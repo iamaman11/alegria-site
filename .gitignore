@@ -12,3 +12,4 @@ app/rust/dist/
 infra/backups/artifacts/
 docs/_archive/
 automation/reports/
+*:Zone.Identifier
