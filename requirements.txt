@@ -1,0 +1,16 @@
+# ==============================================================================
+# Alegria Runtime — Python-only dependencies
+# Строго по фактическим импортам в automation/ и infra/analytics_lab/
+# Обновлять только с cargo check + compileall + pip check
+#
+# R5: voyageai, qdrant-client → заменены на Rust (infrastructure/voyage_client.rs, qdrant.rs)
+# R6: psycopg, psycopg-pool  → заменены на sqlx в Rust
+# R7: pydantic                → заменён на serde в Rust (primitives/writer.rs)
+# R8: neo4j                  → перенесён в infra/analytics_lab/requirements.txt (R&D only)
+# R9: temporalio             → заменён на Rust temporal_worker crate
+#
+# pdfplumber удалён: Python PDF parser заархивирован, runtime реализован в Rust
+# ==============================================================================
+
+# Hashing — automation/smoke_outbox_qdrant.py
+blake3>=1.0

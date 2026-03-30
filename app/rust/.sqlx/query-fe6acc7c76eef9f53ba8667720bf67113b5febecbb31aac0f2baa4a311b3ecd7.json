@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO pipeline.hitl_decisions\n            (run_id, step_name, task_id, decision_status, decision_type, schema_version, decision_bytes, decision_hash, resolved_by)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int8",
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fe6acc7c76eef9f53ba8667720bf67113b5febecbb31aac0f2baa4a311b3ecd7"
+}

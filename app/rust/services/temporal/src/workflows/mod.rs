@@ -1,0 +1,27 @@
+//! Workflows registry and factory for Temporal worker.
+
+use infrastructure::adapters::temporalio_sdk_adapter::WorkerOptions;
+
+// Required for proc-macro expansions.
+use futures_util as _;
+use infrastructure::adapters::temporalio_sdk_adapter::temporalio_common as _;
+
+use crate::activities::AlegriaActivities;
+
+mod content_generation;
+mod fact_extraction;
+mod freshness;
+mod runtime;
+mod test_hitl;
+
+/// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
+pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) -> WorkerOptions {
+    let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
+    tracing::info!(task_queue, build_id = %build_id, "building temporal worker options");
+    let mut opts = WorkerOptions::new(task_queue).register_activities(acts).build();
+    fact_extraction::register(&mut opts);
+    content_generation::register(&mut opts);
+    freshness::register(&mut opts);
+    test_hitl::register(&mut opts);
+    opts
+}

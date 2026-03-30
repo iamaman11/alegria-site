@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package alegria.rules.v1;
+
+import "condition.proto";
+
+enum RuleRole {
+  RULE_ROLE_UNSPECIFIED = 0;
+  RULE_ROLE_DOCUMENT_REQUIRED = 1;
+  RULE_ROLE_ELIGIBILITY_RULE = 2;
+  RULE_ROLE_FEE_ITEM = 3;
+  RULE_ROLE_TIMELINE_ITEM = 4;
+  RULE_ROLE_WHERE_TO_APPLY = 5;
+  RULE_ROLE_APPOINTMENT_RULE = 6;
+  RULE_ROLE_FORM_REQUIRED = 7;
+  RULE_ROLE_STEP = 8;
+  reserved 91, 92, 93;
+  reserved "RULE_ROLE_MUST_PROVIDE", "RULE_ROLE_MUST_PAY", "RULE_ROLE_MUST_SATISFY";
+}
+
+message DocumentRequiredParams {
+  string severity = 1;
+  string subtype = 2;
+  bool notarization_required = 3;
+  bool translation_required = 4;
+  bool accepts_alternatives = 5;
+  string conditions_key = 6;
+}
+
+message FeeItemParams {
+  double amount = 1;
+  string currency = 2;
+  string severity = 3;
+  string channel = 4;
+  string conditions_key = 5;
+}
+
+message TimelineItemParams {
+  int64 days = 1;
+  string subtype = 2;
+  string severity = 3;
+  string conditions_key = 4;
+}
+
+message WhereToApplyParams {
+  string location_key = 1;
+  string channel = 2;
+  string conditions_key = 3;
+}
+
+message EligibilityRuleParams {
+  string subtype = 1;
+  string severity = 2;
+  string conditions_key = 3;
+}
+
+message AppointmentRuleParams {
+  string subtype = 1;
+  int32 advance_days = 2;
+  string conditions_key = 3;
+}
+
+message FormRequiredParams {
+  string form_id = 1;
+  string severity = 2;
+  string conditions_key = 3;
+}
+
+message StepParams {
+  int32 step_index = 1;
+  string subtype = 2;
+  string conditions_key = 3;
+}
+
+message RuleInstance {
+  string rule_instance_id = 1;
+  string context_key = 3;
+  string rule_type_key = 4;
+  string concept_key = 5;
+  RuleRole role = 6;
+  string status = 8;
+  string source_key = 9;
+  double confidence = 10;
+  string effective_from = 11;
+  string effective_to = 12;
+  string evidence_bundle_id = 13;
+  string triple_id = 14;
+  string authority_level = 17;
+  string temporal_status = 18;
+  oneof params {
+    DocumentRequiredParams doc_params = 20;
+    FeeItemParams fee_params = 21;
+    TimelineItemParams timeline_params = 22;
+    WhereToApplyParams where_params = 23;
+    EligibilityRuleParams eligibility_params = 24;
+    AppointmentRuleParams appointment_params = 25;
+    FormRequiredParams form_params = 26;
+    StepParams step_params = 27;
+  }
+  reserved 7;
+}
+
+message RuleProfileApplicability {
+  string rule_instance_id = 1;
+  string profile_key = 2;
+  string applicability = 3;
+  alegria.condition.v1.ConditionExprV1 condition = 4;
+}
+
+message RuleException {
+  string exception_id = 1;
+  string rule_instance_id = 2;
+  string exception_key = 3;
+  string profile_key = 4;
+  alegria.condition.v1.ConditionExprV1 condition = 5;
+  string override_kind = 6;
+  bytes override_payload_bytes = 7;
+  string status = 8;
+}

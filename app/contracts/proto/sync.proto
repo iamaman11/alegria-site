@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+package alegria.sync.v1;
+
+enum RuleRoleTypeV1 {
+  RULE_ROLE_TYPE_V1_UNSPECIFIED = 0;
+  RULE_ROLE_TYPE_V1_MUST_PROVIDE = 1;
+  RULE_ROLE_TYPE_V1_MUST_PAY = 2;
+  RULE_ROLE_TYPE_V1_MUST_SATISFY = 3;
+  RULE_ROLE_TYPE_V1_ALLOWS = 4;
+  RULE_ROLE_TYPE_V1_FORBIDS = 5;
+  RULE_ROLE_TYPE_V1_TIMELINE = 6;
+  RULE_ROLE_TYPE_V1_DOCUMENT_REQUIRED = 7;
+  RULE_ROLE_TYPE_V1_ELIGIBILITY_RULE = 8;
+  RULE_ROLE_TYPE_V1_FEE_ITEM = 9;
+  RULE_ROLE_TYPE_V1_TIMELINE_ITEM = 10;
+  RULE_ROLE_TYPE_V1_WHERE_TO_APPLY = 11;
+  RULE_ROLE_TYPE_V1_APPOINTMENT_RULE = 12;
+  RULE_ROLE_TYPE_V1_FORM_REQUIRED = 13;
+  RULE_ROLE_TYPE_V1_STEP = 14;
+}
+
+message SyncOutboxEvent {
+  string event_id = 1;
+  string aggregate_type = 2;
+  string aggregate_key = 3;
+  string target_system = 4;
+  string event_type = 5;
+  string payload_type = 6;
+  uint32 schema_version = 7;
+  string idempotency_key = 8;
+  bytes payload_bytes = 9;
+  string payload_hash = 10;
+}
+
+message RuleInstanceUpserted {
+  string rule_instance_id = 1;
+}
+
+message RuleInstanceDeprecated {
+  string rule_instance_id = 1;
+}
+
+message ConceptApproved {
+  string concept_key = 1;
+}
+
+message ConceptHierarchyChanged {
+  string parent_concept_key = 1;
+  string child_concept_key = 2;
+}
+
+message PageContextMapped {
+  string url_path = 1;
+  string context_key = 2;
+}
+
+message Neo4jRuleUpsertPayload {
+  string rule_instance_id = 1;
+  string context_key = 2;
+}
+
+message Neo4jMaterializationCommand {
+  string event_id = 1;
+  string aggregate_type = 2;
+  string aggregate_key = 3;
+  Neo4jRuleUpsertPayload payload = 4;
+}
+
+message QdrantEntityPayload {
+  string rule_instance_id = 1;
+  string context_key = 2;
+  string rule_type_key = 3;
+  string concept_key = 4;
+  RuleRoleTypeV1 role_type = 5;
+  string source_key = 6;
+}
+
+message QdrantUpsertCommand {
+  string event_id        = 1;
+  string collection_name = 2;
+  string entity_type     = 3;
+  string entity_key      = 4;
+  string point_id        = 5;
+  repeated float vector  = 6;
+  QdrantEntityPayload payload = 7;
+  string distance        = 8;  // "cosine" | "dot" | "euclidean"
+  uint32 vector_size     = 9;
+}

@@ -1,0 +1,19 @@
+[package]
+name = "primitives"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+blake3 = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+idna = { workspace = true }
+url = { workspace = true }
+scraper = { workspace = true }
+lopdf = { workspace = true }
+regex = { workspace = true }
+ego-tree = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+contracts = { path = "../contracts" }

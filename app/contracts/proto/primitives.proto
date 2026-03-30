@@ -1,0 +1,42 @@
+syntax = "proto3";
+package alegria.primitives.v1;
+
+// Rust primitives gRPC service.
+// Единственный источник правды для генерации ключей и хешей.
+// analytics_svc (Python) вызывает этот сервис — никакой копии логики на Python.
+
+service PrimitivesService {
+  // BLAKE3 hex — content_hash_v1 из primitives::hash
+  rpc ContentHash     (HashRequest)      returns (HashResponse);
+  // normalize_context_key: trim + lowercase + replace " " → "_"
+  rpc NormalizeKey    (NormalizeRequest) returns (NormalizeResponse);
+  // stable_rule_instance_id: join(parts, "|") → blake3_hex
+  rpc StableId        (StableIdRequest)  returns (StableIdResponse);
+  // url_norm: нормализация URL (схема + хост + путь, без query/fragment)
+  rpc NormalizeUrl    (UrlRequest)       returns (UrlResponse);
+  // Health check (Circuit Breaker в Python-клиенте)
+  rpc Ping            (PingRequest)      returns (PingResponse);
+}
+
+message HashRequest  { string text = 1; }
+message HashResponse { string hex  = 1; }
+
+message NormalizeRequest { string raw = 1; }
+message NormalizeResponse {
+  string normalized = 1;
+  bool   ok         = 2;  // false если пустой ключ
+  string error      = 3;
+}
+
+message StableIdRequest  { repeated string parts = 1; }
+message StableIdResponse { string id = 1; }
+
+message UrlRequest  { string raw_url = 1; }
+message UrlResponse {
+  string normalized = 1;
+  bool   ok         = 2;
+  string error      = 3;
+}
+
+message PingRequest  {}
+message PingResponse { string version = 1; }

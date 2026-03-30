@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO pipeline.reconcile_runs (status, summary_type, schema_version, summary_bytes, summary_hash)\n            VALUES ('running', $1, $2, $3, $4)\n            RETURNING reconcile_run_id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "reconcile_run_id",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ea6ff7c8182e7f075aa566fed7776c97b4c142a9bf0d6fac400e04fc07796c42"
+}

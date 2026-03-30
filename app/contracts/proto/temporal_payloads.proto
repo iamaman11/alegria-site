@@ -1,0 +1,236 @@
+syntax = "proto3";
+
+package alegria.temporal.v1;
+
+import "condition.proto";
+
+message StepContractMeta {
+  string run_id = 1;
+  string step_name = 2;
+  uint32 schema_version = 3;
+  string input_hash = 4;
+  string output_hash = 5;
+  string idempotency_key = 6;
+  bool requires_hitl = 7;
+  string prompt_version = 8;
+  string model_version = 9;
+  string registry_version = 10;
+  string error_class = 11;
+}
+
+message StepEnvelope {
+  StepContractMeta meta = 1;
+  string payload_type = 2;
+  uint32 schema_version = 3;
+  bytes payload_bytes = 4;
+  string payload_hash = 5;
+}
+
+message StringPayload {
+  string value = 1;
+}
+
+enum PageModeV1 {
+  PAGE_MODE_V1_UNSPECIFIED = 0;
+  PAGE_MODE_V1_CONTENT_PAGE = 1;
+  PAGE_MODE_V1_MENU_PAGE = 2;
+  PAGE_MODE_V1_DIRECTORY_PAGE = 3;
+  PAGE_MODE_V1_LANDING_PAGE = 4;
+  PAGE_MODE_V1_UTILITY_PAGE = 5;
+}
+
+message PageSemanticContextPayload {
+  PageModeV1 page_mode = 1;
+  repeated string dominant_layers = 2;
+  string page_summary = 3;
+  repeated int32 mixed_sections = 4;
+  repeated string global_entities = 5;
+}
+
+message PageUtilityClassificationPayload {
+  PageModeV1 page_mode = 1;
+  bool allow_procedural_extraction = 2;
+  bool allow_editorial_extraction = 3;
+  bool allow_structural_extraction = 4;
+}
+
+enum DomBlockRoleV1 {
+  DOM_BLOCK_ROLE_V1_UNSPECIFIED = 0;
+  DOM_BLOCK_ROLE_V1_CONTENT_MAIN = 1;
+  DOM_BLOCK_ROLE_V1_NAVIGATION = 2;
+  DOM_BLOCK_ROLE_V1_FOOTER = 3;
+  DOM_BLOCK_ROLE_V1_HEADER = 4;
+  DOM_BLOCK_ROLE_V1_SIDEBAR = 5;
+  DOM_BLOCK_ROLE_V1_RELATED_LINKS = 6;
+  DOM_BLOCK_ROLE_V1_TOC = 7;
+  DOM_BLOCK_ROLE_V1_BREADCRUMBS = 8;
+  DOM_BLOCK_ROLE_V1_PROMO = 9;
+  DOM_BLOCK_ROLE_V1_FORM = 10;
+}
+
+message DomBlockRelevanceDecisionPayload {
+  string dom_block_id = 1;
+  DomBlockRoleV1 block_role = 2;
+  float content_relevance_score = 3;
+  bool allow_extraction = 4;
+}
+
+message DomBlockRelevancePayload {
+  repeated DomBlockRelevanceDecisionPayload blocks = 1;
+}
+
+message FactExtractionInputPayload {
+  string sections_json = 1;
+}
+
+message RuleParamsState {
+  optional double amount = 1;
+  optional string currency = 2;
+  optional int64 days = 3;
+  map<string, bytes> extra_json_utf8 = 4;
+}
+
+enum RuleRoleTypeV1 {
+  RULE_ROLE_TYPE_V1_UNSPECIFIED = 0;
+  RULE_ROLE_TYPE_V1_MUST_PROVIDE = 1;
+  RULE_ROLE_TYPE_V1_MUST_PAY = 2;
+  RULE_ROLE_TYPE_V1_MUST_SATISFY = 3;
+  RULE_ROLE_TYPE_V1_ALLOWS = 4;
+  RULE_ROLE_TYPE_V1_FORBIDS = 5;
+  RULE_ROLE_TYPE_V1_TIMELINE = 6;
+  RULE_ROLE_TYPE_V1_DOCUMENT_REQUIRED = 7;
+  RULE_ROLE_TYPE_V1_ELIGIBILITY_RULE = 8;
+  RULE_ROLE_TYPE_V1_FEE_ITEM = 9;
+  RULE_ROLE_TYPE_V1_TIMELINE_ITEM = 10;
+  RULE_ROLE_TYPE_V1_WHERE_TO_APPLY = 11;
+  RULE_ROLE_TYPE_V1_APPOINTMENT_RULE = 12;
+  RULE_ROLE_TYPE_V1_FORM_REQUIRED = 13;
+  RULE_ROLE_TYPE_V1_STEP = 14;
+}
+
+message RuleInstanceCandidateState {
+  string rule_type_key = 1;
+  string concept_key = 2;
+  RuleRoleTypeV1 role_type = 3;
+  RuleParamsState params = 4;
+  string status = 5;
+  optional string source_key = 6;
+  alegria.condition.v1.ConditionExprV1 condition_expr = 7;
+}
+
+message FactValueState {
+  oneof value {
+    int64 integer_value = 1;
+    double decimal_value = 2;
+    string text_value = 3;
+    bool boolean_value = 4;
+    bool null_value = 5;
+  }
+}
+
+message ExtractedPayloadState {
+  repeated RuleInstanceCandidateState rule_instances = 1;
+  repeated FactValueState facts = 2;
+}
+
+message GenerationBlockState {
+  string block_key = 1;
+  string html = 2;
+}
+
+message GenerationResultState {
+  repeated GenerationBlockState blocks = 1;
+}
+
+message RuntimeErrorPayload {
+  string error_class = 1;
+  string error_message = 2;
+}
+
+message ReconcileSummaryPayload {
+  int64 open_dlq = 1;
+  int64 stale_runs = 2;
+  int64 pending_hitl_runs = 3;
+  int64 stuck_steps = 4;
+}
+
+message ReconcileTargetReportPayload {
+  string target_system = 1;
+  bool dry_run = 2;
+  int64 stale_candidates = 3;
+  int64 failed_candidates = 4;
+  int64 reset_stale_processing = 5;
+  int64 requeued_failed = 6;
+}
+
+message VerifyReport {
+  StepContractMeta meta = 1;
+  uint32 rules_total = 2;
+  uint32 invalid_conditions = 3;
+  string conflict_resolution = 4;
+}
+
+message PersistReport {
+  StepContractMeta meta = 1;
+  uint32 rules_written = 2;
+  uint32 outbox_emitted = 3;
+}
+
+message HitlPauseInfo {
+  bool requires_hitl = 1;
+  int64 task_id = 2;
+  string reason = 3;
+}
+
+message HitlDecision {
+  string decision = 1;
+  string actor = 2;
+  string notes = 3;
+}
+
+message HitlTaskContext {
+  string run_id = 1;
+  string reason = 2;
+  VerifyReport verify_report = 3;
+}
+
+message HitlResolutionInput {
+  StepContractMeta meta = 1;
+  int64 task_id = 2;
+  HitlDecision resolution = 3;
+}
+
+message ValidationInputPayload {
+  StepContractMeta meta = 1;
+  bytes required_links_json_utf8 = 2;
+  bytes required_keys_json_utf8 = 3;
+  bytes used_rule_keys_json_utf8 = 4;
+  bytes used_fact_keys_json_utf8 = 5;
+  string url_norm = 6;
+}
+
+message ValidationDiagnostic {
+  string severity = 1;
+  string gate = 2;
+  string block_key = 3;
+  string message = 4;
+  bytes context_json_utf8 = 5;
+}
+
+message ValidationReport {
+  StepContractMeta meta = 1;
+  bool ok = 2;
+  uint32 critical_count = 3;
+  uint32 warning_count = 4;
+  uint32 info_count = 5;
+  uint32 blocks_total = 6;
+  repeated ValidationDiagnostic diagnostics = 7;
+}
+
+message FreshnessReport {
+  StepContractMeta meta = 1;
+  int64 threshold_hours = 2;
+  int64 stale_count = 3;
+  double max_lag_hours = 4;
+  string status = 5;
+}

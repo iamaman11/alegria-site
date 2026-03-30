@@ -1,0 +1,7 @@
+# Reconcile service configuration
+database_url = "postgres://..."
+reconcile_max_retry = 10
+reconcile_batch_limit = 500
+reconcile_dry_run = false
+reconcile_requeue_base_delay_sec = 0
+reconcile_requeue_jitter_sec = 15

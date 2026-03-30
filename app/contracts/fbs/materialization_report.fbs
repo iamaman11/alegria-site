@@ -1,0 +1,14 @@
+namespace alegria.telemetry.fbs;
+
+table MaterializationReport {
+  event_id: string;
+  worker_id: string;
+  duration_ms: int;
+  success: bool;
+  nodes_created: int;
+  edges_created: int;
+  error_message: string;
+  timestamp: long;
+}
+
+root_type MaterializationReport;

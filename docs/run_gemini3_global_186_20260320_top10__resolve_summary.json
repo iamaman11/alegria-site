@@ -1,0 +1,25 @@
+{
+  "ts": "2026-03-20T12:00:37Z",
+  "run_id": "run_gemini3_global_186_20260320_top10",
+  "results_jsonl": "/home/bose/projects/alegria-site/docs/run_gemini3_global_186_20260320_top10__results.jsonl",
+  "out_jsonl": "/home/bose/projects/alegria-site/docs/run_gemini3_global_186_20260320_top10__enrichment_resolve.jsonl",
+  "total_sources_unique": 120,
+  "resolved_records": 120,
+  "ok": 117,
+  "failed": 3,
+  "success_rate": 0.975,
+  "duration_s": 44.38,
+  "workers": 30,
+  "max_attempts": 6,
+  "http_status_counts": {
+    "200": 104,
+    "400": 5,
+    "403": 5,
+    "404": 2,
+    "500": 1
+  },
+  "error_type_counts": {
+    "SSLError": 3
+  },
+  "resolver_version": "resolve-v1"
+}

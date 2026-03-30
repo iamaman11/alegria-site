@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "V5 Event Contracts",
+  "type": "object",
+  "required": [
+    "LayerRouterInput",
+    "LayerRouterOutput",
+    "EntitySpanOutput",
+    "CanonicalMappingOutput",
+    "ProceduralExtractionOutput",
+    "OperationalExtractionOutput",
+    "EditorialExtractionOutput",
+    "TripleBuildOutput",
+    "CompletenessJudgeOutput",
+    "PublishGateOutput"
+  ],
+  "properties": {
+    "LayerRouterInput": {
+      "type": "object",
+      "required": [
+        "section_id",
+        "heading_text",
+        "raw_text",
+        "source_tier",
+        "block_type",
+        "input_hash",
+        "prompt_version",
+        "model_version",
+        "pipeline_version",
+        "registry_version",
+        "mode"
+      ],
+      "properties": {
+        "section_id": {"type": "string"},
+        "heading_text": {"type": "string"},
+        "raw_text": {"type": "string"},
+        "source_tier": {"type": "string", "enum": ["government", "official_partner", "agency", "forum", "other"]},
+        "block_type": {"type": "string"},
+        "input_hash": {"type": "string"},
+        "prompt_version": {"type": "string"},
+        "model_version": {"type": "string"},
+        "pipeline_version": {"type": "string"},
+        "registry_version": {"type": "string"},
+        "mode": {"type": "string", "enum": ["strict", "recall"]}
+      },
+      "additionalProperties": false
+    },
+    "LayerRouterOutput": {
+      "type": "object",
+      "required": [
+        "section_id",
+        "layer_scores",
+        "primary_layer",
+        "secondary_layers",
+        "confidence",
+        "needs_hitl",
+        "output_hash",
+        "schema_version"
+      ],
+      "properties": {
+        "section_id": {"type": "string"},
+        "layer_scores": {
+          "type": "object",
+          "required": ["procedural", "operational", "editorial", "seo", "commercial"],
+          "properties": {
+            "procedural": {"type": "number", "minimum": 0, "maximum": 1},
+            "operational": {"type": "number", "minimum": 0, "maximum": 1},
+            "editorial": {"type": "number", "minimum": 0, "maximum": 1},
+            "seo": {"type": "number", "minimum": 0, "maximum": 1},
+            "commercial": {"type": "number", "minimum": 0, "maximum": 1}
+          },
+          "additionalProperties": false
+        },
+        "primary_layer": {"type": "string", "enum": ["procedural", "operational", "editorial", "seo", "commercial"]},
+        "secondary_layers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["layer", "confidence"],
+            "properties": {
+              "layer": {"type": "string", "enum": ["procedural", "operational", "editorial", "seo", "commercial"]},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "needs_hitl": {"type": "boolean"},
+        "hitl_reason": {"type": ["string", "null"]},
+        "output_hash": {"type": "string"},
+        "schema_version": {"type": "string", "const": "layer_router_output@1"}
+      },
+      "additionalProperties": false
+    },
+    "EntitySpanOutput": {
+      "type": "object",
+      "required": ["mentions", "schema_version"],
+      "properties": {
+        "mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["raw_text", "entity_type", "has_numeric", "is_central", "confidence"],
+            "properties": {
+              "raw_text": {"type": "string"},
+              "entity_type": {"type": "string", "enum": ["concept", "office", "topic", "pain_point", "risk", "task", "service", "fee", "timeline", "location", "organization", "profile", "legal_term", "date"]},
+              "has_numeric": {"type": "boolean"},
+              "is_central": {"type": "boolean"},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "entity_mention@1"}
+      },
+      "additionalProperties": false
+    },
+    "CanonicalMappingOutput": {
+      "type": "object",
+      "required": ["mappings", "schema_version"],
+      "properties": {
+        "mappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["raw_text", "target_registry", "mapping_type", "match_method", "confidence", "needs_hitl"],
+            "properties": {
+              "raw_text": {"type": "string"},
+              "target_registry": {"type": "string"},
+              "candidate_type": {"type": ["string", "null"]},
+              "canonical_key": {"type": ["string", "null"]},
+              "mapping_type": {"type": "string", "enum": ["alias", "regex", "qdrant", "review", "new_candidate"]},
+              "match_method": {"type": "string", "enum": ["exact_alias", "normalized_alias", "regex", "qdrant", "manual_review"]},
+              "qdrant_score": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "needs_hitl": {"type": "boolean"},
+              "hitl_reason": {"type": ["string", "null"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "canonical_mapping@1"}
+      },
+      "additionalProperties": false
+    },
+    "ProceduralExtractionOutput": {
+      "type": "object",
+      "required": ["extracted_rules", "schema_version"],
+      "properties": {
+        "extracted_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["role", "raw_mention", "params", "scope", "severity", "applies_to_profiles", "alternatives", "derivation_type", "is_numeric", "is_range", "is_incomplete", "confidence", "evidence_section_id"],
+            "properties": {
+              "role": {"type": "string", "enum": ["DOCUMENT_REQUIRED", "ELIGIBILITY_RULE", "FEE_ITEM", "TIMELINE_ITEM", "WHERE_TO_APPLY", "APPOINTMENT_RULE", "FORM_REQUIRED", "STEP"]},
+              "concept_canonical_key": {"type": ["string", "null"]},
+              "raw_mention": {"type": "string"},
+              "params": {"type": "object"},
+              "scope": {"type": "object"},
+              "severity": {"type": "string", "enum": ["mandatory", "recommended", "optional", "unknown"]},
+              "applies_to_profiles": {"type": "array", "items": {"type": "string"}},
+              "exceptions_raw": {"type": ["string", "null"]},
+              "conditions_raw": {"type": ["string", "null"]},
+              "alternatives": {"type": "array", "items": {"type": "object"}},
+              "modality_raw": {"type": ["string", "null"]},
+              "evidence_notes": {"type": ["string", "null"]},
+              "derivation_type": {"type": "string", "enum": ["direct", "inferred", "aggregated"]},
+              "is_numeric": {"type": "boolean"},
+              "is_range": {"type": "boolean"},
+              "is_incomplete": {"type": "boolean"},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "evidence_section_id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "extracted_rule_candidate@1"}
+      },
+      "additionalProperties": false
+    },
+    "OperationalExtractionOutput": {
+      "type": "object",
+      "required": ["operational_entities", "schema_version"],
+      "properties": {
+        "operational_entities": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["entity_type", "validity_type", "raw_mention", "params", "confidence", "evidence_section_id"],
+            "properties": {
+              "entity_type": {"type": "string", "enum": ["office_schedule", "temporary_schedule_change", "closure_event", "holiday_calendar", "country_holiday", "submission_blackout", "operational_notice"]},
+              "validity_type": {"type": "string", "enum": ["fixed", "recurring", "unknown"]},
+              "entity_key_candidate": {"type": ["string", "null"]},
+              "office_key_candidate": {"type": ["string", "null"]},
+              "country_code": {"type": ["string", "null"]},
+              "raw_mention": {"type": "string"},
+              "params": {"type": "object"},
+              "valid_from": {"type": ["string", "null"]},
+              "valid_until": {"type": ["string", "null"]},
+              "ttl_days": {"type": ["integer", "null"], "minimum": 1},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "evidence_section_id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "operational_entity@1"}
+      },
+      "additionalProperties": false
+    },
+    "EditorialExtractionOutput": {
+      "type": "object",
+      "required": ["topics", "schema_version"],
+      "properties": {
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["topic_type", "topic_key_candidate", "human_label", "raw_mention", "links_to_procedure", "audience_hint", "intent_type", "confidence", "evidence_section_id"],
+            "properties": {
+              "topic_type": {"type": "string", "enum": ["topic", "travel_topic", "pain_point", "risk_factor", "preparation_task", "audience_need", "refusal_scenario", "destination_topic", "seasonality"]},
+              "topic_key_candidate": {"type": "string"},
+              "human_label": {"type": "string"},
+              "raw_mention": {"type": "string"},
+              "links_to_procedure": {"type": "boolean"},
+              "procedure_concept_candidate": {"type": ["string", "null"]},
+              "country_code": {"type": ["string", "null"]},
+              "visa_type": {"type": ["string", "null"]},
+              "audience_hint": {"type": "array", "items": {"type": "string"}},
+              "intent_type": {"type": "string", "enum": ["informational", "navigational", "commercial", "mixed"]},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "evidence_section_id": {"type": "string"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "editorial_topic@1"}
+      },
+      "additionalProperties": false
+    },
+    "TripleBuildOutput": {
+      "type": "object",
+      "required": ["triples", "schema_version"],
+      "properties": {
+        "triples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["triple_id", "subject_key", "subject_label", "subject_layer", "relation_type", "object_key", "object_label", "object_layer", "params", "evidence_section_id", "source_tier", "confidence", "extraction_pipeline", "status"],
+            "properties": {
+              "triple_id": {"type": "string"},
+              "subject_key": {"type": "string"},
+              "subject_label": {"type": "string"},
+              "subject_layer": {"type": "string", "enum": ["procedural", "operational", "editorial", "seo", "commercial"]},
+              "relation_type": {"type": "string"},
+              "object_key": {"type": "string"},
+              "object_label": {"type": "string"},
+              "object_layer": {"type": "string", "enum": ["procedural", "operational", "editorial", "seo", "commercial"]},
+              "params": {"type": "object"},
+              "evidence_section_id": {"type": "string"},
+              "source_tier": {"type": "string"},
+              "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+              "extraction_pipeline": {"type": "string"},
+              "status": {"type": "string", "enum": ["extracted", "verified", "deprecated", "rejected"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_version": {"type": "string", "const": "triple@1"}
+      },
+      "additionalProperties": false
+    },
+    "CompletenessJudgeOutput": {
+      "type": "object",
+      "required": ["completeness_score", "missing_elements", "hallucinated_elements", "needs_hitl", "schema_version"],
+      "properties": {
+        "completeness_score": {"type": "number", "minimum": 0, "maximum": 1},
+        "missing_elements": {"type": "array", "items": {"type": "object"}},
+        "hallucinated_elements": {"type": "array", "items": {"type": "object"}},
+        "unmapped_raw_text": {"type": ["string", "null"]},
+        "needs_hitl": {"type": "boolean"},
+        "hitl_reason": {"type": ["string", "null"]},
+        "schema_version": {"type": "string", "const": "completeness_judge@1"}
+      },
+      "additionalProperties": false
+    },
+    "PublishGateOutput": {
+      "type": "object",
+      "required": ["page_id", "block_key", "status", "checks", "schema_version"],
+      "properties": {
+        "page_id": {"type": "string"},
+        "block_key": {"type": "string"},
+        "status": {"type": "string", "enum": ["passed", "failed"]},
+        "checks": {
+          "type": "object",
+          "required": ["required_keys_covered", "verified_only", "no_unresolved_conflicts", "no_unresolved_contradictions"],
+          "properties": {
+            "required_keys_covered": {"type": "boolean"},
+            "verified_only": {"type": "boolean"},
+            "no_unresolved_conflicts": {"type": "boolean"},
+            "no_unresolved_contradictions": {"type": "boolean"}
+          },
+          "additionalProperties": false
+        },
+        "failure_reason": {"type": ["string", "null"]},
+        "schema_version": {"type": "string", "const": "publish_gate_output@1"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

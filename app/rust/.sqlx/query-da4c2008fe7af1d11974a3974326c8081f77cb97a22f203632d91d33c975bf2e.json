@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO pipeline.step_attempts\n            (step_execution_id, attempt_no, status)\n            VALUES ($1, $2, 'running')\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "da4c2008fe7af1d11974a3974326c8081f77cb97a22f203632d91d33c975bf2e"
+}

@@ -1,0 +1,5 @@
+# Outbox worker configuration
+database_url = "postgres://..."
+neo4j_uri = "bolt://localhost:7687"
+qdrant_url = "http://localhost:6334"
+poll_fallback_interval_sec = 30

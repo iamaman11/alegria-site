@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT COALESCE(MAX(attempt_no), 0) + 1 AS \"next_attempt_no!\"\n            FROM pipeline.step_attempts\n            WHERE step_execution_id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "next_attempt_no!",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "91d83a9b9c7a785ccf2f5012a7a38587e881dd27fc407c43b6cc0beb4f78b6d6"
+}

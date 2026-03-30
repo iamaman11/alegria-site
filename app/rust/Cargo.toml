@@ -1,0 +1,64 @@
+[workspace]
+members = [
+  "crates/primitives",
+  "crates/contracts",
+  "crates/runtime_models",
+  "crates/policies",
+  "crates/infrastructure",
+  "crates/use_cases",
+  "crates/telemetry",
+  "services/temporal",
+  "services/outbox_worker",
+  "services/reconcile",
+  "services/cli_tools",
+  "services/analytics_svc",
+  "services/gsc_sync",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1.0.96"
+thiserror = "2.0.11"
+serde = { version = "1.0.218", features = ["derive"] }
+serde_json = "1.0.140"
+blake3 = "1.6.1"
+idna = "1.0.3"
+url = "2.5.4"
+uuid = { version = "1.15.1", features = ["v4", "serde"] }
+chrono = { version = "0.4.39", features = ["serde"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "time", "chrono", "macros"] }
+tokio-postgres = "0.7.16"
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+futures = "0.3.31"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["fmt", "json", "env-filter"] }
+tonic = "0.14.5"
+tonic-build = "0.14.5"
+tonic-prost-build = "0.14.5"
+prost = "0.14.3"
+prost-types = "0.14.3"
+neo4rs = "0.9.0-rc.9"
+qdrant-client = "1.17.0"
+petgraph = "0.7.1"
+dashmap = "6.1.0"
+flatbuffers = "25.2.10"
+scraper = "0.22.0"
+lopdf = "0.34"
+regex = "1.11.1"
+ego-tree = "0.10.0"
+reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "http2"] }
+oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
+hyper = "1.8.1"
+tower = { version = "0.5.3", features = ["util", "timeout", "retry", "limit"] }
+playwright-rs = "0.8.7"
+rig-core = "0.33.0"
+rig-vertexai = "0.3.2"
+temporalio-sdk = "0.2.0"
+temporalio-sdk-core = "0.2.0"
+temporalio-client = "0.2.0"
+temporalio-common = "0.2.0"
+temporalio-macros = "0.2.0"
+graph-flow = "0.4.0"

@@ -1,0 +1,11 @@
+namespace alegria.telemetry.fbs;
+
+table RuntimeSyncStatus {
+  pending_events_count: int;
+  processing_events_count: int;
+  failed_events_count: int;
+  max_lag_ms: long;
+  timestamp: long;
+}
+
+root_type RuntimeSyncStatus;

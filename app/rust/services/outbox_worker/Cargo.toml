@@ -1,0 +1,20 @@
+[package]
+name = "outbox_worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+infrastructure = { path = "../../crates/infrastructure" }
+use_cases = { path = "../../crates/use_cases" }
+telemetry = { path = "../../crates/telemetry" }
+contracts = { path = "../../crates/contracts" }
+primitives = { path = "../../crates/primitives" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+prost = { workspace = true }
+uuid = { workspace = true }

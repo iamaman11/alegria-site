@@ -1,0 +1,13 @@
+namespace alegria.telemetry.fbs;
+
+table ReconcileReport {
+  target_system: string; // "neo4j" or "qdrant"
+  total_checked: int;
+  drift_detected: int;
+  fixed_entities: int;
+  failed_fixes: int;
+  duration_ms: int;
+  timestamp: long;
+}
+
+root_type ReconcileReport;

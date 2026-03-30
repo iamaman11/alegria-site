@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE pipeline.execution_runs\n            SET status = $1, updated_at = now()\n            WHERE run_id = $2\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "64988cd12516cd0e09ed23ea944fb61eb9f83a1b9f6622f61071c2fd3bcd2aed"
+}

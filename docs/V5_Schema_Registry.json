@@ -1,0 +1,342 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "registry_name": "V5 Schema Registry",
+  "registry_version": "v5.1.0",
+  "generated_from": "V5_Ultimate_Extraction_Protocol.md",
+  "schemas": [
+    {
+      "schema_name": "layer_router_input",
+      "schema_version": "1",
+      "event_contract": "LayerRouterInput",
+      "required_fields": [
+        "section_id",
+        "heading_text",
+        "raw_text",
+        "source_tier",
+        "block_type",
+        "input_hash",
+        "prompt_version",
+        "model_version",
+        "pipeline_version",
+        "registry_version",
+        "mode"
+      ],
+      "field_types": {
+        "section_id": "string",
+        "heading_text": "string",
+        "raw_text": "string",
+        "source_tier": "enum",
+        "block_type": "string",
+        "input_hash": "string",
+        "prompt_version": "string",
+        "model_version": "string",
+        "pipeline_version": "string",
+        "registry_version": "string",
+        "mode": "enum"
+      },
+      "validation_rules": [
+        "source_tier in {government, official_partner, agency, forum, other}",
+        "mode in {strict, recall}",
+        "input_hash must be non-empty"
+      ]
+    },
+    {
+      "schema_name": "layer_router_output",
+      "schema_version": "1",
+      "event_contract": "LayerRouterOutput",
+      "required_fields": [
+        "section_id",
+        "layer_scores",
+        "primary_layer",
+        "secondary_layers",
+        "confidence",
+        "needs_hitl",
+        "output_hash",
+        "schema_version"
+      ],
+      "field_types": {
+        "section_id": "string",
+        "layer_scores": "object",
+        "primary_layer": "enum",
+        "secondary_layers": "array",
+        "confidence": "number",
+        "needs_hitl": "boolean",
+        "output_hash": "string",
+        "schema_version": "const"
+      },
+      "validation_rules": [
+        "layer_scores must include procedural, operational, editorial, seo, commercial",
+        "all layer_scores values must be in [0,1]",
+        "primary_layer must equal argmax(layer_scores)",
+        "secondary_layers must exclude primary_layer",
+        "secondary_layers confidence values must be in [0,1]"
+      ]
+    },
+    {
+      "schema_name": "entity_mention",
+      "schema_version": "1",
+      "event_contract": "EntitySpanOutput",
+      "required_fields": [
+        "raw_text",
+        "entity_type",
+        "has_numeric",
+        "is_central",
+        "confidence"
+      ],
+      "field_types": {
+        "raw_text": "string",
+        "entity_type": "enum",
+        "has_numeric": "boolean",
+        "is_central": "boolean",
+        "confidence": "number"
+      },
+      "validation_rules": [
+        "entity_type in {concept, office, topic, pain_point, risk, task, service, fee, timeline, location, organization, profile, legal_term, date}",
+        "confidence must be in [0,1]",
+        "raw_text must be non-empty"
+      ]
+    },
+    {
+      "schema_name": "canonical_mapping",
+      "schema_version": "1",
+      "event_contract": "CanonicalMappingOutput",
+      "required_fields": [
+        "raw_text",
+        "target_registry",
+        "mapping_type",
+        "match_method",
+        "confidence",
+        "needs_hitl"
+      ],
+      "field_types": {
+        "raw_text": "string",
+        "target_registry": "string",
+        "candidate_type": "nullable_string",
+        "canonical_key": "nullable_string",
+        "mapping_type": "enum",
+        "match_method": "enum",
+        "qdrant_score": "nullable_number",
+        "confidence": "number",
+        "needs_hitl": "boolean",
+        "hitl_reason": "nullable_string"
+      },
+      "validation_rules": [
+        "mapping_type in {alias, regex, qdrant, review, new_candidate}",
+        "match_method in {exact_alias, normalized_alias, regex, qdrant, manual_review}",
+        "qdrant_score if present must be in [0,1]",
+        "canonical_key must be null for new_candidate until HITL or registry decision"
+      ]
+    },
+    {
+      "schema_name": "extracted_rule_candidate",
+      "schema_version": "1",
+      "event_contract": "ProceduralExtractionOutput",
+      "required_fields": [
+        "role",
+        "raw_mention",
+        "params",
+        "scope",
+        "severity",
+        "applies_to_profiles",
+        "alternatives",
+        "derivation_type",
+        "is_numeric",
+        "is_range",
+        "is_incomplete",
+        "confidence",
+        "evidence_section_id"
+      ],
+      "field_types": {
+        "role": "enum",
+        "concept_canonical_key": "nullable_string",
+        "raw_mention": "string",
+        "params": "object",
+        "scope": "object",
+        "severity": "enum",
+        "applies_to_profiles": "array",
+        "exceptions_raw": "nullable_string",
+        "conditions_raw": "nullable_string",
+        "alternatives": "array",
+        "modality_raw": "nullable_string",
+        "evidence_notes": "nullable_string",
+        "derivation_type": "enum",
+        "is_numeric": "boolean",
+        "is_range": "boolean",
+        "is_incomplete": "boolean",
+        "confidence": "number",
+        "evidence_section_id": "string"
+      },
+      "validation_rules": [
+        "role in {DOCUMENT_REQUIRED, ELIGIBILITY_RULE, FEE_ITEM, TIMELINE_ITEM, WHERE_TO_APPLY, APPOINTMENT_RULE, FORM_REQUIRED, STEP}",
+        "severity in {mandatory, recommended, optional, unknown}",
+        "derivation_type in {direct, inferred, aggregated}",
+        "confidence must be in [0,1]",
+        "scope should carry constraining context such as visa_subtype, submission_channel, entry_type",
+        "if is_range=true then publish is blocked pending conflict/resolution policy"
+      ]
+    },
+    {
+      "schema_name": "operational_entity",
+      "schema_version": "1",
+      "event_contract": "OperationalExtractionOutput",
+      "required_fields": [
+        "entity_type",
+        "validity_type",
+        "raw_mention",
+        "params",
+        "confidence",
+        "evidence_section_id"
+      ],
+      "field_types": {
+        "entity_type": "enum",
+        "validity_type": "enum",
+        "entity_key_candidate": "nullable_string",
+        "office_key_candidate": "nullable_string",
+        "country_code": "nullable_string",
+        "raw_mention": "string",
+        "params": "object",
+        "valid_from": "nullable_string",
+        "valid_until": "nullable_string",
+        "ttl_days": "nullable_integer",
+        "confidence": "number",
+        "evidence_section_id": "string"
+      },
+      "validation_rules": [
+        "entity_type in {office_schedule, temporary_schedule_change, closure_event, holiday_calendar, country_holiday, submission_blackout, operational_notice}",
+        "validity_type in {fixed, recurring, unknown}",
+        "ttl_days if present must be > 0",
+        "confidence must be in [0,1]"
+      ]
+    },
+    {
+      "schema_name": "editorial_topic",
+      "schema_version": "1",
+      "event_contract": "EditorialExtractionOutput",
+      "required_fields": [
+        "topic_type",
+        "topic_key_candidate",
+        "human_label",
+        "raw_mention",
+        "links_to_procedure",
+        "audience_hint",
+        "intent_type",
+        "confidence",
+        "evidence_section_id"
+      ],
+      "field_types": {
+        "topic_type": "enum",
+        "topic_key_candidate": "string",
+        "human_label": "string",
+        "raw_mention": "string",
+        "links_to_procedure": "boolean",
+        "procedure_concept_candidate": "nullable_string",
+        "country_code": "nullable_string",
+        "visa_type": "nullable_string",
+        "audience_hint": "array",
+        "intent_type": "enum",
+        "confidence": "number",
+        "evidence_section_id": "string"
+      },
+      "validation_rules": [
+        "topic_type in {topic, travel_topic, pain_point, risk_factor, preparation_task, audience_need, refusal_scenario, destination_topic, seasonality}",
+        "intent_type in {informational, navigational, commercial, mixed}",
+        "confidence must be in [0,1]"
+      ]
+    },
+    {
+      "schema_name": "triple",
+      "schema_version": "1",
+      "event_contract": "TripleBuildOutput",
+      "required_fields": [
+        "triple_id",
+        "subject_key",
+        "subject_label",
+        "subject_layer",
+        "relation_type",
+        "object_key",
+        "object_label",
+        "object_layer",
+        "params",
+        "evidence_section_id",
+        "source_tier",
+        "confidence",
+        "extraction_pipeline",
+        "status"
+      ],
+      "field_types": {
+        "triple_id": "string",
+        "subject_key": "string",
+        "subject_label": "string",
+        "subject_layer": "enum",
+        "relation_type": "string",
+        "object_key": "string",
+        "object_label": "string",
+        "object_layer": "enum",
+        "params": "object",
+        "evidence_section_id": "string",
+        "source_tier": "string",
+        "confidence": "number",
+        "extraction_pipeline": "string",
+        "status": "enum"
+      },
+      "validation_rules": [
+        "subject_layer and object_layer in {procedural, operational, editorial, seo, commercial}",
+        "status in {extracted, verified, deprecated, rejected}",
+        "confidence must be in [0,1]"
+      ]
+    },
+    {
+      "schema_name": "completeness_judge",
+      "schema_version": "1",
+      "event_contract": "CompletenessJudgeOutput",
+      "required_fields": [
+        "completeness_score",
+        "missing_elements",
+        "hallucinated_elements",
+        "needs_hitl",
+        "schema_version"
+      ],
+      "field_types": {
+        "completeness_score": "number",
+        "missing_elements": "array",
+        "hallucinated_elements": "array",
+        "unmapped_raw_text": "nullable_string",
+        "needs_hitl": "boolean",
+        "hitl_reason": "nullable_string",
+        "schema_version": "const"
+      },
+      "validation_rules": [
+        "completeness_score must be in [0,1]",
+        "missing_elements stores loss findings",
+        "hallucinated_elements stores over-extraction findings"
+      ]
+    },
+    {
+      "schema_name": "publish_gate_output",
+      "schema_version": "1",
+      "event_contract": "PublishGateOutput",
+      "required_fields": [
+        "page_id",
+        "block_key",
+        "status",
+        "checks",
+        "schema_version"
+      ],
+      "field_types": {
+        "page_id": "string",
+        "block_key": "string",
+        "status": "enum",
+        "checks": "object",
+        "failure_reason": "nullable_string",
+        "schema_version": "const"
+      },
+      "validation_rules": [
+        "status in {passed, failed}",
+        "checks.required_keys_covered is boolean",
+        "checks.verified_only is boolean",
+        "checks.no_unresolved_conflicts is boolean",
+        "checks.no_unresolved_contradictions is boolean"
+      ]
+    }
+  ]
+}

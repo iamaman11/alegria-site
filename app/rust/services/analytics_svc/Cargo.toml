@@ -1,0 +1,17 @@
+[package]
+name = "analytics_svc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = "0.14"
+prost = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+infrastructure = { path = "../../crates/infrastructure" }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

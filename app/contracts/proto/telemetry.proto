@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package alegria.telemetry.v1;
+
+message RuntimeSyncStatus {
+  string worker_name = 1;
+  int64 timestamp_ms = 2;
+  int64 pending_count = 3;
+  int64 failed_count = 4;
+  int64 oldest_pending_age_sec = 5;
+  int64 neo4j_lag_sec = 6;
+  int64 qdrant_lag_sec = 7;
+}
+
+message WorkerHeartbeat {
+  string worker_name = 1;
+  string host = 2;
+  int64 timestamp_ms = 3;
+  string status = 4;
+  string version = 5;
+}

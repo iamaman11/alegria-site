@@ -1,0 +1,25 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO system.dead_letter_queue\n            (run_id, step_name, workflow_id, error_class, retryable, payload_type, schema_version,\n             payload_bytes, payload_hash, input_hash, idempotency_key, build_id, error_message)\n            VALUES ($1, $2, $3, $4, false, $5, $6, $7, $8, $9, $10, $11, $12)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4c94b64d3ffed7b32e3749ecff43cf531bc644a219e87bcc1c89d4279cd67ca2"
+}

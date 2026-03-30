@@ -1,0 +1,10 @@
+namespace alegria.telemetry.fbs;
+
+table WorkerHeartbeat {
+  worker_id: string;
+  timestamp: long;
+  status: string; // "idle", "processing", "shutting_down"
+  active_tasks: int;
+}
+
+root_type WorkerHeartbeat;

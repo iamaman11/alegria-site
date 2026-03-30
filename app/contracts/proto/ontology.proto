@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package alegria.ontology.v1;
+
+message Concept {
+  string concept_key = 1;
+  string concept_type = 2;
+  string label_ru = 3;
+  string status = 4;
+  int32 reg_version = 5;
+}
+
+message ConceptHierarchyEdge {
+  string parent_concept_key = 1;
+  string child_concept_key = 2;
+  string relation_kind = 3;
+  string status = 4;
+}
+
+message ApplicantProfile {
+  string profile_key = 1;
+  string profile_type = 2;
+  string label_ru = 3;
+  string status = 4;
+}
+
+message VisaContext {
+  string context_key = 1;
+  string country_code = 2;
+  string visa_family = 3;
+  string visa_subtype = 4;
+  string citizenship_code = 5;
+  string status = 6;
+}
+
+message Source {
+  string source_key = 1;
+  string source_type = 2;
+  string source_label = 3;
+  string base_url = 4;
+  int32 trust_level = 5;
+  string status = 6;
+}
+
+message PageContextMap {
+  string url_path = 1;
+  string context_key = 2;
+  string mapping_status = 3;
+}

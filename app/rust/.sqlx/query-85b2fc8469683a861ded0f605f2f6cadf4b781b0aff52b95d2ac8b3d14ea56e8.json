@@ -1,0 +1,35 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT payload_type, schema_version, payload_bytes\n            FROM pipeline.execution_run_blobs\n            WHERE run_id = $1 AND field_name = $2\n            LIMIT 1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "payload_type",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "schema_version",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "payload_bytes",
+        "type_info": "Bytea"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "85b2fc8469683a861ded0f605f2f6cadf4b781b0aff52b95d2ac8b3d14ea56e8"
+}

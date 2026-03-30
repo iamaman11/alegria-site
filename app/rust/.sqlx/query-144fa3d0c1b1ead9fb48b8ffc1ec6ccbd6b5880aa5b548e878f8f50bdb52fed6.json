@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE pipeline.reconcile_runs\n            SET status = $1,\n                summary_type = $2,\n                schema_version = $3,\n                summary_bytes = $4,\n                summary_hash = $5,\n                error_message = $6,\n                finished_at = now()\n            WHERE reconcile_run_id = $7\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "144fa3d0c1b1ead9fb48b8ffc1ec6ccbd6b5880aa5b548e878f8f50bdb52fed6"
+}

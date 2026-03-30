@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE pipeline.step_executions\n            SET status = 'done',\n                output_hash = $1,\n                error_class = NULL,\n                error_message = NULL,\n                updated_at = now()\n            WHERE run_id = $2\n              AND step_name = $3\n              AND idempotency_key = $4\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "60bd6c472ececa8c0aa57abf57d61fecc76ca57c7150b8801cb198931ba8bd8d"
+}

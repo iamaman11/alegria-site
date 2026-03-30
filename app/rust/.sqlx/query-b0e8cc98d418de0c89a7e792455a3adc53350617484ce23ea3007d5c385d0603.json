@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO pipeline.step_payload_blobs\n            (run_id, step_name, idempotency_key, payload_kind, payload_type, schema_version, payload_bytes, payload_hash)\n            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)\n            ON CONFLICT (idempotency_key, payload_kind, payload_hash) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Int4",
+        "Bytea",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b0e8cc98d418de0c89a7e792455a3adc53350617484ce23ea3007d5c385d0603"
+}

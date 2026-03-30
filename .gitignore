@@ -1,0 +1,14 @@
+.venv/
+.pytest_cache/
+worker.log
+
+**/__pycache__/
+**/*.pyc
+**/.mypy_cache/
+**/.ruff_cache/
+
+app/rust/target/
+app/rust/dist/
+infra/backups/artifacts/
+docs/_archive/
+automation/reports/

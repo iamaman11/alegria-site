@@ -1,0 +1,18 @@
+[package]
+name = "primitives_svc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+primitives  = { path = "../../crates/primitives" }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+tonic       = { workspace = true }
+prost       = { workspace = true }
+tracing     = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[build-dependencies]
+tonic-build       = { workspace = true }
+tonic-prost-build = { workspace = true }
+prost-build       = { workspace = true }

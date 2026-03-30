@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO pipeline.step_executions\n            (run_id, step_name, schema_version, input_hash, idempotency_key, status)\n            VALUES ($1, $2, $3, $4, $5, 'running')\n            ON CONFLICT (step_name, idempotency_key) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Int4",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "53bb0dd5a402d7200a3e04e96b9859e74bdb13d3f27dae0750a9e9276af507b3"
+}

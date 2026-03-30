@@ -1,0 +1,14 @@
+.git
+.venv
+.pytest_cache
+worker.log
+
+**/__pycache__/
+**/*.pyc
+**/target/
+**/.mypy_cache/
+**/.ruff_cache/
+
+docs/_archive/
+docs/knowledge/
+automation/reports/

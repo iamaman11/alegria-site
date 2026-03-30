@@ -1,0 +1,13 @@
+# ==============================================================================
+# Alegria Pipeline — dev / build tools
+# Не входят в runtime Docker образ
+# R9: maturin удалён — python_bridge crate (PyO3) заархивирован
+# ==============================================================================
+
+-r requirements.txt
+
+# Type checking
+pyright>=1.1
+
+# Code quality
+ruff>=0.9

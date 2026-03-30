@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package alegria.read_api.v1;
+
+enum RuleRoleTypeV1 {
+  RULE_ROLE_TYPE_V1_UNSPECIFIED = 0;
+  RULE_ROLE_TYPE_V1_MUST_PROVIDE = 1;
+  RULE_ROLE_TYPE_V1_MUST_PAY = 2;
+  RULE_ROLE_TYPE_V1_MUST_SATISFY = 3;
+  RULE_ROLE_TYPE_V1_ALLOWS = 4;
+  RULE_ROLE_TYPE_V1_FORBIDS = 5;
+  RULE_ROLE_TYPE_V1_TIMELINE = 6;
+  RULE_ROLE_TYPE_V1_DOCUMENT_REQUIRED = 7;
+  RULE_ROLE_TYPE_V1_ELIGIBILITY_RULE = 8;
+  RULE_ROLE_TYPE_V1_FEE_ITEM = 9;
+  RULE_ROLE_TYPE_V1_TIMELINE_ITEM = 10;
+  RULE_ROLE_TYPE_V1_WHERE_TO_APPLY = 11;
+  RULE_ROLE_TYPE_V1_APPOINTMENT_RULE = 12;
+  RULE_ROLE_TYPE_V1_FORM_REQUIRED = 13;
+  RULE_ROLE_TYPE_V1_STEP = 14;
+}
+
+message ContextBundleRequest {
+  string context_key = 1;
+}
+
+message SourceCitation {
+  string source_key = 1;
+  string source_label = 2;
+  string base_url = 3;
+}
+
+message DocumentRequiredParams {
+  string severity = 1;
+  string subtype = 2;
+  bool notarization_required = 3;
+  bool translation_required = 4;
+  bool accepts_alternatives = 5;
+  string conditions_key = 6;
+}
+
+message FeeItemParams {
+  double amount = 1;
+  string currency = 2;
+  string severity = 3;
+  string channel = 4;
+  string conditions_key = 5;
+}
+
+message TimelineItemParams {
+  int64 days = 1;
+  string subtype = 2;
+  string severity = 3;
+  string conditions_key = 4;
+}
+
+message WhereToApplyParams {
+  string location_key = 1;
+  string channel = 2;
+  string conditions_key = 3;
+}
+
+message EligibilityRuleParams {
+  string subtype = 1;
+  string severity = 2;
+  string conditions_key = 3;
+}
+
+message AppointmentRuleParams {
+  string subtype = 1;
+  int32 advance_days = 2;
+  string conditions_key = 3;
+}
+
+message FormRequiredParams {
+  string form_id = 1;
+  string severity = 2;
+  string conditions_key = 3;
+}
+
+message StepParams {
+  int32 step_index = 1;
+  string subtype = 2;
+  string conditions_key = 3;
+}
+
+message CitationFact {
+  string rule_instance_id = 1;
+  string rule_type_key = 2;
+  string status = 4;
+  string effective_from = 5;
+  string effective_to = 6;
+  SourceCitation citation = 7;
+  RuleRoleTypeV1 role_type = 8;
+  oneof params {
+    DocumentRequiredParams doc_params = 20;
+    FeeItemParams fee_params = 21;
+    TimelineItemParams timeline_params = 22;
+    WhereToApplyParams where_params = 23;
+    EligibilityRuleParams eligibility_params = 24;
+    AppointmentRuleParams appointment_params = 25;
+    FormRequiredParams form_params = 26;
+    StepParams step_params = 27;
+  }
+  reserved 3;
+}
+
+message OntologyRuleView {
+  string rule_instance_id = 1;
+  RuleRoleTypeV1 role_type = 2;
+  string concept_key = 3;
+  repeated string parent_concept_keys = 4;
+  repeated string profile_keys = 5;
+  repeated string exception_ids = 6;
+}
+
+message RelatedLink {
+  string url_path = 1;
+  int32 priority = 2;
+}
+
+message ContextBundle {
+  string context_key = 1;
+  string country_code = 2;
+  string visa_family = 3;
+  string visa_subtype = 4;
+  string citizenship_code = 5;
+  repeated OntologyRuleView ontology_rules = 6;
+  repeated CitationFact citation_facts = 7;
+  repeated RelatedLink related_links = 8;
+}

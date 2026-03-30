@@ -1,0 +1,15 @@
+[package]
+name = "reconcile"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true }
+use_cases = { path = "../../crates/use_cases" }
+infrastructure = { path = "../../crates/infrastructure" }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+sqlx = { workspace = true }
+futures = { workspace = true }
+uuid = { workspace = true }
