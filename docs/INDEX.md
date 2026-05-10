@@ -17,6 +17,7 @@
    - [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
    - [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md)
    - [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md)
+   - [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md)
 3. Current domain/protocol docs
    - [DOMAIN_MODEL.md](DOMAIN_MODEL.md)
    - [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md)
@@ -29,24 +30,29 @@
 
 ## File Map
 
-| File | Class | Role |
-|---|---|---|
-| [INDEX.md](INDEX.md) | current | documentation map and priority rules |
-| [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | domain invariants and taxonomy |
-| [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | current-domain-spec | target protocol and extraction semantics |
-| [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-spec | runtime persistence, retry, replay, HITL, DLQ contracts |
-| [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md) | current-runtime-spec | step ledger and step contract rules |
-| [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md) | current-ops | runtime architecture and operational rules |
-| [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md) | current-ops | worker build-id / rollout / drain rules |
-| [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md) | current-ops | canonical production gate |
-| [OPS_RELIABILITY_HARDENING_RESEARCH_TZ.md](OPS_RELIABILITY_HARDENING_RESEARCH_TZ.md) | research | research specification, not live runtime truth |
-| [OPS_RELIABILITY_EXECUTION_BACKLOG.md](OPS_RELIABILITY_EXECUTION_BACKLOG.md) | backlog-reference | execution backlog and implementation history |
-| [SERP_INGEST_PLAYBOOK.md](SERP_INGEST_PLAYBOOK.md) | reference-runbook | ingest guidance for the archived SERP run artifacts |
-| [V5_Event_Contracts.json](V5_Event_Contracts.json) | reference-schema | legacy/reference event schema snapshot |
-| [V5_Schema_Registry.json](V5_Schema_Registry.json) | reference-schema | legacy/reference registry snapshot |
-| [V5_Postgres_DDL.sql](V5_Postgres_DDL.sql) | reference-schema | reference DDL snapshot; live schema is `app/db/schema.sql` |
-| [V5_Neo4j_Model.cypher](V5_Neo4j_Model.cypher) | reference-domain-model | graph model reference |
-| `run_gemini3_global_186_20260320_top10__*.jsonl/json/csv/sql` | immutable-artifact | run outputs; do not treat as live contracts |
+| File | Class | Implementation status | Role |
+|---|---|---|---|
+| [INDEX.md](INDEX.md) | current | live | documentation map and priority rules |
+| [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |
+| [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | current-domain-spec | partial | target protocol and extraction semantics |
+| [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-spec | live | runtime persistence, retry, replay, HITL, DLQ contracts |
+| [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md) | current-runtime-spec | partial | step ledger and step contract rules |
+| [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md) | current-ops | live | runtime architecture and operational rules |
+| [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md) | current-ops | live | worker build-id / rollout / drain rules |
+| [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md) | current-ops | live | canonical production gate |
+| [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md) | current-seo-execution-plan | partial | live-aligned SEO supersite capability, gaps, and execution order |
+| [V5_SEO_Live_Schema_Design_Spec.md](V5_SEO_Live_Schema_Design_Spec.md) | current-seo-build-spec | partial | SEO relational source-of-record design + SQLx persistence |
+| [V5_SEO_Runtime_Step_Contracts_Spec.md](V5_SEO_Runtime_Step_Contracts_Spec.md) | current-seo-build-spec | partial | SEO Proto, Temporal steps, and workflow skeleton |
+| [V5_SEO_Graph_And_Retrieval_Projection_Spec.md](V5_SEO_Graph_And_Retrieval_Projection_Spec.md) | current-seo-build-spec | partial | SEO Neo4j and Qdrant projection design + bootstrap outbox surface |
+| [V5_SEO_CMS_And_HITL_Control_Plane_Spec.md](V5_SEO_CMS_And_HITL_Control_Plane_Spec.md) | current-seo-build-spec | partial | SEO CMS publish-control handoff and HITL control-plane design |
+| [OPS_RELIABILITY_HARDENING_RESEARCH_TZ.md](OPS_RELIABILITY_HARDENING_RESEARCH_TZ.md) | research | reference | research specification, not live runtime truth |
+| [OPS_RELIABILITY_EXECUTION_BACKLOG.md](OPS_RELIABILITY_EXECUTION_BACKLOG.md) | backlog-reference | reference | execution backlog and implementation history |
+| [SERP_INGEST_PLAYBOOK.md](SERP_INGEST_PLAYBOOK.md) | reference-runbook | reference | ingest guidance for the archived SERP run artifacts |
+| [V5_Event_Contracts.json](V5_Event_Contracts.json) | reference-schema | reference | legacy/reference event schema snapshot |
+| [V5_Schema_Registry.json](V5_Schema_Registry.json) | reference-schema | reference | legacy/reference registry snapshot |
+| [V5_Postgres_DDL.sql](V5_Postgres_DDL.sql) | reference-schema | reference | reference DDL snapshot; live schema is `app/db/schema.sql` |
+| [V5_Neo4j_Model.cypher](V5_Neo4j_Model.cypher) | reference-domain-model | reference | graph model reference |
+| `run_gemini3_global_186_20260320_top10__*.jsonl/json/csv/sql` | immutable-artifact | immutable | run outputs; do not treat as live contracts |
 
 ## Canonical Live Roots
 

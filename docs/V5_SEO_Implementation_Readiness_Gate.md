@@ -1,7 +1,7 @@
 # V5 SEO Implementation Readiness Gate
 
-**Status:** pre-code checklist and review record  
-**Purpose:** consolidated implementation checklist and formal go / no-go gate before live SEO schema, runtime, graph, retrieval, CMS, or HITL code work begins.
+**Status:** current implementation alignment gate and review record
+**Purpose:** consolidated checklist for keeping live SEO code, schema, proto, automation, and documentation aligned.
 
 ## 1. Role Of This Document
 
@@ -9,10 +9,10 @@ This document is not a normative owner of architecture or runtime rules.
 
 Its role is to:
 
-- bind the four build-spec documents into one execution checklist,
+- bind the four build-spec documents and the live execution plan into one execution checklist,
 - distinguish document presence from actual cross-spec verification,
-- record whether the documentation stack is implementation-ready,
-- publish the current Phase 1 go / no-go verdict.
+- record whether the documentation stack matches the live implementation,
+- publish the current implementation and production go / no-go verdicts.
 
 Normative rules remain owned by:
 
@@ -24,9 +24,11 @@ Normative rules remain owned by:
 
 ## 2. Gate Rule
 
-Phase 1 implementation work is **No-Go** unless the overall verdict in this document is `go`.
+Live code, live schema, proto contracts, and automation are the highest-priority truth. Documentation is aligned only when it describes those live artifacts without claiming unimplemented runtime behavior.
 
-Blocked work when verdict is not `go` includes:
+Production launch is **No-Go** unless the production verdict in this document is `go`.
+
+Implementation changes that must update this document when they change behavior include:
 
 - SQL changes in `app/db/schema.sql`
 - Proto changes in `app/contracts/proto/temporal_payloads.proto`
@@ -41,18 +43,20 @@ Blocked work when verdict is not `go` includes:
 
 Checklist rows in this document use exactly three states:
 
-- `present_not_reviewed`: the required section exists, but cross-spec verification is not complete
-- `verified`: the required section exists and has been checked against sibling specs for consistency
-- `blocked`: the required section is missing, contradictory, or still insufficient for implementation
+- `verified`: the required live artifact exists and is consistent with code/schema/proto/automation
+- `partial`: the artifact exists, but production completeness or live E2E proof is missing
+- `blocked`: the artifact is missing, contradictory, or unsafe to treat as implemented
 
-A document may move to `go` only when every blocking checklist row is `verified`.
+Production may move to `go` only when every launch-critical row is `verified` and live E2E certification has passed.
 
 ## 4. Current Verdict
 
-- `phase_1_verdict`: `go`
-- `reason`: build-spec remediation is applied and cross-spec review has verified the blocking implementation concerns
-- `last_reviewed_at`: `2026-03-30`
-- `review_owner`: `planning_cross_spec_review`
+- `spec_readiness_verdict`: `go`
+- `implementation_readiness_verdict`: `partial`
+- `production_readiness_verdict`: `no-go`
+- `reason`: Live schema/proto/contracts, SQLx SEO persistence, `SeoSiteBuildWorkflow`, DataForSEO ingestion, crawl-to-raw storage, raw knowledge ingestion, trust-gated verification, Neo4j/Qdrant/CMS outbox projection, preflight diagnostics, global navigation persistence, draft/QA/CMS/HITL/static publish-control, and deterministic SEO smoke tests exist. Production remains blocked on live E2E certification, production crawler hardening, richer extraction/contradiction coverage, current-run scoped projection barriers, explicit SEO run modes, real external CMS integration policy, and rebuild scheduler execution.
+- `last_reviewed_at`: `2026-05-11`
+- `review_owner`: `live_contract_alignment`
 
 ## 5. Source Build-Spec Package
 
@@ -62,6 +66,32 @@ A document may move to `go` only when every blocking checklist row is `verified`
 | runtime steps and wire contracts | `V5_SEO_Runtime_Step_Contracts_Spec.md` |
 | Neo4j and Qdrant projection | `V5_SEO_Graph_And_Retrieval_Projection_Spec.md` |
 | CMS and HITL control plane | `V5_SEO_CMS_And_HITL_Control_Plane_Spec.md` |
+| current capability and 10/10 execution order | `SEO_SUPERSITE_10_10_EXECUTION_PLAN.md` |
+
+## 5.1 Live Implementation Snapshot
+
+This snapshot reflects the working tree as reviewed on 2026-05-11.
+
+Implemented and automation-checked:
+
+- `SeoSiteBuildWorkflow` is registered and startable through `temporal_starter`.
+- Typed `SeoSiteBuildInputPayload` is persisted before workflow start.
+- Workflow stages include SERP ingest, crawl sources, raw knowledge ingestion, SERP normalize, opportunity build, IA build, link recommend, global reconcile, draft assemble, editorial draft generation, draft normalize, content contract validation, draft QA, CMS review/publish control, static materialization, preview validation, finalize publish, and rebuild detect.
+- DataForSEO credentials can drive live SERP ingestion and crawl queue population.
+- `crawl_sources` stores fetched HTML into `raw.pages`/`raw.sections` and can emit Qdrant outbox events.
+- Raw knowledge ingestion auto-verifies only official/VFS-like sources; competitor-only facts are persisted as pending.
+- Preflight reports context readiness, verified/pending facts, Qdrant point ledger size, live Qdrant/Neo4j probes, and Neo4j/Qdrant/CMS projection outbox status.
+- Global navigation persistence derives `site.navigation_items` from active `site.page_nodes`; it does not seed final menus before source-backed IA exists.
+- Automation gates pass for SEO runtime registration, schema, proto, persistence, projection, CMS, publish gates, traceability, static site builder, step catalog, step execution, and status parity.
+
+Not yet production-complete:
+
+- No live E2E certification has been recorded against real credentials and mutable external sources.
+- The crawler is still an MVP fetcher, not a robots-aware production crawler.
+- Extraction coverage is too narrow for complete visa-rule coverage.
+- Projection barriers are global outbox barriers; current-run scoped barriers still need aggregate/run filtering.
+- Explicit SEO run modes such as `crawl_only`, `draft_only`, and `full_auto_after_approval` are not implemented.
+- Rebuild detection exists, but a full rebuild scheduler/workflow is still missing.
 
 ## 6. Blocking Checklist
 
@@ -143,7 +173,7 @@ A document may move to `go` only when every blocking checklist row is `verified`
 | each implementation concern has one owning spec | `verified` | master plan + build-spec package |
 | build-spec execution order is explicit | `verified` | master plan |
 | dependency references are non-cyclic ownership references | `verified` | master plan |
-| roadmap contains explicit pre-code gate | `verified` | `V5_SEO_SUPERSITE_IMPLEMENTATION_ROADMAP.md` |
+| roadmap contains historical implementation gate context | `verified` | `V5_SEO_SUPERSITE_IMPLEMENTATION_ROADMAP.md` |
 | readiness gate linked into planning layer | `verified` | master plan |
 | readiness gate linked into roadmap layer | `verified` | roadmap |
 | V2 integration touchpoints explicit | `verified` | master plan |
@@ -176,11 +206,16 @@ This document is complete only when:
 - it maps every implementation-critical concern to exactly one source build-spec document
 - it distinguishes document presence from actual verification
 - it exposes a single current implementation verdict
-- it can be used as the pre-flight checklist before Phase 1 code work
+- it can be used as the alignment checklist before code, schema, proto, automation, or documentation changes ship
 
-## 10. Phase 1 Acceptance Scenario
+## 10. Acceptance Scenario
 
-This document requires one representative end-to-end acceptance scenario before Phase 1 implementation can be considered operationally proven.
+This document requires two acceptance levels:
+
+- deterministic fixture acceptance for implementation alignment
+- live E2E certification for production launch
+
+The deterministic fixture path exists to prove that one complete controlled pipeline run can move from SERP-derived inputs to a publishable-or-blocked page verdict without inventing missing contracts. Live E2E remains required before production launch.
 
 ### 10.1 Scenario purpose
 
@@ -203,16 +238,30 @@ The scenario must use real platform object types but does not require production
 
 ### 10.3 Minimum scenario flow
 
-The acceptance scenario must execute this chain successfully:
+The current implementation-alignment scenario must execute this chain successfully:
 
-1. `serp_ingest`
-2. `serp_normalize`
-3. `opportunity_build`
-4. `ia_build`
-5. `link_recommend`
-6. `draft_assemble`
-7. `draft_qa`
-8. publish-control verdict
+1. `load_seo_site_build_input`
+2. `load_verified_support_bundle`
+3. `serp_ingest`
+4. `crawl_sources`
+5. `raw_knowledge_ingestion`
+6. `serp_normalize`
+7. `opportunity_build`
+8. `ia_build`
+9. `link_recommend`
+10. `global_site_reconcile`
+11. `draft_assemble`
+12. `editorial_draft_generate`
+13. `draft_normalize`
+14. `content_contract_validate`
+15. `draft_qa`
+16. `cms_publish` request-review verdict
+17. HITL approval decision lookup when publication is requested
+18. `cms_publish` approved-publish verdict
+19. `publish_materialize`
+20. `render_preview_validate`
+21. `finalize_publish`
+22. `rebuild_detect`
 
 ### 10.4 Required scenario outputs
 
@@ -228,21 +277,21 @@ The scenario passes only if it produces all of the following:
 - one `DraftQaOutput` with explicit verdict
 - required `Neo4j` projections for the page-planning path
 - required `Qdrant` projections for the page-planning and draft-support path
-- one terminal status of either `publish_ready`, `review_required`, `qa_failed`, or `rebuild_required`
+- one terminal status of either `published`, `review_required`, `qa_failed`, `publish_blocked`, or `rebuild_required`
 
 ### 10.5 Required scenario blocking behavior
 
 The scenario also fails unless the system proves these blocking behaviors:
 
 - invalid scope blocks before persistence
-- unsupported factual fragment blocks publish readiness
+- unsupported factual fragment blocks publication
 - unresolved cannibalization blocker prevents silent publication
-- missing required internal links prevents `publish_ready`
-- forbidden SERP-as-fact usage prevents `publish_ready`
+- missing required internal links prevents publication
+- forbidden SERP-as-fact usage prevents publication
 
 ### 10.6 Acceptance verdict rule
 
-Phase 1 is not considered implementation-proven until this scenario is documented, executed against the implementation, and recorded as passing in the delivery record.
+Implementation alignment is considered proven only when deterministic automation passes against the current working tree. Production readiness is not proven until live E2E certification is documented against real credentials, real source pages, live Neo4j/Qdrant projections, HITL approval, and static/CMS output.
 
 ### 10.7 Required fixture package
 
