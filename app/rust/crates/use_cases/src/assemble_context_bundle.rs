@@ -1,12 +1,12 @@
-use prost::Message;
 use contracts::generated::alegria::read_api::v1::{
     citation_fact, AppointmentRuleParams, CitationFact, ContextBundle, DocumentRequiredParams,
     EligibilityRuleParams, FeeItemParams, FormRequiredParams, RuleRoleTypeV1, SourceCitation,
     StepParams, TimelineItemParams, WhereToApplyParams,
 };
-use infrastructure::adapters::sqlx_context_bundle_adapter;
 use infrastructure::adapters::sqlx_adapter::AlegriaPgPool;
+use infrastructure::adapters::sqlx_context_bundle_adapter;
 use primitives::errors::DomainError;
+use prost::Message;
 use runtime_models::RuleParams;
 
 fn read_role_type(role_type: &str) -> i32 {
@@ -84,20 +84,24 @@ fn map_params(params: &RuleParams) -> Option<citation_fact::Params> {
             subtype,
             severity,
             conditions_key,
-        } => Some(citation_fact::Params::EligibilityParams(EligibilityRuleParams {
-            subtype: subtype.clone(),
-            severity: severity.clone(),
-            conditions_key: conditions_key.clone(),
-        })),
+        } => Some(citation_fact::Params::EligibilityParams(
+            EligibilityRuleParams {
+                subtype: subtype.clone(),
+                severity: severity.clone(),
+                conditions_key: conditions_key.clone(),
+            },
+        )),
         RuleParams::AppointmentRule {
             subtype,
             advance_days,
             conditions_key,
-        } => Some(citation_fact::Params::AppointmentParams(AppointmentRuleParams {
-            subtype: subtype.clone(),
-            advance_days: *advance_days,
-            conditions_key: conditions_key.clone(),
-        })),
+        } => Some(citation_fact::Params::AppointmentParams(
+            AppointmentRuleParams {
+                subtype: subtype.clone(),
+                advance_days: *advance_days,
+                conditions_key: conditions_key.clone(),
+            },
+        )),
         RuleParams::FormRequired {
             form_id,
             severity,
@@ -123,7 +127,9 @@ pub async fn assemble_context_bundle_model(
     pool: &AlegriaPgPool,
     context_key: &str,
 ) -> std::result::Result<ContextBundle, DomainError> {
-    let Some(ctx) = sqlx_context_bundle_adapter::load_context_bundle_base(pool, context_key).await? else {
+    let Some(ctx) =
+        sqlx_context_bundle_adapter::load_context_bundle_base(pool, context_key).await?
+    else {
         return Ok(ContextBundle {
             context_key: context_key.to_string(),
             country_code: "".to_string(),
@@ -136,8 +142,8 @@ pub async fn assemble_context_bundle_model(
         });
     };
 
-
-    let rules_rows = sqlx_context_bundle_adapter::load_context_bundle_rules(pool, context_key).await?;
+    let rules_rows =
+        sqlx_context_bundle_adapter::load_context_bundle_rules(pool, context_key).await?;
 
     let mut facts = Vec::new();
     for r in rules_rows {
@@ -177,7 +183,6 @@ pub async fn assemble_context_bundle_model(
     Ok(bundle)
 }
 
-
 pub async fn assemble_context_bundle(
     pool: &AlegriaPgPool,
     context_key: &str,
@@ -186,6 +191,8 @@ pub async fn assemble_context_bundle(
     let mut buf = Vec::new();
     bundle
         .encode(&mut buf)
-        .map_err(|e| DomainError::ContractViolation { message: e.to_string() })?;
+        .map_err(|e| DomainError::ContractViolation {
+            message: e.to_string(),
+        })?;
     Ok(buf)
 }

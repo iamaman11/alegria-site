@@ -98,4 +98,3 @@ pub fn execute(input: &ContradictionGateInput) -> ContradictionGateOutput {
         decision: decision.to_string(),
     }
 }
-

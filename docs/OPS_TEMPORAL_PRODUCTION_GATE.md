@@ -40,7 +40,12 @@ bash automation/temporal_production_gate.sh
   - `resume` сигнал;
   - завершение `COMPLETED`;
   - `pipeline.execution_runs.status = done`.
-- `ContentGenerationWorkflow`:
+- `SeoSiteBuildWorkflow`:
+  - старт по валидному UUID `workflow_id=run_id`;
+  - загружает `verified_support_bundle` из БД по `context_key`;
+  - не продолжает draft path при пустом support bundle;
+  - создает review-required revision;
+  - после approval signal выполняет materialization и render validation;
   - завершение `COMPLETED`;
   - `pipeline.execution_runs.status = done`.
 - `FreshnessCheckWorkflow`:

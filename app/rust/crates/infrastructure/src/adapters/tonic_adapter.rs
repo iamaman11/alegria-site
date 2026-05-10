@@ -31,7 +31,11 @@ impl AnalyticsClient {
         })
     }
 
-    pub async fn run_wcc_optional(&mut self, graph_name: &str, min_cluster: i32) -> Option<WccResult> {
+    pub async fn run_wcc_optional(
+        &mut self,
+        graph_name: &str,
+        min_cluster: i32,
+    ) -> Option<WccResult> {
         let req = WccRequest {
             graph_name: graph_name.to_string(),
             min_cluster,
@@ -48,7 +52,11 @@ impl AnalyticsClient {
         }
     }
 
-    pub async fn build_link_plan(&mut self, context_key: &str, max_links: i32) -> Result<LinkPlanResult> {
+    pub async fn build_link_plan(
+        &mut self,
+        context_key: &str,
+        max_links: i32,
+    ) -> Result<LinkPlanResult> {
         let req = LinkPlanRequest {
             context_key: context_key.to_string(),
             max_links,

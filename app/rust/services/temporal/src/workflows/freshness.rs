@@ -30,7 +30,11 @@ impl FreshnessCheckWorkflow {
         ctx.state_mut(|s| s.phase = "check_data_freshness".to_string());
         let threshold = "24".to_string();
         let report: String = ctx
-            .start_activity(AlegriaActivities::check_data_freshness, threshold, db_opts(30))
+            .start_activity(
+                AlegriaActivities::check_data_freshness,
+                threshold,
+                db_opts(30),
+            )
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
         ctx.state_mut(|s| s.phase = "done".to_string());

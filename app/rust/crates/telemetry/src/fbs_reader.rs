@@ -1,7 +1,7 @@
+use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use serde_json::{json, Value};
 
 pub fn read_runtime_window(name: &str) -> Option<Vec<u8>> {
     let mut target = PathBuf::from("/dev/shm");

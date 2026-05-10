@@ -59,10 +59,28 @@
   - `persist_and_emit`
   - `finalize_run`
 
+- `SeoSiteBuildWorkflow`:
+  - `load_seo_site_build_input`
+  - `load_verified_support_bundle`
+  - `serp_ingest`
+  - `serp_normalize`
+  - `opportunity_build`
+  - `ia_build`
+  - `link_recommend`
+  - `draft_assemble`
+  - `draft_normalize`
+  - `content_contract_validate`
+  - `draft_qa`
+  - `cms_request_review`
+  - `wait/resume (approval signal)`
+  - `publish_materialize`
+  - `render_preview_validate`
+  - `finalize_publish`
+  - `rebuild_detect`
 - `ContentGenerationWorkflow`:
-  - `generate_content`
-  - `validate_blocks`
-  - `finalize_run`
+  - legacy-only
+  - excluded from production SEO launch path
+  - keep disabled by default outside explicit legacy cutover testing
 
 - `FreshnessCheckWorkflow`:
   - `check_data_freshness`
@@ -143,6 +161,8 @@ Out of scope:
 1. E2E run on production-like dataset
 2. Metrics/alerts on failures, retry storm, lag
 3. Full pass of `automation/ci_verify.sh`
+4. SEO launch path uses `SeoSiteBuildWorkflow` with runtime-loaded verified support bundle
+5. SEO publish path materializes artifact through workflow-owned incremental build with validated fallback
 
 ## 6) Backup and restore
 

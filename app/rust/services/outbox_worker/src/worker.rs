@@ -64,10 +64,7 @@ fn emit_heartbeat(worker_id: &str, cycle: u32, claimed: usize) {
         .unwrap_or(0);
     let payload = format!(
         "{{\"worker_id\":\"{}\",\"cycle\":{},\"claimed\":{},\"ts_epoch_ms\":{}}}",
-        worker_id,
-        cycle,
-        claimed,
-        ts_epoch_ms
+        worker_id, cycle, claimed, ts_epoch_ms
     );
     write_runtime_window("worker_heartbeat", payload.as_bytes());
 }
@@ -103,7 +100,11 @@ pub async fn run_worker_loop(
                 warn!(worker_id, error = %err, "failed to subscribe LISTEN channel; fallback polling only");
                 None
             } else {
-                info!(worker_id, channel = OUTBOX_NOTIFY_CHANNEL, "LISTEN channel enabled");
+                info!(
+                    worker_id,
+                    channel = OUTBOX_NOTIFY_CHANNEL,
+                    "LISTEN channel enabled"
+                );
                 Some(l)
             }
         }
@@ -116,7 +117,10 @@ pub async fn run_worker_loop(
     loop {
         if let Some(max) = max_cycles {
             if cycle >= max {
-                info!(worker_id, cycle, "outbox worker max cycles reached, exiting");
+                info!(
+                    worker_id,
+                    cycle, "outbox worker max cycles reached, exiting"
+                );
                 break;
             }
         }
@@ -161,7 +165,12 @@ pub async fn run_worker_loop(
         }
 
         emit_heartbeat(worker_id, cycle, batch.len());
-        info!(worker_id, cycle, claimed = batch.len(), "outbox batch claimed");
+        info!(
+            worker_id,
+            cycle,
+            claimed = batch.len(),
+            "outbox batch claimed"
+        );
 
         for event in batch {
             let event_id = event.event_id;

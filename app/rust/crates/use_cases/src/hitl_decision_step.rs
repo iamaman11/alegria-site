@@ -42,7 +42,10 @@ pub fn execute(input: &HitlDecisionInput) -> HitlDecisionOutput {
         };
     }
 
-    if input.layer_confidence < 0.60 || input.completeness_score < 0.80 || input.unresolved_mappings > 0 {
+    if input.layer_confidence < 0.60
+        || input.completeness_score < 0.80
+        || input.unresolved_mappings > 0
+    {
         return HitlDecisionOutput {
             requires_hitl: true,
             route: "queue_hitl".to_string(),
@@ -60,4 +63,3 @@ pub fn execute(input: &HitlDecisionInput) -> HitlDecisionOutput {
         reason: None,
     }
 }
-

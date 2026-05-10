@@ -69,7 +69,8 @@ pub fn execute(input: &EntitySpanInput) -> EntitySpanOutput {
         });
     }
 
-    for k in ["паспорт", "страхов", "анкет", "декларац", "справк"] {
+    for k in ["паспорт", "страхов", "анкет", "декларац", "справк"]
+    {
         if lowered.contains(k) {
             mentions.push(EntityMention {
                 raw_text: k.to_string(),

@@ -51,12 +51,27 @@ pub fn execute(input: &LayerRouterInput) -> LayerRouterOutput {
     let mut s = 0.05f32;
     let mut c = 0.05f32;
 
-    for k in ["документ", "паспорт", "сбор", "fee", "eur", "must", "требует"] {
+    for k in [
+        "документ",
+        "паспорт",
+        "сбор",
+        "fee",
+        "eur",
+        "must",
+        "требует",
+    ] {
         if text.contains(k) {
             p += 0.12;
         }
     }
-    for k in ["schedule", "график", "выходн", "holiday", "notice", "время работы"] {
+    for k in [
+        "schedule",
+        "график",
+        "выходн",
+        "holiday",
+        "notice",
+        "время работы",
+    ] {
         if text.contains(k) {
             o += 0.14;
         }
@@ -71,7 +86,13 @@ pub fn execute(input: &LayerRouterInput) -> LayerRouterOutput {
             s += 0.14;
         }
     }
-    for k in ["услуга", "стоимость услуги", "под ключ", "консультац", "заказать"] {
+    for k in [
+        "услуга",
+        "стоимость услуги",
+        "под ключ",
+        "консультац",
+        "заказать",
+    ] {
         if text.contains(k) {
             c += 0.14;
         }

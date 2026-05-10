@@ -2,7 +2,6 @@
 ///
 /// Внутри core/use_cases не используются ad hoc JSON runtime-contracts.
 /// Runtime wire для outbox строится строго через protobuf payload bytes.
-
 use contracts::generated::alegria::sync::v1::{
     Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, RuleRoleTypeV1,
 };
@@ -68,7 +67,11 @@ pub fn neo4j_rule_upserted(rule_instance_id: &str, context_key: &str) -> OutboxE
         event_type: "RuleInstanceUpserted".to_string(),
         payload_type: "alegria.outbox.neo4j_rule_upserted.v1".to_string(),
         schema_version: 1,
-        idempotency_key: make_idempotency_key(rule_instance_id, "RuleInstanceUpserted", &payload_bytes),
+        idempotency_key: make_idempotency_key(
+            rule_instance_id,
+            "RuleInstanceUpserted",
+            &payload_bytes,
+        ),
         payload_bytes,
     }
 }
@@ -101,6 +104,7 @@ pub fn qdrant_rule_upsert(
         }),
         distance: "cosine".to_string(),
         vector_size,
+        metadata: Default::default(),
     });
     OutboxEnvelope {
         aggregate_type: "rule_instance".to_string(),
@@ -109,7 +113,11 @@ pub fn qdrant_rule_upsert(
         event_type: "QdrantUpsertCommand".to_string(),
         payload_type: "alegria.outbox.qdrant_upsert_command.v1".to_string(),
         schema_version: 1,
-        idempotency_key: make_idempotency_key(rule_instance_id, "QdrantUpsertCommand", &payload_bytes),
+        idempotency_key: make_idempotency_key(
+            rule_instance_id,
+            "QdrantUpsertCommand",
+            &payload_bytes,
+        ),
         payload_bytes,
     }
 }

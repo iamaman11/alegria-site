@@ -1,6 +1,6 @@
 # V5 SEO Live Schema Design Spec
 
-**Status:** build-spec draft  
+**Status:** build-spec draft; implementation status: partial live schema + SQLx persistence adapter  
 **Owner:** exact live SQL design for SEO operating objects
 
 ---

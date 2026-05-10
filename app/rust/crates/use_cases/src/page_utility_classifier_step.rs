@@ -33,7 +33,8 @@ pub fn execute(input: &PageUtilityClassifierInput) -> PageUtilityClassifierOutpu
         || text.contains("directory")
     {
         PageMode::DirectoryPage
-    } else if text.contains("menu") || text.contains("навигац") || text.contains("breadcrumb") {
+    } else if text.contains("menu") || text.contains("навигац") || text.contains("breadcrumb")
+    {
         PageMode::MenuPage
     } else if text.contains("login")
         || text.contains("signin")

@@ -8,4 +8,3 @@
 pub(crate) fn graphflow_runtime_label() -> &'static str {
     "graphflow_enabled"
 }
-

@@ -35,7 +35,10 @@ impl Default for ReconcileOptions {
     }
 }
 
-pub async fn reconcile_target_system(target_system: &str, opts: &ReconcileOptions) -> Result<ReconcileReport> {
+pub async fn reconcile_target_system(
+    target_system: &str,
+    opts: &ReconcileOptions,
+) -> Result<ReconcileReport> {
     let report = sqlx_reconcile_adapter::reconcile_target_system_default(
         target_system,
         &sqlx_reconcile_adapter::ReconcileOptionsRecord {

@@ -1,6 +1,6 @@
 # V5 SEO CMS And HITL Control Plane Spec
 
-**Status:** build-spec draft  
+**Status:** build-spec draft; implementation status: partial live CMS publish-control handoff  
 **Owner:** exact CMS publish contract and SEO HITL control-plane contract  
 **Depends on:** `V5_SEO_Draft_Assembly_And_QA_Protocol.md`, `V5_SEO_Operations_And_Optimization_Protocol.md`, `V5_SEO_Live_Schema_Design_Spec.md`, `V5_SEO_Runtime_Step_Contracts_Spec.md`
 

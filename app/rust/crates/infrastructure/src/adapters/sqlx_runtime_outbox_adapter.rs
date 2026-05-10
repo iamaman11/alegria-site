@@ -1,5 +1,5 @@
-use sqlx::PgPool;
 use sqlx::types::time::OffsetDateTime;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::proto_runtime_payload_store::{classify_sqlx, contract_violation};
@@ -60,7 +60,9 @@ mod queries {
         )
         .fetch_one(pool)
         .await?;
-        Ok(OutboxEventIdRow { event_id: row.event_id })
+        Ok(OutboxEventIdRow {
+            event_id: row.event_id,
+        })
     }
 
     pub(super) async fn fetch_outbox_event_status(
@@ -152,14 +154,12 @@ pub async fn outbox_get_event_status(
         .await
         .map_err(classify_sqlx)?;
 
-    Ok(row.map(|r| {
-        OutboxEventStatus {
-            event_id: r.event_id.to_string(),
-            status: r.status,
-            retry_count: r.retry_count,
-            next_retry_at: Some(offset_to_utc(r.next_retry_at).to_rfc3339()),
-            last_error: r.last_error,
-            updated_at: offset_to_utc(r.updated_at).to_rfc3339(),
-        }
+    Ok(row.map(|r| OutboxEventStatus {
+        event_id: r.event_id.to_string(),
+        status: r.status,
+        retry_count: r.retry_count,
+        next_retry_at: Some(offset_to_utc(r.next_retry_at).to_rfc3339()),
+        last_error: r.last_error,
+        updated_at: offset_to_utc(r.updated_at).to_rfc3339(),
     }))
 }

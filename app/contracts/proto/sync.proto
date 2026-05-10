@@ -67,6 +67,25 @@ message Neo4jMaterializationCommand {
   Neo4jRuleUpsertPayload payload = 4;
 }
 
+message SeoGraphProjectionPayload {
+  string artifact_type = 1;
+  string artifact_key = 2;
+  string scope_signature = 3;
+}
+
+message SeoCmsEventPayload {
+  string event_key = 1;
+  string event_type = 2;
+  string page_node_key = 3;
+  string scope_signature = 4;
+  string revision_id = 5;
+  string actor_role = 6;
+  string causal_step = 7;
+  string occurred_at = 8;
+  string payload_version = 9;
+  map<string, string> metadata = 10;
+}
+
 message QdrantEntityPayload {
   string rule_instance_id = 1;
   string context_key = 2;
@@ -86,4 +105,5 @@ message QdrantUpsertCommand {
   QdrantEntityPayload payload = 7;
   string distance        = 8;  // "cosine" | "dot" | "euclidean"
   uint32 vector_size     = 9;
+  map<string, string> metadata = 10;
 }

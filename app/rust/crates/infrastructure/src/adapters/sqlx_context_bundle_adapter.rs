@@ -50,7 +50,9 @@ pub async fn load_context_bundle_base(
     Ok(ctx_row.map(|ctx| ContextBundleBaseRow {
         country_code: ctx.get("country_code"),
         visa_family: ctx.get("visa_family"),
-        visa_subtype: ctx.get::<Option<String>, _>("visa_subtype").unwrap_or_default(),
+        visa_subtype: ctx
+            .get::<Option<String>, _>("visa_subtype")
+            .unwrap_or_default(),
         citizenship_code: ctx.get("citizenship_code"),
     }))
 }
@@ -165,8 +167,12 @@ pub async fn load_context_bundle_rules(
                 role_type,
                 params,
                 status: r.get("status"),
-                effective_from: r.get::<Option<String>, _>("effective_from").unwrap_or_default(),
-                effective_to: r.get::<Option<String>, _>("effective_to").unwrap_or_default(),
+                effective_from: r
+                    .get::<Option<String>, _>("effective_from")
+                    .unwrap_or_default(),
+                effective_to: r
+                    .get::<Option<String>, _>("effective_to")
+                    .unwrap_or_default(),
                 source_key: r.get::<Option<String>, _>("source_key"),
                 source_label: r.get::<Option<String>, _>("source_label"),
                 base_url: r.get::<Option<String>, _>("base_url"),

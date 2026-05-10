@@ -12,16 +12,26 @@ mod content_generation;
 mod fact_extraction;
 mod freshness;
 mod runtime;
+mod seo_site_build;
 mod test_hitl;
 
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
 pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) -> WorkerOptions {
     let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
     tracing::info!(task_queue, build_id = %build_id, "building temporal worker options");
-    let mut opts = WorkerOptions::new(task_queue).register_activities(acts).build();
+    let mut opts = WorkerOptions::new(task_queue)
+        .register_activities(acts)
+        .build();
     fact_extraction::register(&mut opts);
-    content_generation::register(&mut opts);
+    if std::env::var("ALLOW_LEGACY_CONTENT_WORKFLOW")
+        .ok()
+        .as_deref()
+        == Some("true")
+    {
+        content_generation::register(&mut opts);
+    }
     freshness::register(&mut opts);
+    seo_site_build::register(&mut opts);
     test_hitl::register(&mut opts);
     opts
 }

@@ -47,7 +47,9 @@ fn normalized(s: &str) -> String {
 fn alias_lookup(s: &str) -> Option<&'static str> {
     match s {
         "паспорт" | "загранпаспорт" => Some("passport"),
-        "страховка" | "медицинская страховка" => Some("medical_insurance"),
+        "страховка" | "медицинская страховка" => {
+            Some("medical_insurance")
+        }
         "анкета" => Some("application_form"),
         "справка о несудимости" => Some("criminal_record_certificate"),
         "vfs" | "визовый центр" => Some("vfs_global"),
@@ -130,9 +132,19 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
         // Symbolic path is exhausted; vector stage is allowed only here.
         let score = pseudo_qdrant_score(&norm);
         let (mapping_type, needs_hitl, key, confidence) = if score >= 0.88 {
-            ("auto_map", false, Some(format!("candidate:{}", norm.replace(' ', "_"))), score)
+            (
+                "auto_map",
+                false,
+                Some(format!("candidate:{}", norm.replace(' ', "_"))),
+                score,
+            )
         } else if score >= 0.75 {
-            ("review", true, Some(format!("candidate:{}", norm.replace(' ', "_"))), score)
+            (
+                "review",
+                true,
+                Some(format!("candidate:{}", norm.replace(' ', "_"))),
+                score,
+            )
         } else {
             ("new_candidate", true, None, score)
         };

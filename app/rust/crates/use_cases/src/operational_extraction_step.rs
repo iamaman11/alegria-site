@@ -22,21 +22,26 @@ pub fn execute(input: &OperationalExtractionInput) -> OperationalExtractionOutpu
     let lowered = input.raw_text.to_lowercase();
     let mut entities = Vec::new();
 
-    if lowered.contains("график") || lowered.contains("schedule") || lowered.contains("время работы") {
+    if lowered.contains("график")
+        || lowered.contains("schedule")
+        || lowered.contains("время работы")
+    {
         entities.push(OperationalEntity {
             entity_kind: "office_schedule".to_string(),
             value: "office_schedule_detected".to_string(),
             confidence: 0.88,
         });
     }
-    if lowered.contains("выходн") || lowered.contains("holiday") || lowered.contains("closed") {
+    if lowered.contains("выходн") || lowered.contains("holiday") || lowered.contains("closed")
+    {
         entities.push(OperationalEntity {
             entity_kind: "closure_notice".to_string(),
             value: "closure_detected".to_string(),
             confidence: 0.86,
         });
     }
-    if lowered.contains("запись") || lowered.contains("appointment") || lowered.contains("slot") {
+    if lowered.contains("запись") || lowered.contains("appointment") || lowered.contains("slot")
+    {
         entities.push(OperationalEntity {
             entity_kind: "appointment_rule".to_string(),
             value: "appointment_detected".to_string(),

@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use sqlx::PgPool;
 
-use super::proto_runtime_payload_store::{
-    classify_sqlx, neo4j_rule_upserted, validation_failure,
-};
+use super::proto_runtime_payload_store::{classify_sqlx, neo4j_rule_upserted, validation_failure};
 use super::sqlx_outbox_adapter::OutboxEnvelope;
 use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
 use primitives::concept_key::normalize_concept_key;
@@ -49,8 +47,8 @@ mod queries {
 }
 
 mod commands {
-    use sqlx::PgPool;
     use sqlx::types::Json;
+    use sqlx::PgPool;
 
     pub(super) async fn upsert_rule_instance(
         pool: &PgPool,
@@ -133,8 +131,9 @@ pub async fn persist_from_pipeline_state(
     for rule in rule_instances {
         let rule_type_key = rule.rule_type_key.clone();
         let concept_key_raw = rule.concept_key.as_str();
-        let concept_key = normalize_concept_key(concept_key_raw)
-            .map_err(|e| validation_failure(format!("invalid concept_key in rule {:?}: {e}", rule)))?;
+        let concept_key = normalize_concept_key(concept_key_raw).map_err(|e| {
+            validation_failure(format!("invalid concept_key in rule {:?}: {e}", rule))
+        })?;
         let role_type = rule.role_type.as_str().to_string();
         let params = rule.params.as_json_value();
         let status = rule.status.clone();

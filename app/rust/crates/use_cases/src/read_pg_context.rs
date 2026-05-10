@@ -2,11 +2,10 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use infrastructure::adapters::sqlx_adapter::AlegriaPgPool;
 use infrastructure::adapters::sqlx_verified_rule_instances_adapter;
-use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct RuleInstanceRow {
-    pub rule_instance_id: Uuid,
+    pub rule_instance_id: String,
     pub context_key: String,
     pub rule_type_key: String,
     pub title: String,

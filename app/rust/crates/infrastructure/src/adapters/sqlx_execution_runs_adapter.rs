@@ -1,5 +1,5 @@
-use sqlx::PgPool;
 use sqlx::types::time::OffsetDateTime;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::proto_runtime_payload_store::{
@@ -159,7 +159,10 @@ async fn read_execution_run_blob(
     }))
 }
 
-pub async fn read_execution_run(pool: &PgPool, run_id: &str) -> std::result::Result<ExecutionRun, DomainError> {
+pub async fn read_execution_run(
+    pool: &PgPool,
+    run_id: &str,
+) -> std::result::Result<ExecutionRun, DomainError> {
     let uuid = Uuid::parse_str(run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
     let row = queries::fetch_execution_run_head(pool, uuid)
@@ -180,14 +183,14 @@ pub async fn read_execution_run(pool: &PgPool, run_id: &str) -> std::result::Res
 }
 
 pub async fn advance_execution_run(
-    pool:        &PgPool,
-    run_id:      &str,
-    new_status:  &str,
+    pool: &PgPool,
+    run_id: &str,
+    new_status: &str,
     data_column: Option<&str>,
     payload_type: Option<&str>,
     schema_version: Option<i32>,
-    payload_bytes:  Option<&[u8]>,
-    payload_hash:  Option<&str>,
+    payload_bytes: Option<&[u8]>,
+    payload_hash: Option<&str>,
 ) -> std::result::Result<(), DomainError> {
     let uuid = Uuid::parse_str(run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
@@ -195,9 +198,19 @@ pub async fn advance_execution_run(
         .await
         .map_err(classify_sqlx)?;
 
-    if let (Some(field_name), Some(payload_type), Some(schema_version), Some(payload_bytes), Some(payload_hash)) =
-        (data_column, payload_type, schema_version, payload_bytes, payload_hash)
-    {
+    if let (
+        Some(field_name),
+        Some(payload_type),
+        Some(schema_version),
+        Some(payload_bytes),
+        Some(payload_hash),
+    ) = (
+        data_column,
+        payload_type,
+        schema_version,
+        payload_bytes,
+        payload_hash,
+    ) {
         commands::upsert_execution_run_blob(
             pool,
             uuid,

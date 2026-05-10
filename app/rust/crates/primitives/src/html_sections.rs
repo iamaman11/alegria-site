@@ -12,13 +12,37 @@ use crate::hash::content_hash_v1;
 
 // (section_type, keywords) — checked as case-insensitive substrings of heading text.
 static SECTION_PATTERNS: &[(&str, &[&str])] = &[
-    ("fees",           &["стоимость", "сборы", "цена", "fee", "консульск", "оплата"]),
-    ("documents",      &["документы", "список", "перечень", "справки", "анкета"]),
-    ("timelines",      &["сроки", "срок", "processing", "рассмотрен"]),
-    ("where_to_apply", &["куда подавать", "где подавать", "адрес", "центр", "посольство"]),
-    ("appointment",    &["запись", "appointment", "записаться", "талон"]),
-    ("eligibility",    &["требования", "условия", "кто может", "право на"]),
-    ("steps",          &["шаги", "этапы", "процесс", "как получить", "порядок"]),
+    (
+        "fees",
+        &["стоимость", "сборы", "цена", "fee", "консульск", "оплата"],
+    ),
+    (
+        "documents",
+        &["документы", "список", "перечень", "справки", "анкета"],
+    ),
+    ("timelines", &["сроки", "срок", "processing", "рассмотрен"]),
+    (
+        "where_to_apply",
+        &[
+            "куда подавать",
+            "где подавать",
+            "адрес",
+            "центр",
+            "посольство",
+        ],
+    ),
+    (
+        "appointment",
+        &["запись", "appointment", "записаться", "талон"],
+    ),
+    (
+        "eligibility",
+        &["требования", "условия", "кто может", "право на"],
+    ),
+    (
+        "steps",
+        &["шаги", "этапы", "процесс", "как получить", "порядок"],
+    ),
 ];
 
 fn identify_section_type(text: &str) -> &'static str {
@@ -118,18 +142,21 @@ pub struct HtmlSection {
 pub fn extract_meta_typed(html: &str) -> HtmlMeta {
     let document = Html::parse_document(html);
 
-    let title = Selector::parse("title").ok()
+    let title = Selector::parse("title")
+        .ok()
         .and_then(|sel| document.select(&sel).next())
         .map(|el| el.text().collect::<String>().trim().to_string())
         .unwrap_or_default();
 
-    let meta_desc = Selector::parse("meta[name='description']").ok()
+    let meta_desc = Selector::parse("meta[name='description']")
+        .ok()
         .and_then(|sel| document.select(&sel).next())
         .and_then(|el| el.value().attr("content"))
         .unwrap_or("")
         .to_string();
 
-    let canonical = Selector::parse("link[rel='canonical']").ok()
+    let canonical = Selector::parse("link[rel='canonical']")
+        .ok()
         .and_then(|sel| document.select(&sel).next())
         .and_then(|el| el.value().attr("href"))
         .unwrap_or("")

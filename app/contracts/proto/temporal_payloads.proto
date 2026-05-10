@@ -16,6 +16,11 @@ message StepContractMeta {
   string model_version = 9;
   string registry_version = 10;
   string error_class = 11;
+  string retry_class = 12;
+  string executor_version = 13;
+  string derivation_version = 14;
+  string scope_signature = 15;
+  uint32 max_retries = 16;
 }
 
 message StepEnvelope {
@@ -233,4 +238,592 @@ message FreshnessReport {
   int64 stale_count = 3;
   double max_lag_hours = 4;
   string status = 5;
+}
+
+message SeoScopePayload {
+  string market = 1;
+  string locale = 2;
+  string country_code = 3;
+  string visa_type = 4;
+  string applicant_profile = 5;
+  string raw_scope_tuple = 6;
+  string scope_signature = 7;
+}
+
+message SeoVerifiedFactSupportState {
+  string fragment_text = 1;
+  string support_ref = 2;
+  string role_type = 3;
+  string source_label = 4;
+  string source_tier = 5;
+  string freshness_class = 6;
+  string observed_at = 7;
+  string valid_until = 8;
+}
+
+message SourceContextChunkState {
+  string chunk_key = 1;
+  string source_url = 2;
+  string source_domain = 3;
+  string heading_path = 4;
+  string section_type = 5;
+  string content_md = 6;
+  string retrieval_score = 7;
+  string usage_policy = 8;
+}
+
+message SeoDraftSectionState {
+  string section_key = 1;
+  string section_role = 2;
+  string heading = 3;
+  string body_markdown = 4;
+  bool required = 5;
+  string traceability_label = 6;
+  repeated string support_refs = 7;
+  string template_key = 8;
+}
+
+message SeoTraceabilityEntryState {
+  string fragment_key = 1;
+  string fragment_text = 2;
+  string fragment_kind = 3;
+  string traceability_label = 4;
+  repeated string support_refs = 5;
+  string validation_verdict = 6;
+}
+
+message ClaimLedgerEntry {
+  string claim_key = 1;
+  string fragment_text = 2;
+  string claim_kind = 3;
+  string traceability_label = 4;
+  repeated string support_refs = 5;
+  string validation_verdict = 6;
+  string source_section_key = 7;
+}
+
+message RenderedContentBlock {
+  string block_key = 1;
+  string block_type = 2;
+  string section_role = 3;
+  string heading = 4;
+  string markdown = 5;
+  repeated string support_refs = 6;
+  string traceability_label = 7;
+  bool required = 8;
+}
+
+message ContentBlockPlanItemState {
+  string plan_item_key = 1;
+  string section_role = 2;
+  string block_type = 3;
+  string heading = 4;
+  bool required = 5;
+  bool deterministic_only = 6;
+  repeated string support_refs = 7;
+  string template_key = 8;
+}
+
+message ContentBlockPlanState {
+  string content_block_plan_key = 1;
+  string page_node_key = 2;
+  string page_brief_key = 3;
+  repeated ContentBlockPlanItemState items = 4;
+  string plan_version = 5;
+}
+
+message SeoPublishBlockerState {
+  string reason_code = 1;
+  string task_type = 2;
+  string required_next_action = 3;
+  string recheck_trigger = 4;
+}
+
+message SectionTemplateBinding {
+  string template_key = 1;
+  string page_type_key = 2;
+  string dominant_intent = 3;
+  string section_role = 4;
+  string heading = 5;
+  string template_body = 6;
+  uint32 template_version = 7;
+  bool required = 8;
+}
+
+message EditorialBrief {
+  string editorial_brief_key = 1;
+  string page_node_key = 2;
+  string page_brief_key = 3;
+  string target_audience = 4;
+  string expertise_goal = 5;
+  repeated SectionTemplateBinding section_templates = 6;
+  repeated SeoVerifiedFactSupportState verified_support = 7;
+  repeated LinkRecommendationState required_links = 8;
+  string truth_snapshot_ref = 9;
+  repeated SourceContextChunkState source_context_chunks = 10;
+}
+
+message LlmDraftRequest {
+  string request_key = 1;
+  string run_id = 2;
+  EditorialBrief editorial_brief = 3;
+  string provider_policy = 4;
+  string prompt_version = 5;
+  string output_contract = 6;
+}
+
+message LlmDraftCandidate {
+  string candidate_key = 1;
+  string request_key = 2;
+  string provider_key = 3;
+  string model_key = 4;
+  string prompt_version = 5;
+  string body_markdown = 6;
+  repeated SeoDraftSectionState sections = 7;
+  repeated ClaimLedgerEntry claim_ledger = 8;
+  repeated RenderedContentBlock content_blocks = 9;
+  string faq_json = 10;
+  string schema_markup_json = 11;
+  string status = 12;
+}
+
+message EditorialDraftGenerateInputPayload {
+  string run_id = 1;
+  LlmDraftRequest request = 2;
+  string provider_policy = 3;
+}
+
+message EditorialDraftGenerateOutputPayload {
+  LlmDraftCandidate candidate = 1;
+  string provider_key = 2;
+  string model_key = 3;
+  string status = 4;
+}
+
+message SeoSiteBuildInputPayload {
+  string run_id = 1;
+  string context_key = 2;
+  SeoScopePayload scope = 3;
+  string query_batch_key = 4;
+  repeated string queries = 5;
+  repeated SeoVerifiedFactSupportState verified_support = 6;
+  repeated string required_page_types = 7;
+}
+
+message SerpPatternState {
+  string serp_pattern_key = 1;
+  string query_batch_key = 2;
+  string scope_signature = 3;
+  string query = 4;
+  string pattern_type = 5;
+  string dominant_intent = 6;
+  double reliability_score = 7;
+  string evidence_ref = 8;
+  string status = 9;
+}
+
+message KeywordClusterState {
+  string cluster_key = 1;
+  string scope_signature = 2;
+  string seed_keyword = 3;
+  string dominant_intent = 4;
+  string status = 5;
+  uint32 cluster_version = 6;
+}
+
+message ContentGapState {
+  string content_gap_key = 1;
+  string scope_signature = 2;
+  string page_node_key = 3;
+  string missing_topic = 4;
+  string severity = 5;
+  string status = 6;
+}
+
+message PageBlueprintState {
+  string blueprint_key = 1;
+  string page_type_key = 2;
+  string dominant_intent = 3;
+  string scope_class = 4;
+  uint32 blueprint_version = 5;
+  string status = 6;
+  repeated string required_sections = 7;
+  string title_pattern = 8;
+  string canonical_url_family = 9;
+}
+
+message PageNodeState {
+  string page_node_key = 1;
+  string scope_signature = 2;
+  string keyword_cluster_key = 3;
+  string blueprint_key = 4;
+  string page_type_key = 5;
+  string dominant_intent = 6;
+  string canonical_slug = 7;
+  string canonical_url_path = 8;
+  string lifecycle_state = 9;
+  string parent_page_node_key = 10;
+  uint32 hierarchy_depth = 11;
+  string menu_group = 12;
+  string breadcrumb_policy = 13;
+  string canonical_url_family = 14;
+}
+
+message CannibalizationConflictState {
+  string conflict_key = 1;
+  string scope_signature = 2;
+  string page_key_a = 3;
+  string page_key_b = 4;
+  string conflict_reason = 5;
+  string severity = 6;
+  string status = 7;
+}
+
+message LinkRecommendationState {
+  string link_recommendation_key = 1;
+  string scope_signature = 2;
+  string source_page_key = 3;
+  string target_page_key = 4;
+  string link_role = 5;
+  string anchor_strategy = 6;
+  bool required_flag = 7;
+  double score = 8;
+  string status = 9;
+}
+
+message PageBriefState {
+  string page_brief_key = 1;
+  string page_node_key = 2;
+  string blueprint_key = 3;
+  string title = 4;
+  string meta_description = 5;
+  uint32 brief_version = 6;
+  string status = 7;
+  string scope_signature = 8;
+  string target_audience = 9;
+  string goal = 10;
+  repeated string required_sections = 11;
+  repeated string metadata_obligations = 12;
+  repeated LinkRecommendationState required_links = 13;
+  string truth_snapshot_ref = 14;
+}
+
+message DraftState {
+  string page_draft_key = 1;
+  string page_node_key = 2;
+  string page_brief_key = 3;
+  uint32 draft_revision = 4;
+  string body_markdown = 5;
+  string qa_verdict = 6;
+  string truth_snapshot_ref = 7;
+  repeated SeoDraftSectionState sections = 8;
+  repeated SeoTraceabilityEntryState traceability_entries = 9;
+  repeated LinkRecommendationState required_links = 10;
+  string schema_markup_json = 11;
+  repeated ClaimLedgerEntry claim_ledger = 12;
+  repeated RenderedContentBlock content_blocks = 13;
+  string faq_json = 14;
+  string llm_provider_key = 15;
+  string llm_model_key = 16;
+  string generation_request_key = 17;
+}
+
+message SerpIngestInputPayload {
+  string run_id = 1;
+  string query_batch_key = 2;
+  SeoScopePayload scope = 3;
+  repeated string queries = 4;
+}
+
+message SerpIngestOutputPayload {
+  string query_batch_key = 1;
+  uint32 query_count = 2;
+  uint32 persisted_snapshot_count = 3;
+  string status = 4;
+}
+
+message CrawlSourcesInputPayload {
+  string run_id = 1;
+  string query_batch_key = 2;
+  uint32 limit = 3;
+  bool emit_qdrant = 4;
+}
+
+message CrawlSourcesOutputPayload {
+  uint32 claimed_count = 1;
+  uint32 crawled_count = 2;
+  uint32 failed_count = 3;
+  uint32 raw_page_count = 4;
+  uint32 raw_section_count = 5;
+  uint32 qdrant_event_count = 6;
+  string status = 7;
+  repeated int64 raw_page_ids = 8;
+  repeated string failed_urls = 9;
+}
+
+message RawKnowledgeIngestionInputPayload {
+  string run_id = 1;
+  string context_key = 2;
+  string query_batch_key = 3;
+  repeated int64 raw_page_ids = 4;
+  string source_policy = 5;
+}
+
+message RawKnowledgeIngestionOutputPayload {
+  uint32 raw_page_count = 1;
+  uint32 raw_section_count = 2;
+  uint32 extracted_rule_count = 3;
+  uint32 verified_rule_count = 4;
+  uint32 outbox_event_count = 5;
+  repeated string changed_truth_keys = 6;
+  string status = 7;
+}
+
+message GlobalSiteReconcileInputPayload {
+  string run_id = 1;
+  SeoScopePayload scope = 2;
+  repeated PageNodeState page_nodes = 3;
+  repeated LinkRecommendationState link_recommendations = 4;
+  string reconcile_reason = 5;
+}
+
+message GlobalSiteReconcileOutputPayload {
+  repeated PageNodeState page_nodes = 1;
+  repeated LinkRecommendationState link_recommendations = 2;
+  uint32 updated_page_count = 3;
+  uint32 updated_link_count = 4;
+  repeated string orphan_page_node_keys = 5;
+  repeated string cannibalization_conflict_keys = 6;
+  string status = 7;
+}
+
+message SerpNormalizeInputPayload {
+  string run_id = 1;
+  string query_batch_key = 2;
+  SeoScopePayload scope = 3;
+  repeated string queries = 4;
+}
+
+message SerpNormalizeOutputPayload {
+  string scope_signature = 1;
+  repeated SerpPatternState serp_patterns = 2;
+  uint32 normalized_query_count = 3;
+}
+
+message OpportunityBuildInputPayload {
+  string run_id = 1;
+  SeoScopePayload scope = 2;
+  repeated SerpPatternState serp_patterns = 3;
+}
+
+message OpportunityBuildOutputPayload {
+  repeated KeywordClusterState keyword_clusters = 1;
+  repeated ContentGapState content_gaps = 2;
+}
+
+message IaBuildInputPayload {
+  string run_id = 1;
+  SeoScopePayload scope = 2;
+  repeated KeywordClusterState keyword_clusters = 3;
+}
+
+message IaBuildOutputPayload {
+  repeated PageNodeState page_nodes = 1;
+  repeated PageBlueprintState page_blueprints = 2;
+  repeated CannibalizationConflictState cannibalization_conflicts = 3;
+}
+
+message LinkRecommendInputPayload {
+  string run_id = 1;
+  repeated PageNodeState page_nodes = 2;
+  uint32 max_links_per_page = 3;
+}
+
+message LinkRecommendOutputPayload {
+  repeated LinkRecommendationState link_recommendations = 1;
+}
+
+message DraftAssembleInputPayload {
+  string run_id = 1;
+  PageNodeState page_node = 2;
+  PageBlueprintState page_blueprint = 3;
+  repeated string factual_fragments = 4;
+  repeated SeoVerifiedFactSupportState verified_support = 5;
+  repeated LinkRecommendationState required_links = 6;
+  repeated SectionTemplateBinding section_templates = 7;
+  LlmDraftCandidate llm_candidate = 8;
+  repeated SourceContextChunkState source_context_chunks = 9;
+}
+
+message DraftAssembleOutputPayload {
+  PageBriefState page_brief = 1;
+  DraftState draft = 2;
+  EditorialBrief editorial_brief = 3;
+  LlmDraftRequest llm_request = 4;
+  ContentBlockPlanState content_block_plan = 5;
+}
+
+message DraftNormalizeInputPayload {
+  string run_id = 1;
+  PageNodeState page_node = 2;
+  PageBlueprintState page_blueprint = 3;
+  repeated string factual_fragments = 4;
+  repeated SeoVerifiedFactSupportState verified_support = 5;
+  repeated LinkRecommendationState required_links = 6;
+  repeated SectionTemplateBinding section_templates = 7;
+  ContentBlockPlanState content_block_plan = 8;
+  LlmDraftCandidate llm_candidate = 9;
+}
+
+message DraftNormalizeOutputPayload {
+  DraftState draft = 1;
+  ContentBlockPlanState content_block_plan = 2;
+}
+
+message ContentContractValidateInputPayload {
+  string run_id = 1;
+  DraftState draft = 2;
+  repeated LinkRecommendationState required_links = 3;
+}
+
+message ContentContractValidateOutputPayload {
+  string verdict = 1;
+  repeated string blocking_reasons = 2;
+  repeated SeoPublishBlockerState blockers = 3;
+}
+
+message DraftQaInputPayload {
+  string run_id = 1;
+  DraftState draft = 2;
+  repeated string supported_fragments = 3;
+  repeated LinkRecommendationState required_links = 4;
+}
+
+message DraftQaOutputPayload {
+  string verdict = 1;
+  repeated string blocking_reasons = 2;
+  uint32 supported_claims = 3;
+  uint32 unsupported_claims = 4;
+  repeated SeoTraceabilityEntryState traceability_entries = 5;
+  repeated SeoPublishBlockerState blockers = 6;
+  string required_next_action = 7;
+}
+
+message CmsPublishInputPayload {
+  string run_id = 1;
+  PageNodeState page_node = 2;
+  DraftState draft = 3;
+  string actor_role = 4;
+  string publish_mode = 5;
+  CmsApprovalDecision approval_decision = 6;
+}
+
+message CmsPublishOutputPayload {
+  string page_node_key = 1;
+  string page_draft_key = 2;
+  string revision_id = 3;
+  string cms_document_id = 4;
+  string verdict = 5;
+  repeated string blocking_reasons = 6;
+  uint32 outbox_emitted = 7;
+  PublishArtifact publish_artifact = 8;
+}
+
+message CmsReviewPage {
+  string page_node_key = 1;
+  string page_draft_key = 2;
+  string revision_id = 3;
+  string canonical_url_path = 4;
+  string title = 5;
+  string status = 6;
+  repeated RenderedContentBlock content_blocks = 7;
+  repeated ClaimLedgerEntry claim_ledger = 8;
+  repeated SeoPublishBlockerState blockers = 9;
+  repeated SeoTraceabilityEntryState traceability_entries = 10;
+}
+
+message CmsApprovalDecision {
+  string decision_key = 1;
+  string page_node_key = 2;
+  string revision_id = 3;
+  string actor_role = 4;
+  string decision = 5;
+  string reason = 6;
+  string decided_at = 7;
+}
+
+message PublishArtifact {
+  string artifact_key = 1;
+  string page_node_key = 2;
+  string revision_id = 3;
+  string artifact_type = 4;
+  string artifact_uri = 5;
+  string manifest_json = 6;
+  string status = 7;
+}
+
+message RenderPreviewPageState {
+  string page_node_key = 1;
+  string revision_id = 2;
+  string canonical_url_path = 3;
+  string rendered_html = 4;
+  bool has_breadcrumbs = 5;
+  bool has_schema_markup = 6;
+  uint32 required_link_count = 7;
+  uint32 rendered_link_count = 8;
+}
+
+message PublishMaterializeInputPayload {
+  string run_id = 1;
+  string page_node_key = 2;
+  string revision_id = 3;
+  string cms_document_id = 4;
+  string canonical_url_path = 5;
+  PublishArtifact publish_artifact = 6;
+  string output_dir = 7;
+  string base_url = 8;
+}
+
+message PublishMaterializeOutputPayload {
+  PublishArtifact publish_artifact = 1;
+  repeated RenderPreviewPageState preview_pages = 2;
+  string materialization_status = 3;
+  repeated string blocking_reasons = 4;
+}
+
+message RenderPreviewValidateInputPayload {
+  string run_id = 1;
+  repeated RenderPreviewPageState preview_pages = 2;
+}
+
+message RenderPreviewValidateOutputPayload {
+  string verdict = 1;
+  repeated string blocking_reasons = 2;
+  repeated SeoPublishBlockerState blockers = 3;
+}
+
+message FinalizePublishInputPayload {
+  string run_id = 1;
+  string page_node_key = 2;
+  string revision_id = 3;
+  PublishArtifact publish_artifact = 4;
+  RenderPreviewValidateOutputPayload render_validation = 5;
+}
+
+message FinalizePublishOutputPayload {
+  string verdict = 1;
+  string current_status = 2;
+  repeated string blocking_reasons = 3;
+  PublishArtifact publish_artifact = 4;
+}
+
+message RebuildDetectInputPayload {
+  string run_id = 1;
+  repeated string changed_truth_keys = 2;
+  repeated PageNodeState page_nodes = 3;
+}
+
+message RebuildDetectOutputPayload {
+  repeated string impacted_page_node_keys = 1;
+  string verdict = 2;
 }

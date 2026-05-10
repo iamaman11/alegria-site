@@ -1,7 +1,10 @@
 use std::env;
 
 use anyhow::{bail, Context, Result};
-use contracts::generated::alegria::sync::v1::{Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand};
+use contracts::generated::alegria::sync::v1::{
+    Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, SeoCmsEventPayload,
+    SeoGraphProjectionPayload,
+};
 use prost::Message;
 
 use infrastructure::adapters::qdrant_client_adapter::{
@@ -10,18 +13,41 @@ use infrastructure::adapters::qdrant_client_adapter::{
 
 const DEFAULT_QDRANT_URL: &str = "http://localhost:6334";
 
-fn qdrant_entity_payload_value(payload: Option<QdrantEntityPayload>) -> serde_json::Value {
-    let Some(payload) = payload else {
-        return serde_json::json!({});
-    };
-    serde_json::json!({
-        "rule_instance_id": payload.rule_instance_id,
-        "context_key": payload.context_key,
-        "rule_type_key": payload.rule_type_key,
-        "concept_key": payload.concept_key,
-        "role_type": payload.role_type,
-        "source_key": payload.source_key,
-    })
+fn qdrant_payload_value(
+    payload: Option<QdrantEntityPayload>,
+    metadata: std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    if let Some(payload) = payload {
+        map.insert(
+            "rule_instance_id".to_string(),
+            serde_json::Value::String(payload.rule_instance_id),
+        );
+        map.insert(
+            "context_key".to_string(),
+            serde_json::Value::String(payload.context_key),
+        );
+        map.insert(
+            "rule_type_key".to_string(),
+            serde_json::Value::String(payload.rule_type_key),
+        );
+        map.insert(
+            "concept_key".to_string(),
+            serde_json::Value::String(payload.concept_key),
+        );
+        map.insert(
+            "role_type".to_string(),
+            serde_json::json!(payload.role_type),
+        );
+        map.insert(
+            "source_key".to_string(),
+            serde_json::Value::String(payload.source_key),
+        );
+    }
+    for (key, value) in metadata {
+        map.insert(key, serde_json::Value::String(value));
+    }
+    serde_json::Value::Object(map)
 }
 
 async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
@@ -56,7 +82,11 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
             cmd.vector.len()
         );
     }
-    let distance = parse_distance(if cmd.distance.is_empty() { "cosine" } else { &cmd.distance })?;
+    let distance = parse_distance(if cmd.distance.is_empty() {
+        "cosine"
+    } else {
+        &cmd.distance
+    })?;
     let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
     let point_id = if cmd.point_id.is_empty() {
         entity_key.to_string()
@@ -68,12 +98,8 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
         .await
         .with_context(|| format!("failed to connect qdrant: {qdrant_url}"))?;
     ensure_dense_collection(&client, collection_name, vector_size, distance).await?;
-    let entity_payload_value = qdrant_entity_payload_value(cmd.payload);
-    let merged_payload = normalize_payload(
-        entity_type,
-        entity_key,
-        Some(&entity_payload_value),
-    );
+    let entity_payload_value = qdrant_payload_value(cmd.payload, cmd.metadata);
+    let merged_payload = normalize_payload(entity_type, entity_key, Some(&entity_payload_value));
     upsert_dense_point(
         &client,
         collection_name,
@@ -83,6 +109,21 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+async fn dispatch_seo_graph_projection(aggregate_key: &str, payload_bytes: &[u8]) -> Result<()> {
+    let payload = SeoGraphProjectionPayload::decode(payload_bytes)
+        .context("invalid protobuf payload for SeoGraphProjectionPayload")?;
+    let artifact_key = if payload.artifact_key.is_empty() {
+        aggregate_key
+    } else {
+        &payload.artifact_key
+    };
+    use_cases::materialize_seo_projection::materialize_seo_artifact(
+        &payload.artifact_type,
+        artifact_key,
+    )
+    .await
 }
 
 async fn dispatch_neo4j_rule_upsert(aggregate_key: &str, payload_bytes: &[u8]) -> Result<()> {
@@ -96,6 +137,21 @@ async fn dispatch_neo4j_rule_upsert(aggregate_key: &str, payload_bytes: &[u8]) -
     use_cases::materialize_rule_instance::materialize_rule_instance(rule_instance_id).await
 }
 
+fn dispatch_cms_event(payload_bytes: &[u8]) -> Result<()> {
+    let payload = SeoCmsEventPayload::decode(payload_bytes)
+        .context("invalid protobuf payload for SeoCmsEventPayload")?;
+    if payload.event_key.trim().is_empty() {
+        bail!("SeoCmsEventPayload.event_key is empty");
+    }
+    if payload.page_node_key.trim().is_empty() {
+        bail!("SeoCmsEventPayload.page_node_key is empty");
+    }
+    if payload.revision_id.trim().is_empty() {
+        bail!("SeoCmsEventPayload.revision_id is empty");
+    }
+    Ok(())
+}
+
 pub async fn dispatch_event(
     target_system: &str,
     event_type: &str,
@@ -107,6 +163,20 @@ pub async fn dispatch_event(
         return match event_type {
             "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload_bytes).await,
             _ => bail!("unsupported qdrant event_type: {event_type}"),
+        };
+    }
+    if target_system == "cms" {
+        return match event_type {
+            "seo_page_review_requested"
+            | "seo_page_approved"
+            | "seo_page_publish_blocked"
+            | "seo_page_published"
+            | "seo_page_deprecated"
+            | "seo_page_rollback_requested"
+            | "seo_page_rolled_back"
+            | "seo_page_rebuild_requested"
+            | "seo_page_canonical_changed" => dispatch_cms_event(payload_bytes),
+            _ => bail!("unsupported cms event_type: {event_type}"),
         };
     }
 
@@ -123,6 +193,13 @@ pub async fn dispatch_event(
         }
         "PageContextUpserted" => {
             use_cases::materialize_page_context::materialize_page_context(aggregate_key).await
+        }
+        "SeoGraphProjectionUpserted" => {
+            if payload_type == "alegria.outbox.seo_graph_projection.v1" {
+                dispatch_seo_graph_projection(aggregate_key, payload_bytes).await
+            } else {
+                bail!("unsupported SEO graph payload_type: {payload_type}")
+            }
         }
         _ => bail!("unsupported event_type: {event_type}"),
     }

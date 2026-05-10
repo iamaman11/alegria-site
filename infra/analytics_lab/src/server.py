@@ -5,11 +5,11 @@ import grpc
 from neo4j import GraphDatabase
 
 try:
-    from src import analytics_pb2
-    from src import analytics_pb2_grpc
+    from src import analytics_pb2  # type: ignore[reportAttributeAccessIssue]
+    from src import analytics_pb2_grpc  # type: ignore[reportAttributeAccessIssue]
 except ImportError:
-    import analytics_pb2
-    import analytics_pb2_grpc
+    import analytics_pb2  # type: ignore[reportMissingImports]
+    import analytics_pb2_grpc  # type: ignore[reportMissingImports]
 
 
 class GraphAnalyticsService(analytics_pb2_grpc.GraphAnalyticsServiceServicer):

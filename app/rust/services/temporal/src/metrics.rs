@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use infrastructure::adapters::hyper_adapter::{
-    Bytes, Full, Incoming, Method, Request, Response, StatusCode, TokioIo, http1, service_fn,
+    http1, service_fn, Bytes, Full, Incoming, Method, Request, Response, StatusCode, TokioIo,
 };
 use prometheus::{
     Encoder, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
@@ -21,14 +21,18 @@ pub struct Metrics {
     pub activity_failures_total: IntCounterVec,
     pub step_execution_reused_total: IntCounterVec,
     pub activity_duration_seconds: HistogramVec,
+    pub support_bundle_events_total: IntCounterVec,
+    pub editorial_provider_events_total: IntCounterVec,
+    pub publish_build_scope_total: IntCounterVec,
+    pub render_validation_failures_total: IntCounterVec,
 }
 
 static METRICS: OnceLock<Metrics> = OnceLock::new();
 
 pub fn global() -> &'static Metrics {
     METRICS.get_or_init(|| {
-        let registry = Registry::new_custom(Some("alegria".to_string()), None)
-            .expect("metrics registry");
+        let registry =
+            Registry::new_custom(Some("alegria".to_string()), None).expect("metrics registry");
         let workflow_starts_total = IntCounterVec::new(
             Opts::new("workflow_starts_total", "Workflow starts"),
             &["workflow_type"],
@@ -64,6 +68,35 @@ pub fn global() -> &'static Metrics {
             &["step_name"],
         )
         .expect("activity_duration_seconds");
+        let support_bundle_events_total = IntCounterVec::new(
+            Opts::new("support_bundle_events_total", "Support bundle events"),
+            &["outcome"],
+        )
+        .expect("support_bundle_events_total");
+        let editorial_provider_events_total = IntCounterVec::new(
+            Opts::new(
+                "editorial_provider_events_total",
+                "Editorial provider events",
+            ),
+            &["provider_key", "outcome"],
+        )
+        .expect("editorial_provider_events_total");
+        let publish_build_scope_total = IntCounterVec::new(
+            Opts::new(
+                "publish_build_scope_total",
+                "Publish materialization build scopes",
+            ),
+            &["build_scope", "outcome"],
+        )
+        .expect("publish_build_scope_total");
+        let render_validation_failures_total = IntCounterVec::new(
+            Opts::new(
+                "render_validation_failures_total",
+                "Render validation failures",
+            ),
+            &["reason"],
+        )
+        .expect("render_validation_failures_total");
 
         for collector in [
             Box::new(workflow_starts_total.clone()) as Box<dyn prometheus::core::Collector>,
@@ -73,6 +106,10 @@ pub fn global() -> &'static Metrics {
             Box::new(activity_failures_total.clone()),
             Box::new(step_execution_reused_total.clone()),
             Box::new(activity_duration_seconds.clone()),
+            Box::new(support_bundle_events_total.clone()),
+            Box::new(editorial_provider_events_total.clone()),
+            Box::new(publish_build_scope_total.clone()),
+            Box::new(render_validation_failures_total.clone()),
         ] {
             registry.register(collector).expect("register collector");
         }
@@ -83,6 +120,7 @@ pub fn global() -> &'static Metrics {
             "FactExtractionWorkflow",
             "ContentGenerationWorkflow",
             "FreshnessCheckWorkflow",
+            "SeoSiteBuildWorkflow",
             "TestHitlWorkflow",
         ] {
             let _ = workflow_starts_total.with_label_values(&[workflow_type]);
@@ -112,8 +150,43 @@ pub fn global() -> &'static Metrics {
             ("generate_content", "bootstrap"),
             ("validate_blocks", "bootstrap"),
             ("finalize_run", "bootstrap"),
+            ("load_verified_support_bundle", "bootstrap"),
+            ("editorial_draft_generate", "bootstrap"),
+            ("publish_materialize", "bootstrap"),
+            ("render_preview_validate", "bootstrap"),
         ] {
             let _ = activity_failures_total.with_label_values(&[step_name, error_class]);
+        }
+        for outcome in ["loaded", "empty", "failed"] {
+            let _ = support_bundle_events_total.with_label_values(&[outcome]);
+        }
+        for (provider_key, outcome) in [
+            ("openai", "selected"),
+            ("anthropic", "selected"),
+            ("gemini", "selected"),
+            ("local_compatible", "selected"),
+            ("deterministic_fixture", "selected"),
+            ("deterministic_fixture", "fallback"),
+            ("unknown", "failed"),
+        ] {
+            let _ = editorial_provider_events_total.with_label_values(&[provider_key, outcome]);
+        }
+        for (build_scope, outcome) in [
+            ("page", "built"),
+            ("site", "built"),
+            ("page", "failed"),
+            ("site", "failed"),
+        ] {
+            let _ = publish_build_scope_total.with_label_values(&[build_scope, outcome]);
+        }
+        for reason in [
+            "missing_html",
+            "missing_breadcrumbs",
+            "missing_schema_markup",
+            "missing_rendered_links",
+            "blocked",
+        ] {
+            let _ = render_validation_failures_total.with_label_values(&[reason]);
         }
 
         Metrics {
@@ -125,6 +198,10 @@ pub fn global() -> &'static Metrics {
             activity_failures_total,
             step_execution_reused_total,
             activity_duration_seconds,
+            support_bundle_events_total,
+            editorial_provider_events_total,
+            publish_build_scope_total,
+            render_validation_failures_total,
         }
     })
 }

@@ -114,7 +114,10 @@ pub fn verify_fact_typed(
     }
 
     let get_trust = |c: &FactCandidate| -> i64 {
-        registry.get(&c.source_key).map(|s| s.trust_level).unwrap_or(0)
+        registry
+            .get(&c.source_key)
+            .map(|s| s.trust_level)
+            .unwrap_or(0)
     };
 
     let get_source_type = |c: &FactCandidate| -> &str {

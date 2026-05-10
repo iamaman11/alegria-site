@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 
@@ -25,6 +24,9 @@ def main() -> int:
         x
         for x in [
             must_contain(PROTO, "message StepContractMeta"),
+            must_contain(PROTO, "string retry_class"),
+            must_contain(PROTO, "string executor_version"),
+            must_contain(PROTO, "string derivation_version"),
             must_contain(PROTO, "message StepEnvelope"),
             must_contain(ACTIVITIES_RUNTIME, "pub(crate) async fn execute_step<I, O, F, Fut>("),
             must_contain(ACTIVITIES_RUNTIME, "derive_step_keys("),

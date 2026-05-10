@@ -6,18 +6,18 @@ use infrastructure::adapters::temporalio_sdk_adapter::{connect_client, WorkflowL
 use tracing::info;
 use use_cases::pipeline_runtime::{
     append_reconcile_summary_action, append_reconcile_target_action, begin_reconcile_run,
-    finish_reconcile_run, ReconcileSummary,
-    ReconcileTargetReportRecord,
+    finish_reconcile_run, ReconcileSummary, ReconcileTargetReportRecord,
 };
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt().json().init();
 
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres_password@localhost:5433/alegria".to_string());
-    let temporal_url = std::env::var("TEMPORAL_URL")
-        .unwrap_or_else(|_| "http://localhost:7233".to_string());
+    let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres_password@localhost:5433/alegria".to_string()
+    });
+    let temporal_url =
+        std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string());
     let pool = connect_pg(&database_url).await?;
     let reconcile_run_id = begin_reconcile_run(&pool).await?;
 
@@ -46,7 +46,9 @@ async fn main() -> Result<()> {
     );
     while let Some(item) = stream.next().await {
         let execution = item?;
-        let started_at = execution.start_time().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let started_at = execution
+            .start_time()
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
         let age = std::time::SystemTime::now()
             .duration_since(started_at)
             .unwrap_or_default();
@@ -153,11 +155,7 @@ async fn main() -> Result<()> {
     );
     info!(
         reconcile_run_id,
-        open_dlq,
-        stale_runs,
-        pending_hitl_runs,
-        stuck_steps,
-        "runtime fail-safe snapshot"
+        open_dlq, stale_runs, pending_hitl_runs, stuck_steps, "runtime fail-safe snapshot"
     );
 
     Ok(())

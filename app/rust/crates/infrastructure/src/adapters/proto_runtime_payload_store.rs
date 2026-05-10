@@ -1,24 +1,40 @@
-use std::collections::BTreeMap;
-use serde_json::Value;
 use contracts::generated::alegria::sync::v1::Neo4jRuleUpsertPayload;
 use contracts::generated::alegria::temporal::v1::{
-    ExtractedPayloadState, FactExtractionInputPayload, FactValueState, FreshnessReport,
-    GenerationBlockState, GenerationResultState, HitlDecision, HitlPauseInfo,
-    HitlResolutionInput, PersistReport, ReconcileSummaryPayload,
-    ReconcileTargetReportPayload, RuleInstanceCandidateState, RuleParamsState, RuleRoleTypeV1,
-    RuntimeErrorPayload, StringPayload, ValidationInputPayload, ValidationReport, VerifyReport,
+    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload, CmsReviewPage,
+    ContentBlockPlanState, ContentContractValidateInputPayload,
+    ContentContractValidateOutputPayload, CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
+    DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
+    DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
+    EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload, ExtractedPayloadState,
+    FactExtractionInputPayload, FactValueState, FinalizePublishInputPayload,
+    FinalizePublishOutputPayload, FreshnessReport, GenerationBlockState, GenerationResultState,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision, HitlPauseInfo,
+    HitlResolutionInput, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
+    LinkRecommendOutputPayload, LlmDraftCandidate, LlmDraftRequest, OpportunityBuildInputPayload,
+    OpportunityBuildOutputPayload, PersistReport, PublishArtifact, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    ReconcileSummaryPayload, ReconcileTargetReportPayload, RenderPreviewValidateInputPayload,
+    RenderPreviewValidateOutputPayload, RuleInstanceCandidateState, RuleParamsState,
+    RuleRoleTypeV1, RuntimeErrorPayload, SeoSiteBuildInputPayload, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload, StringPayload,
+    ValidationInputPayload, ValidationReport, VerifyReport,
 };
-use primitives::facts_extractor::{ExtractedFactsEnvelope, FactValue, RuleParams as ExtractedRuleParams};
+use primitives::facts_extractor::{
+    ExtractedFactsEnvelope, FactValue, RuleParams as ExtractedRuleParams,
+};
 use prost::Message;
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 use super::sqlx_outbox_adapter::OutboxEnvelope;
+use primitives::errors::DomainError;
+use primitives::hash::{blake3_hex, content_hash_v1};
 use runtime_models::{
     ExecutionRunBlob, ExtractedPayload, FactCandidateValue, ReconcileSummary,
-    ReconcileTargetReportRecord, RuleInstanceCandidate, RuleParams as RuntimeRuleParams, RuleRoleType,
-    ValidationInputRecord,
+    ReconcileTargetReportRecord, RuleInstanceCandidate, RuleParams as RuntimeRuleParams,
+    RuleRoleType, ValidationInputRecord,
 };
-use primitives::hash::{blake3_hex, content_hash_v1};
-use primitives::errors::DomainError;
 
 pub(crate) fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
     value.encode_to_vec()
@@ -86,7 +102,10 @@ pub(crate) fn classify_sqlx(err: sqlx::Error) -> DomainError {
     }
 }
 
-pub(crate) fn decode_prost<T: Message + Default>(payload_bytes: &[u8], label: &str) -> std::result::Result<T, DomainError> {
+pub(crate) fn decode_prost<T: Message + Default>(
+    payload_bytes: &[u8],
+    label: &str,
+) -> std::result::Result<T, DomainError> {
     T::decode(payload_bytes)
         .map_err(|e| contract_violation(format!("failed to decode {label}: {e}")))
 }
@@ -94,9 +113,7 @@ pub(crate) fn decode_prost<T: Message + Default>(payload_bytes: &[u8], label: &s
 fn encode_rule_params_state(params: &RuntimeRuleParams) -> RuleParamsState {
     match params {
         RuntimeRuleParams::Fee {
-            amount,
-            currency,
-            ..
+            amount, currency, ..
         } => RuleParamsState {
             amount: Some(*amount),
             currency: Some(currency.clone()),
@@ -162,9 +179,8 @@ fn encode_rule_role_type(role: RuleRoleType) -> i32 {
 }
 
 fn decode_rule_role_type(value: i32) -> std::result::Result<RuleRoleType, DomainError> {
-    let role = RuleRoleTypeV1::try_from(value).map_err(|_| {
-        contract_violation(format!("unknown RuleRoleTypeV1 enum value: {value}"))
-    })?;
+    let role = RuleRoleTypeV1::try_from(value)
+        .map_err(|_| contract_violation(format!("unknown RuleRoleTypeV1 enum value: {value}")))?;
     Ok(match role {
         RuleRoleTypeV1::MustProvide => RuleRoleType::MustProvide,
         RuleRoleTypeV1::MustPay => RuleRoleType::MustPay,
@@ -181,7 +197,9 @@ fn decode_rule_role_type(value: i32) -> std::result::Result<RuleRoleType, Domain
         RuleRoleTypeV1::FormRequired => RuleRoleType::FormRequired,
         RuleRoleTypeV1::Step => RuleRoleType::Step,
         RuleRoleTypeV1::Unspecified => {
-            return Err(contract_violation("unspecified RuleRoleTypeV1 is not allowed"));
+            return Err(contract_violation(
+                "unspecified RuleRoleTypeV1 is not allowed",
+            ));
         }
     })
 }
@@ -189,19 +207,39 @@ fn decode_rule_role_type(value: i32) -> std::result::Result<RuleRoleType, Domain
 fn encode_fact_value_state(value: &FactCandidateValue) -> FactValueState {
     match value {
         FactCandidateValue::Null => FactValueState {
-            value: Some(contracts::generated::alegria::temporal::v1::fact_value_state::Value::NullValue(true)),
+            value: Some(
+                contracts::generated::alegria::temporal::v1::fact_value_state::Value::NullValue(
+                    true,
+                ),
+            ),
         },
         FactCandidateValue::Integer(v) => FactValueState {
-            value: Some(contracts::generated::alegria::temporal::v1::fact_value_state::Value::IntegerValue(*v)),
+            value: Some(
+                contracts::generated::alegria::temporal::v1::fact_value_state::Value::IntegerValue(
+                    *v,
+                ),
+            ),
         },
         FactCandidateValue::Decimal(v) => FactValueState {
-            value: Some(contracts::generated::alegria::temporal::v1::fact_value_state::Value::DecimalValue(*v)),
+            value: Some(
+                contracts::generated::alegria::temporal::v1::fact_value_state::Value::DecimalValue(
+                    *v,
+                ),
+            ),
         },
         FactCandidateValue::Text(v) => FactValueState {
-            value: Some(contracts::generated::alegria::temporal::v1::fact_value_state::Value::TextValue(v.clone())),
+            value: Some(
+                contracts::generated::alegria::temporal::v1::fact_value_state::Value::TextValue(
+                    v.clone(),
+                ),
+            ),
         },
         FactCandidateValue::Boolean(v) => FactValueState {
-            value: Some(contracts::generated::alegria::temporal::v1::fact_value_state::Value::BooleanValue(*v)),
+            value: Some(
+                contracts::generated::alegria::temporal::v1::fact_value_state::Value::BooleanValue(
+                    *v,
+                ),
+            ),
         },
     }
 }
@@ -247,60 +285,112 @@ impl RuntimeProtoPayload for &str {
     }
 
     fn decode_payload_bytes(_payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        Err(contract_violation("cannot decode borrowed &str runtime payload"))
+        Err(contract_violation(
+            "cannot decode borrowed &str runtime payload",
+        ))
     }
 }
 
 impl RuntimeProtoPayload for VerifyReport {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.VerifyReport" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "VerifyReport") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.VerifyReport"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "VerifyReport")
+    }
 }
 
 impl RuntimeProtoPayload for PersistReport {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.PersistReport" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "PersistReport") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.PersistReport"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "PersistReport")
+    }
 }
 
 impl RuntimeProtoPayload for HitlPauseInfo {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.HitlPauseInfo" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "HitlPauseInfo") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.HitlPauseInfo"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "HitlPauseInfo")
+    }
 }
 
 impl RuntimeProtoPayload for HitlResolutionInput {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.HitlResolutionInput" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "HitlResolutionInput") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.HitlResolutionInput"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "HitlResolutionInput")
+    }
 }
 
 impl RuntimeProtoPayload for HitlDecision {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.HitlDecision" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "HitlDecision") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.HitlDecision"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "HitlDecision")
+    }
 }
 
 impl RuntimeProtoPayload for ValidationInputPayload {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.ValidationInputPayload" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "ValidationInputPayload") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ValidationInputPayload"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "ValidationInputPayload")
+    }
 }
 
 impl RuntimeProtoPayload for ValidationReport {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.ValidationReport" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "ValidationReport") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ValidationReport"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "ValidationReport")
+    }
 }
 
 impl RuntimeProtoPayload for FreshnessReport {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.FreshnessReport" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "FreshnessReport") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.FreshnessReport"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "FreshnessReport")
+    }
 }
 
 impl RuntimeProtoPayload for ExtractedPayload {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.ExtractedPayloadState" }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ExtractedPayloadState"
+    }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
         let payload = ExtractedPayloadState {
@@ -323,29 +413,36 @@ impl RuntimeProtoPayload for ExtractedPayload {
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload = decode_prost::<ExtractedPayloadState>(payload_bytes, "ExtractedPayloadState")?;
+        let payload =
+            decode_prost::<ExtractedPayloadState>(payload_bytes, "ExtractedPayloadState")?;
         let mut rules = Vec::with_capacity(payload.rule_instances.len());
         for rule in payload.rule_instances {
             let role_type = decode_rule_role_type(rule.role_type)?;
             rules.push(RuleInstanceCandidate {
-                    rule_type_key: rule.rule_type_key,
-                    concept_key: rule.concept_key,
-                    role_type,
-                    params: decode_rule_params_state(rule.params),
-                    status: rule.status,
-                    source_key: rule.source_key,
-                    condition_expr: rule.condition_expr,
+                rule_type_key: rule.rule_type_key,
+                concept_key: rule.concept_key,
+                role_type,
+                params: decode_rule_params_state(rule.params),
+                status: rule.status,
+                source_key: rule.source_key,
+                condition_expr: rule.condition_expr,
             });
         }
         Ok(ExtractedPayload {
             rule_instances: rules,
-            facts: payload.facts.into_iter().map(decode_fact_value_state).collect(),
+            facts: payload
+                .facts
+                .into_iter()
+                .map(decode_fact_value_state)
+                .collect(),
         })
     }
 }
 
 impl RuntimeProtoPayload for BTreeMap<String, String> {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.GenerationResultState" }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.GenerationResultState"
+    }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
         Ok(GenerationResultState {
@@ -361,7 +458,8 @@ impl RuntimeProtoPayload for BTreeMap<String, String> {
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload = decode_prost::<GenerationResultState>(payload_bytes, "GenerationResultState")?;
+        let payload =
+            decode_prost::<GenerationResultState>(payload_bytes, "GenerationResultState")?;
         Ok(payload
             .blocks
             .into_iter()
@@ -371,7 +469,9 @@ impl RuntimeProtoPayload for BTreeMap<String, String> {
 }
 
 impl RuntimeProtoPayload for ReconcileSummary {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.ReconcileSummaryPayload" }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ReconcileSummaryPayload"
+    }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
         Ok(ReconcileSummaryPayload {
@@ -384,7 +484,8 @@ impl RuntimeProtoPayload for ReconcileSummary {
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload = decode_prost::<ReconcileSummaryPayload>(payload_bytes, "ReconcileSummaryPayload")?;
+        let payload =
+            decode_prost::<ReconcileSummaryPayload>(payload_bytes, "ReconcileSummaryPayload")?;
         Ok(Self {
             open_dlq: payload.open_dlq,
             stale_runs: payload.stale_runs,
@@ -395,7 +496,9 @@ impl RuntimeProtoPayload for ReconcileSummary {
 }
 
 impl RuntimeProtoPayload for ReconcileTargetReportRecord {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.ReconcileTargetReportPayload" }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ReconcileTargetReportPayload"
+    }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
         Ok(ReconcileTargetReportPayload {
@@ -410,7 +513,10 @@ impl RuntimeProtoPayload for ReconcileTargetReportRecord {
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload = decode_prost::<ReconcileTargetReportPayload>(payload_bytes, "ReconcileTargetReportPayload")?;
+        let payload = decode_prost::<ReconcileTargetReportPayload>(
+            payload_bytes,
+            "ReconcileTargetReportPayload",
+        )?;
         Ok(Self {
             target_system: payload.target_system,
             dry_run: payload.dry_run,
@@ -423,10 +529,195 @@ impl RuntimeProtoPayload for ReconcileTargetReportRecord {
 }
 
 impl RuntimeProtoPayload for RuntimeErrorPayload {
-    fn payload_type() -> &'static str { "alegria.temporal.v1.RuntimeErrorPayload" }
-    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> { Ok(self.encode_to_vec()) }
-    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> { decode_prost(payload_bytes, "RuntimeErrorPayload") }
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.RuntimeErrorPayload"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "RuntimeErrorPayload")
+    }
 }
+
+macro_rules! impl_prost_runtime_payload {
+    ($ty:ty, $name:literal) => {
+        impl RuntimeProtoPayload for $ty {
+            fn payload_type() -> &'static str {
+                $name
+            }
+            fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+                Ok(self.encode_to_vec())
+            }
+            fn decode_payload_bytes(
+                payload_bytes: &[u8],
+            ) -> std::result::Result<Self, DomainError> {
+                decode_prost(payload_bytes, stringify!($ty))
+            }
+        }
+    };
+}
+
+impl_prost_runtime_payload!(
+    SeoSiteBuildInputPayload,
+    "alegria.temporal.v1.SeoSiteBuildInputPayload"
+);
+impl_prost_runtime_payload!(
+    SerpIngestInputPayload,
+    "alegria.temporal.v1.SerpIngestInputPayload"
+);
+impl_prost_runtime_payload!(
+    SerpIngestOutputPayload,
+    "alegria.temporal.v1.SerpIngestOutputPayload"
+);
+impl_prost_runtime_payload!(
+    CrawlSourcesInputPayload,
+    "alegria.temporal.v1.CrawlSourcesInputPayload"
+);
+impl_prost_runtime_payload!(
+    CrawlSourcesOutputPayload,
+    "alegria.temporal.v1.CrawlSourcesOutputPayload"
+);
+impl_prost_runtime_payload!(
+    RawKnowledgeIngestionInputPayload,
+    "alegria.temporal.v1.RawKnowledgeIngestionInputPayload"
+);
+impl_prost_runtime_payload!(
+    RawKnowledgeIngestionOutputPayload,
+    "alegria.temporal.v1.RawKnowledgeIngestionOutputPayload"
+);
+impl_prost_runtime_payload!(
+    GlobalSiteReconcileInputPayload,
+    "alegria.temporal.v1.GlobalSiteReconcileInputPayload"
+);
+impl_prost_runtime_payload!(
+    GlobalSiteReconcileOutputPayload,
+    "alegria.temporal.v1.GlobalSiteReconcileOutputPayload"
+);
+impl_prost_runtime_payload!(
+    SerpNormalizeInputPayload,
+    "alegria.temporal.v1.SerpNormalizeInputPayload"
+);
+impl_prost_runtime_payload!(
+    SerpNormalizeOutputPayload,
+    "alegria.temporal.v1.SerpNormalizeOutputPayload"
+);
+impl_prost_runtime_payload!(
+    OpportunityBuildInputPayload,
+    "alegria.temporal.v1.OpportunityBuildInputPayload"
+);
+impl_prost_runtime_payload!(
+    OpportunityBuildOutputPayload,
+    "alegria.temporal.v1.OpportunityBuildOutputPayload"
+);
+impl_prost_runtime_payload!(
+    IaBuildInputPayload,
+    "alegria.temporal.v1.IaBuildInputPayload"
+);
+impl_prost_runtime_payload!(
+    IaBuildOutputPayload,
+    "alegria.temporal.v1.IaBuildOutputPayload"
+);
+impl_prost_runtime_payload!(
+    LinkRecommendInputPayload,
+    "alegria.temporal.v1.LinkRecommendInputPayload"
+);
+impl_prost_runtime_payload!(
+    LinkRecommendOutputPayload,
+    "alegria.temporal.v1.LinkRecommendOutputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftAssembleInputPayload,
+    "alegria.temporal.v1.DraftAssembleInputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftAssembleOutputPayload,
+    "alegria.temporal.v1.DraftAssembleOutputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftNormalizeInputPayload,
+    "alegria.temporal.v1.DraftNormalizeInputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftNormalizeOutputPayload,
+    "alegria.temporal.v1.DraftNormalizeOutputPayload"
+);
+impl_prost_runtime_payload!(
+    ContentBlockPlanState,
+    "alegria.temporal.v1.ContentBlockPlanState"
+);
+impl_prost_runtime_payload!(LlmDraftRequest, "alegria.temporal.v1.LlmDraftRequest");
+impl_prost_runtime_payload!(LlmDraftCandidate, "alegria.temporal.v1.LlmDraftCandidate");
+impl_prost_runtime_payload!(
+    EditorialDraftGenerateInputPayload,
+    "alegria.temporal.v1.EditorialDraftGenerateInputPayload"
+);
+impl_prost_runtime_payload!(
+    EditorialDraftGenerateOutputPayload,
+    "alegria.temporal.v1.EditorialDraftGenerateOutputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftQaInputPayload,
+    "alegria.temporal.v1.DraftQaInputPayload"
+);
+impl_prost_runtime_payload!(
+    ContentContractValidateInputPayload,
+    "alegria.temporal.v1.ContentContractValidateInputPayload"
+);
+impl_prost_runtime_payload!(
+    ContentContractValidateOutputPayload,
+    "alegria.temporal.v1.ContentContractValidateOutputPayload"
+);
+impl_prost_runtime_payload!(
+    DraftQaOutputPayload,
+    "alegria.temporal.v1.DraftQaOutputPayload"
+);
+impl_prost_runtime_payload!(
+    CmsPublishInputPayload,
+    "alegria.temporal.v1.CmsPublishInputPayload"
+);
+impl_prost_runtime_payload!(
+    CmsPublishOutputPayload,
+    "alegria.temporal.v1.CmsPublishOutputPayload"
+);
+impl_prost_runtime_payload!(CmsReviewPage, "alegria.temporal.v1.CmsReviewPage");
+impl_prost_runtime_payload!(
+    CmsApprovalDecision,
+    "alegria.temporal.v1.CmsApprovalDecision"
+);
+impl_prost_runtime_payload!(PublishArtifact, "alegria.temporal.v1.PublishArtifact");
+impl_prost_runtime_payload!(
+    PublishMaterializeInputPayload,
+    "alegria.temporal.v1.PublishMaterializeInputPayload"
+);
+impl_prost_runtime_payload!(
+    PublishMaterializeOutputPayload,
+    "alegria.temporal.v1.PublishMaterializeOutputPayload"
+);
+impl_prost_runtime_payload!(
+    RenderPreviewValidateInputPayload,
+    "alegria.temporal.v1.RenderPreviewValidateInputPayload"
+);
+impl_prost_runtime_payload!(
+    RenderPreviewValidateOutputPayload,
+    "alegria.temporal.v1.RenderPreviewValidateOutputPayload"
+);
+impl_prost_runtime_payload!(
+    FinalizePublishInputPayload,
+    "alegria.temporal.v1.FinalizePublishInputPayload"
+);
+impl_prost_runtime_payload!(
+    FinalizePublishOutputPayload,
+    "alegria.temporal.v1.FinalizePublishOutputPayload"
+);
+impl_prost_runtime_payload!(
+    RebuildDetectInputPayload,
+    "alegria.temporal.v1.RebuildDetectInputPayload"
+);
+impl_prost_runtime_payload!(
+    RebuildDetectOutputPayload,
+    "alegria.temporal.v1.RebuildDetectOutputPayload"
+);
 
 pub fn decode_extracted_payload(payload: Option<&ExecutionRunBlob>) -> ExtractedPayload {
     let Some(payload) = payload else {
@@ -449,14 +740,17 @@ pub fn build_extracted_payload_from_typed(extracted: ExtractedFactsEnvelope) -> 
                 role_type: RuleRoleType::parse(&rule.role_type).unwrap_or_default(),
                 params: match rule.params {
                     ExtractedRuleParams::None => RuntimeRuleParams::None,
-                    ExtractedRuleParams::Fee { amount, currency, severity, conditions_key } => {
-                        RuntimeRuleParams::Fee {
-                            amount,
-                            currency,
-                            severity,
-                            channel: None,
-                            conditions_key,
-                        }
+                    ExtractedRuleParams::Fee {
+                        amount,
+                        currency,
+                        severity,
+                        conditions_key,
+                    } => RuntimeRuleParams::Fee {
+                        amount,
+                        currency,
+                        severity,
+                        channel: None,
+                        conditions_key,
                     },
                     ExtractedRuleParams::Document {
                         severity,
@@ -564,10 +858,14 @@ pub fn decode_validation_input(input_payload: Option<&ExecutionRunBlob>) -> Vali
         Err(_) => return ValidationInputRecord::default(),
     };
     ValidationInputRecord {
-        required_links_json: String::from_utf8(payload.required_links_json_utf8).unwrap_or_else(|_| "[]".to_string()),
-        required_keys_json: String::from_utf8(payload.required_keys_json_utf8).unwrap_or_else(|_| "[]".to_string()),
-        used_rule_keys_json: String::from_utf8(payload.used_rule_keys_json_utf8).unwrap_or_else(|_| "[]".to_string()),
-        used_fact_keys_json: String::from_utf8(payload.used_fact_keys_json_utf8).unwrap_or_else(|_| "[]".to_string()),
+        required_links_json: String::from_utf8(payload.required_links_json_utf8)
+            .unwrap_or_else(|_| "[]".to_string()),
+        required_keys_json: String::from_utf8(payload.required_keys_json_utf8)
+            .unwrap_or_else(|_| "[]".to_string()),
+        used_rule_keys_json: String::from_utf8(payload.used_rule_keys_json_utf8)
+            .unwrap_or_else(|_| "[]".to_string()),
+        used_fact_keys_json: String::from_utf8(payload.used_fact_keys_json_utf8)
+            .unwrap_or_else(|_| "[]".to_string()),
         url_norm: payload.url_norm,
     }
 }

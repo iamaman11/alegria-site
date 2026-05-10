@@ -34,20 +34,27 @@ pub(crate) async fn check_data_freshness_impl(
             schema_version: 1,
             input_hash: content_hash_v1(threshold_input),
             output_hash: String::new(),
-            idempotency_key: content_hash_v1(&format!(
-                "operational:freshness|{}",
-                threshold_input
-            )),
+            idempotency_key: content_hash_v1(&format!("operational:freshness|{}", threshold_input)),
             requires_hitl: false,
             prompt_version: String::new(),
             model_version: String::new(),
             registry_version: String::new(),
             error_class: String::new(),
+            retry_class: "transient".to_string(),
+            executor_version: AlegriaActivities::current_build_id(),
+            derivation_version: "check_data_freshness@1".to_string(),
+            scope_signature: String::new(),
+            max_retries: 3,
         }),
         threshold_hours,
         stale_count: snapshot.stale_count,
         max_lag_hours: snapshot.max_lag_hours,
-        status: if snapshot.stale_count > 0 { "stale" } else { "ok" }.to_string(),
+        status: if snapshot.stale_count > 0 {
+            "stale"
+        } else {
+            "ok"
+        }
+        .to_string(),
     };
 
     serde_json::to_string(&report).map_err(AlegriaActivities::classify_error)

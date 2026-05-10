@@ -53,7 +53,10 @@ pub fn evaluate_condition(
     context: &ConditionContext,
 ) -> std::result::Result<bool, DomainError> {
     match condition.op.as_str() {
-        "eq" => Ok(scalar_equals(&condition.value, context.get(&condition.field))),
+        "eq" => Ok(scalar_equals(
+            &condition.value,
+            context.get(&condition.field),
+        )),
         "lt" => {
             let lhs = context_i64(context, &condition.field).unwrap_or_default();
             let rhs = scalar_i64(&condition.value).unwrap_or_default();

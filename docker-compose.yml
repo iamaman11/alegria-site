@@ -86,7 +86,7 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
-      test: ["CMD", "wget", "http://localhost:6333"]
+      test: ["CMD", "bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/6333"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -179,14 +179,55 @@ services:
       RUST_LOG: info
       METRICS_PORT: "9464"
       WORKER_BUILD_ID: ${WORKER_BUILD_ID:-docker-dev}
+      QDRANT_URL: http://qdrant:6334
+      DATAFORSEO_LOGIN: ${DATAFORSEO_LOGIN:-}
+      DATAFORSEO_PASSWORD: ${DATAFORSEO_PASSWORD:-}
+      DATAFORSEO_ENDPOINT: ${DATAFORSEO_ENDPOINT:-}
+      DATAFORSEO_LANGUAGE_CODE: ${DATAFORSEO_LANGUAGE_CODE:-ru}
+      DATAFORSEO_LOCATION_CODE: ${DATAFORSEO_LOCATION_CODE:-2643}
+      DATAFORSEO_DEPTH: ${DATAFORSEO_DEPTH:-10}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-3-large}
+      SEO_LLM_PROVIDER: ${SEO_LLM_PROVIDER:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_SEO_MODEL: ${OPENAI_SEO_MODEL:-gpt-5.2}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
     depends_on:
       temporal-server:
         condition: service_healthy
       pgbouncer:
         condition: service_started
+      qdrant:
+        condition: service_healthy
     restart: on-failure:3
     ports:
       - "9464:9464"
+
+  # 10. Runtime outbox materializer (PostgreSQL -> Neo4j/Qdrant projections)
+  outbox-worker:
+    build:
+      context: .
+      dockerfile: ./app/rust/services/outbox_worker/Dockerfile
+    container_name: alegria_outbox_worker
+    environment:
+      DATABASE_URL: postgres://postgres:postgres_password@pgbouncer:6432/alegria
+      RUST_LOG: info
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-docker-dev}
+      OUTBOX_WORKER_ID: ${OUTBOX_WORKER_ID:-docker-outbox-worker}
+      NEO4J_URI: neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j_password
+      QDRANT_URL: http://qdrant:6334
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      neo4j:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+    restart: on-failure:3
 
   prometheus:
     image: prom/prometheus:v3.5.0

@@ -2,7 +2,9 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::block_validator::{validate_block_typed, BlockValidationInput, RequiredLink, TypedValidationEnvelope};
+use crate::block_validator::{
+    validate_block_typed, BlockValidationInput, RequiredLink, TypedValidationEnvelope,
+};
 
 fn parse_string_vec(v: &Value) -> Vec<String> {
     match v {
@@ -59,10 +61,14 @@ pub fn validate_block_boundary_typed(
 ) -> TypedValidationEnvelope {
     let rules = serde_json::from_str::<Value>(rules_json).unwrap_or(Value::Array(Vec::new()));
     let facts = serde_json::from_str::<Value>(facts_json).unwrap_or(Value::Array(Vec::new()));
-    let req_links = serde_json::from_str::<Vec<RequiredLink>>(required_links_json).unwrap_or_default();
-    let required_keys = serde_json::from_str::<Value>(required_keys_json).unwrap_or(Value::Array(Vec::new()));
-    let used_rule_keys = serde_json::from_str::<Value>(used_rule_keys_json).unwrap_or(Value::Array(Vec::new()));
-    let used_fact_keys = serde_json::from_str::<Value>(used_fact_keys_json).unwrap_or(Value::Array(Vec::new()));
+    let req_links =
+        serde_json::from_str::<Vec<RequiredLink>>(required_links_json).unwrap_or_default();
+    let required_keys =
+        serde_json::from_str::<Value>(required_keys_json).unwrap_or(Value::Array(Vec::new()));
+    let used_rule_keys =
+        serde_json::from_str::<Value>(used_rule_keys_json).unwrap_or(Value::Array(Vec::new()));
+    let used_fact_keys =
+        serde_json::from_str::<Value>(used_fact_keys_json).unwrap_or(Value::Array(Vec::new()));
 
     let mut allowed_numbers = extract_numbers_from_json(&rules);
     allowed_numbers.extend(extract_numbers_from_json(&facts));

@@ -1,6 +1,6 @@
 # V5 SEO Runtime Step Contracts Spec
 
-**Status:** build-spec draft  
+**Status:** build-spec draft; implementation status: partial live proto/runtime/workflow surface  
 **Owner:** exact runtime contracts for all SEO operations
 
 ---

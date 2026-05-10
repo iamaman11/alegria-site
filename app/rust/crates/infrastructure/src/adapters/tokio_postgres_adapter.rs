@@ -7,7 +7,10 @@ pub async fn connect_tokio_postgres(
     user: &str,
     password: &str,
     dbname: &str,
-) -> Result<(Client, tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>)> {
+) -> Result<(
+    Client,
+    tokio::task::JoinHandle<Result<(), tokio_postgres::Error>>,
+)> {
     let mut cfg = Config::new();
     cfg.host(host)
         .port(port)

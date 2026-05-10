@@ -46,11 +46,11 @@ pub async fn execute(
     } else {
         input.target_system.as_str()
     };
-    let report = reconcile_target_system(target, &opts)
-        .await
-        .map_err(|e| DomainError::InfraUnavailable {
+    let report = reconcile_target_system(target, &opts).await.map_err(|e| {
+        DomainError::InfraUnavailable {
             message: e.to_string(),
-        })?;
+        }
+    })?;
 
     Ok(Neo4jBackwriteOutput {
         target_system: report.target_system,

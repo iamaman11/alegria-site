@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use infrastructure::adapters::sqlx_pipeline_runtime_adapter as adapter;
 use infrastructure::adapters::sqlx_adapter::AlegriaPgPool;
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter as adapter;
 use primitives::errors::DomainError;
 use runtime_models::ExecutionRun as DomainExecutionRun;
 pub use runtime_models::{
@@ -58,8 +58,13 @@ pub fn decode_generation_result_from_run(run: &ExecutionRun) -> BTreeMap<String,
     adapter::decode_generation_result(run.0.generation_result.as_ref())
 }
 
-pub async fn read_execution_run(pool: &AlegriaPgPool, run_id: &str) -> std::result::Result<ExecutionRun, DomainError> {
-    adapter::read_execution_run(pool, run_id).await.map(ExecutionRun)
+pub async fn read_execution_run(
+    pool: &AlegriaPgPool,
+    run_id: &str,
+) -> std::result::Result<ExecutionRun, DomainError> {
+    adapter::read_execution_run(pool, run_id)
+        .await
+        .map(ExecutionRun)
 }
 
 pub async fn advance_execution_run_status(
@@ -91,7 +96,15 @@ pub async fn begin_step_execution(
     input_hash: &str,
     idempotency_key: &str,
 ) -> std::result::Result<bool, DomainError> {
-    adapter::begin_step_execution(pool, run_id, step_name, schema_version, input_hash, idempotency_key).await
+    adapter::begin_step_execution(
+        pool,
+        run_id,
+        step_name,
+        schema_version,
+        input_hash,
+        idempotency_key,
+    )
+    .await
 }
 
 pub async fn read_step_execution_id(
@@ -103,7 +116,10 @@ pub async fn read_step_execution_id(
     adapter::read_step_execution_id(pool, run_id, step_name, idempotency_key).await
 }
 
-pub async fn begin_step_attempt(pool: &AlegriaPgPool, step_execution_id: i64) -> std::result::Result<i32, DomainError> {
+pub async fn begin_step_attempt(
+    pool: &AlegriaPgPool,
+    step_execution_id: i64,
+) -> std::result::Result<i32, DomainError> {
     adapter::begin_step_attempt(pool, step_execution_id).await
 }
 
@@ -115,7 +131,15 @@ pub async fn finish_step_attempt(
     error_class: Option<&str>,
     error_message: Option<&str>,
 ) -> std::result::Result<(), DomainError> {
-    adapter::finish_step_attempt(pool, step_execution_id, attempt_no, status, error_class, error_message).await
+    adapter::finish_step_attempt(
+        pool,
+        step_execution_id,
+        attempt_no,
+        status,
+        error_class,
+        error_message,
+    )
+    .await
 }
 
 pub async fn load_completed_step_result<T>(
@@ -141,7 +165,15 @@ pub async fn complete_step_execution_typed<T>(
 where
     T: adapter::RuntimeProtoPayload,
 {
-    adapter::complete_step_execution_typed(pool, run_id, step_name, idempotency_key, output_hash, payload).await
+    adapter::complete_step_execution_typed(
+        pool,
+        run_id,
+        step_name,
+        idempotency_key,
+        output_hash,
+        payload,
+    )
+    .await
 }
 
 pub async fn fail_step_execution(
@@ -256,7 +288,16 @@ pub async fn write_hitl_decision_typed<T>(
 where
     T: adapter::RuntimeProtoPayload,
 {
-    adapter::write_hitl_decision_typed(pool, run_id, step_name, task_id, decision_status, decision_payload, resolved_by).await
+    adapter::write_hitl_decision_typed(
+        pool,
+        run_id,
+        step_name,
+        task_id,
+        decision_status,
+        decision_payload,
+        resolved_by,
+    )
+    .await
 }
 
 pub async fn begin_reconcile_run(pool: &AlegriaPgPool) -> std::result::Result<i64, DomainError> {
@@ -271,7 +312,15 @@ pub async fn append_reconcile_target_action(
     target_key: Option<&str>,
     details: &ReconcileTargetReportRecord,
 ) -> std::result::Result<(), DomainError> {
-    adapter::append_reconcile_target_action(pool, reconcile_run_id, action_type, target_system, target_key, details).await
+    adapter::append_reconcile_target_action(
+        pool,
+        reconcile_run_id,
+        action_type,
+        target_system,
+        target_key,
+        details,
+    )
+    .await
 }
 
 pub async fn append_reconcile_summary_action(
@@ -282,7 +331,15 @@ pub async fn append_reconcile_summary_action(
     target_key: Option<&str>,
     details: &ReconcileSummary,
 ) -> std::result::Result<(), DomainError> {
-    adapter::append_reconcile_summary_action(pool, reconcile_run_id, action_type, target_system, target_key, details).await
+    adapter::append_reconcile_summary_action(
+        pool,
+        reconcile_run_id,
+        action_type,
+        target_system,
+        target_key,
+        details,
+    )
+    .await
 }
 
 pub async fn finish_reconcile_run(

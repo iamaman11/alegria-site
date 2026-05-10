@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 
@@ -22,6 +21,10 @@ def main() -> int:
         "activity_failures_total",
         "step_execution_reused_total",
         "activity_duration_seconds",
+        "support_bundle_events_total",
+        "editorial_provider_events_total",
+        "publish_build_scope_total",
+        "render_validation_failures_total",
     ]
 
     failures: list[str] = []

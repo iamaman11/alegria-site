@@ -23,6 +23,7 @@ hyper = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 bytes = "1"
+pulldown-cmark = "0.13.3"
 tower = { workspace = true }
 playwright-rs = { workspace = true }
 rig-core = { workspace = true }

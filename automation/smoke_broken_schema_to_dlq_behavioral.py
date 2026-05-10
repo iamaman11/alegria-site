@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
 import uuid
 
 from _behavioral_utils import DATABASE_URL, cargo_run, psql, random_key

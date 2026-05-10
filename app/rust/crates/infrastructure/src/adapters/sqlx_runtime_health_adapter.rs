@@ -50,16 +50,14 @@ pub async fn count_stuck_steps(pool: &PgPool) -> Result<i64> {
 }
 
 pub async fn is_run_pending_hitl(pool: &PgPool, run_id: Uuid) -> Result<bool> {
-    Ok(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*)::bigint
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT count(*)::bigint
              FROM pipeline.execution_runs
              WHERE run_id = $1 AND status = 'pending_hitl'",
-        )
-        .bind(run_id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
-            > 0,
     )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(0)
+        > 0)
 }

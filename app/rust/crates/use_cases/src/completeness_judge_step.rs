@@ -55,7 +55,11 @@ pub fn execute(input: &CompletenessJudgeInput) -> CompletenessJudgeOutput {
     }
 
     if text.contains("кроме") || text.contains("за исключением") {
-        if !input.extracted_rule_keys.iter().any(|k| k.contains("exception")) {
+        if !input
+            .extracted_rule_keys
+            .iter()
+            .any(|k| k.contains("exception"))
+        {
             missing.push(MissingElement {
                 loss_type: "exception".to_string(),
                 raw_fragment: "кроме / за исключением".to_string(),
@@ -64,7 +68,8 @@ pub fn execute(input: &CompletenessJudgeInput) -> CompletenessJudgeOutput {
             });
         }
     }
-    if text.contains("либо") || text.contains("или предоставить") || text.contains("вместо") {
+    if text.contains("либо") || text.contains("или предоставить") || text.contains("вместо")
+    {
         missing.push(MissingElement {
             loss_type: "alternative".to_string(),
             raw_fragment: "либо/вместо".to_string(),

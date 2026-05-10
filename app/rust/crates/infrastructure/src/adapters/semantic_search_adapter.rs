@@ -11,13 +11,17 @@ pub struct SearchResultRecord {
     pub payload: BTreeMap<String, String>,
 }
 
-pub async fn search_by_text(query: &str, collection: &str, limit: u64) -> Result<Vec<SearchResultRecord>> {
-    let qdrant_url = std::env::var("QDRANT_URL")
-        .unwrap_or_else(|_| "http://localhost:6334".to_string());
-    let voyage_api_key = std::env::var("VOYAGE_API_KEY")
-        .map_err(|_| anyhow!("VOYAGE_API_KEY is not set"))?;
-    let voyage_model = std::env::var("VOYAGE_MODEL")
-        .unwrap_or_else(|_| "voyage-3-large".to_string());
+pub async fn search_by_text(
+    query: &str,
+    collection: &str,
+    limit: u64,
+) -> Result<Vec<SearchResultRecord>> {
+    let qdrant_url =
+        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let voyage_api_key =
+        std::env::var("VOYAGE_API_KEY").map_err(|_| anyhow!("VOYAGE_API_KEY is not set"))?;
+    let voyage_model =
+        std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-3-large".to_string());
 
     let client = qdrant::connect_qdrant(&qdrant_url).await?;
     let voyage = VoyageClient::new(voyage_api_key, voyage_model);

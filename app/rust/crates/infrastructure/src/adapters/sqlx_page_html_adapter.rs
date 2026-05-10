@@ -54,4 +54,3 @@ pub async fn html_is_changed(
             .map_or(true, |h| h != new_h)
     }))
 }
-

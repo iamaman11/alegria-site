@@ -4,8 +4,8 @@ pub use qdrant_client::qdrant::{
     UpsertPointsBuilder, VectorParamsBuilder,
 };
 pub use qdrant_client::{Payload, Qdrant};
-use std::collections::BTreeMap;
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 pub type AlegriaQdrantClient = Qdrant;
 
@@ -31,7 +31,11 @@ pub fn parse_distance(distance: &str) -> Result<Distance> {
     }
 }
 
-pub fn normalize_payload(entity_type: &str, entity_key: &str, payload_value: Option<&Value>) -> Value {
+pub fn normalize_payload(
+    entity_type: &str,
+    entity_key: &str,
+    payload_value: Option<&Value>,
+) -> Value {
     let mut merged = Map::new();
     merged.insert(
         "entity_type".to_string(),

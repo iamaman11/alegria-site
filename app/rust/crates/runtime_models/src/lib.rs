@@ -3,6 +3,8 @@ use contracts::wire::condition::ConditionExprV1;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+pub mod seo_blocks;
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleRoleType {
@@ -181,8 +183,7 @@ impl RuleParams {
     }
 
     pub fn as_json_value(&self) -> serde_json::Value {
-        serde_json::to_value(self)
-            .unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
+        serde_json::to_value(self).unwrap_or_else(|_| serde_json::Value::Object(Default::default()))
     }
 }
 
@@ -262,4 +263,182 @@ fn default_role_type() -> RuleRoleType {
 
 fn default_status_pending() -> String {
     "pending".to_string()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoScope {
+    pub market: String,
+    pub locale: String,
+    pub country_code: String,
+    pub visa_type: String,
+    pub applicant_profile: String,
+    pub scope_signature: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoVerifiedFactSupport {
+    pub fragment_text: String,
+    pub support_ref: String,
+    pub role_type: String,
+    pub source_label: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoDraftSection {
+    pub section_key: String,
+    pub section_role: String,
+    pub heading: String,
+    pub body_markdown: String,
+    pub required: bool,
+    pub traceability_label: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoTraceabilityEntry {
+    pub fragment_key: String,
+    pub fragment_text: String,
+    pub fragment_kind: String,
+    pub traceability_label: String,
+    pub support_refs: Vec<String>,
+    pub validation_verdict: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoPublishBlocker {
+    pub reason_code: String,
+    pub task_type: String,
+    pub required_next_action: String,
+    pub recheck_trigger: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoSiteBuildInput {
+    pub run_id: String,
+    pub context_key: String,
+    pub scope: SeoScope,
+    pub query_batch_key: String,
+    pub queries: Vec<String>,
+    pub verified_support: Vec<SeoVerifiedFactSupport>,
+    pub required_page_types: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SerpIngest {
+    pub query_batch_key: String,
+    pub query_count: u32,
+    pub persisted_snapshot_count: u32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct SerpPattern {
+    pub serp_pattern_key: String,
+    pub query_batch_key: String,
+    pub scope_signature: String,
+    pub query: String,
+    pub pattern_type: String,
+    pub dominant_intent: String,
+    pub reliability_score: f64,
+    pub evidence_ref: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KeywordCluster {
+    pub cluster_key: String,
+    pub scope_signature: String,
+    pub seed_keyword: String,
+    pub dominant_intent: String,
+    pub status: String,
+    pub cluster_version: u32,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageBlueprint {
+    pub blueprint_key: String,
+    pub page_type_key: String,
+    pub dominant_intent: String,
+    pub scope_class: String,
+    pub blueprint_version: u32,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PageNode {
+    pub page_node_key: String,
+    pub scope_signature: String,
+    pub keyword_cluster_key: String,
+    pub blueprint_key: String,
+    pub page_type_key: String,
+    pub dominant_intent: String,
+    pub canonical_slug: String,
+    pub canonical_url_path: String,
+    pub lifecycle_state: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LinkRecommendation {
+    pub link_recommendation_key: String,
+    pub scope_signature: String,
+    pub source_page_key: String,
+    pub target_page_key: String,
+    pub link_role: String,
+    pub anchor_strategy: String,
+    pub required_flag: bool,
+    pub score: f64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CannibalizationConflict {
+    pub conflict_key: String,
+    pub scope_signature: String,
+    pub page_key_a: String,
+    pub page_key_b: String,
+    pub conflict_reason: String,
+    pub severity: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContentGap {
+    pub content_gap_key: String,
+    pub scope_signature: String,
+    pub page_node_key: String,
+    pub missing_topic: String,
+    pub severity: String,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PageBrief {
+    pub page_brief_key: String,
+    pub page_node_key: String,
+    pub blueprint_key: String,
+    pub title: String,
+    pub meta_description: String,
+    pub brief_version: u32,
+    pub status: String,
+    pub scope_signature: String,
+    pub target_audience: String,
+    pub goal: String,
+    pub required_sections: Vec<String>,
+    pub metadata_obligations: Vec<String>,
+    pub required_links: Vec<LinkRecommendation>,
+    pub truth_snapshot_ref: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Draft {
+    pub page_draft_key: String,
+    pub page_node_key: String,
+    pub page_brief_key: String,
+    pub draft_revision: u32,
+    pub body_markdown: String,
+    pub qa_verdict: String,
+    pub truth_snapshot_ref: String,
+    pub sections: Vec<SeoDraftSection>,
+    pub traceability_entries: Vec<SeoTraceabilityEntry>,
+    pub required_links: Vec<LinkRecommendation>,
+    pub schema_markup_json: String,
 }

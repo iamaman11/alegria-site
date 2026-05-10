@@ -48,8 +48,9 @@ pub fn load_default_reconcile_options() -> ReconcileOptionsRecord {
 }
 
 fn default_database_url() -> String {
-    std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres:postgres_password@localhost:5433/alegria".to_string())
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgresql://postgres:postgres_password@localhost:5433/alegria".to_string()
+    })
 }
 
 pub async fn reconcile_target_system(

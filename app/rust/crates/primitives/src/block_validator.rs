@@ -185,7 +185,12 @@ pub fn validate_block_typed(html: &str, input: &BlockValidationInput) -> TypedVa
                 "coverage",
                 &input.block_key,
                 format!("Coverage ratio below 100%: {:.2}%", ratio * 100.0),
-                format!(r#"{{"required_total":{},"covered":{}}}"#, required.len(), covered).into_bytes(),
+                format!(
+                    r#"{{"required_total":{},"covered":{}}}"#,
+                    required.len(),
+                    covered
+                )
+                .into_bytes(),
             ));
         } else {
             diagnostics.push(diag(
@@ -247,7 +252,11 @@ pub fn validate_block_typed(html: &str, input: &BlockValidationInput) -> TypedVa
         unknown.sort();
 
         if !unknown.is_empty() {
-            let severity = if unknown.len() >= 3 { "critical" } else { "warning" };
+            let severity = if unknown.len() >= 3 {
+                "critical"
+            } else {
+                "warning"
+            };
             let sample: Vec<&String> = unknown.iter().take(30).collect();
             diagnostics.push(diag(
                 severity,

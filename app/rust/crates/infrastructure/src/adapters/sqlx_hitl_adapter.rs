@@ -67,8 +67,9 @@ pub async fn write_context_fragment<T: Serialize>(
     key: &str,
     payload: &T,
 ) -> std::result::Result<(), DomainError> {
-    let json = serde_json::to_string(payload)
-        .map_err(|e| contract_violation(format!("failed to serialize HITL context fragment: {e}")))?;
+    let json = serde_json::to_string(payload).map_err(|e| {
+        contract_violation(format!("failed to serialize HITL context fragment: {e}"))
+    })?;
     sqlx::query(
         "UPDATE pipeline.hitl_tasks
          SET context = jsonb_set(COALESCE(context, '{}'::jsonb), $1::text[], $2::jsonb, true),

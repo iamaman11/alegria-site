@@ -7,7 +7,10 @@ pub struct FreshnessSnapshot {
     pub max_lag_hours: f64,
 }
 
-pub async fn load_freshness_snapshot(pool: &PgPool, threshold_hours: i64) -> Result<FreshnessSnapshot> {
+pub async fn load_freshness_snapshot(
+    pool: &PgPool,
+    threshold_hours: i64,
+) -> Result<FreshnessSnapshot> {
     let stale_count: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint
          FROM pipeline.execution_runs

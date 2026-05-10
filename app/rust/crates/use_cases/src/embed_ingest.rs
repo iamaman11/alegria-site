@@ -19,18 +19,22 @@ pub async fn ingest_canonical(
     collection: &str,
 ) -> Result<usize> {
     // Читаем тексты для embedding из DB
-    let rows = sqlx_verified_rule_instances_adapter::load_embedding_text_rows(pool, context_key).await?;
+    let rows =
+        sqlx_verified_rule_instances_adapter::load_embedding_text_rows(pool, context_key).await?;
 
-    if rows.is_empty() { return Ok(0); }
+    if rows.is_empty() {
+        return Ok(0);
+    }
 
-    let ids:   Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
+    let ids: Vec<String> = rows.iter().map(|(id, _)| id.clone()).collect();
     let texts: Vec<String> = rows.iter().map(|(_, t)| t.clone()).collect();
 
     qdrant::ensure_default_dense_collection(qdrant_client, collection, 1024).await?;
 
     let embeddings = voyage.embed_all(&texts).await?;
 
-    let points: Vec<DenseEmbeddingPoint> = ids.into_iter()
+    let points: Vec<DenseEmbeddingPoint> = ids
+        .into_iter()
         .zip(embeddings)
         .map(|(id, vec)| {
             let mut payload = BTreeMap::new();

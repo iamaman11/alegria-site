@@ -10,8 +10,8 @@ pub mod proto {
 
 use proto::graph_analytics_service_server::{GraphAnalyticsService, GraphAnalyticsServiceServer};
 use proto::{
-    LinkPlanRequest, LinkEntry, LinkPlanResult, PageRankEntry, PageRankRequest, PageRankResult, PingRequest,
-    PingResponse, WccRequest, WccResult,
+    LinkEntry, LinkPlanRequest, LinkPlanResult, PageRankEntry, PageRankRequest, PageRankResult,
+    PingRequest, PingResponse, WccRequest, WccResult,
 };
 
 #[derive(Clone)]
@@ -38,7 +38,10 @@ impl AnalyticsSvc {
     async fn ensure_graph_projection(&self, graph_name: &str) -> Result<()> {
         let mut result = self
             .graph
-            .execute(query("CALL gds.graph.exists($name) YIELD exists RETURN exists").param("name", graph_name))
+            .execute(
+                query("CALL gds.graph.exists($name) YIELD exists RETURN exists")
+                    .param("name", graph_name),
+            )
             .await?;
 
         let mut exists = false;
@@ -113,7 +116,12 @@ impl GraphAnalyticsService for AnalyticsSvc {
             unique_clusters.insert(component_id);
         }
 
-        let status = if assignments.is_empty() { "graph_empty" } else { "ok" }.to_string();
+        let status = if assignments.is_empty() {
+            "graph_empty"
+        } else {
+            "ok"
+        }
+        .to_string();
         let cluster_count = unique_clusters.len() as i32;
 
         Ok(Response::new(WccResult {
@@ -134,7 +142,11 @@ impl GraphAnalyticsService for AnalyticsSvc {
             req.graph_name
         };
         let top_n = if req.top_n <= 0 { 100 } else { req.top_n };
-        let damping = if req.damping <= 0.0 { 0.85 } else { req.damping };
+        let damping = if req.damping <= 0.0 {
+            0.85
+        } else {
+            req.damping
+        };
 
         self.ensure_graph_projection(&graph_name)
             .await
@@ -224,7 +236,8 @@ async fn main() -> Result<()> {
 
     let neo4j_uri = std::env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
     let neo4j_user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
-    let neo4j_password = std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
+    let neo4j_password =
+        std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
     let port = std::env::var("GRPC_PORT").unwrap_or_else(|_| "50051".to_string());
     let addr = format!("0.0.0.0:{port}").parse()?;
 

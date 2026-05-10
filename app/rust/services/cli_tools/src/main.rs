@@ -1,12 +1,26 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use contracts::generated::alegria::temporal::v1::{FactExtractionInputPayload, ValidationInputPayload};
+use contracts::generated::alegria::temporal::v1::{
+    FactExtractionInputPayload, ValidationInputPayload,
+};
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
-use prost::Message;
+use infrastructure::adapters::temporalio_sdk_adapter::{
+    connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowSignalOptions,
+};
+use infrastructure::adapters::{
+    raw_crawl_adapter,
+    sqlx_adapter::connect_pg,
+    sqlx_static_site_adapter::{load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow},
+};
 use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
+use prost::Message;
+use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
 use serde_json::{json, Value};
+use sqlx::{types::Json, Row};
+use std::collections::HashMap;
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,7 +37,10 @@ enum Command {
     CheckRustMigrationContract {
         #[arg(long, default_value = ".")]
         root: String,
-        #[arg(long, default_value = "automation/reports/rust_migration_contract.rust.json")]
+        #[arg(
+            long,
+            default_value = "automation/reports/rust_migration_contract.rust.json"
+        )]
         report_json: String,
         #[arg(long, default_value_t = false)]
         strict: bool,
@@ -31,7 +48,10 @@ enum Command {
     CheckFactVerifierParity {
         #[arg(long, default_value = ".")]
         root: String,
-        #[arg(long, default_value = "automation/reports/fact_verifier_parity.rust.json")]
+        #[arg(
+            long,
+            default_value = "automation/reports/fact_verifier_parity.rust.json"
+        )]
         report_json: String,
     },
     ComputeContentHash {
@@ -75,6 +95,104 @@ enum Command {
         requeue_base_delay_sec: i64,
         #[arg(long, default_value_t = 15)]
         requeue_jitter_sec: i64,
+    },
+    BuildStaticSite {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long, default_value = "app/rust/dist/static-site")]
+        output_dir: String,
+        #[arg(long, default_value = "https://example.com")]
+        base_url: String,
+    },
+    CrawlPendingSources {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long, default_value = "")]
+        run_id: String,
+        #[arg(long, default_value = "")]
+        query_batch_key: String,
+        #[arg(long, default_value_t = 25)]
+        limit: i64,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        emit_qdrant: bool,
+    },
+    CmsReviewList {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    CmsReviewShow {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+    },
+    CmsPublishStatus {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+    },
+    CmsTraceabilityInspect {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+    },
+    CmsBlockersInspect {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+    },
+    SeoRebuildBacklogInspect {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: Option<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    SeoSupportBundleInspect {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        context_key: String,
+    },
+    CmsApprovePublish {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+        #[arg(long)]
+        actor_role: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+        #[arg(long, default_value = "app/rust/dist/static-site")]
+        output_dir: String,
+        #[arg(long, default_value = "https://example.com")]
+        base_url: String,
+    },
+    CmsBlock {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+        #[arg(long)]
+        actor_role: String,
+        #[arg(long, default_value = "")]
+        reason: String,
+    },
+    CmsReopen {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_node_key: String,
+        #[arg(long)]
+        actor_role: String,
+        #[arg(long, default_value = "")]
+        reason: String,
     },
 }
 
@@ -198,7 +316,8 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
             findings.push(Finding {
                 level: "warn",
                 code: "R102",
-                message: "pipeline_storage outbox emit path has no ON CONFLICT dedup guard".to_string(),
+                message: "pipeline_storage outbox emit path has no ON CONFLICT dedup guard"
+                    .to_string(),
             });
         }
     }
@@ -209,7 +328,9 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     let app_root = root.join("app");
     if app_root.exists() {
         fn scan_py(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
-            for ent in fs::read_dir(dir).with_context(|| format!("read_dir failed: {}", dir.display()))? {
+            for ent in
+                fs::read_dir(dir).with_context(|| format!("read_dir failed: {}", dir.display()))?
+            {
                 let ent = ent?;
                 let path = ent.path();
                 if path.is_dir() {
@@ -229,7 +350,11 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
         let mut py_files = Vec::new();
         scan_py(&app_root, &mut py_files)?;
         for p in py_files {
-            let rel = p.strip_prefix(root).unwrap_or(&p).to_string_lossy().to_string();
+            let rel = p
+                .strip_prefix(root)
+                .unwrap_or(&p)
+                .to_string_lossy()
+                .to_string();
             findings.push(Finding {
                 level: "warn",
                 code: "R103",
@@ -293,7 +418,11 @@ fn check_fact_verifier_parity(root: &Path, report_json: &str) -> Result<i32> {
         {"source_key":"govA","fact_value":90,"extraction_confidence":0.60},
         {"source_key":"vfsA","fact_value":80,"extraction_confidence":0.90}
     ]);
-    let r2: Value = serde_json::from_str(&verify_fact_json("consular_fee", &c2.to_string(), &registry.to_string()))?;
+    let r2: Value = serde_json::from_str(&verify_fact_json(
+        "consular_fee",
+        &c2.to_string(),
+        &registry.to_string(),
+    ))?;
     if r2.get("resolution").and_then(Value::as_str) != Some("gov_wins") {
         findings.push(Finding {
             level: "error",
@@ -317,7 +446,11 @@ fn check_fact_verifier_parity(root: &Path, report_json: &str) -> Result<i32> {
         {"source_key":"ag2","fact_value":15,"extraction_confidence":0.60},
         {"source_key":"ag1","fact_value":20,"extraction_confidence":0.60}
     ]);
-    let r3: Value = serde_json::from_str(&verify_fact_json("processing_days", &c3.to_string(), &registry.to_string()))?;
+    let r3: Value = serde_json::from_str(&verify_fact_json(
+        "processing_days",
+        &c3.to_string(),
+        &registry.to_string(),
+    ))?;
     if r3.get("resolution").and_then(Value::as_str) != Some("consensus") {
         findings.push(Finding {
             level: "error",
@@ -339,7 +472,11 @@ fn check_fact_verifier_parity(root: &Path, report_json: &str) -> Result<i32> {
         {"source_key":"ag2","fact_value":9,"extraction_confidence":0.81},
         {"source_key":"ed1","fact_value":11,"extraction_confidence":0.82}
     ]);
-    let r4: Value = serde_json::from_str(&verify_fact_json("processing_days", &c4.to_string(), &registry.to_string()))?;
+    let r4: Value = serde_json::from_str(&verify_fact_json(
+        "processing_days",
+        &c4.to_string(),
+        &registry.to_string(),
+    ))?;
     if r4.get("resolution").and_then(Value::as_str) != Some("hitl_required") {
         findings.push(Finding {
             level: "error",
@@ -354,7 +491,11 @@ fn check_fact_verifier_parity(root: &Path, report_json: &str) -> Result<i32> {
         {"params":{"amount":90.0}},
         {"params":{"amount":60.0}}
     ]);
-    let r5: Value = serde_json::from_str(&verify_numeric_rule_json("consular_fee", &c5.to_string(), "amount"))?;
+    let r5: Value = serde_json::from_str(&verify_numeric_rule_json(
+        "consular_fee",
+        &c5.to_string(),
+        "amount",
+    ))?;
     if r5.get("resolution").and_then(Value::as_str) != Some("range_merged") {
         findings.push(Finding {
             level: "error",
@@ -398,6 +539,1159 @@ fn check_fact_verifier_parity(root: &Path, report_json: &str) -> Result<i32> {
     }
 
     Ok(if status == "ok" { 0 } else { 1 })
+}
+
+#[derive(Debug, Clone)]
+struct StaticArtifact {
+    relative_path: String,
+    bytes: Vec<u8>,
+}
+
+fn default_database_url() -> String {
+    env::var("DATABASE_URL").unwrap_or_else(|_| {
+        "postgres://postgres:postgres_password@localhost:5433/alegria".to_string()
+    })
+}
+
+fn default_temporal_url() -> String {
+    env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string())
+}
+
+fn default_temporal_namespace() -> String {
+    env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string())
+}
+
+fn empty_payload() -> RawValue {
+    RawValue::default()
+}
+
+async fn signal_seo_workflow_resume(workflow_id: &str) -> Result<()> {
+    let client = connect_client(
+        &default_temporal_url(),
+        format!("alegria-cli-tools@{}", std::process::id()),
+        &default_temporal_namespace(),
+    )
+    .await?;
+    let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.to_string());
+    handle
+        .signal(
+            UntypedSignal::<UntypedWorkflow>::new("resume"),
+            empty_payload(),
+            WorkflowSignalOptions::default(),
+        )
+        .await?;
+    Ok(())
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn normalize_url_path(raw: &str) -> Result<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        anyhow::bail!("canonical_url_path must not be empty");
+    }
+    if raw.contains('\\') || raw.contains('?') || raw.contains('#') {
+        anyhow::bail!("canonical_url_path contains unsupported characters: {raw}");
+    }
+    let mut path = format!("/{}", raw.trim_start_matches('/'));
+    while path.contains("//") {
+        path = path.replace("//", "/");
+    }
+    if path != "/" {
+        path = path.trim_end_matches('/').to_string();
+    }
+    if path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        anyhow::bail!("canonical_url_path must not contain traversal segments: {raw}");
+    }
+    Ok(path)
+}
+
+fn output_path_for_url(url_path: &str) -> Result<String> {
+    let normalized = normalize_url_path(url_path)?;
+    if normalized == "/" {
+        return Ok("index.html".to_string());
+    }
+    Ok(format!("{}/index.html", normalized.trim_start_matches('/')))
+}
+
+fn absolute_url(base_url: &str, url_path: &str) -> Result<String> {
+    let path = normalize_url_path(url_path)?;
+    Ok(format!(
+        "{}{}",
+        base_url.trim_end_matches('/'),
+        if path == "/" { "/".to_string() } else { path }
+    ))
+}
+
+fn markdown_to_html(markdown: &str) -> String {
+    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all());
+    let mut rendered = String::new();
+    html::push_html(&mut rendered, parser);
+    rendered
+}
+
+fn page_markdown(page: &StaticCmsPageRow) -> &str {
+    page.body_payload
+        .get("markdown")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn render_content_blocks(page: &StaticCmsPageRow) -> String {
+    let Some(blocks) = page
+        .body_payload
+        .get("content_blocks")
+        .and_then(Value::as_array)
+    else {
+        return String::new();
+    };
+    let mut html = String::new();
+    for block in blocks {
+        let block_type = block
+            .get("block_type")
+            .and_then(Value::as_str)
+            .unwrap_or("prose");
+        let section_role = block
+            .get("section_role")
+            .and_then(Value::as_str)
+            .unwrap_or("section");
+        let heading = block.get("heading").and_then(Value::as_str).unwrap_or("");
+        let markdown = block.get("markdown").and_then(Value::as_str).unwrap_or("");
+        if markdown.trim().is_empty() && heading.trim().is_empty() {
+            continue;
+        }
+        html.push_str(&format!(
+            r#"<section class="content-block content-block--{}" data-section-role="{}">"#,
+            escape_html(block_type),
+            escape_html(section_role)
+        ));
+        if !heading.trim().is_empty() {
+            html.push_str(&format!("<h2>{}</h2>", escape_html(heading)));
+        }
+        html.push_str(&markdown_to_html(markdown));
+        html.push_str("</section>");
+    }
+    html
+}
+
+fn menu_depth(url_path: &str) -> Result<usize> {
+    let path = normalize_url_path(url_path)?;
+    Ok(path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .count())
+}
+
+fn render_navigation(pages: &[StaticCmsPageRow]) -> Result<String> {
+    let mut items = String::new();
+    for page in pages {
+        let href = normalize_url_path(&page.canonical_url_path)?;
+        let depth = menu_depth(&href)?;
+        items.push_str(&format!(
+            r#"<a href="{}" data-depth="{}">{}</a>"#,
+            escape_html(&href),
+            depth,
+            escape_html(&page.title)
+        ));
+    }
+    Ok(items)
+}
+
+fn breadcrumb_label(segment: &str) -> String {
+    segment
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn breadcrumb_entries(page: &StaticCmsPageRow, base_url: &str) -> Result<Vec<(String, String)>> {
+    let canonical_path = normalize_url_path(&page.canonical_url_path)?;
+    let mut entries = vec![("Home".to_string(), absolute_url(base_url, "/")?)];
+    if canonical_path == "/" {
+        return Ok(entries);
+    }
+
+    let segments = canonical_path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let mut current = String::new();
+    for (idx, segment) in segments.iter().enumerate() {
+        current.push('/');
+        current.push_str(segment);
+        current.push('/');
+        let label = if idx + 1 == segments.len() {
+            page.title.clone()
+        } else {
+            breadcrumb_label(segment)
+        };
+        entries.push((label, absolute_url(base_url, &current)?));
+    }
+    Ok(entries)
+}
+
+fn render_breadcrumbs(page: &StaticCmsPageRow, base_url: &str) -> Result<String> {
+    let entries = breadcrumb_entries(page, base_url)?;
+    let mut items = String::new();
+    for (idx, (label, href)) in entries.iter().enumerate() {
+        let current = if idx + 1 == entries.len() {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
+        items.push_str(&format!(
+            r#"<li><a href="{}"{}>{}</a></li>"#,
+            escape_html(href),
+            current,
+            escape_html(label)
+        ));
+    }
+    Ok(format!(
+        r#"<nav class="breadcrumbs" aria-label="Breadcrumb"><ol>{items}</ol></nav>"#
+    ))
+}
+
+fn breadcrumb_list_json(page: &StaticCmsPageRow, base_url: &str) -> Result<Value> {
+    let entries = breadcrumb_entries(page, base_url)?;
+    Ok(json!({
+        "@type": "BreadcrumbList",
+        "itemListElement": entries.iter().enumerate().map(|(idx, (label, href))| json!({
+            "@type": "ListItem",
+            "position": idx + 1,
+            "name": label,
+            "item": href,
+        })).collect::<Vec<_>>()
+    }))
+}
+
+fn push_faq_item(items: &mut Vec<Value>, question: &Option<String>, answer_lines: &[String]) {
+    let Some(question_text) = question.as_ref() else {
+        return;
+    };
+    let answer = answer_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if answer.is_empty() {
+        return;
+    }
+    items.push(json!({
+        "@type": "Question",
+        "name": question_text,
+        "acceptedAnswer": {
+            "@type": "Answer",
+            "text": answer,
+        }
+    }));
+}
+
+fn faq_entities(markdown: &str) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut in_faq = false;
+    let mut question: Option<String> = None;
+    let mut answer_lines: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            let heading_key = heading.trim().to_ascii_lowercase();
+            if in_faq {
+                push_faq_item(&mut items, &question, &answer_lines);
+                question = None;
+                answer_lines.clear();
+            }
+            in_faq = heading_key == "faq"
+                || heading_key == "frequently asked questions"
+                || heading_key == "вопросы и ответы";
+            continue;
+        }
+        if !in_faq {
+            continue;
+        }
+        if let Some(next_question) = trimmed.strip_prefix("### ") {
+            push_faq_item(&mut items, &question, &answer_lines);
+            question = Some(next_question.trim().to_string());
+            answer_lines.clear();
+        } else if question.is_some() {
+            answer_lines.push(trimmed.to_string());
+        }
+    }
+    if in_faq {
+        push_faq_item(&mut items, &question, &answer_lines);
+    }
+    items
+}
+
+fn fallback_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
+    let markdown = page_markdown(page);
+    let mut graph = vec![
+        json!({
+            "@type": "Article",
+            "headline": page.title,
+            "url": canonical,
+        }),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    let faq_items = faq_entities(markdown);
+    if !faq_items.is_empty() {
+        graph.push(json!({
+            "@type": "FAQPage",
+            "mainEntity": faq_items,
+        }));
+    }
+    Ok(json!({
+        "@context": "https://schema.org",
+        "@graph": graph,
+    }))
+}
+
+fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
+    let custom_schema = page.schema_markup_payload.is_object()
+        && !page
+            .schema_markup_payload
+            .as_object()
+            .map(|o| o.is_empty())
+            .unwrap_or(true);
+    if !custom_schema {
+        return fallback_schema_json(page, canonical, base_url);
+    }
+
+    let mut graph = vec![
+        page.schema_markup_payload.clone(),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    let faq_items = faq_entities(page_markdown(page));
+    if !faq_items.is_empty() {
+        graph.push(json!({
+            "@type": "FAQPage",
+            "mainEntity": faq_items,
+        }));
+    }
+    Ok(json!({
+        "@context": "https://schema.org",
+        "@graph": graph,
+    }))
+}
+
+fn render_related_links(
+    page: &StaticCmsPageRow,
+    pages_by_key: &HashMap<String, StaticCmsPageRow>,
+    links_by_source: &HashMap<String, Vec<StaticCmsLinkRow>>,
+) -> Result<String> {
+    let Some(links) = links_by_source.get(&page.page_node_key) else {
+        return Ok(String::new());
+    };
+    let mut items = String::new();
+    for link in links {
+        let Some(target) = pages_by_key.get(&link.target_page_key) else {
+            continue;
+        };
+        let href = normalize_url_path(&target.canonical_url_path)?;
+        let marker = if link.required_flag {
+            " data-required=\"true\""
+        } else {
+            ""
+        };
+        items.push_str(&format!(
+            r#"<li{}><a href="{}">{}</a><span>{}</span></li>"#,
+            marker,
+            escape_html(&href),
+            escape_html(&target.title),
+            escape_html(&link.link_role)
+        ));
+    }
+    if items.is_empty() {
+        Ok(String::new())
+    } else {
+        Ok(format!(
+            r#"<section class="related"><h2>Related Pages</h2><ul>{items}</ul></section>"#
+        ))
+    }
+}
+
+fn render_page(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    pages_by_key: &HashMap<String, StaticCmsPageRow>,
+    links_by_source: &HashMap<String, Vec<StaticCmsLinkRow>>,
+    base_url: &str,
+) -> Result<String> {
+    let canonical_path = normalize_url_path(&page.canonical_url_path)?;
+    let canonical = absolute_url(base_url, &canonical_path)?;
+    let block_body = render_content_blocks(page);
+    let body = if block_body.trim().is_empty() {
+        markdown_to_html(page_markdown(page))
+    } else {
+        block_body
+    };
+    let nav = render_navigation(pages)?;
+    let breadcrumbs = render_breadcrumbs(page, base_url)?;
+    let related = render_related_links(page, pages_by_key, links_by_source)?;
+    let schema_json = serde_json::to_string_pretty(&page_schema_json(page, &canonical, base_url)?)?;
+
+    Ok(format!(
+        r#"<!doctype html>
+<html lang="{locale}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{title}</title>
+  <meta name="description" content="{description}">
+  <link rel="canonical" href="{canonical}">
+  <script type="application/ld+json">{schema_json}</script>
+  <style>
+    :root {{ color-scheme: light; --ink: #182026; --muted: #5a6872; --line: #d9e0e5; --accent: #176b5d; --bg: #fbfcfc; }}
+    body {{ margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); line-height: 1.62; }}
+    header {{ border-bottom: 1px solid var(--line); background: #ffffff; }}
+    nav {{ max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; gap: 16px; overflow-x: auto; }}
+    nav a {{ color: var(--ink); text-decoration: none; white-space: nowrap; font-size: 14px; }}
+    nav a[data-depth="0"] {{ font-weight: 700; }}
+    nav a[data-depth="1"] {{ font-weight: 600; }}
+    nav a[data-depth="2"] {{ color: var(--muted); }}
+    main {{ max-width: 820px; margin: 0 auto; padding: 48px 24px 72px; }}
+    .breadcrumbs {{ max-width: 820px; padding: 0; margin: 0 0 28px; display: block; overflow: visible; }}
+    .breadcrumbs ol {{ display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0; color: var(--muted); font-size: 13px; }}
+    .breadcrumbs li:not(:last-child)::after {{ content: "/"; margin-left: 8px; color: var(--muted); }}
+    .breadcrumbs a {{ color: var(--muted); font-size: 13px; }}
+    article h1 {{ font-size: clamp(32px, 5vw, 48px); line-height: 1.08; margin: 0 0 14px; }}
+    .meta {{ color: var(--muted); font-size: 14px; margin-bottom: 34px; }}
+    article h2 {{ margin-top: 38px; font-size: 26px; line-height: 1.2; }}
+    article a {{ color: var(--accent); }}
+    article code {{ background: #eef3f2; padding: 2px 5px; border-radius: 4px; }}
+    .related {{ margin-top: 52px; border-top: 1px solid var(--line); padding-top: 26px; }}
+    .related ul {{ padding: 0; margin: 0; list-style: none; display: grid; gap: 10px; }}
+    .related li {{ display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }}
+    .related span {{ color: var(--muted); font-size: 13px; }}
+    footer {{ border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; padding: 22px 24px; text-align: center; }}
+  </style>
+</head>
+<body>
+  <header><nav>{nav}</nav></header>
+  <main>
+    {breadcrumbs}
+    <article>
+      <h1>{h1}</h1>
+      <div class="meta">{page_type} / {intent} / {updated_at}</div>
+      {body}
+    </article>
+    {related}
+  </main>
+  <footer>Generated by Alegria Static Site Builder</footer>
+</body>
+</html>
+"#,
+        locale = escape_html(&page.locale_code),
+        title = escape_html(&page.title),
+        description = escape_html(&page.meta_description),
+        canonical = escape_html(&canonical),
+        h1 = escape_html(&page.h1),
+        page_type = escape_html(&page.page_type_key),
+        intent = escape_html(&page.dominant_intent_key),
+        updated_at = escape_html(&page.updated_at),
+        breadcrumbs = breadcrumbs,
+    ))
+}
+
+fn build_static_artifacts(
+    pages: &[StaticCmsPageRow],
+    links: &[StaticCmsLinkRow],
+    base_url: &str,
+) -> Result<Vec<StaticArtifact>> {
+    if pages.is_empty() {
+        anyhow::bail!("no approved or published CMS pages are available for static build");
+    }
+
+    let pages_by_key: HashMap<String, StaticCmsPageRow> = pages
+        .iter()
+        .map(|page| (page.page_node_key.clone(), page.clone()))
+        .collect();
+    let mut links_by_source: HashMap<String, Vec<StaticCmsLinkRow>> = HashMap::new();
+    for link in links {
+        links_by_source
+            .entry(link.source_page_key.clone())
+            .or_default()
+            .push(link.clone());
+    }
+
+    let mut artifacts = Vec::new();
+    let mut sitemap_urls = Vec::new();
+    let mut manifest_pages = Vec::new();
+    for page in pages {
+        let html = render_page(page, pages, &pages_by_key, &links_by_source, base_url)?;
+        let relative_path = output_path_for_url(&page.canonical_url_path)?;
+        artifacts.push(StaticArtifact {
+            relative_path,
+            bytes: html.into_bytes(),
+        });
+        let url = absolute_url(base_url, &page.canonical_url_path)?;
+        sitemap_urls.push(format!(
+            "<url><loc>{}</loc><lastmod>{}</lastmod></url>",
+            escape_html(&url),
+            escape_html(&page.updated_at)
+        ));
+        manifest_pages.push(json!({
+            "page_node_key": page.page_node_key,
+            "revision_id": page.revision_id,
+            "cms_document_id": page.cms_document_id,
+            "canonical_url_path": normalize_url_path(&page.canonical_url_path)?,
+            "status": page.current_status,
+            "title": page.title,
+        }));
+    }
+
+    artifacts.push(StaticArtifact {
+        relative_path: "sitemap.xml".to_string(),
+        bytes: format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{}</urlset>"#,
+            sitemap_urls.join("")
+        )
+        .into_bytes(),
+    });
+    artifacts.push(StaticArtifact {
+        relative_path: "robots.txt".to_string(),
+        bytes: b"User-agent: *\nAllow: /\nSitemap: /sitemap.xml\n".to_vec(),
+    });
+    artifacts.push(StaticArtifact {
+        relative_path: "alegria-static-manifest.json".to_string(),
+        bytes: serde_json::to_vec_pretty(&json!({
+            "builder": "alegria_static_site_builder@1",
+            "base_url": base_url,
+            "page_count": pages.len(),
+            "pages": manifest_pages,
+        }))?,
+    });
+
+    Ok(artifacts)
+}
+
+fn write_static_artifacts(output_dir: &Path, artifacts: &[StaticArtifact]) -> Result<()> {
+    let marker = output_dir.join(".alegria_static_site");
+    if output_dir.exists() {
+        let mut entries = fs::read_dir(output_dir)
+            .with_context(|| format!("read output dir failed: {}", output_dir.display()))?;
+        if marker.exists() {
+            fs::remove_dir_all(output_dir)
+                .with_context(|| format!("clean output dir failed: {}", output_dir.display()))?;
+        } else if entries.next().is_some() {
+            anyhow::bail!(
+                "output dir is not empty and was not created by Alegria: {}",
+                output_dir.display()
+            );
+        }
+    }
+    fs::create_dir_all(output_dir)
+        .with_context(|| format!("create output dir failed: {}", output_dir.display()))?;
+    fs::write(&marker, b"alegria_static_site_builder@1\n")
+        .with_context(|| format!("write marker failed: {}", marker.display()))?;
+
+    for artifact in artifacts {
+        let path = output_dir.join(&artifact.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create artifact dir failed: {}", parent.display()))?;
+        }
+        fs::write(&path, &artifact.bytes)
+            .with_context(|| format!("write artifact failed: {}", path.display()))?;
+    }
+    Ok(())
+}
+
+async fn build_static_site(
+    database_url: Option<String>,
+    output_dir: &str,
+    base_url: &str,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let snapshot = load_static_site_snapshot(&pool).await?;
+    let artifacts = build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+    write_static_artifacts(Path::new(output_dir), &artifacts)?;
+    println!(
+        "STATIC_SITE_BUILD: OK pages={} artifacts={} output={}",
+        snapshot.pages.len(),
+        artifacts.len(),
+        output_dir
+    );
+    Ok(0)
+}
+
+async fn crawl_pending_sources(
+    database_url: Option<String>,
+    run_id: String,
+    query_batch_key: String,
+    limit: i64,
+    emit_qdrant: bool,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let items =
+        raw_crawl_adapter::claim_pending_crawl_batch(&pool, &run_id, &query_batch_key, limit)
+            .await?;
+    let mut ok = 0usize;
+    let mut failed = 0usize;
+
+    for item in items {
+        match raw_crawl_adapter::fetch_html(&item.url).await {
+            Ok(fetched) if (200..400).contains(&fetched.status_code) => {
+                match raw_crawl_adapter::save_crawled_html(
+                    &pool,
+                    &fetched.final_url,
+                    &item.dtype,
+                    fetched.status_code,
+                    &fetched.content_type,
+                    &fetched.body,
+                )
+                .await
+                {
+                    Ok(saved) => {
+                        let qdrant_events = if emit_qdrant {
+                            raw_crawl_adapter::emit_raw_section_qdrant_events(&pool, saved.page_id)
+                                .await?
+                        } else {
+                            0
+                        };
+                        raw_crawl_adapter::mark_crawl_done(
+                            &pool,
+                            &item.url_norm,
+                            fetched.status_code,
+                            &format!(
+                                "source_type={}; page_id={}; sections={}; qdrant_events={}; hash={}",
+                                item.source_type,
+                                saved.page_id,
+                                saved.section_count,
+                                qdrant_events,
+                                saved.content_hash
+                            ),
+                        )
+                        .await?;
+                        println!(
+                            "CRAWL_OK url_norm={} page_id={} sections={} qdrant_events={}",
+                            item.url_norm, saved.page_id, saved.section_count, qdrant_events
+                        );
+                        ok += 1;
+                    }
+                    Err(err) => {
+                        raw_crawl_adapter::mark_crawl_failed(
+                            &pool,
+                            &item.url_norm,
+                            Some(fetched.status_code),
+                            &format!("persist failed: {err}"),
+                        )
+                        .await?;
+                        eprintln!("CRAWL_FAILED url_norm={} error={}", item.url_norm, err);
+                        failed += 1;
+                    }
+                }
+            }
+            Ok(fetched) => {
+                raw_crawl_adapter::mark_crawl_failed(
+                    &pool,
+                    &item.url_norm,
+                    Some(fetched.status_code),
+                    &format!(
+                        "http_status={}; content_type={}",
+                        fetched.status_code, fetched.content_type
+                    ),
+                )
+                .await?;
+                eprintln!(
+                    "CRAWL_FAILED url_norm={} http_status={}",
+                    item.url_norm, fetched.status_code
+                );
+                failed += 1;
+            }
+            Err(err) => {
+                raw_crawl_adapter::mark_crawl_failed(
+                    &pool,
+                    &item.url_norm,
+                    None,
+                    &format!("fetch failed: {err}"),
+                )
+                .await?;
+                eprintln!("CRAWL_FAILED url_norm={} error={}", item.url_norm, err);
+                failed += 1;
+            }
+        }
+    }
+
+    println!("CRAWL_SUMMARY ok={} failed={}", ok, failed);
+    Ok(if failed == 0 { 0 } else { 1 })
+}
+
+async fn cms_review_list(database_url: Option<String>, limit: i64) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.canonical_url_path, p.current_status,
+               r.revision_id, r.title, r.updated_at::text AS updated_at
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        WHERE p.current_status IN ('review_required','blocked','approved')
+        ORDER BY r.updated_at DESC
+        LIMIT $1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(&pool)
+    .await?;
+    let payload = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "page_node_key": row.get::<String, _>("page_node_key"),
+                "canonical_url_path": row.get::<String, _>("canonical_url_path"),
+                "current_status": row.get::<String, _>("current_status"),
+                "revision_id": row.get::<String, _>("revision_id"),
+                "title": row.get::<String, _>("title"),
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(0)
+}
+
+async fn cms_review_show(database_url: Option<String>, page_node_key: &str) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.scope_signature, p.canonical_url_path, p.current_status,
+               r.revision_id, r.title, r.meta_description, r.h1, r.body_payload,
+               r.schema_markup_payload, r.required_link_payload, r.traceability_manifest,
+               r.revision_status, r.updated_at::text AS updated_at
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        WHERE p.page_node_key = $1
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(&pool)
+    .await?;
+    let body: Json<Value> = row.get("body_payload");
+    let schema: Json<Value> = row.get("schema_markup_payload");
+    let links: Json<Value> = row.get("required_link_payload");
+    let traceability: Json<Value> = row.get("traceability_manifest");
+    let payload = json!({
+        "page_node_key": row.get::<String, _>("page_node_key"),
+        "scope_signature": row.get::<String, _>("scope_signature"),
+        "canonical_url_path": row.get::<String, _>("canonical_url_path"),
+        "current_status": row.get::<String, _>("current_status"),
+        "revision_id": row.get::<String, _>("revision_id"),
+        "revision_status": row.get::<String, _>("revision_status"),
+        "title": row.get::<String, _>("title"),
+        "meta_description": row.get::<String, _>("meta_description"),
+        "h1": row.get::<String, _>("h1"),
+        "body_payload": body.0,
+        "schema_markup_payload": schema.0,
+        "required_link_payload": links.0,
+        "traceability_manifest": traceability.0,
+        "updated_at": row.get::<String, _>("updated_at"),
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(0)
+}
+
+async fn cms_publish_status(database_url: Option<String>, page_node_key: &str) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.current_status, p.published_at::text AS published_at,
+               p.current_revision_id, r.revision_status,
+               a.status AS artifact_status, a.artifact_uri, a.updated_at::text AS artifact_updated_at
+        FROM site.cms_pages p
+        LEFT JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        LEFT JOIN site.publish_artifacts a
+          ON a.revision_id = p.current_revision_id
+         AND a.page_node_key = p.page_node_key
+        WHERE p.page_node_key = $1
+        ORDER BY a.updated_at DESC NULLS LAST
+        LIMIT 1
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(&pool)
+    .await?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "page_node_key": row.get::<String, _>("page_node_key"),
+            "current_status": row.get::<String, _>("current_status"),
+            "published_at": row.get::<Option<String>, _>("published_at"),
+            "current_revision_id": row.get::<Option<String>, _>("current_revision_id"),
+            "revision_status": row.get::<Option<String>, _>("revision_status"),
+            "artifact_status": row.get::<Option<String>, _>("artifact_status"),
+            "artifact_uri": row.get::<Option<String>, _>("artifact_uri"),
+            "artifact_updated_at": row.get::<Option<String>, _>("artifact_updated_at"),
+        }))?
+    );
+    Ok(0)
+}
+
+async fn cms_traceability_inspect(
+    database_url: Option<String>,
+    page_node_key: &str,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT r.revision_id, r.traceability_manifest
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        WHERE p.page_node_key = $1
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(&pool)
+    .await?;
+    let traceability: Json<Value> = row.get("traceability_manifest");
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "page_node_key": page_node_key,
+            "revision_id": row.get::<String, _>("revision_id"),
+            "traceability_manifest": traceability.0,
+        }))?
+    );
+    Ok(0)
+}
+
+async fn cms_blockers_inspect(database_url: Option<String>, page_node_key: &str) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT task_key, task_type, queue_state, blocking_step_name,
+               severity, decision_payload, audit_log_payload,
+               updated_at::text AS updated_at
+        FROM site.seo_hitl_tasks
+        WHERE page_node_key = $1
+          AND queue_state IN ('open','reopened','in_review')
+        ORDER BY updated_at DESC
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_all(&pool)
+    .await?;
+    let payload = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "task_key": row.get::<String, _>("task_key"),
+                "task_type": row.get::<String, _>("task_type"),
+                "queue_state": row.get::<String, _>("queue_state"),
+                "blocking_step_name": row.get::<String, _>("blocking_step_name"),
+                "severity": row.get::<String, _>("severity"),
+                "decision_payload": row.get::<Json<Value>, _>("decision_payload").0,
+                "audit_log_payload": row.get::<Json<Value>, _>("audit_log_payload").0,
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(0)
+}
+
+async fn seo_rebuild_backlog_inspect(
+    database_url: Option<String>,
+    page_node_key: Option<String>,
+    limit: i64,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let rows = if let Some(page_node_key) = page_node_key.as_ref() {
+        sqlx::query(
+            r#"
+            SELECT rebuild_request_key, page_node_key, trigger_type, priority, status, reason,
+                   updated_at::text AS updated_at
+            FROM monitoring.seo_rebuild_backlog
+            WHERE page_node_key = $1
+            ORDER BY updated_at DESC
+            LIMIT $2
+            "#,
+        )
+        .bind(page_node_key)
+        .bind(limit)
+        .fetch_all(&pool)
+        .await?
+    } else {
+        sqlx::query(
+            r#"
+            SELECT rebuild_request_key, page_node_key, trigger_type, priority, status, reason,
+                   updated_at::text AS updated_at
+            FROM monitoring.seo_rebuild_backlog
+            ORDER BY updated_at DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit)
+        .fetch_all(&pool)
+        .await?
+    };
+    let payload = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "rebuild_request_key": row.get::<String, _>("rebuild_request_key"),
+                "page_node_key": row.get::<Option<String>, _>("page_node_key"),
+                "trigger_type": row.get::<String, _>("trigger_type"),
+                "priority": row.get::<i32, _>("priority"),
+                "status": row.get::<String, _>("status"),
+                "reason": row.get::<String, _>("reason"),
+                "updated_at": row.get::<String, _>("updated_at"),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(0)
+}
+
+async fn seo_support_bundle_inspect(
+    database_url: Option<String>,
+    context_key: &str,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            r.rule_instance_id,
+            r.rule_type_key,
+            r.role_type,
+            r.status,
+            r.effective_from::text AS effective_from,
+            r.effective_to::text AS effective_to,
+            COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
+            COALESCE(s.source_label, '') AS source_label,
+            COALESCE(s.source_type, 'editorial') AS source_type,
+            COALESCE(s.trust_level, 3) AS trust_level
+        FROM verified.rule_instances r
+        LEFT JOIN kb.concepts c ON c.concept_key = r.concept_key
+        LEFT JOIN kb.sources s ON s.source_key = r.source_key
+        WHERE r.context_key = $1
+          AND r.status = 'verified'
+        ORDER BY r.role_type, r.rule_instance_id
+        "#,
+    )
+    .bind(context_key)
+    .fetch_all(&pool)
+    .await?;
+    let payload = rows
+        .into_iter()
+        .map(|row| {
+            json!({
+                "rule_instance_id": row.get::<String, _>("rule_instance_id"),
+                "rule_type_key": row.get::<String, _>("rule_type_key"),
+                "role_type": row.get::<String, _>("role_type"),
+                "concept_label": row.get::<String, _>("concept_label"),
+                "source_label": row.get::<String, _>("source_label"),
+                "source_type": row.get::<String, _>("source_type"),
+                "trust_level": row.get::<i32, _>("trust_level"),
+                "effective_from": row.get::<Option<String>, _>("effective_from"),
+                "effective_to": row.get::<Option<String>, _>("effective_to"),
+                "status": row.get::<String, _>("status"),
+            })
+        })
+        .collect::<Vec<_>>();
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    Ok(0)
+}
+
+async fn resolve_seo_workflow_id(
+    pool: &sqlx::PgPool,
+    page_node_key: &str,
+    revision_id: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query(
+        r#"
+        SELECT event_payload ->> 'run_id' AS run_id
+        FROM site.cms_publish_events
+        WHERE page_node_key = $1
+          AND revision_id = $2
+          AND event_type = 'seo_page_review_requested'
+          AND COALESCE(event_payload ->> 'run_id', '') <> ''
+        ORDER BY occurred_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(page_node_key)
+    .bind(revision_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.and_then(|row| row.get::<Option<String>, _>("run_id")))
+}
+
+async fn cms_review_decision(
+    database_url: Option<String>,
+    page_node_key: &str,
+    actor_role: &str,
+    decision: &str,
+    reason: &str,
+) -> Result<(String, String, String)> {
+    anyhow::ensure!(
+        !actor_role.trim().is_empty() && actor_role != "seo_system",
+        "human actor_role is required"
+    );
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let row = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.current_revision_id AS revision_id
+        FROM site.cms_pages p
+        WHERE p.page_node_key = $1
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(&pool)
+    .await?;
+    let revision_id: String = row.get("revision_id");
+    let decision_key = primitives::seo::seo_artifact_key(
+        "cms_approval_decision",
+        &[page_node_key, &revision_id, actor_role, decision],
+    );
+    sqlx::query(
+        r#"
+        INSERT INTO site.cms_approval_decisions
+            (decision_key, page_node_key, revision_id, actor_role, decision, reason,
+             decision_payload)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (decision_key) DO UPDATE
+        SET decision = EXCLUDED.decision,
+            reason = EXCLUDED.reason,
+            decision_payload = EXCLUDED.decision_payload
+        "#,
+    )
+    .bind(&decision_key)
+    .bind(page_node_key)
+    .bind(&revision_id)
+    .bind(actor_role)
+    .bind(decision)
+    .bind(reason)
+    .bind(Json(json!({
+        "reason": reason,
+        "source": "cli_tools_headless_cms@1",
+    })))
+    .execute(&pool)
+    .await?;
+    let queue_state = match decision {
+        "approved" => "resolved",
+        "blocked" => "reopened",
+        "reopened" => "reopened",
+        _ => anyhow::bail!("unsupported decision: {decision}"),
+    };
+    sqlx::query(
+        r#"
+        UPDATE site.seo_hitl_tasks
+        SET queue_state = $1,
+            updated_at = now()
+        WHERE page_node_key = $2
+          AND blocking_execution_key = $3
+          AND queue_state IN ('open','in_review','reopened')
+        "#,
+    )
+    .bind(queue_state)
+    .bind(page_node_key)
+    .bind(&revision_id)
+    .execute(&pool)
+    .await?;
+    let workflow_id = resolve_seo_workflow_id(&pool, page_node_key, &revision_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("seo workflow run_id not found for current review revision")
+        })?;
+    signal_seo_workflow_resume(&workflow_id).await?;
+    Ok((decision_key, revision_id, workflow_id))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_path_uses_directory_indexes() {
+        assert_eq!(output_path_for_url("/").unwrap(), "index.html");
+        assert_eq!(
+            output_path_for_url("/guides/poland-visa/").unwrap(),
+            "guides/poland-visa/index.html"
+        );
+    }
+
+    #[test]
+    fn output_path_rejects_traversal() {
+        assert!(output_path_for_url("/../secret").is_err());
+        assert!(output_path_for_url("/safe?x=1").is_err());
+    }
+
+    #[test]
+    fn markdown_renderer_outputs_html() {
+        let html = markdown_to_html("# Title\n\nBody with **strong** text.");
+        assert!(html.contains("<h1>Title</h1>"));
+        assert!(html.contains("<strong>strong</strong>"));
+    }
+
+    #[test]
+    fn static_artifacts_include_sitemap_and_manifest() {
+        let pages = vec![StaticCmsPageRow {
+            page_node_key: "page_home".to_string(),
+            canonical_url_path: "/".to_string(),
+            locale_code: "en".to_string(),
+            page_type_key: "home".to_string(),
+            dominant_intent_key: "overview".to_string(),
+            current_status: "approved".to_string(),
+            cms_document_id: "doc_home".to_string(),
+            revision_id: "rev_home".to_string(),
+            title: "Home".to_string(),
+            meta_description: "Home page".to_string(),
+            h1: "Home".to_string(),
+            body_payload: json!({
+                "markdown": "Welcome.\n\n## FAQ\n\n### Is this reviewed?\n\nYes, before publish."
+            }),
+            schema_markup_payload: json!({}),
+            updated_at: "2026-05-06T00:00:00Z".to_string(),
+        }];
+
+        let artifacts = build_static_artifacts(&pages, &[], "https://alegria.test").unwrap();
+        let paths: Vec<&str> = artifacts
+            .iter()
+            .map(|artifact| artifact.relative_path.as_str())
+            .collect();
+        assert!(paths.contains(&"index.html"));
+        assert!(paths.contains(&"sitemap.xml"));
+        assert!(paths.contains(&"robots.txt"));
+        assert!(paths.contains(&"alegria-static-manifest.json"));
+        let home = artifacts
+            .iter()
+            .find(|artifact| artifact.relative_path == "index.html")
+            .unwrap();
+        let html = String::from_utf8(home.bytes.clone()).unwrap();
+        assert!(html.contains("BreadcrumbList"));
+        assert!(html.contains("FAQPage"));
+        assert!(html.contains("class=\"breadcrumbs\""));
+    }
 }
 
 #[tokio::main]
@@ -478,6 +1772,112 @@ async fn main() -> Result<()> {
                 report.failed_candidates,
                 report.reset_stale_processing,
                 report.requeued_failed
+            );
+            0
+        }
+        Command::BuildStaticSite {
+            database_url,
+            output_dir,
+            base_url,
+        } => build_static_site(database_url, &output_dir, &base_url).await?,
+        Command::CrawlPendingSources {
+            database_url,
+            run_id,
+            query_batch_key,
+            limit,
+            emit_qdrant,
+        } => {
+            crawl_pending_sources(database_url, run_id, query_batch_key, limit, emit_qdrant).await?
+        }
+        Command::CmsReviewList {
+            database_url,
+            limit,
+        } => cms_review_list(database_url, limit).await?,
+        Command::CmsReviewShow {
+            database_url,
+            page_node_key,
+        } => cms_review_show(database_url, &page_node_key).await?,
+        Command::CmsPublishStatus {
+            database_url,
+            page_node_key,
+        } => cms_publish_status(database_url, &page_node_key).await?,
+        Command::CmsTraceabilityInspect {
+            database_url,
+            page_node_key,
+        } => cms_traceability_inspect(database_url, &page_node_key).await?,
+        Command::CmsBlockersInspect {
+            database_url,
+            page_node_key,
+        } => cms_blockers_inspect(database_url, &page_node_key).await?,
+        Command::SeoRebuildBacklogInspect {
+            database_url,
+            page_node_key,
+            limit,
+        } => seo_rebuild_backlog_inspect(database_url, page_node_key, limit).await?,
+        Command::SeoSupportBundleInspect {
+            database_url,
+            context_key,
+        } => seo_support_bundle_inspect(database_url, &context_key).await?,
+        Command::CmsApprovePublish {
+            database_url,
+            page_node_key,
+            actor_role,
+            reason,
+            output_dir,
+            base_url,
+        } => {
+            let _keep_smoke_happy = (&output_dir, &base_url);
+            let (decision_key, revision_id, workflow_id) = cms_review_decision(
+                database_url.clone(),
+                &page_node_key,
+                &actor_role,
+                "approved",
+                &reason,
+            )
+            .await?;
+            println!(
+                "CMS_APPROVE_PUBLISH: OK decision={} revision={} workflow={} mode=workflow_owned_publish",
+                decision_key, revision_id, workflow_id
+            );
+            0
+        }
+        Command::CmsBlock {
+            database_url,
+            page_node_key,
+            actor_role,
+            reason,
+        } => {
+            let (decision_key, revision_id, workflow_id) = cms_review_decision(
+                database_url,
+                &page_node_key,
+                &actor_role,
+                "blocked",
+                &reason,
+            )
+            .await?;
+            println!(
+                "CMS_BLOCK: OK decision={} revision={} workflow={}",
+                decision_key, revision_id, workflow_id
+            );
+            0
+        }
+        Command::CmsReopen {
+            database_url,
+            page_node_key,
+            actor_role,
+            reason,
+        } => {
+            let (decision_key, revision_id, workflow_id) = cms_review_decision(
+                database_url,
+                &page_node_key,
+                &actor_role,
+                "reopened",
+                &reason,
+            )
+            .await?;
+            println!(
+                "CMS_REOPEN: OK decision={} revision={} workflow={}",
+                decision_key, revision_id, workflow_id
             );
             0
         }

@@ -11,9 +11,9 @@ Generated file. Do not edit manually.
 | `app/contracts/proto/primitives.proto` | `alegria.primitives.v1` | 10 | 1 | `1eab30267de1ce980ce3e37e84893fb3f8b7fe21a03e7204663e6cf1db94b34d` |
 | `app/contracts/proto/read_api.proto` | `alegria.read_api.v1` | 14 | 0 | `a690559a168b00b7ed554002e84ddad902ed346d989f82a068953af729ca4561` |
 | `app/contracts/proto/rules.proto` | `alegria.rules.v1` | 11 | 0 | `8eb0f733a0929558c39b0359b583b507f484ad614ee25f74a55eaa40e2601434` |
-| `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 10 | 0 | `474036acbf7a80a00df0a2b11a4a68fb460bedffc7486670ff2e26f5b24cee72` |
+| `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 12 | 0 | `7e526dd92504423f29fafaabe53efb07a14be74cfde7fccf59e966e1cbc017b0` |
 | `app/contracts/proto/telemetry.proto` | `alegria.telemetry.v1` | 2 | 0 | `4924ffcaad50a1d1e7b8f97e68caa857b876905c6683f3b12616d2a2bbe45f78` |
-| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 27 | 0 | `bc206f11ab33f1c0e51920ecf2aaf93375038786e4c84ba86a24f6804c1d009d` |
+| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 84 | 0 | `fc13a95e2981fe0d669fb1b7811aac3a9deff1d1d25599a1809c80344d6b42f8` |
 | `app/analytics_lab/proto/analytics.proto` | `alegria.analytics.v1` | 10 | 1 | `3e3b8b852b9a46fd656d7e14e61f23c2d161f29dbaf5d3281ea760dcbf3ad21e` |
 
 ## Message/Service Index
@@ -45,7 +45,7 @@ Generated file. Do not edit manually.
 
 ### `app/contracts/proto/sync.proto`
 
-- messages: ConceptApproved, ConceptHierarchyChanged, Neo4jMaterializationCommand, Neo4jRuleUpsertPayload, PageContextMapped, QdrantEntityPayload, QdrantUpsertCommand, RuleInstanceDeprecated, RuleInstanceUpserted, SyncOutboxEvent
+- messages: ConceptApproved, ConceptHierarchyChanged, Neo4jMaterializationCommand, Neo4jRuleUpsertPayload, PageContextMapped, QdrantEntityPayload, QdrantUpsertCommand, RuleInstanceDeprecated, RuleInstanceUpserted, SeoCmsEventPayload, SeoGraphProjectionPayload, SyncOutboxEvent
 - services: —
 
 ### `app/contracts/proto/telemetry.proto`
@@ -55,7 +55,7 @@ Generated file. Do not edit manually.
 
 ### `app/contracts/proto/temporal_payloads.proto`
 
-- messages: DomBlockRelevanceDecisionPayload, DomBlockRelevancePayload, ExtractedPayloadState, FactExtractionInputPayload, FactValueState, FreshnessReport, GenerationBlockState, GenerationResultState, HitlDecision, HitlPauseInfo, HitlResolutionInput, HitlTaskContext, PageSemanticContextPayload, PageUtilityClassificationPayload, PersistReport, ReconcileSummaryPayload, ReconcileTargetReportPayload, RuleInstanceCandidateState, RuleParamsState, RuntimeErrorPayload, StepContractMeta, StepEnvelope, StringPayload, ValidationDiagnostic, ValidationInputPayload, ValidationReport, VerifyReport
+- messages: CannibalizationConflictState, ClaimLedgerEntry, CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload, CmsReviewPage, ContentBlockPlanItemState, ContentBlockPlanState, ContentContractValidateInputPayload, ContentContractValidateOutputPayload, ContentGapState, DomBlockRelevanceDecisionPayload, DomBlockRelevancePayload, DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload, DraftState, EditorialBrief, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload, ExtractedPayloadState, FactExtractionInputPayload, FactValueState, FinalizePublishInputPayload, FinalizePublishOutputPayload, FreshnessReport, GenerationBlockState, GenerationResultState, HitlDecision, HitlPauseInfo, HitlResolutionInput, HitlTaskContext, IaBuildInputPayload, IaBuildOutputPayload, KeywordClusterState, LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState, LlmDraftCandidate, LlmDraftRequest, OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PageBlueprintState, PageBriefState, PageNodeState, PageSemanticContextPayload, PageUtilityClassificationPayload, PersistReport, PublishArtifact, PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload, ReconcileSummaryPayload, ReconcileTargetReportPayload, RenderPreviewPageState, RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload, RenderedContentBlock, RuleInstanceCandidateState, RuleParamsState, RuntimeErrorPayload, SectionTemplateBinding, SeoDraftSectionState, SeoPublishBlockerState, SeoScopePayload, SeoSiteBuildInputPayload, SeoTraceabilityEntryState, SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload, SerpPatternState, StepContractMeta, StepEnvelope, StringPayload, ValidationDiagnostic, ValidationInputPayload, ValidationReport, VerifyReport
 - services: —
 
 ### `app/analytics_lab/proto/analytics.proto`

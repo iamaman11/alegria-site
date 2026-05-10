@@ -3,8 +3,8 @@ use std::io::Error as IoError;
 
 use contracts::generated::alegria::temporal::v1::{RuntimeErrorPayload, StepContractMeta};
 use futures::Future;
-use infrastructure::adapters::temporalio_sdk_adapter::ActivityError;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
+use infrastructure::adapters::temporalio_sdk_adapter::ActivityError;
 use primitives::errors::{DomainError, ErrorClass};
 use primitives::hash::blake3_hex;
 use use_cases::pipeline_runtime as pipeline_storage;
@@ -40,6 +40,11 @@ impl AlegriaActivities {
             error_class: error_class
                 .map(|c| c.as_str().to_string())
                 .unwrap_or_default(),
+            retry_class: "safe".to_string(),
+            executor_version: Self::current_build_id(),
+            derivation_version: format!("{step_name}@{schema_version}"),
+            scope_signature: String::new(),
+            max_retries: 3,
         }
     }
 
@@ -200,7 +205,9 @@ impl AlegriaActivities {
         )
         .await
         .map_err(Self::into_activity_error)?
-        .ok_or_else(|| Self::into_activity_error("missing step_execution row after begin_step_execution"))?;
+        .ok_or_else(|| {
+            Self::into_activity_error("missing step_execution row after begin_step_execution")
+        })?;
 
         let attempt_no = pipeline_storage::begin_step_attempt(&self.pool, step_execution_id)
             .await

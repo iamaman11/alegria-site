@@ -17,9 +17,10 @@ pub(crate) async fn generate_content_impl(
         .await
         .map_err(AlegriaActivities::classify_error)?;
     let context_key = run.context_key();
-    let bundle = use_cases::assemble_context_bundle::assemble_context_bundle_model(&acts.pool, context_key)
-        .await
-        .map_err(AlegriaActivities::classify_error)?;
+    let bundle =
+        use_cases::assemble_context_bundle::assemble_context_bundle_model(&acts.pool, context_key)
+            .await
+            .map_err(AlegriaActivities::classify_error)?;
 
     let mut rendered_blocks: BTreeMap<String, String> = BTreeMap::new();
     let citation_rules: Vec<primitives::writer::CitationRule> = bundle
@@ -186,18 +187,15 @@ pub(crate) async fn validate_blocks_impl(
                 context_json_utf8: b"{}".to_vec(),
             });
         } else {
-            diagnostics.extend(
-                diag_envelope
-                    .diagnostics
-                    .into_iter()
-                    .map(|d| TemporalValidationDiagnostic {
-                        severity: d.severity,
-                        gate: d.gate,
-                        block_key: d.block_key,
-                        message: d.message,
-                        context_json_utf8: d.context_json_utf8,
-                    }),
-            );
+            diagnostics.extend(diag_envelope.diagnostics.into_iter().map(|d| {
+                TemporalValidationDiagnostic {
+                    severity: d.severity,
+                    gate: d.gate,
+                    block_key: d.block_key,
+                    message: d.message,
+                    context_json_utf8: d.context_json_utf8,
+                }
+            }));
         }
     }
 

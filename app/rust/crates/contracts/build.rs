@@ -14,6 +14,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sync = proto_dir.join("sync.proto");
     let temporal_payloads = proto_dir.join("temporal_payloads.proto");
 
-    config.compile_protos(&[read_api, rules, condition, sync, temporal_payloads], &[proto_dir])?;
+    config.compile_protos(
+        &[read_api, rules, condition, sync, temporal_payloads],
+        &[proto_dir],
+    )?;
     Ok(())
 }

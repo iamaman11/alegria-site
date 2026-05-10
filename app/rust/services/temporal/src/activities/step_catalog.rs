@@ -78,3 +78,108 @@ pub(crate) async fn run_neo4j_backwrite(
 ) -> Result<use_cases::neo4j_backwrite_step::Neo4jBackwriteOutput, DomainError> {
     use_cases::neo4j_backwrite_step::execute(input).await
 }
+
+pub(crate) fn run_serp_ingest(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::SerpIngestInputPayload,
+) -> contracts::generated::alegria::temporal::v1::SerpIngestOutputPayload {
+    use_cases::serp_ingest_step::execute(input)
+}
+
+pub(crate) fn run_serp_normalize(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::SerpNormalizeInputPayload,
+) -> contracts::generated::alegria::temporal::v1::SerpNormalizeOutputPayload {
+    use_cases::serp_normalize_step::execute(input)
+}
+
+pub(crate) fn run_opportunity_build(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::OpportunityBuildInputPayload,
+) -> contracts::generated::alegria::temporal::v1::OpportunityBuildOutputPayload {
+    use_cases::opportunity_build_step::execute(input)
+}
+
+pub(crate) fn run_ia_build(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::IaBuildInputPayload,
+) -> contracts::generated::alegria::temporal::v1::IaBuildOutputPayload {
+    use_cases::ia_build_step::execute(input)
+}
+
+pub(crate) fn run_link_recommend(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::LinkRecommendInputPayload,
+) -> contracts::generated::alegria::temporal::v1::LinkRecommendOutputPayload {
+    use_cases::link_recommend_step::execute(input)
+}
+
+pub(crate) fn run_global_site_reconcile(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::GlobalSiteReconcileInputPayload,
+) -> contracts::generated::alegria::temporal::v1::GlobalSiteReconcileOutputPayload {
+    use_cases::global_site_reconcile_step::execute(input)
+}
+
+pub(crate) fn run_draft_assemble(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::DraftAssembleInputPayload,
+) -> contracts::generated::alegria::temporal::v1::DraftAssembleOutputPayload {
+    use_cases::draft_assemble_step::execute(input)
+}
+
+pub(crate) fn run_draft_normalize(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::DraftNormalizeInputPayload,
+) -> contracts::generated::alegria::temporal::v1::DraftNormalizeOutputPayload {
+    use_cases::draft_normalize_step::execute(input)
+}
+
+pub(crate) fn run_content_contract_validate(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::ContentContractValidateInputPayload,
+) -> contracts::generated::alegria::temporal::v1::ContentContractValidateOutputPayload {
+    use_cases::content_contract_validate_step::execute(input)
+}
+
+pub(crate) fn run_draft_qa(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::DraftQaInputPayload,
+) -> contracts::generated::alegria::temporal::v1::DraftQaOutputPayload {
+    use_cases::draft_qa_step::execute(input)
+}
+
+pub(crate) fn run_cms_publish(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::CmsPublishInputPayload,
+) -> contracts::generated::alegria::temporal::v1::CmsPublishOutputPayload {
+    use_cases::cms_publish_step::execute(input)
+}
+
+pub(crate) fn run_rebuild_detect(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::RebuildDetectInputPayload,
+) -> contracts::generated::alegria::temporal::v1::RebuildDetectOutputPayload {
+    use_cases::rebuild_detect_step::execute(input)
+}
+
+pub(crate) fn run_publish_materialize(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::PublishMaterializeInputPayload,
+) -> contracts::generated::alegria::temporal::v1::PublishMaterializeOutputPayload {
+    use_cases::publish_materialize_step::execute(input)
+}
+
+pub(crate) fn run_render_preview_validate(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::RenderPreviewValidateInputPayload,
+) -> contracts::generated::alegria::temporal::v1::RenderPreviewValidateOutputPayload {
+    use_cases::render_preview_validate_step::execute(input)
+}
+
+pub(crate) fn run_finalize_publish(
+    _acts: &AlegriaActivities,
+    input: &contracts::generated::alegria::temporal::v1::FinalizePublishInputPayload,
+) -> contracts::generated::alegria::temporal::v1::FinalizePublishOutputPayload {
+    use_cases::finalize_publish_step::execute(input)
+}

@@ -10,15 +10,11 @@ static EUR_RE: OnceLock<Regex> = OnceLock::new();
 static DAY_RE: OnceLock<Regex> = OnceLock::new();
 
 fn eur_re() -> &'static Regex {
-    EUR_RE.get_or_init(|| {
-        Regex::new(r"(?i)(?P<amount>\d+(?:[.,]\d+)?)\s*(?:eur|€|евро)").unwrap()
-    })
+    EUR_RE.get_or_init(|| Regex::new(r"(?i)(?P<amount>\d+(?:[.,]\d+)?)\s*(?:eur|€|евро)").unwrap())
 }
 
 fn day_re() -> &'static Regex {
-    DAY_RE.get_or_init(|| {
-        Regex::new(r"(?i)(?P<days>\d+)\s*(?:дн|дней|day|days)").unwrap()
-    })
+    DAY_RE.get_or_init(|| Regex::new(r"(?i)(?P<days>\d+)\s*(?:дн|дней|day|days)").unwrap())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

@@ -59,7 +59,12 @@ pub struct FaqItem {
 }
 
 fn parse_rule(fact: &CitationRule) -> RenderRule {
-    let default_title = fact.rule_type_key.replace('_', " ");
+    let default_title = match fact.rule_type_key.as_str() {
+        "consular_fee" => "Visa fee".to_string(),
+        "document_required" => "Required document".to_string(),
+        "timeline_item" => "Processing time".to_string(),
+        _ => fact.rule_type_key.replace('_', " "),
+    };
     let (title, amount, currency, days, notarization_required) = match &fact.params {
         RuleParamsView::None => (default_title.clone(), None, "EUR".to_string(), None, false),
         RuleParamsView::Document {
@@ -73,12 +78,20 @@ fn parse_rule(fact: &CitationRule) -> RenderRule {
             None,
             *notarization_required,
         ),
-        RuleParamsView::Fee { amount, currency } => {
-            (default_title.clone(), Some(*amount), currency.clone(), None, false)
-        }
-        RuleParamsView::Timeline { days } => {
-            (default_title.clone(), None, "EUR".to_string(), Some(*days), false)
-        }
+        RuleParamsView::Fee { amount, currency } => (
+            default_title.clone(),
+            Some(*amount),
+            currency.clone(),
+            None,
+            false,
+        ),
+        RuleParamsView::Timeline { days } => (
+            default_title.clone(),
+            None,
+            "EUR".to_string(),
+            Some(*days),
+            false,
+        ),
     };
     RenderRule {
         rule_type_key: fact.rule_type_key.clone(),
@@ -104,9 +117,9 @@ pub fn render_block(block_key: &str, rules: &[CitationRule], facts: &[FaqItem]) 
 pub fn plan_blocks(rules: &[CitationRule], facts: &[FaqItem]) -> Vec<String> {
     let parsed: Vec<RenderRule> = rules.iter().map(parse_rule).collect();
     let mut blocks = Vec::new();
-    let has_fees = parsed.iter().any(|r| {
-        matches!(r.rule_type_key.as_str(), "fee" | "consular_fee") || r.amount.is_some()
-    });
+    let has_fees = parsed
+        .iter()
+        .any(|r| matches!(r.rule_type_key.as_str(), "fee" | "consular_fee") || r.amount.is_some());
     let has_docs = parsed
         .iter()
         .any(|r| matches!(r.role, RuleRole::DocumentRequired | RuleRole::FormRequired));
@@ -134,7 +147,9 @@ fn render_fees_table(rules: &[CitationRule]) -> String {
     let rows: String = rules
         .iter()
         .map(parse_rule)
-        .filter(|r| matches!(r.rule_type_key.as_str(), "fee" | "consular_fee") || r.amount.is_some())
+        .filter(|r| {
+            matches!(r.rule_type_key.as_str(), "fee" | "consular_fee") || r.amount.is_some()
+        })
         .map(|r| {
             let label = html_escape(&r.title);
             let amount = r.amount.unwrap_or(0.0);
@@ -154,7 +169,11 @@ fn render_documents_list(rules: &[CitationRule]) -> String {
         .filter(|r| matches!(r.role, RuleRole::DocumentRequired | RuleRole::FormRequired))
         .map(|r| {
             let label = html_escape(&r.title);
-            let notarized = if r.notarization_required { " (нотариально)" } else { "" };
+            let notarized = if r.notarization_required {
+                " (нотариально)"
+            } else {
+                ""
+            };
             format!("<li>{label}{notarized}</li>")
         })
         .collect();
@@ -177,7 +196,11 @@ fn render_timeline(rules: &[CitationRule]) -> String {
     let items: String = rules
         .iter()
         .map(parse_rule)
-        .filter(|r| r.days.is_some() || r.rule_type_key.contains("duration") || r.rule_type_key.contains("timeline"))
+        .filter(|r| {
+            r.days.is_some()
+                || r.rule_type_key.contains("duration")
+                || r.rule_type_key.contains("timeline")
+        })
         .map(|r| {
             let label = html_escape(&r.title);
             let days = r.days.unwrap_or(0);

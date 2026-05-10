@@ -131,7 +131,12 @@ pub async fn mark_done(pool: &PgPool, event_id: Uuid) -> Result<()> {
     Ok(())
 }
 
-pub async fn mark_retry(pool: &PgPool, event_id: Uuid, error: &str, next_retry_delay_sec: i64) -> Result<()> {
+pub async fn mark_retry(
+    pool: &PgPool,
+    event_id: Uuid,
+    error: &str,
+    next_retry_delay_sec: i64,
+) -> Result<()> {
     sqlx::query(
         r#"
         UPDATE system.sync_outbox
@@ -154,7 +159,12 @@ pub async fn mark_retry(pool: &PgPool, event_id: Uuid, error: &str, next_retry_d
     Ok(())
 }
 
-pub async fn mark_deferred(pool: &PgPool, event_id: Uuid, reason: &str, next_retry_delay_sec: i64) -> Result<()> {
+pub async fn mark_deferred(
+    pool: &PgPool,
+    event_id: Uuid,
+    reason: &str,
+    next_retry_delay_sec: i64,
+) -> Result<()> {
     sqlx::query(
         r#"
         UPDATE system.sync_outbox
