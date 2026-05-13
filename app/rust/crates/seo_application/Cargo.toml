@@ -1,0 +1,14 @@
+[package]
+name = "seo_application"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+contracts = { path = "../contracts" }
+primitives = { path = "../primitives" }
+seo_domain = { path = "../seo_domain" }
+seo_ports = { path = "../seo_ports" }
+seo_steps = { path = "../seo_steps" }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+async-trait = "0.1"

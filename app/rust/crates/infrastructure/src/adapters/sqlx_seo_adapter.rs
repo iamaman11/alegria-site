@@ -12,6 +12,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use prost::Message;
+use seo_domain::{applicability, identity, rebuild};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
 use uuid::Uuid;
@@ -470,10 +471,12 @@ fn verified_support_fragment(
     }
 }
 
-async fn load_verified_fact_support(
+async fn resolve_verified_fact_support(
     pool: &PgPool,
     context_key: &str,
-) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+    applicant_profile: &str,
+) -> Result<applicability::ResolvedVerifiedSupportBundle<SeoVerifiedFactSupportState>, DomainError>
+{
     let rows = sqlx::query(
         r#"
         SELECT
@@ -485,7 +488,65 @@ async fn load_verified_fact_support(
             COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
             COALESCE(s.source_label, '') AS source_label,
             COALESCE(s.source_type, 'editorial') AS source_type,
-            COALESCE(s.trust_level, 3) AS trust_level
+            COALESCE(s.trust_level, 3) AS trust_level,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_instance_profiles rp_any
+                WHERE rp_any.rule_instance_id = r.rule_instance_id
+            ) AS has_profile_overrides,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_instance_profiles rp_apply
+                WHERE rp_apply.rule_instance_id = r.rule_instance_id
+                  AND rp_apply.profile_key = $2
+                  AND rp_apply.applicability = 'applies'
+            ) AS has_apply_profile,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_instance_profiles rp_conditional
+                WHERE rp_conditional.rule_instance_id = r.rule_instance_id
+                  AND rp_conditional.profile_key = $2
+                  AND rp_conditional.applicability = 'conditional'
+            ) AS has_conditional_profile,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_instance_profiles rp_exclude
+                WHERE rp_exclude.rule_instance_id = r.rule_instance_id
+                  AND rp_exclude.profile_key = $2
+                  AND rp_exclude.applicability = 'excludes'
+            ) AS has_exclude_profile,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_exceptions re
+                WHERE re.rule_instance_id = r.rule_instance_id
+                  AND re.status = 'verified'
+                  AND re.profile_key = $2
+                  AND re.override_kind = 'waive'
+            ) AS has_waive_exception,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_exceptions re
+                WHERE re.rule_instance_id = r.rule_instance_id
+                  AND re.status = 'verified'
+                  AND re.profile_key = $2
+                  AND re.override_kind = 'remove_requirement'
+            ) AS has_remove_exception,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_exceptions re
+                WHERE re.rule_instance_id = r.rule_instance_id
+                  AND re.status = 'verified'
+                  AND re.profile_key = $2
+                  AND re.override_kind = 'replace_value'
+            ) AS has_replace_exception,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_exceptions re
+                WHERE re.rule_instance_id = r.rule_instance_id
+                  AND re.status = 'verified'
+                  AND re.profile_key = $2
+                  AND re.override_kind = 'add_requirement'
+            ) AS has_add_requirement_exception
         FROM verified.rule_instances r
         LEFT JOIN kb.concepts c ON c.concept_key = r.concept_key
         LEFT JOIN kb.sources s ON s.source_key = r.source_key
@@ -495,47 +556,73 @@ async fn load_verified_fact_support(
         "#,
     )
     .bind(context_key)
+    .bind(applicant_profile)
     .fetch_all(pool)
     .await
     .map_err(classify_sqlx)?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let params: Json<serde_json::Value> = row.get("params");
-            let role_type: String = row.get("role_type");
-            let concept_label: String = row.get("concept_label");
-            let source_type: String = row.get("source_type");
-            let trust_level: i32 = row.get("trust_level");
-            let source_tier = match (source_type.as_str(), trust_level) {
-                ("government", _) | (_, 5) => "official",
-                ("vfs", _) | (_, 4) => "regulated_partner",
-                ("internal", _) => "internal_verified",
-                ("niche_agency", _) => "industry_reference",
-                _ => "editorial_reference",
-            };
-            let effective_to = row
-                .get::<Option<String>, _>("effective_to")
-                .unwrap_or_default();
-            let freshness_class = if effective_to.trim().is_empty() {
-                "watch"
-            } else {
-                "fresh"
-            };
-            SeoVerifiedFactSupportState {
-                fragment_text: verified_support_fragment(&role_type, &concept_label, &params.0),
-                support_ref: row.get("rule_instance_id"),
-                role_type,
-                source_label: row.get("source_label"),
-                source_tier: source_tier.to_string(),
-                freshness_class: freshness_class.to_string(),
-                observed_at: row
-                    .get::<Option<String>, _>("effective_from")
-                    .unwrap_or_default(),
-                valid_until: effective_to,
-            }
-        })
-        .collect())
+    let mut candidates = Vec::new();
+    for row in rows {
+        let rule_instance_id: String = row.get("rule_instance_id");
+        let has_profile_overrides: bool = row.get("has_profile_overrides");
+        let has_apply_profile: bool = row.get("has_apply_profile");
+        let has_conditional_profile: bool = row.get("has_conditional_profile");
+        let has_exclude_profile: bool = row.get("has_exclude_profile");
+        let has_waive_exception: bool = row.get("has_waive_exception");
+        let has_remove_exception: bool = row.get("has_remove_exception");
+        let has_replace_exception: bool = row.get("has_replace_exception");
+        let has_add_requirement_exception: bool = row.get("has_add_requirement_exception");
+        let params: Json<serde_json::Value> = row.get("params");
+        let role_type: String = row.get("role_type");
+        let concept_label: String = row.get("concept_label");
+        let source_type: String = row.get("source_type");
+        let trust_level: i32 = row.get("trust_level");
+        let source_tier = match (source_type.as_str(), trust_level) {
+            ("government", _) | (_, 5) => "official",
+            ("vfs", _) | (_, 4) => "regulated_partner",
+            ("internal", _) => "internal_verified",
+            ("niche_agency", _) => "industry_reference",
+            _ => "editorial_reference",
+        };
+        let effective_to = row
+            .get::<Option<String>, _>("effective_to")
+            .unwrap_or_default();
+        let freshness_class = if effective_to.trim().is_empty() {
+            "watch"
+        } else {
+            "fresh"
+        };
+        let support = SeoVerifiedFactSupportState {
+            fragment_text: verified_support_fragment(&role_type, &concept_label, &params.0),
+            support_ref: rule_instance_id.clone(),
+            role_type,
+            source_label: row.get("source_label"),
+            source_tier: source_tier.to_string(),
+            freshness_class: freshness_class.to_string(),
+            observed_at: row
+                .get::<Option<String>, _>("effective_from")
+                .unwrap_or_default(),
+            valid_until: effective_to,
+        };
+        candidates.push((
+            applicability::ApplicabilityRuleCandidate {
+                rule_instance_id,
+                has_profile_overrides,
+                has_apply_profile,
+                has_conditional_profile,
+                has_exclude_profile,
+                has_waive_exception,
+                has_remove_exception,
+                has_replace_exception,
+                has_add_requirement_exception,
+            },
+            support,
+        ));
+    }
+    Ok(applicability::resolve_support_candidates(
+        applicant_profile,
+        candidates,
+    ))
 }
 
 pub async fn load_verified_support_bundle(
@@ -543,15 +630,55 @@ pub async fn load_verified_support_bundle(
     run_id: &str,
     context_key: &str,
     scope_signature: &str,
+    applicant_profile: &str,
 ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
     non_empty(context_key, "context_key")?;
     non_empty(scope_signature, "scope_signature")?;
-    let supports = load_verified_fact_support(pool, context_key).await?;
-    if supports.is_empty() {
+    let normalized_profile = validate_applicant_profile_reference(pool, applicant_profile).await?;
+    let resolution = resolve_verified_fact_support(pool, context_key, &normalized_profile).await?;
+    if resolution.included.is_empty() {
         return Err(validation_failure(format!(
-            "verified support bundle is empty for context_key `{context_key}`"
+            "verified support bundle is empty for context_key `{context_key}` and applicant_profile `{normalized_profile}`"
         )));
     }
+    let support_count = resolution.included.len();
+    let supports = resolution.included;
+    let excluded_rule_count = resolution.excluded_rules.len();
+    let excluded_rules = resolution
+        .excluded_rules
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "rule_instance_id": diagnostic.rule_instance_id,
+                "reason_code": diagnostic.reason_code,
+                "detail": diagnostic.detail,
+            })
+        })
+        .collect::<Vec<_>>();
+    let unresolved_rule_count = resolution.unresolved_rules.len();
+    let unresolved_rules = resolution
+        .unresolved_rules
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "rule_instance_id": diagnostic.rule_instance_id,
+                "reason_code": diagnostic.reason_code,
+                "detail": diagnostic.detail,
+            })
+        })
+        .collect::<Vec<_>>();
+    let applied_override_count = resolution.applied_overrides.len();
+    let applied_overrides = resolution
+        .applied_overrides
+        .iter()
+        .map(|diagnostic| {
+            json!({
+                "rule_instance_id": diagnostic.rule_instance_id,
+                "reason_code": diagnostic.reason_code,
+                "detail": diagnostic.detail,
+            })
+        })
+        .collect::<Vec<_>>();
     upsert_runtime_json_blob(
         pool,
         run_id,
@@ -560,8 +687,15 @@ pub async fn load_verified_support_bundle(
         &json!({
             "context_key": context_key,
             "scope_signature": scope_signature,
-            "support_count": supports.len(),
-            "supports": supports,
+            "applicant_profile": normalized_profile,
+            "support_count": support_count,
+            "supports": supports.clone(),
+            "excluded_rule_count": excluded_rule_count,
+            "excluded_rules": excluded_rules,
+            "unresolved_rule_count": unresolved_rule_count,
+            "unresolved_rules": unresolved_rules,
+            "applied_override_count": applied_override_count,
+            "applied_overrides": applied_overrides,
         }),
     )
     .await?;
@@ -571,9 +705,9 @@ pub async fn load_verified_support_bundle(
 pub async fn resolve_rebuild_impacts(
     pool: &PgPool,
     changed_truth_keys: &[String],
-) -> Result<Vec<(String, String, Value, i32)>, DomainError> {
+) -> Result<BTreeMap<String, Value>, DomainError> {
     if changed_truth_keys.is_empty() {
-        return Ok(Vec::new());
+        return Ok(BTreeMap::new());
     }
 
     let truth_support_refs = changed_truth_keys
@@ -652,27 +786,15 @@ pub async fn resolve_rebuild_impacts(
     .await
     .map_err(classify_sqlx)?;
 
-    let mut impacted = BTreeMap::<String, (String, Value, i32)>::new();
+    let mut impacted = BTreeMap::<String, Value>::new();
     for row in rows {
         let page_node_key: String = row.get("page_node_key");
         let dependency_type: String = row.get("dependency_type");
         let dependency_ref: String = row.get("dependency_ref");
         let reason_package: Json<Value> = row.get("reason_package");
-        let trigger_type = match dependency_type.as_str() {
-            "blueprint" | "section_template" => "template_change",
-            "serp_query" | "keyword_cluster" => "serp_change",
-            _ => "truth_change",
-        };
-        let priority = match dependency_type.as_str() {
-            "truth_support" => 1,
-            "blueprint" | "section_template" => 1,
-            "serp_query" => 2,
-            _ => 2,
-        };
         impacted
             .entry(page_node_key)
-            .and_modify(|(_, reason, existing_priority)| {
-                *existing_priority = (*existing_priority).min(priority);
+            .and_modify(|reason| {
                 if let Some(reasons) = reason
                     .get_mut("matched_dependencies")
                     .and_then(Value::as_array_mut)
@@ -683,33 +805,50 @@ pub async fn resolve_rebuild_impacts(
                     }));
                 }
             })
-            .or_insert((
-                trigger_type.to_string(),
-                json!({
-                    "matched_dependencies": [{
-                        "dependency_type": dependency_type,
-                        "dependency_ref": dependency_ref,
-                    }],
-                    "seed_reason_package": reason_package.0,
-                }),
-                priority,
-            ));
+            .or_insert(json!({
+                "matched_dependencies": [{
+                    "dependency_type": dependency_type,
+                    "dependency_ref": dependency_ref,
+                }],
+                "seed_reason_package": reason_package.0,
+            }));
     }
-    Ok(impacted
-        .into_iter()
-        .map(|(page_node_key, (trigger_type, reason, priority))| {
-            (page_node_key, trigger_type, reason, priority)
-        })
-        .collect())
+    Ok(impacted)
 }
 
-fn require_scope_field(value: &str, label: &str) -> Result<(), DomainError> {
-    if value.trim().is_empty() {
+pub fn normalize_applicant_profile(value: &str) -> Result<String, DomainError> {
+    identity::normalize_applicant_profile(value)
+}
+
+pub async fn validate_applicant_profile_reference(
+    pool: &PgPool,
+    value: &str,
+) -> Result<String, DomainError> {
+    let normalized = normalize_applicant_profile(value)?;
+    let row = sqlx::query(
+        r#"
+        SELECT status
+        FROM kb.applicant_profiles
+        WHERE profile_key = $1
+        LIMIT 1
+        "#,
+    )
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_sqlx)?
+    .ok_or_else(|| {
+        validation_failure(format!(
+            "applicant_profile `{normalized}` is not registered in kb.applicant_profiles"
+        ))
+    })?;
+    let status: String = row.get("status");
+    if status != "active" {
         return Err(validation_failure(format!(
-            "SeoSiteBuildInputPayload.scope.{label} is required"
+            "applicant_profile `{normalized}` is not active"
         )));
     }
-    Ok(())
+    Ok(normalized)
 }
 
 pub async fn bootstrap_seo_scope(
@@ -720,16 +859,8 @@ pub async fn bootstrap_seo_scope(
     visa_subtype: Option<&str>,
     citizenship_code: &str,
 ) -> Result<SeoScopeBootstrapReport, DomainError> {
-    let country_code = country_code.trim().to_ascii_uppercase();
-    let visa_family = visa_family.trim().to_ascii_lowercase();
-    let visa_subtype = visa_subtype
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let citizenship_code = citizenship_code.trim().to_ascii_uppercase();
-    non_empty(&country_code, "country_code")?;
-    non_empty(&visa_family, "visa_family")?;
-    non_empty(&citizenship_code, "citizenship_code")?;
+    let truth =
+        identity::derive_truth_identity(country_code, visa_family, visa_subtype, citizenship_code)?;
 
     sqlx::query(
         r#"
@@ -738,23 +869,15 @@ pub async fn bootstrap_seo_scope(
         ON CONFLICT (key) DO NOTHING
         "#,
     )
-    .bind(&visa_family)
-    .bind(visa_family.replace('_', " "))
+    .bind(&truth.visa_family)
+    .bind(truth.visa_family.replace('_', " "))
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
-
-    let derived_context_key = primitives::context_key::normalize_context_key(
-        &country_code,
-        &visa_family,
-        visa_subtype.as_deref(),
-        &citizenship_code,
-    )
-    .map_err(|err| validation_failure(format!("invalid seo context parts: {err}")))?;
     let context_key = requested_context_key
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(&derived_context_key)
+        .unwrap_or(&truth.context_key)
         .to_string();
 
     if let Some(row) = sqlx::query(
@@ -767,10 +890,14 @@ pub async fn bootstrap_seo_scope(
           AND citizenship_code = $4
         "#,
     )
-    .bind(&country_code)
-    .bind(&visa_family)
-    .bind(visa_subtype.as_deref())
-    .bind(&citizenship_code)
+    .bind(&truth.country_code)
+    .bind(&truth.visa_family)
+    .bind(if truth.visa_subtype.is_empty() {
+        None
+    } else {
+        Some(truth.visa_subtype.as_str())
+    })
+    .bind(&truth.citizenship_code)
     .fetch_optional(pool)
     .await
     .map_err(classify_sqlx)?
@@ -808,10 +935,14 @@ pub async fn bootstrap_seo_scope(
         "#,
     )
     .bind(&context_key)
-    .bind(&country_code)
-    .bind(&visa_family)
-    .bind(visa_subtype.as_deref())
-    .bind(&citizenship_code)
+    .bind(&truth.country_code)
+    .bind(&truth.visa_family)
+    .bind(if truth.visa_subtype.is_empty() {
+        None
+    } else {
+        Some(truth.visa_subtype.as_str())
+    })
+    .bind(&truth.citizenship_code)
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -875,7 +1006,37 @@ async fn seed_runtime_registries(pool: &PgPool) -> Result<u64, DomainError> {
         .map_err(classify_sqlx)?;
         inserted += result.rows_affected();
     }
+
+    let applicant_profiles = [
+        ("standard", "other", "Стандартный заявитель"),
+        ("minor", "age", "Несовершеннолетний заявитель"),
+        ("student", "status", "Студент"),
+        ("family", "family", "Семейный заявитель"),
+    ];
+    for (profile_key, profile_type, label_ru) in applicant_profiles {
+        let result = sqlx::query(
+            r#"
+            INSERT INTO kb.applicant_profiles (profile_key, profile_type, label_ru, status)
+            VALUES ($1, $2, $3, 'active')
+            ON CONFLICT (profile_key) DO UPDATE
+            SET profile_type = EXCLUDED.profile_type,
+                label_ru = EXCLUDED.label_ru,
+                updated_at = now()
+            "#,
+        )
+        .bind(profile_key)
+        .bind(profile_type)
+        .bind(label_ru)
+        .execute(pool)
+        .await
+        .map_err(classify_sqlx)?;
+        inserted += result.rows_affected();
+    }
     Ok(inserted)
+}
+
+pub async fn ensure_seo_runtime_registries(pool: &PgPool) -> Result<u64, DomainError> {
+    seed_runtime_registries(pool).await
 }
 
 pub async fn persist_global_navigation_from_active_pages(
@@ -1277,23 +1438,8 @@ pub async fn load_seo_site_build_input(
         .scope
         .as_ref()
         .ok_or_else(|| validation_failure("SeoSiteBuildInputPayload.scope is required"))?;
-    require_scope_field(&scope.market, "market")?;
-    require_scope_field(&scope.locale, "locale")?;
-    require_scope_field(&scope.country_code, "country_code")?;
-    require_scope_field(&scope.visa_type, "visa_type")?;
-    require_scope_field(&scope.applicant_profile, "applicant_profile")?;
-    let expected_scope_signature = primitives::seo::scope_signature(&[
-        ("market", &scope.market),
-        ("locale", &scope.locale),
-        ("country_code", &scope.country_code),
-        ("visa_type", &scope.visa_type),
-        ("applicant_profile", &scope.applicant_profile),
-    ]);
-    if scope.scope_signature != expected_scope_signature {
-        return Err(validation_failure(
-            "SeoSiteBuildInputPayload.scope_signature does not match normalized scope",
-        ));
-    }
+    let validated_scope = identity::derive_scope_from_payload(scope)?;
+    validate_applicant_profile_reference(pool, &validated_scope.applicant_profile).await?;
     if input.queries.iter().all(|q| q.trim().is_empty()) {
         return Err(validation_failure(
             "SeoSiteBuildInputPayload requires at least one non-empty query",
@@ -1302,7 +1448,7 @@ pub async fn load_seo_site_build_input(
 
     let ctx = sqlx::query(
         r#"
-        SELECT country_code, visa_family
+        SELECT country_code, visa_family, visa_subtype, citizenship_code
         FROM kb.visa_contexts
         WHERE context_key = $1
           AND status = 'active'
@@ -1315,19 +1461,19 @@ pub async fn load_seo_site_build_input(
     .ok_or_else(|| {
         validation_failure("context_key must reference an active kb.visa_contexts row")
     })?;
-    let ctx_country: String = ctx.get("country_code");
-    let ctx_visa_family: String = ctx.get("visa_family");
-    if !ctx_country.eq_ignore_ascii_case(&scope.country_code)
-        || !ctx_visa_family.eq_ignore_ascii_case(&scope.visa_type)
-    {
-        return Err(validation_failure(
-            "SeoSiteBuildInputPayload.scope must match kb.visa_contexts country_code and visa_family",
-        ));
-    }
+    let truth = identity::derive_truth_identity(
+        &ctx.get::<String, _>("country_code"),
+        &ctx.get::<String, _>("visa_family"),
+        ctx.get::<Option<String>, _>("visa_subtype").as_deref(),
+        &ctx.get::<String, _>("citizenship_code"),
+    )?;
+    identity::assert_scope_matches_context(&validated_scope, &truth)?;
 
     if input.query_batch_key.trim().is_empty() {
-        input.query_batch_key =
-            primitives::seo::seo_artifact_key("query_batch", &[run_id, &scope.scope_signature]);
+        input.query_batch_key = primitives::seo::seo_artifact_key(
+            "query_batch",
+            &[run_id, &validated_scope.scope_signature],
+        );
     }
     Ok(input)
 }
@@ -1382,6 +1528,12 @@ pub async fn upsert_seo_site_build_input(
     let uuid = Uuid::parse_str(&input.run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
     non_empty(&input.context_key, "context_key")?;
+    let scope = input
+        .scope
+        .as_ref()
+        .ok_or_else(|| validation_failure("SeoSiteBuildInputPayload.scope is required"))?;
+    let validated_scope = identity::derive_scope_from_payload(scope)?;
+    validate_applicant_profile_reference(pool, &validated_scope.applicant_profile).await?;
     let payload_bytes = input.encode_payload_bytes()?;
     let payload_hash = primitives::hash::blake3_hex(&payload_bytes);
 
@@ -2570,36 +2722,64 @@ pub async fn persist_rebuild_detect_output(
     }
 
     let mut projection_events = Vec::new();
-    let impact_reasons = resolve_rebuild_impacts(pool, &input.changed_truth_keys).await?;
-    let impact_by_page = impact_reasons
-        .into_iter()
-        .map(|(page_node_key, trigger_type, reason_package, priority)| {
-            (page_node_key, (trigger_type, reason_package, priority))
+    let impact_by_page = resolve_rebuild_impacts(pool, &input.changed_truth_keys).await?;
+    let output_impact_by_page = output
+        .impacts
+        .iter()
+        .map(|impact| {
+            let reason_package = serde_json::from_str::<Value>(&impact.reason_package_json)
+                .unwrap_or_else(|_| {
+                    json!({
+                        "fallback_reason": impact.reason_package_json,
+                    })
+                });
+            (
+                impact.page_node_key.clone(),
+                (impact.trigger_type.clone(), reason_package, impact.priority),
+            )
         })
         .collect::<BTreeMap<_, _>>();
     for page_node_key in &output.impacted_page_node_keys {
         if page_node_key.trim().is_empty() {
             continue;
         }
-        set_page_lifecycle(pool, page_node_key, "needs_rebuild", "truth_change").await?;
-        projection_events.push(seo_graph_projection_event("page_node", page_node_key, ""));
         let changed_truth_key = input
             .changed_truth_keys
             .first()
             .map(String::as_str)
             .unwrap_or("truth_change");
-        let (trigger_type, reason_package, priority) =
-            impact_by_page.get(page_node_key).cloned().unwrap_or((
-                "truth_change".to_string(),
-                json!({
-                    "matched_dependencies": [],
-                    "fallback_reason": changed_truth_key,
-                }),
-                2,
+        let (trigger_type, reason_package, priority) = output_impact_by_page
+            .get(page_node_key)
+            .cloned()
+            .unwrap_or((
+                rebuild::TRUTH_CHANGE.to_string(),
+                rebuild::canonical_reason_package(rebuild::TRUTH_CHANGE, &input.changed_truth_keys),
+                rebuild::trigger_priority(rebuild::TRUTH_CHANGE),
             ));
+        let reason_package = if let Some(impact_reason) = impact_by_page.get(page_node_key) {
+            let mut merged = reason_package;
+            if let Some(matched) = impact_reason.get("matched_dependencies").cloned() {
+                merged["matched_dependencies"] = matched;
+            }
+            if let Some(seed) = impact_reason.get("seed_reason_package").cloned() {
+                merged["seed_reason_package"] = seed;
+            }
+            merged
+        } else {
+            reason_package
+        };
+        if let Some(lifecycle_state) = rebuild::lifecycle_state_for_trigger(&trigger_type) {
+            set_page_lifecycle(pool, page_node_key, lifecycle_state, &trigger_type).await?;
+        }
+        projection_events.push(seo_graph_projection_event("page_node", page_node_key, ""));
         let rebuild_request_key = primitives::seo::seo_artifact_key(
             "seo_rebuild",
-            &[page_node_key, changed_truth_key, "rebuild_detect@1"],
+            &[
+                page_node_key,
+                &trigger_type,
+                changed_truth_key,
+                "rebuild_detect@1",
+            ],
         );
         sqlx::query(
             r#"
@@ -2626,6 +2806,74 @@ pub async fn persist_rebuild_detect_output(
 
     emit_projection_events(pool, projection_events).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_applicant_profile;
+    use seo_domain::applicability::{
+        decide_support_resolution, ApplicabilityRuleCandidate, SupportResolutionDecision,
+    };
+
+    fn candidate() -> ApplicabilityRuleCandidate {
+        ApplicabilityRuleCandidate {
+            rule_instance_id: "rule:1".to_string(),
+            has_profile_overrides: false,
+            has_apply_profile: false,
+            has_conditional_profile: false,
+            has_exclude_profile: false,
+            has_waive_exception: false,
+            has_remove_exception: false,
+            has_replace_exception: false,
+            has_add_requirement_exception: false,
+        }
+    }
+
+    #[test]
+    fn supports_apply_without_profile_overrides() {
+        let decision = decide_support_resolution(&candidate());
+        assert_eq!(decision, SupportResolutionDecision::Include);
+    }
+
+    #[test]
+    fn excludes_conditional_without_context() {
+        let mut flags = candidate();
+        flags.has_profile_overrides = true;
+        flags.has_conditional_profile = true;
+        let decision = decide_support_resolution(&flags);
+        assert_eq!(
+            decision,
+            SupportResolutionDecision::Unresolved("unresolved_conditional_applicability")
+        );
+    }
+
+    #[test]
+    fn excludes_replace_value_override_from_auto_support() {
+        let mut flags = candidate();
+        flags.has_replace_exception = true;
+        let decision = decide_support_resolution(&flags);
+        assert_eq!(
+            decision,
+            SupportResolutionDecision::Unresolved("unresolved_exception_override")
+        );
+    }
+
+    #[test]
+    fn excludes_profile_mismatch() {
+        let mut flags = candidate();
+        flags.has_profile_overrides = true;
+        let decision = decide_support_resolution(&flags);
+        assert_eq!(
+            decision,
+            SupportResolutionDecision::Excluded("profile_not_applicable")
+        );
+    }
+
+    #[test]
+    fn normalizes_known_profiles_only() {
+        assert_eq!(normalize_applicant_profile("Minor").unwrap(), "minor");
+        assert!(normalize_applicant_profile("base").is_err());
+    }
 }
 
 async fn set_page_lifecycle(

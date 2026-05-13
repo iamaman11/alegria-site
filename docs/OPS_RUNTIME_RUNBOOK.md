@@ -113,7 +113,7 @@
 
 ### Current implementation note
 
-- `use_cases::hitl_queue` существует и работает на уровне БД.
+- HITL queue orchestration идет через `seo_application::hitl`, а БД-реализация сидит в `seo_ports`/SQLx adapters.
 - В `app/rust/services/temporal/src/workflows/mod.rs` есть signal/query/update handlers:
   `pause`, `resume`, `status`, `set_pause`.
 - Для `FactExtractionWorkflow` добавлен HITL-gate:
@@ -124,7 +124,7 @@
 In scope:
 - `app/*` runtime
 - temporal worker
-- use_cases, adapters, policies
+- `seo_application`, `seo_steps`, adapters, policies
 
 Out of scope:
 - `docs/_archive`

@@ -8,7 +8,9 @@ Last updated: 2026-05-11
 
 Alegria is 10/10 when a production run can create or update a real SEO supersite from live sources:
 
-1. Resolve or bootstrap market, locale, country, visa type, applicant profile, and `kb.visa_contexts.context_key`.
+1. Resolve or bootstrap truth identity and publishing identity separately:
+   - truth identity: `country_code + visa_family + visa_subtype + citizenship_code -> kb.visa_contexts.context_key`
+   - publishing identity: `market + locale + country_code + visa_type + applicant_profile -> scope_signature`
 2. Discover official and competitor source URLs from real SERP and configured source registries.
 3. Crawl sources into `raw.pages` and clean `raw.sections`.
 4. Extract structured rules with citations, source trust, conditions, and contradiction handling.
@@ -68,7 +70,8 @@ Work:
 
 Gate:
 
-- Starting `SeoSiteBuildWorkflow` for a fresh `country_code + visa_type + applicant_profile` can create/resolve context.
+- Starting `SeoSiteBuildWorkflow` for a fresh truth tuple can create/resolve `context_key` without deriving it from `applicant_profile`.
+- Starting `SeoSiteBuildWorkflow` for a fresh scope tuple can create/resolve `scope_signature` independently of truth identity.
 - Bootstrap does not predeclare final navigation; global navigation is produced only after IA/global reconcile has source-backed page nodes.
 - Missing live credentials and blocked projections produce a clear preflight report.
 - Empty verified support before crawling does not block the workflow.

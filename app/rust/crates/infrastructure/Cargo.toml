@@ -7,6 +7,8 @@ edition = "2021"
 contracts = { path = "../contracts" }
 runtime_models = { path = "../runtime_models" }
 primitives = { path = "../primitives" }
+seo_domain = { path = "../seo_domain" }
+seo_ports = { path = "../seo_ports" }
 sqlx = { workspace = true }
 tokio-postgres = { workspace = true }
 neo4rs = { workspace = true }
@@ -16,6 +18,7 @@ anyhow = { workspace = true }
 telemetry = { path = "../telemetry" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = "0.1"
 uuid = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }

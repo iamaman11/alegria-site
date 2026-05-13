@@ -6,7 +6,7 @@
 
 - `primitives = pure`
 - `runtime_models = typed runtime domain model`
-- `use_cases = policy + orchestration`
+- `seo_steps = pure deterministic step execution`
 - `infrastructure = SQL / IO / boundary`
 
 ## Слои
@@ -23,7 +23,7 @@
 Запрещено:
 - зависимости на `primitives`
 - зависимости на `policies`
-- зависимости на `use_cases`
+- зависимости на `seo_steps`
 - зависимости на `infrastructure`
 
 ### `primitives`
@@ -67,7 +67,7 @@
 - `sqlx`
 - инфраструктурные adapters
 - HTTP/DB/Temporal SDK
-- `use_cases`
+- `seo_steps`
 - `policies`
 - `primitives`
 
@@ -85,7 +85,7 @@
 - HTTP/DB/Temporal SDK
 - инфраструктурные adapters
 
-### `use_cases`
+### `seo_steps`
 
 Содержит orchestration-free business logic и typed coordination между domain types и adapter APIs.
 
@@ -140,7 +140,7 @@ Thin runtime assembly:
 - raw DB logic
 - `sqlx::query*`
 - `serde_json::Value`
-- direct external SDK calls вне adapters/use_cases
+- direct external SDK calls вне adapters/seo_steps
 
 ## Единственные допустимые JSON-boundary points
 

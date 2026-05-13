@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 tokio = { workspace = true }
 infrastructure = { path = "../../crates/infrastructure" }
-use_cases = { path = "../../crates/use_cases" }
+seo_steps = { path = "../../crates/seo_steps" }
 telemetry = { path = "../../crates/telemetry" }
 contracts = { path = "../../crates/contracts" }
 primitives = { path = "../../crates/primitives" }

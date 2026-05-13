@@ -13,6 +13,8 @@ pub mod rig_core_adapter;
 pub mod rig_vertexai_adapter;
 pub mod runtime_storage;
 pub mod semantic_search_adapter;
+pub mod seo_ports_sqlx_adapter;
+pub mod seo_workflow_control_adapter;
 pub mod sqlx_adapter;
 pub mod sqlx_context_bundle_adapter;
 pub mod sqlx_dead_letter_adapter;

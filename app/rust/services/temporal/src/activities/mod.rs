@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use contracts::generated::alegria::temporal::v1::{
@@ -10,7 +9,7 @@ use contracts::generated::alegria::temporal::v1::{
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlPauseInfo,
     HitlResolutionInput, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
-    LinkRecommendOutputPayload, LinkRecommendationState, OpportunityBuildInputPayload,
+    LinkRecommendOutputPayload, OpportunityBuildInputPayload,
     OpportunityBuildOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
     RebuildDetectInputPayload, RebuildDetectOutputPayload, RenderPreviewValidateInputPayload,
@@ -22,10 +21,11 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
     activities, ActivityContext, ActivityError,
 };
 use infrastructure::adapters::{
-    dataforseo_serp_adapter, editorial_llm_adapter, raw_crawl_adapter, semantic_search_adapter,
-    sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter, sqlx_seo_cms_adapter, sqlx_serp_adapter,
+    raw_crawl_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
+    sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
 };
 use primitives::errors::DomainError;
+use seo_ports::VerifiedSupportBundleRequest;
 
 mod content_generation;
 mod fact_extraction;
@@ -35,14 +35,6 @@ mod step_catalog;
 
 pub struct AlegriaActivities {
     pub pool: Arc<AlegriaPgPool>,
-}
-
-fn linkable_state(state: &str) -> bool {
-    !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
-}
-
-fn clamp01(value: f64) -> f64 {
-    value.clamp(0.0, 1.0)
 }
 
 fn strict_projection_barrier_enabled() -> bool {
@@ -98,124 +90,6 @@ async fn observe_projection_barrier(
         });
     }
     Ok(())
-}
-
-async fn enrich_semantic_link_recommendations(
-    input: &LinkRecommendInputPayload,
-    output: &mut LinkRecommendOutputPayload,
-) {
-    if std::env::var("VOYAGE_API_KEY").is_err() {
-        return;
-    }
-    let max_semantic_links = input.max_links_per_page.max(3) as usize;
-    let node_by_key = input
-        .page_nodes
-        .iter()
-        .cloned()
-        .map(|node| (node.page_node_key.clone(), node))
-        .collect::<HashMap<_, _>>();
-    let mut seen = output
-        .link_recommendations
-        .iter()
-        .map(|link| (link.source_page_key.clone(), link.target_page_key.clone()))
-        .collect::<HashSet<_>>();
-
-    for source in &input.page_nodes {
-        if !linkable_state(&source.lifecycle_state) {
-            continue;
-        }
-        let query = format!(
-            "{} {} {} {}",
-            source.canonical_url_path,
-            source.page_type_key,
-            source.dominant_intent,
-            source.menu_group
-        );
-        let Ok(results) =
-            semantic_search_adapter::search_by_text(&query, "seo_link_targets", 12).await
-        else {
-            continue;
-        };
-        let mut added = 0usize;
-        for candidate in results {
-            if added >= max_semantic_links {
-                break;
-            }
-            let Some(target) = node_by_key.get(&candidate.entity_key) else {
-                continue;
-            };
-            if source.page_node_key == target.page_node_key
-                || !linkable_state(&target.lifecycle_state)
-                || seen.contains(&(source.page_node_key.clone(), target.page_node_key.clone()))
-            {
-                continue;
-            }
-            let same_scope = source.scope_signature == target.scope_signature;
-            let same_family = source.canonical_url_family == target.canonical_url_family;
-            if !same_scope && !same_family {
-                continue;
-            }
-            let journey_bonus = if source.parent_page_node_key == target.page_node_key
-                || target.parent_page_node_key == source.page_node_key
-            {
-                0.12
-            } else {
-                0.0
-            };
-            let hub_bonus =
-                if source.page_type_key.contains("hub") || target.page_type_key.contains("hub") {
-                    0.08
-                } else {
-                    0.0
-                };
-            let orphan_bonus = if target.parent_page_node_key.is_empty() {
-                0.05
-            } else {
-                0.0
-            };
-            let anchor_strategy = if journey_bonus > 0.0 {
-                "journey_contextual"
-            } else {
-                "semantic_contextual"
-            };
-            let link_role = if same_family {
-                "semantic_family"
-            } else {
-                "semantic_contextual"
-            };
-            let semantic_score = clamp01(
-                (candidate.score as f64 * 0.7)
-                    + if same_scope { 0.12 } else { 0.0 }
-                    + if same_family { 0.08 } else { 0.0 }
-                    + journey_bonus
-                    + hub_bonus
-                    + orphan_bonus,
-            );
-            output.link_recommendations.push(LinkRecommendationState {
-                link_recommendation_key: primitives::seo::seo_artifact_key(
-                    "link_recommendation",
-                    &[
-                        &source.scope_signature,
-                        &source.page_node_key,
-                        &target.page_node_key,
-                        link_role,
-                        anchor_strategy,
-                        "semantic@1",
-                    ],
-                ),
-                scope_signature: source.scope_signature.clone(),
-                source_page_key: source.page_node_key.clone(),
-                target_page_key: target.page_node_key.clone(),
-                link_role: link_role.to_string(),
-                anchor_strategy: anchor_strategy.to_string(),
-                required_flag: false,
-                score: semantic_score,
-                status: "candidate".to_string(),
-            });
-            seen.insert((source.page_node_key.clone(), target.page_node_key.clone()));
-            added += 1;
-        }
-    }
 }
 
 #[allow(dead_code)]
@@ -315,8 +189,8 @@ impl AlegriaActivities {
     pub async fn run_layer_router_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::layer_router_step::LayerRouterInput,
-    ) -> Result<use_cases::layer_router_step::LayerRouterOutput, ActivityError> {
+        input: seo_steps::layer_router_step::LayerRouterInput,
+    ) -> Result<seo_steps::layer_router_step::LayerRouterOutput, ActivityError> {
         Ok(step_catalog::run_layer_router(self.as_ref(), &input))
     }
 
@@ -325,8 +199,8 @@ impl AlegriaActivities {
     pub async fn run_entity_span_detection_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::entity_span_detection_step::EntitySpanInput,
-    ) -> Result<use_cases::entity_span_detection_step::EntitySpanOutput, ActivityError> {
+        input: seo_steps::entity_span_detection_step::EntitySpanInput,
+    ) -> Result<seo_steps::entity_span_detection_step::EntitySpanOutput, ActivityError> {
         Ok(step_catalog::run_entity_span_detection(
             self.as_ref(),
             &input,
@@ -338,8 +212,8 @@ impl AlegriaActivities {
     pub async fn run_canonical_mapping_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::canonical_mapping_step::CanonicalMappingInput,
-    ) -> Result<use_cases::canonical_mapping_step::CanonicalMappingOutput, ActivityError> {
+        input: seo_steps::canonical_mapping_step::CanonicalMappingInput,
+    ) -> Result<seo_steps::canonical_mapping_step::CanonicalMappingOutput, ActivityError> {
         Ok(step_catalog::run_canonical_mapping(self.as_ref(), &input))
     }
 
@@ -348,8 +222,8 @@ impl AlegriaActivities {
     pub async fn run_procedural_extraction_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::procedural_extraction_step::ProceduralExtractionInput,
-    ) -> Result<use_cases::procedural_extraction_step::ProceduralExtractionOutput, ActivityError>
+        input: seo_steps::procedural_extraction_step::ProceduralExtractionInput,
+    ) -> Result<seo_steps::procedural_extraction_step::ProceduralExtractionOutput, ActivityError>
     {
         Ok(step_catalog::run_procedural_extraction(
             self.as_ref(),
@@ -362,8 +236,8 @@ impl AlegriaActivities {
     pub async fn run_operational_extraction_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::operational_extraction_step::OperationalExtractionInput,
-    ) -> Result<use_cases::operational_extraction_step::OperationalExtractionOutput, ActivityError>
+        input: seo_steps::operational_extraction_step::OperationalExtractionInput,
+    ) -> Result<seo_steps::operational_extraction_step::OperationalExtractionOutput, ActivityError>
     {
         Ok(step_catalog::run_operational_extraction(
             self.as_ref(),
@@ -376,8 +250,8 @@ impl AlegriaActivities {
     pub async fn run_editorial_extraction_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::editorial_extraction_step::EditorialExtractionInput,
-    ) -> Result<use_cases::editorial_extraction_step::EditorialExtractionOutput, ActivityError>
+        input: seo_steps::editorial_extraction_step::EditorialExtractionInput,
+    ) -> Result<seo_steps::editorial_extraction_step::EditorialExtractionOutput, ActivityError>
     {
         Ok(step_catalog::run_editorial_extraction(
             self.as_ref(),
@@ -390,8 +264,8 @@ impl AlegriaActivities {
     pub async fn run_triple_builder_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::triple_builder_step::TripleBuilderInput,
-    ) -> Result<use_cases::triple_builder_step::TripleBuilderOutput, ActivityError> {
+        input: seo_steps::triple_builder_step::TripleBuilderInput,
+    ) -> Result<seo_steps::triple_builder_step::TripleBuilderOutput, ActivityError> {
         Ok(step_catalog::run_triple_builder(self.as_ref(), &input))
     }
 
@@ -400,8 +274,8 @@ impl AlegriaActivities {
     pub async fn run_completeness_judge_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::completeness_judge_step::CompletenessJudgeInput,
-    ) -> Result<use_cases::completeness_judge_step::CompletenessJudgeOutput, ActivityError> {
+        input: seo_steps::completeness_judge_step::CompletenessJudgeInput,
+    ) -> Result<seo_steps::completeness_judge_step::CompletenessJudgeOutput, ActivityError> {
         Ok(step_catalog::run_completeness_judge(self.as_ref(), &input))
     }
 
@@ -410,8 +284,8 @@ impl AlegriaActivities {
     pub async fn run_contradiction_gate_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::contradiction_gate_step::ContradictionGateInput,
-    ) -> Result<use_cases::contradiction_gate_step::ContradictionGateOutput, ActivityError> {
+        input: seo_steps::contradiction_gate_step::ContradictionGateInput,
+    ) -> Result<seo_steps::contradiction_gate_step::ContradictionGateOutput, ActivityError> {
         Ok(step_catalog::run_contradiction_gate(self.as_ref(), &input))
     }
 
@@ -420,8 +294,8 @@ impl AlegriaActivities {
     pub async fn run_hitl_decision_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::hitl_decision_step::HitlDecisionInput,
-    ) -> Result<use_cases::hitl_decision_step::HitlDecisionOutput, ActivityError> {
+        input: seo_steps::hitl_decision_step::HitlDecisionInput,
+    ) -> Result<seo_steps::hitl_decision_step::HitlDecisionOutput, ActivityError> {
         Ok(step_catalog::run_hitl_decision(self.as_ref(), &input))
     }
 
@@ -430,8 +304,8 @@ impl AlegriaActivities {
     pub async fn run_neo4j_backwrite_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: use_cases::neo4j_backwrite_step::Neo4jBackwriteInput,
-    ) -> Result<use_cases::neo4j_backwrite_step::Neo4jBackwriteOutput, ActivityError> {
+        input: operations::Neo4jBackwriteInput,
+    ) -> Result<operations::Neo4jBackwriteOutput, ActivityError> {
         step_catalog::run_neo4j_backwrite(self.as_ref(), &input)
             .await
             .map_err(Self::into_activity_error)
@@ -445,7 +319,8 @@ impl AlegriaActivities {
         run_id: String,
     ) -> Result<SeoSiteBuildInputPayload, ActivityError> {
         self.execute_step(&run_id, "load_seo_site_build_input", 1, &run_id, || async {
-            sqlx_seo_adapter::load_seo_site_build_input(&self.pool, &run_id).await
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::seo_runtime::load_site_build_input(&repo, &run_id).await
         })
         .await
     }
@@ -457,19 +332,15 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         workflow_input: String,
     ) -> Result<Vec<SeoVerifiedFactSupportState>, ActivityError> {
-        let mut parts = workflow_input.splitn(3, '|');
-        let run_id = parts.next().unwrap_or_default().to_string();
-        let context_key = parts.next().unwrap_or_default().to_string();
-        let scope_signature = parts.next().unwrap_or_default().to_string();
+        let request: VerifiedSupportBundleRequest =
+            serde_json::from_str(&workflow_input).map_err(|err| {
+                Self::into_activity_error(DomainError::ValidationFailure {
+                    message: format!("invalid verified support bundle request: {err}"),
+                })
+            })?;
         let timer = crate::metrics::ActivityTimer::start("load_verified_support_bundle");
-        match sqlx_seo_adapter::load_verified_support_bundle(
-            &self.pool,
-            &run_id,
-            &context_key,
-            &scope_signature,
-        )
-        .await
-        {
+        let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+        match seo_application::seo_runtime::load_verified_support_bundle(&repo, &request).await {
             Ok(bundle) => {
                 crate::metrics::global()
                     .support_bundle_events_total
@@ -508,64 +379,8 @@ impl AlegriaActivities {
     ) -> Result<SerpIngestOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "serp_ingest", 1, &input, || async {
-            let mut output = step_catalog::run_serp_ingest(self.as_ref(), &input);
-            if let Some(config) = dataforseo_serp_adapter::DataForSeoConfig::from_env_with_locale(
-                input.scope.as_ref().map(|scope| scope.locale.as_str()),
-            ) {
-                let client = dataforseo_serp_adapter::DataForSeoSerpClient::from_config(config)
-                    .map_err(|err| DomainError::InfraUnavailable {
-                        message: format!("configure DataForSEO client: {err}"),
-                    })?;
-                let mut persisted_snapshots = 0u32;
-                for (idx, query) in input
-                    .queries
-                    .iter()
-                    .map(|query| query.trim())
-                    .filter(|query| !query.is_empty())
-                    .enumerate()
-                {
-                    let job_id = primitives::hash::content_hash_v1(&format!(
-                        "{}|{}|{}|{}",
-                        input.run_id, output.query_batch_key, idx, query
-                    ));
-                    let response =
-                        client
-                            .google_organic_live_advanced(query)
-                            .await
-                            .map_err(|err| DomainError::InfraUnavailable {
-                                message: format!("DataForSEO organic live advanced failed: {err}"),
-                            })?;
-                    sqlx_serp_adapter::save_raw_snapshot(
-                        &self.pool,
-                        &sqlx_serp_adapter::RawSnapshotRecord {
-                            run_id: input.run_id.clone(),
-                            job_id: job_id.clone(),
-                            url_norm: query.to_string(),
-                            query: query.to_string(),
-                            raw_payload_utf8: response.raw_payload_utf8,
-                        },
-                    )
-                    .await
-                    .map_err(|err| DomainError::InfraUnavailable {
-                        message: format!("save DataForSEO raw snapshot: {err}"),
-                    })?;
-                    sqlx_serp_adapter::save_dataforseo_organic_results_and_enqueue(
-                        &self.pool,
-                        &input.run_id,
-                        &job_id,
-                        &output.query_batch_key,
-                        &response.organic_results,
-                    )
-                    .await
-                    .map_err(|err| DomainError::InfraUnavailable {
-                        message: format!("save DataForSEO organic results: {err}"),
-                    })?;
-                    persisted_snapshots += 1;
-                }
-                output.persisted_snapshot_count = persisted_snapshots;
-            }
-            sqlx_seo_adapter::persist_serp_ingest_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::planning::run_serp_ingest(&repo, &repo, &input).await
         })
         .await
     }
@@ -745,9 +560,8 @@ impl AlegriaActivities {
     ) -> Result<SerpNormalizeOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "serp_normalize", 1, &input, || async {
-            let output = step_catalog::run_serp_normalize(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_serp_normalize_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::planning::run_serp_normalize(&repo, &input).await
         })
         .await
     }
@@ -761,9 +575,8 @@ impl AlegriaActivities {
     ) -> Result<OpportunityBuildOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "opportunity_build", 1, &input, || async {
-            let output = step_catalog::run_opportunity_build(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_opportunity_build_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::planning::run_opportunity_build(&repo, &input).await
         })
         .await
     }
@@ -777,9 +590,8 @@ impl AlegriaActivities {
     ) -> Result<IaBuildOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "ia_build", 1, &input, || async {
-            let output = step_catalog::run_ia_build(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_ia_build_output(&self.pool, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::planning::run_ia_build(&repo, &input).await
         })
         .await
     }
@@ -793,10 +605,8 @@ impl AlegriaActivities {
     ) -> Result<LinkRecommendOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "link_recommend", 1, &input, || async {
-            let mut output = step_catalog::run_link_recommend(self.as_ref(), &input);
-            enrich_semantic_link_recommendations(&input, &mut output).await;
-            sqlx_seo_adapter::persist_link_recommend_output(&self.pool, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::planning::run_link_recommend(&repo, &repo, &input).await
         })
         .await
     }
@@ -810,39 +620,9 @@ impl AlegriaActivities {
     ) -> Result<GlobalSiteReconcileOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "global_site_reconcile", 1, &input, || async {
-            let output = step_catalog::run_global_site_reconcile(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_ia_build_output(
-                &self.pool,
-                &IaBuildOutputPayload {
-                    page_nodes: output.page_nodes.clone(),
-                    page_blueprints: Vec::new(),
-                    cannibalization_conflicts: Vec::new(),
-                },
-            )
-            .await?;
-            sqlx_seo_adapter::persist_link_recommend_output(
-                &self.pool,
-                &LinkRecommendOutputPayload {
-                    link_recommendations: output.link_recommendations.clone(),
-                },
-            )
-            .await?;
-            let scope = input.scope.as_ref().cloned().unwrap_or_default();
-            let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages(
-                &self.pool,
-                &scope.market,
-                &scope.locale,
-                &input.reconcile_reason,
-            )
-            .await?;
-            tracing::info!(
-                navigation_tree_key = %navigation.navigation_tree_key,
-                scope_count = navigation.scope_count,
-                page_item_count = navigation.page_item_count,
-                silo_group_count = navigation.silo_group_count,
-                rebuild_plan_count = navigation.rebuild_plan_count,
-                "global navigation reconciled"
-            );
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            let output =
+                seo_application::planning::run_global_site_reconcile(&repo, &input).await?;
             observe_projection_barrier(&self.pool, "global_site_reconcile").await?;
             Ok(output)
         })
@@ -859,16 +639,6 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "draft_assemble", 1, &input, || async {
             let mut enriched_input = input.clone();
-            if enriched_input.section_templates.is_empty() {
-                if let Some(blueprint) = enriched_input.page_blueprint.as_ref() {
-                    enriched_input.section_templates = sqlx_seo_adapter::load_section_templates(
-                        &self.pool,
-                        &blueprint.page_type_key,
-                        &blueprint.dominant_intent,
-                    )
-                    .await?;
-                }
-            }
             if enriched_input.source_context_chunks.is_empty() {
                 let page_node = enriched_input.page_node.clone().unwrap_or_default();
                 let page_blueprint = enriched_input.page_blueprint.clone().unwrap_or_default();
@@ -890,9 +660,8 @@ impl AlegriaActivities {
                     raw_crawl_adapter::retrieve_source_context_chunks(&self.pool, &query, 12)
                         .await?;
             }
-            let output = step_catalog::run_draft_assemble(self.as_ref(), &enriched_input);
-            sqlx_seo_adapter::persist_draft_assemble_output(&self.pool, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::drafting::run_draft_assemble(&repo, &enriched_input).await
         })
         .await
     }
@@ -906,9 +675,8 @@ impl AlegriaActivities {
     ) -> Result<DraftNormalizeOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "draft_normalize", 1, &input, || async {
-            let output = step_catalog::run_draft_normalize(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_draft_normalize_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::drafting::run_draft_normalize(&repo, &input).await
         })
         .await
     }
@@ -922,7 +690,9 @@ impl AlegriaActivities {
     ) -> Result<EditorialDraftGenerateOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "editorial_draft_generate", 1, &input, || async {
-            let output = editorial_llm_adapter::generate_editorial_draft(&input).await?;
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            let output =
+                seo_application::drafting::run_editorial_draft_generate(&repo, &input).await?;
             let outcome = if output.provider_key == "deterministic_fixture"
                 && output.status.contains("fallback")
             {
@@ -948,10 +718,8 @@ impl AlegriaActivities {
     ) -> Result<ContentContractValidateOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "content_contract_validate", 1, &input, || async {
-            let output = step_catalog::run_content_contract_validate(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_content_contract_validate_output(&self.pool, &input, &output)
-                .await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::drafting::run_content_contract_validate(&repo, &input).await
         })
         .await
     }
@@ -965,9 +733,8 @@ impl AlegriaActivities {
     ) -> Result<DraftQaOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "draft_qa", 1, &input, || async {
-            let output = step_catalog::run_draft_qa(self.as_ref(), &input);
-            sqlx_seo_adapter::persist_draft_qa_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::drafting::run_draft_qa(&repo, &input).await
         })
         .await
     }
@@ -981,8 +748,8 @@ impl AlegriaActivities {
     ) -> Result<CmsPublishOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "cms_publish", 1, &input, || async {
-            let output = step_catalog::run_cms_publish(self.as_ref(), &input);
-            sqlx_seo_cms_adapter::persist_cms_publish_output(&self.pool, &input, &output).await
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::review_publish::run_cms_publish(&repo, &input).await
         })
         .await
     }
@@ -1004,17 +771,13 @@ impl AlegriaActivities {
             1,
             &workflow_input,
             || async {
-                sqlx_seo_cms_adapter::load_latest_approval_decision(
-                    &self.pool,
+                let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+                seo_application::review_publish::load_cms_approval_decision(
+                    &repo,
                     &page_node_key,
                     &revision_id,
                 )
-                .await?
-                .ok_or_else(|| {
-                    primitives::errors::DomainError::ValidationFailure {
-                        message: "cms approval decision not found".to_string(),
-                    }
-                })
+                .await
             },
         )
         .await
@@ -1029,29 +792,8 @@ impl AlegriaActivities {
     ) -> Result<RebuildDetectOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "rebuild_detect", 1, &input, || async {
-            let mut narrowed_input = input.clone();
-            if !input.changed_truth_keys.is_empty() {
-                let impacted = sqlx_seo_adapter::resolve_rebuild_impacts(
-                    &self.pool,
-                    &input.changed_truth_keys,
-                )
-                .await?;
-                if !impacted.is_empty() {
-                    let impacted_keys = impacted
-                        .iter()
-                        .map(|(page_node_key, _, _, _)| page_node_key.clone())
-                        .collect::<HashSet<_>>();
-                    narrowed_input.page_nodes = input
-                        .page_nodes
-                        .iter()
-                        .filter(|page| impacted_keys.contains(&page.page_node_key))
-                        .cloned()
-                        .collect();
-                }
-            }
-            let output = step_catalog::run_rebuild_detect(self.as_ref(), &narrowed_input);
-            sqlx_seo_adapter::persist_rebuild_detect_output(&self.pool, &input, &output).await?;
-            Ok(output)
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::rebuild_detect::execute(&repo, &input).await
         })
         .await
     }
@@ -1065,11 +807,9 @@ impl AlegriaActivities {
     ) -> Result<PublishMaterializeOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "publish_materialize", 1, &input, || async {
-            let output = step_catalog::run_publish_materialize(self.as_ref(), &input);
-            let persisted = sqlx_seo_cms_adapter::persist_publish_materialize_output(
-                &self.pool, &input, &output,
-            )
-            .await?;
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            let persisted =
+                seo_application::review_publish::run_publish_materialize(&repo, &input).await?;
             let manifest_json = persisted
                 .publish_artifact
                 .as_ref()
@@ -1105,7 +845,7 @@ impl AlegriaActivities {
     ) -> Result<RenderPreviewValidateOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "render_preview_validate", 1, &input, || async {
-            let output = step_catalog::run_render_preview_validate(self.as_ref(), &input);
+            let output = seo_application::review_publish::run_render_preview_validate(&input);
             if output.verdict != "render_ready" {
                 if output.blocking_reasons.is_empty() {
                     crate::metrics::global()
@@ -1135,8 +875,8 @@ impl AlegriaActivities {
     ) -> Result<FinalizePublishOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "finalize_publish", 1, &input, || async {
-            let output = step_catalog::run_finalize_publish(self.as_ref(), &input);
-            sqlx_seo_cms_adapter::persist_finalize_publish_output(&self.pool, &input, &output).await
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::review_publish::run_finalize_publish(&repo, &input).await
         })
         .await
     }

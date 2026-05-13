@@ -9,7 +9,6 @@ SCHEMA = ROOT / "app" / "db" / "schema.sql"
 ACTIVITIES_RUNTIME = (
     ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "runtime.rs"
 )
-PIPELINE_STORAGE = ROOT / "app" / "rust" / "crates" / "use_cases" / "src" / "pipeline_runtime.rs"
 PIPELINE_STORAGE_BOUNDARY_FILES = [
     ROOT
     / "app"

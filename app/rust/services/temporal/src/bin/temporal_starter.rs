@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use contracts::generated::alegria::temporal::v1::{SeoScopePayload, SeoSiteBuildInputPayload};
+use contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload;
 use infrastructure::adapters::temporalio_sdk_adapter::{
     connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
@@ -8,7 +8,7 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 use infrastructure::adapters::{
     neo4rs_adapter, qdrant_client_adapter, sqlx_adapter::connect_pg, sqlx_seo_adapter,
 };
-use sqlx::Row;
+use seo_domain::identity;
 use std::env;
 use std::time::Duration;
 use uuid::Uuid;
@@ -55,6 +55,8 @@ enum Command {
         country_code: String,
         #[arg(long, default_value = "tourist")]
         visa_type: String,
+        #[arg(long)]
+        visa_subtype: Option<String>,
         #[arg(long, default_value = "standard")]
         applicant_profile: String,
         #[arg(long, default_value = "RU")]
@@ -81,6 +83,8 @@ enum Command {
         country_code: String,
         #[arg(long, default_value = "tourist")]
         visa_type: String,
+        #[arg(long)]
+        visa_subtype: Option<String>,
         #[arg(long, default_value = "standard")]
         applicant_profile: String,
         #[arg(long, default_value = "RU")]
@@ -164,6 +168,7 @@ async fn persist_seo_site_build_input(
     locale: String,
     country_code: String,
     visa_type: String,
+    visa_subtype: Option<String>,
     applicant_profile: String,
     citizenship_code: String,
     bootstrap_context: bool,
@@ -180,30 +185,45 @@ async fn persist_seo_site_build_input(
     }
 
     Uuid::parse_str(run_id).context("SeoSiteBuildWorkflow workflow_id must be a UUID")?;
-    let raw_scope_tuple = primitives::seo::canonical_scope_tuple(&[
-        ("market", &market),
-        ("locale", &locale),
-        ("country_code", &country_code),
-        ("visa_type", &visa_type),
-        ("applicant_profile", &applicant_profile),
-    ]);
-    let scope_signature = primitives::seo::scope_signature(&[
-        ("market", &market),
-        ("locale", &locale),
-        ("country_code", &country_code),
-        ("visa_type", &visa_type),
-        ("applicant_profile", &applicant_profile),
-    ]);
+    let scope = identity::derive_scope(
+        &market,
+        &locale,
+        &country_code,
+        &visa_type,
+        &applicant_profile,
+    )
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
-    let visa_subtype = visa_subtype_from_profile(&applicant_profile);
+    sqlx_seo_adapter::ensure_seo_runtime_registries(&pool)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let normalized_profile =
+        sqlx_seo_adapter::validate_applicant_profile_reference(&pool, &scope.applicant_profile)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let scope = identity::ValidatedSeoScope {
+        applicant_profile: normalized_profile.clone(),
+        ..scope
+    };
+    let truth_identity = identity::derive_truth_identity(
+        &country_code,
+        &visa_type,
+        visa_subtype.as_deref(),
+        &citizenship_code,
+    )
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
     let resolved_context_key = if bootstrap_context {
         let report = sqlx_seo_adapter::bootstrap_seo_scope(
             &pool,
             context_key.as_deref(),
-            &country_code,
-            &visa_type,
-            visa_subtype.as_deref(),
-            &citizenship_code,
+            &truth_identity.country_code,
+            &truth_identity.visa_family,
+            if truth_identity.visa_subtype.is_empty() {
+                None
+            } else {
+                Some(truth_identity.visa_subtype.as_str())
+            },
+            &truth_identity.citizenship_code,
         )
         .await
         .context("failed to bootstrap seo scope")?;
@@ -213,33 +233,17 @@ async fn persist_seo_site_build_input(
         );
         report.context_key
     } else {
-        context_key.unwrap_or_else(|| {
-            primitives::context_key::normalize_context_key(
-                &country_code,
-                &visa_type,
-                visa_subtype.as_deref(),
-                &citizenship_code,
-            )
-            .unwrap_or_default()
-        })
+        context_key.unwrap_or_else(|| truth_identity.context_key.clone())
     };
     let input = SeoSiteBuildInputPayload {
         run_id: run_id.to_string(),
         context_key: resolved_context_key,
-        scope: Some(SeoScopePayload {
-            market,
-            locale,
-            country_code,
-            visa_type,
-            applicant_profile,
-            raw_scope_tuple,
-            scope_signature: scope_signature.clone(),
-        }),
+        scope: Some(identity::build_scope_payload(&scope)),
         query_batch_key: query_batch_key
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| {
-                primitives::seo::seo_artifact_key("query_batch", &[run_id, &scope_signature])
+                primitives::seo::seo_artifact_key("query_batch", &[run_id, &scope.scope_signature])
             }),
         queries: non_empty_queries,
         verified_support: Vec::new(),
@@ -249,15 +253,6 @@ async fn persist_seo_site_build_input(
         .await
         .context("failed to upsert seo_site_build input_payload blob")?;
     Ok(())
-}
-
-fn visa_subtype_from_profile(applicant_profile: &str) -> Option<String> {
-    let trimmed = applicant_profile.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("standard") {
-        None
-    } else {
-        Some(trimmed.to_ascii_lowercase())
-    }
 }
 
 fn env_set(name: &str) -> bool {
@@ -293,6 +288,7 @@ async fn run_seo_preflight(
     locale: String,
     country_code: String,
     visa_type: String,
+    visa_subtype: Option<String>,
     applicant_profile: String,
     citizenship_code: String,
     bootstrap_context: bool,
@@ -305,18 +301,43 @@ async fn run_seo_preflight(
         .await
         .map_err(|_| anyhow::anyhow!("database_connect timed out after 10s"))?
         .context("database_connect failed")?;
+    sqlx_seo_adapter::ensure_seo_runtime_registries(&pool)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let scope = identity::derive_scope(
+        &market,
+        &locale,
+        &country_code,
+        &visa_type,
+        &applicant_profile,
+    )
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let normalized_profile =
+        sqlx_seo_adapter::validate_applicant_profile_reference(&pool, &scope.applicant_profile)
+            .await
+            .map_err(|err| anyhow::anyhow!("{err}"))?;
     println!("OK database_connect");
-    println!("OK scope market={market} locale={locale} country={country_code} visa_type={visa_type} applicant_profile={applicant_profile}");
+    println!("OK scope market={market} locale={locale} country={country_code} visa_type={visa_type} applicant_profile={normalized_profile}");
 
-    let visa_subtype = visa_subtype_from_profile(&applicant_profile);
+    let truth_identity = identity::derive_truth_identity(
+        &country_code,
+        &visa_type,
+        visa_subtype.as_deref(),
+        &citizenship_code,
+    )
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
     let resolved_context_key = if bootstrap_context {
         let report = sqlx_seo_adapter::bootstrap_seo_scope(
             &pool,
             context_key.as_deref(),
-            &country_code,
-            &visa_type,
-            visa_subtype.as_deref(),
-            &citizenship_code,
+            &truth_identity.country_code,
+            &truth_identity.visa_family,
+            if truth_identity.visa_subtype.is_empty() {
+                None
+            } else {
+                Some(truth_identity.visa_subtype.as_str())
+            },
+            &truth_identity.citizenship_code,
         )
         .await
         .context("bootstrap_seo_scope failed")?;
@@ -326,87 +347,79 @@ async fn run_seo_preflight(
         );
         report.context_key
     } else {
-        context_key.unwrap_or_else(|| {
-            primitives::context_key::normalize_context_key(
-                &country_code,
-                &visa_type,
-                visa_subtype.as_deref(),
-                &citizenship_code,
-            )
-            .unwrap_or_default()
-        })
+        context_key.unwrap_or_else(|| truth_identity.context_key.clone())
     };
 
-    let context_count: i64 = sqlx::query(
+    let context_row = sqlx::query(
         "SELECT count(*)::bigint AS count FROM kb.visa_contexts WHERE context_key = $1 AND status = 'active'",
     )
     .bind(&resolved_context_key)
     .fetch_one(&pool)
     .await
-    .context("active context lookup failed")?
-    .get("count");
+    .context("active context lookup failed")?;
+    let context_count: i64 = sqlx::Row::get(&context_row, "count");
     if context_count == 0 {
         println!("FAIL active_context context_key={resolved_context_key}");
         return Ok(2);
     }
     println!("OK active_context context_key={resolved_context_key}");
 
-    let page_type_count: i64 = sqlx::query(
+    let page_type_row = sqlx::query(
         "SELECT count(*)::bigint AS count FROM site.registry_page_types WHERE status = 'active'",
     )
     .fetch_one(&pool)
     .await
-    .context("page type registry count failed")?
-    .get("count");
+    .context("page type registry count failed")?;
+    let page_type_count: i64 = sqlx::Row::get(&page_type_row, "count");
     if page_type_count == 0 {
         println!("FAIL registry_page_types active_count=0");
         return Ok(2);
     }
     println!("OK registry_page_types active_count={page_type_count}");
 
-    let page_node_count: i64 = sqlx::query("SELECT count(*)::bigint AS count FROM site.page_nodes")
+    let page_node_row = sqlx::query("SELECT count(*)::bigint AS count FROM site.page_nodes")
         .fetch_one(&pool)
         .await
-        .context("page node count failed")?
-        .get("count");
-    let navigation_item_count: i64 =
+        .context("page node count failed")?;
+    let page_node_count: i64 = sqlx::Row::get(&page_node_row, "count");
+    let navigation_item_row =
         sqlx::query("SELECT count(*)::bigint AS count FROM site.navigation_items")
             .fetch_one(&pool)
             .await
-            .context("navigation item count failed")?
-            .get("count");
+            .context("navigation item count failed")?;
+    let navigation_item_count: i64 = sqlx::Row::get(&navigation_item_row, "count");
     println!(
         "OK global_site_model page_nodes={} navigation_items={}",
         page_node_count, navigation_item_count
     );
 
-    let verified_rule_count: i64 = sqlx::query(
+    let verified_rule_row = sqlx::query(
         "SELECT count(*)::bigint AS count FROM verified.rule_instances WHERE context_key = $1 AND status = 'verified'",
     )
     .bind(&resolved_context_key)
     .fetch_one(&pool)
     .await
-    .context("verified rule count failed")?
-    .get("count");
-    let pending_rule_count: i64 = sqlx::query(
+    .context("verified rule count failed")?;
+    let verified_rule_count: i64 = sqlx::Row::get(&verified_rule_row, "count");
+    let pending_rule_row = sqlx::query(
         "SELECT count(*)::bigint AS count FROM verified.rule_instances WHERE context_key = $1 AND status = 'pending'",
     )
     .bind(&resolved_context_key)
     .fetch_one(&pool)
     .await
-    .context("pending rule count failed")?
-    .get("count");
+    .context("pending rule count failed")?;
+    let pending_rule_count: i64 = sqlx::Row::get(&pending_rule_row, "count");
     println!(
         "OK knowledge_state verified_rules={} pending_review_rules={}",
         verified_rule_count, pending_rule_count
     );
 
-    let qdrant_point_count: i64 =
+    let qdrant_point_row =
         sqlx::query("SELECT count(*)::bigint AS count FROM kb.qdrant_points")
             .fetch_one(&pool)
             .await
-            .context("qdrant point ledger count failed")?
-            .get("count");
+            .context("qdrant point ledger count failed")?;
+    let qdrant_point_count: i64 = sqlx::Row::get(&qdrant_point_row, "count");
     println!("OK qdrant_point_ledger points={qdrant_point_count}");
 
     let mut projection_blocked = false;
@@ -540,6 +553,7 @@ async fn main() -> Result<()> {
             locale,
             country_code,
             visa_type,
+            visa_subtype,
             applicant_profile,
             citizenship_code,
             bootstrap_context,
@@ -554,6 +568,7 @@ async fn main() -> Result<()> {
                 locale,
                 country_code,
                 visa_type,
+                visa_subtype,
                 applicant_profile,
                 citizenship_code,
                 bootstrap_context,
@@ -588,6 +603,7 @@ async fn main() -> Result<()> {
             locale,
             country_code,
             visa_type,
+            visa_subtype,
             applicant_profile,
             citizenship_code,
             bootstrap_context,
@@ -617,6 +633,7 @@ async fn main() -> Result<()> {
                     locale,
                     country_code,
                     visa_type,
+                    visa_subtype,
                     applicant_profile,
                     citizenship_code,
                     bootstrap_context,
@@ -683,4 +700,54 @@ async fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_supported_applicant_profile() {
+        let profile = identity::normalize_applicant_profile(" Standard ").unwrap();
+        assert_eq!(profile, "standard");
+    }
+
+    #[test]
+    fn rejects_unknown_applicant_profile() {
+        let err = identity::normalize_applicant_profile("default-applicant")
+            .expect_err("unknown profile must fail");
+        let message = err.to_string();
+        assert!(message.contains("unsupported applicant_profile"));
+    }
+
+    #[test]
+    fn applicant_profile_does_not_change_truth_identity_without_explicit_subtype() {
+        let standard = identity::derive_truth_identity("ES", "tourist", None, "BY").unwrap();
+        let minor = identity::derive_truth_identity("ES", "tourist", None, "BY").unwrap();
+        assert_eq!(standard.context_key, minor.context_key);
+    }
+
+    #[test]
+    fn explicit_regulatory_subtype_changes_truth_identity() {
+        let base = identity::derive_truth_identity("ES", "tourist", None, "BY").unwrap();
+        let subtype =
+            identity::derive_truth_identity("ES", "tourist", Some("priority_track"), "BY").unwrap();
+        assert_ne!(base.context_key, subtype.context_key);
+    }
+
+    #[test]
+    fn locale_and_profile_change_scope_not_truth_identity() {
+        let truth = identity::derive_truth_identity("ES", "tourist", None, "BY").unwrap();
+        let scope_ru =
+            identity::derive_scope("alegria-site", "ru-RU", "ES", "tourist", "standard").unwrap();
+        let scope_en =
+            identity::derive_scope("alegria-site", "en", "ES", "tourist", "minor").unwrap();
+        assert_eq!(
+            truth.context_key,
+            identity::derive_truth_identity("ES", "tourist", None, "BY")
+                .unwrap()
+                .context_key
+        );
+        assert_ne!(scope_ru.scope_signature, scope_en.scope_signature);
+    }
 }

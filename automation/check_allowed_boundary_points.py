@@ -26,6 +26,13 @@ def allowed(path: Path) -> bool:
         return True
     if rel_s.startswith("app/rust/crates/infrastructure/src/adapters/"):
         return True
+    if rel_s in {
+        "app/rust/crates/seo_ports/src/lib.rs",
+        "app/rust/crates/seo_application/src/rebuild_detect.rs",
+        "app/rust/crates/seo_domain/src/applicability.rs",
+        "app/rust/crates/seo_domain/src/rebuild.rs",
+    }:
+        return True
     if rel_s.startswith("app/rust/crates/primitives/src/") and path.name.endswith("_json.rs"):
         return True
     if rel_s.startswith("app/rust/services/outbox_worker/src/"):

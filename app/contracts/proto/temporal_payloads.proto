@@ -823,7 +823,15 @@ message RebuildDetectInputPayload {
   repeated PageNodeState page_nodes = 3;
 }
 
+message RebuildImpactState {
+  string page_node_key = 1;
+  string trigger_type = 2;
+  string reason_package_json = 3;
+  int32 priority = 4;
+}
+
 message RebuildDetectOutputPayload {
   repeated string impacted_page_node_keys = 1;
   string verdict = 2;
+  repeated RebuildImpactState impacts = 3;
 }

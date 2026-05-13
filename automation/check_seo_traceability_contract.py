@@ -6,8 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
-DRAFT_ASSEMBLE = ROOT / "app/rust/crates/use_cases/src/draft_assemble_step.rs"
-DRAFT_QA = ROOT / "app/rust/crates/use_cases/src/draft_qa_step.rs"
+DRAFT_ASSEMBLE = ROOT / "app/rust/crates/seo_steps/src/draft_assemble_step.rs"
+DRAFT_QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
 ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter.rs"
 SCHEMA = ROOT / "app/db/schema.sql"
 

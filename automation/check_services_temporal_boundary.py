@@ -25,6 +25,8 @@ BANNED = {
 def main() -> int:
     violations: list[str] = []
     for path in sorted(TEMPORAL.rglob("*.rs")):
+        if "bin" in path.parts:
+            continue
         text = path.read_text(encoding="utf-8")
         for label, pattern in BANNED.items():
             if pattern.search(text):

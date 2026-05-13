@@ -36,7 +36,7 @@
 Фактические кодовые корни, которые должны быть включены в исследование:
 
 - `app/rust/services/temporal`
-- `app/rust/crates/use_cases`
+- `app/rust/crates/seo_steps`
 - `app/rust/crates/infrastructure`
 - `app/rust/crates/primitives`
 - `app/db/schema.sql`

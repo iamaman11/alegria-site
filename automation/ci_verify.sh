@@ -43,17 +43,17 @@ python3 automation/check_layer_dependency_matrix.py
 echo "[11/50] Runtime type families"
 python3 automation/check_runtime_type_families.py
 
-echo "[12/50] Use-cases boundary policy"
-python3 automation/check_use_cases_boundary.py
+echo "[12/50] SEO steps boundary policy"
+python3 automation/check_seo_steps_boundary.py
 
-echo "[13/50] Use-cases no-SQL"
-python3 automation/check_use_cases_no_sql.py
+echo "[13/50] SEO steps no-SQL"
+python3 automation/check_seo_steps_no_sql.py
 
-echo "[14/50] Use-cases no-JSON-boundary"
-python3 automation/check_use_cases_no_json_boundary.py
+echo "[14/50] SEO steps no-JSON-boundary"
+python3 automation/check_seo_steps_no_json_boundary.py
 
-echo "[15/50] Use-cases external SDK ban"
-python3 automation/check_use_cases_external_sdk_ban.py
+echo "[15/50] SEO steps external SDK ban"
+python3 automation/check_seo_steps_external_sdk_ban.py
 
 echo "[16/50] Allowed boundary points"
 python3 automation/check_allowed_boundary_points.py
@@ -115,8 +115,35 @@ python3 automation/check_seo_publish_gates.py
 echo "[35/50] SEO traceability contract"
 python3 automation/check_seo_traceability_contract.py
 
-echo "[36/53] SEO no LLM SDK in use_cases"
-python3 automation/check_no_llm_sdk_in_use_cases.py
+echo "[35a/53] SEO identity docs contract"
+python3 automation/check_seo_identity_docs.py
+
+echo "[35b/53] SEO canonical core ownership"
+python3 automation/check_seo_canonical_core.py
+
+echo "[35c/54] SEO layering"
+python3 automation/check_seo_layering.py
+
+echo "[35c2/54] SEO crate graph"
+python3 automation/check_seo_crate_graph.py
+
+echo "[35d/55] seo_steps infra surface"
+python3 automation/check_seo_steps_infra_surface.py
+
+echo "[35e/56] Temporal SEO planning cluster boundary"
+python3 automation/check_temporal_seo_activity_surface.py
+
+echo "[35f/57] Temporal step catalog SEO surface"
+python3 automation/check_temporal_step_catalog_surface.py
+
+echo "[35g/58] CLI tools SEO mutation surface"
+python3 automation/check_cli_tools_seo_surface.py
+
+echo "[35h/59] SEO architecture wording"
+python3 automation/check_seo_architecture_wording.py
+
+echo "[36/56] SEO no LLM SDK in seo_steps"
+python3 automation/check_no_llm_sdk_in_seo_steps.py
 
 echo "[37/53] SEO claim ledger contract"
 python3 automation/check_seo_claim_ledger_contract.py
@@ -187,7 +214,7 @@ python3 automation/check_expert_consistency.py \
   --report-json automation/reports/consistency_report.json
 
 echo "[52/53] SEO use-case acceptance test"
-(cd app/rust && SQLX_OFFLINE=true cargo test -q -p use_cases seo_steps_form_publish_ready_pipeline)
+(cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_steps seo_steps_form_publish_ready_pipeline)
 
 echo "[53/53] Rust workspace check"
 (cd app/rust && SQLX_OFFLINE=true cargo check -q)

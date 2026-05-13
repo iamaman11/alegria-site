@@ -64,9 +64,9 @@
 
 - Внешние runtime-библиотеки используются только через `app/rust/crates/infrastructure/src/adapters/*`.
 - `primitives = pure`: без `contracts`, SQL и внешних SDK; JSON допустим только в `*_json.rs`.
-- `use_cases = policy + orchestration`: raw SQL/JSON-boundary не допускаются; доступ к DB/IO идёт через typed adapter API.
+- `seo_steps`: raw SQL/JSON-boundary не допускаются; доступ к DB/IO идёт через typed adapter API.
 - `infrastructure = SQL / IO / boundary`: только здесь допустимы `sqlx`, `serde_json::Value`, `JSONB`, external SDK.
-- В `use_cases` запрещены прямые импорты `neo4rs`, `qdrant_client`, `reqwest`, `tonic`.
+- В `seo_steps` запрещены прямые импорты `neo4rs`, `qdrant_client`, `reqwest`, `tonic`.
 - JSON допустим только в постоянных boundary-зонах:
   - raw snapshots,
   - внешние источники,
@@ -141,4 +141,4 @@ cd app/rust && cargo check -q
   - Проверить `automation/check_rust_adapter_boundaries.py`.
 
 - Ошибка ingest invariants:
-  - Проверить `app/db/schema.sql` и `use_cases::serp_ingest` на уникальность/идемпотентность.
+  - Проверить `app/db/schema.sql` и `seo_steps::serp_ingest` на уникальность/идемпотентность.

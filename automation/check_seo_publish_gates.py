@@ -5,8 +5,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-QA = ROOT / "app/rust/crates/use_cases/src/draft_qa_step.rs"
-PUBLISH = ROOT / "app/rust/crates/use_cases/src/cms_publish_step.rs"
+QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
+PUBLISH = ROOT / "app/rust/crates/seo_steps/src/cms_publish_step.rs"
 
 
 def main() -> int:

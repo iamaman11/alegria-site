@@ -1,13 +1,18 @@
 use anyhow::Result;
 use futures::StreamExt;
 use infrastructure::adapters::sqlx_adapter::connect_pg;
-use infrastructure::adapters::sqlx_runtime_health_adapter;
-use infrastructure::adapters::temporalio_sdk_adapter::{connect_client, WorkflowListOptions};
-use tracing::info;
-use use_cases::pipeline_runtime::{
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
     append_reconcile_summary_action, append_reconcile_target_action, begin_reconcile_run,
     finish_reconcile_run, ReconcileSummary, ReconcileTargetReportRecord,
 };
+use infrastructure::adapters::sqlx_reconcile_adapter;
+use infrastructure::adapters::sqlx_runtime_health_adapter;
+use infrastructure::adapters::temporalio_sdk_adapter::{connect_client, WorkflowListOptions};
+use tracing::info;
+
+fn reconcile_options() -> sqlx_reconcile_adapter::ReconcileOptionsRecord {
+    sqlx_reconcile_adapter::load_default_reconcile_options()
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -21,14 +26,17 @@ async fn main() -> Result<()> {
     let pool = connect_pg(&database_url).await?;
     let reconcile_run_id = begin_reconcile_run(&pool).await?;
 
-    let graph_before = use_cases::reconcile_graph::read_graph_backlog().await?;
-    let qdrant_before = use_cases::reconcile_qdrant::read_qdrant_backlog().await?;
+    let graph_before = sqlx_reconcile_adapter::read_target_backlog_default("neo4j").await?;
+    let qdrant_before = sqlx_reconcile_adapter::read_target_backlog_default("qdrant").await?;
 
-    let graph_report = use_cases::reconcile_graph::reconcile_graph().await?;
-    let qdrant_report = use_cases::reconcile_qdrant::reconcile_qdrant().await?;
+    let opts = reconcile_options();
+    let graph_report =
+        sqlx_reconcile_adapter::reconcile_target_system_default("neo4j", &opts).await?;
+    let qdrant_report =
+        sqlx_reconcile_adapter::reconcile_target_system_default("qdrant", &opts).await?;
 
-    let graph_after = use_cases::reconcile_graph::read_graph_backlog().await?;
-    let qdrant_after = use_cases::reconcile_qdrant::read_qdrant_backlog().await?;
+    let graph_after = sqlx_reconcile_adapter::read_target_backlog_default("neo4j").await?;
+    let qdrant_after = sqlx_reconcile_adapter::read_target_backlog_default("qdrant").await?;
     let open_dlq = sqlx_runtime_health_adapter::count_open_dead_letters(&pool).await?;
     let stale_runs = sqlx_runtime_health_adapter::count_stale_runs(&pool).await?;
     let pending_hitl_runs = sqlx_runtime_health_adapter::count_pending_hitl_runs(&pool).await?;

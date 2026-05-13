@@ -1,0 +1,12 @@
+[package]
+name = "seo_ports"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+contracts = { path = "../contracts" }
+primitives = { path = "../primitives" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = "0.1"
+prost = { workspace = true }

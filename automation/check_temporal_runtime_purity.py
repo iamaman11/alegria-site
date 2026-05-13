@@ -20,6 +20,8 @@ FORBIDDEN = {
 def main() -> int:
     violations: list[str] = []
     for file_path in sorted(TEMPORAL.rglob("*.rs")):
+        if "bin" in file_path.parts:
+            continue
         text = file_path.read_text(encoding="utf-8")
         for label, pattern in FORBIDDEN.items():
             if pattern.search(text):

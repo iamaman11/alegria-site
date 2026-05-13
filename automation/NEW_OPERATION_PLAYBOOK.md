@@ -4,7 +4,7 @@
 
 - `primitives = pure`
 - `runtime_models = typed runtime domain model`
-- `use_cases = policy + orchestration`
+- `seo_steps = pure deterministic step execution`
 - `infrastructure = SQL / IO / boundary`
 
 Этот документ согласован с:
@@ -117,11 +117,11 @@ Use-case слой не должен знать ни SQL-текст, ни фор�
 
 Путь:
 
-- `app/rust/crates/use_cases/src/...`
+- `app/rust/crates/seo_steps/src/...`
 
 Для примера:
 
-- `app/rust/crates/use_cases/src/seo/keyword_analysis.rs`
+- `app/rust/crates/seo_steps/src/seo/keyword_analysis.rs`
 
 Use-case делает:
 
@@ -129,7 +129,7 @@ Use-case делает:
 2. Вызвать primitive для расчёта.
 3. Сохранить/опубликовать результат через adapter API.
 
-Запрещено в use_cases:
+Запрещено в seo_steps:
 
 - `sqlx::query*`, `sqlx::Row`, прямой `PgPool`
 - `serde_json::Value`, `json!`, `from_value/to_value`
@@ -231,7 +231,7 @@ Go-критерий:
 
 ## 12. Антипаттерны (запрещено)
 
-1. Добавлять SQL в `use_cases` или `services/temporal`.
+1. Добавлять SQL в `seo_steps` или `services/temporal`.
 2. Передавать ad hoc JSON вместо typed proto в runtime path.
 3. Добавлять внешние SDK в `primitives`.
 4. Пропускать регистрацию activity/workflow.

@@ -22,7 +22,7 @@ bash automation/ci_verify.sh
 - Layer dependency matrix: `check_layer_dependency_matrix.py`
 - Явные семейства runtime-типов `domain / storage / wire`: `check_runtime_type_families.py`
 - JSON только на deny-by-default boundary-слоях: `check_json_boundary_policy.py`
-- Запрет raw external SDK в `use_cases`: `check_use_cases_external_sdk_ban.py`
+- Запрет raw external SDK в `seo_steps`: `check_seo_steps_external_sdk_ban.py`
 - Граница `services/temporal`: `check_services_temporal_boundary.py`
 - Proto-контракты и совместимость генерации: `contract_verify.sh`
 - Error taxonomy и retry-discipline Temporal: `check_domain_error_usage.py`
@@ -55,7 +55,7 @@ GO только если одновременно:
 
 - Внешние runtime-SDK используются через `app/rust/crates/infrastructure/src/adapters/*`.
 - `primitives` не зависят от `contracts` и внешних SDK.
-- `use_cases` не содержат raw SQL/JSON-boundary; доступ к DB/IO идёт только через typed adapter API.
+- `seo_steps` не содержат raw SQL/JSON-boundary; доступ к DB/IO идёт только через typed adapter API.
 - Прямые зависимости на целевые SDK вне adapter-layer запрещены (кроме зафиксированных технических исключений).
 - Ingest ключи и дедуп остаются идемпотентными и воспроизводимыми.
 - `raw` слой ingest immutable (`ON CONFLICT DO NOTHING`).
@@ -100,7 +100,7 @@ docker compose build temporal-worker
 
 ## 6) Три вещи, которые нельзя нарушать
 
-1. Нельзя возвращать SQL/JSON/external SDK в `primitives`, `policies`, `use_cases` или `services/temporal`; это допустимо только в `infrastructure/adapters` и зафиксированных boundary-точках.
+1. Нельзя возвращать SQL/JSON/external SDK в `primitives`, `policies`, `seo_steps` или `services/temporal`; это допустимо только в `infrastructure/adapters` и зафиксированных boundary-точках.
 2. Нельзя возвращать legacy JSON runtime path или generic `JsonPayload` для step-state/outbox/DLQ/HITL/reconcile; канонический runtime contract — только специализированные Proto message + `payload_bytes`/`payload_type`/`schema_version`/`payload_hash` + `blake3`.
 3. Нельзя выкатывать workflow/runtime изменения в production без `ci_verify.sh`, свежего `temporal_production_gate.sh` и `restore_drill.sh`.
 

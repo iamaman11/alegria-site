@@ -6,7 +6,7 @@
 
 - `primitives = pure`
   - без `contracts`, SQL, HTTP, external SDK и `serde_json::Value` вне `*_json.rs`
-- `use_cases = policy + orchestration`
+- `seo_steps = pure deterministic step execution`
   - без raw SQL, `JSONB`, `serde_json::Value`, `std::env`, direct SDK imports
 - `infrastructure = SQL / IO / boundary`
   - единственное место для `sqlx`, `serde_json::Value`, `JSONB`, `reqwest`, `neo4rs`, `qdrant-client`, `temporalio_*`, `playwright-rs`, `graph-flow`, `rig*`

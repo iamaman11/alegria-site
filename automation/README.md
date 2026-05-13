@@ -21,7 +21,7 @@
 - Послойность Rust adapter-layer (`infrastructure/adapters/*` как единая точка внешних SDK)
 - Purity `primitives = pure`
 - Purity `services/temporal` (без raw DB logic и ad hoc JSON boundary)
-- Layer dependency matrix (`contracts -> primitives/policies/use_cases/infrastructure` запрещено и т.д.)
+- Layer dependency matrix (`contracts -> primitives/policies/seo_steps/infrastructure` запрещено и т.д.)
 - Явные семейства runtime-типов `domain / storage / wire`
 - JSON boundary policy (deny-by-default: JSON только на boundary/dynamic слоях)
 - DomainError / retry taxonomy для Temporal runtime
@@ -101,7 +101,7 @@ python3 automation/check_docs_layout.py
 ```bash
 python3 automation/check_json_boundary_policy.py
 python3 automation/check_allowed_boundary_points.py
-python3 automation/check_use_cases_external_sdk_ban.py
+python3 automation/check_seo_steps_external_sdk_ban.py
 python3 automation/check_services_temporal_boundary.py
 ```
 

@@ -24,30 +24,30 @@ def main() -> int:
     contracts_src = RUST_CRATES / "contracts" / "src"
     primitives_src = RUST_CRATES / "primitives" / "src"
     policies_src = RUST_CRATES / "policies" / "src"
-    use_cases_src = RUST_CRATES / "use_cases" / "src"
+    seo_steps_src = RUST_CRATES / "seo_steps" / "src"
     infra_src = RUST_CRATES / "infrastructure" / "src"
 
     for file_path in scan_rs(contracts_src):
         txt = file_path.read_text(encoding="utf-8")
-        if re.search(r"\buse\s+(infrastructure|use_cases|policies|primitives)::", txt):
+        if re.search(r"\buse\s+(infrastructure|seo_steps|policies|primitives)::", txt):
             add_violation(violations, file_path, "contracts layer must not depend on other layers")
 
     for file_path in scan_rs(primitives_src):
         txt = file_path.read_text(encoding="utf-8")
-        if re.search(r"\buse\s+(infrastructure|use_cases|policies)::", txt):
-            add_violation(violations, file_path, "primitives layer must not depend on infrastructure/use_cases/policies")
+        if re.search(r"\buse\s+(infrastructure|seo_steps|policies)::", txt):
+            add_violation(violations, file_path, "primitives layer must not depend on infrastructure/seo_steps/policies")
         if re.search(r"\buse\s+contracts::", txt):
             add_violation(violations, file_path, "primitives layer must not depend on contracts")
 
     for file_path in scan_rs(policies_src):
         txt = file_path.read_text(encoding="utf-8")
-        if re.search(r"\buse\s+(infrastructure|use_cases)::", txt):
-            add_violation(violations, file_path, "policies layer must not depend on infrastructure/use_cases")
+        if re.search(r"\buse\s+(infrastructure|seo_steps)::", txt):
+            add_violation(violations, file_path, "policies layer must not depend on infrastructure/seo_steps")
 
-    for file_path in scan_rs(use_cases_src):
+    for file_path in scan_rs(seo_steps_src):
         txt = file_path.read_text(encoding="utf-8")
-        if re.search(r"\buse\s+use_cases::", txt):
-            add_violation(violations, file_path, "use_cases must not depend on other use_cases crate")
+        if re.search(r"\buse\s+seo_steps::", txt):
+            add_violation(violations, file_path, "seo_steps must not depend on other seo_steps crate")
 
     if infra_src.exists():
         allowed = {"lib.rs", "adapters"}

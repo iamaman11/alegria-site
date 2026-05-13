@@ -3,8 +3,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
-DRAFT = ROOT / "app/rust/crates/use_cases/src/draft_assemble_step.rs"
-QA = ROOT / "app/rust/crates/use_cases/src/draft_qa_step.rs"
+DRAFT = ROOT / "app/rust/crates/seo_steps/src/draft_assemble_step.rs"
+QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
 CMS = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter.rs"
 
 

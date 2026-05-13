@@ -56,12 +56,25 @@ impl SeoSiteBuildWorkflow {
             .as_ref()
             .map(|value| value.scope_signature.clone())
             .unwrap_or_default();
+        let applicant_profile = scope
+            .as_ref()
+            .map(|value| value.applicant_profile.clone())
+            .unwrap_or_default();
+        let verified_support_request = serde_json::to_string(
+            &seo_ports::VerifiedSupportBundleRequest {
+                run_id: run_id.clone(),
+                context_key: site_input.context_key.clone(),
+                scope_signature: scope_signature.clone(),
+                applicant_profile: applicant_profile.clone(),
+            },
+        )
+        .map_err(anyhow::Error::from)?;
 
         ctx.state_mut(|s| s.phase = "load_verified_support_bundle".to_string());
         let mut verified_support = ctx
             .start_activity(
                 AlegriaActivities::load_verified_support_bundle,
-                format!("{}|{}|{}", run_id, site_input.context_key, scope_signature),
+                verified_support_request.clone(),
                 db_opts(30),
             )
             .await?;
@@ -115,7 +128,7 @@ impl SeoSiteBuildWorkflow {
             verified_support = ctx
                 .start_activity(
                     AlegriaActivities::load_verified_support_bundle,
-                    format!("{}|{}|{}", run_id, site_input.context_key, scope_signature),
+                    verified_support_request,
                     db_opts(30),
                 )
                 .await?;

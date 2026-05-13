@@ -60,7 +60,7 @@
 - новая проверка: отсутствие ad hoc string-matching без taxonomy в temporal activity wrappers
 
 ### Status
-- `implemented at activity boundary; remaining cleanup: propagate DomainError deeper into use_cases`
+- `implemented at activity boundary; remaining cleanup: propagate DomainError deeper into seo_steps`
 
 ## R3. Step Idempotency Journal
 
@@ -69,7 +69,7 @@
 
 ### Files
 - `app/db/schema.sql`
-- `app/rust/crates/use_cases/src/pipeline_runtime.rs`
+- `app/rust/crates/seo_steps/src/pipeline_runtime.rs`
 - `app/rust/services/temporal/src/activities/mod.rs`
 
 ### Deliverables
@@ -164,7 +164,7 @@
 ### Files
 - `app/db/schema.sql`
 - `app/rust/services/reconcile/src/main.rs`
-- `app/rust/crates/use_cases/src/pipeline_runtime.rs`
+- `app/rust/crates/seo_steps/src/pipeline_runtime.rs`
 
 ### Deliverables
 - `system.dead_letter_queue`
@@ -192,7 +192,7 @@
 
 ### Files
 - `app/db/schema.sql`
-- `app/rust/crates/use_cases/src/outbox_builder.rs`
+- `app/rust/crates/seo_steps/src/outbox_builder.rs`
 - `app/rust/crates/infrastructure/src/adapters/sqlx_pipeline_runtime_adapter.rs`
 
 ### Deliverables

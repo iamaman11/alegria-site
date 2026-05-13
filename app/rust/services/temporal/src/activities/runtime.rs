@@ -3,11 +3,12 @@ use std::io::Error as IoError;
 
 use contracts::generated::alegria::temporal::v1::{RuntimeErrorPayload, StepContractMeta};
 use futures::Future;
-use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
+    self as pipeline_storage, RuntimeProtoPayload,
+};
 use infrastructure::adapters::temporalio_sdk_adapter::ActivityError;
 use primitives::errors::{DomainError, ErrorClass};
 use primitives::hash::blake3_hex;
-use use_cases::pipeline_runtime as pipeline_storage;
 
 use super::AlegriaActivities;
 use crate::metrics::ActivityTimer;

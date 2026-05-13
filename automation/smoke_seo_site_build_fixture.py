@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SEO_TEST = ROOT / "app/rust/crates/use_cases/src/seo_flow_tests.rs"
+SEO_TEST = ROOT / "app/rust/crates/seo_steps/src/seo_flow_tests.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build.rs"
 
 

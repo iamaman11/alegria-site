@@ -4,8 +4,10 @@ use contracts::generated::alegria::read_api::v1::{citation_fact, RuleRoleTypeV1}
 use contracts::generated::alegria::temporal::v1::{
     ValidationDiagnostic as TemporalValidationDiagnostic, ValidationReport,
 };
+use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter as pipeline_storage;
 use primitives::errors::{DomainError, ErrorClass};
-use use_cases::pipeline_runtime as pipeline_storage;
+use seo_application::context_bundle as context_bundle_application;
 
 use super::AlegriaActivities;
 
@@ -16,11 +18,11 @@ pub(crate) async fn generate_content_impl(
     let run = pipeline_storage::read_execution_run(&acts.pool, run_id)
         .await
         .map_err(AlegriaActivities::classify_error)?;
-    let context_key = run.context_key();
-    let bundle =
-        use_cases::assemble_context_bundle::assemble_context_bundle_model(&acts.pool, context_key)
-            .await
-            .map_err(AlegriaActivities::classify_error)?;
+    let context_key = &run.context_key;
+    let repo = SqlxSeoRuntimeRepository::new(&acts.pool);
+    let bundle = context_bundle_application::load_context_bundle(&repo, context_key)
+        .await
+        .map_err(AlegriaActivities::classify_error)?;
 
     let mut rendered_blocks: BTreeMap<String, String> = BTreeMap::new();
     let citation_rules: Vec<primitives::writer::CitationRule> = bundle
@@ -112,12 +114,14 @@ pub(crate) async fn validate_blocks_impl(
         .await
         .map_err(AlegriaActivities::classify_error)?;
 
-    let generation_result = pipeline_storage::decode_generation_result_from_run(&run);
-    let extracted_payload = pipeline_storage::decode_extracted_payload_from_run(&run);
+    let generation_result =
+        pipeline_storage::decode_generation_result(run.generation_result.as_ref());
+    let extracted_payload =
+        pipeline_storage::decode_extracted_payload(run.extracted_payload.as_ref());
     let rules_json = pipeline_storage::extracted_payload_rules_json(&extracted_payload);
     let facts_json = pipeline_storage::extracted_payload_facts_json(&extracted_payload);
 
-    let input_payload = pipeline_storage::decode_validation_input_from_run(&run);
+    let input_payload = pipeline_storage::decode_validation_input(run.input_payload.as_ref());
     let required_links_json = input_payload.required_links_json;
     let required_keys_json = input_payload.required_keys_json;
     let used_rule_keys_json = input_payload.used_rule_keys_json;
@@ -259,7 +263,16 @@ pub(crate) async fn finalize_run_impl(
     acts: &AlegriaActivities,
     run_id: &str,
 ) -> Result<String, DomainError> {
-    pipeline_storage::advance_execution_run_status(&acts.pool, run_id, "done")
+    pipeline_storage::advance_execution_run(
+        &acts.pool,
+        run_id,
+        "done",
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
         .await
         .map_err(AlegriaActivities::classify_error)?;
     Ok(run_id.to_string())

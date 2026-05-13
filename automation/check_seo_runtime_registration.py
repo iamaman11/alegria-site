@@ -8,11 +8,11 @@ ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activiti
 WORKFLOWS_MOD = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "mod.rs"
 SEO_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
 TEMPORAL_STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter.rs"
-STEP_CATALOG = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "step_catalog.rs"
-USE_CASES = ROOT / "app" / "rust" / "crates" / "use_cases" / "src"
+SEO_STEPS_DIR = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src"
+SEO_APPLICATION = ROOT / "app" / "rust" / "crates" / "seo_application" / "src"
 PAYLOAD_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "proto_runtime_payload_store.rs"
 
-SEO_STEPS = [
+SEO_STEP_NAMES = [
     "serp_ingest",
     "serp_normalize",
     "opportunity_build",
@@ -24,27 +24,44 @@ SEO_STEPS = [
     "rebuild_detect",
 ]
 
+APPLICATION_OWNERS = {
+    "serp_ingest": ("planning.rs", "serp_ingest_step::execute"),
+    "serp_normalize": ("planning.rs", "serp_normalize_step::execute"),
+    "opportunity_build": ("planning.rs", "opportunity_build_step::execute"),
+    "ia_build": ("planning.rs", "ia_build_step::execute"),
+    "link_recommend": ("planning.rs", "link_recommend_step::execute"),
+    "draft_assemble": ("drafting.rs", "draft_assemble_step::execute"),
+    "draft_qa": ("drafting.rs", "draft_qa_step::execute"),
+    "cms_publish": ("review_publish.rs", "cms_publish_step::execute"),
+    "rebuild_detect": ("rebuild_detect.rs", "pub async fn execute"),
+}
+
 
 def main() -> int:
     activities = ACTIVITIES.read_text(encoding="utf-8")
     workflows_mod = WORKFLOWS_MOD.read_text(encoding="utf-8")
     seo_workflow = SEO_WORKFLOW.read_text(encoding="utf-8") if SEO_WORKFLOW.exists() else ""
     temporal_starter = TEMPORAL_STARTER.read_text(encoding="utf-8")
-    step_catalog = STEP_CATALOG.read_text(encoding="utf-8")
+    application_modules = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in sorted(SEO_APPLICATION.glob("*.rs"))
+    }
     payload_store = PAYLOAD_STORE.read_text(encoding="utf-8")
     failures: list[str] = []
     if "load_seo_site_build_input" not in activities:
         failures.append("missing Temporal activity `load_seo_site_build_input`")
     if "load_seo_site_build_input" not in seo_workflow:
         failures.append("SeoSiteBuildWorkflow does not load runtime DB input first")
-    for step in SEO_STEPS:
-        module_path = USE_CASES / f"{step}_step.rs"
+    for step in SEO_STEP_NAMES:
+        module_path = SEO_STEPS_DIR / f"{step}_step.rs"
         if not module_path.exists():
-            failures.append(f"missing use_case module `{module_path.relative_to(ROOT)}`")
+            failures.append(f"missing seo_steps module `{module_path.relative_to(ROOT)}`")
         if f"run_{step}_step" not in activities:
             failures.append(f"missing Temporal activity `run_{step}_step`")
-        if f"run_{step}" not in step_catalog:
-            failures.append(f"missing step_catalog function `run_{step}`")
+        owner_module, owner_token = APPLICATION_OWNERS[step]
+        owner_text = application_modules.get(owner_module, "")
+        if owner_token not in owner_text and f"run_{step}" not in owner_text:
+            failures.append(f"missing seo_application orchestration for `{step}`")
         if f"\"{step}\"" not in activities:
             failures.append(f"activity `{step}` is not ledger-backed with execute_step step_name")
         if f"run_{step}_step" not in seo_workflow:

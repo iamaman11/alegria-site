@@ -9,10 +9,10 @@ ACTIVITIES_DIR = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "acti
 ACTIVITIES_MOD = ACTIVITIES_DIR / "mod.rs"
 ACTIVITIES_RUNTIME = ACTIVITIES_DIR / "runtime.rs"
 ACTIVITIES_FACT = ACTIVITIES_DIR / "fact_extraction.rs"
-USE_CASES = [
-    ROOT / "app" / "rust" / "crates" / "use_cases" / "src" / "assemble_context_bundle.rs",
-    ROOT / "app" / "rust" / "crates" / "use_cases" / "src" / "hitl_queue.rs",
-    ROOT / "app" / "rust" / "crates" / "use_cases" / "src" / "neo4j_backwrite_step.rs",
+PURE_RUST_LAYERS = [
+    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "context_bundle.rs",
+    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "hitl.rs",
+    ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs",
 ]
 
 
@@ -72,12 +72,12 @@ def main() -> int:
 
     required_uc_needles = [
         "DomainError",
-        "std::result::Result<",
+        "Result<",
     ]
     forbidden_uc_needles = [
         "use anyhow::Result;",
     ]
-    for path in USE_CASES:
+    for path in PURE_RUST_LAYERS:
         text = path.read_text(encoding="utf-8")
         for needle in required_uc_needles:
             if needle not in text:

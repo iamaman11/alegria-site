@@ -3,11 +3,10 @@ use clap::{Parser, Subcommand};
 use contracts::generated::alegria::temporal::v1::{
     FactExtractionInputPayload, ValidationInputPayload,
 };
+use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+use infrastructure::adapters::seo_workflow_control_adapter::TemporalSeoWorkflowControlAdapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
-};
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowSignalOptions,
 };
 use infrastructure::adapters::{
     raw_crawl_adapter,
@@ -17,6 +16,7 @@ use infrastructure::adapters::{
 use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
+use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::HashMap;
@@ -235,7 +235,7 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
         "app/rust/crates/primitives/src/fact_verifier.rs",
         "app/rust/crates/primitives/src/writer.rs",
         "app/rust/crates/primitives/src/pdf_parser.rs",
-        "app/rust/crates/use_cases/src/pipeline_runtime.rs",
+        "app/rust/crates/seo_application/src/seo_runtime.rs",
         "app/rust/crates/infrastructure/src/adapters/sqlx_pipeline_runtime_adapter.rs",
         "app/rust/crates/infrastructure/src/adapters/proto_runtime_payload_store.rs",
         "app/rust/services/temporal/src/activities/mod.rs",
@@ -559,28 +559,6 @@ fn default_temporal_url() -> String {
 
 fn default_temporal_namespace() -> String {
     env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string())
-}
-
-fn empty_payload() -> RawValue {
-    RawValue::default()
-}
-
-async fn signal_seo_workflow_resume(workflow_id: &str) -> Result<()> {
-    let client = connect_client(
-        &default_temporal_url(),
-        format!("alegria-cli-tools@{}", std::process::id()),
-        &default_temporal_namespace(),
-    )
-    .await?;
-    let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.to_string());
-    handle
-        .signal(
-            UntypedSignal::<UntypedWorkflow>::new("resume"),
-            empty_payload(),
-            WorkflowSignalOptions::default(),
-        )
-        .await?;
-    Ok(())
 }
 
 fn escape_html(input: &str) -> String {
@@ -1521,30 +1499,6 @@ async fn seo_support_bundle_inspect(
     Ok(0)
 }
 
-async fn resolve_seo_workflow_id(
-    pool: &sqlx::PgPool,
-    page_node_key: &str,
-    revision_id: &str,
-) -> Result<Option<String>> {
-    let row = sqlx::query(
-        r#"
-        SELECT event_payload ->> 'run_id' AS run_id
-        FROM site.cms_publish_events
-        WHERE page_node_key = $1
-          AND revision_id = $2
-          AND event_type = 'seo_page_review_requested'
-          AND COALESCE(event_payload ->> 'run_id', '') <> ''
-        ORDER BY occurred_at DESC
-        LIMIT 1
-        "#,
-    )
-    .bind(page_node_key)
-    .bind(revision_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.and_then(|row| row.get::<Option<String>, _>("run_id")))
-}
-
 async fn cms_review_decision(
     database_url: Option<String>,
     page_node_key: &str,
@@ -1552,79 +1506,28 @@ async fn cms_review_decision(
     decision: &str,
     reason: &str,
 ) -> Result<(String, String, String)> {
-    anyhow::ensure!(
-        !actor_role.trim().is_empty() && actor_role != "seo_system",
-        "human actor_role is required"
-    );
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
-    let row = sqlx::query(
-        r#"
-        SELECT p.page_node_key, p.current_revision_id AS revision_id
-        FROM site.cms_pages p
-        WHERE p.page_node_key = $1
-        "#,
-    )
-    .bind(page_node_key)
-    .fetch_one(&pool)
-    .await?;
-    let revision_id: String = row.get("revision_id");
-    let decision_key = primitives::seo::seo_artifact_key(
-        "cms_approval_decision",
-        &[page_node_key, &revision_id, actor_role, decision],
+    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    let workflow = TemporalSeoWorkflowControlAdapter::new(
+        default_temporal_url(),
+        format!("alegria-cli-tools@{}", std::process::id()),
+        default_temporal_namespace(),
     );
-    sqlx::query(
-        r#"
-        INSERT INTO site.cms_approval_decisions
-            (decision_key, page_node_key, revision_id, actor_role, decision, reason,
-             decision_payload)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        ON CONFLICT (decision_key) DO UPDATE
-        SET decision = EXCLUDED.decision,
-            reason = EXCLUDED.reason,
-            decision_payload = EXCLUDED.decision_payload
-        "#,
+    let result = apply_human_review_decision(
+        &repo,
+        &workflow,
+        &ApplyHumanReviewDecisionInput {
+            page_node_key: page_node_key.to_string(),
+            actor_role: actor_role.to_string(),
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+            source: "cli_tools_headless_cms@1".to_string(),
+        },
     )
-    .bind(&decision_key)
-    .bind(page_node_key)
-    .bind(&revision_id)
-    .bind(actor_role)
-    .bind(decision)
-    .bind(reason)
-    .bind(Json(json!({
-        "reason": reason,
-        "source": "cli_tools_headless_cms@1",
-    })))
-    .execute(&pool)
-    .await?;
-    let queue_state = match decision {
-        "approved" => "resolved",
-        "blocked" => "reopened",
-        "reopened" => "reopened",
-        _ => anyhow::bail!("unsupported decision: {decision}"),
-    };
-    sqlx::query(
-        r#"
-        UPDATE site.seo_hitl_tasks
-        SET queue_state = $1,
-            updated_at = now()
-        WHERE page_node_key = $2
-          AND blocking_execution_key = $3
-          AND queue_state IN ('open','in_review','reopened')
-        "#,
-    )
-    .bind(queue_state)
-    .bind(page_node_key)
-    .bind(&revision_id)
-    .execute(&pool)
-    .await?;
-    let workflow_id = resolve_seo_workflow_id(&pool, page_node_key, &revision_id)
-        .await?
-        .ok_or_else(|| {
-            anyhow::anyhow!("seo workflow run_id not found for current review revision")
-        })?;
-    signal_seo_workflow_resume(&workflow_id).await?;
-    Ok((decision_key, revision_id, workflow_id))
+    .await
+    .map_err(|err| anyhow::anyhow!(err.to_string()))?;
+    Ok((result.decision_key, result.revision_id, result.workflow_id))
 }
 
 #[cfg(test)]

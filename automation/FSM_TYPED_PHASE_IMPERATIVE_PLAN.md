@@ -31,7 +31,7 @@
 - Хранить shared status DTO с enum-полями, если они нужны между сервисами.
 - Не хранить произвольные phase strings как primary model.
 
-### use_cases
+### seo_steps
 - Не должны знать о workflow-phase строках вообще.
 - Оркестрационные состояния остаются в `services/temporal`.
 

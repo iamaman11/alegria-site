@@ -287,6 +287,22 @@ Output minimum fields:
 | `outbox_writes` | none |
 | `downstream_consumers` | `ia_build`, `draft_assemble`, `seo_review_resolution` |
 
+Required trigger taxonomy for `rebuild_detect`:
+
+- `truth_change`
+- `profile_applicability_change`
+- `scope_change`
+- `template_change`
+- `serp_change`
+- `locale_change`
+
+Required implementation rules:
+
+- `truth_change` and `profile_applicability_change` may invalidate published support freshness and move pages to `needs_rebuild`
+- `scope_change` and `locale_change` are scope-only rebuild triggers and must not be mislabeled as truth changes
+- `rebuild_detect` output must include structured per-page trigger metadata, not only page keys
+- persistence may enrich reasons from dependency storage, but must not silently rewrite the trigger taxonomy emitted by the use-case
+
 ## 4.9 `seo_review_resolution`
 
 | Contract field | Value |

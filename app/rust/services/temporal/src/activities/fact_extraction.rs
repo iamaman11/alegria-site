@@ -3,8 +3,10 @@ use std::collections::BTreeMap;
 use contracts::generated::alegria::temporal::v1::{
     HitlPauseInfo, HitlResolutionInput, HitlTaskContext, VerifyReport,
 };
+use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter as pipeline_storage;
 use primitives::errors::DomainError;
-use use_cases::pipeline_runtime as pipeline_storage;
+use seo_application::hitl as hitl_application;
 
 use super::AlegriaActivities;
 
@@ -15,7 +17,7 @@ pub(crate) async fn extract_facts_impl(
     let run = pipeline_storage::read_execution_run(&acts.pool, run_id)
         .await
         .map_err(AlegriaActivities::classify_error)?;
-    let sections_json_owned = pipeline_storage::extract_sections_json_from_run(&run);
+    let sections_json_owned = pipeline_storage::extract_sections_json(run.input_payload.as_ref());
     let extracted_typed = primitives::facts_extractor::extract_facts_typed(
         &sections_json_owned,
         &primitives::facts_extractor::ExtractionContext::default(),
@@ -42,7 +44,7 @@ pub(crate) async fn verify_rules_impl(
     let run = pipeline_storage::read_execution_run(&acts.pool, run_id)
         .await
         .map_err(AlegriaActivities::classify_error)?;
-    let extracted = pipeline_storage::decode_extracted_payload_from_run(&run);
+    let extracted = pipeline_storage::decode_extracted_payload(run.extracted_payload.as_ref());
     let rules = extracted.rule_instances;
 
     let mut invalid = 0usize;
@@ -129,7 +131,7 @@ pub(crate) async fn prepare_hitl_pause_impl(
     let run = pipeline_storage::read_execution_run(&acts.pool, run_id)
         .await
         .map_err(AlegriaActivities::classify_error)?;
-    let verify_report_typed = pipeline_storage::decode_verify_report_from_run(&run);
+    let verify_report_typed = pipeline_storage::decode_verify_report(run.verify_report.as_ref());
     let conflict_resolution = verify_report_typed
         .as_ref()
         .map(|report| report.conflict_resolution.as_str())
@@ -149,10 +151,10 @@ pub(crate) async fn prepare_hitl_pause_impl(
         verify_report: verify_report_typed,
     };
 
-    let task_id =
-        use_cases::hitl_queue::enqueue_hitl_task(&acts.pool, "fact_conflict", &diagnostics, 1)
-            .await
-            .map_err(AlegriaActivities::classify_error)?;
+    let repo = SqlxSeoRuntimeRepository::new(&acts.pool);
+    let task_id = hitl_application::enqueue_hitl_task(&repo, "fact_conflict", &diagnostics, 1)
+        .await
+        .map_err(AlegriaActivities::classify_error)?;
 
     Ok(HitlPauseInfo {
         requires_hitl: true,
@@ -177,7 +179,8 @@ pub(crate) async fn apply_hitl_resolution_impl(
             message: "missing HITL resolution payload".to_string(),
         })?;
 
-    use_cases::hitl_queue::resolve_hitl_task(&acts.pool, input.task_id, &resolution)
+    let repo = SqlxSeoRuntimeRepository::new(&acts.pool);
+    hitl_application::resolve_hitl_task(&repo, input.task_id, &resolution)
         .await
         .map_err(AlegriaActivities::classify_error)?;
     pipeline_storage::write_hitl_decision_typed(
@@ -196,7 +199,16 @@ pub(crate) async fn apply_hitl_resolution_impl(
     let approved = matches!(decision.as_str(), "approve" | "approved" | "accept");
     let next_status = if approved { "verifying" } else { "failed" };
 
-    pipeline_storage::advance_execution_run_status(&acts.pool, &run_id, next_status)
+    pipeline_storage::advance_execution_run(
+        &acts.pool,
+        &run_id,
+        next_status,
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
         .await
         .map_err(AlegriaActivities::classify_error)?;
 
@@ -219,8 +231,8 @@ pub(crate) async fn persist_and_emit_impl(
         .await
         .map_err(AlegriaActivities::classify_error)?;
     let state = pipeline_storage::PersistPipelineState {
-        context_key: run.context_key().to_string(),
-        extracted_payload: pipeline_storage::decode_extracted_payload_from_run(&run),
+        context_key: run.context_key.to_string(),
+        extracted_payload: pipeline_storage::decode_extracted_payload(run.extracted_payload.as_ref()),
     };
 
     let (written, outbox_count) = pipeline_storage::persist_from_pipeline_state(&acts.pool, &state)

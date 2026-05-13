@@ -81,6 +81,7 @@ Implemented and automation-checked:
 - `crawl_sources` stores fetched HTML into `raw.pages`/`raw.sections` and can emit Qdrant outbox events.
 - Raw knowledge ingestion auto-verifies only official/VFS-like sources; competitor-only facts are persisted as pending.
 - Preflight reports context readiness, verified/pending facts, Qdrant point ledger size, live Qdrant/Neo4j probes, and Neo4j/Qdrant/CMS projection outbox status.
+- Starter/runtime identity hardening is live: free-form `applicant_profile` drift is blocked, `applicant_profile` is registry-validated, and `context_key` is no longer derived implicitly from applicant profile values.
 - Global navigation persistence derives `site.navigation_items` from active `site.page_nodes`; it does not seed final menus before source-backed IA exists.
 - Automation gates pass for SEO runtime registration, schema, proto, persistence, projection, CMS, publish gates, traceability, static site builder, step catalog, step execution, and status parity.
 
@@ -89,6 +90,7 @@ Not yet production-complete:
 - No live E2E certification has been recorded against real credentials and mutable external sources.
 - The crawler is still an MVP fetcher, not a robots-aware production crawler.
 - Extraction coverage is too narrow for complete visa-rule coverage.
+- Applicability hardening is only partially complete: `conditional`, `replace_value`, and `add_requirement` are blocked from silent auto-support, but full deterministic materialization/HITL policy is still evolving.
 - Projection barriers are global outbox barriers; current-run scoped barriers still need aggregate/run filtering.
 - Explicit SEO run modes such as `crawl_only`, `draft_only`, and `full_auto_after_approval` are not implemented.
 - Rebuild detection exists, but a full rebuild scheduler/workflow is still missing.

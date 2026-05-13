@@ -8,7 +8,7 @@ SYNC_PROTO = ROOT / "app" / "contracts" / "proto" / "sync.proto"
 SEO_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
 NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "neo4j_materialization_adapter.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
-USE_CASES = ROOT / "app" / "rust" / "crates" / "use_cases" / "src"
+SEO_DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src"
 CI = ROOT / "automation" / "ci_verify.sh"
 
 REQUIRED_GRAPH_ARTIFACTS = [
@@ -53,7 +53,7 @@ def main() -> int:
     seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
     neo4j_adapter = NEO4J_ADAPTER.read_text(encoding="utf-8")
     outbox_worker = OUTBOX_WORKER.read_text(encoding="utf-8")
-    use_cases_lib = (USE_CASES / "lib.rs").read_text(encoding="utf-8")
+    seo_domain = (SEO_DOMAIN / "rebuild.rs").read_text(encoding="utf-8")
     ci = CI.read_text(encoding="utf-8")
     failures: list[str] = []
 
@@ -86,8 +86,12 @@ def main() -> int:
         failures.append("outbox worker does not dispatch SeoGraphProjectionUpserted")
     if "cmd.metadata" not in outbox_worker:
         failures.append("outbox worker does not pass Qdrant metadata payloads")
-    if "materialize_seo_projection" not in use_cases_lib:
-        failures.append("use_cases lib does not expose materialize_seo_projection")
+    if "dispatch_seo_graph_projection" not in outbox_worker:
+        failures.append("outbox worker does not own SEO graph projection dispatch")
+    if "materialize_seo_artifact" not in outbox_worker:
+        failures.append("outbox worker does not materialize SEO graph artifacts through Neo4j adapter")
+    if "classify_trigger" not in seo_domain:
+        failures.append("seo_domain rebuild module is missing canonical rebuild trigger ownership")
     if "check_seo_projection_contract.py" not in ci:
         failures.append("ci_verify.sh does not run SEO projection contract gate")
 

@@ -14,7 +14,7 @@ This roadmap is constrained by the actual application and automation rules alrea
 From `automation/README.md`, `automation/OPS_CANONICALS.md`, `automation/00_ENTRYPOINT.md`, `automation/NEW_OPERATION_PLAYBOOK.md`, and the live checks in `automation/*.py`:
 
 - `primitives = pure`
-- `use_cases = policy + orchestration`, without raw SQL, raw JSON boundary logic, or direct SDK usage
+- `seo_steps = pure deterministic step library`, without raw SQL, raw JSON boundary logic, or direct SDK usage
 - `infrastructure/adapters = the only IO / SQL / external SDK boundary`
 - runtime payloads must be typed Proto messages, not ad hoc JSON
 - every side-effectful runtime step must go through `pipeline.step_executions` and `pipeline.step_attempts`
@@ -33,15 +33,15 @@ Live source-of-truth code paths already exist:
 - Rust layers:
   - `app/rust/crates/primitives`
   - `app/rust/crates/runtime_models`
-  - `app/rust/crates/use_cases`
+  - `app/rust/crates/seo_steps`
   - `app/rust/crates/infrastructure/src/adapters`
   - `app/rust/services/temporal`
 
 Current state relevant to SEO:
 
 - `app/db/schema.sql` already has `serp.*` run ingestion tables and only one `site.*` mapping table: `site.page_context_map`
-- `app/rust/crates/use_cases/src/serp_ingest.rs` already exists, but only covers raw SERP ingest and crawl queueing
-- extraction runtime steps already exist in `use_cases/*_step.rs` and `services/temporal/src/activities/step_catalog.rs`
+- `app/rust/crates/seo_steps/src/serp_ingest.rs` already exists, but only covers raw SERP ingest and crawl queueing
+- extraction runtime steps already exist in `seo_steps/*_step.rs` and `services/temporal/src/activities/step_catalog.rs`
 - there is no live typed SEO operating system yet for page planning, link recommendation, blueprinting, cannibalization, or draft QA
 
 ### 1.3 Core implementation constraint
@@ -263,7 +263,7 @@ Implement the pure and boundary layers for SEO artifacts and scoring.
 - `app/rust/crates/primitives/src/...`
 - `app/rust/crates/runtime_models/src/lib.rs`
 - `app/rust/crates/infrastructure/src/adapters/...`
-- `app/rust/crates/use_cases/src/...`
+- `app/rust/crates/seo_steps/src/...`
 
 ### New primitives
 
@@ -306,7 +306,7 @@ Add or extend adapters for:
 ### Acceptance
 
 - `primitives` remain pure and pass automation purity checks
-- `use_cases` do not import SQL/SDK/JSON boundary logic directly
+- `seo_steps` do not import SQL/SDK/JSON boundary logic directly
 - adapters contain all SQL/SDK code for SEO storage and projection
 
 ---
@@ -319,7 +319,7 @@ Turn the SEO layer into real runtime operations governed by the existing step le
 
 ### New use-case step modules
 
-Add under `app/rust/crates/use_cases/src/`:
+Add under `app/rust/crates/seo_steps/src/`:
 
 - `serp_normalize_step.rs`
 - `opportunity_build_step.rs`
@@ -332,7 +332,7 @@ Add under `app/rust/crates/use_cases/src/`:
 ### Extend existing use cases where appropriate
 
 - evolve `serp_ingest.rs` into the canonical raw ingest entrypoint for SEO query batches
-- connect SEO steps to existing `pipeline_runtime.rs`, `outbox_builder.rs`, `hitl_queue.rs`, and reconciliation flows
+- connect SEO steps to existing `seo_application::seo_runtime`, `outbox_builder.rs`, application HITL orchestration, and reconciliation flows
 
 ### New Temporal activities
 
@@ -691,7 +691,7 @@ At the end of each implementation phase:
 - `cargo check --workspace` passes
 - `bash automation/contract_generate.sh` and `bash automation/contract_verify.sh` pass after contract changes
 - `bash automation/ci_verify.sh` passes with new SEO checks included where applicable
-- no layer violations are introduced into `primitives`, `use_cases`, or `services/temporal`
+- no layer violations are introduced into `primitives`, `seo_steps`, or `services/temporal`
 - no new runtime path falls back to generic JSON payloads
 
 Before production-grade verdict:

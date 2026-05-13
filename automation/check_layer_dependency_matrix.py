@@ -12,22 +12,22 @@ RUST = ROOT / "app" / "rust"
 LAYER_RULES = {
     "contracts": {
         "path": RUST / "crates" / "contracts" / "src",
-        "forbidden": [r"\buse\s+(primitives|policies|use_cases|infrastructure|runtime_models)::"],
+        "forbidden": [r"\buse\s+(primitives|policies|seo_steps|infrastructure|runtime_models)::"],
     },
     "runtime_models": {
         "path": RUST / "crates" / "runtime_models" / "src",
-        "forbidden": [r"\buse\s+(primitives|policies|use_cases|infrastructure)::"],
+        "forbidden": [r"\buse\s+(primitives|policies|seo_steps|infrastructure)::"],
     },
     "primitives": {
         "path": RUST / "crates" / "primitives" / "src",
-        "forbidden": [r"\buse\s+(contracts|policies|use_cases|infrastructure|runtime_models)::"],
+        "forbidden": [r"\buse\s+(contracts|policies|seo_steps|infrastructure|runtime_models)::"],
     },
     "policies": {
         "path": RUST / "crates" / "policies" / "src",
-        "forbidden": [r"\buse\s+(use_cases|infrastructure|runtime_models)::"],
+        "forbidden": [r"\buse\s+(seo_steps|infrastructure|runtime_models)::"],
     },
-    "use_cases": {
-        "path": RUST / "crates" / "use_cases" / "src",
+    "seo_steps": {
+        "path": RUST / "crates" / "seo_steps" / "src",
         "forbidden": [
             r"\buse\s+temporalio_",
             r"\buse\s+sqlx::",

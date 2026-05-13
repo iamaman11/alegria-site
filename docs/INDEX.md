@@ -41,6 +41,7 @@
 | [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md) | current-ops | live | worker build-id / rollout / drain rules |
 | [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md) | current-ops | live | canonical production gate |
 | [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md) | current-seo-execution-plan | partial | live-aligned SEO supersite capability, gaps, and execution order |
+| [V5_SEO_Identity_And_Applicability_Hardening_Plan.md](V5_SEO_Identity_And_Applicability_Hardening_Plan.md) | current-seo-execution-plan | partial | live-aligned identity, applicability, and scope-hardening plan for SEO runtime |
 | [V5_SEO_Live_Schema_Design_Spec.md](V5_SEO_Live_Schema_Design_Spec.md) | current-seo-build-spec | partial | SEO relational source-of-record design + SQLx persistence |
 | [V5_SEO_Runtime_Step_Contracts_Spec.md](V5_SEO_Runtime_Step_Contracts_Spec.md) | current-seo-build-spec | partial | SEO Proto, Temporal steps, and workflow skeleton |
 | [V5_SEO_Graph_And_Retrieval_Projection_Spec.md](V5_SEO_Graph_And_Retrieval_Projection_Spec.md) | current-seo-build-spec | partial | SEO Neo4j and Qdrant projection design + bootstrap outbox surface |

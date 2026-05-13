@@ -7,6 +7,7 @@ use contracts::generated::alegria::sync::v1::{
 };
 use prost::Message;
 
+use infrastructure::adapters::neo4j_materialization_adapter;
 use infrastructure::adapters::qdrant_client_adapter::{
     connect_qdrant, ensure_dense_collection, normalize_payload, parse_distance, upsert_dense_point,
 };
@@ -119,11 +120,8 @@ async fn dispatch_seo_graph_projection(aggregate_key: &str, payload_bytes: &[u8]
     } else {
         &payload.artifact_key
     };
-    use_cases::materialize_seo_projection::materialize_seo_artifact(
-        &payload.artifact_type,
-        artifact_key,
-    )
-    .await
+    neo4j_materialization_adapter::materialize_seo_artifact(&payload.artifact_type, artifact_key)
+        .await
 }
 
 async fn dispatch_neo4j_rule_upsert(aggregate_key: &str, payload_bytes: &[u8]) -> Result<()> {
@@ -134,7 +132,7 @@ async fn dispatch_neo4j_rule_upsert(aggregate_key: &str, payload_bytes: &[u8]) -
     } else {
         &payload.rule_instance_id
     };
-    use_cases::materialize_rule_instance::materialize_rule_instance(rule_instance_id).await
+    neo4j_materialization_adapter::materialize_rule_instance(rule_instance_id).await
 }
 
 fn dispatch_cms_event(payload_bytes: &[u8]) -> Result<()> {
@@ -185,14 +183,14 @@ pub async fn dispatch_event(
             if payload_type == "alegria.outbox.neo4j_rule_upserted.v1" {
                 dispatch_neo4j_rule_upsert(aggregate_key, payload_bytes).await
             } else {
-                use_cases::materialize_rule_instance::materialize_rule_instance(aggregate_key).await
+                neo4j_materialization_adapter::materialize_rule_instance(aggregate_key).await
             }
         }
         "ConceptApproved" => {
-            use_cases::materialize_concept::materialize_concept(aggregate_key).await
+            neo4j_materialization_adapter::materialize_concept(aggregate_key).await
         }
         "PageContextUpserted" => {
-            use_cases::materialize_page_context::materialize_page_context(aggregate_key).await
+            neo4j_materialization_adapter::materialize_page_context(aggregate_key).await
         }
         "SeoGraphProjectionUpserted" => {
             if payload_type == "alegria.outbox.seo_graph_projection.v1" {

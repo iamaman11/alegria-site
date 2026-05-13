@@ -10,7 +10,7 @@ RUNTIME_DOMAIN = ROOT / "app" / "rust" / "crates" / "runtime_models" / "src" / "
 RUNTIME_STORAGE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "runtime_storage.rs"
 PIPELINE_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_pipeline_runtime_adapter.rs"
 PROTO_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "proto_runtime_payload_store.rs"
-PIPELINE_RUNTIME = ROOT / "app" / "rust" / "crates" / "use_cases" / "src" / "pipeline_runtime.rs"
+SEO_RUNTIME = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "seo_runtime.rs"
 
 
 def must_contain(path: Path, needle: str) -> str | None:
@@ -47,8 +47,8 @@ def main() -> int:
             must_contain(PROTO_STORE, "impl RuntimeProtoPayload for ReconcileSummary"),
             must_not_contain(PROTO_STORE, "pub struct ExecutionRun {"),
             must_not_contain(PROTO_STORE, "pub struct StepExecution {"),
-            must_not_contain(PIPELINE_RUNTIME, "serde_json::Value"),
-            must_not_contain(PIPELINE_RUNTIME, "sqlx::"),
+            must_not_contain(SEO_RUNTIME, "serde_json::Value"),
+            must_not_contain(SEO_RUNTIME, "sqlx::"),
         ]
         if x is not None
     ]

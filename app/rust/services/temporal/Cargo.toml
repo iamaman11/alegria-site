@@ -17,9 +17,12 @@ temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
 infrastructure = { path = "../../crates/infrastructure" }
 policies = { path = "../../crates/policies" }
-use_cases = { path = "../../crates/use_cases" }
+seo_steps = { path = "../../crates/seo_steps" }
 primitives = { path = "../../crates/primitives" }
 contracts = { path = "../../crates/contracts" }
+seo_domain = { path = "../../crates/seo_domain" }
+seo_ports = { path = "../../crates/seo_ports" }
+seo_application = { path = "../../crates/seo_application" }
 clap = { version = "4", features = ["derive"] }
 uuid = { workspace = true }
 anyhow = { workspace = true }
