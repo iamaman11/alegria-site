@@ -1,14 +1,16 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload;
 use infrastructure::adapters::temporalio_sdk_adapter::{
     connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
 };
 use infrastructure::adapters::{
-    neo4rs_adapter, qdrant_client_adapter, sqlx_adapter::connect_pg, sqlx_seo_adapter,
+    neo4rs_adapter, qdrant_client_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
+    sqlx_adapter::connect_pg, sqlx_seo_adapter,
 };
 use seo_domain::identity;
+use seo_application::registration::register_site_build_input;
+use seo_ports::SeoSiteBuildRegistrationRequest;
 use std::env;
 use std::time::Duration;
 use uuid::Uuid;
@@ -175,83 +177,27 @@ async fn persist_seo_site_build_input(
     queries: Vec<String>,
     query_batch_key: Option<String>,
 ) -> Result<()> {
-    let non_empty_queries = queries
-        .into_iter()
-        .map(|query| query.trim().to_string())
-        .filter(|query| !query.is_empty())
-        .collect::<Vec<_>>();
-    if non_empty_queries.is_empty() {
-        anyhow::bail!("SeoSiteBuildWorkflow requires at least one --query");
-    }
-
-    Uuid::parse_str(run_id).context("SeoSiteBuildWorkflow workflow_id must be a UUID")?;
-    let scope = identity::derive_scope(
-        &market,
-        &locale,
-        &country_code,
-        &visa_type,
-        &applicant_profile,
-    )
-    .map_err(|err| anyhow::anyhow!("{err}"))?;
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
-    sqlx_seo_adapter::ensure_seo_runtime_registries(&pool)
-        .await
-        .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let normalized_profile =
-        sqlx_seo_adapter::validate_applicant_profile_reference(&pool, &scope.applicant_profile)
-            .await
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let scope = identity::ValidatedSeoScope {
-        applicant_profile: normalized_profile.clone(),
-        ..scope
-    };
-    let truth_identity = identity::derive_truth_identity(
-        &country_code,
-        &visa_type,
-        visa_subtype.as_deref(),
-        &citizenship_code,
+    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    register_site_build_input(
+        &repo,
+        &SeoSiteBuildRegistrationRequest {
+            run_id: run_id.to_string(),
+            context_key,
+            market,
+            locale,
+            country_code,
+            visa_type,
+            visa_subtype,
+            applicant_profile,
+            citizenship_code,
+            bootstrap_context,
+            queries,
+            query_batch_key,
+        },
     )
+    .await
     .map_err(|err| anyhow::anyhow!("{err}"))?;
-    let resolved_context_key = if bootstrap_context {
-        let report = sqlx_seo_adapter::bootstrap_seo_scope(
-            &pool,
-            context_key.as_deref(),
-            &truth_identity.country_code,
-            &truth_identity.visa_family,
-            if truth_identity.visa_subtype.is_empty() {
-                None
-            } else {
-                Some(truth_identity.visa_subtype.as_str())
-            },
-            &truth_identity.citizenship_code,
-        )
-        .await
-        .context("failed to bootstrap seo scope")?;
-        println!(
-            "seo_bootstrap context_key={} created_context={} seeded_registries={}",
-            report.context_key, report.created_context, report.seeded_registry_count
-        );
-        report.context_key
-    } else {
-        context_key.unwrap_or_else(|| truth_identity.context_key.clone())
-    };
-    let input = SeoSiteBuildInputPayload {
-        run_id: run_id.to_string(),
-        context_key: resolved_context_key,
-        scope: Some(identity::build_scope_payload(&scope)),
-        query_batch_key: query_batch_key
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                primitives::seo::seo_artifact_key("query_batch", &[run_id, &scope.scope_signature])
-            }),
-        queries: non_empty_queries,
-        verified_support: Vec::new(),
-        required_page_types: Vec::new(),
-    };
-    sqlx_seo_adapter::upsert_seo_site_build_input(&pool, &input)
-        .await
-        .context("failed to upsert seo_site_build input_payload blob")?;
     Ok(())
 }
 

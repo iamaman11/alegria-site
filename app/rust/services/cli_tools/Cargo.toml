@@ -8,6 +8,7 @@ tokio = { workspace = true }
 seo_steps = { path = "../../crates/seo_steps" }
 infrastructure = { path = "../../crates/infrastructure" }
 seo_application = { path = "../../crates/seo_application" }
+seo_ports = { path = "../../crates/seo_ports" }
 primitives = { path = "../../crates/primitives" }
 contracts = { path = "../../crates/contracts" }
 anyhow = { workspace = true }
@@ -15,6 +16,7 @@ clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 prost = { workspace = true }
+uuid = { workspace = true }
 pulldown-cmark = "0.13.3"
 
 hex = "0.4"

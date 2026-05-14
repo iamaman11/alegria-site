@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter.rs"
 ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build.rs"
+SCENARIO = ROOT / "app/rust/crates/seo_application/src/scenario.rs"
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
 
 
@@ -13,6 +14,7 @@ def main() -> int:
     adapter = ADAPTER.read_text(encoding="utf-8")
     activities = ACTIVITIES.read_text(encoding="utf-8")
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    scenario = SCENARIO.read_text(encoding="utf-8")
     proto = PROTO.read_text(encoding="utf-8")
     for needle in [
         "trait EditorialLlmClient",
@@ -32,12 +34,13 @@ def main() -> int:
     ]:
         if needle not in activities:
             failures.append(f"Temporal activities missing `{needle}`")
-    for needle in [
-        "editorial_draft_generate",
-        "llm_candidate: editorial_candidate.candidate",
-    ]:
-        if needle not in workflow:
-            failures.append(f"SEO workflow missing `{needle}`")
+    if "editorial_draft_generate" not in workflow:
+        failures.append("SEO workflow missing `editorial_draft_generate`")
+    if (
+        "llm_candidate: editorial_ref.candidate.clone()" not in workflow
+        and "llm_candidate: editorial_candidate.candidate.clone()" not in scenario
+    ):
+        failures.append("shared SEO execution path missing editorial candidate handoff into draft normalize")
     for needle in [
         "message EditorialDraftGenerateInputPayload",
         "message EditorialDraftGenerateOutputPayload",

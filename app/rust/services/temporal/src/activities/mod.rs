@@ -21,8 +21,8 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
     activities, ActivityContext, ActivityError,
 };
 use infrastructure::adapters::{
-    raw_crawl_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-    sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
+    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool,
+    sqlx_seo_adapter,
 };
 use primitives::errors::DomainError;
 use seo_ports::VerifiedSupportBundleRequest;
@@ -394,122 +394,8 @@ impl AlegriaActivities {
     ) -> Result<CrawlSourcesOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "crawl_sources", 1, &input, || async {
-            let limit = if input.limit == 0 { 25 } else { input.limit } as i64;
-            let items = raw_crawl_adapter::claim_pending_crawl_batch(
-                &self.pool,
-                &input.run_id,
-                &input.query_batch_key,
-                limit,
-            )
-            .await?;
-            let claimed_count = items.len() as u32;
-            let mut crawled_count = 0u32;
-            let mut failed_count = 0u32;
-            let mut raw_page_count = 0u32;
-            let mut raw_section_count = 0u32;
-            let mut qdrant_event_count = 0u32;
-            let mut raw_page_ids = Vec::new();
-            let mut failed_urls = Vec::new();
-
-            for item in items {
-                match raw_crawl_adapter::fetch_html(&item.url).await {
-                    Ok(fetched) if (200..400).contains(&fetched.status_code) => {
-                        match raw_crawl_adapter::save_crawled_html(
-                            &self.pool,
-                            &fetched.final_url,
-                            &item.dtype,
-                            fetched.status_code,
-                            &fetched.content_type,
-                            &fetched.body,
-                        )
-                        .await
-                        {
-                            Ok(saved) => {
-                                let emitted = if input.emit_qdrant {
-                                    raw_crawl_adapter::emit_raw_section_qdrant_events(
-                                        &self.pool,
-                                        saved.page_id,
-                                    )
-                                    .await?
-                                } else {
-                                    0
-                                };
-                                raw_crawl_adapter::mark_crawl_done(
-                                    &self.pool,
-                                    &item.url_norm,
-                                    fetched.status_code,
-                                    &format!(
-                                        "source_type={}; page_id={}; sections={}; qdrant_events={}; hash={}",
-                                        item.source_type,
-                                        saved.page_id,
-                                        saved.section_count,
-                                        emitted,
-                                        saved.content_hash
-                                    ),
-                                )
-                                .await?;
-                                crawled_count += 1;
-                                raw_page_count += 1;
-                                raw_section_count += saved.section_count as u32;
-                                qdrant_event_count += emitted as u32;
-                                raw_page_ids.push(saved.page_id);
-                            }
-                            Err(err) => {
-                                raw_crawl_adapter::mark_crawl_failed(
-                                    &self.pool,
-                                    &item.url_norm,
-                                    Some(fetched.status_code),
-                                    &format!("persist failed: {err}"),
-                                )
-                                .await?;
-                                failed_count += 1;
-                                failed_urls.push(item.url.clone());
-                            }
-                        }
-                    }
-                    Ok(fetched) => {
-                        raw_crawl_adapter::mark_crawl_failed(
-                            &self.pool,
-                            &item.url_norm,
-                            Some(fetched.status_code),
-                            &format!(
-                                "http_status={}; content_type={}",
-                                fetched.status_code, fetched.content_type
-                            ),
-                        )
-                        .await?;
-                        failed_count += 1;
-                        failed_urls.push(item.url.clone());
-                    }
-                    Err(err) => {
-                        raw_crawl_adapter::mark_crawl_failed(
-                            &self.pool,
-                            &item.url_norm,
-                            None,
-                            &format!("fetch failed: {err}"),
-                        )
-                        .await?;
-                        failed_count += 1;
-                        failed_urls.push(item.url.clone());
-                    }
-                }
-            }
-
-            Ok(CrawlSourcesOutputPayload {
-                claimed_count,
-                crawled_count,
-                failed_count,
-                raw_page_count,
-                raw_section_count,
-                qdrant_event_count,
-                status: if failed_count > 0 {
-                    "partial".to_string()
-                } else {
-                    "done".to_string()
-                },
-                raw_page_ids,
-                failed_urls,
-            })
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::crawl_ingest::run_crawl_sources(&repo, &input).await
         })
         .await
     }
@@ -523,30 +409,11 @@ impl AlegriaActivities {
     ) -> Result<RawKnowledgeIngestionOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "raw_knowledge_ingestion", 1, &input, || async {
-            let report = raw_crawl_adapter::ingest_raw_pages_into_verified(
-                &self.pool,
-                &input.context_key,
-                &input.raw_page_ids,
-            )
-            .await?;
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            let report = seo_application::crawl_ingest::run_raw_knowledge_ingestion(&repo, &input)
+                .await?;
             observe_projection_barrier(&self.pool, "raw_knowledge_ingestion").await?;
-            Ok(RawKnowledgeIngestionOutputPayload {
-                raw_page_count: report.raw_page_count as u32,
-                raw_section_count: report.raw_section_count as u32,
-                extracted_rule_count: report.extracted_rule_count as u32,
-                verified_rule_count: report.verified_rule_count as u32,
-                outbox_event_count: report.outbox_event_count as u32,
-                changed_truth_keys: report.changed_truth_keys,
-                status: if input.raw_page_ids.is_empty() {
-                    "skipped:no_raw_pages".to_string()
-                } else if report.extracted_rule_count > 0 && report.verified_rule_count == 0 {
-                    "pending_review:no_auto_verified_rules".to_string()
-                } else if report.verified_rule_count == 0 {
-                    "empty:no_verified_rules".to_string()
-                } else {
-                    "done".to_string()
-                },
-            })
+            Ok(report)
         })
         .await
     }
@@ -638,30 +505,8 @@ impl AlegriaActivities {
     ) -> Result<DraftAssembleOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "draft_assemble", 1, &input, || async {
-            let mut enriched_input = input.clone();
-            if enriched_input.source_context_chunks.is_empty() {
-                let page_node = enriched_input.page_node.clone().unwrap_or_default();
-                let page_blueprint = enriched_input.page_blueprint.clone().unwrap_or_default();
-                let query = format!(
-                    "{} {} {} {} {}",
-                    page_node.canonical_url_path,
-                    page_node.canonical_slug,
-                    page_blueprint.page_type_key,
-                    page_blueprint.dominant_intent,
-                    enriched_input
-                        .verified_support
-                        .iter()
-                        .take(8)
-                        .map(|support| support.fragment_text.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                );
-                enriched_input.source_context_chunks =
-                    raw_crawl_adapter::retrieve_source_context_chunks(&self.pool, &query, 12)
-                        .await?;
-            }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::drafting::run_draft_assemble(&repo, &enriched_input).await
+            seo_application::drafting::run_draft_assemble(&repo, &input).await
         })
         .await
     }

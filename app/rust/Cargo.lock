@@ -559,10 +559,12 @@ dependencies = [
  "prost 0.14.3",
  "pulldown-cmark",
  "seo_application",
+ "seo_ports",
  "seo_steps",
  "serde_json",
  "sqlx",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

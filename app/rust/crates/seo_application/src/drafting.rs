@@ -5,9 +5,32 @@ use contracts::generated::alegria::temporal::v1::{
     EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
 };
 use primitives::errors::DomainError;
-use seo_ports::{DraftRepository, EditorialGenerationPort, SectionTemplateRepository};
+use seo_ports::{
+    DraftRepository, EditorialGenerationPort, SectionTemplateRepository, SourceContextRepository,
+};
 
-pub async fn run_draft_assemble<R: DraftRepository + SectionTemplateRepository>(
+fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
+    let page_node = input.page_node.clone().unwrap_or_default();
+    let page_blueprint = input.page_blueprint.clone().unwrap_or_default();
+    format!(
+        "{} {} {} {} {}",
+        page_node.canonical_url_path,
+        page_node.canonical_slug,
+        page_blueprint.page_type_key,
+        page_blueprint.dominant_intent,
+        input
+            .verified_support
+            .iter()
+            .take(8)
+            .map(|support| support.fragment_text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+pub async fn run_draft_assemble<
+    R: DraftRepository + SectionTemplateRepository + SourceContextRepository,
+>(
     repo: &R,
     input: &DraftAssembleInputPayload,
 ) -> Result<DraftAssembleOutputPayload, DomainError> {
@@ -18,6 +41,11 @@ pub async fn run_draft_assemble<R: DraftRepository + SectionTemplateRepository>(
                 .load_section_templates(&blueprint.page_type_key, &blueprint.dominant_intent)
                 .await?;
         }
+    }
+    if enriched_input.source_context_chunks.is_empty() {
+        enriched_input.source_context_chunks = repo
+            .load_source_context_chunks(&draft_source_context_query(&enriched_input), 12)
+            .await?;
     }
     let output = seo_steps::draft_assemble_step::execute(&enriched_input);
     repo.persist_draft_assemble_output(&output).await?;
@@ -67,7 +95,10 @@ mod tests {
         DraftState, EditorialBrief, EditorialDraftGenerateOutputPayload, LlmDraftCandidate,
         LlmDraftRequest, PageBlueprintState, PageNodeState, SectionTemplateBinding,
     };
-    use seo_ports::{DraftRepository, EditorialGenerationPort, SectionTemplateRepository};
+    use seo_ports::{
+        DraftRepository, EditorialGenerationPort, SectionTemplateRepository,
+        SourceContextRepository,
+    };
 
     #[derive(Default)]
     struct FakeDraftRepo;
@@ -123,6 +154,20 @@ mod tests {
             _output: &DraftQaOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SourceContextRepository for FakeDraftRepo {
+        async fn load_source_context_chunks(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<
+            Vec<contracts::generated::alegria::temporal::v1::SourceContextChunkState>,
+            DomainError,
+        > {
+            Ok(Vec::new())
         }
     }
 

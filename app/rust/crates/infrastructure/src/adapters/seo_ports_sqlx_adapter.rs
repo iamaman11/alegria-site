@@ -5,36 +5,42 @@ use contracts::generated::alegria::read_api::v1::{
     StepParams, TimelineItemParams, WhereToApplyParams,
 };
 use primitives::errors::DomainError;
+use seo_domain::identity;
 use runtime_models::RuleParams;
 use seo_ports::{
     CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest, CmsReviewPort,
-    ContextBundleRepository, DraftRepository, EditorialGenerationPort,
+    ContextBundleRepository, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     GlobalNavigationPersistReport, HitlQueuePort, OrganicSerpResponse, OrganicSerpResult,
-    PlanningRepository, PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
+    PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
+    PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
     SectionTemplateRepository, SemanticLinkCandidate, SemanticLinkSearchPort,
-    SeoBuildInputRepository, SerpSearchPort, VerifiedSupportBundleRequest,
+    SeoBuildInputRepository, SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest,
+    SerpSearchPort, SourceContextRepository, VerifiedSupportBundleRequest,
     VerifiedSupportRepository,
 };
 
 use super::{
-    dataforseo_serp_adapter, editorial_llm_adapter, semantic_search_adapter,
+    dataforseo_serp_adapter, editorial_llm_adapter, raw_crawl_adapter, semantic_search_adapter,
     sqlx_adapter::AlegriaPgPool, sqlx_context_bundle_adapter, sqlx_hitl_adapter, sqlx_seo_adapter,
     sqlx_seo_cms_adapter, sqlx_serp_adapter,
 };
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
+    CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
     HitlTaskContext, IaBuildOutputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
     SectionTemplateBinding, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
     SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    SerpNormalizeOutputPayload, SourceContextChunkState,
 };
+use uuid::Uuid;
 
 pub struct SqlxSeoRuntimeRepository<'a> {
     pool: &'a AlegriaPgPool,
@@ -171,6 +177,98 @@ impl SeoBuildInputRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
+impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
+    async fn register_site_build_input(
+        &self,
+        request: &SeoSiteBuildRegistrationRequest,
+    ) -> Result<SeoSiteBuildInputPayload, DomainError> {
+        let non_empty_queries = request
+            .queries
+            .iter()
+            .map(|query| query.trim().to_string())
+            .filter(|query| !query.is_empty())
+            .collect::<Vec<_>>();
+        if non_empty_queries.is_empty() {
+            return Err(DomainError::ValidationFailure {
+                message: "SeoSiteBuildWorkflow requires at least one --query".to_string(),
+            });
+        }
+        Uuid::parse_str(&request.run_id).map_err(|err| DomainError::ValidationFailure {
+            message: format!("SeoSiteBuild workflow_id must be a UUID: {err}"),
+        })?;
+
+        let scope = identity::derive_scope(
+            &request.market,
+            &request.locale,
+            &request.country_code,
+            &request.visa_type,
+            &request.applicant_profile,
+        )?;
+        sqlx_seo_adapter::ensure_seo_runtime_registries(self.pool).await?;
+        let normalized_profile = sqlx_seo_adapter::validate_applicant_profile_reference(
+            self.pool,
+            &scope.applicant_profile,
+        )
+        .await?;
+        let scope = identity::ValidatedSeoScope {
+            applicant_profile: normalized_profile,
+            ..scope
+        };
+        let truth_identity = identity::derive_truth_identity(
+            &request.country_code,
+            &request.visa_type,
+            request.visa_subtype.as_deref(),
+            &request.citizenship_code,
+        )?;
+        let resolved_context_key = if request.bootstrap_context {
+            sqlx_seo_adapter::bootstrap_seo_scope(
+                self.pool,
+                request.context_key.as_deref(),
+                &truth_identity.country_code,
+                &truth_identity.visa_family,
+                if truth_identity.visa_subtype.is_empty() {
+                    None
+                } else {
+                    Some(truth_identity.visa_subtype.as_str())
+                },
+                &truth_identity.citizenship_code,
+            )
+            .await?
+            .context_key
+        } else {
+            request
+                .context_key
+                .clone()
+                .unwrap_or_else(|| truth_identity.context_key.clone())
+        };
+        let input = SeoSiteBuildInputPayload {
+            run_id: request.run_id.clone(),
+            context_key: resolved_context_key,
+            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                market: scope.market.clone(),
+                locale: scope.locale.clone(),
+                country_code: scope.country_code.clone(),
+                visa_type: scope.visa_type.clone(),
+                applicant_profile: scope.applicant_profile.clone(),
+                raw_scope_tuple: scope.raw_scope_tuple.clone(),
+                scope_signature: scope.scope_signature.clone(),
+            }),
+            query_batch_key: request.query_batch_key.clone().unwrap_or_else(|| {
+                primitives::seo::seo_artifact_key(
+                    "query_batch",
+                    &[&request.run_id, &scope.scope_signature, &non_empty_queries.join("|")],
+                )
+            }),
+            queries: non_empty_queries,
+            verified_support: Vec::new(),
+            required_page_types: Vec::new(),
+        };
+        sqlx_seo_adapter::upsert_seo_site_build_input(self.pool, &input).await?;
+        Ok(input)
+    }
+}
+
+#[async_trait]
 impl VerifiedSupportRepository for SqlxSeoRuntimeRepository<'_> {
     async fn load_verified_support_bundle(
         &self,
@@ -184,6 +282,186 @@ impl VerifiedSupportRepository for SqlxSeoRuntimeRepository<'_> {
             &request.applicant_profile,
         )
         .await
+    }
+}
+
+#[async_trait]
+impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
+    async fn crawl_sources(
+        &self,
+        input: &CrawlSourcesInputPayload,
+    ) -> Result<CrawlSourcesOutputPayload, DomainError> {
+        let limit = if input.limit == 0 { 25 } else { input.limit } as i64;
+        let items = raw_crawl_adapter::claim_pending_crawl_batch(
+            self.pool,
+            &input.run_id,
+            &input.query_batch_key,
+            limit,
+        )
+        .await?;
+        let claimed_count = items.len() as u32;
+        let mut crawled_count = 0u32;
+        let mut failed_count = 0u32;
+        let mut raw_page_count = 0u32;
+        let mut raw_section_count = 0u32;
+        let mut qdrant_event_count = 0u32;
+        let mut raw_page_ids = Vec::new();
+        let mut failed_urls = Vec::new();
+
+        for item in items {
+            match raw_crawl_adapter::fetch_html(&item.url).await {
+                Ok(fetched) if (200..400).contains(&fetched.status_code) => {
+                    match raw_crawl_adapter::save_crawled_html(
+                        self.pool,
+                        &fetched.final_url,
+                        &item.dtype,
+                        fetched.status_code,
+                        &fetched.content_type,
+                        &fetched.body,
+                    )
+                    .await
+                    {
+                        Ok(saved) => {
+                            let emitted = if input.emit_qdrant {
+                                raw_crawl_adapter::emit_raw_section_qdrant_events(
+                                    self.pool,
+                                    saved.page_id,
+                                )
+                                .await?
+                            } else {
+                                0
+                            };
+                            raw_crawl_adapter::mark_crawl_done(
+                                self.pool,
+                                &item.url_norm,
+                                fetched.status_code,
+                                &format!(
+                                    "source_type={}; page_id={}; sections={}; qdrant_events={}; hash={}",
+                                    item.source_type,
+                                    saved.page_id,
+                                    saved.section_count,
+                                    emitted,
+                                    saved.content_hash
+                                ),
+                            )
+                            .await?;
+                            crawled_count += 1;
+                            raw_page_count += 1;
+                            raw_section_count += saved.section_count as u32;
+                            qdrant_event_count += emitted as u32;
+                            raw_page_ids.push(saved.page_id);
+                        }
+                        Err(err) => {
+                            raw_crawl_adapter::mark_crawl_failed(
+                                self.pool,
+                                &item.url_norm,
+                                Some(fetched.status_code),
+                                &format!("persist failed: {err}"),
+                            )
+                            .await?;
+                            failed_count += 1;
+                            failed_urls.push(item.url.clone());
+                        }
+                    }
+                }
+                Ok(fetched) => {
+                    raw_crawl_adapter::mark_crawl_failed(
+                        self.pool,
+                        &item.url_norm,
+                        Some(fetched.status_code),
+                        &format!(
+                            "http_status={}; content_type={}",
+                            fetched.status_code, fetched.content_type
+                        ),
+                    )
+                    .await?;
+                    failed_count += 1;
+                    failed_urls.push(item.url.clone());
+                }
+                Err(err) => {
+                    raw_crawl_adapter::mark_crawl_failed(
+                        self.pool,
+                        &item.url_norm,
+                        None,
+                        &format!("fetch failed: {err}"),
+                    )
+                    .await?;
+                    failed_count += 1;
+                    failed_urls.push(item.url.clone());
+                }
+            }
+        }
+
+        Ok(CrawlSourcesOutputPayload {
+            claimed_count,
+            crawled_count,
+            failed_count,
+            raw_page_count,
+            raw_section_count,
+            qdrant_event_count,
+            status: if failed_count > 0 {
+                "partial".to_string()
+            } else {
+                "done".to_string()
+            },
+            raw_page_ids,
+            failed_urls,
+        })
+    }
+
+    async fn ingest_raw_knowledge(
+        &self,
+        input: &RawKnowledgeIngestionInputPayload,
+    ) -> Result<RawKnowledgeIngestionOutputPayload, DomainError> {
+        let report = raw_crawl_adapter::ingest_raw_pages_into_verified(
+            self.pool,
+            &input.context_key,
+            &input.raw_page_ids,
+        )
+        .await?;
+        Ok(RawKnowledgeIngestionOutputPayload {
+            raw_page_count: report.raw_page_count as u32,
+            raw_section_count: report.raw_section_count as u32,
+            extracted_rule_count: report.extracted_rule_count as u32,
+            verified_rule_count: report.verified_rule_count as u32,
+            outbox_event_count: report.outbox_event_count as u32,
+            changed_truth_keys: report.changed_truth_keys,
+            status: if input.raw_page_ids.is_empty() {
+                "skipped:no_raw_pages".to_string()
+            } else if report.extracted_rule_count > 0 && report.verified_rule_count == 0 {
+                "pending_review:no_auto_verified_rules".to_string()
+            } else if report.verified_rule_count == 0 {
+                "empty:no_verified_rules".to_string()
+            } else {
+                "done".to_string()
+            },
+        })
+    }
+}
+
+#[async_trait]
+impl SourceContextRepository for SqlxSeoRuntimeRepository<'_> {
+    async fn load_source_context_chunks(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SourceContextChunkState>, DomainError> {
+        raw_crawl_adapter::retrieve_source_context_chunks(self.pool, query, limit as u64).await
+    }
+}
+
+#[async_trait]
+impl ProjectionStatusRepository for SqlxSeoRuntimeRepository<'_> {
+    async fn load_projection_barrier_status(&self) -> Result<ProjectionBarrierStatus, DomainError> {
+        let statuses = sqlx_seo_adapter::read_projection_sync_status(self.pool).await?;
+        Ok(ProjectionBarrierStatus {
+            blocked_events: statuses.iter().map(|status| status.blocking_event_count()).sum(),
+            max_open_lag_ms: statuses
+                .iter()
+                .map(|status| status.max_open_lag_ms)
+                .max()
+                .unwrap_or(0),
+        })
     }
 }
 

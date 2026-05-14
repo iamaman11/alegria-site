@@ -9,7 +9,6 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
 use infrastructure::adapters::{
-    raw_crawl_adapter,
     sqlx_adapter::connect_pg,
     sqlx_static_site_adapter::{load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow},
 };
@@ -17,12 +16,20 @@ use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json}
 use prost::Message;
 use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
+use seo_application::crawl_ingest::run_crawl_sources;
+use seo_application::execution::SeoRunPolicy;
+use seo_application::registration::register_site_build_input;
+use seo_application::scenario::{
+    execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
+};
+use seo_ports::SeoSiteBuildRegistrationRequest;
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(name = "cli_tools")]
@@ -194,6 +201,56 @@ enum Command {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    SeoRun {
+        #[command(subcommand)]
+        scenario: SeoRunCommand,
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        run_id: Option<String>,
+        #[arg(long)]
+        context_key: Option<String>,
+        #[arg(long, default_value = "alegria-site")]
+        market: String,
+        #[arg(long, default_value = "ru-RU")]
+        locale: String,
+        #[arg(long, default_value = "ES")]
+        country_code: String,
+        #[arg(long, default_value = "tourist")]
+        visa_type: String,
+        #[arg(long)]
+        visa_subtype: Option<String>,
+        #[arg(long, default_value = "standard")]
+        applicant_profile: String,
+        #[arg(long, default_value = "RU")]
+        citizenship_code: String,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        bootstrap_context: bool,
+        #[arg(long = "query")]
+        queries: Vec<String>,
+        #[arg(long)]
+        query_batch_key: Option<String>,
+        #[arg(long, default_value = "app/rust/dist/static-site")]
+        output_dir: String,
+        #[arg(long, default_value = "https://example.com")]
+        base_url: String,
+        #[arg(long, default_value_t = false)]
+        publish: bool,
+        #[arg(long, default_value_t = false)]
+        require_preapproved_decision: bool,
+        #[arg(long, default_value_t = false)]
+        warn_only_projections: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+enum SeoRunCommand {
+    Planning,
+    Drafting,
+    Publish,
+    Full,
+    Rebuild,
+    CrawlIngest,
 }
 
 #[derive(Debug)]
@@ -220,6 +277,136 @@ fn write_report(root: &Path, report_path: &str, payload: &Value) -> Result<PathB
 
 fn print_hex(bytes: &[u8]) {
     println!("{}", hex::encode(bytes));
+}
+
+fn default_seo_run_id() -> String {
+    Uuid::new_v4().to_string()
+}
+
+fn map_seo_run_kind(command: SeoRunCommand) -> SeoScenarioKind {
+    match command {
+        SeoRunCommand::Planning => SeoScenarioKind::PlanningOnly,
+        SeoRunCommand::Drafting => SeoScenarioKind::DraftingOnly,
+        SeoRunCommand::Publish => SeoScenarioKind::PublishOnly,
+        SeoRunCommand::Full => SeoScenarioKind::Full,
+        SeoRunCommand::Rebuild => SeoScenarioKind::RebuildOnly,
+        SeoRunCommand::CrawlIngest => SeoScenarioKind::CrawlIngestOnly,
+    }
+}
+
+async fn register_seo_run_input(
+    database_url: Option<String>,
+    run_id: Option<String>,
+    context_key: Option<String>,
+    market: String,
+    locale: String,
+    country_code: String,
+    visa_type: String,
+    visa_subtype: Option<String>,
+    applicant_profile: String,
+    citizenship_code: String,
+    bootstrap_context: bool,
+    queries: Vec<String>,
+    query_batch_key: Option<String>,
+) -> Result<contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    register_site_build_input(
+        &repo,
+        &SeoSiteBuildRegistrationRequest {
+            run_id: run_id.unwrap_or_else(default_seo_run_id),
+            context_key,
+            market,
+            locale,
+            country_code,
+            visa_type,
+            visa_subtype,
+            applicant_profile,
+            citizenship_code,
+            bootstrap_context,
+            queries,
+            query_batch_key,
+        },
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err}"))
+}
+
+async fn seo_run(
+    scenario: SeoRunCommand,
+    database_url: Option<String>,
+    run_id: Option<String>,
+    context_key: Option<String>,
+    market: String,
+    locale: String,
+    country_code: String,
+    visa_type: String,
+    visa_subtype: Option<String>,
+    applicant_profile: String,
+    citizenship_code: String,
+    bootstrap_context: bool,
+    queries: Vec<String>,
+    query_batch_key: Option<String>,
+    output_dir: String,
+    base_url: String,
+    publish: bool,
+    require_preapproved_decision: bool,
+    warn_only_projections: bool,
+) -> Result<i32> {
+    let site_input = register_seo_run_input(
+        database_url.clone(),
+        run_id,
+        context_key,
+        market,
+        locale,
+        country_code,
+        visa_type,
+        visa_subtype,
+        applicant_profile,
+        citizenship_code,
+        bootstrap_context,
+        queries,
+        query_batch_key,
+    )
+    .await?;
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    let result = execute_site_build_scenario(
+        &repo,
+        &SeoScenarioRequest {
+            scenario: map_seo_run_kind(scenario),
+            mode: SeoExecutionMode::SemiAutoOperator,
+            policy: SeoRunPolicy::for_semi_auto_operator(
+                publish,
+                require_preapproved_decision,
+                warn_only_projections,
+            ),
+            output_dir,
+            base_url,
+            site_input,
+        },
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
+
+    println!(
+        "SEO_RUN_RESULT scenario={} mode={} status={} page_total={} published_pages={} changed_truth_keys={}",
+        result.scenario,
+        result.mode,
+        result.status,
+        result.page_total,
+        result.published_pages,
+        result.changed_truth_keys.len()
+    );
+    for report in result.phase_reports {
+        println!(
+            "SEO_RUN_PHASE phase={} status={} page_node_key={} detail={}",
+            report.phase, report.status, report.page_node_key, report.detail
+        );
+    }
+    Ok(if result.status.starts_with("blocked") { 1 } else { 0 })
 }
 
 fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -> Result<i32> {
@@ -1123,98 +1310,29 @@ async fn crawl_pending_sources(
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
-    let items =
-        raw_crawl_adapter::claim_pending_crawl_batch(&pool, &run_id, &query_batch_key, limit)
-            .await?;
-    let mut ok = 0usize;
-    let mut failed = 0usize;
-
-    for item in items {
-        match raw_crawl_adapter::fetch_html(&item.url).await {
-            Ok(fetched) if (200..400).contains(&fetched.status_code) => {
-                match raw_crawl_adapter::save_crawled_html(
-                    &pool,
-                    &fetched.final_url,
-                    &item.dtype,
-                    fetched.status_code,
-                    &fetched.content_type,
-                    &fetched.body,
-                )
-                .await
-                {
-                    Ok(saved) => {
-                        let qdrant_events = if emit_qdrant {
-                            raw_crawl_adapter::emit_raw_section_qdrant_events(&pool, saved.page_id)
-                                .await?
-                        } else {
-                            0
-                        };
-                        raw_crawl_adapter::mark_crawl_done(
-                            &pool,
-                            &item.url_norm,
-                            fetched.status_code,
-                            &format!(
-                                "source_type={}; page_id={}; sections={}; qdrant_events={}; hash={}",
-                                item.source_type,
-                                saved.page_id,
-                                saved.section_count,
-                                qdrant_events,
-                                saved.content_hash
-                            ),
-                        )
-                        .await?;
-                        println!(
-                            "CRAWL_OK url_norm={} page_id={} sections={} qdrant_events={}",
-                            item.url_norm, saved.page_id, saved.section_count, qdrant_events
-                        );
-                        ok += 1;
-                    }
-                    Err(err) => {
-                        raw_crawl_adapter::mark_crawl_failed(
-                            &pool,
-                            &item.url_norm,
-                            Some(fetched.status_code),
-                            &format!("persist failed: {err}"),
-                        )
-                        .await?;
-                        eprintln!("CRAWL_FAILED url_norm={} error={}", item.url_norm, err);
-                        failed += 1;
-                    }
-                }
-            }
-            Ok(fetched) => {
-                raw_crawl_adapter::mark_crawl_failed(
-                    &pool,
-                    &item.url_norm,
-                    Some(fetched.status_code),
-                    &format!(
-                        "http_status={}; content_type={}",
-                        fetched.status_code, fetched.content_type
-                    ),
-                )
-                .await?;
-                eprintln!(
-                    "CRAWL_FAILED url_norm={} http_status={}",
-                    item.url_norm, fetched.status_code
-                );
-                failed += 1;
-            }
-            Err(err) => {
-                raw_crawl_adapter::mark_crawl_failed(
-                    &pool,
-                    &item.url_norm,
-                    None,
-                    &format!("fetch failed: {err}"),
-                )
-                .await?;
-                eprintln!("CRAWL_FAILED url_norm={} error={}", item.url_norm, err);
-                failed += 1;
-            }
-        }
+    let repo = SqlxSeoRuntimeRepository::new(&pool);
+    let output = run_crawl_sources(
+        &repo,
+        &contracts::generated::alegria::temporal::v1::CrawlSourcesInputPayload {
+            run_id,
+            query_batch_key,
+            limit: limit as u32,
+            emit_qdrant,
+        },
+    )
+    .await?;
+    println!(
+        "CRAWL_SUMMARY claimed={} crawled={} failed={} raw_pages={} status={}",
+        output.claimed_count,
+        output.crawled_count,
+        output.failed_count,
+        output.raw_page_count,
+        output.status
+    );
+    for url in &output.failed_urls {
+        eprintln!("CRAWL_FAILED url={url}");
     }
-
-    println!("CRAWL_SUMMARY ok={} failed={}", ok, failed);
-    Ok(if failed == 0 { 0 } else { 1 })
+    Ok(if output.failed_count == 0 { 0 } else { 1 })
 }
 
 async fn cms_review_list(database_url: Option<String>, limit: i64) -> Result<i32> {
@@ -1783,6 +1901,50 @@ async fn main() -> Result<()> {
                 decision_key, revision_id, workflow_id
             );
             0
+        }
+        Command::SeoRun {
+            scenario,
+            database_url,
+            run_id,
+            context_key,
+            market,
+            locale,
+            country_code,
+            visa_type,
+            visa_subtype,
+            applicant_profile,
+            citizenship_code,
+            bootstrap_context,
+            queries,
+            query_batch_key,
+            output_dir,
+            base_url,
+            publish,
+            require_preapproved_decision,
+            warn_only_projections,
+        } => {
+            seo_run(
+                scenario,
+                database_url,
+                run_id,
+                context_key,
+                market,
+                locale,
+                country_code,
+                visa_type,
+                visa_subtype,
+                applicant_profile,
+                citizenship_code,
+                bootstrap_context,
+                queries,
+                query_batch_key,
+                output_dir,
+                base_url,
+                publish,
+                require_preapproved_decision,
+                warn_only_projections,
+            )
+            .await?
         }
     };
 

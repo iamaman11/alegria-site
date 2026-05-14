@@ -39,8 +39,8 @@ def main() -> int:
 
     if "load_seo_site_build_input" not in activities:
         failures.append("Temporal activities missing load_seo_site_build_input activity")
-    if "SeoSiteBuildInputPayload" not in starter or "input_payload" not in starter:
-        failures.append("temporal_starter does not create typed SEO input blob")
+    if "register_site_build_input(" not in starter or "SeoSiteBuildRegistrationRequest" not in starter:
+        failures.append("temporal_starter does not use shared typed SEO registration path")
 
     if failures:
         print("SEO_NO_SEED_WORKFLOW: FAILED")

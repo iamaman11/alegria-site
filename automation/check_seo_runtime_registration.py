@@ -85,8 +85,8 @@ def main() -> int:
         failures.append("SeoSiteBuildWorkflow is not registered in worker options")
     if "SeoSiteBuild" not in temporal_starter or "SeoSiteBuildWorkflow" not in temporal_starter:
         failures.append("temporal_starter cannot start SeoSiteBuildWorkflow")
-    if "SeoSiteBuildInputPayload" not in temporal_starter or "input_payload" not in temporal_starter:
-        failures.append("temporal_starter does not persist typed SeoSiteBuild input")
+    if "register_site_build_input(" not in temporal_starter or "SeoSiteBuildRegistrationRequest" not in temporal_starter:
+        failures.append("temporal_starter does not use shared SeoSiteBuild registration path")
     if failures:
         print("SEO_RUNTIME_REGISTRATION: FAILED")
         for failure in failures:

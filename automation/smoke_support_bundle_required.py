@@ -17,7 +17,7 @@ def main() -> int:
 
     for needle in [
         "load_verified_support_bundle",
-        'phase = "load_verified_support_bundle"',
+        "SeoPhaseKey::LoadVerifiedSupportBundle",
     ]:
         if needle not in workflow:
             failures.append(f"workflow missing `{needle}`")
@@ -33,8 +33,8 @@ def main() -> int:
     ]:
         if needle not in adapter:
             failures.append(f"adapter missing `{needle}`")
-    if "verified_support: Vec::new()" not in starter:
-        failures.append("starter should remain thin and not inline verified support")
+    if "register_site_build_input(" not in starter:
+        failures.append("starter should remain thin and use shared registration path")
 
     if failures:
         print("SUPPORT_BUNDLE_REQUIRED: FAILED")

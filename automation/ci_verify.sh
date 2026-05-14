@@ -133,6 +133,9 @@ python3 automation/check_seo_steps_infra_surface.py
 echo "[35e/56] Temporal SEO planning cluster boundary"
 python3 automation/check_temporal_seo_activity_surface.py
 
+echo "[35e1/56] Temporal workflow execution plan"
+python3 automation/check_temporal_workflow_execution_plan.py
+
 echo "[35f/57] Temporal step catalog SEO surface"
 python3 automation/check_temporal_step_catalog_surface.py
 

@@ -3,16 +3,18 @@ use contracts::generated::alegria::read_api::v1::ContextBundle;
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
+    CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
     HitlTaskContext, IaBuildOutputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
     SectionTemplateBinding, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
     SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    SerpNormalizeOutputPayload, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
 use serde::{Deserialize, Serialize};
@@ -79,6 +81,28 @@ pub struct CmsReviewDecisionOutcome {
     pub workflow_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SeoSiteBuildRegistrationRequest {
+    pub run_id: String,
+    pub context_key: Option<String>,
+    pub market: String,
+    pub locale: String,
+    pub country_code: String,
+    pub visa_type: String,
+    pub visa_subtype: Option<String>,
+    pub applicant_profile: String,
+    pub citizenship_code: String,
+    pub bootstrap_context: bool,
+    pub queries: Vec<String>,
+    pub query_batch_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ProjectionBarrierStatus {
+    pub blocked_events: i64,
+    pub max_open_lag_ms: i64,
+}
+
 #[async_trait]
 pub trait SeoBuildInputRepository: Send + Sync {
     async fn load_site_build_input(
@@ -88,11 +112,46 @@ pub trait SeoBuildInputRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait SeoBuildRegistrationRepository: Send + Sync {
+    async fn register_site_build_input(
+        &self,
+        request: &SeoSiteBuildRegistrationRequest,
+    ) -> Result<SeoSiteBuildInputPayload, DomainError>;
+}
+
+#[async_trait]
 pub trait VerifiedSupportRepository: Send + Sync {
     async fn load_verified_support_bundle(
         &self,
         request: &VerifiedSupportBundleRequest,
     ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError>;
+}
+
+#[async_trait]
+pub trait CrawlIngestRepository: Send + Sync {
+    async fn crawl_sources(
+        &self,
+        input: &CrawlSourcesInputPayload,
+    ) -> Result<CrawlSourcesOutputPayload, DomainError>;
+
+    async fn ingest_raw_knowledge(
+        &self,
+        input: &RawKnowledgeIngestionInputPayload,
+    ) -> Result<RawKnowledgeIngestionOutputPayload, DomainError>;
+}
+
+#[async_trait]
+pub trait SourceContextRepository: Send + Sync {
+    async fn load_source_context_chunks(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SourceContextChunkState>, DomainError>;
+}
+
+#[async_trait]
+pub trait ProjectionStatusRepository: Send + Sync {
+    async fn load_projection_barrier_status(&self) -> Result<ProjectionBarrierStatus, DomainError>;
 }
 
 #[async_trait]
