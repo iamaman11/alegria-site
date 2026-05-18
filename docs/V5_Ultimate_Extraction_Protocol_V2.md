@@ -1,8 +1,8 @@
 # V5 Ultimate Extraction Protocol V2
 
-**Status:** Working canonical rewrite skeleton for normative consolidation  
-**Version:** 2.0-draft  
-**Source base:** `V5_Ultimate_Extraction_Protocol.md`  
+**Status:** Working canonical rewrite skeleton for normative consolidation
+**Version:** 2.0-draft
+**Source base:** `V5_Ultimate_Extraction_Protocol.md`
 **Purpose of this file:** become the single normative protocol document after reconciliation of duplicates, conflicts, and rollout-vs-contract ambiguity.
 
 > This file is intentionally organized as a canonical contract skeleton first. Content must be migrated from the V1 source into the section named here as the sole owner of each rule. Duplicate normative wording must not be copied into multiple sections.
@@ -675,7 +675,7 @@ Canonical profile rule:
 
 **Normative status:** mandatory pre-section semantic pass.
 
-**Purpose**  
+**Purpose**
 Understand the page as a whole before sectioning so later local decisions can use page-level context without inventing page meaning downstream.
 
 **What this step does**
@@ -728,7 +728,7 @@ Under `page_semantic_context` the step must produce:
 
 **Normative status:** mandatory gating step before block filtering and extraction routing.
 
-**Purpose**  
+**Purpose**
 Determine page utility type and extraction permissions before block filtering and before any extraction pipeline is allowed to start.
 
 **Normative outputs**
@@ -768,7 +768,7 @@ Determine page utility type and extraction permissions before block filtering an
 
 **Normative status:** mandatory pre-section filtering step.
 
-**Purpose**  
+**Purpose**
 Remove navigation, menu, and boilerplate blocks before sectioning so truth extraction sees only relevant content.
 
 **Canonical block roles**
@@ -906,7 +906,7 @@ If any diff signal is true:
 
 **Normative status:** mandatory first extraction-routing step.
 
-**Purpose**  
+**Purpose**
 Assign a complete layer score vector and route all subsequent extraction behavior before any layer-specific extraction occurs.
 
 **Normative inputs**
@@ -971,7 +971,7 @@ then the section must be decomposed into subspans and Layer Router rerun over:
 
 **Normative status:** mandatory mention detection step, parallelizable with Layer Router.
 
-**Purpose**  
+**Purpose**
 Detect meaningful entity mentions as evidence-bearing spans without extracting rules.
 
 **Normative behavior**
@@ -1022,7 +1022,7 @@ This step finds objects mentioned in text, classifies them at the fixed mention-
 
 **Normative status:** mandatory registry-driven mapping step for canonical binding.
 
-**Purpose**  
+**Purpose**
 Map mentions to canonical keys through deterministic registry logic, using vector similarity as mandatory subordinate fallback after symbolic matching tiers.
 
 **Canonical resolution order**
@@ -1074,7 +1074,7 @@ Without deterministic join anchors, Triple Builder must not create canonical joi
 
 #### 6.8.1 Procedural Extraction
 
-**Purpose**  
+**Purpose**
 Extract procedural rule candidates only from explicit source claims that impose applicant requirements or describe procedural parameters.
 
 **Normative outputs per candidate**
@@ -1112,7 +1112,7 @@ Artifact decomposition between mention, mapping, and rule-candidate semantics re
 
 #### 6.8.2 Operational Extraction
 
-**Purpose**  
+**Purpose**
 Extract operational state of external entities such as schedules, notices, closures, blackout windows, and holiday structures.
 
 **Allowed operational entity types**
@@ -1161,7 +1161,7 @@ Operational dates, times, and TTL fields are owned by `operational` layer numeri
 
 #### 6.8.3 Editorial Extraction
 
-**Purpose**  
+**Purpose**
 Extract topics, pain points, and informational angles useful for articles, FAQs, explainers, and checklist framing.
 
 **Allowed topic types**
@@ -1294,7 +1294,7 @@ Extract agency services, pricing tiers, and commercial offers. Commercial extrac
 
 **Normative status:** deterministic code-owned construction step.
 
-**Purpose**  
+**Purpose**
 Build final identity-bearing triples and graph-safe objects from mappings and extracted outputs.
 
 **Normative inputs**
@@ -1327,7 +1327,7 @@ Graph identity formulas, merge contracts, and dedup identity semantics are owned
 
 **Normative status:** mandatory completeness and over-extraction audit before verified truth promotion.
 
-**Purpose**  
+**Purpose**
 Compare source text against extracted outputs and detect loss of meaning, lost fragments, and hallucinated additions.
 
 **Normative inputs**
@@ -1384,7 +1384,7 @@ The judge must also detect structural integrity loss such as:
 
 **Normative status:** mandatory post-judge remediation loop.
 
-**Purpose**  
+**Purpose**
 Resolve incompleteness, hallucination, ambiguity, and structural loss through bounded actions before truth promotion.
 
 **Allowed workflow actions**
@@ -1567,7 +1567,7 @@ If `hallucinated_elements[]` is non-empty, the workflow must reopen extraction, 
 | procedural candidate must have `params` | schema validator | reject candidate | verified insert |
 | page utility deny flag | router/orchestrator | skip pipeline | extractor run |
 | missing deterministic mention anchor | Triple Builder | rerun or HITL | heuristic join |
-| range without `is_range = true` | Completeness Judge | reopen extraction | auto-verify |
+| range without `is_range = true` | Completeness Judge | reopen extraction | adjudication / verified insert |
 | missing validity semantics for temporary operational entity | schema validator / writer | reject entity | verified write |
 | missing deterministic business context for citizenship-specific retrieval payload | retrieval builder | block insert | retrieval write |
 

@@ -10,6 +10,14 @@ bash automation/temporal_production_gate.sh
 
 Если в конце есть строка `PRODUCTION_GATE: PASS`, gate пройден.
 
+Для baseline-диагностики и безопасного fresh bootstrap локальной business DB используются:
+
+```bash
+python3 automation/check_local_runtime_db_baseline.py --database-url "$DATABASE_URL"
+python3 automation/bootstrap_local_runtime_baseline.py --database-url "$DATABASE_URL" --recreate
+python3 automation/check_truth_extraction_provider_ready.py
+```
+
 ## Что проверяет gate
 
 1. Поднимает продовый стек в Docker:
@@ -34,12 +42,6 @@ bash automation/temporal_production_gate.sh
 - `demo-hitl` проходит (`demo_hitl_ok`).
 
 4. Проверяет реальные workflow в боевом контуре:
-- `FactExtractionWorkflow`:
-  - старт по валидному UUID `workflow_id=run_id`;
-  - пауза HITL;
-  - `resume` сигнал;
-  - завершение `COMPLETED`;
-  - `pipeline.execution_runs.status = done`.
 - `SeoSiteBuildWorkflow`:
   - старт по валидному UUID `workflow_id=run_id`;
   - загружает `verified_support_bundle` из БД по `context_key`;
@@ -51,6 +53,11 @@ bash automation/temporal_production_gate.sh
 - `FreshnessCheckWorkflow`:
   - завершение `COMPLETED`.
 
+5. Перед runtime smoke/prod-gate применяется migration set из `app/db/migrations/*.sql`.
+   - Полный replay `app/db/schema.sql` поверх старого volume не считается каноническим способом выравнивания БД.
+   - Если baseline-таблицы отсутствуют, local volume считается drifted и должен быть recreated или доведён до baseline отдельно.
+   - Canonical preflight verdict задаётся `automation/check_local_runtime_db_baseline.py`; drifted volume не является valid migration target.
+
 5. Проверяет runtime observability:
 - `temporal-worker` экспонирует `:9464/metrics`;
 - endpoint содержит:
@@ -61,6 +68,12 @@ bash automation/temporal_production_gate.sh
 6. Проверяет deployment discipline:
 - worker стартует с `WORKER_BUILD_ID`;
 - docker-mode прогон использует актуальный контейнерный runtime.
+- live truth extraction path не считается ready без одного из configured provider paths:
+  - `SEO_TRUTH_LLM_LOCAL_ENDPOINT|SEO_LLM_LOCAL_ENDPOINT`
+  - `OPENAI_API_KEY`
+  - `ANTHROPIC_API_KEY`
+  - `GEMINI_API_KEY|GOOGLE_API_KEY`
+- current recommended provider for this gate and for `Step 5` closure: `GEMINI_API_KEY` with `GEMINI_TRUTH_MODEL` or fallback `GEMINI_SEO_MODEL`
 
 ## Почему это production-grade
 

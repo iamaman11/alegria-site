@@ -1,8 +1,11 @@
 # V5 SEO Graph And Retrieval Projection Spec
 
-**Status:** build-spec draft; implementation status: partial live outbox/Neo4j/Qdrant projection surface  
-**Owner:** exact projection-layer contract for SEO-derived Neo4j and Qdrant surfaces  
+**Status:** build-spec draft; implementation status: partial live outbox/Neo4j/Qdrant projection surface
+**Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
+**Owner:** exact projection-layer contract for SEO-derived Neo4j and Qdrant surfaces
 **Depends on:** `V5_SEO_Foundation_Contracts.md`, `V5_SERP_Intelligence_Protocol.md`, `V5_SEO_Information_Architecture_Protocol.md`, `V5_SEO_Live_Schema_Design_Spec.md`
+
+This file remains an active projection satellite. It does not compete with `V6` for global architecture ownership.
 
 ## 1. Purpose
 

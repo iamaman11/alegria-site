@@ -20,6 +20,11 @@
 - Domain crates: `app/rust/crates/*`
 - Runtime services: `app/rust/services/*`
 - DB schema: `app/db/schema.sql`
+- Baseline DB diagnostics/bootstrap:
+  - `automation/check_local_runtime_db_baseline.py`
+  - `automation/bootstrap_local_runtime_baseline.py`
+- Truth extraction provider preflight:
+  - `automation/check_truth_extraction_provider_ready.py`
 - Business DB container: `alegria_postgres`
 - Business DB pool boundary: `alegria_pgbouncer` (`:6432`, session pooling)
 - Temporal DB container: `alegria_postgres_temporal`
@@ -43,40 +48,60 @@
   - `pipeline.reconcile_runs`
   - `pipeline.reconcile_actions`
 - `pipeline.execution_runs` is coarse run registry only; runtime payload state lives in `pipeline.execution_run_blobs` and `pipeline.step_payload_blobs`.
+- Operational DB rule:
+  - `app/db/schema.sql` is fresh-bootstrap snapshot only.
+  - `app/db/migrations/*.sql` is the canonical incremental upgrade path.
+  - A local volume missing runtime baseline tables is `drifted`, not a valid migration target.
 - Versioned outbox contract:
   - `system.sync_outbox.payload_type`
   - `system.sync_outbox.schema_version`
   - `system.sync_outbox.idempotency_key`
+- Truth extraction provider contract:
+  - acceptable live provider env paths:
+    - `SEO_TRUTH_LLM_LOCAL_ENDPOINT` or `SEO_LLM_LOCAL_ENDPOINT`
+    - `OPENAI_API_KEY`
+    - `ANTHROPIC_API_KEY`
+    - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
+  - current recommended live path for `Step 5` and immediate `R3.4` work: `GEMINI_API_KEY` with `GEMINI_TRUTH_MODEL` or fallback `GEMINI_SEO_MODEL`
+  - missing truth extraction provider is a hard blocker for live `raw_knowledge_ingestion`
 
 ## 2) Current workflow chains
-
-- `FactExtractionWorkflow`:
-  - `extract_facts`
-  - `verify_rules`
-  - `prepare_hitl_pause`
-  - `wait/resume (signal)`
-  - `apply_hitl_resolution`
-  - `persist_and_emit`
-  - `finalize_run`
 
 - `SeoSiteBuildWorkflow`:
   - `load_seo_site_build_input`
   - `load_verified_support_bundle`
   - `serp_ingest`
+  - `crawl_sources`
+  - `raw_knowledge_ingestion`
+  - optional `load_verified_support_bundle.refresh`
   - `serp_normalize`
   - `opportunity_build`
   - `ia_build`
   - `link_recommend`
-  - `draft_assemble`
-  - `draft_normalize`
-  - `content_contract_validate`
-  - `draft_qa`
-  - `cms_request_review`
-  - `wait/resume (approval signal)`
-  - `publish_materialize`
-  - `render_preview_validate`
-  - `finalize_publish`
-  - `rebuild_detect`
+  - `global_site_reconcile`
+  - per-page:
+    - `draft_assemble`
+    - `editorial_draft_generate`
+    - `draft_normalize`
+    - `content_contract_validate`
+    - `draft_qa`
+    - conditional publish-control path:
+      - `cms_request_review`
+      - `human_approval_wait`
+      - `cms_publish_approved`
+      - `publish_materialize`
+      - `render_preview_validate`
+      - `finalize_publish`
+  - conditional final phase:
+    - `rebuild_detect`
+  - current execution plan is branch-sensitive to normalized `run_mode`, scenario, and policy:
+    - `crawl_only` stops before planning/drafting
+    - `draft_only` and `dry_run` persist without publish
+    - publish phases run only when publish policy and scenario both allow them
+    - workflow may terminate early with `done:no_pages`
+  - workflow checkpoints already observe projection barrier status after:
+    - `raw_knowledge_ingestion`
+    - `global_site_reconcile`
 - `ContentGenerationWorkflow`:
   - legacy-only
   - excluded from production SEO launch path
@@ -116,8 +141,7 @@
 - HITL queue orchestration идет через `seo_application::hitl`, а БД-реализация сидит в `seo_ports`/SQLx adapters.
 - В `app/rust/services/temporal/src/workflows/mod.rs` есть signal/query/update handlers:
   `pause`, `resume`, `status`, `set_pause`.
-- Для `FactExtractionWorkflow` добавлен HITL-gate:
-  `prepare_hitl_pause` -> ожидание `resume` -> `apply_hitl_resolution`.
+- Truth extraction больше не имеет отдельного standalone workflow. HITL применяется на candidate/adjudication path и publish-review path, а не через legacy standalone extraction workflow.
 
 ## 4) Rust-first migration scope
 

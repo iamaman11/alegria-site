@@ -1,8 +1,9 @@
 # SEO Supersite 10/10 Execution Plan
 
-Status: active execution plan
+Status: partial live-aligned execution plan
+Parent owner document: `V6_Expert_Truth_Graph_Runtime.md`
 Owner: Alegria SEO site build runtime
-Last updated: 2026-05-11
+Last updated: 2026-05-16
 
 ## Target
 
@@ -28,8 +29,8 @@ Implemented baseline:
 - `SeoSiteBuildWorkflow` runs multi-page site build stages.
 - DataForSEO results can enqueue scoped crawl jobs.
 - `crawl_sources` persists `raw.pages` and `raw.sections`, emits Qdrant outbox, and returns `raw_page_ids`.
-- `raw_knowledge_ingestion` bridges new raw pages into `verified.rule_instances` and Neo4j outbox.
-- `raw_knowledge_ingestion` does not auto-verify competitor-only facts; only official/VFS-like sources can become verified automatically.
+- `raw_knowledge_ingestion` persists source registration, raw-section context binding, and `extracted.rule_candidates`; it does not bridge raw pages directly into `verified.rule_instances`.
+- `source_type`/`trust_level` are adjudication inputs only. No source tier can shortcut a verified verdict.
 - `global_site_reconcile` normalizes current-scope hierarchy and required links.
 - Data-derived global navigation storage exists: `site.site_scopes`, `site.silo_groups`, `site.navigation_trees`, `site.navigation_items`, and `site.global_rebuild_plan`.
 - `global_site_reconcile` persists a navigation snapshot from active `site.page_nodes`; it does not invent menu items before IA/source-backed pages exist.
@@ -42,19 +43,19 @@ Implemented baseline:
 Critical gaps:
 
 - New scopes have starter-side bootstrap/preflight and direct Neo4j/Qdrant probes, but DataForSEO is still credential-checked rather than queried in preflight.
-- `SeoSiteBuildWorkflow` does not yet expose explicit run modes such as `crawl_only`, `draft_only`, or `full_auto_after_approval`; CMS publish modes exist only inside the publish-control step.
+- `SeoSiteBuildWorkflow` already exposes normalized `run_mode` branching such as `crawl_only`, `draft_only`, `publish_with_hitl`, and `full_auto_after_approval`, but the richer semantic/graph path is still not reactivated as a mandatory runtime contour.
 - SERP intelligence is still query-led, not top10-pattern-led.
 - Crawler is an MVP fetcher, not a production crawler.
 - Extraction is too narrow and currently not enough for real visa rule coverage.
 - Competitor-only extracted facts are persisted as pending; they need verification/HITL before they can support publish-ready pages.
-- Qdrant/Neo4j/CMS projection barriers exist in preflight and workflow checkpoints, but they are global outbox barriers; current-run scoped barriers still need aggregate/run filtering.
+- Projection barriers already exist in preflight and workflow checkpoints; current workflow control is present, but broader graph/retrieval projection hardening and certification still remain partial.
 - Global navigation storage exists, but full policy for multi-country/multi-visa menu grouping still needs refinement after real data appears.
 - Rebuild detection marks impacted pages, but there is no full rebuild scheduler.
 - Live E2E certification has not been run against real credentials and real sources.
 
 ## Phase 1: Production Preflight And Bootstrap
 
-Status: partially implemented. Scope bootstrap, neutral registry seeding, preflight diagnostics, dependency probes, and projection status reporting are live. Explicit SEO site-build run modes are still planned.
+Status: partially implemented. Scope bootstrap, neutral registry seeding, preflight diagnostics, dependency probes, projection status reporting, and explicit SEO site-build run modes are live. Rich semantic and graph/retrieval reactivation remain planned.
 
 Goal: a new SEO scope can start without manual SQL and fails fast when runtime dependencies are missing.
 
@@ -66,7 +67,7 @@ Work:
 - Implemented: preflight checks for DataForSEO credentials, Qdrant, Neo4j, LLM provider, outbox runtime, and static output directory.
 - Implemented: report verified/pending rules for the current context and Qdrant point ledger size.
 - Implemented: report per-target projection outbox status, lag, failed event details, and strict launch blocking.
-- Planned: add SEO site-build run modes: `dry_run`, `crawl_only`, `draft_only`, `publish_with_hitl`, `full_auto_after_approval`.
+- Implemented: SEO site-build run modes: `dry_run`, `crawl_only`, `draft_only`, `publish_with_hitl`, `full_auto_after_approval`.
 
 Gate:
 
@@ -119,7 +120,7 @@ Work:
 - Extend deterministic extraction for documents, fees, timelines, forms, biometrics, photos, bank statements, invitations, employment proof, accommodation, tickets, minors, appointments, and application locations.
 - Add schema-constrained LLM extraction with source spans and confidence.
 - Normalize concepts, roles, conditions, applicant profile, nationality, residence country, age, and visa subtype.
-- Enforce source trust: official/VFS can auto-verify high-confidence facts; competitor-only facts remain candidate or HITL.
+- Enforce source trust as adjudication input only: regulated or official sources may increase confidence and corroboration priority, but cannot shortcut a verified verdict; unsupported or conflicting facts remain candidate or HITL.
 - Add contradiction gate for fees, timelines, documents, application location, and eligibility.
 
 Gate:

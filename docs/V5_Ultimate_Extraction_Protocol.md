@@ -1,8 +1,19 @@
 # V5 Ultimate Extraction Protocol
-**Версия:** 1.0 — Final  
-> Status note: this is the primary domain/protocol specification. Current runtime persistence, worker rollout, gating and recovery rules live in `V5_Runtime_Contract.md`, `STEP_CATALOG_CONTRACT.md`, `OPS_RUNTIME_RUNBOOK.md`, and `automation/`.
+**Версия:** 1.0 — Final
+> Superseded by [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md). Retained for historical design context and target rich-extraction architecture. Current active runtime authority no longer lives here.
 
-**Статус:** Операционный контракт для LLM-агентов  
+**Supersession note**
+
+- Current canonical owner: [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
+- This file is retained to preserve the richer target model:
+  - layer router
+  - entity span detection
+  - canonical mapping
+  - triple builder
+  - graph and retrieval contracts
+- This file must be read as target/deferred architecture unless the same behavior is explicitly marked active in `V6`.
+
+**Статус:** superseded protocol reference
 **Принцип:** Layer-first → Detect Mentions → Canonicalize → Extract → Build Graph
 
 ---
@@ -27,8 +38,8 @@
 
 ## -2. Whole Page Semantic Pass (Agent #0)
 
-**Задача:** понять страницу как единый документ ДО sectioning.  
-**Цель:** не извлекать факты, а построить глобальный контекст страницы для всех следующих шагов.  
+**Задача:** понять страницу как единый документ ДО sectioning.
+**Цель:** не извлекать факты, а построить глобальный контекст страницы для всех следующих шагов.
 **Выход:** `page_mode`, `dominant_layers`, `page_summary`, `global_entities`, `mixed_sections`, `cross_reference_map`.
 
 ### -2.1 Контракт ответа
@@ -52,7 +63,7 @@
 
 ### -2.2 Правило
 
-Whole-page understanding is mandatory.  
+Whole-page understanding is mandatory.
 Final factual extraction remains section/span-bound.
 
 ### -2.3 External Job Context
@@ -229,8 +240,8 @@ content_hash(новый) == content_hash(старый)?
 
 ## 2. Step 1 — Layer Router (Agent #1)
 
-**Задача:** определить `layer_scores`, `primary_layer` и `secondary_layers` до любого extraction.  
-**Стартовый размер промпта (ориентир, не лимит):** ~200 токенов системной инструкции.  
+**Задача:** определить `layer_scores`, `primary_layer` и `secondary_layers` до любого extraction.
+**Стартовый размер промпта (ориентир, не лимит):** ~200 токенов системной инструкции.
 **Input:** `heading_text` + `raw_text` (первые 1500 символов) + `source_tier` + `block_type` + `page_semantic_context`.
 
 ### 2.1 Системная инструкция (Layer Router)
@@ -338,8 +349,8 @@ content_hash(новый) == content_hash(старый)?
 
 ## 3. Step 2 — Entity Span Detection (Agent #2)
 
-**Задача:** найти все значимые упоминания сущностей. Не классифицировать в детали — только тип и центральность.  
-**Запускается параллельно с Layer Router**, не после.  
+**Задача:** найти все значимые упоминания сущностей. Не классифицировать в детали — только тип и центральность.
+**Запускается параллельно с Layer Router**, не после.
 **Стартовый размер промпта (ориентир, не лимит):** ~300 токенов.
 
 ### 3.1 Системная инструкция
@@ -418,7 +429,7 @@ fee, timeline, location, organization, profile, legal_term, date
 
 ## 4. Step 3 — Canonical Mapping (Symbolic-first + Qdrant)
 
-**Задача:** сопоставить каждое mention с canonical key из реестра.  
+**Задача:** сопоставить каждое mention с canonical key из реестра.
 **Порядок строго:**
 
 ```
@@ -760,8 +771,8 @@ fee, timeline, location, organization, profile, legal_term, date
 
 ## 6. Step 5 — Triple Builder (Code-first, Rust Activity)
 
-**Задача:** собрать финальные тройки для Neo4j из всех результатов extraction.  
-**Исполнение:** детерминированный Rust-код (не LLM).  
+**Задача:** собрать финальные тройки для Neo4j из всех результатов extraction.
+**Исполнение:** детерминированный Rust-код (не LLM).
 **Input:** canonical mappings + extracted_rules / topics / operational_entities.
 
 ### 6.1 Финальная модель Procedural в Neo4j — RuleInstance-first
@@ -979,8 +990,8 @@ Canonical Object Envelope — полный контракт свойств дл�
 
 ## 7. Step 6 — Completeness Judge (Agent #5)
 
-**Задача:** проверить что ничего не потеряно — ни фрагменты, ни логика.  
-**Input:** `raw_text` + все тройки + все unmapped mentions.  
+**Задача:** проверить что ничего не потеряно — ни фрагменты, ни логика.
+**Input:** `raw_text` + все тройки + все unmapped mentions.
 **Стартовый размер промпта (ориентир, не лимит):** ~300 токенов системной инструкции.
 
 ### 7.1 Системная инструкция
@@ -1180,7 +1191,7 @@ CALL gds.shortestPath.dijkstra.stream('full_graph', {
 |---|---|---|
 | procedural | `verified-only` | Только verified.rules / verified.facts. Extracted — не публикуется |
 | operational | `verified + TTL-valid` | Verified + `valid_until > NOW()` или `ttl_days` не истёк |
-| editorial | `verified-context or source-tier >= niche_agency` | Tier1 auto-verify, остальные через HITL |
+| editorial | `verified-context only` | Source tier остаётся adjudication signal; shortcut verified verdict запрещён, unresolved cases идут через HITL |
 | seo | `deterministic-only` | Без LLM. Только алгоритмы GDS и keyword data |
 | commercial | `business-owned-only` | Только данные агентства, не из краулинга |
 
@@ -1246,9 +1257,9 @@ CALL gds.shortestPath.dijkstra.stream('full_graph', {
   extracted.rule_candidates / extracted.topics / kb.operational_entities
         ↓
 [Verification Pipeline (Temporal + Rust activities)]
-  tier=government → auto_verify
-  confidence >= 0.88 → auto_verify
-  иначе → HITL queue (pause workflow, wait signal)
+  source tier + confidence + corroboration → adjudication inputs only
+  shortcut verified verdict запрещён
+  unresolved / conflicting / incomplete candidates → HITL queue (pause workflow, wait signal)
         ↓
 [verified.rules insert + registry_version bump]
         ↓
@@ -1408,7 +1419,7 @@ Procedural RuleInstance считается завершённым (`done`) то�
 
 ### 12.1 Core Extraction Principle
 
-Whole-page understanding is mandatory.  
+Whole-page understanding is mandatory.
 Final facts must always be bound to section/span evidence.
 
 

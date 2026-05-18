@@ -54,8 +54,8 @@ Production may move to `go` only when every launch-critical row is `verified` an
 - `spec_readiness_verdict`: `go`
 - `implementation_readiness_verdict`: `partial`
 - `production_readiness_verdict`: `no-go`
-- `reason`: Live schema/proto/contracts, SQLx SEO persistence, `SeoSiteBuildWorkflow`, DataForSEO ingestion, crawl-to-raw storage, raw knowledge ingestion, trust-gated verification, Neo4j/Qdrant/CMS outbox projection, preflight diagnostics, global navigation persistence, draft/QA/CMS/HITL/static publish-control, and deterministic SEO smoke tests exist. Production remains blocked on live E2E certification, production crawler hardening, richer extraction/contradiction coverage, current-run scoped projection barriers, explicit SEO run modes, real external CMS integration policy, and rebuild scheduler execution.
-- `last_reviewed_at`: `2026-05-11`
+- `reason`: Live schema/proto/contracts, SQLx SEO persistence, `SeoSiteBuildWorkflow`, normalized `run_mode` branching, DataForSEO ingestion, crawl-to-raw storage, raw knowledge ingestion, trust-gated verification, Neo4j/Qdrant/CMS outbox projection, preflight diagnostics, global navigation persistence, draft/QA/CMS/HITL/static publish-control, and deterministic SEO smoke tests exist. Production remains blocked on live E2E certification, production crawler hardening, richer extraction/contradiction coverage, external truth-provider readiness, richer graph/retrieval reactivation, real external CMS integration policy, and rebuild scheduler execution.
+- `last_reviewed_at`: `2026-05-16`
 - `review_owner`: `live_contract_alignment`
 
 ## 5. Source Build-Spec Package
@@ -70,7 +70,7 @@ Production may move to `go` only when every launch-critical row is `verified` an
 
 ## 5.1 Live Implementation Snapshot
 
-This snapshot reflects the working tree as reviewed on 2026-05-11.
+This snapshot reflects the working tree as reviewed on 2026-05-16.
 
 Implemented and automation-checked:
 
@@ -79,8 +79,9 @@ Implemented and automation-checked:
 - Workflow stages include SERP ingest, crawl sources, raw knowledge ingestion, SERP normalize, opportunity build, IA build, link recommend, global reconcile, draft assemble, editorial draft generation, draft normalize, content contract validation, draft QA, CMS review/publish control, static materialization, preview validation, finalize publish, and rebuild detect.
 - DataForSEO credentials can drive live SERP ingestion and crawl queue population.
 - `crawl_sources` stores fetched HTML into `raw.pages`/`raw.sections` and can emit Qdrant outbox events.
-- Raw knowledge ingestion auto-verifies only official/VFS-like sources; competitor-only facts are persisted as pending.
+- Raw knowledge ingestion persists only `extracted.rule_candidates`; admissible verified truth appears only after validation/adjudication, and no source tier can shortcut a verified verdict.
 - Preflight reports context readiness, verified/pending facts, Qdrant point ledger size, live Qdrant/Neo4j probes, and Neo4j/Qdrant/CMS projection outbox status.
+- Normalized `run_mode` branching is live: `dry_run`, `crawl_only`, `draft_only`, `publish_with_hitl`, `full_auto_after_approval`.
 - Starter/runtime identity hardening is live: free-form `applicant_profile` drift is blocked, `applicant_profile` is registry-validated, and `context_key` is no longer derived implicitly from applicant profile values.
 - Global navigation persistence derives `site.navigation_items` from active `site.page_nodes`; it does not seed final menus before source-backed IA exists.
 - Automation gates pass for SEO runtime registration, schema, proto, persistence, projection, CMS, publish gates, traceability, static site builder, step catalog, step execution, and status parity.
@@ -91,8 +92,8 @@ Not yet production-complete:
 - The crawler is still an MVP fetcher, not a robots-aware production crawler.
 - Extraction coverage is too narrow for complete visa-rule coverage.
 - Applicability hardening is only partially complete: `conditional`, `replace_value`, and `add_requirement` are blocked from silent auto-support, but full deterministic materialization/HITL policy is still evolving.
-- Projection barriers are global outbox barriers; current-run scoped barriers still need aggregate/run filtering.
-- Explicit SEO run modes such as `crawl_only`, `draft_only`, and `full_auto_after_approval` are not implemented.
+- Projection barriers and projection-aware workflow checkpoints are present, but graph/retrieval projection activation and certification remain partial.
+- Live truth-provider readiness is still missing for the canonical Gemini path.
 - Rebuild detection exists, but a full rebuild scheduler/workflow is still missing.
 
 ## 6. Blocking Checklist

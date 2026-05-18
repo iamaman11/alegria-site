@@ -1,7 +1,10 @@
 # V5 Runtime Contract
 
-**Статус:** current runtime source of truth for persistence/retry/replay/HITL semantics  
+**Статус:** current runtime source of truth for persistence/retry/replay/HITL semantics
+**Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Назначение:** зафиксировать текущий production-grade runtime contract для V5 pipeline.
+
+Этот файл остаётся active satellite contract. Он не является глобальным owner-document архитектуры knowledge/runtime.
 
 ---
 
@@ -74,7 +77,7 @@ Each step execution must persist at least:
 ```json
 {
   "run_id": "uuid",
-  "step_name": "verify_rules",
+  "step_name": "truth_adjudication",
   "attempt": 1,
   "status": "running|done|failed|pending_hitl",
   "input_hash": "blake3_hex",
@@ -114,7 +117,7 @@ Current canonical rules:
 - workflow pause state is `pending_hitl`
 - `pending_hitl` is excluded from stale-failure classification
 - `TestHitlWorkflow.resume` accepts no payload
-- `FactExtractionWorkflow.resume` accepts typed `HitlDecision`
+- Truth extraction no longer uses a standalone extraction workflow; HITL applies on candidate/adjudication or publish-review paths, not via legacy workflow resume payloads.
 
 HITL persistence lives in:
 - `pipeline.hitl_tasks`

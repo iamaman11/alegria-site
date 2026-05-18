@@ -28,8 +28,11 @@ cargo run -p temporal_worker --bin temporal_starter -- ping
 cd /home/bose/projects/alegria-site
 docker compose up -d postgres postgres-temporal temporal-server temporal-ui
 
+set -a
+. infra/local/dev_db.env
+set +a
+
 export TEMPORAL_URL=http://localhost:7233
-export DATABASE_URL=postgres://postgres:postgres_password@localhost:5433/alegria
 export RUST_LOG=info
 export WORKER_BUILD_ID=dev-$(date +%s)
 export METRICS_PORT=9464
