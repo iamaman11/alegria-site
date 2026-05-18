@@ -24,6 +24,8 @@ import time
 import urllib.request
 import uuid
 
+from local_env import resolve_database_url
+
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUST_DIR = os.path.join(ROOT_DIR, "app", "rust")
@@ -133,10 +135,7 @@ def _encode_qdrant_upsert_command(
 
 
 def _psql(sql: str) -> str:
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql://postgres:postgres_password@localhost:5433/alegria",
-    )
+    db_url = resolve_database_url()
     result = subprocess.run(
         ["psql", db_url, "-t", "-A", "-c", sql],
         capture_output=True,

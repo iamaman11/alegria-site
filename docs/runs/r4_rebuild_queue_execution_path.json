@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r4_rebuild_queue_execution_path",
+  "step": "R4.Step2",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Rebuild detect persists both monitoring backlog and site-level global rebuild plans, and the Temporal workflow exposes the rebuild detect execution path.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p infrastructure --lib",
+  "contract_checks": [
+    "sqlx_seo_adapter writes rebuild queue rows to site.global_rebuild_plan and monitoring.seo_rebuild_backlog.",
+    "seo_application rebuild_detect persists the detect output after narrowing impacts.",
+    "Temporal workflow surface still routes rebuild_detect through the SEO build workflow."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

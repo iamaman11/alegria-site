@@ -8,8 +8,9 @@ use infrastructure::adapters::{
     neo4rs_adapter, qdrant_client_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg, sqlx_seo_adapter,
 };
-use seo_domain::identity;
+use seo_application::execution::normalize_run_mode;
 use seo_application::registration::register_site_build_input;
+use seo_domain::identity;
 use seo_ports::SeoSiteBuildRegistrationRequest;
 use std::env;
 use std::time::Duration;
@@ -70,6 +71,8 @@ enum Command {
         queries: Vec<String>,
         #[arg(long)]
         query_batch_key: Option<String>,
+        #[arg(long, default_value = "publish_with_hitl")]
+        run_mode: String,
     },
     /// Validate and optionally bootstrap a SEO site-build scope without starting Temporal.
     SeoPreflight {
@@ -115,7 +118,6 @@ enum Command {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum WorkflowKind {
-    FactExtraction,
     ContentGeneration,
     FreshnessCheck,
     SeoSiteBuild,
@@ -125,7 +127,6 @@ enum WorkflowKind {
 impl WorkflowKind {
     fn workflow_type(self) -> &'static str {
         match self {
-            WorkflowKind::FactExtraction => "FactExtractionWorkflow",
             WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
@@ -135,7 +136,6 @@ impl WorkflowKind {
 
     fn id_prefix(self) -> &'static str {
         match self {
-            WorkflowKind::FactExtraction => "fact-extract",
             WorkflowKind::ContentGeneration => "content-gen",
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::SeoSiteBuild => "seo-site-build",
@@ -146,9 +146,7 @@ impl WorkflowKind {
     fn requires_uuid_run_id(self) -> bool {
         matches!(
             self,
-            WorkflowKind::FactExtraction
-                | WorkflowKind::ContentGeneration
-                | WorkflowKind::SeoSiteBuild
+            WorkflowKind::ContentGeneration | WorkflowKind::SeoSiteBuild
         )
     }
 }
@@ -176,6 +174,7 @@ async fn persist_seo_site_build_input(
     bootstrap_context: bool,
     queries: Vec<String>,
     query_batch_key: Option<String>,
+    run_mode: String,
 ) -> Result<()> {
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
@@ -194,6 +193,7 @@ async fn persist_seo_site_build_input(
             bootstrap_context,
             queries,
             query_batch_key,
+            run_mode: Some(normalize_run_mode(&run_mode).to_string()),
         },
     )
     .await
@@ -360,11 +360,10 @@ async fn run_seo_preflight(
         verified_rule_count, pending_rule_count
     );
 
-    let qdrant_point_row =
-        sqlx::query("SELECT count(*)::bigint AS count FROM kb.qdrant_points")
-            .fetch_one(&pool)
-            .await
-            .context("qdrant point ledger count failed")?;
+    let qdrant_point_row = sqlx::query("SELECT count(*)::bigint AS count FROM kb.qdrant_points")
+        .fetch_one(&pool)
+        .await
+        .context("qdrant point ledger count failed")?;
     let qdrant_point_count: i64 = sqlx::Row::get(&qdrant_point_row, "count");
     println!("OK qdrant_point_ledger points={qdrant_point_count}");
 
@@ -555,6 +554,7 @@ async fn main() -> Result<()> {
             bootstrap_context,
             queries,
             query_batch_key,
+            run_mode,
         } => {
             if workflow == WorkflowKind::ContentGeneration {
                 anyhow::bail!(
@@ -585,6 +585,7 @@ async fn main() -> Result<()> {
                     bootstrap_context,
                     queries,
                     query_batch_key,
+                    run_mode,
                 )
                 .await?;
             }

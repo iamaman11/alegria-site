@@ -4,11 +4,12 @@ use contracts::generated::alegria::sync::v1::{QdrantUpsertCommand, SeoGraphProje
 use contracts::generated::alegria::temporal::v1::{
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
-    DraftQaInputPayload, DraftQaOutputPayload, IaBuildOutputPayload, LinkRecommendOutputPayload,
-    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, RebuildDetectInputPayload,
-    RebuildDetectOutputPayload, SectionTemplateBinding, SeoScopePayload, SeoSiteBuildInputPayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpIngestOutputPayload,
-    SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    DraftQaInputPayload, DraftQaOutputPayload, IaBuildInputPayload, IaBuildOutputPayload,
+    LinkRecommendInputPayload, LinkRecommendOutputPayload, OpportunityBuildInputPayload,
+    OpportunityBuildOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    SectionTemplateBinding, SeoScopePayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
+    SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
 use prost::Message;
@@ -228,6 +229,7 @@ fn seo_graph_projection_event(
         scope_signature: scope_signature.to_string(),
     });
     OutboxEnvelope {
+        run_id: String::new(),
         aggregate_type: artifact_type.to_string(),
         aggregate_key: artifact_key.to_string(),
         target_system: "neo4j".to_string(),
@@ -293,6 +295,7 @@ fn seo_qdrant_projection_event(
         metadata,
     });
     OutboxEnvelope {
+        run_id: String::new(),
         aggregate_type: artifact_type.to_string(),
         aggregate_key: artifact_key.to_string(),
         target_system: "qdrant".to_string(),
@@ -304,12 +307,118 @@ fn seo_qdrant_projection_event(
     }
 }
 
-async fn emit_projection_events(
+async fn emit_projection_events_for_run(
     pool: &PgPool,
+    run_id: &str,
     events: Vec<OutboxEnvelope>,
 ) -> Result<(), DomainError> {
+    let events = events
+        .into_iter()
+        .map(|mut event| {
+            if event.run_id.trim().is_empty() {
+                event.run_id = run_id.to_string();
+            }
+            event
+        })
+        .collect::<Vec<_>>();
     let _ = outbox_emit_many(pool, &events).await?;
     Ok(())
+}
+
+pub async fn read_projection_sync_status_for_run(
+    pool: &PgPool,
+    run_id: &str,
+) -> Result<Vec<ProjectionSyncStatus>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        WITH target_systems(target_system) AS (
+            VALUES ('neo4j'), ('qdrant'), ('cms')
+        )
+        SELECT
+            targets.target_system,
+            COUNT(outbox.event_id) FILTER (WHERE outbox.status = 'pending')::BIGINT AS pending_events,
+            COUNT(outbox.event_id) FILTER (WHERE outbox.status = 'processing')::BIGINT AS processing_events,
+            COUNT(outbox.event_id) FILTER (WHERE outbox.status = 'failed')::BIGINT AS failed_events,
+            COUNT(outbox.event_id) FILTER (WHERE outbox.status = 'done')::BIGINT AS done_events,
+            COALESCE(
+                MAX(
+                    CASE
+                        WHEN outbox.status IN ('pending', 'processing') THEN
+                            GREATEST(
+                                0,
+                                FLOOR(EXTRACT(EPOCH FROM (now() - outbox.created_at)) * 1000)
+                            )::BIGINT
+                        ELSE 0
+                    END
+                ),
+                0
+            )::BIGINT AS max_open_lag_ms,
+            oldest.event_id AS oldest_open_event_id,
+            oldest.aggregate_key AS oldest_open_aggregate_key,
+            oldest.event_type AS oldest_open_event_type,
+            latest_failed.aggregate_key AS latest_failed_aggregate_key,
+            latest_failed.event_type AS latest_failed_event_type,
+            latest_failed.last_error AS latest_failed_error
+        FROM target_systems targets
+        LEFT JOIN system.sync_outbox outbox
+            ON outbox.target_system = targets.target_system
+           AND outbox.run_id = $1
+        LEFT JOIN LATERAL (
+            SELECT
+                event_id::TEXT AS event_id,
+                aggregate_key,
+                event_type
+            FROM system.sync_outbox
+            WHERE target_system = targets.target_system
+              AND run_id = $1
+              AND status IN ('pending', 'processing')
+            ORDER BY created_at ASC
+            LIMIT 1
+        ) oldest ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT
+                aggregate_key,
+                event_type,
+                last_error
+            FROM system.sync_outbox
+            WHERE target_system = targets.target_system
+              AND run_id = $1
+              AND status = 'failed'
+            ORDER BY updated_at DESC
+            LIMIT 1
+        ) latest_failed ON TRUE
+        GROUP BY
+            targets.target_system,
+            oldest.event_id,
+            oldest.aggregate_key,
+            oldest.event_type,
+            latest_failed.aggregate_key,
+            latest_failed.event_type,
+            latest_failed.last_error
+        ORDER BY targets.target_system
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| ProjectionSyncStatus {
+            target_system: row.get("target_system"),
+            pending_events: row.get("pending_events"),
+            processing_events: row.get("processing_events"),
+            failed_events: row.get("failed_events"),
+            done_events: row.get("done_events"),
+            max_open_lag_ms: row.get("max_open_lag_ms"),
+            oldest_open_event_id: row.get("oldest_open_event_id"),
+            oldest_open_aggregate_key: row.get("oldest_open_aggregate_key"),
+            oldest_open_event_type: row.get("oldest_open_event_type"),
+            latest_failed_aggregate_key: row.get("latest_failed_aggregate_key"),
+            latest_failed_event_type: row.get("latest_failed_event_type"),
+            latest_failed_error: row.get("latest_failed_error"),
+        })
+        .collect())
 }
 
 pub async fn read_projection_sync_status(
@@ -485,6 +594,7 @@ async fn resolve_verified_fact_support(
             r.params,
             r.effective_from::text AS effective_from,
             r.effective_to::text AS effective_to,
+            COALESCE(r.freshness_class, 'unknown') AS freshness_class,
             COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
             COALESCE(s.source_label, '') AS source_label,
             COALESCE(s.source_type, 'editorial') AS source_type,
@@ -552,6 +662,12 @@ async fn resolve_verified_fact_support(
         LEFT JOIN kb.sources s ON s.source_key = r.source_key
         WHERE r.context_key = $1
           AND r.status = 'verified'
+          AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'
+          AND r.source_key IS NOT NULL
+          AND r.source_key <> ''
+          AND r.evidence_section_id IS NOT NULL
+          AND COALESCE(r.evidence_quote, '') <> ''
+          AND COALESCE(r.source_snapshot_hash, '') <> ''
         ORDER BY r.role_type, r.rule_instance_id
         "#,
     )
@@ -587,18 +703,14 @@ async fn resolve_verified_fact_support(
         let effective_to = row
             .get::<Option<String>, _>("effective_to")
             .unwrap_or_default();
-        let freshness_class = if effective_to.trim().is_empty() {
-            "watch"
-        } else {
-            "fresh"
-        };
+        let freshness_class: String = row.get("freshness_class");
         let support = SeoVerifiedFactSupportState {
             fragment_text: verified_support_fragment(&role_type, &concept_label, &params.0),
             support_ref: rule_instance_id.clone(),
             role_type,
             source_label: row.get("source_label"),
             source_tier: source_tier.to_string(),
-            freshness_class: freshness_class.to_string(),
+            freshness_class,
             observed_at: row
                 .get::<Option<String>, _>("effective_from")
                 .unwrap_or_default(),
@@ -743,6 +855,24 @@ pub async fn resolve_rebuild_impacts(
         })
         .map(ToOwned::to_owned)
         .collect::<Vec<_>>();
+    let source_refs = changed_truth_keys
+        .iter()
+        .filter_map(|key| {
+            key.strip_prefix("source_key:")
+                .or_else(|| key.strip_prefix("source:"))
+                .or_else(|| key.strip_prefix("raw.source:"))
+        })
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    let navigation_refs = changed_truth_keys
+        .iter()
+        .filter_map(|key| {
+            key.strip_prefix("navigation_state:")
+                .or_else(|| key.strip_prefix("nav_state:"))
+                .or_else(|| key.strip_prefix("site.navigation:"))
+        })
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
     let keyword_cluster_refs = if serp_query_refs.is_empty() {
         Vec::new()
     } else {
@@ -773,6 +903,8 @@ pub async fn resolve_rebuild_impacts(
             OR (dependency_type = 'section_template' AND dependency_ref = ANY($3))
             OR (dependency_type = 'serp_query' AND dependency_ref = ANY($4))
             OR (dependency_type = 'keyword_cluster' AND dependency_ref = ANY($5))
+            OR (dependency_type = 'source_provenance' AND dependency_ref = ANY($6))
+            OR (dependency_type = 'navigation_state' AND dependency_ref = ANY($7))
           )
         ORDER BY page_node_key, dependency_type, dependency_ref
         "#,
@@ -782,6 +914,8 @@ pub async fn resolve_rebuild_impacts(
     .bind(&template_refs)
     .bind(&serp_query_refs)
     .bind(&keyword_cluster_refs)
+    .bind(&source_refs)
+    .bind(&navigation_refs)
     .fetch_all(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -1475,6 +1609,9 @@ pub async fn load_seo_site_build_input(
             &[run_id, &validated_scope.scope_signature],
         );
     }
+    if input.run_mode.trim().is_empty() {
+        input.run_mode = "publish_with_hitl".to_string();
+    }
     Ok(input)
 }
 
@@ -1823,7 +1960,7 @@ pub async fn persist_serp_normalize_output(
         ));
     }
 
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
     Ok(())
 }
 
@@ -1993,12 +2130,13 @@ pub async fn persist_opportunity_build_output(
         ));
     }
 
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
     Ok(())
 }
 
 pub async fn persist_ia_build_output(
     pool: &PgPool,
+    input: &IaBuildInputPayload,
     output: &IaBuildOutputPayload,
 ) -> Result<(), DomainError> {
     let mut projection_events = Vec::new();
@@ -2204,6 +2342,36 @@ pub async fn persist_ia_build_output(
             }
         }
 
+        let navigation_state_ref = format!(
+            "{}|{}|{}",
+            page.menu_group, page.breadcrumb_policy, page.canonical_url_family
+        );
+        sqlx::query(
+            r#"
+            INSERT INTO monitoring.seo_rebuild_dependencies
+                (rebuild_dependency_key, page_node_key, dependency_type, dependency_ref, reason_package, status)
+            VALUES ($1, $2, 'navigation_state', $3, $4, 'active')
+            ON CONFLICT (page_node_key, dependency_type, dependency_ref) DO UPDATE
+            SET reason_package = EXCLUDED.reason_package,
+                status = EXCLUDED.status,
+                updated_at = now()
+            "#,
+        )
+        .bind(primitives::seo::seo_artifact_key(
+            "rebuild_dependency",
+            &[&page.page_node_key, "navigation_state", &navigation_state_ref],
+        ))
+        .bind(&page.page_node_key)
+        .bind(&navigation_state_ref)
+        .bind(Json(json!({
+            "menu_group": page.menu_group,
+            "breadcrumb_policy": page.breadcrumb_policy,
+            "canonical_url_family": page.canonical_url_family,
+        })))
+        .execute(pool)
+        .await
+        .map_err(classify_sqlx)?;
+
         projection_events.push(seo_graph_projection_event(
             "page_node",
             &page.page_node_key,
@@ -2271,12 +2439,13 @@ pub async fn persist_ia_build_output(
         ));
     }
 
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
     Ok(())
 }
 
 pub async fn persist_link_recommend_output(
     pool: &PgPool,
+    input: &LinkRecommendInputPayload,
     output: &LinkRecommendOutputPayload,
 ) -> Result<(), DomainError> {
     let mut projection_events = Vec::new();
@@ -2341,26 +2510,17 @@ pub async fn persist_link_recommend_output(
             &link.scope_signature,
         ));
     }
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
     Ok(())
 }
 
 pub async fn persist_draft_assemble_output(
     pool: &PgPool,
+    run_id: &str,
     output: &DraftAssembleOutputPayload,
 ) -> Result<(), DomainError> {
     let mut projection_events = Vec::new();
-    let run_id = output
-        .page_brief
-        .as_ref()
-        .map(|brief| brief.truth_snapshot_ref.clone())
-        .or_else(|| {
-            output
-                .llm_request
-                .as_ref()
-                .map(|request| request.run_id.clone())
-        })
-        .unwrap_or_default();
+    non_empty(run_id, "run_id")?;
     if let Some(brief) = output.page_brief.as_ref() {
         non_empty(&brief.page_brief_key, "page_brief_key")?;
         sqlx::query(
@@ -2413,9 +2573,7 @@ pub async fn persist_draft_assemble_output(
     }
 
     if let Some(plan) = output.content_block_plan.as_ref() {
-        if !run_id.trim().is_empty() {
-            upsert_runtime_blob(pool, &run_id, "content_block_plan", plan).await?;
-        }
+        upsert_runtime_blob(pool, run_id, "content_block_plan", plan).await?;
     }
 
     if let Some(draft) = output.draft.as_ref() {
@@ -2523,6 +2681,48 @@ pub async fn persist_draft_assemble_output(
                 .execute(pool)
                 .await
                 .map_err(classify_sqlx)?;
+
+                if let Some(source_key) = sqlx::query_scalar::<_, String>(
+                    r#"
+                    SELECT source_key
+                    FROM verified.rule_instances
+                    WHERE rule_instance_id = $1
+                      AND source_key IS NOT NULL
+                      AND source_key <> ''
+                    LIMIT 1
+                    "#,
+                )
+                .bind(support_ref)
+                .fetch_optional(pool)
+                .await
+                .map_err(classify_sqlx)?
+                {
+                    sqlx::query(
+                        r#"
+                        INSERT INTO monitoring.seo_rebuild_dependencies
+                            (rebuild_dependency_key, page_node_key, dependency_type, dependency_ref, reason_package, status)
+                        VALUES ($1, $2, 'source_provenance', $3, $4, 'active')
+                        ON CONFLICT (page_node_key, dependency_type, dependency_ref) DO UPDATE
+                        SET reason_package = EXCLUDED.reason_package,
+                            status = EXCLUDED.status,
+                            updated_at = now()
+                        "#,
+                    )
+                    .bind(primitives::seo::seo_artifact_key(
+                        "rebuild_dependency",
+                        &[&draft.page_node_key, "source_provenance", &source_key],
+                    ))
+                    .bind(&draft.page_node_key)
+                    .bind(&source_key)
+                    .bind(Json(json!({
+                        "page_draft_key": draft.page_draft_key,
+                        "support_ref": support_ref,
+                        "source_section_key": claim.source_section_key,
+                    })))
+                    .execute(pool)
+                    .await
+                    .map_err(classify_sqlx)?;
+                }
             }
         }
 
@@ -2578,7 +2778,7 @@ pub async fn persist_draft_assemble_output(
         ));
     }
 
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, run_id, projection_events).await?;
     Ok(())
 }
 
@@ -2595,7 +2795,7 @@ pub async fn persist_draft_normalize_output(
         llm_request: None,
         content_block_plan: output.content_block_plan.clone(),
     };
-    persist_draft_assemble_output(pool, &output_as_assemble).await
+    persist_draft_assemble_output(pool, &input.run_id, &output_as_assemble).await
 }
 
 pub async fn persist_content_contract_validate_output(
@@ -2688,8 +2888,9 @@ pub async fn persist_draft_qa_output(
         .map_err(classify_sqlx)?;
     }
 
-    emit_projection_events(
+    emit_projection_events_for_run(
         pool,
+        &input.run_id,
         vec![seo_qdrant_projection_event(
             "seo_draft_support_sections",
             "page_draft",
@@ -2802,9 +3003,36 @@ pub async fn persist_rebuild_detect_output(
         .execute(pool)
         .await
         .map_err(classify_sqlx)?;
+
+        let global_rebuild_plan_key = primitives::seo::seo_artifact_key(
+            "global_rebuild_plan",
+            &[page_node_key, &trigger_type, changed_truth_key],
+        );
+        sqlx::query(
+            r#"
+            INSERT INTO site.global_rebuild_plan
+                (rebuild_plan_key, affected_page_node_key, trigger_type, priority, reason_payload, status)
+            VALUES ($1, $2, $3, $4, $5, 'queued')
+            ON CONFLICT (rebuild_plan_key) DO UPDATE
+            SET affected_page_node_key = EXCLUDED.affected_page_node_key,
+                trigger_type = EXCLUDED.trigger_type,
+                priority = EXCLUDED.priority,
+                reason_payload = EXCLUDED.reason_payload,
+                status = 'queued',
+                updated_at = now()
+            "#,
+        )
+        .bind(global_rebuild_plan_key)
+        .bind(page_node_key)
+        .bind(&trigger_type)
+        .bind(priority)
+        .bind(Json(reason_package.clone()))
+        .execute(pool)
+        .await
+        .map_err(classify_sqlx)?;
     }
 
-    emit_projection_events(pool, projection_events).await?;
+    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
     Ok(())
 }
 

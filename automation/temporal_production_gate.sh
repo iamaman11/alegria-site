@@ -62,17 +62,25 @@ db_scalar() {
     psql -U postgres -d alegria -t -A -c "$sql"
 }
 
+table_exists() {
+  local schema="$1"
+  local table="$2"
+  db_scalar "select exists (select 1 from information_schema.tables where table_schema='${schema}' and table_name='${table}');" | tr -d '[:space:]'
+}
+
+assert_db_baseline() {
+  local verdict
+  verdict="$(python3 automation/check_local_runtime_db_baseline.py --database-url "$DB_DSN" 2>&1)" || {
+    printf '%s\n' "$verdict" >&2
+    die "local DB is not baseline-ready for migration-first runtime path"
+  }
+  printf '%s\n' "$verdict"
+}
+
 blake3_hex() {
   (
     cd app/rust
     cargo run -q -p cli_tools -- compute-bytes-hash --hex "$1"
-  )
-}
-
-encode_fact_input_hex() {
-  (
-    cd app/rust
-    cargo run -q -p cli_tools -- encode-fact-input --sections-json "$1"
   )
 }
 
@@ -105,10 +113,31 @@ wait_sql_value() {
   return 1
 }
 
-apply_business_schema() {
-  log "applying business schema"
-  docker exec -i -e PGPASSWORD=postgres_password alegria_postgres \
-    psql -U postgres -d alegria >/dev/null < app/db/schema.sql
+seed_admissible_verified_rule() {
+  local rule_instance_id="$1"
+  local context_key="$2"
+  local rule_type_key="$3"
+  local concept_key="$4"
+  local role_type="$5"
+  local fragment_text="$6"
+  local source_key="${7:-smoke_source}"
+  local unique_token="${8:-$(cat /proc/sys/kernel/random/uuid)}"
+  local page_id section_id snapshot_hash
+  page_id="$(db_scalar "insert into raw.pages (url, domain, dtype, status_code, title, raw_html, raw_html_bytes, content_hash, content, processed) values ('https://example.com/${unique_token}','example.com','internal',200,'Smoke Source','<html><body><main><p>${fragment_text}</p></main></body></html>', length('<html><body><main><p>${fragment_text}</p></main></body></html>'), md5('<html><body><main><p>${fragment_text}</p></main></body></html>'), jsonb_build_object('markdown','${fragment_text}','headings','[]'::jsonb,'links','[]'::jsonb), true) returning id;" | tr -d '[:space:]')"
+  section_id="$(db_scalar "insert into raw.sections (page_id, heading_path, heading_level, section_order, section_type, content_md, content_hash) values (${page_id}, 'Requirements', 1, 0, 'paragraph', '${fragment_text}', md5('${fragment_text}')) returning id;" | tr -d '[:space:]')"
+  snapshot_hash="$(db_scalar "select content_hash from raw.pages where id=${page_id};" | tr -d '[:space:]')"
+  db_scalar "insert into verified.rule_instances (rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status, source_key, confidence, evidence_section_id, evidence_quote, span_start, span_end, source_snapshot_hash, verification_method, adjudication_reason, publish_admissibility, freshness_class, completeness_class, registry_version, prompt_version, model_version, pipeline_version, effective_from) values ('${rule_instance_id}','${context_key}','${rule_type_key}','${concept_key}','${role_type}', jsonb_build_object('fragment_text','${fragment_text}'),'verified','${source_key}',1.0,${section_id},'${fragment_text}',0,length('${fragment_text}'),'${snapshot_hash}','bootstrap_seed','temporal_production_gate_seed','admissible','fresh','complete','registry@1','seed@1','none','temporal_production_gate@1',current_date) on conflict (rule_instance_id) do update set params=excluded.params, status=excluded.status, source_key=excluded.source_key, confidence=excluded.confidence, evidence_section_id=excluded.evidence_section_id, evidence_quote=excluded.evidence_quote, span_start=excluded.span_start, span_end=excluded.span_end, source_snapshot_hash=excluded.source_snapshot_hash, verification_method=excluded.verification_method, adjudication_reason=excluded.adjudication_reason, publish_admissibility=excluded.publish_admissibility, freshness_class=excluded.freshness_class, completeness_class=excluded.completeness_class, registry_version=excluded.registry_version, prompt_version=excluded.prompt_version, model_version=excluded.model_version, pipeline_version=excluded.pipeline_version, updated_at=now();" >/dev/null
+}
+
+apply_business_migrations() {
+  log "checking local DB baseline"
+  assert_db_baseline
+  log "applying business migrations"
+  local migration
+  for migration in app/db/migrations/*.sql; do
+    docker exec -i -e PGPASSWORD=postgres_password alegria_postgres \
+      psql -v ON_ERROR_STOP=1 -U postgres -d alegria >/dev/null < "$migration"
+  done
 }
 
 start_services() {
@@ -153,7 +182,7 @@ assert_metrics() {
 
 assert_invariants() {
   log "checking DB/runtime invariants"
-  apply_business_schema
+  apply_business_migrations
 
   local idx_count
   idx_count="$(db_scalar "select count(*) from pg_indexes where schemaname='system' and tablename='sync_outbox' and indexname='idx_sync_outbox_dedup';" | tr -d '[:space:]')"
@@ -166,16 +195,16 @@ assert_invariants() {
     db_scalar "insert into kb.sources (source_key, source_type, source_label, base_url, trust_level, status) values ('smoke_source','internal','Smoke Source','https://example.com',3,'active') on conflict (source_key) do nothing;" >/dev/null
   fi
 
-  # Required concepts for deterministic smoke extract path.
+  # Required concepts for deterministic support bootstrap.
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('consular_fee','fee','Консульский сбор','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('passport','document','Паспорт','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('medical_insurance','document','Медицинская страховка','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('pl:work:by','pl','work',null,'by','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:by','ES','tourist',null,'BY','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:empty:by','ES','tourist','empty-gate','BY','active') on conflict (context_key) do nothing;" >/dev/null
-  db_scalar "insert into verified.rule_instances (rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status, source_key, confidence, effective_from) values ('gate-es-doc-passport','es:tourist:by','document_required','passport','document_required','{\"fragment_text\":\"Valid passport is required for the application.\"}'::jsonb,'verified','smoke_source',1.0,current_date) on conflict (rule_instance_id) do nothing;" >/dev/null
-  db_scalar "insert into verified.rule_instances (rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status, source_key, confidence, effective_from) values ('gate-es-fee-consular','es:tourist:by','fee_item','consular_fee','fee_item','{\"fragment_text\":\"Consular fee is 35 EUR for the standard visa process.\"}'::jsonb,'verified','smoke_source',1.0,current_date) on conflict (rule_instance_id) do nothing;" >/dev/null
-  db_scalar "insert into verified.rule_instances (rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status, source_key, confidence, effective_from) values ('gate-es-doc-insurance','es:tourist:by','document_required','medical_insurance','document_required','{\"fragment_text\":\"Medical insurance covering the trip is required.\"}'::jsonb,'verified','smoke_source',1.0,current_date) on conflict (rule_instance_id) do nothing;" >/dev/null
+  seed_admissible_verified_rule "gate-es-doc-passport" "es:tourist:by" "document_required" "passport" "document_required" "Valid passport is required for the application."
+  seed_admissible_verified_rule "gate-es-fee-consular" "es:tourist:by" "fee_item" "consular_fee" "fee_item" "Consular fee is 35 EUR for the standard visa process."
+  seed_admissible_verified_rule "gate-es-doc-insurance" "es:tourist:by" "document_required" "medical_insurance" "document_required" "Medical insurance covering the trip is required."
 }
 
 run_ping_and_demo() {
@@ -184,54 +213,6 @@ run_ping_and_demo() {
   local out
   out="$(cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- demo-hitl)"
   printf '%s\n' "$out" | grep -q "demo_hitl_ok" || die "demo-hitl failed"
-}
-
-run_fact_workflow() {
-  local rid
-  rid="$(cat /proc/sys/kernel/random/uuid)"
-  log "fact workflow run_id=$rid"
-  local sections_json input_hex input_hash
-  sections_json='[{"content_md":"Паспорт обязателен. Консульский сбор 35 EUR. Медицинская страховка обязательна."}]'
-  input_hex="$(encode_fact_input_hex "$sections_json")"
-  input_hash="$(blake3_hex "$input_hex")"
-  db_scalar "insert into pipeline.execution_runs (run_id, workflow_run_id, workflow_type, context_key, status) values ('$rid'::uuid, '$rid', 'extract_facts', 'pl:work:by', 'created');" >/dev/null
-  db_scalar "insert into pipeline.execution_run_blobs (run_id, field_name, payload_type, schema_version, payload_bytes, payload_hash) values ('$rid'::uuid, 'input_payload', 'alegria.temporal.v1.FactExtractionInputPayload', 1, decode('$input_hex','hex'), '$input_hash');" >/dev/null
-  (cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- start --workflow fact-extraction --workflow-id "$rid") >/dev/null
-
-  # Wait for HITL pause and resolve.
-  local waited=0
-  local hitl_seen=0
-  while [ "$waited" -lt 120 ]; do
-    local st
-    st="$(wf_status "$rid" || true)"
-    if [ "$st" = "WORKFLOW_EXECUTION_STATUS_COMPLETED" ]; then
-      break
-    fi
-    if [ "$st" = "WORKFLOW_EXECUTION_STATUS_FAILED" ] || [ "$st" = "WORKFLOW_EXECUTION_STATUS_TERMINATED" ] || [ "$st" = "WORKFLOW_EXECUTION_STATUS_TIMED_OUT" ]; then
-      break
-    fi
-    if docker exec alegria_temporal temporal --address "$TEMPORAL_CLI_ADDRESS" workflow query --workflow-id "$rid" --name status 2>/dev/null | grep -q '"waiting_hitl":true'; then
-      hitl_seen=1
-      docker exec alegria_temporal temporal --address "$TEMPORAL_CLI_ADDRESS" workflow signal --workflow-id "$rid" --name resume --input '{"decision":"approve","actor":"gate","notes":""}' >/dev/null
-      break
-    fi
-    sleep 2
-    waited=$((waited + 2))
-  done
-
-  # Fallback: even if query path is slow/timeout, push resume once.
-  # Signal handler is idempotent for this test path.
-  if [ "$hitl_seen" -eq 0 ]; then
-    docker exec alegria_temporal temporal --address "$TEMPORAL_CLI_ADDRESS" workflow signal --workflow-id "$rid" --name resume --input '{"decision":"approve","actor":"gate","notes":""}' >/dev/null 2>&1 || true
-  fi
-
-  if ! wait_wf_closed "$rid" 240; then
-    die "fact workflow did not reach COMPLETED"
-  fi
-
-  local run_status
-  run_status="$(db_scalar "select status from pipeline.execution_runs where run_id='$rid'::uuid;" | tr -d '[:space:]')"
-  [ "$run_status" = "done" ] || die "fact execution_runs status is not done: $run_status"
 }
 
 run_seo_site_build_workflow() {
@@ -346,7 +327,6 @@ main() {
   start_services
   assert_invariants
   run_ping_and_demo
-  run_fact_workflow
   run_seo_empty_support_failure
   run_seo_site_build_workflow
   run_freshness_workflow

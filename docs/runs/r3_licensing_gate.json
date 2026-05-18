@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r3_licensing_gate",
+  "step": "R3.Step5",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Restricted redistribution sources are flagged in draft assembly and blocked in draft QA.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps licensing_gate_step",
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/licensing_gate_step.rs detects restricted redistribution traceability labels.",
+    "app/rust/crates/seo_steps/src/draft_assemble_step.rs marks forbidden source_context policies as restricted redistribution.",
+    "app/rust/crates/seo_steps/src/draft_qa_step.rs routes licensing blockers into publish safety."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

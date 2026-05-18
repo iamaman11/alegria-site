@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r4_rebuild_dependency_graph",
+  "step": "R4.Step1",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Rebuild dependency graph links page nodes to rule support, source provenance, blueprint/template, required links, query cluster and navigation state.",
+  "smoke_command": "python3 automation/smoke_rebuild_dependency_graph.py",
+  "contract_checks": [
+    "monitoring.seo_rebuild_dependencies schema allows truth_support, source_provenance, blueprint, section_template, keyword_cluster, serp_query, required_link and navigation_state.",
+    "sqlx_seo_adapter persists source provenance and navigation state edges and resolves them into matched_dependencies.",
+    "seo_domain rebuild keeps canonical trigger, priority and reason ownership."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

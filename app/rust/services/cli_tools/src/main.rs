@@ -17,7 +17,7 @@ use prost::Message;
 use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
 use seo_application::crawl_ingest::run_crawl_sources;
-use seo_application::execution::SeoRunPolicy;
+use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
 use seo_application::registration::register_site_build_input;
 use seo_application::scenario::{
     execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
@@ -296,6 +296,7 @@ fn map_seo_run_kind(command: SeoRunCommand) -> SeoScenarioKind {
 
 async fn register_seo_run_input(
     database_url: Option<String>,
+    scenario: SeoRunCommand,
     run_id: Option<String>,
     context_key: Option<String>,
     market: String,
@@ -308,6 +309,9 @@ async fn register_seo_run_input(
     bootstrap_context: bool,
     queries: Vec<String>,
     query_batch_key: Option<String>,
+    publish: bool,
+    require_preapproved_decision: bool,
+    warn_only_projections: bool,
 ) -> Result<contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
@@ -327,6 +331,15 @@ async fn register_seo_run_input(
             bootstrap_context,
             queries,
             query_batch_key,
+            run_mode: Some(
+                run_mode_for_scenario(
+                    map_seo_run_kind(scenario),
+                    publish,
+                    require_preapproved_decision,
+                    warn_only_projections,
+                )
+                .to_string(),
+            ),
         },
     )
     .await
@@ -356,6 +369,7 @@ async fn seo_run(
 ) -> Result<i32> {
     let site_input = register_seo_run_input(
         database_url.clone(),
+        scenario,
         run_id,
         context_key,
         market,
@@ -368,6 +382,9 @@ async fn seo_run(
         bootstrap_context,
         queries,
         query_batch_key,
+        publish,
+        require_preapproved_decision,
+        warn_only_projections,
     )
     .await?;
     let database_url = database_url.unwrap_or_else(default_database_url);
@@ -406,7 +423,11 @@ async fn seo_run(
             report.phase, report.status, report.page_node_key, report.detail
         );
     }
-    Ok(if result.status.starts_with("blocked") { 1 } else { 0 })
+    Ok(if result.status.starts_with("blocked") {
+        1
+    } else {
+        0
+    })
 }
 
 fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -> Result<i32> {
@@ -417,7 +438,6 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     // Legacy Python paths are intentionally NOT required anymore (R9 archive).
     // ---------------------------------------------------------------------
     let required_files = [
-        "app/rust/crates/primitives/src/facts_extractor.rs",
         "app/rust/crates/primitives/src/block_validator.rs",
         "app/rust/crates/primitives/src/fact_verifier.rs",
         "app/rust/crates/primitives/src/writer.rs",
@@ -425,6 +445,7 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
         "app/rust/crates/seo_application/src/seo_runtime.rs",
         "app/rust/crates/infrastructure/src/adapters/sqlx_pipeline_runtime_adapter.rs",
         "app/rust/crates/infrastructure/src/adapters/proto_runtime_payload_store.rs",
+        "app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs",
         "app/rust/services/temporal/src/activities/mod.rs",
         "app/rust/services/temporal/src/workflows/mod.rs",
         "app/rust/crates/infrastructure/src/adapters/sqlx_adapter.rs",
@@ -453,9 +474,6 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     if temporal_activities.exists() {
         let text = read_text(&temporal_activities)?;
         for fn_name in [
-            "pub async fn extract_facts(",
-            "pub async fn verify_rules(",
-            "pub async fn persist_and_emit(",
             "pub async fn generate_content(",
             "pub async fn validate_blocks(",
             "pub async fn finalize_run(",

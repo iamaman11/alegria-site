@@ -151,64 +151,187 @@ python3 automation/check_no_llm_sdk_in_seo_steps.py
 echo "[37/53] SEO claim ledger contract"
 python3 automation/check_seo_claim_ledger_contract.py
 
-echo "[38/53] Headless CMS publish flow smoke"
+echo "[37a/53] Extraction runtime contract"
+python3 automation/check_extraction_runtime_contract.py
+
+echo "[37b/53] Verified storage invariants"
+python3 automation/check_verified_storage_invariants.py
+
+echo "[37c/53] Truth admissibility gate"
+python3 automation/check_truth_admissibility_gate.py
+
+echo "[37d/53] Extracted rule candidates schema"
+python3 automation/check_extracted_rule_candidates_schema.py
+
+echo "[37e/53] Truth extraction provider contract"
+python3 automation/check_truth_extraction_provider_contract.py
+
+echo "[37f/53] LLM extraction contract"
+python3 automation/check_llm_extraction_contract.py
+
+echo "[37g/53] Truth validators contract"
+python3 automation/check_truth_validators_contract.py
+
+echo "[37h/53] Truth adjudication contract"
+python3 automation/check_truth_adjudication_contract.py
+
+echo "[37e/53] SEO provenance invariants"
+python3 automation/check_seo_provenance_invariants.py
+
+echo "[38/53] Extraction coverage"
+python3 automation/check_extraction_coverage.py
+
+echo "[39/53] Extraction coverage smoke"
+python3 automation/smoke_extraction_coverage.py
+
+echo "[40/53] Contradiction handling"
+python3 automation/check_contradiction_handling.py
+
+echo "[41/53] Contradiction handling smoke"
+python3 automation/smoke_contradiction_handling.py
+
+echo "[42/53] PII redaction pre-LLM"
+python3 automation/check_pii_redaction_pre_llm.py
+
+echo "[43/53] PII redaction pre-LLM smoke"
+python3 automation/smoke_pii_redaction_pre_llm.py
+
+echo "[44/53] Licensing gate"
+python3 automation/check_licensing_gate.py
+
+echo "[45/53] Licensing gate smoke"
+python3 automation/smoke_licensing_gate.py
+
+echo "[46/53] Deterministic fallback publish blocking"
+python3 automation/check_deterministic_fallback_publish_blocking.py
+
+echo "[47/53] Deterministic fallback publish blocking smoke"
+python3 automation/smoke_deterministic_fallback_publish_blocking.py
+
+echo "[48/53] HITL operator surface"
+python3 automation/check_hitl_operator_surface.py
+
+echo "[49/53] HITL operator surface smoke"
+python3 automation/smoke_hitl_operator_surface.py
+
+echo "[50/53] Headless CMS publish flow smoke"
 python3 automation/smoke_headless_cms_publish_flow.py
 
-echo "[39/53] Expert draft LLM fixture smoke"
+echo "[51/53] Expert draft LLM fixture smoke"
 python3 automation/smoke_expert_draft_llm_fixture.py
 
-echo "[40/53] SEO site-build fixture smoke"
+echo "[52/53] SEO site-build fixture smoke"
 python3 automation/smoke_seo_site_build_fixture.py
 
-echo "[40a/53] Support bundle required smoke"
+echo "[52a/53] Support bundle required smoke"
 python3 automation/smoke_support_bundle_required.py
 
-echo "[40b/53] Incremental publish path smoke"
+echo "[52b/53] Incremental publish path smoke"
 python3 automation/smoke_incremental_publish_path.py
 
-echo "[40c/53] Dependency-aware rebuild smoke"
+echo "[52c/53] Rebuild dependency graph"
+python3 automation/check_rebuild_dependency_graph.py
+
+echo "[52d/53] Rebuild dependency graph smoke"
+python3 automation/smoke_rebuild_dependency_graph.py
+
+echo "[52e/53] Rebuild queue and execution path"
+python3 automation/check_rebuild_queue_execution_path.py
+
+echo "[52f/53] Rebuild queue and execution path smoke"
+python3 automation/smoke_rebuild_queue_execution_path.py
+
+echo "[52g/53] Global navigation policy"
+python3 automation/check_global_navigation_policy.py
+
+echo "[52h/53] Global navigation policy smoke"
+python3 automation/smoke_global_navigation_policy.py
+
+echo "[52i/53] Dependency-aware rebuild smoke"
 python3 automation/smoke_dependency_aware_rebuild.py
 
-echo "[40d/53] Editorial provider routing contract"
+echo "[52j/53] Editorial provider routing contract"
 python3 automation/check_editorial_provider_routing.py
 
-echo "[40e/53] SEO migration parity"
+echo "[52k/53] SEO migration parity"
 python3 automation/check_seo_migration_parity.py
 
-echo "[40f/53] Launch gate no legacy content"
+echo "[52k1/53] Execution run blob contract"
+python3 automation/check_execution_run_blob_contract.py
+
+echo "[52l/53] Launch gate no legacy content"
 python3 automation/check_launch_gate_no_legacy_content.py
+
+echo "[52m/53] Legacy workflow quarantine"
+python3 automation/check_legacy_workflow_quarantine.py
+
+echo "[52n/53] Legacy replay evidence schema"
+python3 automation/check_seo_legacy_replay_evidence_schema.py
+
+echo "[52o/53] Legacy replay inventory contract"
+python3 automation/check_seo_legacy_replay_inventory_contract.py
+
+echo "[52p/53] Legacy replay environment probe"
+python3 automation/check_seo_legacy_replay_environment_probe.py
 
 echo "[41/53] Temporal build-id policy"
 python3 automation/check_temporal_build_id_policy.py
 
-echo "[42/53] Metrics contract"
+echo "[42a/53] Quality policy registry and scoring"
+python3 automation/check_quality_policy_registry.py
+
+echo "[42b/53] Quality policy registry and scoring smoke"
+python3 automation/smoke_quality_policy_registry.py
+
+echo "[42c/53] Run report completeness"
+python3 automation/check_run_report_completeness.py
+
+echo "[42d/53] Run report completeness smoke"
+python3 automation/smoke_run_report_completeness.py
+
+echo "[42e/53] Metrics contract"
 python3 automation/check_metrics_contract.py
 
-echo "[43/53] Reconcile fail-safe contract"
+echo "[43/57] Run modes contract"
+python3 automation/check_run_modes_contract.py
+
+echo "[44/57] SEO site-build replay contract"
+python3 automation/check_seo_site_build_replay_contract.py
+
+echo "[45/57] SEO rollout/compat contract"
+python3 automation/check_seo_rollout_compat_contract.py
+
+echo "[46/58] Projection barrier run-scope contract"
+python3 automation/check_projection_barrier_run_scoped.py
+
+echo "[47/59] Run-id event stamping contract"
+python3 automation/check_run_id_event_stamping.py
+
+echo "[48/60] Reconcile fail-safe contract"
 python3 automation/check_reconcile_failsafe.py
 
-echo "[44/53] Fail-safe smoke: broken schema -> DLQ"
+echo "[49/60] Fail-safe smoke: broken schema -> DLQ"
 python3 automation/smoke_broken_schema_to_dlq.py
 
-echo "[45/53] Fail-safe smoke: exhausted retry -> DLQ"
+echo "[50/60] Fail-safe smoke: exhausted retry -> DLQ"
 python3 automation/smoke_exhausted_retry_to_dlq.py
 
-echo "[46/53] Fail-safe smoke: stale outbox reclaim"
+echo "[51/60] Fail-safe smoke: stale outbox reclaim"
 python3 automation/smoke_stale_outbox_reclaim.py
 
-echo "[47/53] Fail-safe smoke: pending HITL not failure"
+echo "[52/60] Fail-safe smoke: pending HITL not failure"
 python3 automation/smoke_pending_hitl_not_failure.py
 
-echo "[48/53] Backup/restore layout"
+echo "[53/60] Backup/restore layout"
 python3 automation/check_backup_restore_layout.py
 
-echo "[49/53] SQLx offline contract"
+echo "[54/60] SQLx offline contract"
 python3 automation/check_sqlx_offline_contract.py
 
-echo "[50/53] End-to-end invariant checks (schema + JSONL data)"
+echo "[55/60] End-to-end invariant checks (schema + JSONL data)"
 python3 automation/check_end_to_end_invariants.py
 
-echo "[51/53] Consistency audit report"
+echo "[56/60] Consistency audit report"
 python3 automation/check_expert_consistency.py \
   --run-boundary \
   --run-rust-adapters \
@@ -216,11 +339,38 @@ python3 automation/check_expert_consistency.py \
   --run-json-boundary \
   --report-json automation/reports/consistency_report.json
 
-echo "[52/53] SEO use-case acceptance test"
+echo "[57/60] Integration harness presence"
+python3 automation/check_integration_harness_present.py
+
+echo "[58/60] SEO use-case acceptance test"
 (cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_steps seo_steps_form_publish_ready_pipeline)
 
-echo "[53/53] Rust workspace check"
-(cd app/rust && SQLX_OFFLINE=true cargo check -q)
+echo "[59/60] Integration harness stub test"
+(cd app/rust && cargo test -q -p integration_harness)
+
+echo "[60/60] Integration harness e2e surface compile"
+(cd app/rust && cargo test -q -p integration_harness --features e2e --no-run)
+
+echo "[60a/60] Live-provider smoke evidence schema"
+python3 automation/check_live_provider_smoke_evidence_schema.py
+
+echo "[60b/60] Crawler invariants contract"
+python3 automation/check_crawler_invariants.py
+
+echo "[60c/60] Crawler robots-policy smoke"
+python3 automation/smoke_crawler_robots_policy.py
+
+echo "[60d/60] Crawl provenance contract"
+python3 automation/check_crawl_provenance_contract.py
+
+echo "[60e/60] Crawl dedup contract"
+python3 automation/check_crawl_dedup_contract.py
+
+echo "[60f/60] SERP intelligence contract"
+python3 automation/check_serp_intelligence_contract.py
+
+echo "[60g/60] SERP top10 pattern smoke"
+python3 automation/smoke_serp_top10_pattern_pipeline.py
 
 echo "[post] Rust migration contract + fact verifier parity"
 SQLX_OFFLINE=true cargo run -q --manifest-path app/rust/services/cli_tools/Cargo.toml -- \

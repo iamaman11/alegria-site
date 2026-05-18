@@ -30,6 +30,7 @@ mod rows {
 mod queries {
     use super::rows::{OutboxEventIdRow, OutboxEventStatusRow};
     use sqlx::PgPool;
+    use sqlx::Row;
     use uuid::Uuid;
 
     use super::OutboxEnvelope;
@@ -39,29 +40,30 @@ mod queries {
         event: &OutboxEnvelope,
         payload_hash: &str,
     ) -> Result<OutboxEventIdRow, sqlx::Error> {
-        let row = sqlx::query!(
+        let row = sqlx::query(
             r#"
             INSERT INTO system.sync_outbox
-            (aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            (run_id, aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (aggregate_key, event_type, idempotency_key) WHERE idempotency_key <> ''
             DO UPDATE SET updated_at = now()
             RETURNING event_id
             "#,
-            event.aggregate_type,
-            event.aggregate_key,
-            event.target_system,
-            event.event_type,
-            event.payload_type,
-            event.schema_version,
-            event.idempotency_key,
-            event.payload_bytes(),
-            payload_hash
         )
+        .bind(&event.run_id)
+        .bind(&event.aggregate_type)
+        .bind(&event.aggregate_key)
+        .bind(&event.target_system)
+        .bind(&event.event_type)
+        .bind(&event.payload_type)
+        .bind(event.schema_version)
+        .bind(&event.idempotency_key)
+        .bind(event.payload_bytes())
+        .bind(payload_hash)
         .fetch_one(pool)
         .await?;
         Ok(OutboxEventIdRow {
-            event_id: row.event_id,
+            event_id: row.get("event_id"),
         })
     }
 
@@ -109,10 +111,11 @@ pub async fn outbox_emit_many(
 
         let res = sqlx::query(
             "INSERT INTO system.sync_outbox \
-             (aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (run_id, aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (aggregate_key, event_type, idempotency_key) WHERE idempotency_key <> '' DO NOTHING",
         )
+        .bind(&event.run_id)
         .bind(&event.aggregate_type)
         .bind(&event.aggregate_key)
         .bind(&event.target_system)

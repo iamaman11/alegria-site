@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r3_contradiction_handling",
+  "step": "R3.Step3",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Critical contradictions block publish; lower-confidence conflicts route to HITL.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps contradiction_gate_step && SQLX_OFFLINE=true cargo test -q -p seo_steps hitl_decision_step",
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/contradiction_gate_step.rs blocks critical conflicts and distinguishes hitl_review from pass.",
+    "app/rust/crates/seo_steps/src/hitl_decision_step.rs hard-blocks contradiction_blocked inputs and routes conflicts to HITL.",
+    "app/rust/crates/seo_steps/src/seo_flow_tests.rs already exercises publish-ready flow without contradiction regressions."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

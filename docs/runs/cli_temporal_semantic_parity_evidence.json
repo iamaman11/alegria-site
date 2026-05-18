@@ -1,0 +1,20 @@
+{
+  "evidence_status": "PASS",
+  "checked_at": "2026-05-14T19:59:46Z",
+  "command": "cargo test -p integration_harness --features e2e cli_vs_temporal_semantic_parity_on_full_harness -- --nocapture",
+  "exit_code": 0,
+  "scope": "synthetic fixture scope with stubbed SERP and editorial providers",
+  "semantic_surface": [
+    "verified.rule_instances",
+    "site.page_drafts",
+    "publish-intent decisions",
+    "business phase outputs"
+  ],
+  "normalization_rules": [
+    "exclude timestamps",
+    "exclude executor ids",
+    "exclude step ledger representation",
+    "exclude HITL transport",
+    "exclude run-specific truth_snapshot_ref"
+  ]
+}

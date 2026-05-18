@@ -1,0 +1,15 @@
+{
+  "artifact_id": "r4_run_report_metrics_surface",
+  "step": "R4.Step5",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "SeoScenarioResult is serializable, CLI prints run summary and phase lines, and metrics surface is contract-checked.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_application scenario_report_surface_serializes_phase_reports && SQLX_OFFLINE=true cargo test -q -p cli_tools --no-run && SQLX_OFFLINE=true cargo test -q -p integration_harness --features e2e synthetic_full_scenario_persists_page_draft_on_full_harness",
+  "contract_checks": [
+    "seo_application::scenario exposes a serializable SeoScenarioResult and SeoPhaseReport.",
+    "cli_tools prints SEO_RUN_RESULT and SEO_RUN_PHASE lines from the scenario result.",
+    "temporal metrics expose /metrics and the production gate validates the endpoint.",
+    "integration_harness keeps the canonical synthetic full scenario as report evidence."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

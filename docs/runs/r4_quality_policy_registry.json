@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r4_quality_policy_registry",
+  "step": "R4.Step4",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Quality policy thresholds live in a separate registry and are evaluated through a dedicated scoring step.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p policies quality_policy && SQLX_OFFLINE=true cargo test -q -p seo_steps quality_policy_step",
+  "contract_checks": [
+    "policies::quality_policy exposes the registry and scoring rules.",
+    "seo_steps::quality_policy_step wraps the registry in an executable step surface.",
+    "The proto contract exposes dedicated quality policy evaluation messages."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

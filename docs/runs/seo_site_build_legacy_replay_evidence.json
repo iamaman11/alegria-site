@@ -1,0 +1,78 @@
+{
+  "artifact_id": "seo_site_build_legacy_replay_evidence@2026-05-14",
+  "workflow_type": "SeoSiteBuildWorkflow",
+  "evidence_status": "PASS",
+  "status_reason": "No historical `seo_site_build` executions found in pipeline.execution_runs; legacy replay is not required for this environment.",
+  "worker_build_id_policy": "old build-id stays alive until old histories drain",
+  "workflow_type_policy": "new workflow type is mandatory when branch/order/signal semantics change and replay-safe proof is unavailable",
+  "run_mode_legacy_default": "publish_with_hitl",
+  "projection_barrier_contract": "system.sync_outbox.run_id separates current-run semantics from legacy/global rows",
+  "history_source": {
+    "kind": "db_inventory",
+    "workflow_ids": [],
+    "run_ids": [],
+    "namespace": "default",
+    "inventory": {
+      "source": "pipeline.execution_runs",
+      "captured_at": "2026-05-14T17:29:30Z",
+      "total_runs": 0,
+      "open_runs": 0,
+      "done_runs": 0,
+      "sample_run_ids": [],
+      "last_error": null
+    },
+    "environment_probe": {
+      "captured_at": "2026-05-14T17:29:29Z",
+      "candidates": [
+        {
+          "database_url": "postgresql://<local-user>:<redacted>@localhost:5432/alegria",
+          "host": "localhost",
+          "port": 5432,
+          "tcp_status": "listening",
+          "inventory_status": "query_succeeded",
+          "last_error": null
+        },
+        {
+          "database_url": "postgresql://<local-user>:<redacted>@localhost:5433/alegria",
+          "host": "localhost",
+          "port": 5433,
+          "tcp_status": "connect_failed",
+          "inventory_status": "not_attempted",
+          "last_error": "[Errno 111] Connection refused"
+        },
+        {
+          "database_url": "postgresql://<local-user>:<redacted>@localhost:6432/alegria",
+          "host": "localhost",
+          "port": 6432,
+          "tcp_status": "connect_failed",
+          "inventory_status": "not_attempted",
+          "last_error": "[Errno 111] Connection refused"
+        },
+        {
+          "database_url": "postgresql://<local-user>:<redacted>@localhost:5432/alegria",
+          "host": "localhost",
+          "port": 5432,
+          "tcp_status": "listening",
+          "inventory_status": "not_attempted",
+          "last_error": null
+        }
+      ]
+    }
+  },
+  "checks_green": [
+    "check_run_modes_contract.py",
+    "check_seo_site_build_replay_contract.py",
+    "check_seo_rollout_compat_contract.py",
+    "check_projection_barrier_run_scoped.py",
+    "check_run_id_event_stamping.py",
+    "check_legacy_workflow_quarantine.py",
+    "check_temporal_workflow_execution_plan.py",
+    "check_temporal_build_id_policy.py"
+  ],
+  "required_for_pass": [
+    "Captured old SeoSiteBuildWorkflow history or explicit proof that no such histories exist in target environment",
+    "Replay-compatible execution evidence for the current workflow contract",
+    "Recorded decision whether new workflow type is required or replay-safe proof is sufficient"
+  ],
+  "updated_at": "2026-05-14"
+}

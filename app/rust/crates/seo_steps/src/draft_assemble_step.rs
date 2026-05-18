@@ -1,5 +1,8 @@
 use std::collections::BTreeSet;
 
+use crate::pii_redaction_prepass_step::{
+    sanitize_candidate, sanitize_source_context_chunks, sanitize_support_bundle, sanitize_text,
+};
 use crate::seo_step_support::artifact_key;
 use contracts::generated::alegria::temporal::v1::{
     ClaimLedgerEntry, ContentBlockPlanItemState, ContentBlockPlanState, DraftAssembleInputPayload,
@@ -123,16 +126,16 @@ fn deterministic_section_body(
     page_node_key: &str,
     section_role: &str,
     section_support: &[&SeoVerifiedFactSupportState],
-    input: &DraftAssembleInputPayload,
+    required_links: &[contracts::generated::alegria::temporal::v1::LinkRecommendationState],
     traceability_entries: &mut Vec<SeoTraceabilityEntryState>,
     claim_ledger: &mut Vec<ClaimLedgerEntry>,
 ) -> String {
     if section_role == "related_pages" {
-        if input.required_links.is_empty() {
+        if required_links.is_empty() {
             return "- [unsupported:missing_required_internal_links]\n".to_string();
         }
         let mut body = String::new();
-        for link in &input.required_links {
+        for link in required_links {
             body.push_str("- Recommended internal link: ");
             body.push_str(&link.link_role);
             body.push_str(" -> ");
@@ -234,7 +237,8 @@ fn supported_refs_for_section(
 fn build_fallback_draft_parts(
     page_node_key: &str,
     title: &str,
-    input: &DraftAssembleInputPayload,
+    support: &[SeoVerifiedFactSupportState],
+    required_links: &[contracts::generated::alegria::temporal::v1::LinkRecommendationState],
     templates: &[SectionTemplateBinding],
 ) -> (
     String,
@@ -248,18 +252,17 @@ fn build_fallback_draft_parts(
     let mut traceability_entries = Vec::new();
     let mut claim_ledger = Vec::new();
     let mut content_blocks = Vec::new();
-    let block_plan =
-        planned_content_blocks(templates, &input.verified_support, &input.required_links);
+    let block_plan = planned_content_blocks(templates, support, required_links);
 
     for block in &block_plan {
         let section_role = block.section_role.clone();
         let heading = block.heading.clone();
-        let section_support = supports_for_role(&input.verified_support, &section_role);
+        let section_support = supports_for_role(support, &section_role);
         let section_body = deterministic_section_body(
             page_node_key,
             &section_role,
             &section_support,
-            input,
+            required_links,
             &mut traceability_entries,
             &mut claim_ledger,
         );
@@ -280,7 +283,7 @@ fn build_fallback_draft_parts(
             } else {
                 "business_copy".to_string()
             },
-            support_refs: supported_refs_for_section(&input.verified_support, &section_role),
+            support_refs: supported_refs_for_section(support, &section_role),
             template_key: templates
                 .iter()
                 .find(|template| template.section_role == section_role)
@@ -293,7 +296,7 @@ fn build_fallback_draft_parts(
             section_role: section_role.clone(),
             heading,
             markdown: section_body,
-            support_refs: supported_refs_for_section(&input.verified_support, &section_role),
+            support_refs: supported_refs_for_section(support, &section_role),
             traceability_label: if factual_role(&section_role) {
                 support_traceability_label(&section_role).to_string()
             } else {
@@ -414,6 +417,9 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
     let blueprint = input.page_blueprint.clone().unwrap_or_default();
     let safe_title = title_from_slug(&page_node.canonical_slug);
     let templates = template_bindings(input);
+    let sanitized_support = sanitize_support_bundle(&input.verified_support);
+    let sanitized_source_context_chunks =
+        sanitize_source_context_chunks(&input.source_context_chunks);
     let page_brief_key = artifact_key(
         "page_brief",
         &[&page_node.page_node_key, &blueprint.blueprint_key, "1"],
@@ -430,10 +436,10 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             "Produce a source-backed expert travel/visa page without introducing unsourced claims."
                 .to_string(),
         section_templates: templates.clone(),
-        verified_support: input.verified_support.clone(),
+        verified_support: sanitized_support.clone(),
         required_links: input.required_links.clone(),
         truth_snapshot_ref: input.run_id.clone(),
-        source_context_chunks: input.source_context_chunks.clone(),
+        source_context_chunks: sanitized_source_context_chunks,
     };
     let llm_request = LlmDraftRequest {
         request_key: artifact_key(
@@ -454,14 +460,20 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         &page_node.page_node_key,
         &page_brief_key,
         &templates,
-        &input.verified_support,
+        &sanitized_support,
         &input.required_links,
     );
 
-    let fallback =
-        build_fallback_draft_parts(&page_node.page_node_key, &safe_title, input, &templates);
-    let candidate = input.llm_candidate.as_ref();
+    let fallback = build_fallback_draft_parts(
+        &page_node.page_node_key,
+        &safe_title,
+        &sanitized_support,
+        &input.required_links,
+        &templates,
+    );
+    let candidate = input.llm_candidate.as_ref().map(sanitize_candidate);
     let has_candidate = candidate
+        .as_ref()
         .map(|value| value.status == "ready" && !value.body_markdown.trim().is_empty())
         .unwrap_or(false);
 
@@ -477,7 +489,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         llm_model_key,
         generation_request_key,
     ) = if has_candidate {
-        let candidate = candidate.unwrap();
+        let candidate = candidate.as_ref().unwrap();
         (
             candidate.body_markdown.clone(),
             if candidate.sections.is_empty() {
@@ -493,7 +505,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
                 candidate.content_blocks.clone()
             },
             if candidate.faq_json.trim().is_empty() {
-                faq_json_from_support(&input.verified_support)
+                faq_json_from_support(&sanitized_support)
             } else {
                 candidate.faq_json.clone()
             },
@@ -511,7 +523,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             candidate.request_key.clone(),
         )
     } else {
-        let faq_json = faq_json_from_support(&input.verified_support);
+        let faq_json = faq_json_from_support(&sanitized_support);
         (
             fallback.0,
             fallback.1,
@@ -539,9 +551,29 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
                     "draft_fragment",
                     &[&page_node.page_node_key, "manual", fragment.trim()],
                 ),
-                fragment_text: fragment.trim().to_string(),
+                fragment_text: sanitize_text(fragment.trim()),
                 fragment_kind: "factual".to_string(),
                 traceability_label: "unsupported_factual_fragment".to_string(),
+                support_refs: Vec::new(),
+                validation_verdict: "blocked".to_string(),
+            });
+        }
+    }
+
+    for chunk in &input.source_context_chunks {
+        let policy = chunk.usage_policy.to_ascii_lowercase();
+        if policy.contains("redistribution_allowed=false")
+            || policy.contains("non_redistributable")
+            || policy.contains("no redistribution")
+        {
+            traceability_entries.push(SeoTraceabilityEntryState {
+                fragment_key: artifact_key(
+                    "draft_fragment",
+                    &[&page_node.page_node_key, "license", &chunk.chunk_key],
+                ),
+                fragment_text: "Source usage policy forbids redistribution.".to_string(),
+                fragment_kind: "policy".to_string(),
+                traceability_label: "restricted_redistribution_source".to_string(),
                 support_refs: Vec::new(),
                 validation_verdict: "blocked".to_string(),
             });

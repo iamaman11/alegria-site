@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r4_global_navigation_policy",
+  "step": "R4.Step3",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Global navigation policy is deterministic across menu_group, breadcrumb_policy and canonical_url_family.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps global_site_reconcile_step",
+  "contract_checks": [
+    "global_site_reconcile_step assigns deterministic menu group, breadcrumb policy and canonical URL family.",
+    "ia_build_step emits canonical hub/country hub/leaf hierarchy and required link structure.",
+    "sqlx_seo_adapter persists navigation trees and navigation items."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

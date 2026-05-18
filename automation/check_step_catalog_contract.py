@@ -16,13 +16,13 @@ REQUIRED_CONTRACT_FIELDS = [
 ]
 
 LEDGER_BACKED_STEPS = [
-    "extract_facts",
-    "verify_rules",
-    "persist_and_emit",
     "generate_content",
     "validate_blocks",
     "load_seo_site_build_input",
+    "load_verified_support_bundle",
     "serp_ingest",
+    "crawl_sources",
+    "raw_knowledge_ingestion",
     "serp_normalize",
     "opportunity_build",
     "ia_build",

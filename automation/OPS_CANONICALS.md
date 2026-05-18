@@ -55,9 +55,12 @@ infra/backups/restore_drill.sh
 Локальный dev worker:
 
 ```bash
+set -a
+. infra/local/dev_db.env
+set +a
+
 cd app/rust
 TEMPORAL_URL=http://localhost:7233 \
-DATABASE_URL=postgres://postgres:postgres_password@localhost:5433/alegria \
 RUST_LOG=info \
 cargo run -p temporal_worker --bin temporal_worker
 ```

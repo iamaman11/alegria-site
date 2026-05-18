@@ -4,23 +4,24 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
     DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
     EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    FinalizePublishInputPayload, GlobalSiteReconcileInputPayload,
-    GlobalSiteReconcileOutputPayload, IaBuildInputPayload, IaBuildOutputPayload,
-    LinkRecommendInputPayload, LinkRecommendOutputPayload, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload,
-    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SerpIngestInputPayload,
-    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    FinalizePublishInputPayload, GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload,
+    IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
+    LinkRecommendOutputPayload, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
+    RebuildDetectInputPayload, RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload,
+    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
+    SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
     WorkflowContextView, WorkflowResult,
 };
 use seo_application::execution::{
-    advance_cursor, blocked_publish_gate_status, build_execution_plan, final_phase_keys,
-    initial_phase_keys, next_phase, page_phase_keys, phase_label, planning_phase_keys,
-    SeoExecutionCursor, SeoExecutionSegment, SeoPhaseDecision, SeoPhaseKey, SeoRunPolicy,
+    advance_cursor, blocked_interaction_status, blocked_publish_gate_status, build_execution_plan,
+    final_phase_keys, initial_phase_keys, next_phase, normalize_run_mode, page_phase_keys,
+    phase_label, planning_phase_keys, policy_for_run_mode, scenario_kind_for_run_mode,
+    RunInteractionPolicy, SeoExecutionCursor, SeoExecutionSegment, SeoPhaseDecision, SeoPhaseKey,
 };
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest};
 
@@ -66,10 +67,12 @@ impl SeoSiteBuildWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
 
+        let normalized_run_mode = normalize_run_mode(&site_input.run_mode);
+        let scenario = scenario_kind_for_run_mode(normalized_run_mode);
         let request = SeoScenarioRequest {
-            scenario: SeoScenarioKind::Full,
+            scenario,
             mode: SeoExecutionMode::TemporalDurable,
-            policy: SeoRunPolicy::for_temporal_durable(),
+            policy: policy_for_run_mode(normalized_run_mode, SeoExecutionMode::TemporalDurable),
             output_dir: String::new(),
             base_url: String::new(),
             site_input: site_input.clone(),
@@ -77,8 +80,8 @@ impl SeoSiteBuildWorkflow {
         let plan = build_execution_plan(&request);
 
         let scope = site_input.scope.clone();
-        let verified_support_request = serde_json::to_string(
-            &seo_ports::VerifiedSupportBundleRequest {
+        let verified_support_request =
+            serde_json::to_string(&seo_ports::VerifiedSupportBundleRequest {
                 run_id: run_id.clone(),
                 context_key: site_input.context_key.clone(),
                 scope_signature: scope
@@ -89,9 +92,8 @@ impl SeoSiteBuildWorkflow {
                     .as_ref()
                     .map(|value| value.applicant_profile.clone())
                     .unwrap_or_default(),
-            },
-        )
-        .map_err(anyhow::Error::from)?;
+            })
+            .map_err(anyhow::Error::from)?;
 
         let mut verified_support = Vec::new();
         let mut ingest: Option<SerpIngestOutputPayload> = None;
@@ -164,7 +166,8 @@ impl SeoSiteBuildWorkflow {
                                         context_key: site_input.context_key.clone(),
                                         query_batch_key: ingest_ref.query_batch_key.clone(),
                                         raw_page_ids: crawl_ref.raw_page_ids.clone(),
-                                        source_policy: "auto_verify_high_confidence@1".to_string(),
+                                        source_policy: "candidate_only_truth_extraction@1"
+                                            .to_string(),
                                     },
                                     db_opts(60),
                                 )
@@ -180,6 +183,10 @@ impl SeoSiteBuildWorkflow {
         }
 
         let raw_knowledge = raw_knowledge.expect("raw knowledge required");
+        if matches!(plan.scenario, SeoScenarioKind::CrawlIngestOnly) {
+            ctx.state_mut(|s| s.phase = "done:crawl_ingest_only".to_string());
+            return Ok(run_id);
+        }
         let planning_keys =
             planning_phase_keys(&plan, !raw_knowledge.changed_truth_keys.is_empty());
         cursor = SeoExecutionCursor {
@@ -241,7 +248,9 @@ impl SeoSiteBuildWorkflow {
                                     IaBuildInputPayload {
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
-                                        keyword_clusters: opportunities_ref.keyword_clusters.clone(),
+                                        keyword_clusters: opportunities_ref
+                                            .keyword_clusters
+                                            .clone(),
                                     },
                                     db_opts(30),
                                 )
@@ -273,7 +282,9 @@ impl SeoSiteBuildWorkflow {
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         page_nodes: ia_ref.page_nodes.clone(),
-                                        link_recommendations: links_ref.link_recommendations.clone(),
+                                        link_recommendations: links_ref
+                                            .link_recommendations
+                                            .clone(),
                                         reconcile_reason: "seo_site_build_workflow@1".to_string(),
                                     },
                                     db_opts(30),
@@ -483,44 +494,96 @@ impl SeoSiteBuildWorkflow {
                             SeoPhaseKey::HumanApprovalWait => {
                                 let cms_requested_ref =
                                     cms_requested.as_ref().expect("cms request required");
-                                ctx.state_mut(|s| {
-                                    s.waiting_hitl = true;
-                                    s.resume_requested = false;
-                                    s.paused = true;
-                                    s.phase = phase_with_ordinal(input.key, page_index, page_total);
-                                });
-                                loop {
-                                    ctx.wait_condition(|s| !s.paused && s.resume_requested).await;
-                                    let approval_lookup_key = format!(
-                                        "{}|{}|{}",
-                                        run_id, page_node.page_node_key, cms_requested_ref.revision_id
-                                    );
-                                    let approval_decision: CmsApprovalDecision = ctx
-                                        .start_activity(
-                                            AlegriaActivities::load_cms_approval_decision,
-                                            approval_lookup_key.clone(),
-                                            db_opts(30),
-                                        )
-                                        .await?;
-                                    if approval_decision.decision == "approved" {
+                                let approval_lookup_key = format!(
+                                    "{}|{}|{}",
+                                    run_id, page_node.page_node_key, cms_requested_ref.revision_id
+                                );
+                                match plan.policy.interaction {
+                                    RunInteractionPolicy::AllowHitlPause => {
+                                        ctx.state_mut(|s| {
+                                            s.waiting_hitl = true;
+                                            s.resume_requested = false;
+                                            s.paused = true;
+                                            s.phase = phase_with_ordinal(
+                                                input.key, page_index, page_total,
+                                            );
+                                        });
+                                        loop {
+                                            ctx.wait_condition(|s| !s.paused && s.resume_requested)
+                                                .await;
+                                            let approval_decision: CmsApprovalDecision = ctx
+                                                .start_activity(
+                                                    AlegriaActivities::load_cms_approval_decision,
+                                                    approval_lookup_key.clone(),
+                                                    db_opts(30),
+                                                )
+                                                .await?;
+                                            if approval_decision.decision == "approved" {
+                                                break;
+                                            }
+                                            ctx.state_mut(|s| {
+                                                s.waiting_hitl = true;
+                                                s.resume_requested = false;
+                                                s.paused = true;
+                                                s.phase = format!(
+                                                    "{}:{}:{}",
+                                                    phase_label(input.key),
+                                                    approval_decision.decision,
+                                                    page_index + 1
+                                                );
+                                            });
+                                        }
+                                        ctx.state_mut(|s| {
+                                            s.waiting_hitl = false;
+                                            s.resume_requested = false;
+                                        });
+                                    }
+                                    RunInteractionPolicy::FailIfHitlRequired => {
+                                        page_blocked = true;
+                                        ctx.state_mut(|s| {
+                                            s.waiting_hitl = false;
+                                            s.resume_requested = false;
+                                            s.phase = format!(
+                                                "{}:{}",
+                                                blocked_interaction_status(
+                                                    RunInteractionPolicy::FailIfHitlRequired
+                                                ),
+                                                phase_with_ordinal(
+                                                    input.key, page_index, page_total
+                                                )
+                                            );
+                                        });
                                         break;
                                     }
-                                    ctx.state_mut(|s| {
-                                        s.waiting_hitl = true;
-                                        s.resume_requested = false;
-                                        s.paused = true;
-                                        s.phase = format!(
-                                            "{}:{}:{}",
-                                            phase_label(input.key),
-                                            approval_decision.decision,
-                                            page_index + 1
-                                        );
-                                    });
+                                    RunInteractionPolicy::RequirePreApprovedDecision => {
+                                        let approval_decision: CmsApprovalDecision = ctx
+                                            .start_activity(
+                                                AlegriaActivities::load_cms_approval_decision,
+                                                approval_lookup_key,
+                                                db_opts(30),
+                                            )
+                                            .await?;
+                                        if approval_decision.decision != "approved" {
+                                            page_blocked = true;
+                                            ctx.state_mut(|s| {
+                                                s.waiting_hitl = false;
+                                                s.resume_requested = false;
+                                                s.phase = format!(
+                                                    "{}:{}",
+                                                    blocked_interaction_status(
+                                                        RunInteractionPolicy::RequirePreApprovedDecision
+                                                    ),
+                                                    phase_with_ordinal(
+                                                        input.key,
+                                                        page_index,
+                                                        page_total
+                                                    )
+                                                );
+                                            });
+                                            break;
+                                        }
+                                    }
                                 }
-                                ctx.state_mut(|s| {
-                                    s.waiting_hitl = false;
-                                    s.resume_requested = false;
-                                });
                             }
                             SeoPhaseKey::CmsPublishApproved => {
                                 let draft_ref = draft.as_ref().expect("draft_normalize required");
@@ -552,10 +615,7 @@ impl SeoSiteBuildWorkflow {
                                     )
                                     .await?,
                                 );
-                                if cms_approved
-                                    .as_ref()
-                                    .expect("cms approved output")
-                                    .verdict
+                                if cms_approved.as_ref().expect("cms approved output").verdict
                                     != "approved"
                                 {
                                     page_blocked = true;
@@ -579,13 +639,18 @@ impl SeoSiteBuildWorkflow {
                                             run_id: run_id.clone(),
                                             page_node_key: page_node.page_node_key.clone(),
                                             revision_id: cms_requested_ref.revision_id.clone(),
-                                            cms_document_id: cms_requested_ref.cms_document_id.clone(),
-                                            canonical_url_path: page_node.canonical_url_path.clone(),
-                                            publish_artifact: cms_requested_ref.publish_artifact.clone().or(
-                                                cms_approved
-                                                    .as_ref()
-                                                    .and_then(|approved| approved.publish_artifact.clone()),
-                                            ),
+                                            cms_document_id: cms_requested_ref
+                                                .cms_document_id
+                                                .clone(),
+                                            canonical_url_path: page_node
+                                                .canonical_url_path
+                                                .clone(),
+                                            publish_artifact: cms_requested_ref
+                                                .publish_artifact
+                                                .clone()
+                                                .or(cms_approved.as_ref().and_then(|approved| {
+                                                    approved.publish_artifact.clone()
+                                                })),
                                             output_dir: String::new(),
                                             base_url: String::new(),
                                         },
@@ -657,7 +722,9 @@ impl SeoSiteBuildWorkflow {
                                             run_id: run_id.clone(),
                                             page_node_key: page_node.page_node_key.clone(),
                                             revision_id: cms_requested_ref.revision_id.clone(),
-                                            publish_artifact: materialized_ref.publish_artifact.clone(),
+                                            publish_artifact: materialized_ref
+                                                .publish_artifact
+                                                .clone(),
                                             render_validation: Some(render_validation),
                                         },
                                         db_opts(30),

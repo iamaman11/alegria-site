@@ -5,13 +5,12 @@ import subprocess
 import uuid
 from pathlib import Path
 
+from local_env import resolve_database_url
+
 
 ROOT = Path(__file__).resolve().parents[1]
 POSTGRES_CONTAINER = os.environ.get("ALEGRIA_POSTGRES_CONTAINER", "alegria_postgres")
-DATABASE_URL = os.environ.get(
-    "ALEGRIA_DATABASE_URL",
-    "postgresql://postgres:postgres_password@localhost:5433/alegria",
-)
+DATABASE_URL = resolve_database_url()
 TEMPORAL_URL = os.environ.get("ALEGRIA_TEMPORAL_URL", "http://localhost:7233")
 
 

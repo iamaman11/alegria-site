@@ -7,28 +7,25 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlPauseInfo,
-    HitlResolutionInput, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
-    LinkRecommendOutputPayload, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
-    RebuildDetectInputPayload, RebuildDetectOutputPayload, RenderPreviewValidateInputPayload,
-    RenderPreviewValidateOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
+    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     activities, ActivityContext, ActivityError,
 };
 use infrastructure::adapters::{
-    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool,
-    sqlx_seo_adapter,
+    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
 };
 use primitives::errors::DomainError;
 use seo_ports::VerifiedSupportBundleRequest;
 
 mod content_generation;
-mod fact_extraction;
 mod operations;
 mod runtime;
 mod step_catalog;
@@ -49,8 +46,9 @@ fn strict_projection_barrier_enabled() -> bool {
 async fn observe_projection_barrier(
     pool: &AlegriaPgPool,
     checkpoint: &str,
+    run_id: &str,
 ) -> Result<(), DomainError> {
-    let statuses = sqlx_seo_adapter::read_projection_sync_status(pool).await?;
+    let statuses = sqlx_seo_adapter::read_projection_sync_status_for_run(pool, run_id).await?;
     let blocked_events: i64 = statuses
         .iter()
         .map(|status| status.blocking_event_count())
@@ -96,71 +94,6 @@ async fn observe_projection_barrier(
 #[activities]
 impl AlegriaActivities {
     #[activity]
-    pub async fn extract_facts(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<String, ActivityError> {
-        self.execute_step(&run_id, "extract_facts", 1, &run_id, || async {
-            fact_extraction::extract_facts_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
-    #[activity]
-    pub async fn verify_rules(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<String, ActivityError> {
-        self.execute_step(&run_id, "verify_rules", 1, &run_id, || async {
-            fact_extraction::verify_rules_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
-    #[activity]
-    pub async fn prepare_hitl_pause(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<HitlPauseInfo, ActivityError> {
-        self.execute_step(&run_id, "prepare_hitl_pause", 1, &run_id, || async {
-            fact_extraction::prepare_hitl_pause_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
-    #[activity]
-    pub async fn apply_hitl_resolution(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: HitlResolutionInput,
-    ) -> Result<String, ActivityError> {
-        let run_id = input
-            .meta
-            .as_ref()
-            .map(|m| m.run_id.clone())
-            .unwrap_or_default();
-        self.execute_step(&run_id, "apply_hitl_resolution", 1, &input, || async {
-            fact_extraction::apply_hitl_resolution_impl(self.as_ref(), &input).await
-        })
-        .await
-    }
-
-    #[activity]
-    pub async fn persist_and_emit(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<String, ActivityError> {
-        self.execute_step(&run_id, "persist_and_emit", 1, &run_id, || async {
-            fact_extraction::persist_and_emit_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
-    #[activity]
     pub async fn generate_content(
         self: Arc<Self>,
         _ctx: ActivityContext,
@@ -192,43 +125,6 @@ impl AlegriaActivities {
         input: seo_steps::layer_router_step::LayerRouterInput,
     ) -> Result<seo_steps::layer_router_step::LayerRouterOutput, ActivityError> {
         Ok(step_catalog::run_layer_router(self.as_ref(), &input))
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_entity_span_detection_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: seo_steps::entity_span_detection_step::EntitySpanInput,
-    ) -> Result<seo_steps::entity_span_detection_step::EntitySpanOutput, ActivityError> {
-        Ok(step_catalog::run_entity_span_detection(
-            self.as_ref(),
-            &input,
-        ))
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_canonical_mapping_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: seo_steps::canonical_mapping_step::CanonicalMappingInput,
-    ) -> Result<seo_steps::canonical_mapping_step::CanonicalMappingOutput, ActivityError> {
-        Ok(step_catalog::run_canonical_mapping(self.as_ref(), &input))
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_procedural_extraction_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: seo_steps::procedural_extraction_step::ProceduralExtractionInput,
-    ) -> Result<seo_steps::procedural_extraction_step::ProceduralExtractionOutput, ActivityError>
-    {
-        Ok(step_catalog::run_procedural_extraction(
-            self.as_ref(),
-            &input,
-        ))
     }
 
     #[allow(dead_code)]
@@ -267,16 +163,6 @@ impl AlegriaActivities {
         input: seo_steps::triple_builder_step::TripleBuilderInput,
     ) -> Result<seo_steps::triple_builder_step::TripleBuilderOutput, ActivityError> {
         Ok(step_catalog::run_triple_builder(self.as_ref(), &input))
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_completeness_judge_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: seo_steps::completeness_judge_step::CompletenessJudgeInput,
-    ) -> Result<seo_steps::completeness_judge_step::CompletenessJudgeOutput, ActivityError> {
-        Ok(step_catalog::run_completeness_judge(self.as_ref(), &input))
     }
 
     #[allow(dead_code)]
@@ -410,9 +296,10 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "raw_knowledge_ingestion", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            let report = seo_application::crawl_ingest::run_raw_knowledge_ingestion(&repo, &input)
+            let report =
+                seo_application::crawl_ingest::run_raw_knowledge_ingestion(&repo, &input).await?;
+            observe_projection_barrier(&self.pool, "raw_knowledge_ingestion", &input.run_id)
                 .await?;
-            observe_projection_barrier(&self.pool, "raw_knowledge_ingestion").await?;
             Ok(report)
         })
         .await
@@ -490,7 +377,7 @@ impl AlegriaActivities {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             let output =
                 seo_application::planning::run_global_site_reconcile(&repo, &input).await?;
-            observe_projection_barrier(&self.pool, "global_site_reconcile").await?;
+            observe_projection_barrier(&self.pool, "global_site_reconcile", &input.run_id).await?;
             Ok(output)
         })
         .await

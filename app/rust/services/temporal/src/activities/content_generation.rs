@@ -264,16 +264,9 @@ pub(crate) async fn finalize_run_impl(
     run_id: &str,
 ) -> Result<String, DomainError> {
     pipeline_storage::advance_execution_run(
-        &acts.pool,
-        run_id,
-        "done",
-        None,
-        None,
-        None,
-        None,
-        None,
+        &acts.pool, run_id, "done", None, None, None, None, None,
     )
-        .await
-        .map_err(AlegriaActivities::classify_error)?;
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
     Ok(run_id.to_string())
 }

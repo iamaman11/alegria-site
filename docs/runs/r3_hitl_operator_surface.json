@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r3_hitl_operator_surface",
+  "step": "R3.Step7",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "HITL operator surface exposes list/show/approve/reject/request_changes/registry_extension verbs.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps hitl_operator_surface_step",
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/hitl_operator_surface_step.rs exposes canonical HITL action verbs.",
+    "Operator surface differentiates review tasks from registry-extension tasks.",
+    "Resolved tasks are reduced to list/show only."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

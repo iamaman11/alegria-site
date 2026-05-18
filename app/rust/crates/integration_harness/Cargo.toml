@@ -1,0 +1,40 @@
+[package]
+name = "integration_harness"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+e2e = [
+  "dep:neo4rs",
+  "dep:qdrant-client",
+  "dep:sqlx",
+  "dep:temporalio-client",
+  "dep:temporalio-sdk-core",
+  "dep:testcontainers",
+  "dep:uuid",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls"] }
+axum = { version = "0.8.8", features = ["json"] }
+sqlx = { workspace = true, optional = true }
+testcontainers = { version = "0.23.3", optional = true }
+qdrant-client = { workspace = true, optional = true }
+neo4rs = { workspace = true, optional = true }
+temporalio-client = { workspace = true, optional = true }
+temporalio-sdk-core = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
+
+[dev-dependencies]
+contracts = { path = "../contracts" }
+infrastructure = { path = "../infrastructure" }
+seo_application = { path = "../seo_application" }
+seo_ports = { path = "../seo_ports" }
+serial_test = "3.2.0"
+sqlx = { workspace = true }
+uuid = { workspace = true }

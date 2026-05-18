@@ -1,0 +1,70 @@
+{
+  "artifact_id": "r3_required_rule_type_coverage",
+  "step": "R3.Step2",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Canonical publish-ready smoke covers all required factual rule types without blocking gaps.",
+  "canonical_smoke": "cargo test -q -p seo_steps seo_steps_form_publish_ready_pipeline",
+  "coverage_summary": {
+    "required_rule_types": 6,
+    "covered_rule_types": 6,
+    "blocking_gaps": 0,
+    "non_blocking_gaps": 0
+  },
+  "coverage": [
+    {
+      "rule_type": "document_required",
+      "section_role": "documents",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required document support is present in the canonical publish-ready smoke."
+    },
+    {
+      "rule_type": "fee_item",
+      "section_role": "fees",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required fee support is present in the canonical publish-ready smoke."
+    },
+    {
+      "rule_type": "timeline_item",
+      "section_role": "timing",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required timeline support is present in the canonical publish-ready smoke."
+    },
+    {
+      "rule_type": "where_to_apply",
+      "section_role": "where_to_apply",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required application-route support is present in the canonical publish-ready smoke."
+    },
+    {
+      "rule_type": "eligibility_rule",
+      "section_role": "who_fits",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required eligibility support is present in the canonical publish-ready smoke."
+    },
+    {
+      "rule_type": "step",
+      "section_role": "process",
+      "status": "covered",
+      "gap_classification": "none",
+      "smoke_ref": "seo_steps::seo_flow_tests::seo_steps_form_publish_ready_pipeline",
+      "notes": "Required process support is present in the canonical publish-ready smoke."
+    }
+  ],
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/content_contract_validate_step.rs enforces required content blocks and factual support gates.",
+    "app/rust/crates/seo_steps/src/draft_qa_step.rs blocks unsupported factual fragments and missing required links/traceability.",
+    "app/rust/crates/runtime_models/src/seo_blocks.rs maps the required factual rule types to canonical section roles."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

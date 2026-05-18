@@ -1,0 +1,14 @@
+{
+  "artifact_id": "r3_pii_redaction_pre_llm",
+  "step": "R3.Step4",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "PII redaction pre-pass sanitizes support, candidate, source context and unsupported fragments before LLM-facing assembly.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps pii_redaction_prepass_step",
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/pii_redaction_prepass_step.rs provides sanitizers for text, support bundle, source context, sections, claim ledger, content blocks and candidate payloads.",
+    "app/rust/crates/seo_steps/src/draft_assemble_step.rs uses the sanitizers before draft assembly, including candidate sanitization.",
+    "The canonical sanitize test redacts email, phone and passport patterns."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

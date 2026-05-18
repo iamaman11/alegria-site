@@ -240,6 +240,26 @@ message FreshnessReport {
   string status = 5;
 }
 
+message QualityPolicyEvaluationInputPayload {
+  string page_type_key = 1;
+  string locale = 2;
+  float completeness_score = 3;
+  uint32 supported_claims = 4;
+  uint32 missing_required_sections = 5;
+}
+
+message QualityPolicyEvaluationOutputPayload {
+  string page_type_key = 1;
+  string locale = 2;
+  string policy_version = 3;
+  float min_quality_score = 4;
+  uint32 min_supported_claims = 5;
+  uint32 max_missing_required_sections = 6;
+  float score = 7;
+  bool blocked = 8;
+  repeated string blocking_reasons = 9;
+}
+
 message SeoScopePayload {
   string market = 1;
   string locale = 2;
@@ -408,6 +428,7 @@ message SeoSiteBuildInputPayload {
   repeated string queries = 5;
   repeated SeoVerifiedFactSupportState verified_support = 6;
   repeated string required_page_types = 7;
+  string run_mode = 8;
 }
 
 message SerpPatternState {

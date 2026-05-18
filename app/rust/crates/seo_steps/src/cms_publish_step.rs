@@ -24,6 +24,9 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
     if page_node.canonical_url_path.trim().is_empty() {
         blocking_reasons.push("missing_canonical_url".to_string());
     }
+    if draft.llm_provider_key == "deterministic_fallback" {
+        blocking_reasons.push("deterministic_fallback_publish_blocked".to_string());
+    }
     if input.publish_mode == "approved_publish" {
         let approval = input.approval_decision.as_ref();
         let human_approved = approval
@@ -75,5 +78,72 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
         blocking_reasons,
         outbox_emitted: 0,
         publish_artifact: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::{
+        CmsApprovalDecision, DraftState, PageNodeState,
+    };
+
+    #[test]
+    fn deterministic_fallback_blocks_publish() {
+        let output = execute(&CmsPublishInputPayload {
+            run_id: "run".to_string(),
+            page_node: Some(PageNodeState {
+                page_node_key: "page".to_string(),
+                canonical_url_path: "/ru/visa/spain/".to_string(),
+                ..PageNodeState::default()
+            }),
+            draft: Some(DraftState {
+                page_draft_key: "draft".to_string(),
+                qa_verdict: "publish_ready".to_string(),
+                body_markdown: "body".to_string(),
+                llm_provider_key: "deterministic_fallback".to_string(),
+                ..DraftState::default()
+            }),
+            actor_role: "seo_system".to_string(),
+            publish_mode: "request_review".to_string(),
+            approval_decision: None,
+        });
+
+        assert_eq!(output.verdict, "publish_blocked");
+        assert!(output
+            .blocking_reasons
+            .contains(&"deterministic_fallback_publish_blocked".to_string()));
+    }
+
+    #[test]
+    fn approved_publish_still_requires_human_approval() {
+        let output = execute(&CmsPublishInputPayload {
+            run_id: "run".to_string(),
+            page_node: Some(PageNodeState {
+                page_node_key: "page".to_string(),
+                canonical_url_path: "/ru/visa/spain/".to_string(),
+                ..PageNodeState::default()
+            }),
+            draft: Some(DraftState {
+                page_draft_key: "draft".to_string(),
+                qa_verdict: "publish_ready".to_string(),
+                body_markdown: "body".to_string(),
+                llm_provider_key: "source_backed_template@1".to_string(),
+                ..DraftState::default()
+            }),
+            actor_role: "seo_system".to_string(),
+            publish_mode: "approved_publish".to_string(),
+            approval_decision: Some(CmsApprovalDecision {
+                decision_key: "decision".to_string(),
+                page_node_key: "page".to_string(),
+                revision_id: "rev".to_string(),
+                actor_role: "seo_system".to_string(),
+                decision: "approved".to_string(),
+                reason: "test".to_string(),
+                decided_at: "2026-05-15T00:00:00Z".to_string(),
+            }),
+        });
+
+        assert_eq!(output.verdict, "publish_blocked");
     }
 }

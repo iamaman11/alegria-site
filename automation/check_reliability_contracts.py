@@ -75,7 +75,9 @@ def main() -> int:
             must_contain(PROTO_RUNTIME_PAYLOAD_STORE, "trait RuntimeProtoPayload"),
             must_contain(PROTO_RUNTIME_PAYLOAD_STORE, "fn encode_runtime_payload"),
             must_contain(PIPELINE_RUNTIME_ADAPTER, "pub use super::proto_runtime_payload_store::"),
-            must_contain(GATE, "encode-fact-input"),
+            must_contain(GATE, "run_seo_site_build_workflow"),
+            must_contain(GATE, "verified_support_bundle blob was not persisted"),
+            must_contain(GATE, "seo_page_review_requested"),
             must_contain(GATE, "encode-validation-input"),
         ]
         if x is not None

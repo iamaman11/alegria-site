@@ -9,7 +9,6 @@ use infrastructure::adapters::temporalio_sdk_adapter::temporalio_common as _;
 use crate::activities::AlegriaActivities;
 
 mod content_generation;
-mod fact_extraction;
 mod freshness;
 mod runtime;
 mod seo_site_build;
@@ -22,7 +21,6 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     let mut opts = WorkerOptions::new(task_queue)
         .register_activities(acts)
         .build();
-    fact_extraction::register(&mut opts);
     if std::env::var("ALLOW_LEGACY_CONTENT_WORKFLOW")
         .ok()
         .as_deref()

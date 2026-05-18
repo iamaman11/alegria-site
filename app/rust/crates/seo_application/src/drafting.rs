@@ -9,6 +9,8 @@ use seo_ports::{
     DraftRepository, EditorialGenerationPort, SectionTemplateRepository, SourceContextRepository,
 };
 
+use crate::seo_runtime;
+
 fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
     let page_node = input.page_node.clone().unwrap_or_default();
     let page_blueprint = input.page_blueprint.clone().unwrap_or_default();
@@ -34,6 +36,15 @@ pub async fn run_draft_assemble<
     repo: &R,
     input: &DraftAssembleInputPayload,
 ) -> Result<DraftAssembleOutputPayload, DomainError> {
+    seo_runtime::truth_admissibility_gate(
+        &input.verified_support,
+        input
+            .page_node
+            .as_ref()
+            .map(|node| node.page_node_key.as_str())
+            .unwrap_or(input.run_id.as_str()),
+        "draft_assemble",
+    )?;
     let mut enriched_input = input.clone();
     if enriched_input.section_templates.is_empty() {
         if let Some(blueprint) = enriched_input.page_blueprint.as_ref() {
@@ -48,7 +59,8 @@ pub async fn run_draft_assemble<
             .await?;
     }
     let output = seo_steps::draft_assemble_step::execute(&enriched_input);
-    repo.persist_draft_assemble_output(&output).await?;
+    repo.persist_draft_assemble_output(&input.run_id, &output)
+        .await?;
     Ok(output)
 }
 
@@ -127,6 +139,7 @@ mod tests {
     impl DraftRepository for FakeDraftRepo {
         async fn persist_draft_assemble_output(
             &self,
+            _run_id: &str,
             _output: &DraftAssembleOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())

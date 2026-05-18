@@ -120,6 +120,7 @@ pub async fn load_source_registry_entries(
 
 pub async fn persist_from_pipeline_state(
     pool: &PgPool,
+    run_id: &str,
     state: &PersistPipelineState,
 ) -> std::result::Result<(usize, usize), DomainError> {
     let context_key = state.context_key.clone();
@@ -138,6 +139,11 @@ pub async fn persist_from_pipeline_state(
         let params = rule.params.as_json_value();
         let status = rule.status.clone();
         let source_key = rule.source_key.clone();
+        if status == "verified" && source_key.is_none() {
+            return Err(validation_failure(format!(
+                "verified rule `{rule_type_key}` in context `{context_key}` is missing source provenance"
+            )));
+        }
 
         let rule_instance_id =
             stable_rule_instance_id(&[&context_key, &rule_type_key, &concept_key, &role_type]);
@@ -157,7 +163,9 @@ pub async fn persist_from_pipeline_state(
         .map_err(classify_sqlx)?;
 
         written += 1;
-        outbox_events.push(neo4j_rule_upserted(&rule_instance_id, &context_key));
+        let mut event = neo4j_rule_upserted(&rule_instance_id, &context_key);
+        event.run_id = run_id.to_string();
+        outbox_events.push(event);
     }
 
     let outbox_count = outbox_emit_many(pool, &outbox_events).await? as usize;

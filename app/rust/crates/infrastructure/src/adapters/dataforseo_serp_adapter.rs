@@ -25,6 +25,7 @@ pub struct DataForSeoOrganicResult {
     pub url: String,
     pub url_norm: String,
     pub domain_norm: String,
+    pub source_tier: String,
     pub snippet: String,
     pub raw_json: Value,
 }
@@ -173,12 +174,14 @@ fn parse_organic_results(raw: &Value) -> Vec<DataForSeoOrganicResult> {
                 let domain = json_str(item, "domain")
                     .map(str::to_string)
                     .unwrap_or_else(|| domain_norm(url));
+                let source_tier = classify_domain_tier(&domain, url);
                 out.push(DataForSeoOrganicResult {
                     rank,
                     title: json_str(item, "title").unwrap_or_default().to_string(),
                     url: url.to_string(),
                     url_norm: url_norm(url),
                     domain_norm: domain_norm(&domain),
+                    source_tier,
                     snippet: json_str(item, "description")
                         .unwrap_or_default()
                         .to_string(),
@@ -188,6 +191,42 @@ fn parse_organic_results(raw: &Value) -> Vec<DataForSeoOrganicResult> {
         }
     }
     out
+}
+
+fn classify_domain_tier(domain: &str, url: &str) -> String {
+    let value = format!(
+        "{} {}",
+        domain.to_ascii_lowercase(),
+        url.to_ascii_lowercase()
+    );
+    if value.contains(".gov")
+        || value.contains("embassy")
+        || value.contains("consulate")
+        || value.contains("mfa.")
+        || value.contains("mid.")
+    {
+        "official".to_string()
+    } else if value.contains("vfsglobal") || value.contains("vfs ") || value.contains(" vfs") {
+        "vfs".to_string()
+    } else if value.contains("agency") || value.contains("consult") {
+        "agency".to_string()
+    } else if value.contains("forum")
+        || value.contains("reddit.")
+        || value.contains("quora.")
+        || value.contains("stackexchange")
+        || value.contains("community")
+    {
+        "forum".to_string()
+    } else if value.contains("news")
+        || value.contains("blog")
+        || value.contains("editorial")
+        || value.contains("magazine")
+        || value.contains("medium.")
+    {
+        "editorial".to_string()
+    } else {
+        "low_trust".to_string()
+    }
 }
 
 #[cfg(test)]
@@ -219,6 +258,23 @@ mod tests {
         assert_eq!(parsed[0].rank, 1);
         assert_eq!(parsed[0].url_norm, "example.com/visa/fees");
         assert_eq!(parsed[0].domain_norm, "example.com");
+        assert_eq!(parsed[0].source_tier, "low_trust");
         assert_eq!(parsed[0].snippet, "Fee details");
+    }
+
+    #[test]
+    fn classifies_domain_tiers() {
+        assert_eq!(
+            classify_domain_tier("www.mfa.gov.by", "https://www.mfa.gov.by/visa"),
+            "official"
+        );
+        assert_eq!(
+            classify_domain_tier("vfsglobal.com", "https://vfsglobal.com/visa"),
+            "vfs"
+        );
+        assert_eq!(
+            classify_domain_tier("reddit.com", "https://reddit.com/r/visas"),
+            "forum"
+        );
     }
 }

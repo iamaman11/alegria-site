@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
+INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
 
 ALLOWED_DIRECT_SDK_MANIFESTS = {
     (ROOT / "app" / "rust" / "Cargo.toml").resolve(),
@@ -23,6 +24,14 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-client",
         "temporalio-common",
         "temporalio-macros",
+    },
+    (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
+        "neo4rs",
+        "qdrant-client",
+        "reqwest",
+        "sqlx",
+        "temporalio-client",
+        "temporalio-sdk-core",
     },
 }
 
@@ -125,6 +134,8 @@ def main() -> int:
         if "target" in file_path.parts:
             continue
         if ADAPTERS_DIR in file_path.parents:
+            continue
+        if INTEGRATION_HARNESS_DIR in file_path.parents:
             continue
         text = file_path.read_text(encoding="utf-8")
         for pat in FORBIDDEN_DIRECT_IN_USE_CASES:

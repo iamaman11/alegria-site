@@ -8,9 +8,15 @@ MIGRATIONS_DIR = ROOT / "app" / "db" / "migrations"
 
 REQUIRED_NEEDLES = [
     "verified_support_bundle",
+    "content_block_plan",
+    "draft_normalize_output",
+    "content_contract_validation",
     "CREATE TABLE IF NOT EXISTS site.page_support_bindings",
     "CREATE TABLE IF NOT EXISTS site.publish_artifact_entries",
     "CREATE TABLE IF NOT EXISTS monitoring.seo_rebuild_dependencies",
+    "CREATE TABLE IF NOT EXISTS extracted.rule_candidates",
+    "publish_admissibility",
+    "verified_rule_instances_rule_candidate_fk",
 ]
 
 

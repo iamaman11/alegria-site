@@ -5,8 +5,8 @@ use contracts::generated::alegria::read_api::v1::{
     StepParams, TimelineItemParams, WhereToApplyParams,
 };
 use primitives::errors::DomainError;
-use seo_domain::identity;
 use runtime_models::RuleParams;
+use seo_domain::identity;
 use seo_ports::{
     CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest, CmsReviewPort,
     ContextBundleRepository, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
@@ -27,12 +27,12 @@ use super::{
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
-    CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
-    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
-    DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
-    EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
-    HitlTaskContext, IaBuildOutputPayload, LinkRecommendOutputPayload,
+    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
+    DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,
+    DraftQaOutputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
+    FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
+    GlobalSiteReconcileOutputPayload, HitlDecision, HitlTaskContext, IaBuildInputPayload,
+    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
@@ -244,24 +244,34 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
         let input = SeoSiteBuildInputPayload {
             run_id: request.run_id.clone(),
             context_key: resolved_context_key,
-            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                market: scope.market.clone(),
-                locale: scope.locale.clone(),
-                country_code: scope.country_code.clone(),
-                visa_type: scope.visa_type.clone(),
-                applicant_profile: scope.applicant_profile.clone(),
-                raw_scope_tuple: scope.raw_scope_tuple.clone(),
-                scope_signature: scope.scope_signature.clone(),
-            }),
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    market: scope.market.clone(),
+                    locale: scope.locale.clone(),
+                    country_code: scope.country_code.clone(),
+                    visa_type: scope.visa_type.clone(),
+                    applicant_profile: scope.applicant_profile.clone(),
+                    raw_scope_tuple: scope.raw_scope_tuple.clone(),
+                    scope_signature: scope.scope_signature.clone(),
+                },
+            ),
             query_batch_key: request.query_batch_key.clone().unwrap_or_else(|| {
                 primitives::seo::seo_artifact_key(
                     "query_batch",
-                    &[&request.run_id, &scope.scope_signature, &non_empty_queries.join("|")],
+                    &[
+                        &request.run_id,
+                        &scope.scope_signature,
+                        &non_empty_queries.join("|"),
+                    ],
                 )
             }),
             queries: non_empty_queries,
             verified_support: Vec::new(),
             required_page_types: Vec::new(),
+            run_mode: request
+                .run_mode
+                .clone()
+                .unwrap_or_else(|| "publish_with_hitl".to_string()),
         };
         sqlx_seo_adapter::upsert_seo_site_build_input(self.pool, &input).await?;
         Ok(input)
@@ -309,15 +319,49 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
         let mut failed_urls = Vec::new();
 
         for item in items {
+            let robots_trace = match raw_crawl_adapter::evaluate_robots_policy(&item.url).await {
+                Ok(trace) if trace.allowed => trace,
+                Ok(trace) => {
+                    raw_crawl_adapter::mark_crawl_failed(
+                        self.pool,
+                        &item.url_norm,
+                        None,
+                        &format!(
+                            "robots disallow: robots_url={}; matched_rule={:?}; fetch_error={:?}",
+                            trace.robots_url, trace.matched_rule, trace.fetch_error
+                        ),
+                    )
+                    .await?;
+                    failed_count += 1;
+                    failed_urls.push(item.url.clone());
+                    continue;
+                }
+                Err(err) => {
+                    raw_crawl_adapter::mark_crawl_failed(
+                        self.pool,
+                        &item.url_norm,
+                        None,
+                        &format!("robots evaluation failed: {err}"),
+                    )
+                    .await?;
+                    failed_count += 1;
+                    failed_urls.push(item.url.clone());
+                    continue;
+                }
+            };
+
             match raw_crawl_adapter::fetch_html(&item.url).await {
                 Ok(fetched) if (200..400).contains(&fetched.status_code) => {
                     match raw_crawl_adapter::save_crawled_html(
                         self.pool,
+                        &fetched.source_url,
                         &fetched.final_url,
                         &item.dtype,
                         fetched.status_code,
                         &fetched.content_type,
                         &fetched.body,
+                        &fetched.redirect_chain,
+                        &robots_trace,
                     )
                     .await
                     {
@@ -325,6 +369,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                             let emitted = if input.emit_qdrant {
                                 raw_crawl_adapter::emit_raw_section_qdrant_events(
                                     self.pool,
+                                    &input.run_id,
                                     saved.page_id,
                                 )
                                 .await?
@@ -336,8 +381,11 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                                 &item.url_norm,
                                 fetched.status_code,
                                 &format!(
-                                    "source_type={}; page_id={}; sections={}; qdrant_events={}; hash={}",
+                                    "source_type={}; source_url={}; final_url={}; redirect_hops={}; page_id={}; sections={}; qdrant_events={}; hash={}",
                                     item.source_type,
+                                    fetched.source_url,
+                                    fetched.final_url,
+                                    fetched.redirect_chain.len().saturating_sub(1),
                                     saved.page_id,
                                     saved.section_count,
                                     emitted,
@@ -365,27 +413,56 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                     }
                 }
                 Ok(fetched) => {
-                    raw_crawl_adapter::mark_crawl_failed(
-                        self.pool,
-                        &item.url_norm,
-                        Some(fetched.status_code),
-                        &format!(
-                            "http_status={}; content_type={}",
-                            fetched.status_code, fetched.content_type
-                        ),
-                    )
-                    .await?;
+                    let error = format!(
+                        "http_status={}; content_type={}; source_url={}; final_url={}",
+                        fetched.status_code,
+                        fetched.content_type,
+                        fetched.source_url,
+                        fetched.final_url
+                    );
+                    if raw_crawl_adapter::should_retry_http_status(fetched.status_code)
+                        && raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count)
+                    {
+                        raw_crawl_adapter::mark_crawl_retry(
+                            self.pool,
+                            &item.url_norm,
+                            Some(fetched.status_code),
+                            &error,
+                            item.attempt_count,
+                        )
+                        .await?;
+                    } else {
+                        raw_crawl_adapter::mark_crawl_failed(
+                            self.pool,
+                            &item.url_norm,
+                            Some(fetched.status_code),
+                            &error,
+                        )
+                        .await?;
+                    }
                     failed_count += 1;
                     failed_urls.push(item.url.clone());
                 }
                 Err(err) => {
-                    raw_crawl_adapter::mark_crawl_failed(
-                        self.pool,
-                        &item.url_norm,
-                        None,
-                        &format!("fetch failed: {err}"),
-                    )
-                    .await?;
+                    let error = format!("fetch failed: {err}");
+                    if raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count) {
+                        raw_crawl_adapter::mark_crawl_retry(
+                            self.pool,
+                            &item.url_norm,
+                            None,
+                            &error,
+                            item.attempt_count,
+                        )
+                        .await?;
+                    } else {
+                        raw_crawl_adapter::mark_crawl_failed(
+                            self.pool,
+                            &item.url_norm,
+                            None,
+                            &error,
+                        )
+                        .await?;
+                    }
                     failed_count += 1;
                     failed_urls.push(item.url.clone());
                 }
@@ -415,6 +492,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
     ) -> Result<RawKnowledgeIngestionOutputPayload, DomainError> {
         let report = raw_crawl_adapter::ingest_raw_pages_into_verified(
             self.pool,
+            &input.run_id,
             &input.context_key,
             &input.raw_page_ids,
         )
@@ -428,10 +506,12 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
             changed_truth_keys: report.changed_truth_keys,
             status: if input.raw_page_ids.is_empty() {
                 "skipped:no_raw_pages".to_string()
-            } else if report.extracted_rule_count > 0 && report.verified_rule_count == 0 {
-                "pending_review:no_auto_verified_rules".to_string()
+            } else if report.extraction_provider_unavailable {
+                "blocked:no_truth_extraction_provider".to_string()
+            } else if report.needs_hitl_candidate_count > 0 {
+                "pending_review:needs_truth_adjudication".to_string()
             } else if report.verified_rule_count == 0 {
-                "empty:no_verified_rules".to_string()
+                "empty:no_admissible_verified_rules".to_string()
             } else {
                 "done".to_string()
             },
@@ -452,10 +532,17 @@ impl SourceContextRepository for SqlxSeoRuntimeRepository<'_> {
 
 #[async_trait]
 impl ProjectionStatusRepository for SqlxSeoRuntimeRepository<'_> {
-    async fn load_projection_barrier_status(&self) -> Result<ProjectionBarrierStatus, DomainError> {
-        let statuses = sqlx_seo_adapter::read_projection_sync_status(self.pool).await?;
+    async fn load_projection_barrier_status(
+        &self,
+        run_id: &str,
+    ) -> Result<ProjectionBarrierStatus, DomainError> {
+        let statuses =
+            sqlx_seo_adapter::read_projection_sync_status_for_run(self.pool, run_id).await?;
         Ok(ProjectionBarrierStatus {
-            blocked_events: statuses.iter().map(|status| status.blocking_event_count()).sum(),
+            blocked_events: statuses
+                .iter()
+                .map(|status| status.blocking_event_count())
+                .sum(),
             max_open_lag_ms: statuses
                 .iter()
                 .map(|status| status.max_open_lag_ms)
@@ -527,6 +614,7 @@ impl SerpSearchPort for SqlxSeoRuntimeRepository<'_> {
                     url: result.url,
                     url_norm: result.url_norm,
                     domain_norm: result.domain_norm,
+                    source_tier: result.source_tier,
                     snippet: result.snippet,
                 })
                 .collect(),
@@ -606,6 +694,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 url: result.url.clone(),
                 url_norm: result.url_norm.clone(),
                 domain_norm: result.domain_norm.clone(),
+                source_tier: result.source_tier.clone(),
                 snippet: result.snippet.clone(),
                 raw_json: serde_json::Value::Null,
             })
@@ -642,16 +731,18 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
 
     async fn persist_ia_build_output(
         &self,
+        input: &IaBuildInputPayload,
         output: &IaBuildOutputPayload,
     ) -> Result<(), DomainError> {
-        sqlx_seo_adapter::persist_ia_build_output(self.pool, output).await
+        sqlx_seo_adapter::persist_ia_build_output(self.pool, input, output).await
     }
 
     async fn persist_link_recommend_output(
         &self,
+        input: &LinkRecommendInputPayload,
         output: &LinkRecommendOutputPayload,
     ) -> Result<(), DomainError> {
-        sqlx_seo_adapter::persist_link_recommend_output(self.pool, output).await
+        sqlx_seo_adapter::persist_link_recommend_output(self.pool, input, output).await
     }
 
     async fn persist_global_site_reconcile_output(
@@ -661,6 +752,11 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
     ) -> Result<GlobalNavigationPersistReport, DomainError> {
         sqlx_seo_adapter::persist_ia_build_output(
             self.pool,
+            &IaBuildInputPayload {
+                run_id: input.run_id.clone(),
+                scope: input.scope.clone(),
+                keyword_clusters: Vec::new(),
+            },
             &IaBuildOutputPayload {
                 page_nodes: output.page_nodes.clone(),
                 page_blueprints: Vec::new(),
@@ -670,6 +766,11 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         .await?;
         sqlx_seo_adapter::persist_link_recommend_output(
             self.pool,
+            &LinkRecommendInputPayload {
+                run_id: input.run_id.clone(),
+                page_nodes: output.page_nodes.clone(),
+                max_links_per_page: 0,
+            },
             &LinkRecommendOutputPayload {
                 link_recommendations: output.link_recommendations.clone(),
             },
@@ -708,9 +809,10 @@ impl SectionTemplateRepository for SqlxSeoRuntimeRepository<'_> {
 impl DraftRepository for SqlxSeoRuntimeRepository<'_> {
     async fn persist_draft_assemble_output(
         &self,
+        run_id: &str,
         output: &DraftAssembleOutputPayload,
     ) -> Result<(), DomainError> {
-        sqlx_seo_adapter::persist_draft_assemble_output(self.pool, output).await
+        sqlx_seo_adapter::persist_draft_assemble_output(self.pool, run_id, output).await
     }
 
     async fn persist_draft_normalize_output(

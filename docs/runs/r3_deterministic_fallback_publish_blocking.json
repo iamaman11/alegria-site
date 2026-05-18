@@ -1,0 +1,13 @@
+{
+  "artifact_id": "r3_deterministic_fallback_publish_blocking",
+  "step": "R3.Step6",
+  "evidence_status": "PASS",
+  "failure_class": "none",
+  "status_reason": "Deterministic fallback drafts are blocked in CMS publish path.",
+  "smoke_command": "SQLX_OFFLINE=true cargo test -q -p seo_steps cms_publish_step",
+  "contract_checks": [
+    "app/rust/crates/seo_steps/src/cms_publish_step.rs blocks deterministic_fallback provider drafts.",
+    "app/rust/crates/seo_steps/src/draft_qa_step.rs receives the licensing blockers before verdict finalization."
+  ],
+  "updated_at": "2026-05-15T00:00:00Z"
+}

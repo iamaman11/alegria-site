@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct OutboxEnvelope {
+    pub run_id: String,
     pub aggregate_type: String,
     pub aggregate_key: String,
     pub target_system: String,

@@ -14,7 +14,7 @@
   - файл: `src/bin/temporal_starter.rs`
   - запуск:
     - `cargo run -p temporal_worker --bin temporal_starter -- ping`
-    - `cargo run -p temporal_worker --bin temporal_starter -- start --workflow fact-extraction`
+    - `cargo run -p temporal_worker --bin temporal_starter -- start --workflow seo-site-build`
 
 ## Что должно быть в окружении
 

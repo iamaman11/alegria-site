@@ -84,7 +84,7 @@ mod tests {
                 context_key: "ES|tourist||BY".to_string(),
                 query_batch_key: "batch-1".to_string(),
                 raw_page_ids: vec![101],
-                source_policy: "auto_verify_high_confidence@1".to_string(),
+                source_policy: "candidate_only_truth_extraction@1".to_string(),
             },
         )
         .await

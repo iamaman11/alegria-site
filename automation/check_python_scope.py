@@ -16,13 +16,26 @@ TARGETS = [
 ]
 
 # R5-R8 complete: no Python runtime module is allowed to use SQL directly.
-# Exceptions: explicit smoke-test scripts use psql on purpose for behavioral fail-safe verification.
+# Exceptions:
+# - explicit smoke-test scripts use psql on purpose for behavioral fail-safe verification;
+# - local baseline/replay probes are ops diagnostics, not runtime modules;
+# - contract scanners may contain SQL snippets only as strings they expect in Rust code.
 ALLOWED_SQL_FILES: set[Path] = {
+    (ROOT / "automation" / "bootstrap_local_runtime_baseline.py").resolve(),
+    (ROOT / "automation" / "capture_seo_legacy_replay_inventory.py").resolve(),
+    (ROOT / "automation" / "check_extraction_runtime_contract.py").resolve(),
+    (ROOT / "automation" / "check_global_navigation_policy.py").resolve(),
+    (ROOT / "automation" / "check_llm_extraction_contract.py").resolve(),
+    (ROOT / "automation" / "check_rebuild_queue_execution_path.py").resolve(),
+    (ROOT / "automation" / "check_seo_provenance_invariants.py").resolve(),
+    (ROOT / "automation" / "check_serp_intelligence_contract.py").resolve(),
+    (ROOT / "automation" / "local_db_baseline.py").resolve(),
     (ROOT / "automation" / "smoke_outbox_qdrant.py").resolve(),
     (ROOT / "automation" / "smoke_broken_schema_to_dlq_behavioral.py").resolve(),
     (ROOT / "automation" / "smoke_exhausted_retry_to_dlq_behavioral.py").resolve(),
     (ROOT / "automation" / "smoke_stale_outbox_reclaim_behavioral.py").resolve(),
     (ROOT / "automation" / "smoke_pending_hitl_not_failure_behavioral.py").resolve(),
+    (ROOT / "automation" / "smoke_real_provider_minimal_scope.py").resolve(),
 }
 
 SQL_PATTERN = re.compile(

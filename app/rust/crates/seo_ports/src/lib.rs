@@ -3,12 +3,12 @@ use contracts::generated::alegria::read_api::v1::ContextBundle;
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
-    CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
-    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
-    DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
-    EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
-    HitlTaskContext, IaBuildOutputPayload, LinkRecommendOutputPayload,
+    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
+    DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,
+    DraftQaOutputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
+    FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
+    GlobalSiteReconcileOutputPayload, HitlDecision, HitlTaskContext, IaBuildInputPayload,
+    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
@@ -41,6 +41,7 @@ pub struct OrganicSerpResult {
     pub url: String,
     pub url_norm: String,
     pub domain_norm: String,
+    pub source_tier: String,
     pub snippet: String,
 }
 
@@ -95,6 +96,7 @@ pub struct SeoSiteBuildRegistrationRequest {
     pub bootstrap_context: bool,
     pub queries: Vec<String>,
     pub query_batch_key: Option<String>,
+    pub run_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -151,7 +153,10 @@ pub trait SourceContextRepository: Send + Sync {
 
 #[async_trait]
 pub trait ProjectionStatusRepository: Send + Sync {
-    async fn load_projection_barrier_status(&self) -> Result<ProjectionBarrierStatus, DomainError>;
+    async fn load_projection_barrier_status(
+        &self,
+        run_id: &str,
+    ) -> Result<ProjectionBarrierStatus, DomainError>;
 }
 
 #[async_trait]
@@ -217,11 +222,13 @@ pub trait PlanningRepository: Send + Sync {
 
     async fn persist_ia_build_output(
         &self,
+        input: &IaBuildInputPayload,
         output: &IaBuildOutputPayload,
     ) -> Result<(), DomainError>;
 
     async fn persist_link_recommend_output(
         &self,
+        input: &LinkRecommendInputPayload,
         output: &LinkRecommendOutputPayload,
     ) -> Result<(), DomainError>;
 
@@ -245,6 +252,7 @@ pub trait SectionTemplateRepository: Send + Sync {
 pub trait DraftRepository: Send + Sync {
     async fn persist_draft_assemble_output(
         &self,
+        run_id: &str,
         output: &DraftAssembleOutputPayload,
     ) -> Result<(), DomainError>;
 

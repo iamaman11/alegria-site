@@ -54,9 +54,10 @@ fn make_idempotency_key(aggregate_key: &str, event_type: &str, payload_bytes: &[
     primitives::hash::content_hash_v1(&format!("{aggregate_key}|{event_type}|{payload_hash}"))
 }
 
-fn cms_event_outbox(event: &SeoCmsEventPayload) -> OutboxEnvelope {
+fn cms_event_outbox(event: &SeoCmsEventPayload, run_id: &str) -> OutboxEnvelope {
     let payload_bytes = encode_payload(event);
     OutboxEnvelope {
+        run_id: run_id.to_string(),
         aggregate_type: "cms_page".to_string(),
         aggregate_key: event.page_node_key.clone(),
         target_system: "cms".to_string(),
@@ -705,7 +706,7 @@ pub async fn persist_cms_publish_output(
             ("cms_document_id".to_string(), cms_document_id.clone()),
         ]),
     };
-    let emitted = outbox_emit_many(pool, &[cms_event_outbox(&cms_event)]).await?;
+    let emitted = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
     let publish_artifact = if verdict == "approved" {
         let manifest = json!({
             "page_node_key": row.page_node_key.clone(),
@@ -1140,7 +1141,7 @@ pub async fn persist_finalize_publish_output(
         payload_version: "seo_cms_event@1".to_string(),
         metadata: HashMap::from([("verdict".to_string(), planned.verdict.clone())]),
     };
-    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event)]).await?;
+    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
 
     if !is_published {
         for blocker_reason in &blocking_reasons {

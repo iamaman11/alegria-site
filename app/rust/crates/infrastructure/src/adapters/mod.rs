@@ -42,4 +42,5 @@ pub mod tokio_postgres_adapter;
 pub mod tonic_adapter;
 pub mod tower_adapter;
 pub mod tracing_adapter;
+pub mod truth_extraction_llm_adapter;
 pub mod voyage_api_adapter;

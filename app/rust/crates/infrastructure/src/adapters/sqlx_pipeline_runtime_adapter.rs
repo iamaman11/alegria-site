@@ -1,7 +1,7 @@
 pub use super::proto_runtime_payload_store::{
-    build_extracted_payload_from_typed, decode_extracted_payload, decode_generation_result,
-    decode_validation_input, decode_verify_report, extract_sections_json,
-    extracted_payload_facts_json, extracted_payload_rules_json, RuntimeProtoPayload,
+    decode_extracted_payload, decode_generation_result, decode_validation_input,
+    decode_verify_report, extract_sections_json, extracted_payload_facts_json,
+    extracted_payload_rules_json, RuntimeProtoPayload,
 };
 pub use super::runtime_storage::{StepAttempt, StepExecution};
 pub use runtime_models::{

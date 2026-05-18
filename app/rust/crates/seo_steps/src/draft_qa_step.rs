@@ -31,6 +31,12 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         blocking_reasons.push(blocker_state.reason_code.clone());
         blockers.push(blocker_state);
     }
+    if let Some(draft_ref) = input.draft.as_ref() {
+        for blocker_state in crate::licensing_gate_step::evaluate(draft_ref) {
+            blocking_reasons.push(blocker_state.reason_code.clone());
+            blockers.push(blocker_state);
+        }
+    }
     let supported_claims = draft
         .traceability_entries
         .iter()

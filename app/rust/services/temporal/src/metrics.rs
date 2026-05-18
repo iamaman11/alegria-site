@@ -117,7 +117,6 @@ pub fn global() -> &'static Metrics {
         // Pre-initialize required series so the metrics contract is visible even
         // before the first specific event path is exercised.
         for workflow_type in [
-            "FactExtractionWorkflow",
             "ContentGenerationWorkflow",
             "FreshnessCheckWorkflow",
             "SeoSiteBuildWorkflow",
@@ -128,11 +127,6 @@ pub fn global() -> &'static Metrics {
             let _ = workflow_failures_total.with_label_values(&[workflow_type]);
         }
         for step_name in [
-            "extract_facts",
-            "verify_rules",
-            "prepare_hitl_pause",
-            "apply_hitl_resolution",
-            "persist_and_emit",
             "generate_content",
             "validate_blocks",
             "finalize_run",
@@ -144,9 +138,6 @@ pub fn global() -> &'static Metrics {
             let _ = activity_duration_seconds.with_label_values(&[step_name]);
         }
         for (step_name, error_class) in [
-            ("extract_facts", "bootstrap"),
-            ("verify_rules", "bootstrap"),
-            ("persist_and_emit", "bootstrap"),
             ("generate_content", "bootstrap"),
             ("validate_blocks", "bootstrap"),
             ("finalize_run", "bootstrap"),

@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+
 use contracts::generated::alegria::temporal::v1::{
     CmsPublishInputPayload, CmsPublishOutputPayload, ContentContractValidateInputPayload,
     CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleInputPayload,
@@ -8,17 +10,16 @@ use contracts::generated::alegria::temporal::v1::{
     IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RenderPreviewValidateInputPayload,
-    SeoSiteBuildInputPayload, SerpIngestInputPayload, SerpIngestOutputPayload,
-    SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload,
+    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
 use seo_ports::{
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     PlanningRepository, ProjectionStatusRepository, PublishArtifactRepository, RebuildRepository,
-    SectionTemplateRepository, SemanticLinkSearchPort, SeoBuildInputRepository,
-    SerpSearchPort, SourceContextRepository, VerifiedSupportBundleRequest,
-    VerifiedSupportRepository,
+    SectionTemplateRepository, SemanticLinkSearchPort, SeoBuildInputRepository, SerpSearchPort,
+    SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
 
 use crate::execution::{
@@ -57,7 +58,7 @@ pub struct SeoScenarioRequest {
     pub site_input: SeoSiteBuildInputPayload,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SeoPhaseReport {
     pub phase: String,
     pub status: String,
@@ -65,7 +66,7 @@ pub struct SeoPhaseReport {
     pub detail: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SeoScenarioResult {
     pub scenario: String,
     pub mode: String,
@@ -151,17 +152,21 @@ fn mode_label(mode: SeoExecutionMode) -> &'static str {
 
 async fn enforce_projection_policy<R: ProjectionStatusRepository>(
     repo: &R,
+    run_id: &str,
     policy: RunProjectionPolicy,
     checkpoint: &str,
     phase_reports: &mut Vec<SeoPhaseReport>,
 ) -> Result<Option<String>, DomainError> {
-    let status = repo.load_projection_barrier_status().await?;
+    let status = repo.load_projection_barrier_status(run_id).await?;
     if status.blocked_events == 0 {
         phase_reports.push(phase_report(
             checkpoint,
             "projection_clear",
             "",
-            format!("blocked_events=0 max_open_lag_ms={}", status.max_open_lag_ms),
+            format!(
+                "blocked_events=0 max_open_lag_ms={}",
+                status.max_open_lag_ms
+            ),
         ));
         return Ok(None);
     }
@@ -193,7 +198,9 @@ async fn enforce_projection_policy<R: ProjectionStatusRepository>(
     }
 }
 
-async fn run_initial_phase<R: VerifiedSupportRepository + PlanningRepository + CrawlIngestRepository + SerpSearchPort>(
+async fn run_initial_phase<
+    R: VerifiedSupportRepository + PlanningRepository + CrawlIngestRepository + SerpSearchPort,
+>(
     repo: &R,
     request: &SeoScenarioRequest,
     state: &mut ScenarioState,
@@ -240,7 +247,10 @@ async fn run_initial_phase<R: VerifiedSupportRepository + PlanningRepository + C
                 phase_label(key),
                 "done",
                 "",
-                format!("persisted_snapshot_count={}", output.persisted_snapshot_count),
+                format!(
+                    "persisted_snapshot_count={}",
+                    output.persisted_snapshot_count
+                ),
             ));
             state.ingest = Some(output);
         }
@@ -283,7 +293,7 @@ async fn run_initial_phase<R: VerifiedSupportRepository + PlanningRepository + C
                     context_key: request.site_input.context_key.clone(),
                     query_batch_key: ingest.query_batch_key.clone(),
                     raw_page_ids: crawl_sources.raw_page_ids.clone(),
-                    source_policy: "auto_verify_high_confidence@1".to_string(),
+                    source_policy: "candidate_only_truth_extraction@1".to_string(),
                 },
             )
             .await?;
@@ -304,7 +314,13 @@ async fn run_initial_phase<R: VerifiedSupportRepository + PlanningRepository + C
     Ok(())
 }
 
-async fn run_planning_phase<R: PlanningRepository + VerifiedSupportRepository + ProjectionStatusRepository + SerpSearchPort + SemanticLinkSearchPort>(
+async fn run_planning_phase<
+    R: PlanningRepository
+        + VerifiedSupportRepository
+        + ProjectionStatusRepository
+        + SerpSearchPort
+        + SemanticLinkSearchPort,
+>(
     repo: &R,
     request: &SeoScenarioRequest,
     state: &mut ScenarioState,
@@ -438,8 +454,14 @@ async fn run_planning_phase<R: PlanningRepository + VerifiedSupportRepository + 
                 format!("page_nodes={}", output.page_nodes.len()),
             ));
             state.reconciled = Some(output);
-            enforce_projection_policy(repo, request.policy.projection, phase_label(key), phase_reports)
-                .await
+            enforce_projection_policy(
+                repo,
+                &request.site_input.run_id,
+                request.policy.projection,
+                phase_label(key),
+                phase_reports,
+            )
+            .await
         }
         _ => unreachable!("invalid planning phase"),
     }
@@ -577,10 +599,7 @@ async fn run_page_phase<
             Ok(None)
         }
         SeoPhaseKey::ContentContractValidate => {
-            let draft = page_state
-                .draft
-                .as_ref()
-                .expect("draft_normalize required");
+            let draft = page_state.draft.as_ref().expect("draft_normalize required");
             let _output = drafting::run_content_contract_validate(
                 repo,
                 &ContentContractValidateInputPayload {
@@ -599,10 +618,7 @@ async fn run_page_phase<
             Ok(None)
         }
         SeoPhaseKey::DraftQa => {
-            let draft = page_state
-                .draft
-                .as_ref()
-                .expect("draft_normalize required");
+            let draft = page_state.draft.as_ref().expect("draft_normalize required");
             let output = drafting::run_draft_qa(
                 repo,
                 &DraftQaInputPayload {
@@ -623,10 +639,7 @@ async fn run_page_phase<
             Ok(None)
         }
         SeoPhaseKey::CmsRequestReview => {
-            let draft = page_state
-                .draft
-                .as_ref()
-                .expect("draft_normalize required");
+            let draft = page_state.draft.as_ref().expect("draft_normalize required");
             let output = review_publish::run_cms_publish(
                 repo,
                 &CmsPublishInputPayload {
@@ -711,10 +724,7 @@ async fn run_page_phase<
             }
         }
         SeoPhaseKey::CmsPublishApproved => {
-            let draft = page_state
-                .draft
-                .as_ref()
-                .expect("draft_normalize required");
+            let draft = page_state.draft.as_ref().expect("draft_normalize required");
             let cms_requested = page_state
                 .cms_requested
                 .as_ref()
@@ -763,12 +773,10 @@ async fn run_page_phase<
                     revision_id: cms_requested.revision_id.clone(),
                     cms_document_id: cms_requested.cms_document_id.clone(),
                     canonical_url_path: page_node.canonical_url_path.clone(),
-                    publish_artifact: cms_requested.publish_artifact.clone().or(
-                        page_state
-                            .cms_approved
-                            .as_ref()
-                            .and_then(|approved| approved.publish_artifact.clone()),
-                    ),
+                    publish_artifact: cms_requested.publish_artifact.clone().or(page_state
+                        .cms_approved
+                        .as_ref()
+                        .and_then(|approved| approved.publish_artifact.clone())),
                     output_dir: request.output_dir.clone(),
                     base_url: request.base_url.clone(),
                 },
@@ -791,12 +799,11 @@ async fn run_page_phase<
                 .materialized
                 .as_ref()
                 .expect("publish_materialize required");
-            let output = review_publish::run_render_preview_validate(
-                &RenderPreviewValidateInputPayload {
+            let output =
+                review_publish::run_render_preview_validate(&RenderPreviewValidateInputPayload {
                     run_id,
                     preview_pages: materialized.preview_pages.clone(),
-                },
-            );
+                });
             phase_reports.push(phase_report(
                 phase_label(key),
                 &output.verdict,
@@ -817,12 +824,11 @@ async fn run_page_phase<
                 .materialized
                 .as_ref()
                 .expect("publish_materialize required");
-            let render_validation = review_publish::run_render_preview_validate(
-                &RenderPreviewValidateInputPayload {
+            let render_validation =
+                review_publish::run_render_preview_validate(&RenderPreviewValidateInputPayload {
                     run_id: run_id.clone(),
                     preview_pages: materialized.preview_pages.clone(),
-                },
-            );
+                });
             let output = review_publish::run_finalize_publish(
                 repo,
                 &FinalizePublishInputPayload {
@@ -890,6 +896,7 @@ where
                 if input.key == SeoPhaseKey::RawKnowledgeIngestion {
                     if let Some(status) = enforce_projection_policy(
                         repo,
+                        &request.site_input.run_id,
                         request.policy.projection,
                         phase_label(input.key),
                         &mut phase_reports,
@@ -1083,18 +1090,17 @@ mod tests {
     use contracts::generated::alegria::temporal::v1::{
         CmsApprovalDecision, EditorialDraftGenerateOutputPayload, GlobalSiteReconcileOutputPayload,
         IaBuildOutputPayload, LinkRecommendOutputPayload, LlmDraftCandidate,
-        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload,
-        SectionTemplateBinding, SeoScopePayload, SeoVerifiedFactSupportState,
-        SerpIngestOutputPayload, SerpNormalizeOutputPayload,
+        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload, SectionTemplateBinding,
+        SeoScopePayload, SeoVerifiedFactSupportState, SerpIngestOutputPayload,
+        SerpNormalizeOutputPayload,
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
         CrawlIngestRepository, OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
-        RebuildRepository, SeoBuildInputRepository, SeoBuildRegistrationRepository,
-        SeoSiteBuildRegistrationRequest, SemanticLinkCandidate, SemanticLinkSearchPort,
-        SerpSearchPort, SourceContextRepository, VerifiedSupportBundleRequest,
-        VerifiedSupportRepository,
+        RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
+        SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
+        SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
     };
 
     #[derive(Default)]
@@ -1178,6 +1184,7 @@ mod tests {
     impl ProjectionStatusRepository for FakeRepo {
         async fn load_projection_barrier_status(
             &self,
+            _run_id: &str,
         ) -> Result<ProjectionBarrierStatus, DomainError> {
             Ok(ProjectionBarrierStatus::default())
         }
@@ -1240,12 +1247,14 @@ mod tests {
         }
         async fn persist_ia_build_output(
             &self,
+            _input: &IaBuildInputPayload,
             _output: &IaBuildOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
         }
         async fn persist_link_recommend_output(
             &self,
+            _input: &LinkRecommendInputPayload,
             _output: &LinkRecommendOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
@@ -1291,7 +1300,10 @@ mod tests {
             &self,
             _query: &str,
             _limit: usize,
-        ) -> Result<Vec<contracts::generated::alegria::temporal::v1::SourceContextChunkState>, DomainError> {
+        ) -> Result<
+            Vec<contracts::generated::alegria::temporal::v1::SourceContextChunkState>,
+            DomainError,
+        > {
             Ok(Vec::new())
         }
     }
@@ -1300,6 +1312,7 @@ mod tests {
     impl DraftRepository for FakeRepo {
         async fn persist_draft_assemble_output(
             &self,
+            _run_id: &str,
             _output: &DraftAssembleOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
@@ -1390,7 +1403,10 @@ mod tests {
             &self,
             _input: &FinalizePublishInputPayload,
             output: &contracts::generated::alegria::temporal::v1::FinalizePublishOutputPayload,
-        ) -> Result<contracts::generated::alegria::temporal::v1::FinalizePublishOutputPayload, DomainError> {
+        ) -> Result<
+            contracts::generated::alegria::temporal::v1::FinalizePublishOutputPayload,
+            DomainError,
+        > {
             Ok(output.clone())
         }
     }
@@ -1439,6 +1455,7 @@ mod tests {
             queries: vec!["spain tourist visa".to_string()],
             verified_support: Vec::new(),
             required_page_types: Vec::new(),
+            run_mode: "publish_with_hitl".to_string(),
         }
     }
 
@@ -1459,7 +1476,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.scenario, "site_build_planning_only");
-        assert!(result.phase_reports.iter().any(|r| r.phase == "global_site_reconcile"));
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|r| r.phase == "global_site_reconcile"));
     }
 
     #[tokio::test]
@@ -1479,5 +1499,27 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.status, "blocked_publish_gate");
+    }
+
+    #[test]
+    fn scenario_report_surface_carries_phase_reports() {
+        let result = SeoScenarioResult {
+            scenario: "site_build_full".to_string(),
+            mode: "temporal_durable".to_string(),
+            status: "ok".to_string(),
+            page_total: 1,
+            published_pages: 0,
+            changed_truth_keys: vec!["truth_key".to_string()],
+            phase_reports: vec![SeoPhaseReport {
+                phase: "draft_assemble".to_string(),
+                status: "done".to_string(),
+                page_node_key: "page_1".to_string(),
+                detail: "assembled".to_string(),
+            }],
+        };
+
+        assert_eq!(result.phase_reports[0].phase, "draft_assemble");
+        assert_eq!(result.phase_reports[0].status, "done");
+        assert_eq!(result.changed_truth_keys[0], "truth_key");
     }
 }

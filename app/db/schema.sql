@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS kb.applicant_profiles (
 CREATE TABLE IF NOT EXISTS kb.sources (
     source_key   TEXT PRIMARY KEY,
     source_type  TEXT NOT NULL
-        CHECK (source_type IN ('government','vfs','niche_agency','editorial','internal')),
+        CHECK (source_type IN ('government','vfs','niche_agency','editorial','internal','forum','low_trust')),
     source_label TEXT NOT NULL,
     base_url     TEXT,
     -- 1=forum/aggregator  2=niche_agency  3=editorial  4=vfs  5=government
@@ -226,6 +226,57 @@ ALTER TABLE verified.rule_instances
             'step'
         ));
 
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS rule_candidate_id TEXT;
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS evidence_section_id BIGINT;
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS evidence_quote TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS span_start INTEGER;
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS span_end INTEGER;
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS source_snapshot_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS verification_method TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS adjudication_reason TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS publish_admissibility TEXT NOT NULL DEFAULT 'not_admissible';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS freshness_class TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS completeness_class TEXT NOT NULL DEFAULT 'unknown';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS registry_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS prompt_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS model_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS pipeline_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE verified.rule_instances
+    ADD COLUMN IF NOT EXISTS review_decision_id TEXT;
+
+ALTER TABLE verified.rule_instances
+    DROP CONSTRAINT IF EXISTS verified_rule_instances_publish_admissibility_check;
+ALTER TABLE verified.rule_instances
+    ADD CONSTRAINT verified_rule_instances_publish_admissibility_check
+        CHECK (publish_admissibility IN ('admissible','not_admissible','needs_hitl','admissible_with_warning'));
+
+ALTER TABLE verified.rule_instances
+    DROP CONSTRAINT IF EXISTS verified_rule_instances_freshness_class_check;
+ALTER TABLE verified.rule_instances
+    ADD CONSTRAINT verified_rule_instances_freshness_class_check
+        CHECK (freshness_class IN ('fresh','watch','stale','unknown'));
+
+ALTER TABLE verified.rule_instances
+    DROP CONSTRAINT IF EXISTS verified_rule_instances_completeness_class_check;
+ALTER TABLE verified.rule_instances
+    ADD CONSTRAINT verified_rule_instances_completeness_class_check
+        CHECK (completeness_class IN ('complete','partial','incomplete','unknown'));
+
 CREATE INDEX IF NOT EXISTS idx_verified_rule_instances_context
     ON verified.rule_instances(context_key);
 CREATE INDEX IF NOT EXISTS idx_verified_rule_instances_rule_type
@@ -236,6 +287,8 @@ CREATE INDEX IF NOT EXISTS idx_verified_rule_instances_source
     ON verified.rule_instances(source_key);
 CREATE INDEX IF NOT EXISTS idx_verified_rule_instances_params_gin
     ON verified.rule_instances USING GIN (params);
+CREATE INDEX IF NOT EXISTS idx_verified_rule_instances_admissibility
+    ON verified.rule_instances(publish_admissibility, status);
 
 -- ----------------------------------------------------------------------------
 
@@ -286,6 +339,7 @@ CREATE INDEX IF NOT EXISTS idx_verified_rule_exceptions_condition_gin
 
 CREATE TABLE IF NOT EXISTS system.sync_outbox (
     event_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id         TEXT NOT NULL DEFAULT '',
     aggregate_type TEXT NOT NULL,           -- 'rule_instance' | 'concept' | 'page_context'
     aggregate_key  TEXT NOT NULL,
     target_system  TEXT NOT NULL
@@ -315,6 +369,8 @@ ALTER TABLE system.sync_outbox
         CHECK (target_system IN ('neo4j','qdrant','cms'));
 
 ALTER TABLE system.sync_outbox
+    ADD COLUMN IF NOT EXISTS run_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE system.sync_outbox
     ADD COLUMN IF NOT EXISTS payload_type TEXT NOT NULL DEFAULT 'alegria.sync.v1.opaque_payload';
 ALTER TABLE system.sync_outbox
     ADD COLUMN IF NOT EXISTS schema_version INTEGER NOT NULL DEFAULT 1;
@@ -335,6 +391,9 @@ CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_locked_until
 
 CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_aggregate
     ON system.sync_outbox(aggregate_type, aggregate_key);
+
+CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_target_run_status
+    ON system.sync_outbox(target_system, run_id, status);
 
 -- Idempotency guard: prevents duplicate logical events on activity retries.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_dedup
@@ -1025,6 +1084,7 @@ CREATE TABLE IF NOT EXISTS raw.pages (
     content_type    TEXT DEFAULT 'html',    -- 'html' | 'pdf'
     snapshot_at     TIMESTAMPTZ DEFAULT now(),
     crawled_at      TIMESTAMPTZ,
+    final_url       TEXT,
     title           TEXT,
     meta_desc       TEXT,
     canonical       TEXT,
@@ -1033,6 +1093,9 @@ CREATE TABLE IF NOT EXISTS raw.pages (
     raw_html        TEXT,                   -- полный HTML (TOASTed)
     raw_html_bytes  INTEGER,
     content_hash    TEXT,                   -- blake3(raw_html), hex64
+    redirect_chain  JSONB DEFAULT '[]'::jsonb,
+    robots_trace    JSONB DEFAULT '{}'::jsonb,
+    source_observation JSONB DEFAULT '{}'::jsonb,
     processed       BOOLEAN DEFAULT false
 );
 
@@ -1056,6 +1119,21 @@ CREATE TABLE IF NOT EXISTS raw.sections (
 CREATE INDEX IF NOT EXISTS idx_raw_pages_domain     ON raw.pages(domain);
 CREATE INDEX IF NOT EXISTS idx_raw_sections_page    ON raw.sections(page_id);
 CREATE INDEX IF NOT EXISTS idx_raw_sections_type    ON raw.sections(section_type);
+
+CREATE TABLE IF NOT EXISTS raw.page_content_aliases (
+    alias_page_id     BIGINT PRIMARY KEY REFERENCES raw.pages(id) ON DELETE CASCADE,
+    canonical_page_id BIGINT NOT NULL REFERENCES raw.pages(id) ON DELETE CASCADE,
+    source_url        TEXT NOT NULL,
+    final_url         TEXT NOT NULL,
+    content_hash      TEXT NOT NULL,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_raw_page_content_aliases_canonical
+    ON raw.page_content_aliases(canonical_page_id);
+CREATE INDEX IF NOT EXISTS idx_raw_page_content_aliases_hash
+    ON raw.page_content_aliases(content_hash);
 
 -- ==============================================================================
 -- 7. SERP — SERP Runs & Crawl Queue
@@ -1103,6 +1181,7 @@ CREATE TABLE IF NOT EXISTS serp.gemini_top10 (
     url         TEXT NOT NULL,
     url_norm    TEXT,
     domain_norm TEXT,
+    source_tier TEXT NOT NULL DEFAULT 'low_trust',
     also_in_sources BOOLEAN DEFAULT false,
     PRIMARY KEY (run_id, job_id, rank)
 );
@@ -1156,12 +1235,14 @@ CREATE TABLE IF NOT EXISTS serp.gemini_supports (
 CREATE TABLE IF NOT EXISTS serp.crawl_queue (
     url               TEXT NOT NULL,
     url_norm          TEXT NOT NULL UNIQUE,
+    source_domain     TEXT NOT NULL DEFAULT '',
     source_type       TEXT NOT NULL,   -- 'top10' | 'source_resolved'
     dtype             TEXT,            -- 'government' | 'niche_agency' | 'forum' | ...
     first_seen_run_id TEXT NOT NULL,
     first_seen_job_id TEXT NOT NULL,
     query_batch_key   TEXT NOT NULL DEFAULT '',
     first_seen_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    next_attempt_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     status            TEXT NOT NULL DEFAULT 'pending',
     http_status       INT,
     crawl_attempt_count INT NOT NULL DEFAULT 0,
@@ -1171,7 +1252,11 @@ CREATE TABLE IF NOT EXISTS serp.crawl_queue (
 );
 
 ALTER TABLE serp.crawl_queue
+    ADD COLUMN IF NOT EXISTS source_domain TEXT NOT NULL DEFAULT '';
+ALTER TABLE serp.crawl_queue
     ADD COLUMN IF NOT EXISTS query_batch_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE serp.crawl_queue
+    ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT now();
 ALTER TABLE serp.crawl_queue
     ADD COLUMN IF NOT EXISTS crawl_attempt_count INT NOT NULL DEFAULT 0;
 ALTER TABLE serp.crawl_queue
@@ -1183,6 +1268,8 @@ CREATE INDEX IF NOT EXISTS idx_serp_crawl_queue_status
     ON serp.crawl_queue(status);
 CREATE INDEX IF NOT EXISTS idx_serp_crawl_queue_run_batch
     ON serp.crawl_queue(first_seen_run_id, query_batch_key, status, first_seen_at);
+CREATE INDEX IF NOT EXISTS idx_serp_crawl_queue_domain_ready
+    ON serp.crawl_queue(source_domain, status, next_attempt_at, first_seen_at);
 
 CREATE TABLE IF NOT EXISTS raw.section_context_candidates (
     raw_section_id BIGINT NOT NULL REFERENCES raw.sections(id) ON DELETE CASCADE,
@@ -1196,6 +1283,72 @@ CREATE TABLE IF NOT EXISTS raw.section_context_candidates (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (raw_section_id, context_key)
 );
+
+CREATE TABLE IF NOT EXISTS extracted.rule_candidates (
+    rule_candidate_id      TEXT PRIMARY KEY,
+    context_key            TEXT NOT NULL REFERENCES kb.visa_contexts(context_key) ON UPDATE CASCADE,
+    raw_section_id         BIGINT NOT NULL REFERENCES raw.sections(id) ON DELETE CASCADE,
+    role                   TEXT NOT NULL
+                            CHECK (role IN (
+                                'DOCUMENT_REQUIRED','ELIGIBILITY_RULE','FEE_ITEM','TIMELINE_ITEM',
+                                'WHERE_TO_APPLY','APPOINTMENT_RULE','FORM_REQUIRED','STEP'
+                            )),
+    concept_canonical_key  TEXT NOT NULL,
+    raw_mention            TEXT NOT NULL,
+    params                 JSONB NOT NULL DEFAULT '{}'::jsonb,
+    scope                  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    severity               TEXT NOT NULL DEFAULT 'unknown'
+                            CHECK (severity IN ('mandatory','recommended','optional','unknown')),
+    applies_to_profiles    JSONB NOT NULL DEFAULT '[]'::jsonb,
+    exceptions_raw         TEXT NOT NULL DEFAULT '',
+    conditions_raw         TEXT NOT NULL DEFAULT '',
+    alternatives           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    modality_raw           TEXT NOT NULL DEFAULT '',
+    derivation_type        TEXT NOT NULL DEFAULT 'direct'
+                            CHECK (derivation_type IN ('direct','inferred','aggregated')),
+    is_numeric             BOOLEAN NOT NULL DEFAULT false,
+    is_range               BOOLEAN NOT NULL DEFAULT false,
+    is_incomplete          BOOLEAN NOT NULL DEFAULT false,
+    confidence             NUMERIC(5,4) NOT NULL CHECK (confidence > 0 AND confidence <= 1),
+    evidence_section_id    BIGINT NOT NULL REFERENCES raw.sections(id) ON DELETE CASCADE,
+    evidence_quote         TEXT NOT NULL,
+    span_start             INTEGER NOT NULL CHECK (span_start >= 0),
+    span_end               INTEGER NOT NULL CHECK (span_end > span_start),
+    source_key             TEXT NOT NULL REFERENCES kb.sources(source_key) ON UPDATE CASCADE,
+    source_snapshot_hash   TEXT NOT NULL,
+    llm_provider           TEXT NOT NULL,
+    llm_model              TEXT NOT NULL,
+    prompt_version         TEXT NOT NULL,
+    epistemic_status       TEXT NOT NULL DEFAULT 'candidate'
+                            CHECK (epistemic_status IN ('candidate','structured','needs_hitl','rejected','verified')),
+    uncertainty_flags      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (raw_section_id, role, concept_canonical_key, evidence_quote, span_start, span_end)
+);
+
+CREATE INDEX IF NOT EXISTS idx_extracted_rule_candidates_context
+    ON extracted.rule_candidates(context_key, epistemic_status);
+CREATE INDEX IF NOT EXISTS idx_extracted_rule_candidates_section
+    ON extracted.rule_candidates(raw_section_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_extracted_rule_candidates_source
+    ON extracted.rule_candidates(source_key, created_at DESC);
+
+ALTER TABLE verified.rule_instances
+    DROP CONSTRAINT IF EXISTS verified_rule_instances_rule_candidate_fk;
+ALTER TABLE verified.rule_instances
+    ADD CONSTRAINT verified_rule_instances_rule_candidate_fk
+        FOREIGN KEY (rule_candidate_id)
+        REFERENCES extracted.rule_candidates(rule_candidate_id)
+        ON DELETE SET NULL;
+
+ALTER TABLE verified.rule_instances
+    DROP CONSTRAINT IF EXISTS verified_rule_instances_evidence_section_fk;
+ALTER TABLE verified.rule_instances
+    ADD CONSTRAINT verified_rule_instances_evidence_section_fk
+        FOREIGN KEY (evidence_section_id)
+        REFERENCES raw.sections(id)
+        ON DELETE RESTRICT;
 
 CREATE INDEX IF NOT EXISTS idx_raw_section_context_candidates_context
     ON raw.section_context_candidates(context_key, status);
@@ -1359,7 +1512,8 @@ CREATE TABLE IF NOT EXISTS monitoring.seo_rebuild_dependencies (
     dependency_type        TEXT NOT NULL
                            CHECK (dependency_type IN (
                                'truth_support','blueprint','section_template',
-                               'keyword_cluster','serp_query','required_link'
+                               'keyword_cluster','serp_query','required_link',
+                               'source_provenance','navigation_state'
                            )),
     dependency_ref         TEXT NOT NULL,
     reason_package         JSONB NOT NULL DEFAULT '{}'::jsonb,

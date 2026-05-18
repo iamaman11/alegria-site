@@ -10,6 +10,8 @@ worker.log
 app/rust/target/
 app/rust/dist/
 infra/backups/artifacts/
+infra/local/*.env
+infra/local/*.pgpass
 docs/_archive/
 automation/reports/
 *:Zone.Identifier

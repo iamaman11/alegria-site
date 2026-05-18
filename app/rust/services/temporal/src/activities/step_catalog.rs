@@ -9,27 +9,6 @@ pub(crate) fn run_layer_router(
     seo_steps::layer_router_step::execute(input)
 }
 
-pub(crate) fn run_entity_span_detection(
-    _acts: &AlegriaActivities,
-    input: &seo_steps::entity_span_detection_step::EntitySpanInput,
-) -> seo_steps::entity_span_detection_step::EntitySpanOutput {
-    seo_steps::entity_span_detection_step::execute(input)
-}
-
-pub(crate) fn run_canonical_mapping(
-    _acts: &AlegriaActivities,
-    input: &seo_steps::canonical_mapping_step::CanonicalMappingInput,
-) -> seo_steps::canonical_mapping_step::CanonicalMappingOutput {
-    seo_steps::canonical_mapping_step::execute(input)
-}
-
-pub(crate) fn run_procedural_extraction(
-    _acts: &AlegriaActivities,
-    input: &seo_steps::procedural_extraction_step::ProceduralExtractionInput,
-) -> seo_steps::procedural_extraction_step::ProceduralExtractionOutput {
-    seo_steps::procedural_extraction_step::execute(input)
-}
-
 pub(crate) fn run_operational_extraction(
     _acts: &AlegriaActivities,
     input: &seo_steps::operational_extraction_step::OperationalExtractionInput,
@@ -49,13 +28,6 @@ pub(crate) fn run_triple_builder(
     input: &seo_steps::triple_builder_step::TripleBuilderInput,
 ) -> seo_steps::triple_builder_step::TripleBuilderOutput {
     seo_steps::triple_builder_step::execute(input)
-}
-
-pub(crate) fn run_completeness_judge(
-    _acts: &AlegriaActivities,
-    input: &seo_steps::completeness_judge_step::CompletenessJudgeInput,
-) -> seo_steps::completeness_judge_step::CompletenessJudgeOutput {
-    seo_steps::completeness_judge_step::execute(input)
 }
 
 pub(crate) fn run_contradiction_gate(

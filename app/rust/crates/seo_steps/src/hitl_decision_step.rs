@@ -63,3 +63,50 @@ pub fn execute(input: &HitlDecisionInput) -> HitlDecisionOutput {
         reason: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contradiction_blocked_routes_to_hard_block() {
+        let output = execute(&HitlDecisionInput {
+            run_id: "run".to_string(),
+            step_name: "draft_qa".to_string(),
+            layer_confidence: 0.95,
+            completeness_score: 0.95,
+            unresolved_mappings: 0,
+            contradiction_blocked: true,
+            conflict_count: 1,
+            loss_count: 0,
+        });
+
+        assert!(output.requires_hitl);
+        assert_eq!(output.route, "hard_block");
+        assert_eq!(output.task_type.as_deref(), Some("fact_conflict"));
+        assert_eq!(output.priority, 200);
+        assert_eq!(
+            output.reason.as_deref(),
+            Some("critical contradiction detected")
+        );
+    }
+
+    #[test]
+    fn non_blocking_conflicts_queue_hitl() {
+        let output = execute(&HitlDecisionInput {
+            run_id: "run".to_string(),
+            step_name: "draft_qa".to_string(),
+            layer_confidence: 0.95,
+            completeness_score: 0.95,
+            unresolved_mappings: 0,
+            contradiction_blocked: false,
+            conflict_count: 1,
+            loss_count: 0,
+        });
+
+        assert!(output.requires_hitl);
+        assert_eq!(output.route, "queue_hitl");
+        assert_eq!(output.task_type.as_deref(), Some("quality_review"));
+        assert_eq!(output.priority, 120);
+    }
+}

@@ -20,9 +20,6 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload, StringPayload,
     ValidationInputPayload, ValidationReport, VerifyReport,
 };
-use primitives::facts_extractor::{
-    ExtractedFactsEnvelope, FactValue, RuleParams as ExtractedRuleParams,
-};
 use prost::Message;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -63,6 +60,7 @@ pub(crate) fn neo4j_rule_upserted(rule_instance_id: &str, context_key: &str) -> 
         context_key: context_key.to_string(),
     });
     OutboxEnvelope {
+        run_id: String::new(),
         aggregate_type: "rule_instance".to_string(),
         aggregate_key: rule_instance_id.to_string(),
         target_system: "neo4j".to_string(),
@@ -727,75 +725,6 @@ pub fn decode_extracted_payload(payload: Option<&ExecutionRunBlob>) -> Extracted
         return ExtractedPayload::default();
     }
     ExtractedPayload::decode_payload_bytes(&payload.payload_bytes).unwrap_or_default()
-}
-
-pub fn build_extracted_payload_from_typed(extracted: ExtractedFactsEnvelope) -> ExtractedPayload {
-    ExtractedPayload {
-        rule_instances: extracted
-            .rule_instances
-            .into_iter()
-            .map(|rule| RuleInstanceCandidate {
-                rule_type_key: rule.rule_type_key,
-                concept_key: rule.concept_key,
-                role_type: RuleRoleType::parse(&rule.role_type).unwrap_or_default(),
-                params: match rule.params {
-                    ExtractedRuleParams::None => RuntimeRuleParams::None,
-                    ExtractedRuleParams::Fee {
-                        amount,
-                        currency,
-                        severity,
-                        conditions_key,
-                    } => RuntimeRuleParams::Fee {
-                        amount,
-                        currency,
-                        severity,
-                        channel: None,
-                        conditions_key,
-                    },
-                    ExtractedRuleParams::Document {
-                        severity,
-                        subtype,
-                        notarization_required,
-                        translation_required,
-                        accepts_alternatives,
-                        conditions_key,
-                    } => RuntimeRuleParams::Document {
-                        severity,
-                        subtype,
-                        notarization_required,
-                        translation_required,
-                        accepts_alternatives,
-                        conditions_key,
-                    },
-                    ExtractedRuleParams::Timeline {
-                        days,
-                        subtype,
-                        severity,
-                        conditions_key,
-                    } => RuntimeRuleParams::Timeline {
-                        days,
-                        subtype,
-                        severity,
-                        conditions_key,
-                    },
-                },
-                status: "pending".to_string(),
-                source_key: rule.source_key,
-                condition_expr: None,
-            })
-            .collect(),
-        facts: extracted
-            .facts
-            .into_iter()
-            .map(|fact| match fact.fact_value {
-                FactValue::Null => FactCandidateValue::Null,
-                FactValue::Integer(v) => FactCandidateValue::Integer(v),
-                FactValue::Decimal(v) => FactCandidateValue::Decimal(v),
-                FactValue::Text(v) => FactCandidateValue::Text(v),
-                FactValue::Boolean(v) => FactCandidateValue::Boolean(v),
-            })
-            .collect(),
-    }
 }
 
 pub fn decode_verify_report(payload: Option<&ExecutionRunBlob>) -> Option<VerifyReport> {

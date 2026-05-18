@@ -25,6 +25,8 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel.startswith("app/rust/crates/infrastructure/src/adapters/"):
         return True
+    if rel.startswith("app/rust/crates/integration_harness/src/"):
+        return True
     if rel in {
         "app/rust/crates/seo_ports/src/lib.rs",
         "app/rust/crates/seo_application/src/rebuild_detect.rs",

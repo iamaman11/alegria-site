@@ -15,7 +15,38 @@ pub async fn load_verified_support_bundle<R: VerifiedSupportRepository>(
     repo: &R,
     request: &VerifiedSupportBundleRequest,
 ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
-    repo.load_verified_support_bundle(request).await
+    let bundle = repo.load_verified_support_bundle(request).await?;
+    truth_admissibility_gate(&bundle, &request.context_key, &request.applicant_profile)?;
+    Ok(bundle)
+}
+
+pub fn truth_admissibility_gate(
+    bundle: &[SeoVerifiedFactSupportState],
+    context_key: &str,
+    applicant_profile: &str,
+) -> Result<(), DomainError> {
+    if bundle.is_empty() {
+        return Err(DomainError::ValidationFailure {
+            message: format!(
+                "truth_admissibility_gate failed: admissible verified support is empty for context_key `{context_key}` and applicant_profile `{applicant_profile}`"
+            ),
+        });
+    }
+    for support in bundle {
+        if support.support_ref.trim().is_empty()
+            || support.fragment_text.trim().is_empty()
+            || support.role_type.trim().is_empty()
+            || support.source_label.trim().is_empty()
+        {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "truth_admissibility_gate failed: support row `{}` is missing mandatory admissibility fields",
+                    support.support_ref
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -48,6 +79,7 @@ mod tests {
                 queries: vec!["spain tourist visa".to_string()],
                 verified_support: Vec::new(),
                 required_page_types: Vec::new(),
+                run_mode: "publish_with_hitl".to_string(),
             })
         }
     }
@@ -95,5 +127,12 @@ mod tests {
         .unwrap();
         assert_eq!(bundle.len(), 1);
         assert_eq!(bundle[0].support_ref, "rule:passport");
+    }
+
+    #[test]
+    fn rejects_empty_truth_bundle() {
+        let err = truth_admissibility_gate(&[], "ES|tourist||BY", "standard").unwrap_err();
+        assert_eq!(err.class_str(), "validation_failure");
+        assert!(err.to_string().contains("truth_admissibility_gate failed"));
     }
 }

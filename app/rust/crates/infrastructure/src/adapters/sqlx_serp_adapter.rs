@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use primitives::url_norm::domain_norm;
 use sqlx::PgPool;
 
 use super::dataforseo_serp_adapter::DataForSeoOrganicResult;
@@ -47,13 +48,14 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
     for result in results {
         sqlx::query(
             "INSERT INTO serp.gemini_top10
-             (run_id, job_id, rank, title, url, url_norm, domain_norm, also_in_sources)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+             (run_id, job_id, rank, title, url, url_norm, domain_norm, source_tier, also_in_sources)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
              ON CONFLICT (run_id, job_id, rank) DO UPDATE
              SET title       = EXCLUDED.title,
                  url         = EXCLUDED.url,
                  url_norm    = EXCLUDED.url_norm,
-                 domain_norm = EXCLUDED.domain_norm",
+                 domain_norm = EXCLUDED.domain_norm,
+                 source_tier = EXCLUDED.source_tier",
         )
         .bind(run_id)
         .bind(job_id)
@@ -62,27 +64,37 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
         .bind(&result.url)
         .bind(&result.url_norm)
         .bind(&result.domain_norm)
+        .bind(&result.source_tier)
         .execute(&mut *tx)
         .await
         .context("save DataForSEO organic result")?;
 
         sqlx::query(
             "INSERT INTO serp.crawl_queue
-             (url, url_norm, source_type, dtype, first_seen_run_id, first_seen_job_id, query_batch_key, status, notes)
-             VALUES ($1, $2, 'top10', 'organic_competitor', $3, $4, $5, 'pending', $6)
+             (url, url_norm, source_domain, source_type, dtype, first_seen_run_id, first_seen_job_id, query_batch_key, status, next_attempt_at, notes)
+             VALUES ($1, $2, $3, 'top10', 'organic_competitor', $4, $5, $6, 'pending', now(), $7)
              ON CONFLICT (url_norm) DO UPDATE
              SET status = CASE
                      WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.status
                      ELSE 'pending'
                  END,
+                 source_domain = CASE
+                     WHEN serp.crawl_queue.source_domain = '' THEN EXCLUDED.source_domain
+                     ELSE serp.crawl_queue.source_domain
+                 END,
                  query_batch_key = CASE
                      WHEN serp.crawl_queue.query_batch_key = '' THEN EXCLUDED.query_batch_key
                      ELSE serp.crawl_queue.query_batch_key
+                 END,
+                 next_attempt_at = CASE
+                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.next_attempt_at
+                     ELSE now()
                  END,
                  notes = EXCLUDED.notes",
         )
         .bind(&result.url)
         .bind(&result.url_norm)
+        .bind(domain_norm(&result.url))
         .bind(run_id)
         .bind(job_id)
         .bind(query_batch_key)
@@ -104,16 +116,25 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
 pub async fn enqueue_crawl(pool: &PgPool, url_norm: &str, priority: i32) -> Result<()> {
     sqlx::query(
         "INSERT INTO serp.crawl_queue
-         (url, url_norm, source_type, first_seen_run_id, first_seen_job_id, status, notes)
-         VALUES ($1, $1, 'manual', 'manual', 'manual', 'pending', $2)
+         (url, url_norm, source_domain, source_type, first_seen_run_id, first_seen_job_id, status, next_attempt_at, notes)
+         VALUES ($1, $1, $2, 'manual', 'manual', 'manual', 'pending', now(), $3)
          ON CONFLICT (url_norm) DO UPDATE
          SET status = CASE
                  WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.status
                  ELSE 'pending'
              END,
+             source_domain = CASE
+                 WHEN serp.crawl_queue.source_domain = '' THEN EXCLUDED.source_domain
+                 ELSE serp.crawl_queue.source_domain
+             END,
+             next_attempt_at = CASE
+                 WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.next_attempt_at
+                 ELSE now()
+             END,
              notes = EXCLUDED.notes",
     )
     .bind(url_norm)
+    .bind(domain_norm(url_norm))
     .bind(format!("priority={priority}"))
     .execute(pool)
     .await

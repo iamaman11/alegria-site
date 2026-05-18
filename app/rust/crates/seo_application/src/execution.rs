@@ -1,5 +1,11 @@
 use crate::scenario::{SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest};
 
+pub const SEO_RUN_MODE_DRY_RUN: &str = "dry_run";
+pub const SEO_RUN_MODE_CRAWL_ONLY: &str = "crawl_only";
+pub const SEO_RUN_MODE_DRAFT_ONLY: &str = "draft_only";
+pub const SEO_RUN_MODE_PUBLISH_WITH_HITL: &str = "publish_with_hitl";
+pub const SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL: &str = "full_auto_after_approval";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunPersistencePolicy {
     PersistAll,
@@ -44,7 +50,11 @@ impl SeoRunPolicy {
         }
     }
 
-    pub fn for_semi_auto_operator(publish: bool, require_preapproved_decision: bool, warn_only_projections: bool) -> Self {
+    pub fn for_semi_auto_operator(
+        publish: bool,
+        require_preapproved_decision: bool,
+        warn_only_projections: bool,
+    ) -> Self {
         Self {
             persistence: if publish {
                 RunPersistencePolicy::PersistAll
@@ -76,6 +86,113 @@ impl SeoRunPolicy {
             projection: RunProjectionPolicy::WarnOnly,
             publish: RunPublishPolicy::NoPublish,
         }
+    }
+}
+
+pub fn normalize_run_mode(run_mode: &str) -> &'static str {
+    match run_mode.trim() {
+        SEO_RUN_MODE_DRY_RUN => SEO_RUN_MODE_DRY_RUN,
+        SEO_RUN_MODE_CRAWL_ONLY => SEO_RUN_MODE_CRAWL_ONLY,
+        SEO_RUN_MODE_DRAFT_ONLY => SEO_RUN_MODE_DRAFT_ONLY,
+        SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL => SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL,
+        SEO_RUN_MODE_PUBLISH_WITH_HITL => SEO_RUN_MODE_PUBLISH_WITH_HITL,
+        _ => SEO_RUN_MODE_PUBLISH_WITH_HITL,
+    }
+}
+
+pub fn scenario_kind_for_run_mode(run_mode: &str) -> SeoScenarioKind {
+    match normalize_run_mode(run_mode) {
+        SEO_RUN_MODE_CRAWL_ONLY => SeoScenarioKind::CrawlIngestOnly,
+        SEO_RUN_MODE_DRY_RUN | SEO_RUN_MODE_DRAFT_ONLY => SeoScenarioKind::Full,
+        SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL | SEO_RUN_MODE_PUBLISH_WITH_HITL => {
+            SeoScenarioKind::Full
+        }
+        _ => SeoScenarioKind::Full,
+    }
+}
+
+pub fn policy_for_run_mode(run_mode: &str, execution_mode: SeoExecutionMode) -> SeoRunPolicy {
+    match normalize_run_mode(run_mode) {
+        SEO_RUN_MODE_CRAWL_ONLY => match execution_mode {
+            SeoExecutionMode::TemporalDurable => SeoRunPolicy {
+                persistence: RunPersistencePolicy::PersistAll,
+                interaction: RunInteractionPolicy::FailIfHitlRequired,
+                projection: RunProjectionPolicy::ObserveProjectionBarrier,
+                publish: RunPublishPolicy::NoPublish,
+            },
+            SeoExecutionMode::SemiAutoOperator => {
+                SeoRunPolicy::for_semi_auto_operator(false, false, false)
+            }
+            SeoExecutionMode::ManualTest => SeoRunPolicy::for_manual_test(),
+        },
+        SEO_RUN_MODE_DRY_RUN => match execution_mode {
+            SeoExecutionMode::TemporalDurable => SeoRunPolicy {
+                persistence: RunPersistencePolicy::PersistWithoutPublish,
+                interaction: RunInteractionPolicy::FailIfHitlRequired,
+                projection: RunProjectionPolicy::WarnOnly,
+                publish: RunPublishPolicy::NoPublish,
+            },
+            SeoExecutionMode::SemiAutoOperator => {
+                SeoRunPolicy::for_semi_auto_operator(false, false, true)
+            }
+            SeoExecutionMode::ManualTest => SeoRunPolicy::for_manual_test(),
+        },
+        SEO_RUN_MODE_DRAFT_ONLY => match execution_mode {
+            SeoExecutionMode::TemporalDurable => SeoRunPolicy {
+                persistence: RunPersistencePolicy::PersistWithoutPublish,
+                interaction: RunInteractionPolicy::FailIfHitlRequired,
+                projection: RunProjectionPolicy::ObserveProjectionBarrier,
+                publish: RunPublishPolicy::NoPublish,
+            },
+            SeoExecutionMode::SemiAutoOperator => {
+                SeoRunPolicy::for_semi_auto_operator(false, false, false)
+            }
+            SeoExecutionMode::ManualTest => SeoRunPolicy::for_manual_test(),
+        },
+        SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL => match execution_mode {
+            SeoExecutionMode::TemporalDurable => SeoRunPolicy {
+                persistence: RunPersistencePolicy::PersistAll,
+                interaction: RunInteractionPolicy::RequirePreApprovedDecision,
+                projection: RunProjectionPolicy::ObserveProjectionBarrier,
+                publish: RunPublishPolicy::PublishIfApproved,
+            },
+            SeoExecutionMode::SemiAutoOperator => {
+                SeoRunPolicy::for_semi_auto_operator(true, true, false)
+            }
+            SeoExecutionMode::ManualTest => SeoRunPolicy::for_manual_test(),
+        },
+        SEO_RUN_MODE_PUBLISH_WITH_HITL => match execution_mode {
+            SeoExecutionMode::TemporalDurable => SeoRunPolicy::for_temporal_durable(),
+            SeoExecutionMode::SemiAutoOperator => {
+                SeoRunPolicy::for_semi_auto_operator(true, false, false)
+            }
+            SeoExecutionMode::ManualTest => SeoRunPolicy::for_manual_test(),
+        },
+        _ => SeoRunPolicy::for_temporal_durable(),
+    }
+}
+
+pub fn run_mode_for_scenario(
+    scenario: SeoScenarioKind,
+    publish: bool,
+    require_preapproved_decision: bool,
+    warn_only_projections: bool,
+) -> &'static str {
+    match scenario {
+        SeoScenarioKind::CrawlIngestOnly => SEO_RUN_MODE_CRAWL_ONLY,
+        SeoScenarioKind::Full | SeoScenarioKind::PublishOnly => {
+            if publish && require_preapproved_decision {
+                SEO_RUN_MODE_FULL_AUTO_AFTER_APPROVAL
+            } else if publish {
+                SEO_RUN_MODE_PUBLISH_WITH_HITL
+            } else if warn_only_projections {
+                SEO_RUN_MODE_DRY_RUN
+            } else {
+                SEO_RUN_MODE_DRAFT_ONLY
+            }
+        }
+        SeoScenarioKind::PlanningOnly | SeoScenarioKind::DraftingOnly => SEO_RUN_MODE_DRAFT_ONLY,
+        SeoScenarioKind::RebuildOnly => SEO_RUN_MODE_PUBLISH_WITH_HITL,
     }
 }
 
@@ -232,7 +349,10 @@ pub fn should_publish(plan: &SeoExecutionPlan) -> bool {
         return false;
     }
     matches!(plan.policy.publish, RunPublishPolicy::PublishIfApproved)
-        && matches!(plan.scenario, SeoScenarioKind::Full | SeoScenarioKind::PublishOnly)
+        && matches!(
+            plan.scenario,
+            SeoScenarioKind::Full | SeoScenarioKind::PublishOnly
+        )
 }
 
 pub fn page_phase_keys(plan: &SeoExecutionPlan) -> Vec<SeoPhaseKey> {
@@ -257,17 +377,17 @@ pub fn page_phase_keys(plan: &SeoExecutionPlan) -> Vec<SeoPhaseKey> {
 }
 
 pub fn final_phase_keys(plan: &SeoExecutionPlan) -> &'static [SeoPhaseKey] {
-    if matches!(plan.scenario, SeoScenarioKind::Full | SeoScenarioKind::RebuildOnly) {
+    if matches!(
+        plan.scenario,
+        SeoScenarioKind::Full | SeoScenarioKind::RebuildOnly
+    ) {
         &[SeoPhaseKey::RebuildDetect]
     } else {
         &[]
     }
 }
 
-pub fn next_phase(
-    phases: &[SeoPhaseKey],
-    cursor: &SeoExecutionCursor,
-) -> SeoPhaseDecision {
+pub fn next_phase(phases: &[SeoPhaseKey], cursor: &SeoExecutionCursor) -> SeoPhaseDecision {
     if cursor.phase_index >= phases.len() {
         return SeoPhaseDecision::Complete("done".to_string());
     }
@@ -326,5 +446,28 @@ mod tests {
             },
         };
         assert!(!page_phase_keys(&plan).contains(&SeoPhaseKey::CmsRequestReview));
+    }
+
+    #[test]
+    fn unknown_run_mode_defaults_to_publish_with_hitl() {
+        assert_eq!(
+            normalize_run_mode("unknown-mode"),
+            SEO_RUN_MODE_PUBLISH_WITH_HITL
+        );
+        assert_eq!(
+            scenario_kind_for_run_mode("unknown-mode"),
+            SeoScenarioKind::Full
+        );
+    }
+
+    #[test]
+    fn crawl_only_mode_maps_to_non_publish_plan() {
+        let policy =
+            policy_for_run_mode(SEO_RUN_MODE_CRAWL_ONLY, SeoExecutionMode::TemporalDurable);
+        assert_eq!(
+            scenario_kind_for_run_mode(SEO_RUN_MODE_CRAWL_ONLY),
+            SeoScenarioKind::CrawlIngestOnly
+        );
+        assert_eq!(policy.publish, RunPublishPolicy::NoPublish);
     }
 }

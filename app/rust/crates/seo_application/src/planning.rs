@@ -194,7 +194,7 @@ pub async fn run_ia_build<R: PlanningRepository>(
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
     let output = seo_steps::ia_build_step::execute(input);
-    repo.persist_ia_build_output(&output).await?;
+    repo.persist_ia_build_output(input, &output).await?;
     Ok(output)
 }
 
@@ -205,7 +205,7 @@ pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort
 ) -> Result<LinkRecommendOutputPayload, DomainError> {
     let mut output = seo_steps::link_recommend_step::execute(input);
     enrich_semantic_link_recommendations(search_port, input, &mut output).await?;
-    repo.persist_link_recommend_output(&output).await?;
+    repo.persist_link_recommend_output(input, &output).await?;
     Ok(output)
 }
 
@@ -270,6 +270,7 @@ mod tests {
 
         async fn persist_ia_build_output(
             &self,
+            _input: &IaBuildInputPayload,
             _output: &IaBuildOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
@@ -277,6 +278,7 @@ mod tests {
 
         async fn persist_link_recommend_output(
             &self,
+            _input: &LinkRecommendInputPayload,
             _output: &LinkRecommendOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
@@ -308,6 +310,7 @@ mod tests {
                     url: "https://example.com/visa".to_string(),
                     url_norm: "example.com/visa".to_string(),
                     domain_norm: "example.com".to_string(),
+                    source_tier: "official".to_string(),
                     snippet: "snippet".to_string(),
                 }],
             }))
