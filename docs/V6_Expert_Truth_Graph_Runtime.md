@@ -40,6 +40,8 @@ The detailed versioned execution plan for evolving `SeoSiteBuildWorkflow` lives 
 
 That working plan has been expanded to match the actual active runtime surface, including support loading, publish-control phases, projection barriers, rebuild detection, and explicit run-mode/scenario branching semantics.
 
+The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value stream. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow.
+
 ---
 
 ## 2. Current Runtime Truth
@@ -195,27 +197,39 @@ Rules:
 
 The target expert architecture is richer than the current active path and must be returned on top of the stabilized truth core.
 
-Target sequence:
+The full executable target sequence is the 56-step flow in [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md).
 
-1. `SERP ingest`
-2. `crawl`
-3. `raw.sections`
-4. `Layer Router`
-5. `Entity Span Detection`
-6. `Canonical Mapping`
-7. `Procedural / Operational / Editorial Extraction`
-8. `Candidate Validation`
-9. `Truth Adjudication`
-10. `Verified Truth`
-11. `Triple Builder`
-12. `Neo4j Sync`
-13. `Voyage/Qdrant Sync`
-14. `planning / cluster / topic / linking / reconcile`
-15. `editorial drafting`
+Owner-level grouped sequence:
+
+1. preflight, verified-support loading, SERP discovery, crawl, and raw evidence registration;
+2. whole-page, utility, DOM relevance, sectioning, sectioning-contract, and CAS gates;
+3. layer routing, subspan routing, entity spans, canonical mapping, and ontology intake;
+4. strict procedural extraction plus operational, editorial, SEO, and commercial extraction;
+5. schema validation, candidate validation, triple building, completeness judge, resolution loop, contradiction gate, truth adjudication, and verified truth write;
+6. graph/retrieval admissibility, `Neo4j` projection, `Voyage/Qdrant` projection, and projection barriers;
+7. SERP normalization, opportunity building, IA, internal linking, and global site reconcile;
+8. truth-admissible draft assembly, editorial generation, draft normalization, content contract validation, draft QA, CMS/HITL, publish materialization, preview validation, and final publish;
+9. rebuild detection from truth, ontology, graph, retrieval, navigation, or publish changes.
 
 This is not a replacement for truth-core.
 
 It is a richer semantic layer built on top of truth-core.
+
+### 5.1 Coverage boundary
+
+The target flow captures all current-run SEO/truth/site-build product behavior.
+
+It deliberately does not absorb these required support planes:
+
+- Temporal worker build-id, rollout, drain, replay, metrics, and durable-history policy;
+- Proto/FBS generation, SQL migrations, SQLx offline metadata, and schema/contract parity checks;
+- asynchronous outbox materialization, reconcile workers, stale-outbox reclaim, and projection consumers;
+- backup/restore drills, production gates, CI, smoke tests, and immutable run evidence;
+- scheduled freshness checks, GSC/analytics ingestion, monitoring, and operator dashboards;
+- PII redaction, licensing checks, quality-policy registries, and HITL operator surfaces that gate drafting or publish;
+- legacy, test-only, and lab-only workflows unless a future version explicitly promotes them.
+
+Support planes may block release or strict-mode workflow progress through gates and barriers, but they are not truth extraction stages and they must not redefine truth authority.
 
 ---
 
@@ -379,3 +393,9 @@ Phase exit requires:
 - aligned the owner-document summary with the real active runtime surface
 - added explicit note that execution is branch-sensitive to run mode, scenario, and publish policy
 - clarified that current truth-core validator/adjudication remain active even while richer semantic stages stay deferred
+
+### V6.2
+
+- pointed the owner-level target expert flow at the detailed 56-step working plan;
+- clarified that the 56 steps cover the canonical current-run SEO/truth/site-build value stream, while runtime substrate, contracts, outbox workers, release gates, backup/restore, monitoring, analytics, privacy/licensing/quality gates, and legacy/test/lab surfaces are required support planes outside the step list;
+- added an explicit rule that support planes may gate or observe the workflow but may not redefine truth authority.

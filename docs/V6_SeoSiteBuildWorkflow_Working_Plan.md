@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.3`
+**Current version:** `6.4`
 
 ---
 
@@ -40,6 +40,54 @@ The system must not wait for all 56 target workflow steps to become first-class 
 - draft QA before publish.
 
 This is not an MVP relaxation. It is the expert core extracted from the full target workflow. Orchestration may be added later; expert safety gates may not be postponed.
+
+### 1.2 Coverage boundary
+
+The 56-step flow is the canonical product/runtime value stream for one `SeoSiteBuildWorkflow` run.
+
+It is not a list of every process, daemon, migration, CI check, backup script, adapter, or laboratory surface in the repository.
+
+The rule is:
+
+- a capability belongs inside the 56 steps when it mutates, validates, or gates source evidence, truth, graph/retrieval projection, planning, drafting, publish, or rebuild state for the current SEO site-build run;
+- a capability belongs outside the 56 steps when it prepares the runtime substrate, verifies release safety, consumes outbox work asynchronously, runs scheduled monitoring, backs up/restores infrastructure, generates contracts, or serves as legacy/test/lab support.
+
+Support-plane functionality must still be covered by acceptance gates, automation, runbooks, and release checks. It must not be forgotten, but it also must not be inserted into the workflow as if it were domain extraction or page-build logic.
+
+### 1.3 Full project coverage map
+
+This map is the result of reconciling the V6 plan with the V5 extraction protocol, SEO companion documents, ops runbooks, automation surface, and active Rust services.
+
+| Area | Inside 56-step flow | Outside 56, but required support plane |
+|---|---|---|
+| Scope/run identity | `seo_preflight`, `load_verified_support_bundle.initial`, `truth_admissibility_gate` | starter CLI, run-mode/scenario policy, scope bootstrap, local DB baseline |
+| Source discovery | `serp_ingest`, `serp_normalize` | DataForSEO credentials, SERP playbook artifacts, source registries |
+| Crawl and raw evidence | `crawl_sources`, `whole_page_semantic_pass`, `page_utility_classifier`, `dom_block_relevance_filter`, `sectioning`, `sectioning_contract_gate`, `cas_gate`, `raw_evidence_register` | crawler adapter, robots/retry policy, raw page persistence, duplicate-content support code |
+| Expert extraction | `layer_router` through `verified_truth_write` | truth LLM provider adapter, primitives validators, policy crates, golden fixtures, integration harness |
+| Ontology | `canonical_mapping`, `ontology_intake_gate`, `resolution_loop`, `verified_truth_write`, retrieval invalidation through `voyage_qdrant_sync` | registry governance, impact analysis tooling, migration/backfill procedures |
+| Graph and retrieval | `graph_admissibility_gate`, `retrieval_admissibility_gate`, `neo4j_sync`, `voyage_qdrant_sync`, projection barriers | outbox worker, reconcile service, Neo4j/Qdrant/Voyage adapters, stale outbox reclaim |
+| Planning and supersite IA | `opportunity_build`, `ia_build`, `link_recommend`, `global_site_reconcile` | SEO registries, page-type policies, quality policy registry, graph analytics lab when needed |
+| Draft and publish | `truth_admissibility_gate` through `projection_barrier(publish)` | CMS/static adapters, HITL queue surfaces, reviewer tooling, publish outbox consumers |
+| Privacy, licensing, and content safety | `draft_assemble`, `content_contract_validate`, `draft_qa`, `render_preview_validate` | PII redaction pre-LLM, licensing gate, quality policy registry, HITL operator surface |
+| Rebuild and update loop | `rebuild_detect` | scheduled freshness checks, GSC/analytics services, rebuild scheduler/backlog processors |
+| Runtime safety | every first-class step ledger and every projection barrier | Temporal worker build-id discipline, replay/drain policy, DLQ, payload blobs, metrics, production gate |
+| Schema/contracts | every step must consume typed contracts | Proto/FBS generation, SQL migrations, SQLx offline metadata, schema parity checks |
+| Ops resilience | release gates observe the flow | CI, smoke checks, restore drill, backups, monitoring, Grafana/Prometheus |
+| Legacy/test/lab surfaces | excluded unless explicitly promoted | `ContentGenerationWorkflow`, legacy `FactExtractionWorkflow` skeleton, `TestHitlWorkflow`, Python analytics lab |
+
+### 1.4 Missing-process rule
+
+If a future feature appears to be "missing from the 56 steps", classify it before changing the flow:
+
+1. If it is a current-run domain phase, add it to the 56-step ledger or merge it into the correct existing step with an explicit exit contract.
+2. If it is an asynchronous materializer or monitor, keep it as a support-plane process and add a barrier, metric, or acceptance gate where the workflow depends on its result.
+3. If it is release safety, keep it in automation/runbooks and require it in production gates.
+4. If it is legacy, test-only, or lab-only, quarantine it and document the promotion rule before it can affect production.
+
+This prevents two failure modes:
+
+- hiding real extraction or publish logic outside the canonical flow;
+- bloating the workflow with infrastructure processes that should be independently operated and verified.
 
 ---
 
@@ -411,11 +459,11 @@ Each target step must have:
 | `global_site_reconcile` | planning/serving | Reconcile current scope into global navigation, hubs, directories, sitemap intent, and rebuild plan. | Navigation uses active source-backed pages and does not invent final menus before IA evidence exists. |
 | `projection_barrier(global_site_reconcile)` | runtime | Ensure planning/global reconcile projections are materialized or explicitly recorded as pending according to policy. | Strict policy blocks open/failed required projection events. |
 | `truth_admissibility_gate` | truth gate | Block drafting unless current page has admissible verified support after profile applicability filtering. | Empty or inadmissible support blocks `draft_assemble`. |
-| `draft_assemble` | serving preparation | Assemble draft plan from verified support, blueprint, section templates, graph/retrieval context, and required links. | LLM request is constrained by verified support. Supplemental retrieval is marked non-fact support unless verified. |
+| `draft_assemble` | serving preparation | Assemble draft plan from verified support, blueprint, section templates, graph/retrieval context, and required links. | LLM request is constrained by verified support and must pass PII redaction before external LLM use. Supplemental retrieval is marked non-fact support unless verified. |
 | `editorial_draft_generate` | serving | Generate draft candidate under JSON/content contract. | LLM may write prose only. It may not create unsupported facts. |
 | `draft_normalize` | serving | Normalize draft candidate into canonical draft blocks, claim ledger, support refs, metadata, and internal links. | Unsupported or malformed claims remain visible for QA and cannot be hidden. |
 | `content_contract_validate` | serving gate | Validate page-type contract, required sections, metadata obligations, links, traceability labels, and schema readiness. | Contract failure blocks publish path. |
-| `draft_qa` | serving gate | Validate factual support, claim coverage, unsupported numbers/dates/prices, duplicate risk, links, readability, and schema coverage. | Unsupported factual claims block publish and may route to HITL. |
+| `draft_qa` | serving gate | Validate factual support, claim coverage, unsupported numbers/dates/prices, licensing restrictions, quality-policy thresholds, duplicate risk, links, readability, and schema coverage. | Unsupported factual claims, restricted redistribution sources, or quality-policy failures block publish and may route to HITL. |
 | `cms_request_review` | publish control | Create review request for draft revision. | Review request persisted with revision id, reviewer surface, and blocking status. |
 | `human_approval_wait` | publish control | Pause or verify pre-approval according to run policy. | `pending_hitl` is resumable. No approval is fabricated. |
 | `cms_publish_approved` | publish control | Confirm approved decision before materialization. | Only approved revision proceeds. Rejected or change-requested revision blocks. |
@@ -838,6 +886,7 @@ Exit:
 - first-class `neo4j_sync`
 - first-class `voyage_qdrant_sync`
 - full graph-backed cluster/topic reasoning
+- any dormant source files for rich steps such as `canonical_mapping_step`, `entity_span_detection_step`, `procedural_extraction_step`, or `completeness_judge_step` do not count as active until they are exported by the Rust crate, covered by contracts/tests, registered in the executable path, and invoked by the workflow or expert-core runner
 
 ### 9.4 Legacy / quarantined now
 
@@ -990,6 +1039,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.4
+
+- clarified that the 56 steps are the canonical `SeoSiteBuildWorkflow` value stream, not every process in the repository;
+- added a full project coverage map that reconciles source discovery, crawl, expert extraction, ontology, graph/retrieval, planning, drafting, publish, privacy/licensing/content-safety gates, rebuild, runtime safety, schema/contracts, ops resilience, and legacy/lab surfaces;
+- added a missing-process classification rule so future capabilities are either placed inside the workflow, attached as support-plane gates, kept in release ops, or quarantined.
+- clarified that dormant rich-step source files are not active functionality until exported, contract-tested, registered, and invoked.
 
 ### 6.3
 

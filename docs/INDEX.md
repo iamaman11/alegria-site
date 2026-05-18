@@ -32,6 +32,7 @@
    - everything explicitly marked below as `research` or `reference`
 7. Immutable run artifacts
    - machine-generated files under `docs/` root listed below
+   - machine-generated evidence under `docs/runs/**`
 
 `V6_Expert_Truth_Graph_Runtime.md` is the single owner-document for the active runtime shape, the target expert architecture, and the truth/graph/retrieval authority split. `V5_Ultimate_Extraction_Protocol.md` and `SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md` are retained as superseded reference context.
 
@@ -66,6 +67,7 @@
 | [V5_Postgres_DDL.sql](V5_Postgres_DDL.sql) | reference-schema | reference | reference DDL snapshot; live schema is `app/db/schema.sql` |
 | [V5_Neo4j_Model.cypher](V5_Neo4j_Model.cypher) | reference-domain-model | reference | graph model reference |
 | `run_gemini3_global_186_20260320_top10__*.jsonl/json/csv/sql` | immutable-artifact | immutable | run outputs; do not treat as live contracts |
+| `docs/runs/**` | immutable-artifact | immutable | smoke, run-report, and certification evidence; do not treat as live contracts |
 
 ## Canonical Live Roots
 
