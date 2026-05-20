@@ -141,6 +141,15 @@ Additional first-class workflow surfaces now present for phased rollout:
 - `FreshnessCheckWorkflow`:
   - support-plane freshness monitor
 
+Additional support-plane executable surfaces now present outside the 56-step run:
+
+- `temporal_starter RebuildDispatch`
+  - consumes queued rebuild backlog rows and starts a fresh scoped workflow run on a new workflow id
+- `temporal_starter OntologyBackfillPlan`
+  - plans ontology backfill and can materialize concepts into Neo4j without pretending retrieval reindex is automatic
+- `cli_tools SeoPostPublishFeedbackProbe`
+  - verifies analytics/GSC support loop health without mutating truth
+
 Within the current `raw_knowledge_ingestion` macro-step:
 
 1. truth-extraction LLM receives one `raw.section`

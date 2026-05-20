@@ -9,8 +9,10 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
 use infrastructure::adapters::{
+    reqwest_adapter::new_default_client,
     sqlx_adapter::connect_pg,
     sqlx_static_site_adapter::{load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow},
+    tonic_adapter::AnalyticsClient,
 };
 use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
@@ -166,6 +168,12 @@ enum Command {
         database_url: Option<String>,
         #[arg(long)]
         context_key: String,
+    },
+    SeoPostPublishFeedbackProbe {
+        #[arg(long, default_value = "http://127.0.0.1:50051")]
+        analytics_addr: String,
+        #[arg(long, default_value_t = false)]
+        require_gsc: bool,
     },
     CmsApprovePublish {
         #[arg(long)]
@@ -1635,6 +1643,77 @@ async fn seo_support_bundle_inspect(
     Ok(0)
 }
 
+async fn seo_post_publish_feedback_probe(analytics_addr: &str, require_gsc: bool) -> Result<i32> {
+    let analytics = match AnalyticsClient::connect(analytics_addr).await {
+        Ok(mut client) => {
+            let ok = client.ping().await;
+            json!({
+                "status": if ok { "ok" } else { "error" },
+                "addr": analytics_addr,
+            })
+        }
+        Err(err) => json!({
+            "status": "error",
+            "addr": analytics_addr,
+            "error": err.to_string(),
+        }),
+    };
+
+    let gsc_access_token = env::var("GSC_ACCESS_TOKEN").ok();
+    let gsc_site_url = env::var("GSC_SITE_URL").ok();
+    let gsc = match (gsc_access_token, gsc_site_url) {
+        (Some(token), Some(site_url))
+            if !token.trim().is_empty() && !site_url.trim().is_empty() =>
+        {
+            let http = new_default_client(30)?;
+            match http
+                .get("https://www.googleapis.com/webmasters/v3/sites")
+                .bearer_auth(token)
+                .send()
+                .await
+            {
+                Ok(resp) => json!({
+                    "status": if resp.status().is_success() { "ok" } else { "error" },
+                    "http_status": resp.status().as_u16(),
+                    "site_url": site_url,
+                }),
+                Err(err) => json!({
+                    "status": "error",
+                    "site_url": site_url,
+                    "error": err.to_string(),
+                }),
+            }
+        }
+        _ if require_gsc => json!({
+            "status": "error",
+            "error": "GSC_ACCESS_TOKEN and GSC_SITE_URL are required",
+        }),
+        _ => json!({
+            "status": "not_configured",
+        }),
+    };
+
+    let analytics_ok = analytics.get("status").and_then(Value::as_str) == Some("ok");
+    let gsc_status = gsc.get("status").and_then(Value::as_str).unwrap_or("error");
+    let gsc_ok = gsc_status == "ok" || (!require_gsc && gsc_status == "not_configured");
+    let overall_status = if analytics_ok && gsc_ok {
+        "ok"
+    } else {
+        "error"
+    };
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "status": overall_status,
+            "analytics": analytics,
+            "gsc": gsc,
+            "truth_mutation": "forbidden",
+        }))?
+    );
+    Ok(if overall_status == "ok" { 0 } else { 2 })
+}
+
 async fn cms_review_decision(
     database_url: Option<String>,
     page_node_key: &str,
@@ -1857,6 +1936,10 @@ async fn main() -> Result<()> {
             database_url,
             context_key,
         } => seo_support_bundle_inspect(database_url, &context_key).await?,
+        Command::SeoPostPublishFeedbackProbe {
+            analytics_addr,
+            require_gsc,
+        } => seo_post_publish_feedback_probe(&analytics_addr, require_gsc).await?,
         Command::CmsApprovePublish {
             database_url,
             page_node_key,

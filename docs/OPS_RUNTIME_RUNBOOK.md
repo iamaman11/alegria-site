@@ -128,6 +128,26 @@ Owner-boundary note:
 - `FreshnessCheckWorkflow`:
   - `check_data_freshness`
 
+## 2.1 Support-plane operator surfaces
+
+- `freshness_monitor`
+  - executable surface: `FreshnessCheckWorkflow`
+- `projection_reconcile_and_reclaim`
+  - executable surfaces: `ProjectionReconcileWorkflow`, `reconcile` service, outbox worker
+- `rebuild_dispatcher`
+  - executable surface: `temporal_starter RebuildDispatch`
+  - responsibility: consume `monitoring.seo_rebuild_backlog`, validate scope completeness, register fresh run input, and start a new scoped workflow without mutating existing workflow history
+- `ontology_backfill_reindex`
+  - executable surface: `temporal_starter OntologyBackfillPlan`
+  - current hard guarantee: concept impact planning plus optional Neo4j materialization
+  - explicit current limitation: Voyage/Qdrant concept reindex is still a downstream projection-consumer obligation and must not be claimed implicit
+- `post_publish_feedback_loop`
+  - operator probe surface: `cli_tools SeoPostPublishFeedbackProbe`
+  - connected services: `gsc_sync`, `analytics_svc`
+  - authority rule: this loop must never mutate verified truth
+- `release_and_restore_gate`
+  - executable surfaces: `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `infra/backups/restore_drill.sh`
+
 ## 3) HITL contract
 
 ### Trigger scenarios
