@@ -1,5 +1,7 @@
 use contracts::generated::alegria::temporal::v1::{FreshnessReport, StepContractMeta};
+use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
+use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use primitives::errors::DomainError;
 use primitives::hash::content_hash_v1;
@@ -26,6 +28,59 @@ pub struct Neo4jBackwriteOutput {
     pub failed_candidates: i64,
     pub reset_stale_processing: i64,
     pub requeued_failed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticSectionSampleInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SemanticSectionSampleOutput {
+    pub section_id: String,
+    pub page_id: i64,
+    pub source_url: String,
+    pub source_domain: String,
+    pub heading_path: String,
+    pub section_type: String,
+    pub raw_text: String,
+}
+
+impl RuntimeProtoPayload for SemanticSectionSampleInput {
+    fn payload_type() -> &'static str {
+        "alegria.runtime.json.SemanticSectionSampleInput"
+    }
+
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        serde_json::to_vec(self).map_err(|e| DomainError::ContractViolation {
+            message: e.to_string(),
+        })
+    }
+
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        serde_json::from_slice(payload_bytes).map_err(|e| DomainError::ContractViolation {
+            message: e.to_string(),
+        })
+    }
+}
+
+impl RuntimeProtoPayload for SemanticSectionSampleOutput {
+    fn payload_type() -> &'static str {
+        "alegria.runtime.json.SemanticSectionSampleOutput"
+    }
+
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        serde_json::to_vec(self).map_err(|e| DomainError::ContractViolation {
+            message: e.to_string(),
+        })
+    }
+
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        serde_json::from_slice(payload_bytes).map_err(|e| DomainError::ContractViolation {
+            message: e.to_string(),
+        })
+    }
 }
 
 pub(crate) fn test_step_prepare_impl(workflow_id: &str) -> String {
@@ -148,5 +203,31 @@ pub(crate) async fn projection_reconcile_impl(
         failed_candidates: report.failed_candidates,
         reset_stale_processing: report.reset_stale_processing,
         requeued_failed: report.requeued_failed,
+    })
+}
+
+pub(crate) async fn load_semantic_section_sample_impl(
+    acts: &AlegriaActivities,
+    input: &SemanticSectionSampleInput,
+) -> Result<SemanticSectionSampleOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids)
+            .await
+            .map_err(AlegriaActivities::classify_error)?;
+    let section = sections
+        .into_iter()
+        .find(|section| !section.content_md.trim().is_empty())
+        .ok_or_else(|| DomainError::ValidationFailure {
+            message: "no non-empty raw section available for semantic slice".to_string(),
+        })?;
+
+    Ok(SemanticSectionSampleOutput {
+        section_id: section.id.to_string(),
+        page_id: section.page_id,
+        source_url: section.source_url,
+        source_domain: section.source_domain,
+        heading_path: section.heading_path,
+        section_type: section.section_type,
+        raw_text: section.content_md,
     })
 }

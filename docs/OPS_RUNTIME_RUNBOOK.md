@@ -130,6 +130,25 @@ Owner-boundary note:
   - `voyage_qdrant_sync`
   - `projection_barrier.post_projection`
   - optional `load_verified_support_bundle.refresh`
+- `ExpertSemanticSliceWorkflow`:
+  - rollout-safe real-section semantic surface
+  - `load_seo_site_build_input`
+  - `load_verified_support_bundle.initial`
+  - `serp_ingest`
+  - `crawl_sources`
+  - `load_semantic_section_sample`
+  - `page_utility_classifier`
+  - `dom_block_relevance_filter`
+  - `layer_router`
+  - `entity_span_detection`
+  - `canonical_mapping`
+  - `procedural_extraction`
+  - `operational_extraction`
+  - `editorial_extraction`
+  - `completeness_judge`
+  - `triple_builder`
+  - `contradiction_gate`
+  - `hitl_decision`
 - `ProjectionReconcileWorkflow`:
   - `projection_reconcile.neo4j`
   - `projection_reconcile.qdrant`

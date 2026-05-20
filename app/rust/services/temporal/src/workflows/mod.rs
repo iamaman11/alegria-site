@@ -11,6 +11,7 @@ use crate::activities::AlegriaActivities;
 mod content_generation;
 mod expert_extraction;
 mod expert_projection;
+mod expert_semantic_slice;
 mod freshness;
 mod projection_reconcile;
 mod runtime;
@@ -33,6 +34,7 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     }
     expert_extraction::register(&mut opts);
     expert_projection::register(&mut opts);
+    expert_semantic_slice::register(&mut opts);
     freshness::register(&mut opts);
     projection_reconcile::register(&mut opts);
     seo_site_build::register(&mut opts);

@@ -138,6 +138,8 @@ Additional first-class workflow surfaces now present for phased rollout:
   - isolated truth/extraction rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> optional support refresh`
 - `ExpertProjectionWorkflow`:
   - isolated truth-to-projection rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> graph_admissibility_gate -> neo4j_sync -> retrieval_admissibility_gate -> voyage_qdrant_sync -> projection_barrier.post_projection -> optional support refresh`
+- `ExpertSemanticSliceWorkflow`:
+  - isolated real-section rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> load_semantic_section_sample -> page_utility_classifier -> dom_block_relevance_filter -> layer_router -> entity_span_detection -> canonical_mapping -> procedural_extraction -> operational_extraction -> editorial_extraction -> completeness_judge -> triple_builder -> contradiction_gate -> hitl_decision`
 - `ProjectionReconcileWorkflow`:
   - explicit reconcile surface for `neo4j` and `qdrant`
 - `FreshnessCheckWorkflow`:

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_MOD = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "mod.rs"
 EXPERT_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_extraction.rs"
 EXPERT_PROJECTION_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_projection.rs"
+EXPERT_SEMANTIC_SLICE_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_semantic_slice.rs"
 RECONCILE_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "projection_reconcile.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
 OPERATIONS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs"
@@ -27,6 +28,7 @@ def main() -> int:
     workflows_mod = read(WORKFLOWS_MOD)
     expert = read(EXPERT_WORKFLOW)
     expert_projection = read(EXPERT_PROJECTION_WORKFLOW)
+    expert_semantic_slice = read(EXPERT_SEMANTIC_SLICE_WORKFLOW)
     reconcile = read(RECONCILE_WORKFLOW)
     activities = read(ACTIVITIES)
     operations = read(OPERATIONS)
@@ -37,9 +39,11 @@ def main() -> int:
     for needle in [
         "mod expert_extraction;",
         "mod expert_projection;",
+        "mod expert_semantic_slice;",
         "mod projection_reconcile;",
         "expert_extraction::register(&mut opts);",
         "expert_projection::register(&mut opts);",
+        "expert_semantic_slice::register(&mut opts);",
         "projection_reconcile::register(&mut opts);",
     ]:
         if needle not in workflows_mod:
@@ -66,6 +70,23 @@ def main() -> int:
             failures.append(f"expert projection workflow missing `{needle}`")
 
     for needle in [
+        "struct ExpertSemanticSliceWorkflow",
+        "load_semantic_section_sample",
+        "page_utility_classifier",
+        "dom_block_relevance_filter",
+        "entity_span_detection",
+        "canonical_mapping",
+        "procedural_extraction",
+        "completeness_judge",
+        "triple_builder",
+        "contradiction_gate",
+        "hitl_decision",
+        "done:expert_semantic_slice",
+    ]:
+        if needle not in expert_semantic_slice:
+            failures.append(f"expert semantic slice workflow missing `{needle}`")
+
+    for needle in [
         "struct ProjectionReconcileWorkflow",
         "projection_reconcile.neo4j",
         "projection_reconcile.qdrant",
@@ -77,6 +98,13 @@ def main() -> int:
     for needle in [
         "run_projection_reconcile_step",
         "run_projection_barrier_audit_step",
+        "load_semantic_section_sample_step",
+        "run_page_utility_classifier_step",
+        "run_dom_block_relevance_step",
+        "run_entity_span_detection_step",
+        "run_canonical_mapping_step",
+        "run_procedural_extraction_step",
+        "run_completeness_judge_step",
         "ProjectionBarrierAuditInputPayload",
         "ReconcileTargetInputPayload",
         "projection_reconcile",
@@ -90,9 +118,11 @@ def main() -> int:
     for needle in [
         "ExpertExtraction",
         "ExpertProjection",
+        "ExpertSemanticSlice",
         "ProjectionReconcile",
         "ExpertExtractionWorkflow",
         "ExpertProjectionWorkflow",
+        "ExpertSemanticSliceWorkflow",
         "ProjectionReconcileWorkflow",
     ]:
         if needle not in starter:

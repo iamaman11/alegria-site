@@ -155,6 +155,7 @@ enum WorkflowKind {
     ContentGeneration,
     ExpertExtraction,
     ExpertProjection,
+    ExpertSemanticSlice,
     FreshnessCheck,
     ProjectionReconcile,
     SeoSiteBuild,
@@ -167,6 +168,7 @@ impl WorkflowKind {
             WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
             WorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
             WorkflowKind::ExpertProjection => "ExpertProjectionWorkflow",
+            WorkflowKind::ExpertSemanticSlice => "ExpertSemanticSliceWorkflow",
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
             WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
@@ -179,6 +181,7 @@ impl WorkflowKind {
             WorkflowKind::ContentGeneration => "content-gen",
             WorkflowKind::ExpertExtraction => "expert-extraction",
             WorkflowKind::ExpertProjection => "expert-projection",
+            WorkflowKind::ExpertSemanticSlice => "expert-semantic-slice",
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::ProjectionReconcile => "projection-reconcile",
             WorkflowKind::SeoSiteBuild => "seo-site-build",
@@ -192,6 +195,7 @@ impl WorkflowKind {
             WorkflowKind::ContentGeneration
                 | WorkflowKind::ExpertExtraction
                 | WorkflowKind::ExpertProjection
+                | WorkflowKind::ExpertSemanticSlice
                 | WorkflowKind::SeoSiteBuild
         )
     }
@@ -1254,6 +1258,7 @@ async fn main() -> Result<()> {
                 WorkflowKind::SeoSiteBuild
                     | WorkflowKind::ExpertExtraction
                     | WorkflowKind::ExpertProjection
+                    | WorkflowKind::ExpertSemanticSlice
             ) {
                 persist_seo_site_build_input(
                     database_url,

@@ -29,7 +29,7 @@ use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::{ProjectionStatusRepository, VerifiedSupportBundleRequest};
 
 mod content_generation;
-mod operations;
+pub(crate) mod operations;
 mod runtime;
 mod step_catalog;
 
@@ -122,12 +122,116 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_page_utility_classifier_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: seo_steps::page_utility_classifier_step::PageUtilityClassifierInput,
+    ) -> Result<seo_steps::page_utility_classifier_step::PageUtilityClassifierOutput, ActivityError>
+    {
+        let run_id = if input.url.trim().is_empty() {
+            "page_utility_classifier".to_string()
+        } else {
+            input.url.clone()
+        };
+        self.execute_step(&run_id, "page_utility_classifier", 1, &input, || async {
+            Ok(step_catalog::run_page_utility_classifier(
+                self.as_ref(),
+                &input,
+            ))
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_dom_block_relevance_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: Vec<seo_steps::dom_block_relevance_step::DomBlockInput>,
+    ) -> Result<seo_steps::dom_block_relevance_step::DomBlockRelevanceOutput, ActivityError> {
+        let run_id = input
+            .first()
+            .map(|item| item.dom_block_id.clone())
+            .unwrap_or_else(|| "dom_block_relevance".to_string());
+        self.execute_step(&run_id, "dom_block_relevance_filter", 1, &input, || async {
+            Ok(step_catalog::run_dom_block_relevance(self.as_ref(), &input))
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn run_layer_router_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
         input: seo_steps::layer_router_step::LayerRouterInput,
     ) -> Result<seo_steps::layer_router_step::LayerRouterOutput, ActivityError> {
-        Ok(step_catalog::run_layer_router(self.as_ref(), &input))
+        self.execute_step(&input.section_id, "layer_router", 1, &input, || async {
+            Ok(step_catalog::run_layer_router(self.as_ref(), &input))
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_entity_span_detection_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: seo_steps::entity_span_detection_step::EntitySpanInput,
+    ) -> Result<seo_steps::entity_span_detection_step::EntitySpanOutput, ActivityError> {
+        self.execute_step(
+            &input.section_id,
+            "entity_span_detection",
+            1,
+            &input,
+            || async {
+                Ok(step_catalog::run_entity_span_detection(
+                    self.as_ref(),
+                    &input,
+                ))
+            },
+        )
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_canonical_mapping_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: seo_steps::canonical_mapping_step::CanonicalMappingInput,
+    ) -> Result<seo_steps::canonical_mapping_step::CanonicalMappingOutput, ActivityError> {
+        self.execute_step(
+            &input.section_id,
+            "canonical_mapping",
+            1,
+            &input,
+            || async { Ok(step_catalog::run_canonical_mapping(self.as_ref(), &input)) },
+        )
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_procedural_extraction_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: seo_steps::procedural_extraction_step::ProceduralExtractionInput,
+    ) -> Result<seo_steps::procedural_extraction_step::ProceduralExtractionOutput, ActivityError>
+    {
+        self.execute_step(
+            &input.section_id,
+            "procedural_extraction",
+            1,
+            &input,
+            || async {
+                Ok(step_catalog::run_procedural_extraction(
+                    self.as_ref(),
+                    &input,
+                ))
+            },
+        )
+        .await
     }
 
     #[allow(dead_code)]
@@ -138,10 +242,19 @@ impl AlegriaActivities {
         input: seo_steps::operational_extraction_step::OperationalExtractionInput,
     ) -> Result<seo_steps::operational_extraction_step::OperationalExtractionOutput, ActivityError>
     {
-        Ok(step_catalog::run_operational_extraction(
-            self.as_ref(),
+        self.execute_step(
+            &input.section_id,
+            "operational_extraction",
+            1,
             &input,
-        ))
+            || async {
+                Ok(step_catalog::run_operational_extraction(
+                    self.as_ref(),
+                    &input,
+                ))
+            },
+        )
+        .await
     }
 
     #[allow(dead_code)]
@@ -152,10 +265,36 @@ impl AlegriaActivities {
         input: seo_steps::editorial_extraction_step::EditorialExtractionInput,
     ) -> Result<seo_steps::editorial_extraction_step::EditorialExtractionOutput, ActivityError>
     {
-        Ok(step_catalog::run_editorial_extraction(
-            self.as_ref(),
+        self.execute_step(
+            &input.section_id,
+            "editorial_extraction",
+            1,
             &input,
-        ))
+            || async {
+                Ok(step_catalog::run_editorial_extraction(
+                    self.as_ref(),
+                    &input,
+                ))
+            },
+        )
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_completeness_judge_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: seo_steps::completeness_judge_step::CompletenessJudgeInput,
+    ) -> Result<seo_steps::completeness_judge_step::CompletenessJudgeOutput, ActivityError> {
+        self.execute_step(
+            &input.section_id,
+            "completeness_judge",
+            1,
+            &input,
+            || async { Ok(step_catalog::run_completeness_judge(self.as_ref(), &input)) },
+        )
+        .await
     }
 
     #[allow(dead_code)]
@@ -165,7 +304,10 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         input: seo_steps::triple_builder_step::TripleBuilderInput,
     ) -> Result<seo_steps::triple_builder_step::TripleBuilderOutput, ActivityError> {
-        Ok(step_catalog::run_triple_builder(self.as_ref(), &input))
+        self.execute_step(&input.section_id, "triple_builder", 1, &input, || async {
+            Ok(step_catalog::run_triple_builder(self.as_ref(), &input))
+        })
+        .await
     }
 
     #[allow(dead_code)]
@@ -175,7 +317,10 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         input: seo_steps::contradiction_gate_step::ContradictionGateInput,
     ) -> Result<seo_steps::contradiction_gate_step::ContradictionGateOutput, ActivityError> {
-        Ok(step_catalog::run_contradiction_gate(self.as_ref(), &input))
+        self.execute_step(&input.run_id, "contradiction_gate", 1, &input, || async {
+            Ok(step_catalog::run_contradiction_gate(self.as_ref(), &input))
+        })
+        .await
     }
 
     #[allow(dead_code)]
@@ -185,7 +330,10 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         input: seo_steps::hitl_decision_step::HitlDecisionInput,
     ) -> Result<seo_steps::hitl_decision_step::HitlDecisionOutput, ActivityError> {
-        Ok(step_catalog::run_hitl_decision(self.as_ref(), &input))
+        self.execute_step(&input.run_id, "hitl_decision", 1, &input, || async {
+            Ok(step_catalog::run_hitl_decision(self.as_ref(), &input))
+        })
+        .await
     }
 
     #[allow(dead_code)]
@@ -246,6 +394,24 @@ impl AlegriaActivities {
                 .to_string(),
             })
         })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn load_semantic_section_sample_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SemanticSectionSampleInput,
+    ) -> Result<operations::SemanticSectionSampleOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(
+            &run_id,
+            "load_semantic_section_sample",
+            1,
+            &input,
+            || async { operations::load_semantic_section_sample_impl(self.as_ref(), &input).await },
+        )
         .await
     }
 

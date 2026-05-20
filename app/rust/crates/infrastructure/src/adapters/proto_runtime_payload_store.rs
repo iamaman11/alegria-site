@@ -598,6 +598,26 @@ macro_rules! impl_prost_runtime_payload {
     };
 }
 
+macro_rules! impl_json_runtime_payload {
+    ($ty:ty, $name:literal) => {
+        impl RuntimeProtoPayload for $ty {
+            fn payload_type() -> &'static str {
+                $name
+            }
+
+            fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+                serde_json::to_vec(self)
+                    .map_err(|e| contract_violation(format!("failed to encode {}: {e}", $name)))
+            }
+
+            fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+                serde_json::from_slice(payload_bytes)
+                    .map_err(|e| contract_violation(format!("failed to decode {}: {e}", $name)))
+            }
+        }
+    };
+}
+
 impl_prost_runtime_payload!(
     SeoSiteBuildInputPayload,
     "alegria.temporal.v1.SeoSiteBuildInputPayload"
@@ -757,6 +777,103 @@ impl_prost_runtime_payload!(
 impl_prost_runtime_payload!(
     RebuildDetectOutputPayload,
     "alegria.temporal.v1.RebuildDetectOutputPayload"
+);
+
+impl_json_runtime_payload!(
+    seo_steps::page_utility_classifier_step::PageUtilityClassifierInput,
+    "alegria.runtime.json.PageUtilityClassifierInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::page_utility_classifier_step::PageUtilityClassifierOutput,
+    "alegria.runtime.json.PageUtilityClassifierOutput"
+);
+impl_json_runtime_payload!(
+    Vec<seo_steps::dom_block_relevance_step::DomBlockInput>,
+    "alegria.runtime.json.DomBlockInputList"
+);
+impl_json_runtime_payload!(
+    seo_steps::dom_block_relevance_step::DomBlockRelevanceOutput,
+    "alegria.runtime.json.DomBlockRelevanceOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::layer_router_step::LayerRouterInput,
+    "alegria.runtime.json.LayerRouterInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::layer_router_step::LayerRouterOutput,
+    "alegria.runtime.json.LayerRouterOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::entity_span_detection_step::EntitySpanInput,
+    "alegria.runtime.json.EntitySpanInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::entity_span_detection_step::EntitySpanOutput,
+    "alegria.runtime.json.EntitySpanOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::canonical_mapping_step::CanonicalMappingInput,
+    "alegria.runtime.json.CanonicalMappingInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::canonical_mapping_step::CanonicalMappingOutput,
+    "alegria.runtime.json.CanonicalMappingOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::procedural_extraction_step::ProceduralExtractionInput,
+    "alegria.runtime.json.ProceduralExtractionInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::procedural_extraction_step::ProceduralExtractionOutput,
+    "alegria.runtime.json.ProceduralExtractionOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::operational_extraction_step::OperationalExtractionInput,
+    "alegria.runtime.json.OperationalExtractionInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::operational_extraction_step::OperationalExtractionOutput,
+    "alegria.runtime.json.OperationalExtractionOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::editorial_extraction_step::EditorialExtractionInput,
+    "alegria.runtime.json.EditorialExtractionInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::editorial_extraction_step::EditorialExtractionOutput,
+    "alegria.runtime.json.EditorialExtractionOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::completeness_judge_step::CompletenessJudgeInput,
+    "alegria.runtime.json.CompletenessJudgeInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::completeness_judge_step::CompletenessJudgeOutput,
+    "alegria.runtime.json.CompletenessJudgeOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::triple_builder_step::TripleBuilderInput,
+    "alegria.runtime.json.TripleBuilderInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::triple_builder_step::TripleBuilderOutput,
+    "alegria.runtime.json.TripleBuilderOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::contradiction_gate_step::ContradictionGateInput,
+    "alegria.runtime.json.ContradictionGateInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::contradiction_gate_step::ContradictionGateOutput,
+    "alegria.runtime.json.ContradictionGateOutput"
+);
+impl_json_runtime_payload!(
+    seo_steps::hitl_decision_step::HitlDecisionInput,
+    "alegria.runtime.json.HitlDecisionInput"
+);
+impl_json_runtime_payload!(
+    seo_steps::hitl_decision_step::HitlDecisionOutput,
+    "alegria.runtime.json.HitlDecisionOutput"
 );
 
 pub fn decode_extracted_payload(payload: Option<&ExecutionRunBlob>) -> ExtractedPayload {

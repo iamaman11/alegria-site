@@ -63,6 +63,7 @@ Additional first-class rollout/support workflows now exist without replacing the
 
 - `ExpertExtractionWorkflow` for focused expert truth extraction rollout;
 - `ExpertProjectionWorkflow` for focused truth-to-projection rollout with explicit graph/retrieval admissibility checkpoints;
+- `ExpertSemanticSliceWorkflow` for focused real-section rollout of deferred rich semantic stages such as utility classification, DOM filtering, entity spans, canonical mapping, procedural extraction, completeness, triples, contradiction, and HITL routing;
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
 - `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
 
