@@ -59,6 +59,12 @@ The only active production workflow is:
 
 - `SeoSiteBuildWorkflow`
 
+Additional first-class rollout/support workflows now exist without replacing the canonical site-build path:
+
+- `ExpertExtractionWorkflow` for focused expert truth extraction rollout;
+- `FreshnessCheckWorkflow` for scheduled freshness monitoring;
+- `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
+
 The current active runtime sequence is:
 
 1. `load_verified_support_bundle`
@@ -81,6 +87,11 @@ Current truth extraction policy:
 - validator assigns `structured | needs_hitl | rejected`
 - adjudication is required before `verified`
 - `truth_admissibility_gate` blocks drafting without admissible verified truth
+
+Current rollout-safe promotion rule:
+
+- new extraction orchestration may be introduced as a separate workflow type;
+- current `SeoSiteBuildWorkflow` remains the canonical publishing path until a future build-id rollout promotes a richer workflow as primary.
 
 Current execution-plan semantics:
 

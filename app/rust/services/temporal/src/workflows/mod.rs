@@ -9,7 +9,9 @@ use infrastructure::adapters::temporalio_sdk_adapter::temporalio_common as _;
 use crate::activities::AlegriaActivities;
 
 mod content_generation;
+mod expert_extraction;
 mod freshness;
+mod projection_reconcile;
 mod runtime;
 mod seo_site_build;
 mod test_hitl;
@@ -28,7 +30,9 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     {
         content_generation::register(&mut opts);
     }
+    expert_extraction::register(&mut opts);
     freshness::register(&mut opts);
+    projection_reconcile::register(&mut opts);
     seo_site_build::register(&mut opts);
     test_hitl::register(&mut opts);
     opts

@@ -247,7 +247,7 @@ pub struct ReconcileSummary {
     pub stuck_steps: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReconcileTargetReportRecord {
     pub target_system: String,
     pub dry_run: bool,

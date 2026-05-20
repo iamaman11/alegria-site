@@ -14,11 +14,12 @@ use contracts::generated::alegria::temporal::v1::{
     OpportunityBuildOutputPayload, PersistReport, PublishArtifact, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    ReconcileSummaryPayload, ReconcileTargetReportPayload, RenderPreviewValidateInputPayload,
-    RenderPreviewValidateOutputPayload, RuleInstanceCandidateState, RuleParamsState,
-    RuleRoleTypeV1, RuntimeErrorPayload, SeoSiteBuildInputPayload, SerpIngestInputPayload,
-    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload, StringPayload,
-    ValidationInputPayload, ValidationReport, VerifyReport,
+    ReconcileSummaryPayload, ReconcileTargetInputPayload, ReconcileTargetReportPayload,
+    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
+    RuleInstanceCandidateState, RuleParamsState, RuleRoleTypeV1, RuntimeErrorPayload,
+    SeoSiteBuildInputPayload, SerpIngestInputPayload, SerpIngestOutputPayload,
+    SerpNormalizeInputPayload, SerpNormalizeOutputPayload, StringPayload, ValidationInputPayload,
+    ValidationReport, VerifyReport,
 };
 use prost::Message;
 use serde_json::Value;
@@ -382,6 +383,18 @@ impl RuntimeProtoPayload for FreshnessReport {
     }
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
         decode_prost(payload_bytes, "FreshnessReport")
+    }
+}
+
+impl RuntimeProtoPayload for ReconcileTargetInputPayload {
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ReconcileTargetInputPayload"
+    }
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "ReconcileTargetInputPayload")
     }
 }
 

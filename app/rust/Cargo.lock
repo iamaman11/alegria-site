@@ -5366,6 +5366,7 @@ dependencies = [
  "policies",
  "primitives",
  "prometheus 0.13.4",
+ "runtime_models",
  "seo_application",
  "seo_domain",
  "seo_ports",

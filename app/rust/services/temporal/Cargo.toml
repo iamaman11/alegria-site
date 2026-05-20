@@ -23,6 +23,7 @@ contracts = { path = "../../crates/contracts" }
 seo_domain = { path = "../../crates/seo_domain" }
 seo_ports = { path = "../../crates/seo_ports" }
 seo_application = { path = "../../crates/seo_application" }
+runtime_models = { path = "../../crates/runtime_models" }
 clap = { version = "4", features = ["derive"] }
 uuid = { workspace = true }
 anyhow = { workspace = true }

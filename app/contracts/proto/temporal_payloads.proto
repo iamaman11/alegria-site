@@ -240,6 +240,16 @@ message FreshnessReport {
   string status = 5;
 }
 
+message ReconcileTargetInputPayload {
+  string run_id = 1;
+  string target_system = 2;
+  bool dry_run = 3;
+  int32 max_retry_count = 4;
+  int64 batch_limit = 5;
+  int64 requeue_base_delay_sec = 6;
+  int64 requeue_jitter_sec = 7;
+}
+
 message QualityPolicyEvaluationInputPayload {
   string page_type_key = 1;
   string locale = 2;

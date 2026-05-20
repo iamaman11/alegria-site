@@ -3,6 +3,7 @@ use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use primitives::errors::DomainError;
 use primitives::hash::content_hash_v1;
+use runtime_models::ReconcileTargetReportRecord;
 use serde::{Deserialize, Serialize};
 
 use super::AlegriaActivities;
@@ -110,6 +111,37 @@ pub(crate) async fn neo4j_backwrite_impl(
         .map_err(AlegriaActivities::classify_error)?;
 
     Ok(Neo4jBackwriteOutput {
+        target_system: report.target_system,
+        dry_run: report.dry_run,
+        stale_candidates: report.stale_candidates,
+        failed_candidates: report.failed_candidates,
+        reset_stale_processing: report.reset_stale_processing,
+        requeued_failed: report.requeued_failed,
+    })
+}
+
+pub(crate) async fn projection_reconcile_impl(
+    target_system: &str,
+    dry_run: bool,
+    max_retry_count: i32,
+    batch_limit: i64,
+    requeue_base_delay_sec: i64,
+    requeue_jitter_sec: i64,
+) -> Result<ReconcileTargetReportRecord, DomainError> {
+    let report = sqlx_reconcile_adapter::reconcile_target_system_default(
+        target_system,
+        &sqlx_reconcile_adapter::ReconcileOptionsRecord {
+            max_retry_count,
+            batch_limit,
+            dry_run,
+            requeue_base_delay_sec,
+            requeue_jitter_sec,
+        },
+    )
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
+
+    Ok(ReconcileTargetReportRecord {
         target_system: report.target_system,
         dry_run: report.dry_run,
         stale_candidates: report.stale_candidates,

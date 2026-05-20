@@ -72,3 +72,9 @@ The following `V5` or legacy planning files are reference-only:
 - [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md)
 - [SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md](SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md)
 - research/backlog/reference snapshots listed in [INDEX.md](INDEX.md)
+
+## Current Executable Surfaces
+
+- `freshness_monitor` currently executes through `FreshnessCheckWorkflow`.
+- `projection_reconcile_and_reclaim` currently executes through `ProjectionReconcileWorkflow`, `reconcile` service, and outbox workers.
+- focused extraction rollout currently executes through `ExpertExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for the extraction core.

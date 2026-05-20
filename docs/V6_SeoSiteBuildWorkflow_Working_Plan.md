@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.5`
+**Current version:** `6.6`
 
 ---
 
@@ -132,6 +132,15 @@ Current active flow:
 12. final:
     - `rebuild_detect`
 
+Additional first-class workflow surfaces now present for phased rollout:
+
+- `ExpertExtractionWorkflow`:
+  - isolated truth/extraction rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> optional support refresh`
+- `ProjectionReconcileWorkflow`:
+  - explicit reconcile surface for `neo4j` and `qdrant`
+- `FreshnessCheckWorkflow`:
+  - support-plane freshness monitor
+
 Within the current `raw_knowledge_ingestion` macro-step:
 
 1. truth-extraction LLM receives one `raw.section`
@@ -205,6 +214,7 @@ Canonical live envs:
 - deferred reactivation below refers to the richer semantic stages around early gates, router, entity spans, canonical mapping, triple building, completeness, and resolution. It does not mean removing the active truth-core validator/adjudicator.
 - the current `raw_knowledge_ingestion` is a migration macro-step. In the V6.3 target it must be decomposed into explicit evidence preparation, rich extraction, validation, completeness, resolution, and truth-adjudication stages.
 - `code-present, runtime-inactive` source files are not counted as active implementation until crate export, live invocation, and automation coverage all exist.
+- `ExpertExtractionWorkflow` is the current safe promotion surface for extraction-core hardening; it does not replace `SeoSiteBuildWorkflow` yet.
 
 ---
 

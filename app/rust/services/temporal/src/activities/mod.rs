@@ -12,9 +12,10 @@ use contracts::generated::alegria::temporal::v1::{
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
-    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    ReconcileTargetInputPayload, RenderPreviewValidateInputPayload,
+    RenderPreviewValidateOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
+    SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     activities, ActivityContext, ActivityError,
@@ -23,6 +24,7 @@ use infrastructure::adapters::{
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
 };
 use primitives::errors::DomainError;
+use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::VerifiedSupportBundleRequest;
 
 mod content_generation;
@@ -195,6 +197,28 @@ impl AlegriaActivities {
         step_catalog::run_neo4j_backwrite(self.as_ref(), &input)
             .await
             .map_err(Self::into_activity_error)
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_projection_reconcile_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: ReconcileTargetInputPayload,
+    ) -> Result<ReconcileTargetReportRecord, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "projection_reconcile", 1, &input, || async {
+            operations::projection_reconcile_impl(
+                &input.target_system,
+                input.dry_run,
+                input.max_retry_count,
+                input.batch_limit,
+                input.requeue_base_delay_sec,
+                input.requeue_jitter_sec,
+            )
+            .await
+        })
+        .await
     }
 
     #[allow(dead_code)]

@@ -109,6 +109,17 @@ Owner-boundary note:
   - workflow checkpoints already observe projection barrier status after:
     - `raw_knowledge_ingestion`
     - `global_site_reconcile`
+- `ExpertExtractionWorkflow`:
+  - rollout-safe extraction-only surface
+  - `load_seo_site_build_input`
+  - `load_verified_support_bundle.initial`
+  - `serp_ingest`
+  - `crawl_sources`
+  - `raw_knowledge_ingestion`
+  - optional `load_verified_support_bundle.refresh`
+- `ProjectionReconcileWorkflow`:
+  - `projection_reconcile.neo4j`
+  - `projection_reconcile.qdrant`
 - `ContentGenerationWorkflow`:
   - legacy-only
   - excluded from production SEO launch path

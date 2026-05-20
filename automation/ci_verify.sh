@@ -142,6 +142,9 @@ python3 automation/check_temporal_workflow_execution_plan.py
 echo "[35f/57] Temporal step catalog SEO surface"
 python3 automation/check_temporal_step_catalog_surface.py
 
+echo "[35f1/57] Temporal workflow catalog support surfaces"
+python3 automation/check_temporal_workflow_catalog_support.py
+
 echo "[35g/58] CLI tools SEO mutation surface"
 python3 automation/check_cli_tools_seo_surface.py
 

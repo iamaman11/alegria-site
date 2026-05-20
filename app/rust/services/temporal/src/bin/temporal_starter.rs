@@ -119,7 +119,9 @@ enum Command {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum WorkflowKind {
     ContentGeneration,
+    ExpertExtraction,
     FreshnessCheck,
+    ProjectionReconcile,
     SeoSiteBuild,
     TestHitl,
 }
@@ -128,7 +130,9 @@ impl WorkflowKind {
     fn workflow_type(self) -> &'static str {
         match self {
             WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
+            WorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
+            WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
             WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
             WorkflowKind::TestHitl => "TestHitlWorkflow",
         }
@@ -137,7 +141,9 @@ impl WorkflowKind {
     fn id_prefix(self) -> &'static str {
         match self {
             WorkflowKind::ContentGeneration => "content-gen",
+            WorkflowKind::ExpertExtraction => "expert-extraction",
             WorkflowKind::FreshnessCheck => "freshness-check",
+            WorkflowKind::ProjectionReconcile => "projection-reconcile",
             WorkflowKind::SeoSiteBuild => "seo-site-build",
             WorkflowKind::TestHitl => "test-hitl",
         }
@@ -146,7 +152,9 @@ impl WorkflowKind {
     fn requires_uuid_run_id(self) -> bool {
         matches!(
             self,
-            WorkflowKind::ContentGeneration | WorkflowKind::SeoSiteBuild
+            WorkflowKind::ContentGeneration
+                | WorkflowKind::ExpertExtraction
+                | WorkflowKind::SeoSiteBuild
         )
     }
 }
@@ -570,7 +578,10 @@ async fn main() -> Result<()> {
                 }
                 None => format!("{}-{}", workflow.id_prefix(), Uuid::new_v4()),
             };
-            if workflow == WorkflowKind::SeoSiteBuild {
+            if matches!(
+                workflow,
+                WorkflowKind::SeoSiteBuild | WorkflowKind::ExpertExtraction
+            ) {
                 persist_seo_site_build_input(
                     database_url,
                     &wf_id,
