@@ -139,8 +139,8 @@ Owner-boundary note:
   - responsibility: consume `monitoring.seo_rebuild_backlog`, validate scope completeness, register fresh run input, and start a new scoped workflow without mutating existing workflow history
 - `ontology_backfill_reindex`
   - executable surface: `temporal_starter OntologyBackfillPlan`
-  - current hard guarantee: concept impact planning plus optional Neo4j materialization
-  - explicit current limitation: Voyage/Qdrant concept reindex is still a downstream projection-consumer obligation and must not be claimed implicit
+  - current hard guarantee: concept impact planning plus optional Neo4j materialization and optional Voyage/Qdrant ontology materialization with `kb.qdrant_points` ledger update
+  - operator knobs: `--apply-neo4j`, `--apply-qdrant` (`apply_qdrant` retrieval materialization path)
 - `post_publish_feedback_loop`
   - operator probe surface: `cli_tools SeoPostPublishFeedbackProbe`
   - connected services: `gsc_sync`, `analytics_svc`

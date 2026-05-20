@@ -6,14 +6,16 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 };
 use infrastructure::adapters::{
     neo4rs_adapter, qdrant_client_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-    sqlx_adapter::connect_pg, sqlx_seo_adapter,
+    sqlx_adapter::connect_pg, sqlx_seo_adapter, voyage_api_adapter::VoyageClient,
 };
+use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
 use seo_application::execution::normalize_run_mode;
 use seo_application::registration::register_site_build_input;
 use seo_domain::identity;
 use seo_ports::SeoSiteBuildRegistrationRequest;
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
+use std::collections::BTreeMap;
 use std::env;
 use std::time::Duration;
 use uuid::Uuid;
@@ -128,6 +130,8 @@ enum Command {
         limit: i64,
         #[arg(long, default_value_t = false)]
         apply_neo4j: bool,
+        #[arg(long, default_value_t = false)]
+        apply_qdrant: bool,
     },
     /// End-to-end test workflow with HITL pause/resume
     DemoHitl {
@@ -216,6 +220,22 @@ fn default_database_url() -> String {
 
 fn parse_reason_json(reason: &str) -> Value {
     serde_json::from_str::<Value>(reason).unwrap_or_else(|_| json!({ "raw_reason": reason }))
+}
+
+fn fingerprint_vector(text: &str) -> Vec<f32> {
+    let digest = blake3_hex(text.as_bytes());
+    let mut vector = Vec::with_capacity(16);
+    for chunk in digest.as_bytes().chunks(2).take(16) {
+        let Ok(hex) = std::str::from_utf8(chunk) else {
+            continue;
+        };
+        let value = u8::from_str_radix(hex, 16).unwrap_or(0);
+        vector.push((value as f32 / 127.5) - 1.0);
+    }
+    if vector.is_empty() {
+        vector.push(0.0);
+    }
+    vector
 }
 
 async fn persist_seo_site_build_input(
@@ -811,9 +831,13 @@ async fn run_ontology_backfill_plan(
     concept_key: Option<String>,
     limit: i64,
     apply_neo4j: bool,
+    apply_qdrant: bool,
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
+    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let voyage_api_key = env::var("VOYAGE_API_KEY").ok();
+    let voyage_model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-3-large".to_string());
     let rows = sqlx::query(
         r#"
         SELECT
@@ -843,18 +867,98 @@ async fn run_ontology_backfill_plan(
     .fetch_all(&pool)
     .await?;
 
+    let mut concept_records = Vec::new();
+    for row in rows {
+        let concept_key: String = row.get("concept_key");
+        let alias_rows = sqlx::query(
+            r#"
+            SELECT alias_text
+            FROM kb.concept_aliases
+            WHERE concept_key = $1
+              AND status IN ('active','pending')
+            ORDER BY confidence DESC NULLS LAST, alias_text ASC
+            "#,
+        )
+        .bind(&concept_key)
+        .fetch_all(&pool)
+        .await?;
+        let aliases = alias_rows
+            .into_iter()
+            .map(|alias_row| alias_row.get::<String, _>("alias_text"))
+            .collect::<Vec<_>>();
+        concept_records.push((
+            concept_key,
+            row.get::<String, _>("concept_type"),
+            row.get::<String, _>("status"),
+            row.get::<i32, _>("reg_version"),
+            row.get::<String, _>("label_ru"),
+            row.get::<i64, _>("alias_count"),
+            row.get::<i64, _>("verified_rule_count"),
+            aliases,
+        ));
+    }
+
+    let voyage_vectors = if apply_qdrant {
+        let texts = concept_records
+            .iter()
+            .map(
+                |(
+                    concept_key,
+                    concept_type,
+                    status,
+                    _reg_version,
+                    label_ru,
+                    _alias_count,
+                    _verified_rule_count,
+                    aliases,
+                )| {
+                    format!(
+                        "{} {} {} {} {}",
+                        concept_key,
+                        concept_type,
+                        status,
+                        label_ru,
+                        aliases.join(" ")
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+        if let Some(api_key) = voyage_api_key.clone() {
+            if texts.is_empty() {
+                Vec::new()
+            } else {
+                VoyageClient::new(api_key, voyage_model.clone())
+                    .embed_all(&texts)
+                    .await?
+            }
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let mut voyage_iter = voyage_vectors.into_iter();
+    let qdrant_client = if apply_qdrant {
+        Some(qdrant_client_adapter::connect_qdrant(&qdrant_url).await?)
+    } else {
+        None
+    };
+
     let mut concepts = Vec::new();
     let mut failures = Vec::new();
 
-    for row in rows {
-        let concept_key: String = row.get("concept_key");
-        let concept_type: String = row.get("concept_type");
-        let status: String = row.get("status");
-        let reg_version: i32 = row.get("reg_version");
-        let label_ru: String = row.get("label_ru");
-        let alias_count: i64 = row.get("alias_count");
-        let verified_rule_count: i64 = row.get("verified_rule_count");
-
+    for (
+        concept_key,
+        concept_type,
+        status,
+        reg_version,
+        label_ru,
+        alias_count,
+        verified_rule_count,
+        aliases,
+    ) in concept_records
+    {
         let mut neo4j_result = json!({ "status": "skipped" });
         if apply_neo4j {
             match infrastructure::adapters::neo4j_materialization_adapter::materialize_concept(
@@ -879,6 +983,103 @@ async fn run_ontology_backfill_plan(
             }
         }
 
+        let mut qdrant_result = json!({ "status": "skipped" });
+        if let Some(client) = qdrant_client.as_ref() {
+            let embedding_text = format!(
+                "{} {} {} {} {}",
+                concept_key,
+                concept_type,
+                status,
+                label_ru,
+                aliases.join(" ")
+            )
+            .trim()
+            .to_string();
+            let (vector, embedding_model, embedding_version) =
+                if let Some(vector) = voyage_iter.next() {
+                    (vector, voyage_model.as_str(), "ontology_voyage@1")
+                } else {
+                    (
+                        fingerprint_vector(&embedding_text),
+                        "deterministic-fingerprint",
+                        "ontology_fingerprint@1",
+                    )
+                };
+            let point_id = qdrant_point_id_v1("ontology", "concept", &concept_key);
+            let mut payload = BTreeMap::new();
+            payload.insert("concept_key".to_string(), concept_key.clone());
+            payload.insert("concept_type".to_string(), concept_type.clone());
+            payload.insert("status".to_string(), status.clone());
+            payload.insert("label_ru".to_string(), label_ru.clone());
+            payload.insert("aliases".to_string(), aliases.join(" | "));
+            payload.insert("reg_version".to_string(), reg_version.to_string());
+            payload.insert(
+                "embedding_version".to_string(),
+                embedding_version.to_string(),
+            );
+
+            match async {
+                qdrant_client_adapter::ensure_default_dense_collection(
+                    client,
+                    "ontology",
+                    vector.len() as u64,
+                )
+                .await?;
+                qdrant_client_adapter::upsert_embedding_points(
+                    client,
+                    "ontology",
+                    vec![qdrant_client_adapter::DenseEmbeddingPoint {
+                        point_id: point_id.clone(),
+                        vector,
+                        payload,
+                    }],
+                )
+                .await?;
+                sqlx::query(
+                    r#"
+                    INSERT INTO kb.qdrant_points
+                        (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version)
+                    VALUES ($1, 'concept', $2, 'ontology', $3, $4)
+                    ON CONFLICT (entity_type, entity_key, collection_name) DO UPDATE
+                    SET point_id = EXCLUDED.point_id,
+                        embedding_model = EXCLUDED.embedding_model,
+                        embedding_version = EXCLUDED.embedding_version,
+                        updated_at = now()
+                    "#,
+                )
+                .bind(&point_id)
+                .bind(&concept_key)
+                .bind(embedding_model)
+                .bind(embedding_version)
+                .execute(&pool)
+                .await?;
+                Result::<()>::Ok(())
+            }
+            .await
+            {
+                Ok(()) => {
+                    qdrant_result = json!({
+                        "status": "materialized",
+                        "collection_name": "ontology",
+                        "point_id": point_id,
+                        "embedding_model": embedding_model,
+                        "embedding_version": embedding_version,
+                    });
+                }
+                Err(err) => {
+                    qdrant_result = json!({
+                        "status": "failed",
+                        "error": err.to_string(),
+                    });
+                    failures.push(json!({
+                        "concept_key": concept_key,
+                        "failure_class": "qdrant_materialization_failed",
+                        "error": err.to_string(),
+                    }));
+                }
+            }
+        }
+
         concepts.push(json!({
             "concept_key": concept_key,
             "concept_type": concept_type,
@@ -886,15 +1087,14 @@ async fn run_ontology_backfill_plan(
             "reg_version": reg_version,
             "label_ru": label_ru,
             "alias_count": alias_count,
+            "aliases": aliases,
             "verified_rule_count": verified_rule_count,
             "planned_actions": [
                 "graph_materialize",
-                "retrieval_reindex_required"
-            ],
-            "notes": [
-                "retrieval/vector reindex remains a projection-consumer obligation until a canonical Voyage/Qdrant concept materializer is promoted"
+                "retrieval_reindex"
             ],
             "neo4j": neo4j_result,
+            "qdrant": qdrant_result,
         }));
     }
 
@@ -903,6 +1103,7 @@ async fn run_ontology_backfill_plan(
         serde_json::to_string_pretty(&json!({
             "status": if failures.is_empty() { "ok" } else { "partial_failure" },
             "apply_neo4j": apply_neo4j,
+            "apply_qdrant": apply_qdrant,
             "concept_count": concepts.len(),
             "concepts": concepts,
             "failures": failures,
@@ -961,9 +1162,16 @@ async fn main() -> Result<()> {
             concept_key,
             limit,
             apply_neo4j,
+            apply_qdrant,
         } => {
-            let code =
-                run_ontology_backfill_plan(database_url, concept_key, limit, apply_neo4j).await?;
+            let code = run_ontology_backfill_plan(
+                database_url,
+                concept_key,
+                limit,
+                apply_neo4j,
+                apply_qdrant,
+            )
+            .await?;
             std::process::exit(code);
         }
         other => other,
