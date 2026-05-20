@@ -17,6 +17,8 @@ use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -119,6 +121,8 @@ enum Command {
         dry_run: bool,
         #[arg(long, value_enum, default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuild)]
         workflow: RebuildDispatchWorkflowKind,
+        #[arg(long)]
+        report_json: Option<String>,
     },
     /// Plan ontology backfill/reindex work and optionally materialize concepts into Neo4j.
     OntologyBackfillPlan {
@@ -132,6 +136,8 @@ enum Command {
         apply_neo4j: bool,
         #[arg(long, default_value_t = false)]
         apply_qdrant: bool,
+        #[arg(long)]
+        report_json: Option<String>,
     },
     /// End-to-end test workflow with HITL pause/resume
     DemoHitl {
@@ -216,6 +222,17 @@ fn empty_payload() -> RawValue {
 fn default_database_url() -> String {
     env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres_password@localhost:5433/alegria".into())
+}
+
+fn write_report(report_path: &str, payload: &Value) -> Result<PathBuf> {
+    let out = PathBuf::from(report_path);
+    if let Some(parent) = out.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create report dir failed: {}", parent.display()))?;
+    }
+    fs::write(&out, serde_json::to_vec_pretty(payload)?)
+        .with_context(|| format!("write report failed: {}", out.display()))?;
+    Ok(out)
 }
 
 fn parse_reason_json(reason: &str) -> Value {
@@ -567,6 +584,7 @@ async fn run_rebuild_dispatch(
     limit: i64,
     dry_run: bool,
     workflow: RebuildDispatchWorkflowKind,
+    report_json: Option<String>,
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
@@ -811,18 +829,20 @@ async fn run_rebuild_dispatch(
         }));
     }
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "status": "ok",
-            "dry_run": dry_run,
-            "workflow_type": workflow.workflow_type(),
-            "dispatched_count": dispatched.len(),
-            "blocked_count": blocked.len(),
-            "dispatched": dispatched,
-            "blocked": blocked,
-        }))?
-    );
+    let payload = json!({
+        "status": "ok",
+        "dry_run": dry_run,
+        "workflow_type": workflow.workflow_type(),
+        "dispatched_count": dispatched.len(),
+        "blocked_count": blocked.len(),
+        "dispatched": dispatched,
+        "blocked": blocked,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(report_json) = report_json.as_deref() {
+        let out = write_report(report_json, &payload)?;
+        eprintln!("report: {}", out.display());
+    }
     Ok(0)
 }
 
@@ -832,6 +852,7 @@ async fn run_ontology_backfill_plan(
     limit: i64,
     apply_neo4j: bool,
     apply_qdrant: bool,
+    report_json: Option<String>,
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
@@ -1098,17 +1119,19 @@ async fn run_ontology_backfill_plan(
         }));
     }
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "status": if failures.is_empty() { "ok" } else { "partial_failure" },
-            "apply_neo4j": apply_neo4j,
-            "apply_qdrant": apply_qdrant,
-            "concept_count": concepts.len(),
-            "concepts": concepts,
-            "failures": failures,
-        }))?
-    );
+    let payload = json!({
+        "status": if failures.is_empty() { "ok" } else { "partial_failure" },
+        "apply_neo4j": apply_neo4j,
+        "apply_qdrant": apply_qdrant,
+        "concept_count": concepts.len(),
+        "concepts": concepts,
+        "failures": failures,
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(report_json) = report_json.as_deref() {
+        let out = write_report(report_json, &payload)?;
+        eprintln!("report: {}", out.display());
+    }
     Ok(if failures.is_empty() { 0 } else { 2 })
 }
 
@@ -1163,6 +1186,7 @@ async fn main() -> Result<()> {
             limit,
             apply_neo4j,
             apply_qdrant,
+            report_json,
         } => {
             let code = run_ontology_backfill_plan(
                 database_url,
@@ -1170,6 +1194,7 @@ async fn main() -> Result<()> {
                 limit,
                 apply_neo4j,
                 apply_qdrant,
+                report_json,
             )
             .await?;
             std::process::exit(code);
@@ -1267,10 +1292,18 @@ async fn main() -> Result<()> {
             limit,
             dry_run,
             workflow,
+            report_json,
         } => {
-            let code =
-                run_rebuild_dispatch(&client, &task_queue, database_url, limit, dry_run, workflow)
-                    .await?;
+            let code = run_rebuild_dispatch(
+                &client,
+                &task_queue,
+                database_url,
+                limit,
+                dry_run,
+                workflow,
+                report_json,
+            )
+            .await?;
             std::process::exit(code);
         }
         Command::OntologyBackfillPlan { .. } => {

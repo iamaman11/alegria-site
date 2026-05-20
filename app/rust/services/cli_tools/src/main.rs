@@ -174,6 +174,8 @@ enum Command {
         analytics_addr: String,
         #[arg(long, default_value_t = false)]
         require_gsc: bool,
+        #[arg(long)]
+        report_json: Option<String>,
     },
     CmsApprovePublish {
         #[arg(long)]
@@ -1643,7 +1645,11 @@ async fn seo_support_bundle_inspect(
     Ok(0)
 }
 
-async fn seo_post_publish_feedback_probe(analytics_addr: &str, require_gsc: bool) -> Result<i32> {
+async fn seo_post_publish_feedback_probe(
+    analytics_addr: &str,
+    require_gsc: bool,
+    report_json: Option<String>,
+) -> Result<i32> {
     let analytics = match AnalyticsClient::connect(analytics_addr).await {
         Ok(mut client) => {
             let ok = client.ping().await;
@@ -1702,15 +1708,17 @@ async fn seo_post_publish_feedback_probe(analytics_addr: &str, require_gsc: bool
         "error"
     };
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&json!({
-            "status": overall_status,
-            "analytics": analytics,
-            "gsc": gsc,
-            "truth_mutation": "forbidden",
-        }))?
-    );
+    let payload = json!({
+        "status": overall_status,
+        "analytics": analytics,
+        "gsc": gsc,
+        "truth_mutation": "forbidden",
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(report_json) = report_json.as_deref() {
+        let out = write_report(Path::new("."), report_json, &payload)?;
+        eprintln!("report: {}", out.display());
+    }
     Ok(if overall_status == "ok" { 0 } else { 2 })
 }
 
@@ -1939,7 +1947,8 @@ async fn main() -> Result<()> {
         Command::SeoPostPublishFeedbackProbe {
             analytics_addr,
             require_gsc,
-        } => seo_post_publish_feedback_probe(&analytics_addr, require_gsc).await?,
+            report_json,
+        } => seo_post_publish_feedback_probe(&analytics_addr, require_gsc, report_json).await?,
         Command::CmsApprovePublish {
             database_url,
             page_node_key,

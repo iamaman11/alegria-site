@@ -34,6 +34,8 @@ def main() -> int:
         "OntologyBackfillPlan",
         "run_ontology_backfill_plan(",
         "RebuildDispatchWorkflowKind",
+        "report_json: Option<String>",
+        "write_report(",
     ]:
         if needle not in starter:
             failures.append(f"temporal_starter missing `{needle}`")
@@ -43,6 +45,8 @@ def main() -> int:
         "seo_post_publish_feedback_probe(",
         "AnalyticsClient::connect",
         "new_default_client",
+        "report_json: Option<String>",
+        "write_report(",
     ]:
         if needle not in cli:
             failures.append(f"cli_tools missing `{needle}`")

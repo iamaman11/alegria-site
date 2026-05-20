@@ -78,7 +78,10 @@ The following `V5` or legacy planning files are reference-only:
 - `freshness_monitor` currently executes through `FreshnessCheckWorkflow`.
 - `projection_reconcile_and_reclaim` currently executes through `ProjectionReconcileWorkflow`, `reconcile` service, and outbox workers.
 - `rebuild_dispatcher` currently executes through `temporal_starter RebuildDispatch`.
+- `rebuild_dispatcher` currently emits machine-readable evidence through `--report-json`.
 - `ontology_backfill_reindex` currently executes through `temporal_starter OntologyBackfillPlan`; Neo4j materialization and Voyage/Qdrant ontology materialization are executable now.
+- `ontology_backfill_reindex` currently emits machine-readable evidence through `--report-json`.
 - `post_publish_feedback_loop` currently has operator probe coverage through `cli_tools SeoPostPublishFeedbackProbe`, plus service surfaces `gsc_sync` and `analytics_svc`.
+- `post_publish_feedback_loop` currently emits machine-readable evidence through `--report-json`.
 - `release_and_restore_gate` currently executes through `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, and `infra/backups/restore_drill.sh`.
 - focused extraction rollout currently executes through `ExpertExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for the extraction core.
