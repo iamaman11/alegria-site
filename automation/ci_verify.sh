@@ -22,6 +22,9 @@ python3 automation/check_python_scope.py
 echo "[4/50] Docs layout check (flat docs/, no docs/knowledge drift)"
 python3 automation/check_docs_layout.py
 
+echo "[4a/50] Support process registry"
+python3 automation/check_support_process_registry.py
+
 echo "[5/50] R5-R8 boundary check (no Python hot-path violations)"
 bash automation/check_python_rust_boundary.sh
 
@@ -180,6 +183,9 @@ python3 automation/check_seo_provenance_invariants.py
 
 echo "[38/53] Extraction coverage"
 python3 automation/check_extraction_coverage.py
+
+echo "[38a/53] Expert core activation contract"
+python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
 python3 automation/smoke_extraction_coverage.py

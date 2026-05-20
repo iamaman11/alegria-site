@@ -17,6 +17,7 @@
    - [V5_Runtime_Contract.md](V5_Runtime_Contract.md)
    - [V5_Truth_Extraction_LLM_Contract.md](V5_Truth_Extraction_LLM_Contract.md)
    - [V5_SEO_Graph_And_Retrieval_Projection_Spec.md](V5_SEO_Graph_And_Retrieval_Projection_Spec.md)
+   - [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md)
    - [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md)
    - [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
    - [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md)
@@ -43,6 +44,7 @@
 | [INDEX.md](INDEX.md) | current | live | documentation map and priority rules |
 | [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md) | current-canonical-owner | live | single owner-document for active runtime, target expert flow, authority boundaries, and execution sequence |
 | [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md) | current-execution-satellite | live | versioned detailed working plan for evolving `SeoSiteBuildWorkflow` under `V6` |
+| [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md) | current-support-plane-registry | live | named support processes outside the 56-step flow, with contracts, owners, evidence, and automation coverage |
 | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |
 | [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | superseded-reference | reference | historical rich extraction and target protocol context; superseded by `V6` |
 | [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-satellite | live | runtime persistence, retry, replay, HITL, and DLQ satellite contract under `V6` |
@@ -78,7 +80,9 @@
 
 ## Governance Rules
 
-- `V6_Expert_Truth_Graph_Runtime.md` is the single current owner-document.
+- `V6_Expert_Truth_Graph_Runtime.md` is the single current owner-document for architecture and boundaries.
+- `V6_SeoSiteBuildWorkflow_Working_Plan.md` owns execution shape and activation status only.
+- `V6_Support_Process_Registry.md` owns required support-plane processes outside the 56-step flow.
 - Активные документы — только в `docs/` root.
 - `docs/_archive/` never participates in current truth.
 - Superseded `V5` owner docs may preserve historical and design context, but must not override `V6`.

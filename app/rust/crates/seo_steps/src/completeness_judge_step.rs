@@ -29,7 +29,9 @@ pub struct CompletenessJudgeOutput {
 
 static NUMBER_RE: OnceLock<Regex> = OnceLock::new();
 fn number_re() -> &'static Regex {
-    NUMBER_RE.get_or_init(|| Regex::new(r"(?m)(?<!\w)\d+(?:[.,]\d+)?(?!\w)").unwrap())
+    // Rust regex does not support look-around; word boundaries are enough for
+    // deterministic numeric-token recovery in completeness judging.
+    NUMBER_RE.get_or_init(|| Regex::new(r"(?m)\b\d+(?:[.,]\d+)?\b").unwrap())
 }
 
 pub fn execute(input: &CompletenessJudgeInput) -> CompletenessJudgeOutput {
@@ -92,5 +94,26 @@ pub fn execute(input: &CompletenessJudgeInput) -> CompletenessJudgeOutput {
         missing_elements: missing,
         needs_hitl,
         hitl_reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_missing_numbers_without_panicking() {
+        let output = execute(&CompletenessJudgeInput {
+            section_id: "section-1".to_string(),
+            raw_text: "Fee is 80 EUR and processing time is 15 days.".to_string(),
+            extracted_numeric_tokens: vec!["80".to_string()],
+            extracted_rule_keys: vec!["consular_fee".to_string()],
+        });
+
+        assert!(output.needs_hitl);
+        assert!(output
+            .missing_elements
+            .iter()
+            .any(|missing| missing.raw_fragment == "15"));
     }
 }

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.4`
+**Current version:** `6.5`
 
 ---
 
@@ -88,6 +88,16 @@ This prevents two failure modes:
 
 - hiding real extraction or publish logic outside the canonical flow;
 - bloating the workflow with infrastructure processes that should be independently operated and verified.
+
+### 1.5 Support-process registry boundary
+
+The required support processes outside the 56-step flow are owned by [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md).
+
+This plan must not duplicate their operational contracts. It only decides:
+
+- whether the workflow depends on them;
+- where barriers or gates must observe them;
+- when a support process must be promoted into a first-class workflow or runner.
 
 ---
 
@@ -194,6 +204,7 @@ Canonical live envs:
 - current truth-core `validator` and `adjudication` are already active inside `raw_knowledge_ingestion`.
 - deferred reactivation below refers to the richer semantic stages around early gates, router, entity spans, canonical mapping, triple building, completeness, and resolution. It does not mean removing the active truth-core validator/adjudicator.
 - the current `raw_knowledge_ingestion` is a migration macro-step. In the V6.3 target it must be decomposed into explicit evidence preparation, rich extraction, validation, completeness, resolution, and truth-adjudication stages.
+- `code-present, runtime-inactive` source files are not counted as active implementation until crate export, live invocation, and automation coverage all exist.
 
 ---
 

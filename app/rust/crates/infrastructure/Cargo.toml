@@ -9,6 +9,7 @@ runtime_models = { path = "../runtime_models" }
 primitives = { path = "../primitives" }
 seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }
+seo_steps = { path = "../seo_steps" }
 sqlx = { workspace = true }
 tokio-postgres = { workspace = true }
 neo4rs = { workspace = true }

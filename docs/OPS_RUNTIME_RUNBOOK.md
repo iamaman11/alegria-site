@@ -1,6 +1,6 @@
 # Operations Runtime Runbook (V5, Rust-first)
 
-Этот документ объединяет orchestration, temporal execution plan, HITL и Rust migration gate.
+Этот документ владеет runtime substrate, rollout, replay, restore, HITL transport, and production-gate operations. It is not the owner of truth architecture or of the 56-step workflow semantics.
 
 ## 1) Runtime architecture
 
@@ -63,7 +63,14 @@
     - `ANTHROPIC_API_KEY`
     - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
   - current recommended live path for `Step 5` and immediate `R3.4` work: `GEMINI_API_KEY` with `GEMINI_TRUTH_MODEL` or fallback `GEMINI_SEO_MODEL`
-  - missing truth extraction provider is a hard blocker for live `raw_knowledge_ingestion`
+- missing truth extraction provider is a hard blocker for live `raw_knowledge_ingestion`
+
+Owner-boundary note:
+
+- truth architecture and active/deferred runtime boundaries are owned by [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md);
+- workflow shape and activation status are owned by [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md);
+- support processes outside the 56-step flow are owned by [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md);
+- this runbook owns only substrate and operational enforcement.
 
 ## 2) Current workflow chains
 

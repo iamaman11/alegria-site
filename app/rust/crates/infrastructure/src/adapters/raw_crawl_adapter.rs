@@ -101,6 +101,10 @@ pub struct RawKnowledgeIngestionReport {
     pub extracted_rule_count: usize,
     pub verified_rule_count: usize,
     pub needs_hitl_candidate_count: usize,
+    pub expert_blocked_section_count: usize,
+    pub expert_needs_hitl_section_count: usize,
+    pub expert_verified_ready_section_count: usize,
+    pub expert_triple_count: usize,
     pub outbox_event_count: usize,
     pub changed_truth_keys: Vec<String>,
     pub extraction_provider_unavailable: bool,
@@ -745,6 +749,21 @@ pub async fn ingest_raw_pages_into_verified(
     };
     let sections = load_raw_sections_by_page_ids(pool, raw_page_ids).await?;
     report.raw_section_count = sections.len();
+    let expert_core_report =
+        super::expert_extraction_core::run_expert_extraction_core(_run_id, context_key, &sections);
+    report.expert_blocked_section_count = expert_core_report.blocked_section_count;
+    report.expert_needs_hitl_section_count = expert_core_report.needs_hitl_section_count;
+    report.expert_verified_ready_section_count = expert_core_report.verified_ready_section_count;
+    report.expert_triple_count = expert_core_report.triple_count;
+    if let Ok(summary_json) = serde_json::to_string(&expert_core_report) {
+        tracing::info!(
+            run_id = _run_id,
+            context_key,
+            raw_section_count = report.raw_section_count,
+            expert_extraction_core = %summary_json,
+            "evaluated expert extraction core inside raw_knowledge_ingestion"
+        );
+    }
 
     for section in &sections {
         if section.content_md.trim().is_empty() {

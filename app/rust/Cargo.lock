@@ -2356,6 +2356,7 @@ dependencies = [
  "runtime_models",
  "seo_domain",
  "seo_ports",
+ "seo_steps",
  "serde",
  "serde_json",
  "sqlx",

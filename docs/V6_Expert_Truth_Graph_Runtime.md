@@ -5,7 +5,7 @@
 **Owner:** Alegria SEO runtime and knowledge architecture
 **Supersedes:** `V5_Ultimate_Extraction_Protocol.md`, `SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md`
 **Priority rule:** if any `V5` owner or execution document conflicts with this file, `V6` wins.
-**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`
+**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`
 
 ---
 
@@ -24,13 +24,16 @@ This file owns:
 - the target expert knowledge architecture,
 - the authority boundaries between truth, graph, and retrieval,
 - the status of active, partial, deferred, and legacy surfaces,
+- the classification rule for `code-present, runtime-inactive` sources,
 - the execution sequence for returning the full rich expert flow.
 
 This file does not replace low-level implementation satellites that define:
 
 - exact LLM prompt and wire format,
 - exact runtime persistence and retry semantics,
-- exact Neo4j/Qdrant projection contracts.
+- exact Neo4j/Qdrant projection contracts,
+- support-process contracts outside the 56-step flow,
+- rollout, replay, restore, and production-gate operations.
 
 Those files remain active, but they are satellites, not competing owner-documents.
 
@@ -38,9 +41,13 @@ The detailed versioned execution plan for evolving `SeoSiteBuildWorkflow` lives 
 
 - [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md)
 
+The named support-plane contracts that are outside the 56-step flow live in:
+
+- [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md)
+
 That working plan has been expanded to match the actual active runtime surface, including support loading, publish-control phases, projection barriers, rebuild detection, and explicit run-mode/scenario branching semantics.
 
-The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value stream. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow.
+The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value stream. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow and must be listed in [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md).
 
 ---
 
@@ -230,6 +237,19 @@ It deliberately does not absorb these required support planes:
 - legacy, test-only, and lab-only workflows unless a future version explicitly promotes them.
 
 Support planes may block release or strict-mode workflow progress through gates and barriers, but they are not truth extraction stages and they must not redefine truth authority.
+
+### 5.2 Activation rule for source files
+
+A source file is not an implemented runtime stage merely because it exists in the repository.
+
+It becomes an active stage only when all of the following are true:
+
+1. the module is exported through the owning crate boundary;
+2. the module is reachable from an active use-case, activity, or workflow path;
+3. automation treats it as active and verifies the contract;
+4. owner docs classify it as active.
+
+If any of those conditions are missing, the file is `code-present, runtime-inactive` and must be documented that way.
 
 ---
 
