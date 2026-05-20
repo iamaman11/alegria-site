@@ -9,13 +9,14 @@ use contracts::generated::alegria::temporal::v1::{
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
     IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
-    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    ReconcileTargetInputPayload, RenderPreviewValidateInputPayload,
-    RenderPreviewValidateOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
+    ProjectionBarrierAuditInputPayload, ProjectionBarrierAuditOutputPayload,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
+    RebuildDetectInputPayload, RebuildDetectOutputPayload, ReconcileTargetInputPayload,
+    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     activities, ActivityContext, ActivityError,
@@ -25,7 +26,7 @@ use infrastructure::adapters::{
 };
 use primitives::errors::DomainError;
 use runtime_models::ReconcileTargetReportRecord;
-use seo_ports::VerifiedSupportBundleRequest;
+use seo_ports::{ProjectionStatusRepository, VerifiedSupportBundleRequest};
 
 mod content_generation;
 mod operations;
@@ -217,6 +218,33 @@ impl AlegriaActivities {
                 input.requeue_jitter_sec,
             )
             .await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_projection_barrier_audit_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: ProjectionBarrierAuditInputPayload,
+    ) -> Result<ProjectionBarrierAuditOutputPayload, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "projection_barrier_audit", 1, &input, || async {
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            let status = repo.load_projection_barrier_status(&run_id).await?;
+            Ok(ProjectionBarrierAuditOutputPayload {
+                run_id: run_id.clone(),
+                checkpoint: input.checkpoint.clone(),
+                blocked_events: status.blocked_events,
+                max_open_lag_ms: status.max_open_lag_ms,
+                status: if status.blocked_events > 0 {
+                    "blocked"
+                } else {
+                    "clear"
+                }
+                .to_string(),
+            })
         })
         .await
     }

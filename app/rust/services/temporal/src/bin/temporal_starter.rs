@@ -154,6 +154,7 @@ enum Command {
 enum WorkflowKind {
     ContentGeneration,
     ExpertExtraction,
+    ExpertProjection,
     FreshnessCheck,
     ProjectionReconcile,
     SeoSiteBuild,
@@ -165,6 +166,7 @@ impl WorkflowKind {
         match self {
             WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
             WorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
+            WorkflowKind::ExpertProjection => "ExpertProjectionWorkflow",
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
             WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
@@ -176,6 +178,7 @@ impl WorkflowKind {
         match self {
             WorkflowKind::ContentGeneration => "content-gen",
             WorkflowKind::ExpertExtraction => "expert-extraction",
+            WorkflowKind::ExpertProjection => "expert-projection",
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::ProjectionReconcile => "projection-reconcile",
             WorkflowKind::SeoSiteBuild => "seo-site-build",
@@ -188,6 +191,7 @@ impl WorkflowKind {
             self,
             WorkflowKind::ContentGeneration
                 | WorkflowKind::ExpertExtraction
+                | WorkflowKind::ExpertProjection
                 | WorkflowKind::SeoSiteBuild
         )
     }
@@ -1247,7 +1251,9 @@ async fn main() -> Result<()> {
             };
             if matches!(
                 workflow,
-                WorkflowKind::SeoSiteBuild | WorkflowKind::ExpertExtraction
+                WorkflowKind::SeoSiteBuild
+                    | WorkflowKind::ExpertExtraction
+                    | WorkflowKind::ExpertProjection
             ) {
                 persist_seo_site_build_input(
                     database_url,

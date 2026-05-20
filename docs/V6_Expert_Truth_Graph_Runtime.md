@@ -62,6 +62,7 @@ The only active production workflow is:
 Additional first-class rollout/support workflows now exist without replacing the canonical site-build path:
 
 - `ExpertExtractionWorkflow` for focused expert truth extraction rollout;
+- `ExpertProjectionWorkflow` for focused truth-to-projection rollout with explicit graph/retrieval admissibility checkpoints;
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
 - `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
 

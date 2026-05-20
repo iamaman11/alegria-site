@@ -136,6 +136,8 @@ Additional first-class workflow surfaces now present for phased rollout:
 
 - `ExpertExtractionWorkflow`:
   - isolated truth/extraction rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> optional support refresh`
+- `ExpertProjectionWorkflow`:
+  - isolated truth-to-projection rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> graph_admissibility_gate -> neo4j_sync -> retrieval_admissibility_gate -> voyage_qdrant_sync -> projection_barrier.post_projection -> optional support refresh`
 - `ProjectionReconcileWorkflow`:
   - explicit reconcile surface for `neo4j` and `qdrant`
 - `FreshnessCheckWorkflow`:

@@ -8,6 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS_MOD = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "mod.rs"
 EXPERT_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_extraction.rs"
+EXPERT_PROJECTION_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_projection.rs"
 RECONCILE_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "projection_reconcile.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
 OPERATIONS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs"
@@ -25,6 +26,7 @@ def main() -> int:
 
     workflows_mod = read(WORKFLOWS_MOD)
     expert = read(EXPERT_WORKFLOW)
+    expert_projection = read(EXPERT_PROJECTION_WORKFLOW)
     reconcile = read(RECONCILE_WORKFLOW)
     activities = read(ACTIVITIES)
     operations = read(OPERATIONS)
@@ -34,8 +36,10 @@ def main() -> int:
 
     for needle in [
         "mod expert_extraction;",
+        "mod expert_projection;",
         "mod projection_reconcile;",
         "expert_extraction::register(&mut opts);",
+        "expert_projection::register(&mut opts);",
         "projection_reconcile::register(&mut opts);",
     ]:
         if needle not in workflows_mod:
@@ -51,6 +55,17 @@ def main() -> int:
             failures.append(f"expert workflow missing `{needle}`")
 
     for needle in [
+        "struct ExpertProjectionWorkflow",
+        "graph_admissibility_gate",
+        "neo4j_sync",
+        "retrieval_admissibility_gate",
+        "voyage_qdrant_sync",
+        "done:expert_projection",
+    ]:
+        if needle not in expert_projection:
+            failures.append(f"expert projection workflow missing `{needle}`")
+
+    for needle in [
         "struct ProjectionReconcileWorkflow",
         "projection_reconcile.neo4j",
         "projection_reconcile.qdrant",
@@ -61,6 +76,8 @@ def main() -> int:
 
     for needle in [
         "run_projection_reconcile_step",
+        "run_projection_barrier_audit_step",
+        "ProjectionBarrierAuditInputPayload",
         "ReconcileTargetInputPayload",
         "projection_reconcile",
     ]:
@@ -72,8 +89,10 @@ def main() -> int:
 
     for needle in [
         "ExpertExtraction",
+        "ExpertProjection",
         "ProjectionReconcile",
         "ExpertExtractionWorkflow",
+        "ExpertProjectionWorkflow",
         "ProjectionReconcileWorkflow",
     ]:
         if needle not in starter:
@@ -81,8 +100,16 @@ def main() -> int:
 
     if "message ReconcileTargetInputPayload" not in proto:
         failures.append("proto missing `ReconcileTargetInputPayload`")
+    if "message ProjectionBarrierAuditInputPayload" not in proto:
+        failures.append("proto missing `ProjectionBarrierAuditInputPayload`")
+    if "message ProjectionBarrierAuditOutputPayload" not in proto:
+        failures.append("proto missing `ProjectionBarrierAuditOutputPayload`")
     if "impl RuntimeProtoPayload for ReconcileTargetInputPayload" not in payload_store:
         failures.append("payload store missing RuntimeProtoPayload impl for ReconcileTargetInputPayload")
+    if "impl RuntimeProtoPayload for ProjectionBarrierAuditInputPayload" not in payload_store:
+        failures.append("payload store missing RuntimeProtoPayload impl for ProjectionBarrierAuditInputPayload")
+    if "impl RuntimeProtoPayload for ProjectionBarrierAuditOutputPayload" not in payload_store:
+        failures.append("payload store missing RuntimeProtoPayload impl for ProjectionBarrierAuditOutputPayload")
 
     if failures:
         print("TEMPORAL_WORKFLOW_CATALOG_SUPPORT: FAILED")

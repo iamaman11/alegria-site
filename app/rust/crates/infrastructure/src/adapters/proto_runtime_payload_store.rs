@@ -13,7 +13,8 @@ use contracts::generated::alegria::temporal::v1::{
     LinkRecommendOutputPayload, LlmDraftCandidate, LlmDraftRequest, OpportunityBuildInputPayload,
     OpportunityBuildOutputPayload, PersistReport, PublishArtifact, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    RawKnowledgeIngestionOutputPayload, ProjectionBarrierAuditInputPayload,
+    ProjectionBarrierAuditOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
     ReconcileSummaryPayload, ReconcileTargetInputPayload, ReconcileTargetReportPayload,
     RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
     RuleInstanceCandidateState, RuleParamsState, RuleRoleTypeV1, RuntimeErrorPayload,
@@ -395,6 +396,34 @@ impl RuntimeProtoPayload for ReconcileTargetInputPayload {
     }
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
         decode_prost(payload_bytes, "ReconcileTargetInputPayload")
+    }
+}
+
+impl RuntimeProtoPayload for ProjectionBarrierAuditInputPayload {
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ProjectionBarrierAuditInputPayload"
+    }
+
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "ProjectionBarrierAuditInputPayload")
+    }
+}
+
+impl RuntimeProtoPayload for ProjectionBarrierAuditOutputPayload {
+    fn payload_type() -> &'static str {
+        "alegria.temporal.v1.ProjectionBarrierAuditOutputPayload"
+    }
+
+    fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
+        Ok(self.encode_to_vec())
+    }
+
+    fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+        decode_prost(payload_bytes, "ProjectionBarrierAuditOutputPayload")
     }
 }
 

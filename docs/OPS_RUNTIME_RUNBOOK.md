@@ -117,6 +117,19 @@ Owner-boundary note:
   - `crawl_sources`
   - `raw_knowledge_ingestion`
   - optional `load_verified_support_bundle.refresh`
+- `ExpertProjectionWorkflow`:
+  - rollout-safe extraction-plus-projection surface
+  - `load_seo_site_build_input`
+  - `load_verified_support_bundle.initial`
+  - `serp_ingest`
+  - `crawl_sources`
+  - `raw_knowledge_ingestion`
+  - `graph_admissibility_gate`
+  - `neo4j_sync`
+  - `retrieval_admissibility_gate`
+  - `voyage_qdrant_sync`
+  - `projection_barrier.post_projection`
+  - optional `load_verified_support_bundle.refresh`
 - `ProjectionReconcileWorkflow`:
   - `projection_reconcile.neo4j`
   - `projection_reconcile.qdrant`

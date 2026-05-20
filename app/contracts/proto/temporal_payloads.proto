@@ -610,6 +610,19 @@ message RawKnowledgeIngestionOutputPayload {
   string status = 7;
 }
 
+message ProjectionBarrierAuditInputPayload {
+  string run_id = 1;
+  string checkpoint = 2;
+}
+
+message ProjectionBarrierAuditOutputPayload {
+  string run_id = 1;
+  string checkpoint = 2;
+  int64 blocked_events = 3;
+  int64 max_open_lag_ms = 4;
+  string status = 5;
+}
+
 message GlobalSiteReconcileInputPayload {
   string run_id = 1;
   SeoScopePayload scope = 2;
