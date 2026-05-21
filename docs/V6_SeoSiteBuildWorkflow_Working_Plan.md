@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.14`
+**Current version:** `6.15`
 
 ---
 
@@ -161,6 +161,8 @@ Additional support-plane executable surfaces now present outside the 56-step run
   - verifies analytics/GSC support loop health without mutating truth
 - `cli_tools SeoReleaseRestoreGate`
   - evaluates release/build-id/restore readiness and can explicitly run `ci_verify`, `temporal_production_gate`, and `restore_drill` with machine-readable evidence
+- `cli_tools SeoCutoverShadowVerify`
+  - compares current runtime against `SeoSiteBuildCanonicalCutoverWorkflow` by `run_id`, step ledger, candidate status counts, and projection barriers, and emits a machine-readable shadow report
 
 Within the current `raw_knowledge_ingestion` macro-step:
 
@@ -983,7 +985,7 @@ Required implementation order:
 4. `steps 32-36`
    - graph admissibility, retrieval admissibility, `Neo4j` sync, `Voyage/Qdrant` sync, and `projection_barrier(semantic_projection)`
 5. shadow verification
-   - compare `SeoSiteBuildCanonicalCutoverWorkflow` against current runtime on the same scope before promotion
+   - run `cli_tools SeoCutoverShadowVerify` on paired legacy/cutover runs and compare `SeoSiteBuildCanonicalCutoverWorkflow` against current runtime on the same scope before promotion
 
 The order above is mandatory unless a later change is purely a bug fix for an already accepted earlier slice.
 
@@ -1083,7 +1085,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted cutover checkpoint, currently `shadow verification` before `Phase M2`;
+- the next implementation target must be the earliest non-accepted cutover checkpoint, currently real paired-run `shadow verification` evidence before `Phase M2`;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1119,6 +1121,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - `seo_preflight`
 - `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-36` wired through `projection_barrier(semantic_projection)` as the current real cutover slice
+- `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface for the remaining Phase M1 shadow gate
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1289,6 +1292,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.15
+
+- added `cli_tools SeoCutoverShadowVerify` as the machine-readable shadow verification surface for comparing legacy runtime and `SeoSiteBuildCanonicalCutoverWorkflow` by `run_id`;
+- clarified that the remaining non-accepted `Phase M1` checkpoint is not inventing a shadow plan, but producing real paired-run shadow evidence before `Phase M2`;
+- recorded the shadow verification surface in the active/partial runtime status and support-surface inventory.
 
 ### 6.14
 

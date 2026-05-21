@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use contracts::generated::alegria::temporal::v1::{
-    FactExtractionInputPayload, ValidationInputPayload,
+    CrawlSourcesOutputPayload, FactExtractionInputPayload, ProjectionBarrierAuditOutputPayload,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
 use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use infrastructure::adapters::seo_workflow_control_adapter::TemporalSeoWorkflowControlAdapter;
@@ -190,6 +191,18 @@ enum Command {
         #[arg(long)]
         report_json: Option<String>,
     },
+    SeoCutoverShadowVerify {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        legacy_run_id: String,
+        #[arg(long)]
+        cutover_run_id: String,
+        #[arg(long, default_value_t = false)]
+        strict: bool,
+        #[arg(long)]
+        report_json: Option<String>,
+    },
     CmsApprovePublish {
         #[arg(long)]
         database_url: Option<String>,
@@ -283,6 +296,54 @@ struct Finding {
     message: String,
 }
 
+#[derive(Debug)]
+struct StepPayloadBlob {
+    payload_type: String,
+    payload_bytes: Vec<u8>,
+}
+
+const CUTOVER_PHASE_M1_LEDGER_STEPS: &[&str] = &[
+    "seo_preflight",
+    "serp_ingest",
+    "crawl_sources",
+    "whole_page_semantic_pass",
+    "page_utility_classifier",
+    "dom_block_relevance_filter",
+    "sectioning",
+    "sectioning_contract_gate",
+    "cas_gate",
+    "raw_evidence_register",
+    "projection_barrier(raw_evidence)",
+    "layer_router",
+    "subspan_layer_router",
+    "entity_span_detection",
+    "canonical_mapping",
+    "ontology_intake_gate",
+    "procedural_extraction",
+    "operational_extraction",
+    "editorial_extraction",
+    "seo_signal_extraction",
+    "commercial_signal_extraction",
+    "extraction_schema_validate",
+    "candidate_validation",
+    "triple_builder",
+    "completeness_judge",
+    "resolution_loop",
+    "contradiction_gate",
+    "truth_adjudication",
+    "verified_truth_write",
+    "graph_admissibility_gate",
+    "retrieval_admissibility_gate",
+    "neo4j_sync",
+    "voyage_qdrant_sync",
+    "projection_barrier(semantic_projection)",
+];
+
+const CUTOVER_PHASE_M1_NON_LEDGERED_ACTIVITY_STEPS: &[&str] = &[
+    "load_verified_support_bundle.initial",
+    "load_verified_support_bundle.refresh",
+];
+
 fn read_text(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("read file failed: {}", path.display()))
 }
@@ -341,7 +402,11 @@ fn run_gate_command(
         .current_dir(root)
         .output()
         .with_context(|| format!("run gate command failed: {joined}"))?;
-    let status = if output.status.success() { "ok" } else { "error" };
+    let status = if output.status.success() {
+        "ok"
+    } else {
+        "error"
+    };
     Ok(json!({
         "label": label,
         "status": status,
@@ -354,6 +419,252 @@ fn run_gate_command(
 
 fn print_hex(bytes: &[u8]) {
     println!("{}", hex::encode(bytes));
+}
+
+fn warning_finding(code: &'static str, message: impl Into<String>) -> Finding {
+    Finding {
+        level: "warn",
+        code,
+        message: message.into(),
+    }
+}
+
+fn error_finding(code: &'static str, message: impl Into<String>) -> Finding {
+    Finding {
+        level: "error",
+        code,
+        message: message.into(),
+    }
+}
+
+fn value_as_i64(value: &Value, key: &str) -> Option<i64> {
+    value.get(key).and_then(Value::as_i64)
+}
+
+fn value_as_u64(value: &Value, key: &str) -> Option<u64> {
+    value.get(key).and_then(Value::as_u64)
+}
+
+fn value_as_str<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(Value::as_str)
+}
+
+fn value_as_string_vec(value: &Value, key: &str) -> Vec<String> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+fn value_as_i64_vec(value: &Value, key: &str) -> Vec<i64> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_i64).collect::<Vec<_>>())
+        .unwrap_or_default()
+}
+
+fn status_from_findings(findings: &[Finding], strict: bool) -> &'static str {
+    if findings.iter().any(|finding| finding.level == "error") {
+        "blocked"
+    } else if strict && findings.iter().any(|finding| finding.level == "warn") {
+        "blocked"
+    } else {
+        "ok"
+    }
+}
+
+async fn load_latest_step_blob(
+    pool: &sqlx::PgPool,
+    run_id: &str,
+    step_name: &str,
+    payload_kind: &str,
+) -> Result<Option<StepPayloadBlob>> {
+    let row = sqlx::query(
+        r#"
+        SELECT blobs.payload_type, blobs.payload_bytes
+        FROM pipeline.step_payload_blobs blobs
+        JOIN pipeline.step_executions exec
+          ON exec.run_id = blobs.run_id
+         AND exec.step_name = blobs.step_name
+         AND exec.idempotency_key = blobs.idempotency_key
+        WHERE blobs.run_id = $1
+          AND blobs.step_name = $2
+          AND blobs.payload_kind = $3
+          AND exec.status = 'done'
+        ORDER BY blobs.created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(Uuid::parse_str(run_id).with_context(|| format!("invalid run_id uuid: {run_id}"))?)
+    .bind(step_name)
+    .bind(payload_kind)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(|row| StepPayloadBlob {
+        payload_type: row.get("payload_type"),
+        payload_bytes: row.get("payload_bytes"),
+    }))
+}
+
+fn decode_step_blob_to_value(blob: &StepPayloadBlob) -> Result<Value> {
+    match blob.payload_type.as_str() {
+        "alegria.temporal.v1.CrawlSourcesOutputPayload" => {
+            let payload = CrawlSourcesOutputPayload::decode(blob.payload_bytes.as_slice())?;
+            Ok(json!({
+                "claimed_count": payload.claimed_count,
+                "crawled_count": payload.crawled_count,
+                "failed_count": payload.failed_count,
+                "raw_page_count": payload.raw_page_count,
+                "raw_section_count": payload.raw_section_count,
+                "qdrant_event_count": payload.qdrant_event_count,
+                "status": payload.status,
+                "raw_page_ids": payload.raw_page_ids,
+                "failed_urls": payload.failed_urls,
+            }))
+        }
+        "alegria.temporal.v1.RawKnowledgeIngestionInputPayload" => {
+            let payload = RawKnowledgeIngestionInputPayload::decode(blob.payload_bytes.as_slice())?;
+            Ok(json!({
+                "run_id": payload.run_id,
+                "context_key": payload.context_key,
+                "query_batch_key": payload.query_batch_key,
+                "raw_page_ids": payload.raw_page_ids,
+                "source_policy": payload.source_policy,
+            }))
+        }
+        "alegria.temporal.v1.RawKnowledgeIngestionOutputPayload" => {
+            let payload =
+                RawKnowledgeIngestionOutputPayload::decode(blob.payload_bytes.as_slice())?;
+            Ok(json!({
+                "raw_page_count": payload.raw_page_count,
+                "raw_section_count": payload.raw_section_count,
+                "extracted_rule_count": payload.extracted_rule_count,
+                "verified_rule_count": payload.verified_rule_count,
+                "outbox_event_count": payload.outbox_event_count,
+                "changed_truth_keys": payload.changed_truth_keys,
+                "status": payload.status,
+            }))
+        }
+        "alegria.temporal.v1.ProjectionBarrierAuditOutputPayload" => {
+            let payload =
+                ProjectionBarrierAuditOutputPayload::decode(blob.payload_bytes.as_slice())?;
+            Ok(json!({
+                "run_id": payload.run_id,
+                "checkpoint": payload.checkpoint,
+                "blocked_events": payload.blocked_events,
+                "max_open_lag_ms": payload.max_open_lag_ms,
+                "status": payload.status,
+            }))
+        }
+        payload_type if payload_type.starts_with("alegria.runtime.json.") => {
+            Ok(serde_json::from_slice(&blob.payload_bytes)?)
+        }
+        other => anyhow::bail!("unsupported step payload type for shadow verification: {other}"),
+    }
+}
+
+async fn load_latest_step_value(
+    pool: &sqlx::PgPool,
+    run_id: &str,
+    step_name: &str,
+    payload_kind: &str,
+) -> Result<Option<Value>> {
+    let Some(blob) = load_latest_step_blob(pool, run_id, step_name, payload_kind).await? else {
+        return Ok(None);
+    };
+    Ok(Some(decode_step_blob_to_value(&blob)?))
+}
+
+async fn list_run_step_statuses(
+    pool: &sqlx::PgPool,
+    run_id: &str,
+) -> Result<HashMap<String, String>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT step_name, status
+        FROM pipeline.step_executions
+        WHERE run_id = $1
+        ORDER BY updated_at, step_name
+        "#,
+    )
+    .bind(Uuid::parse_str(run_id).with_context(|| format!("invalid run_id uuid: {run_id}"))?)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("step_name"),
+                row.get::<String, _>("status"),
+            )
+        })
+        .collect())
+}
+
+async fn load_candidate_status_counts(
+    pool: &sqlx::PgPool,
+    context_key: &str,
+    raw_page_ids: &[i64],
+) -> Result<Value> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE c.epistemic_status = 'structured')::BIGINT AS structured_count,
+            COUNT(*) FILTER (WHERE c.epistemic_status = 'verified')::BIGINT AS verified_count,
+            COUNT(*) FILTER (WHERE c.epistemic_status = 'needs_hitl')::BIGINT AS needs_hitl_count,
+            COUNT(*) FILTER (WHERE c.epistemic_status = 'rejected')::BIGINT AS rejected_count,
+            COUNT(*)::BIGINT AS total_count
+        FROM extracted.rule_candidates c
+        JOIN raw.sections s ON s.id = c.raw_section_id
+        WHERE c.context_key = $1
+          AND s.page_id = ANY($2)
+        "#,
+    )
+    .bind(context_key)
+    .bind(raw_page_ids)
+    .fetch_one(pool)
+    .await?;
+    Ok(json!({
+        "structured_count": rows.get::<i64, _>("structured_count"),
+        "verified_count": rows.get::<i64, _>("verified_count"),
+        "needs_hitl_count": rows.get::<i64, _>("needs_hitl_count"),
+        "rejected_count": rows.get::<i64, _>("rejected_count"),
+        "total_count": rows.get::<i64, _>("total_count"),
+    }))
+}
+
+async fn projection_status_value(pool: &sqlx::PgPool, run_id: &str) -> Result<Value> {
+    let statuses = infrastructure::adapters::sqlx_seo_adapter::read_projection_sync_status_for_run(
+        pool, run_id,
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
+    Ok(json!(statuses
+        .into_iter()
+        .map(|status| json!({
+            "target_system": status.target_system,
+            "pending_events": status.pending_events,
+            "processing_events": status.processing_events,
+            "failed_events": status.failed_events,
+            "done_events": status.done_events,
+            "max_open_lag_ms": status.max_open_lag_ms,
+            "oldest_open_event_id": status.oldest_open_event_id,
+            "oldest_open_aggregate_key": status.oldest_open_aggregate_key,
+            "oldest_open_event_type": status.oldest_open_event_type,
+            "latest_failed_aggregate_key": status.latest_failed_aggregate_key,
+            "latest_failed_event_type": status.latest_failed_event_type,
+            "latest_failed_error": status.latest_failed_error,
+        }))
+        .collect::<Vec<_>>()))
 }
 
 fn default_seo_run_id() -> String {
@@ -1920,6 +2231,261 @@ fn seo_release_restore_gate(
     Ok(if status == "ok" { 0 } else { 2 })
 }
 
+async fn seo_cutover_shadow_verify(
+    database_url: Option<String>,
+    legacy_run_id: &str,
+    cutover_run_id: &str,
+    strict: bool,
+    report_json: Option<String>,
+) -> Result<i32> {
+    let database_url = database_url.unwrap_or_else(default_database_url);
+    let pool = connect_pg(&database_url).await?;
+
+    let legacy_crawl = load_latest_step_value(&pool, legacy_run_id, "crawl_sources", "output")
+        .await?
+        .context("legacy run missing crawl_sources output")?;
+    let legacy_raw_ingestion =
+        load_latest_step_value(&pool, legacy_run_id, "raw_knowledge_ingestion", "output")
+            .await?
+            .context("legacy run missing raw_knowledge_ingestion output")?;
+    let legacy_raw_ingestion_input =
+        load_latest_step_value(&pool, legacy_run_id, "raw_knowledge_ingestion", "input")
+            .await?
+            .context("legacy run missing raw_knowledge_ingestion input")?;
+
+    let cutover_raw_evidence =
+        load_latest_step_value(&pool, cutover_run_id, "raw_evidence_register", "output")
+            .await?
+            .context("cutover run missing raw_evidence_register output")?;
+    let cutover_candidate_validation =
+        load_latest_step_value(&pool, cutover_run_id, "candidate_validation", "output")
+            .await?
+            .context("cutover run missing candidate_validation output")?;
+    let cutover_truth_adjudication =
+        load_latest_step_value(&pool, cutover_run_id, "truth_adjudication", "output")
+            .await?
+            .context("cutover run missing truth_adjudication output")?;
+    let cutover_verified_write =
+        load_latest_step_value(&pool, cutover_run_id, "verified_truth_write", "output")
+            .await?
+            .context("cutover run missing verified_truth_write output")?;
+    let cutover_contradiction_gate =
+        load_latest_step_value(&pool, cutover_run_id, "contradiction_gate", "output")
+            .await?
+            .context("cutover run missing contradiction_gate output")?;
+    let cutover_projection_barrier = load_latest_step_value(
+        &pool,
+        cutover_run_id,
+        "projection_barrier(semantic_projection)",
+        "output",
+    )
+    .await?
+    .context("cutover run missing projection_barrier(semantic_projection) output")?;
+    let cutover_candidate_validation_input =
+        load_latest_step_value(&pool, cutover_run_id, "candidate_validation", "input")
+            .await?
+            .context("cutover run missing candidate_validation input")?;
+
+    let legacy_context_key = value_as_str(&legacy_raw_ingestion_input, "context_key")
+        .map(ToOwned::to_owned)
+        .context("legacy raw_knowledge_ingestion input missing context_key")?;
+    let cutover_context_key = value_as_str(&cutover_candidate_validation_input, "context_key")
+        .map(ToOwned::to_owned)
+        .context("cutover candidate_validation input missing context_key")?;
+    let legacy_raw_page_ids = value_as_i64_vec(&legacy_crawl, "raw_page_ids");
+    let cutover_raw_page_ids =
+        value_as_i64_vec(&cutover_candidate_validation_input, "raw_page_ids");
+
+    let legacy_candidate_counts =
+        load_candidate_status_counts(&pool, &legacy_context_key, &legacy_raw_page_ids).await?;
+    let cutover_projection_status = projection_status_value(&pool, cutover_run_id).await?;
+    let legacy_projection_status = projection_status_value(&pool, legacy_run_id).await?;
+    let cutover_step_statuses = list_run_step_statuses(&pool, cutover_run_id).await?;
+
+    let mut findings = Vec::new();
+    if legacy_context_key != cutover_context_key {
+        findings.push(error_finding(
+            "SHADOW_CONTEXT_MISMATCH",
+            format!(
+                "legacy context_key `{legacy_context_key}` does not match cutover context_key `{cutover_context_key}`"
+            ),
+        ));
+    }
+    if legacy_raw_page_ids.is_empty() {
+        findings.push(error_finding(
+            "SHADOW_LEGACY_RAW_PAGES_MISSING",
+            "legacy crawl_sources output has no raw_page_ids",
+        ));
+    }
+    if cutover_raw_page_ids.is_empty() {
+        findings.push(error_finding(
+            "SHADOW_CUTOVER_RAW_PAGES_MISSING",
+            "cutover candidate_validation input has no raw_page_ids",
+        ));
+    }
+    if legacy_raw_page_ids != cutover_raw_page_ids {
+        findings.push(warning_finding(
+            "SHADOW_RAW_PAGE_SCOPE_DIFF",
+            format!(
+                "legacy raw_page_ids ({}) and cutover raw_page_ids ({}) differ",
+                legacy_raw_page_ids.len(),
+                cutover_raw_page_ids.len()
+            ),
+        ));
+    }
+
+    let missing_cutover_steps = CUTOVER_PHASE_M1_LEDGER_STEPS
+        .iter()
+        .filter(|step_name| cutover_step_statuses.get(**step_name) != Some(&"done".to_string()))
+        .map(|step_name| (*step_name).to_string())
+        .collect::<Vec<_>>();
+    if !missing_cutover_steps.is_empty() {
+        findings.push(error_finding(
+            "SHADOW_CUTOVER_STEP_COVERAGE",
+            format!(
+                "cutover run is missing completed ledger steps: {}",
+                missing_cutover_steps.join(", ")
+            ),
+        ));
+    }
+
+    let legacy_verified = value_as_u64(&legacy_raw_ingestion, "verified_rule_count").unwrap_or(0);
+    let legacy_changed_truth_keys =
+        value_as_string_vec(&legacy_raw_ingestion, "changed_truth_keys").len() as u64;
+    let legacy_needs_hitl = value_as_i64(&legacy_candidate_counts, "needs_hitl_count")
+        .unwrap_or_default()
+        .max(0) as u64;
+
+    let cutover_verified =
+        value_as_u64(&cutover_verified_write, "verified_rule_count").unwrap_or(0);
+    let cutover_changed_truth_keys =
+        value_as_string_vec(&cutover_verified_write, "changed_truth_keys").len() as u64;
+    let cutover_needs_hitl =
+        value_as_u64(&cutover_candidate_validation, "needs_hitl_count").unwrap_or(0);
+    let cutover_contradictions =
+        value_as_u64(&cutover_contradiction_gate, "conflict_count").unwrap_or(0);
+
+    if cutover_verified > legacy_verified {
+        findings.push(error_finding(
+            "SHADOW_VERIFIED_INCREASE_UNJUSTIFIED",
+            format!(
+                "cutover verified_rule_count {} exceeds legacy verified_rule_count {}",
+                cutover_verified, legacy_verified
+            ),
+        ));
+    } else if cutover_verified < legacy_verified {
+        findings.push(warning_finding(
+            "SHADOW_VERIFIED_COUNT_LOWER",
+            format!(
+                "cutover verified_rule_count {} is lower than legacy verified_rule_count {}",
+                cutover_verified, legacy_verified
+            ),
+        ));
+    }
+
+    if cutover_needs_hitl < legacy_needs_hitl {
+        findings.push(warning_finding(
+            "SHADOW_NEEDS_HITL_LOWER",
+            format!(
+                "cutover needs_hitl_count {} is lower than legacy needs_hitl_count {}; verify that no ambiguity was silently accepted",
+                cutover_needs_hitl, legacy_needs_hitl
+            ),
+        ));
+    }
+
+    let barrier_blocked_events =
+        value_as_i64(&cutover_projection_barrier, "blocked_events").unwrap_or_default();
+    let barrier_status = value_as_str(&cutover_projection_barrier, "status")
+        .unwrap_or("unknown")
+        .to_string();
+    if barrier_status != "ok" || barrier_blocked_events > 0 {
+        findings.push(error_finding(
+            "SHADOW_PROJECTION_BARRIER_BLOCKED",
+            format!(
+                "cutover semantic projection barrier status={} blocked_events={}",
+                barrier_status, barrier_blocked_events
+            ),
+        ));
+    }
+
+    let cutover_truth_verified =
+        value_as_u64(&cutover_truth_adjudication, "verified_count").unwrap_or(0);
+    if cutover_truth_verified != cutover_verified {
+        findings.push(warning_finding(
+            "SHADOW_TRUTH_WRITE_DELTA",
+            format!(
+                "truth_adjudication verified_count {} differs from verified_truth_write verified_rule_count {}",
+                cutover_truth_verified, cutover_verified
+            ),
+        ));
+    }
+
+    let status = status_from_findings(&findings, strict);
+    let payload = json!({
+        "status": status,
+        "strict": strict,
+        "legacy_run_id": legacy_run_id,
+        "cutover_run_id": cutover_run_id,
+        "context_key": {
+            "legacy": legacy_context_key,
+            "cutover": cutover_context_key,
+        },
+        "phase_m1": {
+            "expected_ledger_steps": CUTOVER_PHASE_M1_LEDGER_STEPS,
+            "non_ledgered_activity_steps": CUTOVER_PHASE_M1_NON_LEDGERED_ACTIVITY_STEPS,
+            "completed_ledger_steps": cutover_step_statuses
+                .iter()
+                .filter(|(_, status)| status.as_str() == "done")
+                .map(|(step_name, _)| step_name.clone())
+                .collect::<Vec<_>>(),
+            "missing_ledger_steps": missing_cutover_steps,
+        },
+        "legacy_runtime": {
+            "crawl_sources": legacy_crawl,
+            "raw_knowledge_ingestion": legacy_raw_ingestion,
+            "candidate_status_counts": legacy_candidate_counts,
+            "projection_status": legacy_projection_status,
+            "summary": {
+                "verified_rule_count": legacy_verified,
+                "needs_hitl_count": legacy_needs_hitl,
+                "changed_truth_key_count": legacy_changed_truth_keys,
+            }
+        },
+        "cutover_runtime": {
+            "raw_evidence_register": cutover_raw_evidence,
+            "candidate_validation": cutover_candidate_validation,
+            "truth_adjudication": cutover_truth_adjudication,
+            "verified_truth_write": cutover_verified_write,
+            "contradiction_gate": cutover_contradiction_gate,
+            "projection_barrier_semantic_projection": cutover_projection_barrier,
+            "projection_status": cutover_projection_status,
+            "support_refresh": {
+                "expected": cutover_changed_truth_keys > 0,
+                "observed_via_step_ledger": false,
+                "note": "load_verified_support_bundle.* remains a non-ledgered activity surface"
+            },
+            "summary": {
+                "verified_rule_count": cutover_verified,
+                "needs_hitl_count": cutover_needs_hitl,
+                "contradiction_conflict_count": cutover_contradictions,
+                "changed_truth_key_count": cutover_changed_truth_keys,
+            }
+        },
+        "findings": findings.iter().map(|finding| json!({
+            "level": finding.level,
+            "code": finding.code,
+            "message": finding.message,
+        })).collect::<Vec<_>>()
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(report_json) = report_json.as_deref() {
+        let out = write_report(Path::new("."), report_json, &payload)?;
+        eprintln!("report: {}", out.display());
+    }
+
+    Ok(if status == "ok" || !strict { 0 } else { 2 })
+}
+
 async fn cms_review_decision(
     database_url: Option<String>,
     page_node_key: &str,
@@ -2160,6 +2726,22 @@ async fn main() -> Result<()> {
             run_restore_drill,
             report_json,
         )?,
+        Command::SeoCutoverShadowVerify {
+            database_url,
+            legacy_run_id,
+            cutover_run_id,
+            strict,
+            report_json,
+        } => {
+            seo_cutover_shadow_verify(
+                database_url,
+                &legacy_run_id,
+                &cutover_run_id,
+                strict,
+                report_json,
+            )
+            .await?
+        }
         Command::CmsApprovePublish {
             database_url,
             page_node_key,
