@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{FreshnessReport, SeoScopePayload, StepContractMeta};
 use infrastructure::adapters::raw_crawl_adapter;
@@ -246,6 +246,138 @@ pub struct RawEvidenceRegisterOutput {
     pub status: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionSemanticGateBundle {
+    pub page_utility: PageUtilitySweepOutput,
+    pub dom_relevance: DomBlockRelevanceSweepOutput,
+    pub sectioning_contract: SectioningContractGateOutput,
+    pub cas_gate: CasGateOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerRouterSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerRouterSectionDecision {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub primary_layer: String,
+    pub secondary_layers: Vec<seo_steps::layer_router_step::SecondaryLayer>,
+    pub confidence: f32,
+    pub needs_hitl: bool,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LayerRouterSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub decisions: Vec<LayerRouterSectionDecision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubspanLayerRouterInput {
+    pub run_id: String,
+    pub layer_router: LayerRouterSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubspanLayerRouterDecision {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub mixed_layers: Vec<String>,
+    pub needs_split: bool,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubspanLayerRouterOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_split_count: usize,
+    pub decisions: Vec<SubspanLayerRouterDecision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySpanSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySpanSectionMentions {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub mentions: Vec<seo_steps::entity_span_detection_step::EntityMention>,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntitySpanSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub mention_count: usize,
+    pub sections: Vec<EntitySpanSectionMentions>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalMappingSweepInput {
+    pub run_id: String,
+    pub entity_spans: EntitySpanSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalMappingSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub mappings: Vec<seo_steps::canonical_mapping_step::MappingResult>,
+    pub blocked_by_gate: bool,
+    pub needs_hitl: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalMappingSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub sections: Vec<CanonicalMappingSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyIntakeGateInput {
+    pub run_id: String,
+    pub canonical_mapping: CanonicalMappingSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyIntakeGateDecision {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub accepted_keys: Vec<String>,
+    pub unresolved_mentions: Vec<String>,
+    pub blocked_by_gate: bool,
+    pub needs_hitl: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OntologyIntakeGateOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub sections: Vec<OntologyIntakeGateDecision>,
+}
+
 impl_json_runtime_payload_local!(
     SemanticSectionSampleInput,
     "alegria.runtime.json.SemanticSectionSampleInput"
@@ -299,6 +431,50 @@ impl_json_runtime_payload_local!(
 impl_json_runtime_payload_local!(
     RawEvidenceRegisterOutput,
     "alegria.runtime.json.RawEvidenceRegisterOutput"
+);
+impl_json_runtime_payload_local!(
+    SectionSemanticGateBundle,
+    "alegria.runtime.json.SectionSemanticGateBundle"
+);
+impl_json_runtime_payload_local!(
+    LayerRouterSweepInput,
+    "alegria.runtime.json.LayerRouterSweepInput"
+);
+impl_json_runtime_payload_local!(
+    LayerRouterSweepOutput,
+    "alegria.runtime.json.LayerRouterSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    SubspanLayerRouterInput,
+    "alegria.runtime.json.SubspanLayerRouterInput"
+);
+impl_json_runtime_payload_local!(
+    SubspanLayerRouterOutput,
+    "alegria.runtime.json.SubspanLayerRouterOutput"
+);
+impl_json_runtime_payload_local!(
+    EntitySpanSweepInput,
+    "alegria.runtime.json.EntitySpanSweepInput"
+);
+impl_json_runtime_payload_local!(
+    EntitySpanSweepOutput,
+    "alegria.runtime.json.EntitySpanSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CanonicalMappingSweepInput,
+    "alegria.runtime.json.CanonicalMappingSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CanonicalMappingSweepOutput,
+    "alegria.runtime.json.CanonicalMappingSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    OntologyIntakeGateInput,
+    "alegria.runtime.json.OntologyIntakeGateInput"
+);
+impl_json_runtime_payload_local!(
+    OntologyIntakeGateOutput,
+    "alegria.runtime.json.OntologyIntakeGateOutput"
 );
 
 fn dominant_layers(text: &str) -> Vec<String> {
@@ -385,6 +561,52 @@ fn block_role_for_section(
     } else {
         seo_steps::dom_block_relevance_step::BlockRole::ContentMain
     }
+}
+
+struct SectionSemanticGateIndexes {
+    structural_allowed: BTreeMap<i64, bool>,
+    dom_allowed: BTreeMap<i64, bool>,
+    contract_pass: BTreeMap<i64, bool>,
+    replay_safe: BTreeMap<i64, bool>,
+}
+
+impl SectionSemanticGateIndexes {
+    fn from_bundle(bundle: &SectionSemanticGateBundle) -> Self {
+        Self {
+            structural_allowed: bundle
+                .page_utility
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.allow_structural_extraction))
+                .collect(),
+            dom_allowed: bundle
+                .dom_relevance
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.allow_extraction))
+                .collect(),
+            contract_pass: bundle
+                .sectioning_contract
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.decision == "pass"))
+                .collect(),
+            replay_safe: bundle
+                .cas_gate
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.is_replay_safe))
+                .collect(),
+        }
+    }
+
+    fn blocked_by_gate(&self, section_id: i64) -> bool {
+        !self.structural_allowed.get(&section_id).copied().unwrap_or(false)
+            || !self.dom_allowed.get(&section_id).copied().unwrap_or(false)
+            || !self.contract_pass.get(&section_id).copied().unwrap_or(false)
+            || !self.replay_safe.get(&section_id).copied().unwrap_or(false)
+    }
+
 }
 
 pub(crate) fn test_step_prepare_impl(workflow_id: &str) -> String {
@@ -659,7 +881,7 @@ pub(crate) async fn sectioning_impl(
     let page_count = sections
         .iter()
         .map(|section| section.page_id)
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
     let mapped = sections
         .iter()
@@ -827,12 +1049,12 @@ pub(crate) async fn raw_evidence_register_impl(
     let page_count = sections
         .iter()
         .map(|section| section.page_id)
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
     let unique_source_count = sections
         .iter()
         .map(|section| section.source_url.clone())
-        .collect::<std::collections::BTreeSet<_>>()
+        .collect::<BTreeSet<_>>()
         .len();
     let evidence_refs = sections
         .iter()
@@ -845,5 +1067,267 @@ pub(crate) async fn raw_evidence_register_impl(
         unique_source_count,
         evidence_refs,
         status: "registered".to_string(),
+    })
+}
+
+pub(crate) async fn layer_router_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &LayerRouterSweepInput,
+) -> Result<LayerRouterSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let decisions = sections
+        .iter()
+        .map(|section| {
+            let output = seo_steps::layer_router_step::execute(
+                &seo_steps::layer_router_step::LayerRouterInput {
+                    section_id: section.id.to_string(),
+                    heading_text: section.heading_path.clone(),
+                    raw_text: section.content_md.clone(),
+                    source_tier: section.source_dtype.clone(),
+                    block_type: section.section_type.clone(),
+                },
+            );
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let decision = if blocked_by_gate {
+                "blocked_by_gate"
+            } else if output.needs_hitl {
+                "needs_hitl"
+            } else {
+                "pass"
+            };
+            LayerRouterSectionDecision {
+                section_id: section.id,
+                page_id: section.page_id,
+                primary_layer: output.primary_layer,
+                secondary_layers: output.secondary_layers,
+                confidence: output.confidence,
+                needs_hitl: output.needs_hitl,
+                blocked_by_gate,
+                decision: decision.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked_section_count = decisions
+        .iter()
+        .filter(|decision| decision.blocked_by_gate)
+        .count();
+    let needs_hitl_count = decisions
+        .iter()
+        .filter(|decision| !decision.blocked_by_gate && decision.needs_hitl)
+        .count();
+    Ok(LayerRouterSweepOutput {
+        section_count: decisions.len(),
+        blocked_section_count,
+        needs_hitl_count,
+        decisions,
+    })
+}
+
+pub(crate) async fn subspan_layer_router_impl(
+    input: &SubspanLayerRouterInput,
+) -> Result<SubspanLayerRouterOutput, DomainError> {
+    let decisions = input
+        .layer_router
+        .decisions
+        .iter()
+        .map(|decision| {
+            let mixed_layers = decision
+                .secondary_layers
+                .iter()
+                .map(|layer| layer.layer.clone())
+                .collect::<Vec<_>>();
+            let needs_split = !mixed_layers.is_empty();
+            let stage_decision = if decision.blocked_by_gate {
+                "blocked_by_gate"
+            } else if needs_split {
+                "needs_hitl"
+            } else {
+                "pass"
+            };
+            SubspanLayerRouterDecision {
+                section_id: decision.section_id,
+                page_id: decision.page_id,
+                mixed_layers,
+                needs_split,
+                blocked_by_gate: decision.blocked_by_gate,
+                decision: stage_decision.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked_section_count = decisions
+        .iter()
+        .filter(|decision| decision.blocked_by_gate)
+        .count();
+    let needs_split_count = decisions
+        .iter()
+        .filter(|decision| !decision.blocked_by_gate && decision.needs_split)
+        .count();
+    Ok(SubspanLayerRouterOutput {
+        section_count: decisions.len(),
+        blocked_section_count,
+        needs_split_count,
+        decisions,
+    })
+}
+
+pub(crate) async fn entity_span_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &EntitySpanSweepInput,
+) -> Result<EntitySpanSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let section_outputs = sections
+        .iter()
+        .map(|section| {
+            let output = seo_steps::entity_span_detection_step::execute(
+                &seo_steps::entity_span_detection_step::EntitySpanInput {
+                    section_id: section.id.to_string(),
+                    raw_text: section.content_md.clone(),
+                },
+            );
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            EntitySpanSectionMentions {
+                section_id: section.id,
+                page_id: section.page_id,
+                mentions: output.mentions,
+                blocked_by_gate,
+                decision: if blocked_by_gate {
+                    "blocked_by_gate".to_string()
+                } else {
+                    "pass".to_string()
+                },
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked_section_count = section_outputs
+        .iter()
+        .filter(|section| section.blocked_by_gate)
+        .count();
+    let mention_count = section_outputs
+        .iter()
+        .map(|section| section.mentions.len())
+        .sum();
+    Ok(EntitySpanSweepOutput {
+        section_count: section_outputs.len(),
+        blocked_section_count,
+        mention_count,
+        sections: section_outputs,
+    })
+}
+
+pub(crate) async fn canonical_mapping_sweep_impl(
+    input: &CanonicalMappingSweepInput,
+) -> Result<CanonicalMappingSweepOutput, DomainError> {
+    let sections = input
+        .entity_spans
+        .sections
+        .iter()
+        .map(|section| {
+            let output = seo_steps::canonical_mapping_step::execute(
+                &seo_steps::canonical_mapping_step::CanonicalMappingInput {
+                    section_id: section.section_id.to_string(),
+                    mentions: section
+                        .mentions
+                        .iter()
+                        .map(
+                            |mention| seo_steps::canonical_mapping_step::MentionForMapping {
+                                raw_text: mention.raw_text.clone(),
+                                entity_type: mention.entity_type.clone(),
+                            },
+                        )
+                        .collect(),
+                },
+            );
+            let needs_hitl = output
+                .mappings
+                .iter()
+                .any(|mapping| mapping.needs_hitl);
+            let decision = if section.blocked_by_gate {
+                "blocked_by_gate"
+            } else if needs_hitl {
+                "needs_hitl"
+            } else {
+                "pass"
+            };
+            CanonicalMappingSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                mappings: output.mappings,
+                blocked_by_gate: section.blocked_by_gate,
+                needs_hitl,
+                decision: decision.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked_section_count = sections
+        .iter()
+        .filter(|section| section.blocked_by_gate)
+        .count();
+    let needs_hitl_count = sections
+        .iter()
+        .filter(|section| !section.blocked_by_gate && section.needs_hitl)
+        .count();
+    Ok(CanonicalMappingSweepOutput {
+        section_count: sections.len(),
+        blocked_section_count,
+        needs_hitl_count,
+        sections,
+    })
+}
+
+pub(crate) async fn ontology_intake_gate_impl(
+    input: &OntologyIntakeGateInput,
+) -> Result<OntologyIntakeGateOutput, DomainError> {
+    let sections = input
+        .canonical_mapping
+        .sections
+        .iter()
+        .map(|section| {
+            let unresolved_mentions = section
+                .mappings
+                .iter()
+                .filter(|mapping| mapping.needs_hitl || mapping.canonical_key.is_none())
+                .map(|mapping| mapping.raw_text.clone())
+                .collect::<Vec<_>>();
+            let accepted_keys = section
+                .mappings
+                .iter()
+                .filter_map(|mapping| mapping.canonical_key.clone())
+                .collect::<Vec<_>>();
+            let needs_hitl = !unresolved_mentions.is_empty();
+            let decision = if section.blocked_by_gate {
+                "blocked_by_gate"
+            } else if needs_hitl {
+                "needs_hitl"
+            } else {
+                "pass"
+            };
+            OntologyIntakeGateDecision {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                accepted_keys,
+                unresolved_mentions,
+                blocked_by_gate: section.blocked_by_gate,
+                needs_hitl,
+                decision: decision.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let blocked_section_count = sections
+        .iter()
+        .filter(|section| section.blocked_by_gate)
+        .count();
+    let needs_hitl_count = sections
+        .iter()
+        .filter(|section| !section.blocked_by_gate && section.needs_hitl)
+        .count();
+    Ok(OntologyIntakeGateOutput {
+        section_count: sections.len(),
+        blocked_section_count,
+        needs_hitl_count,
+        sections,
     })
 }

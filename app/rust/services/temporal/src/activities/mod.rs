@@ -529,6 +529,76 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_layer_router_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::LayerRouterSweepInput,
+    ) -> Result<operations::LayerRouterSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "layer_router", 1, &input, || async {
+            operations::layer_router_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_subspan_layer_router_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SubspanLayerRouterInput,
+    ) -> Result<operations::SubspanLayerRouterOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "subspan_layer_router", 1, &input, || async {
+            operations::subspan_layer_router_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_entity_span_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::EntitySpanSweepInput,
+    ) -> Result<operations::EntitySpanSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "entity_span_detection", 1, &input, || async {
+            operations::entity_span_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_canonical_mapping_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CanonicalMappingSweepInput,
+    ) -> Result<operations::CanonicalMappingSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "canonical_mapping", 1, &input, || async {
+            operations::canonical_mapping_sweep_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_ontology_intake_gate_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::OntologyIntakeGateInput,
+    ) -> Result<operations::OntologyIntakeGateOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "ontology_intake_gate", 1, &input, || async {
+            operations::ontology_intake_gate_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn load_seo_site_build_input(
         self: Arc<Self>,
         _ctx: ActivityContext,

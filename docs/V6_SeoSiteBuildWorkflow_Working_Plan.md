@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.11`
+**Current version:** `6.12`
 
 ---
 
@@ -149,7 +149,7 @@ These surfaces are migration-only. They are not the long-term target architectur
 - `FreshnessCheckWorkflow`:
   - support-plane freshness monitor
 - `SeoSiteBuildCanonicalCutoverWorkflow`:
-  - partial canonical-cutover surface now wired for `seo_preflight -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> whole_page_semantic_pass -> page_utility_classifier -> dom_block_relevance_filter -> sectioning -> sectioning_contract_gate -> cas_gate -> raw_evidence_register -> projection_barrier(raw_evidence)`
+  - partial canonical-cutover surface now wired for `seo_preflight -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> whole_page_semantic_pass -> page_utility_classifier -> dom_block_relevance_filter -> sectioning -> sectioning_contract_gate -> cas_gate -> raw_evidence_register -> projection_barrier(raw_evidence) -> layer_router -> subspan_layer_router -> entity_span_detection -> canonical_mapping -> ontology_intake_gate`
 
 Additional support-plane executable surfaces now present outside the 56-step run:
 
@@ -1083,7 +1083,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted Phase M1 slice, currently `steps 1-11`;
+- the next implementation target must be the earliest non-accepted Phase M1 slice, currently `steps 18-31`;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1118,7 +1118,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
-- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-11` plus `projection_barrier(raw_evidence)` wired as the first real cutover slice
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-17` wired through `ontology_intake_gate` as the current real cutover slice
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1130,16 +1130,6 @@ Before continuing development past planning, the repository must satisfy this cl
 
 ### 9.3 Deferred now
 
-- mandatory `whole_page_semantic_pass`
-- mandatory `page_utility_classifier`
-- mandatory `dom_block_relevance_filter`
-- mandatory `sectioning_contract_gate`
-- mandatory `cas_gate`
-- mandatory `layer_router`
-- mandatory `subspan_layer_router`
-- mandatory `entity_span_detection`
-- mandatory `canonical_mapping`
-- mandatory `ontology_intake_gate`
 - rich extraction stages above the current truth-core
 - mandatory `triple_builder`
 - mandatory `completeness_judge`
@@ -1308,6 +1298,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.12
+
+- extended `SeoSiteBuildCanonicalCutoverWorkflow` from the raw-evidence slice into canonical `steps 13-17`;
+- added first-class cutover runtime surfaces for `layer_router`, `subspan_layer_router`, `entity_span_detection`, `canonical_mapping`, and `ontology_intake_gate`;
+- updated the working plan status so the next non-accepted Phase M1 target is now `steps 18-31`.
 
 ### 6.11
 

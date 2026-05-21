@@ -134,6 +134,11 @@ def main() -> int:
         "cas_gate",
         "raw_evidence_register",
         "projection_barrier(raw_evidence)",
+        "layer_router",
+        "subspan_layer_router",
+        "entity_span_detection",
+        "canonical_mapping",
+        "ontology_intake_gate",
         "done:seo_site_build_canonical_cutover",
     ]:
         if needle not in canonical_cutover:
@@ -151,6 +156,11 @@ def main() -> int:
         "run_sectioning_contract_gate_step",
         "run_cas_gate_step",
         "run_raw_evidence_register_step",
+        "run_layer_router_sweep_step",
+        "run_subspan_layer_router_step",
+        "run_entity_span_sweep_step",
+        "run_canonical_mapping_sweep_step",
+        "run_ontology_intake_gate_step",
         "run_page_utility_classifier_step",
         "run_dom_block_relevance_step",
         "run_entity_span_detection_step",

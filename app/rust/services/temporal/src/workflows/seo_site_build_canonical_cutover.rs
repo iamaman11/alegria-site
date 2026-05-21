@@ -9,9 +9,11 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 use seo_ports::VerifiedSupportBundleRequest;
 
 use crate::activities::operations::{
-    CasGateInput, DomBlockRelevanceSweepInput, PageUtilitySweepInput,
-    RawEvidenceRegisterInput, SectioningContractGateInput, SectioningInput, SeoPreflightInput,
-    WholePageSemanticPassInput,
+    CanonicalMappingSweepInput, CasGateInput, DomBlockRelevanceSweepInput,
+    EntitySpanSweepInput, LayerRouterSweepInput, OntologyIntakeGateInput,
+    PageUtilitySweepInput, RawEvidenceRegisterInput, SectionSemanticGateBundle,
+    SectioningContractGateInput, SectioningInput, SeoPreflightInput,
+    SubspanLayerRouterInput, WholePageSemanticPassInput,
 };
 use crate::activities::AlegriaActivities;
 use crate::metrics;
@@ -228,6 +230,80 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
 
+        let semantic_gates = SectionSemanticGateBundle {
+            page_utility: page_utility.clone(),
+            dom_relevance: dom.clone(),
+            sectioning_contract: sectioning_contract.clone(),
+            cas_gate: cas_gate.clone(),
+        };
+
+        ctx.state_mut(|s| s.phase = "layer_router".to_string());
+        let layer_router = ctx
+            .start_activity(
+                AlegriaActivities::run_layer_router_sweep_step,
+                LayerRouterSweepInput {
+                    run_id: run_id.clone(),
+                    raw_page_ids: crawled.raw_page_ids.clone(),
+                    gates: semantic_gates.clone(),
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "subspan_layer_router".to_string());
+        let subspan_layer_router = ctx
+            .start_activity(
+                AlegriaActivities::run_subspan_layer_router_step,
+                SubspanLayerRouterInput {
+                    run_id: run_id.clone(),
+                    layer_router: layer_router.clone(),
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "entity_span_detection".to_string());
+        let entity_spans = ctx
+            .start_activity(
+                AlegriaActivities::run_entity_span_sweep_step,
+                EntitySpanSweepInput {
+                    run_id: run_id.clone(),
+                    raw_page_ids: crawled.raw_page_ids.clone(),
+                    gates: semantic_gates,
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "canonical_mapping".to_string());
+        let canonical_mapping = ctx
+            .start_activity(
+                AlegriaActivities::run_canonical_mapping_sweep_step,
+                CanonicalMappingSweepInput {
+                    run_id: run_id.clone(),
+                    entity_spans: entity_spans.clone(),
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "ontology_intake_gate".to_string());
+        let ontology_intake = ctx
+            .start_activity(
+                AlegriaActivities::run_ontology_intake_gate_step,
+                OntologyIntakeGateInput {
+                    run_id: run_id.clone(),
+                    canonical_mapping: canonical_mapping.clone(),
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
         ctx.state_mut(|s| s.phase = "done:seo_site_build_canonical_cutover".to_string());
         metrics::global()
             .workflow_completions_total
@@ -235,7 +311,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .inc();
 
         Ok(format!(
-            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={}",
+            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={}",
             run_id,
             preflight.status,
             support_bundle.len(),
@@ -247,7 +323,12 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             sectioning_contract.blocked_section_count,
             cas_gate.blocked_section_count,
             raw_evidence.section_count,
-            raw_evidence_barrier.status
+            raw_evidence_barrier.status,
+            layer_router.needs_hitl_count,
+            subspan_layer_router.needs_split_count,
+            entity_spans.mention_count,
+            canonical_mapping.needs_hitl_count,
+            ontology_intake.needs_hitl_count
         ))
     }
 
