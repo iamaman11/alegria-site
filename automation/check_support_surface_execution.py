@@ -51,6 +51,20 @@ def main() -> int:
         if needle not in cli:
             failures.append(f"cli_tools missing `{needle}`")
 
+    for needle in [
+        "SeoReleaseRestoreGate",
+        "seo_release_restore_gate(",
+        "run_gate_command(",
+        "automation/check_temporal_build_id_policy.py",
+        "automation/check_seo_rollout_compat_contract.py",
+        "automation/check_backup_restore_layout.py",
+        "automation/ci_verify.sh",
+        "automation/temporal_production_gate.sh",
+        "infra/backups/restore_drill.sh",
+    ]:
+        if needle not in cli:
+            failures.append(f"cli_tools release gate surface missing `{needle}`")
+
     if "struct FreshnessCheckWorkflow" not in read(FRESHNESS):
         failures.append("freshness workflow surface missing")
     if "struct ProjectionReconcileWorkflow" not in read(RECONCILE):
@@ -67,6 +81,7 @@ def main() -> int:
         "RebuildDispatch",
         "OntologyBackfillPlan",
         "SeoPostPublishFeedbackProbe",
+        "SeoReleaseRestoreGate",
         "temporal_production_gate.sh",
         "restore_drill.sh",
     ]:

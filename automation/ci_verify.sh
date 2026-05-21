@@ -28,7 +28,10 @@ python3 automation/check_support_process_registry.py
 echo "[4b/50] Support surface execution"
 python3 automation/check_support_surface_execution.py
 
-echo "[4c/50] Voyage retrieval surface"
+echo "[4c/50] Release/restore gate surface"
+python3 automation/check_release_restore_gate_surface.py
+
+echo "[4d/50] Voyage retrieval surface"
 python3 automation/check_voyage_retrieval_surface.py
 
 echo "[5/50] R5-R8 boundary check (no Python hot-path violations)"

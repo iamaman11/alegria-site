@@ -202,7 +202,9 @@ Owner-boundary note:
   - authority rule: this loop must never mutate verified truth
   - evidence surface: `--report-json`
 - `release_and_restore_gate`
-  - executable surfaces: `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `infra/backups/restore_drill.sh`
+  - operator surface: `cli_tools SeoReleaseRestoreGate`
+  - evidence surface: `--report-json`
+  - heavyweight executable surfaces: `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `infra/backups/restore_drill.sh`
 
 ## 3) HITL contract
 
@@ -301,6 +303,14 @@ Production release is allowed only when:
 - metrics endpoint exposes runtime counters/histograms
 - restore drill succeeds
 - reconcile writes persistent run/action forensic records
+
+The canonical operator probe for this support process is:
+
+- `cargo run -p cli_tools -- seo-release-restore-gate --report-json automation/reports/release_restore_gate.json`
+
+Heavyweight execution can be requested explicitly:
+
+- `cargo run -p cli_tools -- seo-release-restore-gate --run-ci-verify --run-temporal-gate --run-restore-drill --report-json automation/reports/release_restore_gate.full.json`
 
 ## 8) Archive policy
 

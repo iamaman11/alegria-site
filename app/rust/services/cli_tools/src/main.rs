@@ -31,6 +31,7 @@ use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
@@ -177,6 +178,18 @@ enum Command {
         #[arg(long)]
         report_json: Option<String>,
     },
+    SeoReleaseRestoreGate {
+        #[arg(long, default_value = ".")]
+        root: String,
+        #[arg(long, default_value_t = false)]
+        run_ci_verify: bool,
+        #[arg(long, default_value_t = false)]
+        run_temporal_gate: bool,
+        #[arg(long, default_value_t = false)]
+        run_restore_drill: bool,
+        #[arg(long)]
+        report_json: Option<String>,
+    },
     CmsApprovePublish {
         #[arg(long)]
         database_url: Option<String>,
@@ -283,6 +296,60 @@ fn write_report(root: &Path, report_path: &str, payload: &Value) -> Result<PathB
     fs::write(&out, serde_json::to_vec_pretty(payload)?)
         .with_context(|| format!("write report failed: {}", out.display()))?;
     Ok(out)
+}
+
+fn truncate_command_output(text: &str) -> String {
+    const LIMIT: usize = 4000;
+    if text.len() <= LIMIT {
+        text.to_string()
+    } else {
+        let mut truncated = text
+            .char_indices()
+            .take_while(|(idx, _)| *idx < LIMIT)
+            .map(|(_, ch)| ch)
+            .collect::<String>();
+        truncated.push_str(&format!(
+            "\n...[truncated {} bytes]",
+            text.len().saturating_sub(LIMIT)
+        ));
+        truncated
+    }
+}
+
+fn run_gate_command(
+    root: &Path,
+    label: &str,
+    command: &str,
+    args: &[&str],
+    enabled: bool,
+) -> Result<Value> {
+    let joined = if args.is_empty() {
+        command.to_string()
+    } else {
+        format!("{} {}", command, args.join(" "))
+    };
+    if !enabled {
+        return Ok(json!({
+            "label": label,
+            "status": "skipped",
+            "command": joined,
+        }));
+    }
+
+    let output = ProcessCommand::new(command)
+        .args(args)
+        .current_dir(root)
+        .output()
+        .with_context(|| format!("run gate command failed: {joined}"))?;
+    let status = if output.status.success() { "ok" } else { "error" };
+    Ok(json!({
+        "label": label,
+        "status": status,
+        "command": joined,
+        "exit_code": output.status.code(),
+        "stdout": truncate_command_output(&String::from_utf8_lossy(&output.stdout)),
+        "stderr": truncate_command_output(&String::from_utf8_lossy(&output.stderr)),
+    }))
 }
 
 fn print_hex(bytes: &[u8]) {
@@ -774,6 +841,25 @@ fn default_temporal_url() -> String {
 
 fn default_temporal_namespace() -> String {
     env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".to_string())
+}
+
+fn evaluate_gate_status(report: &Value, blocking_reasons: &mut Vec<String>) {
+    let label = report
+        .get("label")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown_gate");
+    let status = report
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("error");
+    if status == "error" {
+        let exit_code = report
+            .get("exit_code")
+            .and_then(Value::as_i64)
+            .map(|code| code.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        blocking_reasons.push(format!("{label} failed (exit_code={exit_code})"));
+    }
 }
 
 fn escape_html(input: &str) -> String {
@@ -1722,6 +1808,118 @@ async fn seo_post_publish_feedback_probe(
     Ok(if overall_status == "ok" { 0 } else { 2 })
 }
 
+fn seo_release_restore_gate(
+    root: &Path,
+    run_ci_verify: bool,
+    run_temporal_gate: bool,
+    run_restore_drill: bool,
+    report_json: Option<String>,
+) -> Result<i32> {
+    let required_paths = [
+        "automation/ci_verify.sh",
+        "automation/temporal_production_gate.sh",
+        "infra/backups/restore_drill.sh",
+        "automation/check_temporal_build_id_policy.py",
+        "automation/check_seo_rollout_compat_contract.py",
+        "automation/check_backup_restore_layout.py",
+    ];
+    let mut blocking_reasons = Vec::new();
+    let mut missing_paths = Vec::new();
+    for rel in required_paths {
+        if !root.join(rel).exists() {
+            missing_paths.push(rel.to_string());
+            blocking_reasons.push(format!("missing required gate path: {rel}"));
+        }
+    }
+
+    let build_id_policy = run_gate_command(
+        root,
+        "check_temporal_build_id_policy",
+        "python3",
+        &["automation/check_temporal_build_id_policy.py"],
+        true,
+    )?;
+    evaluate_gate_status(&build_id_policy, &mut blocking_reasons);
+
+    let rollout_compat = run_gate_command(
+        root,
+        "check_seo_rollout_compat_contract",
+        "python3",
+        &["automation/check_seo_rollout_compat_contract.py"],
+        true,
+    )?;
+    evaluate_gate_status(&rollout_compat, &mut blocking_reasons);
+
+    let backup_restore_layout = run_gate_command(
+        root,
+        "check_backup_restore_layout",
+        "python3",
+        &["automation/check_backup_restore_layout.py"],
+        true,
+    )?;
+    evaluate_gate_status(&backup_restore_layout, &mut blocking_reasons);
+
+    let ci_verify = run_gate_command(
+        root,
+        "ci_verify",
+        "bash",
+        &["automation/ci_verify.sh"],
+        run_ci_verify,
+    )?;
+    evaluate_gate_status(&ci_verify, &mut blocking_reasons);
+
+    let temporal_gate = run_gate_command(
+        root,
+        "temporal_production_gate",
+        "bash",
+        &["automation/temporal_production_gate.sh"],
+        run_temporal_gate,
+    )?;
+    evaluate_gate_status(&temporal_gate, &mut blocking_reasons);
+
+    let restore_drill = run_gate_command(
+        root,
+        "restore_drill",
+        "bash",
+        &["infra/backups/restore_drill.sh"],
+        run_restore_drill,
+    )?;
+    evaluate_gate_status(&restore_drill, &mut blocking_reasons);
+
+    let status = if blocking_reasons.is_empty() {
+        "ok"
+    } else {
+        "blocked"
+    };
+    let payload = json!({
+        "status": status,
+        "release_gate": "release_and_restore_gate",
+        "root": root.display().to_string(),
+        "executed": {
+            "run_ci_verify": run_ci_verify,
+            "run_temporal_gate": run_temporal_gate,
+            "run_restore_drill": run_restore_drill,
+        },
+        "required_paths": required_paths,
+        "missing_paths": missing_paths,
+        "blocking_reasons": blocking_reasons,
+        "checks": {
+            "build_id_policy": build_id_policy,
+            "rollout_compat": rollout_compat,
+            "backup_restore_layout": backup_restore_layout,
+            "ci_verify": ci_verify,
+            "temporal_production_gate": temporal_gate,
+            "restore_drill": restore_drill,
+        }
+    });
+    println!("{}", serde_json::to_string_pretty(&payload)?);
+    if let Some(report_json) = report_json.as_deref() {
+        let out = write_report(root, report_json, &payload)?;
+        eprintln!("report: {}", out.display());
+    }
+    Ok(if status == "ok" { 0 } else { 2 })
+}
+
 async fn cms_review_decision(
     database_url: Option<String>,
     page_node_key: &str,
@@ -1949,6 +2147,19 @@ async fn main() -> Result<()> {
             require_gsc,
             report_json,
         } => seo_post_publish_feedback_probe(&analytics_addr, require_gsc, report_json).await?,
+        Command::SeoReleaseRestoreGate {
+            root,
+            run_ci_verify,
+            run_temporal_gate,
+            run_restore_drill,
+            report_json,
+        } => seo_release_restore_gate(
+            Path::new(&root),
+            run_ci_verify,
+            run_temporal_gate,
+            run_restore_drill,
+            report_json,
+        )?,
         Command::CmsApprovePublish {
             database_url,
             page_node_key,
