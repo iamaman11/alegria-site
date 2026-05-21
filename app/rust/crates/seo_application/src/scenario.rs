@@ -1502,7 +1502,7 @@ mod tests {
     }
 
     #[test]
-    fn scenario_report_surface_carries_phase_reports() {
+    fn scenario_report_surface_serializes_phase_reports() {
         let result = SeoScenarioResult {
             scenario: "site_build_full".to_string(),
             mode: "temporal_durable".to_string(),

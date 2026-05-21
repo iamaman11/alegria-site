@@ -1285,6 +1285,7 @@ mod tests {
             "missing serp_ingest phase: {:?}",
             result.phase_reports
         );
+        assert!(result.phase_reports.iter().any(|r| r.phase == "serp_ingest"));
         assert!(
             result
                 .phase_reports
@@ -1293,6 +1294,7 @@ mod tests {
             "missing crawl_sources phase: {:?}",
             result.phase_reports
         );
+        assert!(result.phase_reports.iter().any(|r| r.phase == "crawl_sources"));
         assert!(
             result
                 .phase_reports
@@ -1301,6 +1303,7 @@ mod tests {
             "missing draft_assemble phase: {:?}",
             result.phase_reports
         );
+        assert!(result.phase_reports.iter().any(|r| r.phase == "draft_assemble"));
 
         let draft_count: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")
             .fetch_one(&infra.postgres.pool)
