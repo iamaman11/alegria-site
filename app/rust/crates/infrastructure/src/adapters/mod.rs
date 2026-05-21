@@ -6,6 +6,7 @@ pub mod hyper_adapter;
 pub mod neo4j_materialization_adapter;
 pub mod neo4rs_adapter;
 pub mod playwright_rs_adapter;
+pub mod projection_materialize_adapter;
 pub mod proto_runtime_payload_store;
 pub mod qdrant_client_adapter;
 pub mod raw_crawl_adapter;

@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{FreshnessReport, SeoScopePayload, StepContractMeta};
+use infrastructure::adapters::projection_materialize_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
+use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
@@ -61,6 +63,27 @@ pub struct Neo4jBackwriteOutput {
     pub failed_candidates: i64,
     pub reset_stale_processing: i64,
     pub requeued_failed: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectionSyncInput {
+    pub run_id: String,
+    pub target_system: String,
+    pub step_name: String,
+    pub batch_limit: i64,
+    pub lease_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectionSyncOutput {
+    pub run_id: String,
+    pub target_system: String,
+    pub processed_events: i64,
+    pub retried_events: i64,
+    pub failed_events: i64,
+    pub remaining_pending: i64,
+    pub remaining_failed: i64,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -777,6 +800,14 @@ impl_json_runtime_payload_local!(
     SemanticSectionSampleOutput,
     "alegria.runtime.json.SemanticSectionSampleOutput"
 );
+impl_json_runtime_payload_local!(
+    ProjectionSyncInput,
+    "alegria.runtime.json.ProjectionSyncInput"
+);
+impl_json_runtime_payload_local!(
+    ProjectionSyncOutput,
+    "alegria.runtime.json.ProjectionSyncOutput"
+);
 impl_json_runtime_payload_local!(SeoPreflightInput, "alegria.runtime.json.SeoPreflightInput");
 impl_json_runtime_payload_local!(SeoPreflightOutput, "alegria.runtime.json.SeoPreflightOutput");
 impl_json_runtime_payload_local!(
@@ -1405,6 +1436,95 @@ pub(crate) async fn projection_reconcile_impl(
         failed_candidates: report.failed_candidates,
         reset_stale_processing: report.reset_stale_processing,
         requeued_failed: report.requeued_failed,
+    })
+}
+
+pub(crate) async fn projection_sync_impl(
+    acts: &AlegriaActivities,
+    input: &ProjectionSyncInput,
+) -> Result<ProjectionSyncOutput, DomainError> {
+    let worker_id = format!("projection-sync:{}:{}", input.step_name, input.run_id);
+    let batch = sqlx_outbox_adapter::claim_outbox_batch_for_run_target(
+        &acts.pool,
+        &worker_id,
+        &input.run_id,
+        &input.target_system,
+        input.batch_limit.max(1),
+        input.lease_seconds.max(30),
+    )
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
+
+    let mut processed_events = 0_i64;
+    let retried_events = 0_i64;
+    let failed_events = 0_i64;
+
+    for event in batch {
+        match projection_materialize_adapter::dispatch_event(
+            &event.target_system,
+            &event.event_type,
+            &event.aggregate_key,
+            &event.payload_type,
+            &event.payload_bytes,
+        )
+        .await
+        {
+            Ok(_) => {
+                sqlx_outbox_adapter::mark_done(&acts.pool, event.event_id)
+                    .await
+                    .map_err(AlegriaActivities::classify_error)?;
+                processed_events += 1;
+            }
+            Err(err) => {
+                let message = err.to_string();
+                if event.retry_count + 1 >= 10 {
+                    sqlx_outbox_adapter::mark_failed(&acts.pool, event.event_id, &message)
+                        .await
+                        .map_err(AlegriaActivities::classify_error)?;
+                } else {
+                    sqlx_outbox_adapter::mark_retry(&acts.pool, event.event_id, &message, 30)
+                        .await
+                        .map_err(AlegriaActivities::classify_error)?;
+                }
+                return Err(DomainError::InfraUnavailable { message });
+            }
+        }
+    }
+
+    let backlog = sqlx::query(
+        r#"
+        SELECT
+          COUNT(*) FILTER (WHERE status = 'pending') AS pending_events,
+          COUNT(*) FILTER (WHERE status = 'failed') AS failed_events
+        FROM system.sync_outbox
+        WHERE run_id = $1
+          AND target_system = $2
+        "#,
+    )
+    .bind(&input.run_id)
+    .bind(&input.target_system)
+    .fetch_one(&*acts.pool)
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
+
+    let remaining_pending = backlog.get::<i64, _>("pending_events");
+    let remaining_failed = backlog.get::<i64, _>("failed_events");
+
+    Ok(ProjectionSyncOutput {
+        run_id: input.run_id.clone(),
+        target_system: input.target_system.clone(),
+        processed_events,
+        retried_events,
+        failed_events,
+        remaining_pending,
+        remaining_failed,
+        status: if remaining_pending == 0 && remaining_failed == 0 && retried_events == 0 {
+            "done".to_string()
+        } else if failed_events > 0 || retried_events > 0 {
+            "blocked".to_string()
+        } else {
+            "partial".to_string()
+        },
     })
 }
 

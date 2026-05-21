@@ -12,6 +12,7 @@ use contracts::generated::alegria::temporal::v1::{
     SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
+use primitives::qdrant_point_id::qdrant_point_id_v1;
 use prost::Message;
 use seo_domain::{applicability, identity, rebuild};
 use serde_json::{json, Value};
@@ -287,7 +288,7 @@ fn seo_qdrant_projection_event(
         collection_name: collection_name.to_string(),
         entity_type: artifact_type.to_string(),
         entity_key: artifact_key.to_string(),
-        point_id: artifact_key.to_string(),
+        point_id: qdrant_point_id_v1(collection_name, artifact_type, artifact_key),
         vector,
         payload: None,
         distance: "cosine".to_string(),

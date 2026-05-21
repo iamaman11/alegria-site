@@ -377,6 +377,21 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_projection_sync_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::ProjectionSyncInput,
+    ) -> Result<operations::ProjectionSyncOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        let step_name = input.step_name.clone();
+        self.execute_step(&run_id, &step_name, 1, &input, || async {
+            operations::projection_sync_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn run_projection_barrier_audit_step(
         self: Arc<Self>,
         _ctx: ActivityContext,

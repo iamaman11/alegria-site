@@ -14,6 +14,7 @@ use sqlx::{types::Json, PgPool, Row};
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
 use primitives::html_sections::{extract_meta_typed, extract_sections_typed};
+use primitives::qdrant_point_id::qdrant_point_id_v1;
 use primitives::truth_candidates::{
     adjudicate_truth_candidates, validate_truth_candidate, TruthCandidateRuntime, TruthParamValue,
     TruthStructuredCandidate,
@@ -1761,10 +1762,7 @@ pub async fn emit_raw_section_qdrant_events(
                 )
             };
         let entity_key = format!("raw_section:{}", section.id);
-        let point_id = content_hash_v1(&format!(
-            "content_chunks|{}|{}|{}",
-            section.page_id, section.id, section.content_hash
-        ));
+        let point_id = qdrant_point_id_v1("content_chunks", "raw_section", &entity_key);
         let mut metadata = HashMap::new();
         metadata.insert("page_id".to_string(), section.page_id.to_string());
         metadata.insert("section_id".to_string(), section.id.to_string());

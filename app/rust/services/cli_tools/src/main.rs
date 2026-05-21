@@ -2398,7 +2398,7 @@ async fn seo_cutover_shadow_verify(
     let barrier_status = value_as_str(&cutover_projection_barrier, "status")
         .unwrap_or("unknown")
         .to_string();
-    if barrier_status != "ok" || barrier_blocked_events > 0 {
+    if barrier_status != "clear" || barrier_blocked_events > 0 {
         findings.push(error_finding(
             "SHADOW_PROJECTION_BARRIER_BLOCKED",
             format!(

@@ -6,6 +6,7 @@ use contracts::generated::alegria::sync::v1::{
     Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, RuleRoleTypeV1,
 };
 use primitives::hash::{blake3_hex, content_hash_v1};
+use primitives::qdrant_point_id::qdrant_point_id_v1;
 use prost::Message;
 use runtime_models::RuleRoleType;
 
@@ -92,7 +93,7 @@ pub fn qdrant_rule_upsert(
         collection_name: collection_name.to_string(),
         entity_type: "rule_instance".to_string(),
         entity_key: rule_instance_id.to_string(),
-        point_id: rule_instance_id.to_string(),
+        point_id: qdrant_point_id_v1(collection_name, "rule_instance", rule_instance_id),
         vector: vector.into_iter().map(|v| v as f32).collect(),
         payload: Some(QdrantEntityPayload {
             rule_instance_id: rule_instance_id.to_string(),

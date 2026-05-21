@@ -1,12 +1,11 @@
 use contracts::generated::alegria::temporal::v1::{
-    CrawlSourcesInputPayload, ProjectionBarrierAuditInputPayload, ReconcileTargetInputPayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    CrawlSourcesInputPayload, ProjectionBarrierAuditInputPayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
     WorkflowContextView, WorkflowResult,
 };
-use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::VerifiedSupportBundleRequest;
 
 use crate::activities::operations::{
@@ -15,8 +14,8 @@ use crate::activities::operations::{
     ContradictionGateSweepInput, DomBlockRelevanceSweepInput,
     EditorialExtractionSweepInput, EntitySpanSweepInput, ExtractionSchemaValidateInput,
     LayerRouterSweepInput, OntologyIntakeGateInput, OperationalExtractionSweepInput,
-    PageUtilitySweepInput, ProceduralExtractionSweepInput, RawEvidenceRegisterInput,
-    ResolutionLoopInput, SectionSemanticGateBundle, SectioningContractGateInput,
+    PageUtilitySweepInput, ProceduralExtractionSweepInput, ProjectionSyncInput,
+    ProjectionSyncOutput, RawEvidenceRegisterInput, ResolutionLoopInput, SectionSemanticGateBundle, SectioningContractGateInput,
     SectioningInput, SeoPreflightInput, SeoSignalExtractionSweepInput,
     SubspanLayerRouterInput, TripleBuilderSweepInput, TruthAdjudicationSweepInput,
     VerifiedTruthWriteInput, WholePageSemanticPassInput,
@@ -51,22 +50,21 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
     .map_err(anyhow::Error::from)?)
 }
 
-async fn reconcile_target(
+async fn sync_target(
     ctx: &mut WorkflowContext<SeoSiteBuildCanonicalCutoverWorkflow>,
     run_id: &str,
+    step_name: &str,
     target_system: &str,
-) -> WorkflowResult<ReconcileTargetReportRecord> {
+) -> WorkflowResult<ProjectionSyncOutput> {
     Ok(ctx
         .start_activity(
-            AlegriaActivities::run_projection_reconcile_step,
-            ReconcileTargetInputPayload {
+            AlegriaActivities::run_projection_sync_step,
+            ProjectionSyncInput {
                 run_id: run_id.to_string(),
+                step_name: step_name.to_string(),
                 target_system: target_system.to_string(),
-                dry_run: false,
-                max_retry_count: 10,
                 batch_limit: 500,
-                requeue_base_delay_sec: 0,
-                requeue_jitter_sec: 15,
+                lease_seconds: 120,
             },
             db_opts(120),
         )
@@ -585,11 +583,11 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         ctx.wait_condition(|s| !s.paused).await;
 
         ctx.state_mut(|s| s.phase = "neo4j_sync".to_string());
-        let neo4j = reconcile_target(ctx, &run_id, "neo4j").await?;
+        let neo4j = sync_target(ctx, &run_id, "neo4j_sync", "neo4j").await?;
         ctx.wait_condition(|s| !s.paused).await;
 
         ctx.state_mut(|s| s.phase = "voyage_qdrant_sync".to_string());
-        let qdrant = reconcile_target(ctx, &run_id, "qdrant").await?;
+        let qdrant = sync_target(ctx, &run_id, "voyage_qdrant_sync", "qdrant").await?;
         ctx.wait_condition(|s| !s.paused).await;
 
         ctx.state_mut(|s| s.phase = "projection_barrier(semantic_projection)".to_string());
@@ -647,8 +645,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             graph_gate.blocked_events,
             retrieval_gate.blocked_events,
             semantic_projection_barrier.blocked_events,
-            neo4j.failed_candidates,
-            qdrant.failed_candidates
+            neo4j.failed_events + neo4j.remaining_failed,
+            qdrant.failed_events + qdrant.remaining_failed
         ))
     }
 

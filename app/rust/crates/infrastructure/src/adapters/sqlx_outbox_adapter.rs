@@ -113,6 +113,78 @@ pub async fn claim_outbox_batch(
     Ok(events)
 }
 
+pub async fn claim_outbox_batch_for_run_target(
+    pool: &PgPool,
+    worker_id: &str,
+    run_id: &str,
+    target_system: &str,
+    limit: i64,
+    lease_seconds: i64,
+) -> Result<Vec<OutboxEvent>> {
+    let rows = sqlx::query(
+        r#"
+        WITH candidates AS (
+            SELECT event_id
+            FROM system.sync_outbox
+            WHERE run_id = $4
+              AND target_system = $5
+              AND (
+                (status = 'pending' AND next_retry_at <= now())
+                OR
+                (status = 'processing' AND (locked_until IS NULL OR locked_until <= now()))
+              )
+            ORDER BY created_at
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+        )
+        UPDATE system.sync_outbox o
+        SET status = 'processing',
+            worker_id = $2,
+            locked_at = now(),
+            locked_until = now() + make_interval(secs => $3::int),
+            updated_at = now()
+        FROM candidates c
+        WHERE o.event_id = c.event_id
+        RETURNING
+            o.event_id,
+            o.aggregate_type,
+            o.aggregate_key,
+            o.target_system,
+            o.event_type,
+            o.payload_type,
+            o.schema_version,
+            o.idempotency_key,
+            o.payload_bytes,
+            o.retry_count
+        "#,
+    )
+    .bind(limit)
+    .bind(worker_id)
+    .bind(lease_seconds)
+    .bind(run_id)
+    .bind(target_system)
+    .fetch_all(pool)
+    .await?;
+
+    let events = rows
+        .into_iter()
+        .map(|r| OutboxEvent {
+            event_id: r.get("event_id"),
+            aggregate_type: r.get("aggregate_type"),
+            aggregate_key: r.get("aggregate_key"),
+            target_system: r.get("target_system"),
+            event_type: r.get("event_type"),
+            payload_type: r.get("payload_type"),
+            schema_version: r.get("schema_version"),
+            idempotency_key: r.get("idempotency_key"),
+            payload_bytes: r.get("payload_bytes"),
+            retry_count: r.get("retry_count"),
+        })
+        .collect();
+
+    Ok(events)
+}
+
 pub async fn mark_done(pool: &PgPool, event_id: Uuid) -> Result<()> {
     sqlx::query(
         r#"
