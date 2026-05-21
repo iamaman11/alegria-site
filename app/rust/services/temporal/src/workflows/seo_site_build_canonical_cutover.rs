@@ -1,11 +1,12 @@
 use contracts::generated::alegria::temporal::v1::{
-    CrawlSourcesInputPayload, ProjectionBarrierAuditInputPayload, SeoSiteBuildInputPayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    CrawlSourcesInputPayload, ProjectionBarrierAuditInputPayload, ReconcileTargetInputPayload,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
     WorkflowContextView, WorkflowResult,
 };
+use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::VerifiedSupportBundleRequest;
 
 use crate::activities::operations::{
@@ -48,6 +49,28 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
         applicant_profile: scope.applicant_profile.clone(),
     })
     .map_err(anyhow::Error::from)?)
+}
+
+async fn reconcile_target(
+    ctx: &mut WorkflowContext<SeoSiteBuildCanonicalCutoverWorkflow>,
+    run_id: &str,
+    target_system: &str,
+) -> WorkflowResult<ReconcileTargetReportRecord> {
+    Ok(ctx
+        .start_activity(
+            AlegriaActivities::run_projection_reconcile_step,
+            ReconcileTargetInputPayload {
+                run_id: run_id.to_string(),
+                target_system: target_system.to_string(),
+                dry_run: false,
+                max_retry_count: 10,
+                batch_limit: 500,
+                requeue_base_delay_sec: 0,
+                requeue_jitter_sec: 15,
+            },
+            db_opts(120),
+        )
+        .await?)
 }
 
 #[workflow_methods]
@@ -535,6 +558,53 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             ctx.wait_condition(|s| !s.paused).await;
         }
 
+        ctx.state_mut(|s| s.phase = "graph_admissibility_gate".to_string());
+        let graph_gate = ctx
+            .start_activity(
+                AlegriaActivities::run_projection_barrier_audit_step,
+                ProjectionBarrierAuditInputPayload {
+                    run_id: run_id.clone(),
+                    checkpoint: "graph_admissibility_gate".to_string(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "retrieval_admissibility_gate".to_string());
+        let retrieval_gate = ctx
+            .start_activity(
+                AlegriaActivities::run_projection_barrier_audit_step,
+                ProjectionBarrierAuditInputPayload {
+                    run_id: run_id.clone(),
+                    checkpoint: "retrieval_admissibility_gate".to_string(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "neo4j_sync".to_string());
+        let neo4j = reconcile_target(ctx, &run_id, "neo4j").await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "voyage_qdrant_sync".to_string());
+        let qdrant = reconcile_target(ctx, &run_id, "qdrant").await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "projection_barrier(semantic_projection)".to_string());
+        let semantic_projection_barrier = ctx
+            .start_activity(
+                AlegriaActivities::run_projection_barrier_audit_step,
+                ProjectionBarrierAuditInputPayload {
+                    run_id: run_id.clone(),
+                    checkpoint: "projection_barrier(semantic_projection)".to_string(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
         ctx.state_mut(|s| s.phase = "done:seo_site_build_canonical_cutover".to_string());
         metrics::global()
             .workflow_completions_total
@@ -542,7 +612,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .inc();
 
         Ok(format!(
-            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={}",
+            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={} graph_gate_blocked={} retrieval_gate_blocked={} semantic_projection_barrier_blocked={} neo4j_failed={} qdrant_failed={}",
             run_id,
             preflight.status,
             support_bundle.len(),
@@ -573,7 +643,12 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             contradiction.conflict_count,
             truth_adjudication.verified_count,
             truth_adjudication.needs_hitl_count,
-            verified_truth_write.verified_rule_count
+            verified_truth_write.verified_rule_count,
+            graph_gate.blocked_events,
+            retrieval_gate.blocked_events,
+            semantic_projection_barrier.blocked_events,
+            neo4j.failed_candidates,
+            qdrant.failed_candidates
         ))
     }
 

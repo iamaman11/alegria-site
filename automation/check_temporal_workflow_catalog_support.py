@@ -153,6 +153,11 @@ def main() -> int:
         "truth_adjudication",
         "verified_truth_write",
         "load_verified_support_bundle.refresh",
+        "graph_admissibility_gate",
+        "retrieval_admissibility_gate",
+        "neo4j_sync",
+        "voyage_qdrant_sync",
+        "projection_barrier(semantic_projection)",
         "done:seo_site_build_canonical_cutover",
     ]:
         if needle not in canonical_cutover:
