@@ -599,6 +599,188 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_procedural_extraction_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::ProceduralExtractionSweepInput,
+    ) -> Result<operations::ProceduralExtractionSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "procedural_extraction", 1, &input, || async {
+            operations::procedural_extraction_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_operational_extraction_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::OperationalExtractionSweepInput,
+    ) -> Result<operations::OperationalExtractionSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "operational_extraction", 1, &input, || async {
+            operations::operational_extraction_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_editorial_extraction_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::EditorialExtractionSweepInput,
+    ) -> Result<operations::EditorialExtractionSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "editorial_extraction", 1, &input, || async {
+            operations::editorial_extraction_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_seo_signal_extraction_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SeoSignalExtractionSweepInput,
+    ) -> Result<operations::SeoSignalExtractionSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "seo_signal_extraction", 1, &input, || async {
+            operations::seo_signal_extraction_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_commercial_signal_extraction_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CommercialSignalExtractionSweepInput,
+    ) -> Result<operations::CommercialSignalExtractionSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "commercial_signal_extraction", 1, &input, || async {
+            operations::commercial_signal_extraction_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_extraction_schema_validate_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::ExtractionSchemaValidateInput,
+    ) -> Result<operations::ExtractionSchemaValidateOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "extraction_schema_validate", 1, &input, || async {
+            operations::extraction_schema_validate_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_candidate_validation_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CandidateValidationInput,
+    ) -> Result<operations::CandidateValidationOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "candidate_validation", 1, &input, || async {
+            operations::candidate_validation_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_triple_builder_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::TripleBuilderSweepInput,
+    ) -> Result<operations::TripleBuilderSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "triple_builder", 1, &input, || async {
+            operations::triple_builder_sweep_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_completeness_judge_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CompletenessJudgeSweepInput,
+    ) -> Result<operations::CompletenessJudgeSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "completeness_judge", 1, &input, || async {
+            operations::completeness_judge_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_resolution_loop_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::ResolutionLoopInput,
+    ) -> Result<operations::ResolutionLoopOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "resolution_loop", 1, &input, || async {
+            operations::resolution_loop_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_contradiction_gate_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::ContradictionGateSweepInput,
+    ) -> Result<operations::ContradictionGateSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "contradiction_gate", 1, &input, || async {
+            operations::contradiction_gate_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_truth_adjudication_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::TruthAdjudicationSweepInput,
+    ) -> Result<operations::TruthAdjudicationSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "truth_adjudication", 1, &input, || async {
+            operations::truth_adjudication_sweep_impl(&input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_verified_truth_write_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::VerifiedTruthWriteInput,
+    ) -> Result<operations::VerifiedTruthWriteOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "verified_truth_write", 1, &input, || async {
+            operations::verified_truth_write_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn load_seo_site_build_input(
         self: Arc<Self>,
         _ctx: ActivityContext,

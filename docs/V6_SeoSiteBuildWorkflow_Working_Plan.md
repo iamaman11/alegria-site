@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.12`
+**Current version:** `6.13`
 
 ---
 
@@ -149,7 +149,7 @@ These surfaces are migration-only. They are not the long-term target architectur
 - `FreshnessCheckWorkflow`:
   - support-plane freshness monitor
 - `SeoSiteBuildCanonicalCutoverWorkflow`:
-  - partial canonical-cutover surface now wired for `seo_preflight -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> whole_page_semantic_pass -> page_utility_classifier -> dom_block_relevance_filter -> sectioning -> sectioning_contract_gate -> cas_gate -> raw_evidence_register -> projection_barrier(raw_evidence) -> layer_router -> subspan_layer_router -> entity_span_detection -> canonical_mapping -> ontology_intake_gate`
+  - partial canonical-cutover surface now wired for `seo_preflight -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> whole_page_semantic_pass -> page_utility_classifier -> dom_block_relevance_filter -> sectioning -> sectioning_contract_gate -> cas_gate -> raw_evidence_register -> projection_barrier(raw_evidence) -> layer_router -> subspan_layer_router -> entity_span_detection -> canonical_mapping -> ontology_intake_gate -> procedural_extraction -> operational_extraction -> editorial_extraction -> seo_signal_extraction -> commercial_signal_extraction -> extraction_schema_validate -> candidate_validation -> triple_builder -> completeness_judge -> resolution_loop -> contradiction_gate -> truth_adjudication -> verified_truth_write -> load_verified_support_bundle.refresh`
 
 Additional support-plane executable surfaces now present outside the 56-step run:
 
@@ -1083,7 +1083,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted Phase M1 slice, currently `steps 18-31`;
+- the next implementation target must be the earliest non-accepted Phase M1 slice, currently `steps 32-36`;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1118,7 +1118,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
-- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-17` wired through `ontology_intake_gate` as the current real cutover slice
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-31` wired through `load_verified_support_bundle.refresh` as the current real cutover slice
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1130,11 +1130,6 @@ Before continuing development past planning, the repository must satisfy this cl
 
 ### 9.3 Deferred now
 
-- rich extraction stages above the current truth-core
-- mandatory `triple_builder`
-- mandatory `completeness_judge`
-- mandatory `resolution_loop`
-- mandatory `contradiction_gate` as explicit rich-flow phase
 - mandatory `graph_admissibility_gate`
 - mandatory `retrieval_admissibility_gate`
 - first-class `neo4j_sync`
@@ -1298,6 +1293,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.13
+
+- extended `SeoSiteBuildCanonicalCutoverWorkflow` from semantic routing into canonical `steps 18-31`;
+- added first-class cutover runtime surfaces for `procedural_extraction`, `operational_extraction`, `editorial_extraction`, `seo_signal_extraction`, `commercial_signal_extraction`, `extraction_schema_validate`, `candidate_validation`, `triple_builder`, `completeness_judge`, `resolution_loop`, `contradiction_gate`, `truth_adjudication`, `verified_truth_write`, and support-bundle refresh after truth change;
+- updated the working plan status so the next non-accepted Phase M1 target is now `steps 32-36`.
 
 ### 6.12
 

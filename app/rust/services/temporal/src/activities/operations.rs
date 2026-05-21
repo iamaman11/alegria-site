@@ -7,10 +7,15 @@ use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
 use primitives::errors::DomainError;
-use primitives::hash::content_hash_v1;
+use primitives::hash::{blake3_hex, content_hash_v1};
+use primitives::truth_candidates::{
+    adjudicate_truth_candidates, validate_truth_candidate, TruthCandidateRuntime,
+    TruthCandidateValidationResult, TruthParamValue, TruthStructuredCandidate,
+};
 use runtime_models::ReconcileTargetReportRecord;
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
+use serde_json::{json, Value};
+use sqlx::{types::Json, Row};
 
 use super::AlegriaActivities;
 
@@ -378,6 +383,392 @@ pub struct OntologyIntakeGateOutput {
     pub sections: Vec<OntologyIntakeGateDecision>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProceduralExtractionSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+    pub ontology: OntologyIntakeGateOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProceduralExtractionSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub rules: Vec<seo_steps::procedural_extraction_step::ProceduralRule>,
+    pub blocked_by_gate: bool,
+    pub skipped: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProceduralExtractionSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub skipped_section_count: usize,
+    pub rule_count: usize,
+    pub sections: Vec<ProceduralExtractionSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalExtractionSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalExtractionSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub entities: Vec<seo_steps::operational_extraction_step::OperationalEntity>,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OperationalExtractionSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub entity_count: usize,
+    pub sections: Vec<OperationalExtractionSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorialExtractionSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorialExtractionSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub topics: Vec<seo_steps::editorial_extraction_step::EditorialTopic>,
+    pub blocked_by_gate: bool,
+    pub skipped: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditorialExtractionSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub skipped_section_count: usize,
+    pub topic_count: usize,
+    pub sections: Vec<EditorialExtractionSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeoSignalExtractionSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeoSignalRecord {
+    pub signal_type: String,
+    pub value: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeoSignalExtractionSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub signals: Vec<SeoSignalRecord>,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeoSignalExtractionSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub signal_count: usize,
+    pub sections: Vec<SeoSignalExtractionSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercialSignalExtractionSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub gates: SectionSemanticGateBundle,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercialSignalRecord {
+    pub signal_type: String,
+    pub value: String,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercialSignalExtractionSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub signals: Vec<CommercialSignalRecord>,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommercialSignalExtractionSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub signal_count: usize,
+    pub sections: Vec<CommercialSignalExtractionSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionSchemaValidateInput {
+    pub run_id: String,
+    pub procedural: ProceduralExtractionSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionSchemaSectionDecision {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub status: String,
+    pub blocking_reasons: Vec<String>,
+    pub blocked_by_gate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionSchemaValidateOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub invalid_section_count: usize,
+    pub sections: Vec<ExtractionSchemaSectionDecision>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateValidationInput {
+    pub run_id: String,
+    pub context_key: String,
+    pub raw_page_ids: Vec<i64>,
+    pub procedural: ProceduralExtractionSweepOutput,
+    pub ontology: OntologyIntakeGateOutput,
+    pub schema_validate: ExtractionSchemaValidateOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatedTruthCandidateRecord {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub rule_candidate_id: String,
+    pub role: String,
+    pub concept_canonical_key: String,
+    pub raw_mention: String,
+    pub params: TruthParamValue,
+    pub source_key: String,
+    pub source_tier: String,
+    pub confidence: f64,
+    pub evidence_quote: String,
+    pub span_start: usize,
+    pub span_end: usize,
+    pub source_snapshot_hash: String,
+    pub freshness_class: String,
+    pub completeness_class: String,
+    pub epistemic_status: String,
+    pub issues: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateValidationSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub candidates: Vec<ValidatedTruthCandidateRecord>,
+    pub accepted_count: usize,
+    pub needs_hitl_count: usize,
+    pub rejected_count: usize,
+    pub blocked_by_gate: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CandidateValidationOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub accepted_count: usize,
+    pub needs_hitl_count: usize,
+    pub rejected_count: usize,
+    pub sections: Vec<CandidateValidationSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TripleBuilderSweepInput {
+    pub run_id: String,
+    pub procedural: ProceduralExtractionSweepOutput,
+    pub operational: OperationalExtractionSweepOutput,
+    pub editorial: EditorialExtractionSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TripleBuilderSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub triples: Vec<seo_steps::triple_builder_step::BuiltTriple>,
+    pub blocked_by_gate: bool,
+    pub decision: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TripleBuilderSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub triple_count: usize,
+    pub sections: Vec<TripleBuilderSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletenessJudgeSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub procedural: ProceduralExtractionSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletenessJudgeSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub output: seo_steps::completeness_judge_step::CompletenessJudgeOutput,
+    pub blocked_by_gate: bool,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletenessJudgeSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub sections: Vec<CompletenessJudgeSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionLoopInput {
+    pub run_id: String,
+    pub ontology: OntologyIntakeGateOutput,
+    pub schema_validate: ExtractionSchemaValidateOutput,
+    pub completeness: CompletenessJudgeSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionLoopSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub decision: String,
+    pub blockers: Vec<String>,
+    pub needs_hitl: bool,
+    pub blocked_by_gate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolutionLoopOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub rejected_count: usize,
+    pub sections: Vec<ResolutionLoopSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContradictionGateSweepInput {
+    pub run_id: String,
+    pub raw_page_ids: Vec<i64>,
+    pub procedural: ProceduralExtractionSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContradictionGateSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub output: seo_steps::contradiction_gate_step::ContradictionGateOutput,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContradictionGateSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub needs_hitl_count: usize,
+    pub conflict_count: usize,
+    pub sections: Vec<ContradictionGateSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdjudicationSweepInput {
+    pub run_id: String,
+    pub context_key: String,
+    pub candidate_validation: CandidateValidationOutput,
+    pub resolution: ResolutionLoopOutput,
+    pub contradiction: ContradictionGateSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdjudicationCandidateDecision {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub rule_candidate_id: String,
+    pub role: String,
+    pub concept_canonical_key: String,
+    pub params: TruthParamValue,
+    pub source_key: String,
+    pub source_tier: String,
+    pub confidence: f64,
+    pub freshness_class: String,
+    pub completeness_class: String,
+    pub evidence_quote: String,
+    pub span_start: usize,
+    pub span_end: usize,
+    pub source_snapshot_hash: String,
+    pub decision: String,
+    pub publish_admissibility: String,
+    pub verification_method: String,
+    pub adjudication_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdjudicationSectionState {
+    pub section_id: i64,
+    pub page_id: i64,
+    pub decision: String,
+    pub status: String,
+    pub verified_count: usize,
+    pub needs_hitl_count: usize,
+    pub rejected_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdjudicationSweepOutput {
+    pub section_count: usize,
+    pub blocked_section_count: usize,
+    pub verified_count: usize,
+    pub needs_hitl_count: usize,
+    pub rejected_count: usize,
+    pub decisions: Vec<TruthAdjudicationCandidateDecision>,
+    pub sections: Vec<TruthAdjudicationSectionState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifiedTruthWriteInput {
+    pub run_id: String,
+    pub context_key: String,
+    pub truth_adjudication: TruthAdjudicationSweepOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifiedTruthWriteOutput {
+    pub context_key: String,
+    pub verified_rule_count: usize,
+    pub demoted_rule_count: usize,
+    pub changed_truth_keys: Vec<String>,
+    pub status: String,
+}
+
 impl_json_runtime_payload_local!(
     SemanticSectionSampleInput,
     "alegria.runtime.json.SemanticSectionSampleInput"
@@ -476,6 +867,110 @@ impl_json_runtime_payload_local!(
     OntologyIntakeGateOutput,
     "alegria.runtime.json.OntologyIntakeGateOutput"
 );
+impl_json_runtime_payload_local!(
+    ProceduralExtractionSweepInput,
+    "alegria.runtime.json.ProceduralExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    ProceduralExtractionSweepOutput,
+    "alegria.runtime.json.ProceduralExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    OperationalExtractionSweepInput,
+    "alegria.runtime.json.OperationalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    OperationalExtractionSweepOutput,
+    "alegria.runtime.json.OperationalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    EditorialExtractionSweepInput,
+    "alegria.runtime.json.EditorialExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    EditorialExtractionSweepOutput,
+    "alegria.runtime.json.EditorialExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    SeoSignalExtractionSweepInput,
+    "alegria.runtime.json.SeoSignalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    SeoSignalExtractionSweepOutput,
+    "alegria.runtime.json.SeoSignalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CommercialSignalExtractionSweepInput,
+    "alegria.runtime.json.CommercialSignalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CommercialSignalExtractionSweepOutput,
+    "alegria.runtime.json.CommercialSignalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    ExtractionSchemaValidateInput,
+    "alegria.runtime.json.ExtractionSchemaValidateInput"
+);
+impl_json_runtime_payload_local!(
+    ExtractionSchemaValidateOutput,
+    "alegria.runtime.json.ExtractionSchemaValidateOutput"
+);
+impl_json_runtime_payload_local!(
+    CandidateValidationInput,
+    "alegria.runtime.json.CandidateValidationInput"
+);
+impl_json_runtime_payload_local!(
+    CandidateValidationOutput,
+    "alegria.runtime.json.CandidateValidationOutput"
+);
+impl_json_runtime_payload_local!(
+    TripleBuilderSweepInput,
+    "alegria.runtime.json.TripleBuilderSweepInput"
+);
+impl_json_runtime_payload_local!(
+    TripleBuilderSweepOutput,
+    "alegria.runtime.json.TripleBuilderSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CompletenessJudgeSweepInput,
+    "alegria.runtime.json.CompletenessJudgeSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CompletenessJudgeSweepOutput,
+    "alegria.runtime.json.CompletenessJudgeSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    ResolutionLoopInput,
+    "alegria.runtime.json.ResolutionLoopInput"
+);
+impl_json_runtime_payload_local!(
+    ResolutionLoopOutput,
+    "alegria.runtime.json.ResolutionLoopOutput"
+);
+impl_json_runtime_payload_local!(
+    ContradictionGateSweepInput,
+    "alegria.runtime.json.ContradictionGateSweepInput"
+);
+impl_json_runtime_payload_local!(
+    ContradictionGateSweepOutput,
+    "alegria.runtime.json.ContradictionGateSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    TruthAdjudicationSweepInput,
+    "alegria.runtime.json.TruthAdjudicationSweepInput"
+);
+impl_json_runtime_payload_local!(
+    TruthAdjudicationSweepOutput,
+    "alegria.runtime.json.TruthAdjudicationSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    VerifiedTruthWriteInput,
+    "alegria.runtime.json.VerifiedTruthWriteInput"
+);
+impl_json_runtime_payload_local!(
+    VerifiedTruthWriteOutput,
+    "alegria.runtime.json.VerifiedTruthWriteOutput"
+);
 
 fn dominant_layers(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
@@ -564,6 +1059,8 @@ fn block_role_for_section(
 }
 
 struct SectionSemanticGateIndexes {
+    procedural_allowed: BTreeMap<i64, bool>,
+    editorial_allowed: BTreeMap<i64, bool>,
     structural_allowed: BTreeMap<i64, bool>,
     dom_allowed: BTreeMap<i64, bool>,
     contract_pass: BTreeMap<i64, bool>,
@@ -573,6 +1070,18 @@ struct SectionSemanticGateIndexes {
 impl SectionSemanticGateIndexes {
     fn from_bundle(bundle: &SectionSemanticGateBundle) -> Self {
         Self {
+            procedural_allowed: bundle
+                .page_utility
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.allow_procedural_extraction))
+                .collect(),
+            editorial_allowed: bundle
+                .page_utility
+                .decisions
+                .iter()
+                .map(|decision| (decision.section_id, decision.allow_editorial_extraction))
+                .collect(),
             structural_allowed: bundle
                 .page_utility
                 .decisions
@@ -607,6 +1116,173 @@ impl SectionSemanticGateIndexes {
             || !self.replay_safe.get(&section_id).copied().unwrap_or(false)
     }
 
+    fn allow_procedural_extraction(&self, section_id: i64) -> bool {
+        self.procedural_allowed
+            .get(&section_id)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    fn allow_editorial_extraction(&self, section_id: i64) -> bool {
+        self.editorial_allowed
+            .get(&section_id)
+            .copied()
+            .unwrap_or(false)
+    }
+}
+
+fn section_source_tier(section: &raw_crawl_adapter::RawSectionRecord) -> String {
+    let dtype = section.source_dtype.to_ascii_lowercase();
+    let domain = section.source_domain.to_ascii_lowercase();
+    if dtype.contains("government")
+        || dtype.contains("official")
+        || domain.contains(".gov")
+        || domain.contains("embassy")
+        || domain.contains("consulate")
+    {
+        "government".to_string()
+    } else if dtype.contains("vfs") || domain.contains("vfsglobal") {
+        "vfs".to_string()
+    } else if dtype.contains("editorial") || domain.contains("news") || domain.contains("blog") {
+        "editorial".to_string()
+    } else {
+        "low_trust".to_string()
+    }
+}
+
+fn find_evidence_span(raw_text: &str, candidates: &[String]) -> (usize, usize, String) {
+    for candidate in candidates {
+        let trimmed = candidate.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(start) = raw_text.find(trimmed) {
+            let end = start + trimmed.len();
+            return (start, end, trimmed.to_string());
+        }
+    }
+    let fallback = raw_text.trim();
+    if fallback.is_empty() {
+        (0, 0, String::new())
+    } else {
+        let quote = fallback
+            .split('.')
+            .next()
+            .unwrap_or(fallback)
+            .trim()
+            .to_string();
+        let start = raw_text.find(&quote).unwrap_or(0);
+        (start, start + quote.len(), quote)
+    }
+}
+
+fn extract_first_number(token: &str) -> Option<f64> {
+    let normalized = token.replace(',', ".");
+    let digits = normalized
+        .chars()
+        .filter(|ch| ch.is_ascii_digit() || *ch == '.')
+        .collect::<String>();
+    digits.parse::<f64>().ok()
+}
+
+fn extract_first_days(token: &str) -> Option<i64> {
+    let digits = token
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse::<i64>().ok()
+}
+
+fn role_and_concept_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule) -> (&'static str, String) {
+    match rule.rule_key.as_str() {
+        "consular_fee" => ("FEE_ITEM", "consular_fee".to_string()),
+        "processing_time" => ("TIMELINE_ITEM", "processing_time".to_string()),
+        "passport_required" => ("DOCUMENT_REQUIRED", "passport".to_string()),
+        "insurance_required" => ("DOCUMENT_REQUIRED", "medical_insurance".to_string()),
+        _ => ("DOCUMENT_REQUIRED", rule.rule_key.clone()),
+    }
+}
+
+fn params_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule) -> TruthParamValue {
+    match rule.rule_key.as_str() {
+        "consular_fee" => {
+            let amount = rule
+                .numeric_tokens
+                .first()
+                .and_then(|token| extract_first_number(token))
+                .unwrap_or_default();
+            TruthParamValue::object([
+                ("amount", TruthParamValue::Decimal(amount)),
+                ("currency", TruthParamValue::Text("EUR".to_string())),
+            ])
+        }
+        "processing_time" => {
+            let days = rule
+                .numeric_tokens
+                .first()
+                .and_then(|token| extract_first_days(token))
+                .unwrap_or_default();
+            TruthParamValue::object([("days", TruthParamValue::Integer(days))])
+        }
+        "passport_required" => TruthParamValue::object([
+            ("subtype", TruthParamValue::Text("passport".to_string())),
+            ("severity", TruthParamValue::Text("mandatory".to_string())),
+        ]),
+        "insurance_required" => TruthParamValue::object([
+            ("subtype", TruthParamValue::Text("medical_insurance".to_string())),
+            ("severity", TruthParamValue::Text("mandatory".to_string())),
+        ]),
+        _ => TruthParamValue::object([(
+            "subtype",
+            TruthParamValue::Text(rule.rule_key.clone()),
+        )]),
+    }
+}
+
+fn truth_param_value_to_json_local(value: &TruthParamValue) -> Value {
+    match value {
+        TruthParamValue::Null => Value::Null,
+        TruthParamValue::Bool(value) => Value::Bool(*value),
+        TruthParamValue::Integer(value) => json!(value),
+        TruthParamValue::Decimal(value) => json!(value),
+        TruthParamValue::Text(value) => Value::String(value.clone()),
+        TruthParamValue::List(values) => {
+            Value::Array(values.iter().map(truth_param_value_to_json_local).collect())
+        }
+        TruthParamValue::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), truth_param_value_to_json_local(value)))
+                .collect(),
+        ),
+    }
+}
+
+fn classify_candidate_completeness_local(
+    validation: &TruthCandidateValidationResult,
+) -> String {
+    if validation.issues.iter().any(|issue| {
+        matches!(
+            issue.code.as_str(),
+            "fee_item_incomplete"
+                | "timeline_item_incomplete"
+                | "where_to_apply_incomplete"
+                | "role_specific_params_missing"
+                | "missing_numeric_params"
+                | "missing_range_bounds"
+                | "candidate_marked_incomplete"
+        )
+    }) {
+        "incomplete".to_string()
+    } else if validation.epistemic_status == "needs_hitl" {
+        "partial".to_string()
+    } else {
+        "complete".to_string()
+    }
+}
+
+fn semantic_rule_instance_id_local(context_key: &str, role: &str, concept_canonical_key: &str) -> String {
+    blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
 
 pub(crate) fn test_step_prepare_impl(workflow_id: &str) -> String {
@@ -1329,5 +2005,1116 @@ pub(crate) async fn ontology_intake_gate_impl(
         blocked_section_count,
         needs_hitl_count,
         sections,
+    })
+}
+
+pub(crate) async fn procedural_extraction_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &ProceduralExtractionSweepInput,
+) -> Result<ProceduralExtractionSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let ontology_by_section: BTreeMap<i64, &OntologyIntakeGateDecision> = input
+        .ontology
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let section_states = sections
+        .iter()
+        .map(|section| {
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let ontology_needs_hitl = ontology_by_section
+                .get(&section.id)
+                .map(|decision| decision.needs_hitl)
+                .unwrap_or(false);
+            let skipped = !gates.allow_procedural_extraction(section.id) || ontology_needs_hitl;
+            let rules = if blocked_by_gate || skipped {
+                Vec::new()
+            } else {
+                seo_steps::procedural_extraction_step::execute(
+                    &seo_steps::procedural_extraction_step::ProceduralExtractionInput {
+                        section_id: section.id.to_string(),
+                        raw_text: section.content_md.clone(),
+                    },
+                )
+                .rules
+            };
+            let decision = if blocked_by_gate {
+                "blocked_by_gate"
+            } else if skipped {
+                "skipped"
+            } else {
+                "pass"
+            };
+            ProceduralExtractionSectionState {
+                section_id: section.id,
+                page_id: section.page_id,
+                rules,
+                blocked_by_gate,
+                skipped,
+                decision: decision.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(ProceduralExtractionSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        skipped_section_count: section_states.iter().filter(|section| section.skipped).count(),
+        rule_count: section_states.iter().map(|section| section.rules.len()).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn operational_extraction_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &OperationalExtractionSweepInput,
+) -> Result<OperationalExtractionSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let section_states = sections
+        .iter()
+        .map(|section| {
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let entities = if blocked_by_gate {
+                Vec::new()
+            } else {
+                seo_steps::operational_extraction_step::execute(
+                    &seo_steps::operational_extraction_step::OperationalExtractionInput {
+                        section_id: section.id.to_string(),
+                        raw_text: section.content_md.clone(),
+                    },
+                )
+                .entities
+            };
+            OperationalExtractionSectionState {
+                section_id: section.id,
+                page_id: section.page_id,
+                entities,
+                blocked_by_gate,
+                decision: if blocked_by_gate {
+                    "blocked_by_gate"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(OperationalExtractionSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        entity_count: section_states.iter().map(|section| section.entities.len()).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn editorial_extraction_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &EditorialExtractionSweepInput,
+) -> Result<EditorialExtractionSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let section_states = sections
+        .iter()
+        .map(|section| {
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let skipped = !gates.allow_editorial_extraction(section.id);
+            let topics = if blocked_by_gate || skipped {
+                Vec::new()
+            } else {
+                seo_steps::editorial_extraction_step::execute(
+                    &seo_steps::editorial_extraction_step::EditorialExtractionInput {
+                        section_id: section.id.to_string(),
+                        raw_text: section.content_md.clone(),
+                    },
+                )
+                .topics
+            };
+            EditorialExtractionSectionState {
+                section_id: section.id,
+                page_id: section.page_id,
+                topics,
+                blocked_by_gate,
+                skipped,
+                decision: if blocked_by_gate {
+                    "blocked_by_gate"
+                } else if skipped {
+                    "skipped"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(EditorialExtractionSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        skipped_section_count: section_states.iter().filter(|section| section.skipped).count(),
+        topic_count: section_states.iter().map(|section| section.topics.len()).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn seo_signal_extraction_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &SeoSignalExtractionSweepInput,
+) -> Result<SeoSignalExtractionSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let section_states = sections
+        .iter()
+        .map(|section| {
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let lowered = section.content_md.to_lowercase();
+            let mut signals = Vec::new();
+            if !blocked_by_gate && (lowered.contains("seo") || lowered.contains("serp")) {
+                signals.push(SeoSignalRecord {
+                    signal_type: "ranking_signal".to_string(),
+                    value: "seo_or_serp_mentioned".to_string(),
+                    confidence: 0.82,
+                });
+            }
+            if !blocked_by_gate && (lowered.contains("keyword") || lowered.contains("ключев")) {
+                signals.push(SeoSignalRecord {
+                    signal_type: "keyword_signal".to_string(),
+                    value: "keyword_language_present".to_string(),
+                    confidence: 0.79,
+                });
+            }
+            SeoSignalExtractionSectionState {
+                section_id: section.id,
+                page_id: section.page_id,
+                signals,
+                blocked_by_gate,
+                decision: if blocked_by_gate {
+                    "blocked_by_gate"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(SeoSignalExtractionSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        signal_count: section_states.iter().map(|section| section.signals.len()).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn commercial_signal_extraction_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &CommercialSignalExtractionSweepInput,
+) -> Result<CommercialSignalExtractionSweepOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let section_states = sections
+        .iter()
+        .map(|section| {
+            let blocked_by_gate = gates.blocked_by_gate(section.id);
+            let lowered = section.content_md.to_lowercase();
+            let mut signals = Vec::new();
+            if !blocked_by_gate
+                && (lowered.contains("консультац")
+                    || lowered.contains("под ключ")
+                    || lowered.contains("заказать")
+                    || lowered.contains("service"))
+            {
+                signals.push(CommercialSignalRecord {
+                    signal_type: "service_offer".to_string(),
+                    value: "service_offer_detected".to_string(),
+                    confidence: 0.84,
+                });
+            }
+            if !blocked_by_gate
+                && (lowered.contains("стоимость услуги")
+                    || lowered.contains("our fee")
+                    || lowered.contains("price"))
+            {
+                signals.push(CommercialSignalRecord {
+                    signal_type: "commercial_price".to_string(),
+                    value: "commercial_price_detected".to_string(),
+                    confidence: 0.81,
+                });
+            }
+            CommercialSignalExtractionSectionState {
+                section_id: section.id,
+                page_id: section.page_id,
+                signals,
+                blocked_by_gate,
+                decision: if blocked_by_gate {
+                    "blocked_by_gate"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(CommercialSignalExtractionSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        signal_count: section_states.iter().map(|section| section.signals.len()).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn extraction_schema_validate_impl(
+    input: &ExtractionSchemaValidateInput,
+) -> Result<ExtractionSchemaValidateOutput, DomainError> {
+    let sections = input
+        .procedural
+        .sections
+        .iter()
+        .map(|section| {
+            let mut reasons = Vec::new();
+            if !section.blocked_by_gate && !section.skipped {
+                if section
+                    .rules
+                    .iter()
+                    .any(|rule| rule.rule_key.trim().is_empty() || rule.confidence <= 0.0)
+                {
+                    reasons.push("invalid_procedural_candidate_shape".to_string());
+                }
+            }
+            let status = if section.blocked_by_gate {
+                "blocked"
+            } else if !reasons.is_empty() {
+                "invalid"
+            } else {
+                "valid"
+            };
+            ExtractionSchemaSectionDecision {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                status: status.to_string(),
+                blocking_reasons: reasons,
+                blocked_by_gate: section.blocked_by_gate,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(ExtractionSchemaValidateOutput {
+        section_count: sections.len(),
+        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        invalid_section_count: sections
+            .iter()
+            .filter(|section| section.status == "invalid")
+            .count(),
+        sections,
+    })
+}
+
+pub(crate) async fn candidate_validation_impl(
+    acts: &AlegriaActivities,
+    input: &CandidateValidationInput,
+) -> Result<CandidateValidationOutput, DomainError> {
+    let sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
+        sections.iter().map(|section| (section.id, section)).collect();
+    let schema_by_section: BTreeMap<i64, &ExtractionSchemaSectionDecision> = input
+        .schema_validate
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let ontology_by_section: BTreeMap<i64, &OntologyIntakeGateDecision> = input
+        .ontology
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let mut section_states = Vec::new();
+    for section in &input.procedural.sections {
+        let raw = raw_by_section
+            .get(&section.section_id)
+            .ok_or_else(|| DomainError::ValidationFailure {
+                message: format!(
+                    "missing raw section for candidate validation: {}",
+                    section.section_id
+                ),
+            })?;
+        let schema = schema_by_section
+            .get(&section.section_id)
+            .ok_or_else(|| DomainError::ValidationFailure {
+                message: format!(
+                    "missing schema validation section for {}",
+                    section.section_id
+                ),
+            })?;
+        let ontology = ontology_by_section
+            .get(&section.section_id)
+            .ok_or_else(|| DomainError::ValidationFailure {
+                message: format!("missing ontology section for {}", section.section_id),
+            })?;
+        let mut candidates = Vec::new();
+        for (ordinal, rule) in section.rules.iter().enumerate() {
+            let (role, concept_key) = role_and_concept_for_rule(rule);
+            let evidence_targets = if !rule.numeric_tokens.is_empty() {
+                rule.numeric_tokens.clone()
+            } else {
+                vec![match rule.rule_key.as_str() {
+                    "passport_required" => "паспорт".to_string(),
+                    "insurance_required" => "страхов".to_string(),
+                    _ => rule.rule_key.clone(),
+                }]
+            };
+            let (span_start, span_end, evidence_quote) =
+                find_evidence_span(&raw.content_md, &evidence_targets);
+            let runtime = TruthCandidateRuntime {
+                rule_candidate_id: blake3_hex(
+                    format!(
+                        "{}|{}|{}|{}|{}",
+                        input.context_key, raw.id, ordinal, role, concept_key
+                    )
+                    .as_bytes(),
+                ),
+                context_key: input.context_key.clone(),
+                role: role.to_string(),
+                concept_canonical_key: concept_key.clone(),
+                raw_mention: evidence_quote.clone(),
+                params: params_for_rule(rule),
+                scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
+                severity: "mandatory".to_string(),
+                derivation_type: "deterministic_procedural_extraction".to_string(),
+                confidence: rule.confidence as f64,
+                evidence_section_id: raw.id,
+                evidence_quote: evidence_quote.clone(),
+                span_start,
+                span_end,
+                source_key: raw.source_url.clone(),
+                source_tier: section_source_tier(raw),
+                source_snapshot_hash: if raw.content_hash.trim().is_empty() {
+                    content_hash_v1(&raw.content_md)
+                } else {
+                    raw.content_hash.clone()
+                },
+                is_numeric: !rule.numeric_tokens.is_empty(),
+                is_range: false,
+                is_incomplete: false,
+                uncertainty_flags: Vec::new(),
+            };
+            let validation = validate_truth_candidate(&runtime, &raw.content_md);
+            let mut epistemic_status = validation.epistemic_status.clone();
+            if ontology.needs_hitl && epistemic_status != "rejected" {
+                epistemic_status = "needs_hitl".to_string();
+            }
+            if schema.status == "invalid" && epistemic_status != "rejected" {
+                epistemic_status = "rejected".to_string();
+            }
+            candidates.push(ValidatedTruthCandidateRecord {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                rule_candidate_id: runtime.rule_candidate_id,
+                role: runtime.role,
+                concept_canonical_key: runtime.concept_canonical_key,
+                raw_mention: runtime.raw_mention,
+                params: runtime.params,
+                source_key: runtime.source_key,
+                source_tier: runtime.source_tier,
+                confidence: runtime.confidence,
+                evidence_quote: runtime.evidence_quote,
+                span_start: runtime.span_start,
+                span_end: runtime.span_end,
+                source_snapshot_hash: runtime.source_snapshot_hash,
+                freshness_class: "fresh".to_string(),
+                completeness_class: classify_candidate_completeness_local(&validation),
+                epistemic_status,
+                issues: validation
+                    .issues
+                    .iter()
+                    .map(|issue| format!("{}:{}", issue.code, issue.message))
+                    .collect(),
+            });
+        }
+        let accepted_count = candidates
+            .iter()
+            .filter(|candidate| candidate.epistemic_status == "structured")
+            .count();
+        let needs_hitl_count = candidates
+            .iter()
+            .filter(|candidate| candidate.epistemic_status == "needs_hitl")
+            .count();
+        let rejected_count = candidates
+            .iter()
+            .filter(|candidate| candidate.epistemic_status == "rejected")
+            .count();
+        let status = if section.blocked_by_gate {
+            "blocked"
+        } else if needs_hitl_count > 0 {
+            "needs_hitl"
+        } else if rejected_count > 0 && accepted_count == 0 {
+            "rejected"
+        } else {
+            "accepted"
+        };
+        section_states.push(CandidateValidationSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            candidates,
+            accepted_count,
+            needs_hitl_count,
+            rejected_count,
+            blocked_by_gate: section.blocked_by_gate,
+            status: status.to_string(),
+        });
+    }
+    Ok(CandidateValidationOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
+        accepted_count: section_states.iter().map(|section| section.accepted_count).sum(),
+        needs_hitl_count: section_states
+            .iter()
+            .map(|section| section.needs_hitl_count)
+            .sum(),
+        rejected_count: section_states.iter().map(|section| section.rejected_count).sum(),
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn triple_builder_sweep_impl(
+    input: &TripleBuilderSweepInput,
+) -> Result<TripleBuilderSweepOutput, DomainError> {
+    let operational_by_section: BTreeMap<i64, &OperationalExtractionSectionState> = input
+        .operational
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let editorial_by_section: BTreeMap<i64, &EditorialExtractionSectionState> = input
+        .editorial
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let sections = input
+        .procedural
+        .sections
+        .iter()
+        .map(|section| {
+            let operational = operational_by_section
+                .get(&section.section_id)
+                .copied()
+                .unwrap();
+            let editorial = editorial_by_section
+                .get(&section.section_id)
+                .copied()
+                .unwrap();
+            let output = seo_steps::triple_builder_step::execute(
+                &seo_steps::triple_builder_step::TripleBuilderInput {
+                    section_id: section.section_id.to_string(),
+                    procedural_rules: section
+                        .rules
+                        .iter()
+                        .map(|rule| seo_steps::triple_builder_step::ProceduralRuleForTriple {
+                            rule_key: rule.rule_key.clone(),
+                            role_type: rule.role_type,
+                        })
+                        .collect(),
+                    operational_entities: operational
+                        .entities
+                        .iter()
+                        .map(
+                            |entity| seo_steps::triple_builder_step::OperationalEntityForTriple {
+                                entity_kind: entity.entity_kind.clone(),
+                                value: entity.value.clone(),
+                            },
+                        )
+                        .collect(),
+                    editorial_topics: editorial
+                        .topics
+                        .iter()
+                        .map(
+                            |topic| seo_steps::triple_builder_step::EditorialTopicForTriple {
+                                topic_type: topic.topic_type.clone(),
+                                topic_key_candidate: topic.topic_key_candidate.clone(),
+                            },
+                        )
+                        .collect(),
+                },
+            );
+            TripleBuilderSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                triples: output.triples,
+                blocked_by_gate: section.blocked_by_gate,
+                decision: if section.blocked_by_gate {
+                    "blocked_by_gate"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(TripleBuilderSweepOutput {
+        section_count: sections.len(),
+        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        triple_count: sections.iter().map(|section| section.triples.len()).sum(),
+        sections,
+    })
+}
+
+pub(crate) async fn completeness_judge_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &CompletenessJudgeSweepInput,
+) -> Result<CompletenessJudgeSweepOutput, DomainError> {
+    let raw_sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
+        raw_sections.iter().map(|section| (section.id, section)).collect();
+    let sections = input
+        .procedural
+        .sections
+        .iter()
+        .map(|section| {
+            let raw = raw_by_section.get(&section.section_id).copied().unwrap();
+            let numeric_tokens: BTreeSet<String> = section
+                .rules
+                .iter()
+                .flat_map(|rule| rule.numeric_tokens.iter().cloned())
+                .collect();
+            let output = seo_steps::completeness_judge_step::execute(
+                &seo_steps::completeness_judge_step::CompletenessJudgeInput {
+                    section_id: section.section_id.to_string(),
+                    raw_text: raw.content_md.clone(),
+                    extracted_numeric_tokens: numeric_tokens.into_iter().collect(),
+                    extracted_rule_keys: section
+                        .rules
+                        .iter()
+                        .map(|rule| rule.rule_key.clone())
+                        .collect(),
+                },
+            );
+            CompletenessJudgeSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                blocked_by_gate: section.blocked_by_gate,
+                status: if section.blocked_by_gate {
+                    "blocked"
+                } else if output.needs_hitl {
+                    "needs_hitl"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+                output,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(CompletenessJudgeSweepOutput {
+        section_count: sections.len(),
+        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        needs_hitl_count: sections
+            .iter()
+            .filter(|section| !section.blocked_by_gate && section.output.needs_hitl)
+            .count(),
+        sections,
+    })
+}
+
+pub(crate) async fn resolution_loop_impl(
+    input: &ResolutionLoopInput,
+) -> Result<ResolutionLoopOutput, DomainError> {
+    let ontology_by_section: BTreeMap<i64, &OntologyIntakeGateDecision> = input
+        .ontology
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let schema_by_section: BTreeMap<i64, &ExtractionSchemaSectionDecision> = input
+        .schema_validate
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let sections = input
+        .completeness
+        .sections
+        .iter()
+        .map(|section| {
+            let ontology = ontology_by_section.get(&section.section_id).copied().unwrap();
+            let schema = schema_by_section.get(&section.section_id).copied().unwrap();
+            let decision = if section.blocked_by_gate {
+                "drop_with_reason"
+            } else if section.output.needs_hitl || ontology.needs_hitl {
+                "pause_for_hitl"
+            } else if schema.status == "invalid" {
+                "drop_with_reason"
+            } else {
+                "accept"
+            };
+            let blockers = section
+                .output
+                .missing_elements
+                .iter()
+                .map(|missing| missing.action.clone())
+                .chain(ontology.unresolved_mentions.iter().cloned())
+                .collect::<Vec<_>>();
+            ResolutionLoopSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                decision: decision.to_string(),
+                blockers,
+                needs_hitl: !section.blocked_by_gate
+                    && (section.output.needs_hitl || ontology.needs_hitl),
+                blocked_by_gate: section.blocked_by_gate,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(ResolutionLoopOutput {
+        section_count: sections.len(),
+        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        needs_hitl_count: sections.iter().filter(|section| section.needs_hitl).count(),
+        rejected_count: sections
+            .iter()
+            .filter(|section| !section.blocked_by_gate && section.decision == "drop_with_reason")
+            .count(),
+        sections,
+    })
+}
+
+pub(crate) async fn contradiction_gate_sweep_impl(
+    acts: &AlegriaActivities,
+    input: &ContradictionGateSweepInput,
+) -> Result<ContradictionGateSweepOutput, DomainError> {
+    let raw_sections =
+        raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
+        raw_sections.iter().map(|section| (section.id, section)).collect();
+    let sections = input
+        .procedural
+        .sections
+        .iter()
+        .map(|section| {
+            let raw = raw_by_section.get(&section.section_id).copied().unwrap();
+            let facts = section
+                .rules
+                .iter()
+                .map(|rule| {
+                    let predicate = match rule.rule_key.as_str() {
+                        "consular_fee" => "amount",
+                        "processing_time" => "days",
+                        _ => "required",
+                    };
+                    let value_normalized = if !rule.numeric_tokens.is_empty() {
+                        rule.numeric_tokens.join("|")
+                    } else {
+                        rule.rule_key.clone()
+                    };
+                    seo_steps::contradiction_gate_step::FactAssertion {
+                        subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
+                        predicate_key: predicate.to_string(),
+                        value_normalized,
+                        source_key: Some(raw.source_url.clone()),
+                        confidence: rule.confidence,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let output = seo_steps::contradiction_gate_step::execute(
+                &seo_steps::contradiction_gate_step::ContradictionGateInput {
+                    run_id: input.run_id.clone(),
+                    facts,
+                },
+            );
+            ContradictionGateSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                status: if section.blocked_by_gate {
+                    "blocked"
+                } else if output.is_blocked {
+                    "rejected"
+                } else if output.needs_hitl {
+                    "needs_hitl"
+                } else {
+                    "pass"
+                }
+                .to_string(),
+                output,
+            }
+        })
+        .collect::<Vec<_>>();
+    Ok(ContradictionGateSweepOutput {
+        section_count: sections.len(),
+        blocked_section_count: sections.iter().filter(|section| section.status == "blocked").count(),
+        needs_hitl_count: sections
+            .iter()
+            .filter(|section| section.status == "needs_hitl")
+            .count(),
+        conflict_count: sections.iter().map(|section| section.output.conflict_count).sum(),
+        sections,
+    })
+}
+
+pub(crate) async fn truth_adjudication_sweep_impl(
+    input: &TruthAdjudicationSweepInput,
+) -> Result<TruthAdjudicationSweepOutput, DomainError> {
+    let resolution_by_section: BTreeMap<i64, &ResolutionLoopSectionState> = input
+        .resolution
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+    let contradiction_by_section: BTreeMap<i64, &ContradictionGateSectionState> = input
+        .contradiction
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
+
+    let mut decisions = Vec::new();
+    let mut section_states = Vec::new();
+    for section in &input.candidate_validation.sections {
+        let resolution = resolution_by_section.get(&section.section_id).copied().unwrap();
+        let contradiction = contradiction_by_section.get(&section.section_id).copied().unwrap();
+
+        let mut verified_count = 0usize;
+        let mut needs_hitl_count = 0usize;
+        let mut rejected_count = 0usize;
+
+        if section.blocked_by_gate {
+            section_states.push(TruthAdjudicationSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                decision: "blocked".to_string(),
+                status: "blocked".to_string(),
+                verified_count,
+                needs_hitl_count,
+                rejected_count,
+            });
+            continue;
+        }
+
+        if contradiction.output.is_blocked {
+            for candidate in &section.candidates {
+                decisions.push(TruthAdjudicationCandidateDecision {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    rule_candidate_id: candidate.rule_candidate_id.clone(),
+                    role: candidate.role.clone(),
+                    concept_canonical_key: candidate.concept_canonical_key.clone(),
+                    params: candidate.params.clone(),
+                    source_key: candidate.source_key.clone(),
+                    source_tier: candidate.source_tier.clone(),
+                    confidence: candidate.confidence,
+                    freshness_class: candidate.freshness_class.clone(),
+                    completeness_class: candidate.completeness_class.clone(),
+                    evidence_quote: candidate.evidence_quote.clone(),
+                    span_start: candidate.span_start,
+                    span_end: candidate.span_end,
+                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                    decision: "rejected".to_string(),
+                    publish_admissibility: "not_admissible".to_string(),
+                    verification_method: "truth_adjudication@1".to_string(),
+                    adjudication_reason: "contradiction_block".to_string(),
+                });
+                rejected_count += 1;
+            }
+            section_states.push(TruthAdjudicationSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                decision: "rejected".to_string(),
+                status: "rejected".to_string(),
+                verified_count,
+                needs_hitl_count,
+                rejected_count,
+            });
+            continue;
+        }
+
+        let mut grouped: BTreeMap<(String, String), Vec<&ValidatedTruthCandidateRecord>> = BTreeMap::new();
+        for candidate in &section.candidates {
+            grouped
+                .entry((candidate.role.clone(), candidate.concept_canonical_key.clone()))
+                .or_default()
+                .push(candidate);
+        }
+
+        for ((_role, _concept), group) in grouped {
+            if resolution.needs_hitl || resolution.decision == "pause_for_hitl" {
+                for candidate in group {
+                    decisions.push(TruthAdjudicationCandidateDecision {
+                        section_id: section.section_id,
+                        page_id: section.page_id,
+                        rule_candidate_id: candidate.rule_candidate_id.clone(),
+                        role: candidate.role.clone(),
+                        concept_canonical_key: candidate.concept_canonical_key.clone(),
+                        params: candidate.params.clone(),
+                        source_key: candidate.source_key.clone(),
+                        source_tier: candidate.source_tier.clone(),
+                        confidence: candidate.confidence,
+                        freshness_class: candidate.freshness_class.clone(),
+                        completeness_class: "partial".to_string(),
+                        evidence_quote: candidate.evidence_quote.clone(),
+                        span_start: candidate.span_start,
+                        span_end: candidate.span_end,
+                        source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                        decision: "needs_hitl".to_string(),
+                        publish_admissibility: "needs_hitl".to_string(),
+                        verification_method: "truth_adjudication@1".to_string(),
+                        adjudication_reason: "resolution_loop_requires_hitl".to_string(),
+                    });
+                    needs_hitl_count += 1;
+                }
+                continue;
+            }
+
+            let structured = group
+                .iter()
+                .map(|candidate| TruthStructuredCandidate {
+                    rule_candidate_id: candidate.rule_candidate_id.clone(),
+                    context_key: input.context_key.clone(),
+                    role: candidate.role.clone(),
+                    concept_canonical_key: candidate.concept_canonical_key.clone(),
+                    params: candidate.params.clone(),
+                    source_key: candidate.source_key.clone(),
+                    source_tier: candidate.source_tier.clone(),
+                    confidence: candidate.confidence,
+                    freshness_class: candidate.freshness_class.clone(),
+                    completeness_class: candidate.completeness_class.clone(),
+                    evidence_quote: candidate.evidence_quote.clone(),
+                    epistemic_status: candidate.epistemic_status.clone(),
+                })
+                .collect::<Vec<_>>();
+            let adjudication = adjudicate_truth_candidates(&structured);
+            for decision in adjudication.decisions {
+                let candidate = group
+                    .iter()
+                    .find(|candidate| candidate.rule_candidate_id == decision.rule_candidate_id)
+                    .copied()
+                    .unwrap();
+                match decision.decision.as_str() {
+                    "verified" => verified_count += 1,
+                    "needs_hitl" => needs_hitl_count += 1,
+                    _ => rejected_count += 1,
+                }
+                decisions.push(TruthAdjudicationCandidateDecision {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    rule_candidate_id: candidate.rule_candidate_id.clone(),
+                    role: candidate.role.clone(),
+                    concept_canonical_key: candidate.concept_canonical_key.clone(),
+                    params: candidate.params.clone(),
+                    source_key: candidate.source_key.clone(),
+                    source_tier: candidate.source_tier.clone(),
+                    confidence: candidate.confidence,
+                    freshness_class: candidate.freshness_class.clone(),
+                    completeness_class: candidate.completeness_class.clone(),
+                    evidence_quote: candidate.evidence_quote.clone(),
+                    span_start: candidate.span_start,
+                    span_end: candidate.span_end,
+                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                    decision: decision.decision,
+                    publish_admissibility: decision.publish_admissibility,
+                    verification_method: decision.verification_method,
+                    adjudication_reason: decision.adjudication_reason,
+                });
+            }
+        }
+
+        let section_decision = if verified_count > 0 {
+            "verified"
+        } else if needs_hitl_count > 0 {
+            "needs_hitl"
+        } else {
+            "rejected"
+        };
+        section_states.push(TruthAdjudicationSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            decision: section_decision.to_string(),
+            status: section_decision.to_string(),
+            verified_count,
+            needs_hitl_count,
+            rejected_count,
+        });
+    }
+
+    Ok(TruthAdjudicationSweepOutput {
+        section_count: section_states.len(),
+        blocked_section_count: section_states
+            .iter()
+            .filter(|section| section.status == "blocked")
+            .count(),
+        verified_count: section_states.iter().map(|section| section.verified_count).sum(),
+        needs_hitl_count: section_states.iter().map(|section| section.needs_hitl_count).sum(),
+        rejected_count: section_states.iter().map(|section| section.rejected_count).sum(),
+        decisions,
+        sections: section_states,
+    })
+}
+
+pub(crate) async fn verified_truth_write_impl(
+    acts: &AlegriaActivities,
+    input: &VerifiedTruthWriteInput,
+) -> Result<VerifiedTruthWriteOutput, DomainError> {
+    let mut changed_truth_keys = Vec::new();
+    let mut verified_rule_count = 0usize;
+    let mut demoted_rule_count = 0usize;
+
+    for decision in &input.truth_adjudication.decisions {
+        let rule_instance_id = semantic_rule_instance_id_local(
+            &input.context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+        );
+        let changed_key = format!("verified.rule_instance:{rule_instance_id}");
+        match decision.decision.as_str() {
+            "verified" => {
+                sqlx::query(
+                    "INSERT INTO verified.rule_instances (
+                         rule_instance_id,
+                         context_key,
+                         rule_type_key,
+                         concept_key,
+                         role_type,
+                         params,
+                         status,
+                         source_key,
+                         confidence,
+                         effective_from,
+                         rule_candidate_id,
+                         evidence_section_id,
+                         evidence_quote,
+                         span_start,
+                         span_end,
+                         source_snapshot_hash,
+                         verification_method,
+                         adjudication_reason,
+                         publish_admissibility,
+                         freshness_class,
+                         completeness_class,
+                         registry_version,
+                         prompt_version,
+                         model_version,
+                         pipeline_version
+                     )
+                     VALUES (
+                         $1, $2, $3, $4, $5, $6, 'verified', $7, $8, current_date,
+                         $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
+                     )
+                     ON CONFLICT (rule_instance_id) DO UPDATE
+                     SET rule_type_key = EXCLUDED.rule_type_key,
+                         concept_key = EXCLUDED.concept_key,
+                         role_type = EXCLUDED.role_type,
+                         params = EXCLUDED.params,
+                         status = EXCLUDED.status,
+                         source_key = EXCLUDED.source_key,
+                         confidence = EXCLUDED.confidence,
+                         effective_from = EXCLUDED.effective_from,
+                         rule_candidate_id = EXCLUDED.rule_candidate_id,
+                         evidence_section_id = EXCLUDED.evidence_section_id,
+                         evidence_quote = EXCLUDED.evidence_quote,
+                         span_start = EXCLUDED.span_start,
+                         span_end = EXCLUDED.span_end,
+                         source_snapshot_hash = EXCLUDED.source_snapshot_hash,
+                         verification_method = EXCLUDED.verification_method,
+                         adjudication_reason = EXCLUDED.adjudication_reason,
+                         publish_admissibility = EXCLUDED.publish_admissibility,
+                         freshness_class = EXCLUDED.freshness_class,
+                         completeness_class = EXCLUDED.completeness_class,
+                         registry_version = EXCLUDED.registry_version,
+                         prompt_version = EXCLUDED.prompt_version,
+                         model_version = EXCLUDED.model_version,
+                         pipeline_version = EXCLUDED.pipeline_version,
+                         updated_at = now()"
+                )
+                .bind(&rule_instance_id)
+                .bind(&input.context_key)
+                .bind(decision.role.to_ascii_lowercase())
+                .bind(&decision.concept_canonical_key)
+                .bind(decision.role.to_ascii_lowercase())
+                .bind(Json::<Value>(truth_param_value_to_json_local(&decision.params)))
+                .bind(&decision.source_key)
+                .bind(decision.confidence)
+                .bind(&decision.rule_candidate_id)
+                .bind(decision.section_id)
+                .bind(&decision.evidence_quote)
+                .bind(decision.span_start as i32)
+                .bind(decision.span_end as i32)
+                .bind(&decision.source_snapshot_hash)
+                .bind(&decision.verification_method)
+                .bind(&decision.adjudication_reason)
+                .bind(&decision.publish_admissibility)
+                .bind(&decision.freshness_class)
+                .bind(&decision.completeness_class)
+                .bind("registry@1")
+                .bind("cutover@1")
+                .bind("deterministic")
+                .bind("truth_adjudication_runtime@1")
+                .execute(&*acts.pool)
+                .await
+                .map_err(AlegriaActivities::classify_error)?;
+                verified_rule_count += 1;
+                changed_truth_keys.push(changed_key);
+            }
+            "needs_hitl" | "rejected" => {
+                let status = if decision.decision == "needs_hitl" {
+                    "disputed"
+                } else {
+                    "deprecated"
+                };
+                sqlx::query(
+                    "UPDATE verified.rule_instances
+                     SET status = $2,
+                         publish_admissibility = $3,
+                         verification_method = $4,
+                         adjudication_reason = $5,
+                         updated_at = now()
+                     WHERE rule_instance_id = $1",
+                )
+                .bind(&rule_instance_id)
+                .bind(status)
+                .bind(&decision.publish_admissibility)
+                .bind(&decision.verification_method)
+                .bind(&decision.adjudication_reason)
+                .execute(&*acts.pool)
+                .await
+                .map_err(AlegriaActivities::classify_error)?;
+                demoted_rule_count += 1;
+                changed_truth_keys.push(changed_key);
+            }
+            _ => {}
+        }
+    }
+
+    changed_truth_keys.sort();
+    changed_truth_keys.dedup();
+    Ok(VerifiedTruthWriteOutput {
+        context_key: input.context_key.clone(),
+        verified_rule_count,
+        demoted_rule_count,
+        status: if changed_truth_keys.is_empty() {
+            "no_change".to_string()
+        } else {
+            "written".to_string()
+        },
+        changed_truth_keys,
     })
 }
