@@ -31,15 +31,6 @@ pub(crate) fn test_opts(timeout_secs: u64) -> ActivityOptions {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct WorkflowStatus {
-    pub phase: String,
-    pub paused: bool,
-    pub waiting_hitl: bool,
-    pub hitl_task_id: Option<i64>,
-    pub has_hitl_resolution: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct BasicWorkflowStatus {
     pub phase: String,
     pub paused: bool,

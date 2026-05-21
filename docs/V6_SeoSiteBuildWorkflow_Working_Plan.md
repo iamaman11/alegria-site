@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.17`
+**Current version:** `6.18`
 
 ---
 
@@ -1085,7 +1085,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted cutover checkpoint, currently beginning `Phase M2` at canonical `steps 37-42` after accepted `Phase M1` shadow evidence;
+- the next implementation target must be the earliest non-accepted cutover checkpoint, currently continuing `Phase M2` from canonical planning `steps 37-42` into draft/publish `steps 43-55`, then `rebuild_detect`;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1120,7 +1120,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
-- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-36` wired through `projection_barrier(semantic_projection)` as the current real cutover slice
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-42` wired through `projection_barrier(global_site_reconcile)` as the current real cutover slice
 - `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for the Phase M1 shadow gate
 - first real paired-run Phase M1 shadow report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json)
 - accepted Phase M1 cutover evidence status:
@@ -1129,6 +1129,10 @@ Before continuing development past planning, the repository must satisfy this cl
   - accepted paired-run shadow report: [docs/runs/seo_cutover_shadow_verify_2026-05-22_phase_m1_accepted.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-22_phase_m1_accepted.json)
   - canonical ledger coverage for `steps 1-36`: complete
   - `projection_barrier(semantic_projection)`: clear with `blocked_events=0`
+- current Phase M2 planning status:
+  - canonical `steps 37-42` are now runtime-wired in `SeoSiteBuildCanonicalCutoverWorkflow`
+  - current cutover edge ends at `projection_barrier(global_site_reconcile)`
+  - draft, publish, and rebuild semantics remain on the old canonical path until later `Phase M2` slices are accepted
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1299,6 +1303,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.18
+
+- removed the dead `WorkflowStatus` runtime type instead of suppressing the warning, so `temporal_worker` now compiles without the stale unused-status warning;
+- extended `SeoSiteBuildCanonicalCutoverWorkflow` through canonical `Phase M2` planning steps `37-42`: `serp_normalize`, `opportunity_build`, `ia_build`, `link_recommend`, `global_site_reconcile`, and `projection_barrier(global_site_reconcile)`;
+- updated the execution state so the current cutover edge is `steps 1-42`, while the next non-accepted checkpoint moves to draft/publish `steps 43-55` and final `rebuild_detect`.
 
 ### 6.17
 

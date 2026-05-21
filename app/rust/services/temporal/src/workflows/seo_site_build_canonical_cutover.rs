@@ -1,6 +1,8 @@
 use contracts::generated::alegria::temporal::v1::{
-    CrawlSourcesInputPayload, ProjectionBarrierAuditInputPayload, SeoSiteBuildInputPayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    CrawlSourcesInputPayload, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
+    LinkRecommendInputPayload, OpportunityBuildInputPayload, ProjectionBarrierAuditInputPayload,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
@@ -128,7 +130,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 SerpIngestInputPayload {
                     run_id: run_id.clone(),
                     query_batch_key: site_input.query_batch_key.clone(),
-                    scope: Some(scope),
+                    scope: Some(scope.clone()),
                     queries: site_input.queries.clone(),
                 },
                 db_opts(30),
@@ -603,6 +605,92 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
 
+        ctx.state_mut(|s| s.phase = "serp_normalize".to_string());
+        let serp_normalize = ctx
+            .start_activity(
+                AlegriaActivities::run_serp_normalize_step,
+                SerpNormalizeInputPayload {
+                    run_id: run_id.clone(),
+                    query_batch_key: ingest.query_batch_key.clone(),
+                    scope: Some(scope.clone()),
+                    queries: site_input.queries.clone(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "opportunity_build".to_string());
+        let opportunity_build = ctx
+            .start_activity(
+                AlegriaActivities::run_opportunity_build_step,
+                OpportunityBuildInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    serp_patterns: serp_normalize.serp_patterns.clone(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "ia_build".to_string());
+        let ia_build = ctx
+            .start_activity(
+                AlegriaActivities::run_ia_build_step,
+                IaBuildInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    keyword_clusters: opportunity_build.keyword_clusters.clone(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "link_recommend".to_string());
+        let link_recommend = ctx
+            .start_activity(
+                AlegriaActivities::run_link_recommend_step,
+                LinkRecommendInputPayload {
+                    run_id: run_id.clone(),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    max_links_per_page: 3,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
+        let global_site_reconcile = ctx
+            .start_activity(
+                AlegriaActivities::run_global_site_reconcile_step,
+                GlobalSiteReconcileInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    link_recommendations: link_recommend.link_recommendations.clone(),
+                    reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
+        ctx.state_mut(|s| s.phase = "projection_barrier(global_site_reconcile)".to_string());
+        let planning_projection_barrier = ctx
+            .start_activity(
+                AlegriaActivities::run_projection_barrier_audit_step,
+                ProjectionBarrierAuditInputPayload {
+                    run_id: run_id.clone(),
+                    checkpoint: "projection_barrier(global_site_reconcile)".to_string(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await;
+
         ctx.state_mut(|s| s.phase = "done:seo_site_build_canonical_cutover".to_string());
         metrics::global()
             .workflow_completions_total
@@ -610,7 +698,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .inc();
 
         Ok(format!(
-            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={} graph_gate_blocked={} retrieval_gate_blocked={} semantic_projection_barrier_blocked={} neo4j_failed={} qdrant_failed={}",
+            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={} graph_gate_blocked={} retrieval_gate_blocked={} semantic_projection_barrier_blocked={} neo4j_failed={} qdrant_failed={} serp_patterns={} opportunity_clusters={} ia_pages={} link_recommendations={} global_reconcile_pages={} global_reconcile_links={} planning_projection_barrier_blocked={}",
             run_id,
             preflight.status,
             support_bundle.len(),
@@ -646,7 +734,14 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             retrieval_gate.blocked_events,
             semantic_projection_barrier.blocked_events,
             neo4j.failed_events + neo4j.remaining_failed,
-            qdrant.failed_events + qdrant.remaining_failed
+            qdrant.failed_events + qdrant.remaining_failed,
+            serp_normalize.serp_patterns.len(),
+            opportunity_build.keyword_clusters.len(),
+            ia_build.page_nodes.len(),
+            link_recommend.link_recommendations.len(),
+            global_site_reconcile.page_nodes.len(),
+            global_site_reconcile.link_recommendations.len(),
+            planning_projection_barrier.blocked_events
         ))
     }
 
