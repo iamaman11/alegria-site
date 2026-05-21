@@ -12,6 +12,7 @@ EXPERT_DECOMPOSED_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "
 EXPERT_PROJECTION_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_projection.rs"
 EXPERT_SEMANTIC_SLICE_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "expert_semantic_slice.rs"
 RECONCILE_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "projection_reconcile.rs"
+CANONICAL_CUTOVER_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build_canonical_cutover.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
 OPERATIONS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs"
 STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter.rs"
@@ -32,6 +33,7 @@ def main() -> int:
     expert_projection = read(EXPERT_PROJECTION_WORKFLOW)
     expert_semantic_slice = read(EXPERT_SEMANTIC_SLICE_WORKFLOW)
     reconcile = read(RECONCILE_WORKFLOW)
+    canonical_cutover = read(CANONICAL_CUTOVER_WORKFLOW)
     activities = read(ACTIVITIES)
     operations = read(OPERATIONS)
     starter = read(STARTER)
@@ -44,11 +46,13 @@ def main() -> int:
         "mod expert_projection;",
         "mod expert_semantic_slice;",
         "mod projection_reconcile;",
+        "mod seo_site_build_canonical_cutover;",
         "expert_extraction::register(&mut opts);",
         "expert_decomposed_extraction::register(&mut opts);",
         "expert_projection::register(&mut opts);",
         "expert_semantic_slice::register(&mut opts);",
         "projection_reconcile::register(&mut opts);",
+        "seo_site_build_canonical_cutover::register(&mut opts);",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflow registry missing `{needle}`")
@@ -119,9 +123,34 @@ def main() -> int:
             failures.append(f"projection reconcile workflow missing `{needle}`")
 
     for needle in [
+        "struct SeoSiteBuildCanonicalCutoverWorkflow",
+        "seo_preflight",
+        "load_verified_support_bundle.initial",
+        "whole_page_semantic_pass",
+        "page_utility_classifier",
+        "dom_block_relevance_filter",
+        "sectioning",
+        "sectioning_contract_gate",
+        "cas_gate",
+        "raw_evidence_register",
+        "projection_barrier(raw_evidence)",
+        "done:seo_site_build_canonical_cutover",
+    ]:
+        if needle not in canonical_cutover:
+            failures.append(f"canonical cutover workflow missing `{needle}`")
+
+    for needle in [
         "run_projection_reconcile_step",
         "run_projection_barrier_audit_step",
         "load_semantic_section_sample_step",
+        "run_seo_preflight_step",
+        "run_whole_page_semantic_pass_step",
+        "run_sectioning_step",
+        "run_page_utility_sweep_step",
+        "run_dom_block_relevance_sweep_step",
+        "run_sectioning_contract_gate_step",
+        "run_cas_gate_step",
+        "run_raw_evidence_register_step",
         "run_page_utility_classifier_step",
         "run_dom_block_relevance_step",
         "run_entity_span_detection_step",
@@ -144,11 +173,13 @@ def main() -> int:
         "ExpertProjection",
         "ExpertSemanticSlice",
         "ProjectionReconcile",
+        "SeoSiteBuildCanonicalCutover",
         "ExpertDecomposedExtractionWorkflow",
         "ExpertExtractionWorkflow",
         "ExpertProjectionWorkflow",
         "ExpertSemanticSliceWorkflow",
         "ProjectionReconcileWorkflow",
+        "SeoSiteBuildCanonicalCutoverWorkflow",
     ]:
         if needle not in starter:
             failures.append(f"temporal starter missing `{needle}`")

@@ -417,6 +417,118 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_seo_preflight_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SeoPreflightInput,
+    ) -> Result<operations::SeoPreflightOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "seo_preflight", 1, &input, || async {
+            operations::seo_preflight_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_whole_page_semantic_pass_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::WholePageSemanticPassInput,
+    ) -> Result<operations::WholePageSemanticPassOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "whole_page_semantic_pass", 1, &input, || async {
+            operations::whole_page_semantic_pass_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_sectioning_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SectioningInput,
+    ) -> Result<operations::SectioningOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "sectioning", 1, &input, || async {
+            operations::sectioning_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_page_utility_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::PageUtilitySweepInput,
+    ) -> Result<operations::PageUtilitySweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "page_utility_classifier", 1, &input, || async {
+            operations::page_utility_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_dom_block_relevance_sweep_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::DomBlockRelevanceSweepInput,
+    ) -> Result<operations::DomBlockRelevanceSweepOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "dom_block_relevance_filter", 1, &input, || async {
+            operations::dom_block_relevance_sweep_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_sectioning_contract_gate_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::SectioningContractGateInput,
+    ) -> Result<operations::SectioningContractGateOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "sectioning_contract_gate", 1, &input, || async {
+            operations::sectioning_contract_gate_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_cas_gate_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CasGateInput,
+    ) -> Result<operations::CasGateOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "cas_gate", 1, &input, || async {
+            operations::cas_gate_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_raw_evidence_register_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::RawEvidenceRegisterInput,
+    ) -> Result<operations::RawEvidenceRegisterOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "raw_evidence_register", 1, &input, || async {
+            operations::raw_evidence_register_impl(self.as_ref(), &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn load_seo_site_build_input(
         self: Arc<Self>,
         _ctx: ActivityContext,

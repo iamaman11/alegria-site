@@ -16,6 +16,7 @@ mod expert_semantic_slice;
 mod freshness;
 mod projection_reconcile;
 mod runtime;
+mod seo_site_build_canonical_cutover;
 mod seo_site_build;
 mod test_hitl;
 
@@ -39,6 +40,7 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     expert_semantic_slice::register(&mut opts);
     freshness::register(&mut opts);
     projection_reconcile::register(&mut opts);
+    seo_site_build_canonical_cutover::register(&mut opts);
     seo_site_build::register(&mut opts);
     test_hitl::register(&mut opts);
     opts

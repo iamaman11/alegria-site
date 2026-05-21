@@ -159,6 +159,7 @@ enum WorkflowKind {
     ExpertSemanticSlice,
     FreshnessCheck,
     ProjectionReconcile,
+    SeoSiteBuildCanonicalCutover,
     SeoSiteBuild,
     TestHitl,
 }
@@ -173,6 +174,7 @@ impl WorkflowKind {
             WorkflowKind::ExpertSemanticSlice => "ExpertSemanticSliceWorkflow",
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
+            WorkflowKind::SeoSiteBuildCanonicalCutover => "SeoSiteBuildCanonicalCutoverWorkflow",
             WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
             WorkflowKind::TestHitl => "TestHitlWorkflow",
         }
@@ -187,6 +189,7 @@ impl WorkflowKind {
             WorkflowKind::ExpertSemanticSlice => "expert-semantic-slice",
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::ProjectionReconcile => "projection-reconcile",
+            WorkflowKind::SeoSiteBuildCanonicalCutover => "seo-site-build-canonical-cutover",
             WorkflowKind::SeoSiteBuild => "seo-site-build",
             WorkflowKind::TestHitl => "test-hitl",
         }
@@ -200,6 +203,7 @@ impl WorkflowKind {
                 | WorkflowKind::ExpertExtraction
                 | WorkflowKind::ExpertProjection
                 | WorkflowKind::ExpertSemanticSlice
+                | WorkflowKind::SeoSiteBuildCanonicalCutover
                 | WorkflowKind::SeoSiteBuild
         )
     }

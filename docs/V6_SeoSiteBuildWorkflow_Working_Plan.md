@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.10`
+**Current version:** `6.11`
 
 ---
 
@@ -148,6 +148,8 @@ These surfaces are migration-only. They are not the long-term target architectur
   - explicit reconcile surface for `neo4j` and `qdrant`
 - `FreshnessCheckWorkflow`:
   - support-plane freshness monitor
+- `SeoSiteBuildCanonicalCutoverWorkflow`:
+  - partial canonical-cutover surface now wired for `seo_preflight -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> whole_page_semantic_pass -> page_utility_classifier -> dom_block_relevance_filter -> sectioning -> sectioning_contract_gate -> cas_gate -> raw_evidence_register -> projection_barrier(raw_evidence)`
 
 Additional support-plane executable surfaces now present outside the 56-step run:
 
@@ -1116,6 +1118,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-11` plus `projection_barrier(raw_evidence)` wired as the first real cutover slice
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1305,6 +1308,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.11
+
+- added the first real `SeoSiteBuildCanonicalCutoverWorkflow` runtime surface;
+- wired the first cutover slice for `seo_preflight`, support loading, source discovery, crawl, semantic page prelude, sectioning, sectioning contract, CAS, raw evidence registration, and `projection_barrier(raw_evidence)`;
+- updated the working plan status to record that the cutover workflow now exists as a partial runtime surface rather than only a planned replacement candidate.
 
 ### 6.10
 
