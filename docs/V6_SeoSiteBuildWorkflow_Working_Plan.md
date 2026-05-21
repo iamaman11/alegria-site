@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.9`
+**Current version:** `6.10`
 
 ---
 
@@ -1052,6 +1052,38 @@ Resume rule:
 - never resume from a later slice by assumption;
 - never infer acceptance from code presence without ledger/test/shadow evidence.
 
+#### Retired WIP preservation rule
+
+The removed `ExpertRichFlowWorkflow` was an exploratory WIP, not an accepted runtime surface. Its deletion must not be interpreted as permission to lose reusable implementation knowledge.
+
+Reusable achievements from that WIP are preserved conceptually as:
+
+- combined semantic-to-projection orchestration for canonical Phase M1 coverage;
+- pause / resume / status workflow control pattern for a cutover workflow;
+- reuse of existing rich step activities across semantic, extraction, and projection slices;
+- end-of-run summary expectations needed for later shadow comparison.
+
+When implementing `SeoSiteBuildCanonicalCutoverWorkflow`, these reusable achievements must be recovered from stable sources, not by resurrecting `ExpertRichFlowWorkflow`:
+
+- `ExpertDecomposedExtractionWorkflow` for semantic and extraction slice ordering;
+- `ExpertProjectionWorkflow` for graph / retrieval admissibility and projection ordering;
+- `ExpertSemanticSliceWorkflow` for real-section gate wiring and step catalog usage;
+- the accepted `Phase M` rules in this file for naming, cutover scope, and no-skip execution.
+
+Rule:
+
+- no new code may reintroduce `ExpertRichFlowWorkflow` as a workflow identity;
+- if code from that retired WIP is reused, it must be moved directly into `SeoSiteBuildCanonicalCutoverWorkflow` under canonical step names and cutover semantics.
+
+#### Clean-development baseline
+
+Before continuing development past planning, the repository must satisfy this cleanliness rule:
+
+- only user-owned unrelated dirty files may remain outside accepted cutover work;
+- there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
+- the next implementation target must be the earliest non-accepted Phase M1 slice, currently `steps 1-11`;
+- any future cutover code must begin from this baseline rather than reopening retired WIP directions.
+
 ---
 
 ## 9. Step-by-Step Status Ledger
@@ -1273,6 +1305,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.10
+
+- added a `Retired WIP preservation rule` so the useful orchestration lessons from deleted `ExpertRichFlowWorkflow` are preserved without keeping that workflow identity alive;
+- added a `Clean-development baseline` that fixes what constitutes a clean starting point before further Phase M1 coding;
+- clarified that reusable WIP achievements must be recovered from accepted rollout surfaces and the working plan, not by resurrecting the retired workflow.
 
 ### 6.9
 
