@@ -85,5 +85,6 @@ The following `V5` or legacy planning files are reference-only:
 - `post_publish_feedback_loop` currently emits machine-readable evidence through `--report-json`.
 - `release_and_restore_gate` currently executes through `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, and `infra/backups/restore_drill.sh`.
 - focused extraction rollout currently executes through `ExpertExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for the extraction core.
+- focused decomposition rollout currently executes through `ExpertDecomposedExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for splitting the `raw_knowledge_ingestion` macro-step into explicit semantic prelude plus current truth-core.
 - focused extraction-to-projection rollout currently executes through `ExpertProjectionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for explicit graph/retrieval admissibility and sync stages.
 - focused semantic-step rollout currently executes through `ExpertSemanticSliceWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for deferred rich semantic stages on real crawled sections.

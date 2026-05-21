@@ -153,6 +153,7 @@ enum Command {
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum WorkflowKind {
     ContentGeneration,
+    ExpertDecomposedExtraction,
     ExpertExtraction,
     ExpertProjection,
     ExpertSemanticSlice,
@@ -166,6 +167,7 @@ impl WorkflowKind {
     fn workflow_type(self) -> &'static str {
         match self {
             WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
+            WorkflowKind::ExpertDecomposedExtraction => "ExpertDecomposedExtractionWorkflow",
             WorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
             WorkflowKind::ExpertProjection => "ExpertProjectionWorkflow",
             WorkflowKind::ExpertSemanticSlice => "ExpertSemanticSliceWorkflow",
@@ -179,6 +181,7 @@ impl WorkflowKind {
     fn id_prefix(self) -> &'static str {
         match self {
             WorkflowKind::ContentGeneration => "content-gen",
+            WorkflowKind::ExpertDecomposedExtraction => "expert-decomposed-extraction",
             WorkflowKind::ExpertExtraction => "expert-extraction",
             WorkflowKind::ExpertProjection => "expert-projection",
             WorkflowKind::ExpertSemanticSlice => "expert-semantic-slice",
@@ -193,6 +196,7 @@ impl WorkflowKind {
         matches!(
             self,
             WorkflowKind::ContentGeneration
+                | WorkflowKind::ExpertDecomposedExtraction
                 | WorkflowKind::ExpertExtraction
                 | WorkflowKind::ExpertProjection
                 | WorkflowKind::ExpertSemanticSlice
@@ -1256,6 +1260,7 @@ async fn main() -> Result<()> {
             if matches!(
                 workflow,
                 WorkflowKind::SeoSiteBuild
+                    | WorkflowKind::ExpertDecomposedExtraction
                     | WorkflowKind::ExpertExtraction
                     | WorkflowKind::ExpertProjection
                     | WorkflowKind::ExpertSemanticSlice

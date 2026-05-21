@@ -9,6 +9,7 @@ use infrastructure::adapters::temporalio_sdk_adapter::temporalio_common as _;
 use crate::activities::AlegriaActivities;
 
 mod content_generation;
+mod expert_decomposed_extraction;
 mod expert_extraction;
 mod expert_projection;
 mod expert_semantic_slice;
@@ -32,6 +33,7 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     {
         content_generation::register(&mut opts);
     }
+    expert_decomposed_extraction::register(&mut opts);
     expert_extraction::register(&mut opts);
     expert_projection::register(&mut opts);
     expert_semantic_slice::register(&mut opts);

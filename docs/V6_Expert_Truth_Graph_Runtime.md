@@ -62,6 +62,7 @@ The only active production workflow is:
 Additional first-class rollout/support workflows now exist without replacing the canonical site-build path:
 
 - `ExpertExtractionWorkflow` for focused expert truth extraction rollout;
+- `ExpertDecomposedExtractionWorkflow` for focused decomposition rollout of the current `raw_knowledge_ingestion` macro-step into explicit semantic prelude plus current truth-core;
 - `ExpertProjectionWorkflow` for focused truth-to-projection rollout with explicit graph/retrieval admissibility checkpoints;
 - `ExpertSemanticSliceWorkflow` for focused real-section rollout of deferred rich semantic stages such as utility classification, DOM filtering, entity spans, canonical mapping, procedural extraction, completeness, triples, contradiction, and HITL routing;
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
