@@ -1,0 +1,1172 @@
+{
+  "context_key": {
+    "cutover": "US|tourist||BY",
+    "legacy": "US|tourist||BY"
+  },
+  "cutover_run_id": "1984db43-6519-4540-8482-61fd3768bf2d",
+  "cutover_runtime": {
+    "candidate_validation": {
+      "accepted_count": 4,
+      "blocked_section_count": 0,
+      "needs_hitl_count": 0,
+      "rejected_count": 0,
+      "section_count": 21,
+      "sections": [
+        {
+          "accepted_count": 1,
+          "blocked_by_gate": false,
+          "candidates": [
+            {
+              "completeness_class": "complete",
+              "concept_canonical_key": "passport",
+              "confidence": 0.8399999737739563,
+              "epistemic_status": "structured",
+              "evidence_quote": "Travel",
+              "freshness_class": "fresh",
+              "issues": [],
+              "page_id": 1,
+              "params": {
+                "severity": "mandatory",
+                "subtype": "passport"
+              },
+              "raw_mention": "Travel",
+              "role": "DOCUMENT_REQUIRED",
+              "rule_candidate_id": "558d86dfbf5882ff3837fb7b33fa889c849ee53932995ba93120d20c6fac667e",
+              "section_id": 22,
+              "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+              "source_snapshot_hash": "8d761f7b25d78a9efc28a7cb736c6487aca63d324b5217c2a80321ca9fb2ed6f",
+              "source_tier": "government",
+              "span_end": 6,
+              "span_start": 0
+            }
+          ],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 22,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 23,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 24,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 25,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 26,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 27,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 28,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 29,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 1,
+          "blocked_by_gate": false,
+          "candidates": [
+            {
+              "completeness_class": "complete",
+              "concept_canonical_key": "passport",
+              "confidence": 0.8399999737739563,
+              "epistemic_status": "structured",
+              "evidence_quote": "Gather and prepare the following required documents before your visa interview:\nPassport\nvalid for travel to the United States – Your passport must be valid for at least six months beyond your period of stay in the United States (unless exempt by\ncountry-specific agreements\n)",
+              "freshness_class": "fresh",
+              "issues": [],
+              "page_id": 1,
+              "params": {
+                "severity": "mandatory",
+                "subtype": "passport"
+              },
+              "raw_mention": "Gather and prepare the following required documents before your visa interview:\nPassport\nvalid for travel to the United States – Your passport must be valid for at least six months beyond your period of stay in the United States (unless exempt by\ncountry-specific agreements\n)",
+              "role": "DOCUMENT_REQUIRED",
+              "rule_candidate_id": "81eea4e66c3b38a625f89f6a466fd46be0167a678ba6700b6c59ee2259b77009",
+              "section_id": 30,
+              "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+              "source_snapshot_hash": "6c65af8e0ed21e7f682cd35b419ebc751cf80f1a00d818874e1521c4cccd2360",
+              "source_tier": "government",
+              "span_end": 279,
+              "span_start": 0
+            }
+          ],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 30,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 31,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 1,
+          "blocked_by_gate": false,
+          "candidates": [
+            {
+              "completeness_class": "complete",
+              "concept_canonical_key": "passport",
+              "confidence": 0.8399999737739563,
+              "epistemic_status": "structured",
+              "evidence_quote": "A consular officer will interview you to determine whether you are qualified to receive a visitor visa",
+              "freshness_class": "fresh",
+              "issues": [],
+              "page_id": 1,
+              "params": {
+                "severity": "mandatory",
+                "subtype": "passport"
+              },
+              "raw_mention": "A consular officer will interview you to determine whether you are qualified to receive a visitor visa",
+              "role": "DOCUMENT_REQUIRED",
+              "rule_candidate_id": "1ea081047498fb6bbb1ce757b1a74ba047562d48a6411646a7a34ad584f6e498",
+              "section_id": 32,
+              "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+              "source_snapshot_hash": "adbf8e659bd7d65e49b56bdfad7ac56dc09badbc6ae4fe4a931e896969e515d7",
+              "source_tier": "government",
+              "span_end": 102,
+              "span_start": 0
+            }
+          ],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 32,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 33,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 34,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 35,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 1,
+          "blocked_by_gate": false,
+          "candidates": [
+            {
+              "completeness_class": "complete",
+              "concept_canonical_key": "passport",
+              "confidence": 0.8399999737739563,
+              "epistemic_status": "structured",
+              "evidence_quote": "An individual on a visitor visa (B1/B2) is not permitted to accept employment or work in the United States",
+              "freshness_class": "fresh",
+              "issues": [],
+              "page_id": 1,
+              "params": {
+                "severity": "mandatory",
+                "subtype": "passport"
+              },
+              "raw_mention": "An individual on a visitor visa (B1/B2) is not permitted to accept employment or work in the United States",
+              "role": "DOCUMENT_REQUIRED",
+              "rule_candidate_id": "7c303f1b4ce5d6dbd4724d962f56e1c34922577c6542d2b8a7560a36db355650",
+              "section_id": 36,
+              "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+              "source_snapshot_hash": "18b4d35ecb726059e9b822d7290b456dc355efcdba6fe59c7fdb4e654a836ff5",
+              "source_tier": "government",
+              "span_end": 106,
+              "span_start": 0
+            }
+          ],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 36,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 37,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 38,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 39,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 40,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 41,
+          "status": "accepted"
+        },
+        {
+          "accepted_count": 0,
+          "blocked_by_gate": false,
+          "candidates": [],
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 42,
+          "status": "accepted"
+        }
+      ]
+    },
+    "contradiction_gate": {
+      "blocked_section_count": 0,
+      "conflict_count": 0,
+      "needs_hitl_count": 0,
+      "section_count": 21,
+      "sections": [
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 22,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 23,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 24,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 25,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 26,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 27,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 28,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 29,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 30,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 31,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 32,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 33,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 34,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 35,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 36,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 37,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 38,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 39,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 40,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 41,
+          "status": "pass"
+        },
+        {
+          "output": {
+            "conflict_count": 0,
+            "conflicts": [],
+            "decision": "pass",
+            "hitl_reason": null,
+            "is_blocked": false,
+            "needs_hitl": false
+          },
+          "page_id": 1,
+          "section_id": 42,
+          "status": "pass"
+        }
+      ]
+    },
+    "projection_barrier_semantic_projection": {
+      "blocked_events": 21,
+      "checkpoint": "projection_barrier(semantic_projection)",
+      "max_open_lag_ms": 5728,
+      "run_id": "1984db43-6519-4540-8482-61fd3768bf2d",
+      "status": "blocked"
+    },
+    "projection_status": [
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 0,
+        "oldest_open_aggregate_key": null,
+        "oldest_open_event_id": null,
+        "oldest_open_event_type": null,
+        "pending_events": 0,
+        "processing_events": 0,
+        "target_system": "cms"
+      },
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 0,
+        "oldest_open_aggregate_key": null,
+        "oldest_open_event_id": null,
+        "oldest_open_event_type": null,
+        "pending_events": 0,
+        "processing_events": 0,
+        "target_system": "neo4j"
+      },
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 103929,
+        "oldest_open_aggregate_key": "raw_section:22",
+        "oldest_open_event_id": "9d5abf52-42a7-45ad-a6fc-cae6ceb3124a",
+        "oldest_open_event_type": "QdrantUpsertCommand",
+        "pending_events": 21,
+        "processing_events": 0,
+        "target_system": "qdrant"
+      }
+    ],
+    "raw_evidence_register": {
+      "context_key": "US|tourist||BY",
+      "evidence_refs": [
+        "raw.section:22",
+        "raw.section:23",
+        "raw.section:24",
+        "raw.section:25",
+        "raw.section:26",
+        "raw.section:27",
+        "raw.section:28",
+        "raw.section:29",
+        "raw.section:30",
+        "raw.section:31",
+        "raw.section:32",
+        "raw.section:33",
+        "raw.section:34",
+        "raw.section:35",
+        "raw.section:36",
+        "raw.section:37",
+        "raw.section:38",
+        "raw.section:39",
+        "raw.section:40",
+        "raw.section:41",
+        "raw.section:42"
+      ],
+      "page_count": 1,
+      "section_count": 21,
+      "status": "registered",
+      "unique_source_count": 1
+    },
+    "summary": {
+      "changed_truth_key_count": 1,
+      "contradiction_conflict_count": 0,
+      "needs_hitl_count": 0,
+      "verified_rule_count": 0
+    },
+    "support_refresh": {
+      "expected": true,
+      "note": "load_verified_support_bundle.* remains a non-ledgered activity surface",
+      "observed_via_step_ledger": false
+    },
+    "truth_adjudication": {
+      "blocked_section_count": 0,
+      "decisions": [
+        {
+          "adjudication_reason": "single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=government",
+          "completeness_class": "complete",
+          "concept_canonical_key": "passport",
+          "confidence": 0.8399999737739563,
+          "decision": "needs_hitl",
+          "evidence_quote": "Travel",
+          "freshness_class": "fresh",
+          "page_id": 1,
+          "params": {
+            "severity": "mandatory",
+            "subtype": "passport"
+          },
+          "publish_admissibility": "needs_hitl",
+          "role": "DOCUMENT_REQUIRED",
+          "rule_candidate_id": "558d86dfbf5882ff3837fb7b33fa889c849ee53932995ba93120d20c6fac667e",
+          "section_id": 22,
+          "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+          "source_snapshot_hash": "8d761f7b25d78a9efc28a7cb736c6487aca63d324b5217c2a80321ca9fb2ed6f",
+          "source_tier": "government",
+          "span_end": 6,
+          "span_start": 0,
+          "verification_method": "truth_adjudication@1"
+        },
+        {
+          "adjudication_reason": "resolution_loop_requires_hitl",
+          "completeness_class": "partial",
+          "concept_canonical_key": "passport",
+          "confidence": 0.8399999737739563,
+          "decision": "needs_hitl",
+          "evidence_quote": "Gather and prepare the following required documents before your visa interview:\nPassport\nvalid for travel to the United States – Your passport must be valid for at least six months beyond your period of stay in the United States (unless exempt by\ncountry-specific agreements\n)",
+          "freshness_class": "fresh",
+          "page_id": 1,
+          "params": {
+            "severity": "mandatory",
+            "subtype": "passport"
+          },
+          "publish_admissibility": "needs_hitl",
+          "role": "DOCUMENT_REQUIRED",
+          "rule_candidate_id": "81eea4e66c3b38a625f89f6a466fd46be0167a678ba6700b6c59ee2259b77009",
+          "section_id": 30,
+          "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+          "source_snapshot_hash": "6c65af8e0ed21e7f682cd35b419ebc751cf80f1a00d818874e1521c4cccd2360",
+          "source_tier": "government",
+          "span_end": 279,
+          "span_start": 0,
+          "verification_method": "truth_adjudication@1"
+        },
+        {
+          "adjudication_reason": "single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=government",
+          "completeness_class": "complete",
+          "concept_canonical_key": "passport",
+          "confidence": 0.8399999737739563,
+          "decision": "needs_hitl",
+          "evidence_quote": "A consular officer will interview you to determine whether you are qualified to receive a visitor visa",
+          "freshness_class": "fresh",
+          "page_id": 1,
+          "params": {
+            "severity": "mandatory",
+            "subtype": "passport"
+          },
+          "publish_admissibility": "needs_hitl",
+          "role": "DOCUMENT_REQUIRED",
+          "rule_candidate_id": "1ea081047498fb6bbb1ce757b1a74ba047562d48a6411646a7a34ad584f6e498",
+          "section_id": 32,
+          "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+          "source_snapshot_hash": "adbf8e659bd7d65e49b56bdfad7ac56dc09badbc6ae4fe4a931e896969e515d7",
+          "source_tier": "government",
+          "span_end": 102,
+          "span_start": 0,
+          "verification_method": "truth_adjudication@1"
+        },
+        {
+          "adjudication_reason": "single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=government",
+          "completeness_class": "complete",
+          "concept_canonical_key": "passport",
+          "confidence": 0.8399999737739563,
+          "decision": "needs_hitl",
+          "evidence_quote": "An individual on a visitor visa (B1/B2) is not permitted to accept employment or work in the United States",
+          "freshness_class": "fresh",
+          "page_id": 1,
+          "params": {
+            "severity": "mandatory",
+            "subtype": "passport"
+          },
+          "publish_admissibility": "needs_hitl",
+          "role": "DOCUMENT_REQUIRED",
+          "rule_candidate_id": "7c303f1b4ce5d6dbd4724d962f56e1c34922577c6542d2b8a7560a36db355650",
+          "section_id": 36,
+          "source_key": "https://travel.state.gov/content/travel/en/us-visas/tourism-visit/visitor.html",
+          "source_snapshot_hash": "18b4d35ecb726059e9b822d7290b456dc355efcdba6fe59c7fdb4e654a836ff5",
+          "source_tier": "government",
+          "span_end": 106,
+          "span_start": 0,
+          "verification_method": "truth_adjudication@1"
+        }
+      ],
+      "needs_hitl_count": 4,
+      "rejected_count": 0,
+      "section_count": 21,
+      "sections": [
+        {
+          "decision": "needs_hitl",
+          "needs_hitl_count": 1,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 22,
+          "status": "needs_hitl",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 23,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 24,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 25,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 26,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 27,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 28,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 29,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "needs_hitl",
+          "needs_hitl_count": 1,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 30,
+          "status": "needs_hitl",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 31,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "needs_hitl",
+          "needs_hitl_count": 1,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 32,
+          "status": "needs_hitl",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 33,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 34,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 35,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "needs_hitl",
+          "needs_hitl_count": 1,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 36,
+          "status": "needs_hitl",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 37,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 38,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 39,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 40,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 41,
+          "status": "rejected",
+          "verified_count": 0
+        },
+        {
+          "decision": "rejected",
+          "needs_hitl_count": 0,
+          "page_id": 1,
+          "rejected_count": 0,
+          "section_id": 42,
+          "status": "rejected",
+          "verified_count": 0
+        }
+      ],
+      "verified_count": 0
+    },
+    "verified_truth_write": {
+      "changed_truth_keys": [
+        "verified.rule_instance:24b235c42a942ced7d7d1a6c55ca60d91efaa88d3e1e245dcb23040ac27f5666"
+      ],
+      "context_key": "US|tourist||BY",
+      "demoted_rule_count": 4,
+      "status": "written",
+      "verified_rule_count": 0
+    }
+  },
+  "findings": [
+    {
+      "code": "SHADOW_PROJECTION_BARRIER_BLOCKED",
+      "level": "error",
+      "message": "cutover semantic projection barrier status=blocked blocked_events=21"
+    }
+  ],
+  "legacy_run_id": "d1e6a42c-f896-4420-8caa-effd07a0e28b",
+  "legacy_runtime": {
+    "candidate_status_counts": {
+      "needs_hitl_count": 0,
+      "rejected_count": 0,
+      "structured_count": 0,
+      "total_count": 0,
+      "verified_count": 0
+    },
+    "crawl_sources": {
+      "claimed_count": 1,
+      "crawled_count": 1,
+      "failed_count": 0,
+      "failed_urls": [],
+      "qdrant_event_count": 21,
+      "raw_page_count": 1,
+      "raw_page_ids": [
+        1
+      ],
+      "raw_section_count": 21,
+      "status": "done"
+    },
+    "projection_status": [
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 0,
+        "oldest_open_aggregate_key": null,
+        "oldest_open_event_id": null,
+        "oldest_open_event_type": null,
+        "pending_events": 0,
+        "processing_events": 0,
+        "target_system": "cms"
+      },
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 2379608,
+        "oldest_open_aggregate_key": "99113b1be94974dd2aa2dce93ffd9518fc040194dda200ac2b9ac05e224a29cb",
+        "oldest_open_event_id": "4cff36a6-37c1-4f7a-ba5c-43a48fc7f6f8",
+        "oldest_open_event_type": "SeoGraphProjectionUpserted",
+        "pending_events": 18,
+        "processing_events": 0,
+        "target_system": "neo4j"
+      },
+      {
+        "done_events": 0,
+        "failed_events": 0,
+        "latest_failed_aggregate_key": null,
+        "latest_failed_error": null,
+        "latest_failed_event_type": null,
+        "max_open_lag_ms": 2380355,
+        "oldest_open_aggregate_key": "raw_section:1",
+        "oldest_open_event_id": "a0454d75-5949-4dda-9cd8-7c6c31539652",
+        "oldest_open_event_type": "QdrantUpsertCommand",
+        "pending_events": 32,
+        "processing_events": 0,
+        "target_system": "qdrant"
+      }
+    ],
+    "raw_knowledge_ingestion": {
+      "changed_truth_keys": [],
+      "extracted_rule_count": 0,
+      "outbox_event_count": 0,
+      "raw_page_count": 1,
+      "raw_section_count": 21,
+      "status": "blocked:no_truth_extraction_provider",
+      "verified_rule_count": 0
+    },
+    "summary": {
+      "changed_truth_key_count": 0,
+      "needs_hitl_count": 0,
+      "verified_rule_count": 0
+    }
+  },
+  "phase_m1": {
+    "completed_ledger_steps": [
+      "operational_extraction",
+      "procedural_extraction",
+      "commercial_signal_extraction",
+      "triple_builder",
+      "truth_adjudication",
+      "verified_truth_write",
+      "whole_page_semantic_pass",
+      "seo_preflight",
+      "page_utility_classifier",
+      "dom_block_relevance_filter",
+      "contradiction_gate",
+      "resolution_loop",
+      "layer_router",
+      "cas_gate",
+      "retrieval_admissibility_gate",
+      "neo4j_sync",
+      "voyage_qdrant_sync",
+      "projection_barrier(raw_evidence)",
+      "raw_evidence_register",
+      "canonical_mapping",
+      "seo_signal_extraction",
+      "candidate_validation",
+      "serp_ingest",
+      "graph_admissibility_gate",
+      "editorial_extraction",
+      "completeness_judge",
+      "projection_barrier(semantic_projection)",
+      "subspan_layer_router",
+      "crawl_sources",
+      "load_seo_site_build_input",
+      "extraction_schema_validate",
+      "sectioning",
+      "entity_span_detection",
+      "ontology_intake_gate",
+      "sectioning_contract_gate"
+    ],
+    "expected_ledger_steps": [
+      "seo_preflight",
+      "serp_ingest",
+      "crawl_sources",
+      "whole_page_semantic_pass",
+      "page_utility_classifier",
+      "dom_block_relevance_filter",
+      "sectioning",
+      "sectioning_contract_gate",
+      "cas_gate",
+      "raw_evidence_register",
+      "projection_barrier(raw_evidence)",
+      "layer_router",
+      "subspan_layer_router",
+      "entity_span_detection",
+      "canonical_mapping",
+      "ontology_intake_gate",
+      "procedural_extraction",
+      "operational_extraction",
+      "editorial_extraction",
+      "seo_signal_extraction",
+      "commercial_signal_extraction",
+      "extraction_schema_validate",
+      "candidate_validation",
+      "triple_builder",
+      "completeness_judge",
+      "resolution_loop",
+      "contradiction_gate",
+      "truth_adjudication",
+      "verified_truth_write",
+      "graph_admissibility_gate",
+      "retrieval_admissibility_gate",
+      "neo4j_sync",
+      "voyage_qdrant_sync",
+      "projection_barrier(semantic_projection)"
+    ],
+    "missing_ledger_steps": [],
+    "non_ledgered_activity_steps": [
+      "load_verified_support_bundle.initial",
+      "load_verified_support_bundle.refresh"
+    ]
+  },
+  "status": "blocked",
+  "strict": false
+}

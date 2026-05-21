@@ -1264,6 +1264,7 @@ async fn main() -> Result<()> {
             if matches!(
                 workflow,
                 WorkflowKind::SeoSiteBuild
+                    | WorkflowKind::SeoSiteBuildCanonicalCutover
                     | WorkflowKind::ExpertDecomposedExtraction
                     | WorkflowKind::ExpertExtraction
                     | WorkflowKind::ExpertProjection

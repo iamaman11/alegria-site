@@ -356,7 +356,12 @@ impl AlegriaActivities {
         input: ReconcileTargetInputPayload,
     ) -> Result<ReconcileTargetReportRecord, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "projection_reconcile", 1, &input, || async {
+        let step_name = match input.target_system.as_str() {
+            "neo4j" => "neo4j_sync",
+            "qdrant" => "voyage_qdrant_sync",
+            _ => "projection_reconcile",
+        };
+        self.execute_step(&run_id, step_name, 1, &input, || async {
             operations::projection_reconcile_impl(
                 &input.target_system,
                 input.dry_run,
@@ -378,7 +383,12 @@ impl AlegriaActivities {
         input: ProjectionBarrierAuditInputPayload,
     ) -> Result<ProjectionBarrierAuditOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "projection_barrier_audit", 1, &input, || async {
+        let step_name = if input.checkpoint.trim().is_empty() {
+            "projection_barrier_audit"
+        } else {
+            input.checkpoint.as_str()
+        };
+        self.execute_step(&run_id, step_name, 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             let status = repo.load_projection_barrier_status(&run_id).await?;
             Ok(ProjectionBarrierAuditOutputPayload {

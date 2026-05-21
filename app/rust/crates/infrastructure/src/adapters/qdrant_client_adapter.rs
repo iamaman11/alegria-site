@@ -6,6 +6,7 @@ pub use qdrant_client::qdrant::{
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+use std::env;
 
 pub type AlegriaQdrantClient = Qdrant;
 
@@ -17,7 +18,21 @@ pub struct DenseEmbeddingPoint {
 }
 
 pub async fn connect_qdrant(url: &str) -> Result<Qdrant> {
-    Ok(Qdrant::from_url(url).build()?)
+    let skip_compatibility = env::var("QDRANT_SKIP_COMPATIBILITY_CHECK")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let builder = if skip_compatibility {
+        Qdrant::from_url(url).skip_compatibility_check()
+    } else {
+        Qdrant::from_url(url)
+    };
+    Ok(builder.build()?)
 }
 
 pub fn parse_distance(distance: &str) -> Result<Distance> {

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.15`
+**Current version:** `6.16`
 
 ---
 
@@ -1085,7 +1085,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted cutover checkpoint, currently real paired-run `shadow verification` evidence before `Phase M2`;
+- the next implementation target must be the earliest non-accepted cutover checkpoint, currently clearing the real Phase M1 shadow blocker on `Qdrant` projection materialization compatibility before `Phase M2`;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1121,7 +1121,13 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - `seo_preflight`
 - `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-36` wired through `projection_barrier(semantic_projection)` as the current real cutover slice
-- `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface for the remaining Phase M1 shadow gate
+- `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for the Phase M1 shadow gate
+- first real paired-run Phase M1 shadow report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json)
+- current Phase M1 cutover evidence status:
+  - legacy run id `d1e6a42c-f896-4420-8caa-effd07a0e28b`
+  - cutover run id `1984db43-6519-4540-8482-61fd3768bf2d`
+  - canonical ledger coverage for `steps 1-36`: complete
+  - current blocker: `projection_barrier(semantic_projection)` remains blocked because `Qdrant` materialization is runtime-incompatible with the current `qdrant-client 1.17.0` to local server `Qdrant 1.9.0`
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1298,6 +1304,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - added `cli_tools SeoCutoverShadowVerify` as the machine-readable shadow verification surface for comparing legacy runtime and `SeoSiteBuildCanonicalCutoverWorkflow` by `run_id`;
 - clarified that the remaining non-accepted `Phase M1` checkpoint is not inventing a shadow plan, but producing real paired-run shadow evidence before `Phase M2`;
 - recorded the shadow verification surface in the active/partial runtime status and support-surface inventory.
+
+### 6.16
+
+- captured the first real paired-run `Phase M1` shadow evidence at `docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json`;
+- recorded the exact shadow baseline run ids for legacy and cutover execution so recovery does not depend on chat context;
+- advanced the next non-accepted checkpoint from "produce shadow evidence" to "clear the `Qdrant` projection compatibility blocker that keeps `projection_barrier(semantic_projection)` blocked";
+- documented that canonical cutover `steps 1-36` ledger coverage is complete, while `Phase M1` acceptance remains blocked by runtime projection compatibility rather than by missing workflow steps.
 
 ### 6.14
 
