@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.18`
+**Current version:** `6.19`
 
 ---
 
@@ -1085,7 +1085,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted cutover checkpoint, currently continuing `Phase M2` from canonical planning `steps 37-42` into draft/publish `steps 43-55`, then `rebuild_detect`;
+- the next implementation target must be the earliest non-accepted cutover checkpoint, currently producing `Phase M2` runtime evidence and acceptance for canonical `steps 43-56` after the cutover workflow reached full step coverage;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1120,7 +1120,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
-- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-42` wired through `projection_barrier(global_site_reconcile)` as the current real cutover slice
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-56` wired through `rebuild_detect` as the current real cutover slice
 - `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for the Phase M1 shadow gate
 - first real paired-run Phase M1 shadow report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json)
 - accepted Phase M1 cutover evidence status:
@@ -1130,9 +1130,9 @@ Before continuing development past planning, the repository must satisfy this cl
   - canonical ledger coverage for `steps 1-36`: complete
   - `projection_barrier(semantic_projection)`: clear with `blocked_events=0`
 - current Phase M2 planning status:
-  - canonical `steps 37-42` are now runtime-wired in `SeoSiteBuildCanonicalCutoverWorkflow`
-  - current cutover edge ends at `projection_barrier(global_site_reconcile)`
-  - draft, publish, and rebuild semantics remain on the old canonical path until later `Phase M2` slices are accepted
+  - canonical `steps 37-56` are now runtime-wired in `SeoSiteBuildCanonicalCutoverWorkflow`
+  - explicit canonical step wrappers now exist for `truth_admissibility_gate`, `human_approval_wait`, `cms_request_review`, `cms_publish_approved`, and `projection_barrier(publish)`
+  - `Phase M2` is not yet accepted: publish, HITL, preview, finalize publish, publish barrier, and rebuild still need runtime evidence before the old canonical publish path can be drained
 - future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
@@ -1303,6 +1303,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.19
+
+- extended `SeoSiteBuildCanonicalCutoverWorkflow` through canonical `Phase M2` draft/publish/rebuild steps `43-56`;
+- promoted previously hidden or merged publish gates into explicit canonical steps by adding wrappers for `truth_admissibility_gate`, `human_approval_wait`, `cms_request_review`, and `cms_publish_approved`, plus `projection_barrier(publish)`;
+- advanced the cutover workflow from planning-only `steps 1-42` coverage to full runtime wiring of canonical `steps 1-56`, while keeping `Phase M2` acceptance pending runtime evidence for publish/HITL/rebuild semantics.
 
 ### 6.18
 

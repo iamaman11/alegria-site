@@ -1080,6 +1080,30 @@ impl AlegriaActivities {
 
     #[allow(dead_code)]
     #[activity]
+    pub async fn run_truth_admissibility_gate_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::TruthAdmissibilityGateInput,
+    ) -> Result<operations::TruthAdmissibilityGateOutput, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "truth_admissibility_gate", 1, &input, || async {
+            seo_application::seo_runtime::truth_admissibility_gate(
+                &input.verified_support,
+                &input.context_key,
+                &input.applicant_profile,
+            )?;
+            Ok(operations::TruthAdmissibilityGateOutput {
+                context_key: input.context_key.clone(),
+                applicant_profile: input.applicant_profile.clone(),
+                admissible_support_count: input.verified_support.len(),
+                status: "admissible".to_string(),
+            })
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
     pub async fn run_cms_publish_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
@@ -1087,6 +1111,56 @@ impl AlegriaActivities {
     ) -> Result<CmsPublishOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "cms_publish", 1, &input, || async {
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::review_publish::run_cms_publish(&repo, &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_cms_request_review_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: CmsPublishInputPayload,
+    ) -> Result<CmsPublishOutputPayload, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "cms_request_review", 1, &input, || async {
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::review_publish::run_cms_publish(&repo, &input).await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_human_approval_wait_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::HumanApprovalWaitInput,
+    ) -> Result<CmsApprovalDecision, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "human_approval_wait", 1, &input, || async {
+            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
+            seo_application::review_publish::load_cms_approval_decision(
+                &repo,
+                &input.page_node_key,
+                &input.revision_id,
+            )
+            .await
+        })
+        .await
+    }
+
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn run_cms_publish_approved_step(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: CmsPublishInputPayload,
+    ) -> Result<CmsPublishOutputPayload, ActivityError> {
+        let run_id = input.run_id.clone();
+        self.execute_step(&run_id, "cms_publish_approved", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::review_publish::run_cms_publish(&repo, &input).await
         })

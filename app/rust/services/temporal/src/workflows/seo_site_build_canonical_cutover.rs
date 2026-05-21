@@ -1,13 +1,24 @@
 use contracts::generated::alegria::temporal::v1::{
-    CrawlSourcesInputPayload, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
+    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
+    ContentContractValidateInputPayload, CrawlSourcesInputPayload, DraftAssembleInputPayload,
+    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
+    DraftQaInputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
+    FinalizePublishInputPayload, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
     LinkRecommendInputPayload, OpportunityBuildInputPayload, ProjectionBarrierAuditInputPayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
-    SerpNormalizeInputPayload,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RebuildDetectInputPayload, RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
     WorkflowContextView, WorkflowResult,
 };
+use seo_application::execution::{
+    blocked_interaction_status, blocked_publish_gate_status, build_execution_plan,
+    final_phase_keys, normalize_run_mode, page_phase_keys, phase_label, policy_for_run_mode,
+    scenario_kind_for_run_mode, RunInteractionPolicy, SeoPhaseKey,
+};
+use seo_application::scenario::{SeoExecutionMode, SeoScenarioRequest};
 use seo_ports::VerifiedSupportBundleRequest;
 
 use crate::activities::operations::{
@@ -15,12 +26,13 @@ use crate::activities::operations::{
     CommercialSignalExtractionSweepInput, CompletenessJudgeSweepInput,
     ContradictionGateSweepInput, DomBlockRelevanceSweepInput,
     EditorialExtractionSweepInput, EntitySpanSweepInput, ExtractionSchemaValidateInput,
+    HumanApprovalWaitInput,
     LayerRouterSweepInput, OntologyIntakeGateInput, OperationalExtractionSweepInput,
     PageUtilitySweepInput, ProceduralExtractionSweepInput, ProjectionSyncInput,
     ProjectionSyncOutput, RawEvidenceRegisterInput, ResolutionLoopInput, SectionSemanticGateBundle, SectioningContractGateInput,
     SectioningInput, SeoPreflightInput, SeoSignalExtractionSweepInput,
     SubspanLayerRouterInput, TripleBuilderSweepInput, TruthAdjudicationSweepInput,
-    VerifiedTruthWriteInput, WholePageSemanticPassInput,
+    TruthAdmissibilityGateInput, VerifiedTruthWriteInput, WholePageSemanticPassInput,
 };
 use crate::activities::AlegriaActivities;
 use crate::metrics;
@@ -31,6 +43,8 @@ use super::runtime::{db_opts, BasicWorkflowStatus};
 #[derive(Default)]
 struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
+    waiting_hitl: bool,
+    resume_requested: bool,
     phase: String,
 }
 
@@ -50,6 +64,10 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
         applicant_profile: scope.applicant_profile.clone(),
     })
     .map_err(anyhow::Error::from)?)
+}
+
+fn phase_with_ordinal(key: SeoPhaseKey, page_index: usize, page_total: usize) -> String {
+    format!("{}:{}/{}", phase_label(key), page_index + 1, page_total)
 }
 
 async fn sync_target(
@@ -96,6 +114,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .scope
             .clone()
             .ok_or_else(|| anyhow::anyhow!("SeoSiteBuildInputPayload.scope is required"))?;
+        let normalized_run_mode = normalize_run_mode(&site_input.run_mode);
+        let request = SeoScenarioRequest {
+            scenario: scenario_kind_for_run_mode(normalized_run_mode),
+            mode: SeoExecutionMode::TemporalDurable,
+            policy: policy_for_run_mode(normalized_run_mode, SeoExecutionMode::TemporalDurable),
+            output_dir: String::new(),
+            base_url: String::new(),
+            site_input: site_input.clone(),
+        };
+        let plan = build_execution_plan(&request);
 
         ctx.state_mut(|s| s.phase = "seo_preflight".to_string());
         let preflight = ctx
@@ -691,6 +719,487 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
 
+        let page_nodes = if global_site_reconcile.page_nodes.is_empty() {
+            ia_build.page_nodes.clone()
+        } else {
+            global_site_reconcile.page_nodes.clone()
+        };
+        let link_recommendations = if global_site_reconcile.link_recommendations.is_empty() {
+            link_recommend.link_recommendations.clone()
+        } else {
+            global_site_reconcile.link_recommendations.clone()
+        };
+        if page_nodes.is_empty() {
+            ctx.state_mut(|s| s.phase = "done:no_pages".to_string());
+            return Ok(run_id);
+        }
+
+        let factual_fragments = support_bundle
+            .iter()
+            .map(|support| support.fragment_text.clone())
+            .collect::<Vec<_>>();
+        let page_total = page_nodes.len();
+        let mut published_pages = 0usize;
+        let page_keys = page_phase_keys(&plan);
+        let mut publish_projection_barrier = None;
+
+        for (page_index, page_node) in page_nodes.iter().cloned().enumerate() {
+            let page_blueprint = ia_build
+                .page_blueprints
+                .iter()
+                .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
+                .cloned()
+                .unwrap_or_default();
+            let required_links: Vec<_> = link_recommendations
+                .iter()
+                .filter(|link| {
+                    link.required_flag && link.source_page_key == page_node.page_node_key
+                })
+                .cloned()
+                .collect();
+
+            let mut draft_plan: Option<DraftAssembleOutputPayload> = None;
+            let mut editorial_candidate: Option<EditorialDraftGenerateOutputPayload> = None;
+            let mut draft: Option<DraftNormalizeOutputPayload> = None;
+            let mut cms_requested: Option<CmsPublishOutputPayload> = None;
+            let mut cms_approved: Option<CmsPublishOutputPayload> = None;
+            let mut materialized: Option<PublishMaterializeOutputPayload> = None;
+            let mut page_blocked = false;
+
+            for key in page_keys.iter().copied() {
+                ctx.state_mut(|s| s.phase = phase_with_ordinal(key, page_index, page_total));
+                match key {
+                    SeoPhaseKey::DraftAssemble => {
+                        let _ = ctx
+                            .start_activity(
+                                AlegriaActivities::run_truth_admissibility_gate_step,
+                                TruthAdmissibilityGateInput {
+                                    run_id: run_id.clone(),
+                                    context_key: page_node.page_node_key.clone(),
+                                    applicant_profile: scope.applicant_profile.clone(),
+                                    verified_support: support_bundle.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                        draft_plan = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_draft_assemble_step,
+                                DraftAssembleInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node: Some(page_node.clone()),
+                                    page_blueprint: Some(page_blueprint.clone()),
+                                    factual_fragments: factual_fragments.clone(),
+                                    verified_support: support_bundle.clone(),
+                                    required_links: required_links.clone(),
+                                    section_templates: Vec::new(),
+                                    llm_candidate: None,
+                                    source_context_chunks: Vec::new(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?,
+                        );
+                    }
+                    SeoPhaseKey::EditorialDraftGenerate => {
+                        let draft_plan_ref =
+                            draft_plan.as_ref().expect("draft_assemble required");
+                        editorial_candidate = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_editorial_draft_generate,
+                                EditorialDraftGenerateInputPayload {
+                                    run_id: run_id.clone(),
+                                    request: draft_plan_ref.llm_request.clone(),
+                                    provider_policy: "multi_provider:first_available".to_string(),
+                                },
+                                db_opts(60),
+                            )
+                            .await?,
+                        );
+                    }
+                    SeoPhaseKey::DraftNormalize => {
+                        let draft_plan_ref =
+                            draft_plan.as_ref().expect("draft_assemble required");
+                        let editorial_ref = editorial_candidate
+                            .as_ref()
+                            .expect("editorial generation required");
+                        draft = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_draft_normalize_step,
+                                DraftNormalizeInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node: Some(page_node.clone()),
+                                    page_blueprint: Some(page_blueprint.clone()),
+                                    factual_fragments: factual_fragments.clone(),
+                                    verified_support: support_bundle.clone(),
+                                    required_links: required_links.clone(),
+                                    section_templates: draft_plan_ref
+                                        .editorial_brief
+                                        .as_ref()
+                                        .map(|brief| brief.section_templates.clone())
+                                        .unwrap_or_default(),
+                                    content_block_plan: draft_plan_ref.content_block_plan.clone(),
+                                    llm_candidate: editorial_ref.candidate.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?,
+                        );
+                    }
+                    SeoPhaseKey::ContentContractValidate => {
+                        let draft_ref = draft.as_ref().expect("draft_normalize required");
+                        let _ = ctx
+                            .start_activity(
+                                AlegriaActivities::run_content_contract_validate_step,
+                                ContentContractValidateInputPayload {
+                                    run_id: run_id.clone(),
+                                    draft: draft_ref.draft.clone(),
+                                    required_links: required_links.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                    }
+                    SeoPhaseKey::DraftQa => {
+                        let draft_ref = draft.as_ref().expect("draft_normalize required");
+                        let _ = ctx
+                            .start_activity(
+                                AlegriaActivities::run_draft_qa_step,
+                                DraftQaInputPayload {
+                                    run_id: run_id.clone(),
+                                    draft: draft_ref.draft.clone(),
+                                    supported_fragments: factual_fragments.clone(),
+                                    required_links: required_links.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                    }
+                    SeoPhaseKey::CmsRequestReview => {
+                        let draft_ref = draft.as_ref().expect("draft_normalize required");
+                        cms_requested = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_cms_request_review_step,
+                                CmsPublishInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node: Some(page_node.clone()),
+                                    draft: draft_ref.draft.clone(),
+                                    actor_role: "seo_system".to_string(),
+                                    publish_mode: "request_review".to_string(),
+                                    approval_decision: None,
+                                },
+                                db_opts(30),
+                            )
+                            .await?,
+                        );
+                        if cms_requested
+                            .as_ref()
+                            .expect("cms_request_review output")
+                            .verdict
+                            != "review_requested"
+                        {
+                            page_blocked = true;
+                            ctx.state_mut(|s| {
+                                s.phase = format!(
+                                    "{}:{}",
+                                    blocked_publish_gate_status(),
+                                    phase_with_ordinal(key, page_index, page_total)
+                                )
+                            });
+                            break;
+                        }
+                    }
+                    SeoPhaseKey::HumanApprovalWait => {
+                        let cms_requested_ref =
+                            cms_requested.as_ref().expect("cms request required");
+                        let approval_input = HumanApprovalWaitInput {
+                            run_id: run_id.clone(),
+                            page_node_key: page_node.page_node_key.clone(),
+                            revision_id: cms_requested_ref.revision_id.clone(),
+                        };
+                        match plan.policy.interaction {
+                            RunInteractionPolicy::AllowHitlPause => {
+                                ctx.state_mut(|s| {
+                                    s.waiting_hitl = true;
+                                    s.resume_requested = false;
+                                    s.paused = true;
+                                    s.phase = phase_with_ordinal(key, page_index, page_total);
+                                });
+                                loop {
+                                    ctx.wait_condition(|s| !s.paused && s.resume_requested)
+                                        .await;
+                                    let approval_decision: CmsApprovalDecision = ctx
+                                        .start_activity(
+                                            AlegriaActivities::run_human_approval_wait_step,
+                                            approval_input.clone(),
+                                            db_opts(30),
+                                        )
+                                        .await?;
+                                    if approval_decision.decision == "approved" {
+                                        break;
+                                    }
+                                    ctx.state_mut(|s| {
+                                        s.waiting_hitl = true;
+                                        s.resume_requested = false;
+                                        s.paused = true;
+                                        s.phase = format!(
+                                            "{}:{}:{}",
+                                            phase_label(key),
+                                            approval_decision.decision,
+                                            page_index + 1
+                                        );
+                                    });
+                                }
+                                ctx.state_mut(|s| {
+                                    s.waiting_hitl = false;
+                                    s.resume_requested = false;
+                                });
+                            }
+                            RunInteractionPolicy::FailIfHitlRequired => {
+                                page_blocked = true;
+                                ctx.state_mut(|s| {
+                                    s.waiting_hitl = false;
+                                    s.resume_requested = false;
+                                    s.phase = format!(
+                                        "{}:{}",
+                                        blocked_interaction_status(
+                                            RunInteractionPolicy::FailIfHitlRequired
+                                        ),
+                                        phase_with_ordinal(key, page_index, page_total)
+                                    );
+                                });
+                                break;
+                            }
+                            RunInteractionPolicy::RequirePreApprovedDecision => {
+                                let approval_decision: CmsApprovalDecision = ctx
+                                    .start_activity(
+                                        AlegriaActivities::run_human_approval_wait_step,
+                                        approval_input,
+                                        db_opts(30),
+                                    )
+                                    .await?;
+                                if approval_decision.decision != "approved" {
+                                    page_blocked = true;
+                                    ctx.state_mut(|s| {
+                                        s.waiting_hitl = false;
+                                        s.resume_requested = false;
+                                        s.phase = format!(
+                                            "{}:{}",
+                                            blocked_interaction_status(
+                                                RunInteractionPolicy::RequirePreApprovedDecision
+                                            ),
+                                            phase_with_ordinal(key, page_index, page_total)
+                                        );
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    SeoPhaseKey::CmsPublishApproved => {
+                        let draft_ref = draft.as_ref().expect("draft_normalize required");
+                        let cms_requested_ref =
+                            cms_requested.as_ref().expect("cms request required");
+                        let approval_lookup_key = format!(
+                            "{}|{}|{}",
+                            run_id, page_node.page_node_key, cms_requested_ref.revision_id
+                        );
+                        let approval_decision: CmsApprovalDecision = ctx
+                            .start_activity(
+                                AlegriaActivities::load_cms_approval_decision,
+                                approval_lookup_key,
+                                db_opts(30),
+                            )
+                            .await?;
+                        cms_approved = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_cms_publish_approved_step,
+                                CmsPublishInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node: Some(page_node.clone()),
+                                    draft: draft_ref.draft.clone(),
+                                    actor_role: "seo_system".to_string(),
+                                    publish_mode: "approved_publish".to_string(),
+                                    approval_decision: Some(approval_decision),
+                                },
+                                db_opts(30),
+                            )
+                            .await?,
+                        );
+                        if cms_approved.as_ref().expect("cms approved output").verdict
+                            != "approved"
+                        {
+                            page_blocked = true;
+                            ctx.state_mut(|s| {
+                                s.phase = format!(
+                                    "{}:{}",
+                                    blocked_publish_gate_status(),
+                                    phase_with_ordinal(key, page_index, page_total)
+                                )
+                            });
+                            break;
+                        }
+                    }
+                    SeoPhaseKey::PublishMaterialize => {
+                        let cms_requested_ref =
+                            cms_requested.as_ref().expect("cms request required");
+                        materialized = Some(
+                            ctx.start_activity(
+                                AlegriaActivities::run_publish_materialize_step,
+                                PublishMaterializeInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node_key: page_node.page_node_key.clone(),
+                                    revision_id: cms_requested_ref.revision_id.clone(),
+                                    cms_document_id: cms_requested_ref.cms_document_id.clone(),
+                                    canonical_url_path: page_node.canonical_url_path.clone(),
+                                    publish_artifact: cms_requested_ref
+                                        .publish_artifact
+                                        .clone()
+                                        .or(cms_approved.as_ref().and_then(|approved| {
+                                            approved.publish_artifact.clone()
+                                        })),
+                                    output_dir: String::new(),
+                                    base_url: String::new(),
+                                },
+                                db_opts(60),
+                            )
+                            .await?,
+                        );
+                        if materialized
+                            .as_ref()
+                            .expect("publish materialize output")
+                            .materialization_status
+                            .contains("failed")
+                        {
+                            page_blocked = true;
+                            ctx.state_mut(|s| {
+                                s.phase = format!(
+                                    "{}:{}",
+                                    blocked_publish_gate_status(),
+                                    phase_with_ordinal(key, page_index, page_total)
+                                )
+                            });
+                            break;
+                        }
+                    }
+                    SeoPhaseKey::RenderPreviewValidate => {
+                        let materialized_ref =
+                            materialized.as_ref().expect("publish materialize required");
+                        let render_validation = ctx
+                            .start_activity(
+                                AlegriaActivities::run_render_preview_validate_step,
+                                RenderPreviewValidateInputPayload {
+                                    run_id: run_id.clone(),
+                                    preview_pages: materialized_ref.preview_pages.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                        if render_validation.verdict != "render_ready" {
+                            page_blocked = true;
+                            ctx.state_mut(|s| {
+                                s.phase = format!(
+                                    "{}:{}",
+                                    blocked_publish_gate_status(),
+                                    phase_with_ordinal(key, page_index, page_total)
+                                )
+                            });
+                            break;
+                        }
+                    }
+                    SeoPhaseKey::FinalizePublish => {
+                        let cms_requested_ref =
+                            cms_requested.as_ref().expect("cms request required");
+                        let materialized_ref =
+                            materialized.as_ref().expect("publish materialize required");
+                        let render_validation = ctx
+                            .start_activity(
+                                AlegriaActivities::run_render_preview_validate_step,
+                                RenderPreviewValidateInputPayload {
+                                    run_id: run_id.clone(),
+                                    preview_pages: materialized_ref.preview_pages.clone(),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                        let finalized = ctx
+                            .start_activity(
+                                AlegriaActivities::run_finalize_publish_step,
+                                FinalizePublishInputPayload {
+                                    run_id: run_id.clone(),
+                                    page_node_key: page_node.page_node_key.clone(),
+                                    revision_id: cms_requested_ref.revision_id.clone(),
+                                    publish_artifact: materialized_ref.publish_artifact.clone(),
+                                    render_validation: Some(render_validation),
+                                },
+                                db_opts(30),
+                            )
+                            .await?;
+                        if finalized.verdict == "published" {
+                            published_pages += 1;
+                        } else {
+                            page_blocked = true;
+                            ctx.state_mut(|s| {
+                                s.phase = format!(
+                                    "{}:{}",
+                                    blocked_publish_gate_status(),
+                                    phase_with_ordinal(key, page_index, page_total)
+                                )
+                            });
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                ctx.wait_condition(|s| !s.paused).await;
+            }
+
+            if page_blocked {
+                continue;
+            }
+        }
+
+        if page_keys.contains(&SeoPhaseKey::FinalizePublish) {
+            ctx.state_mut(|s| s.phase = "projection_barrier(publish)".to_string());
+            publish_projection_barrier = Some(
+                ctx.start_activity(
+                    AlegriaActivities::run_projection_barrier_audit_step,
+                    ProjectionBarrierAuditInputPayload {
+                        run_id: run_id.clone(),
+                        checkpoint: "projection_barrier(publish)".to_string(),
+                    },
+                    db_opts(30),
+                )
+                .await?,
+            );
+            ctx.wait_condition(|s| !s.paused).await;
+        }
+
+        let mut rebuild = None;
+        for key in final_phase_keys(&plan).iter().copied() {
+            ctx.state_mut(|s| s.phase = phase_label(key).to_string());
+            match key {
+                SeoPhaseKey::RebuildDetect => {
+                    rebuild = Some(
+                        ctx.start_activity(
+                            AlegriaActivities::run_rebuild_detect_step,
+                            RebuildDetectInputPayload {
+                                run_id: run_id.clone(),
+                                changed_truth_keys: verified_truth_write
+                                    .changed_truth_keys
+                                    .clone(),
+                                page_nodes: page_nodes.clone(),
+                            },
+                            db_opts(30),
+                        )
+                        .await?,
+                    );
+                }
+                _ => {}
+            }
+            ctx.wait_condition(|s| !s.paused).await;
+        }
+
         ctx.state_mut(|s| s.phase = "done:seo_site_build_canonical_cutover".to_string());
         metrics::global()
             .workflow_completions_total
@@ -698,7 +1207,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .inc();
 
         Ok(format!(
-            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={} graph_gate_blocked={} retrieval_gate_blocked={} semantic_projection_barrier_blocked={} neo4j_failed={} qdrant_failed={} serp_patterns={} opportunity_clusters={} ia_pages={} link_recommendations={} global_reconcile_pages={} global_reconcile_links={} planning_projection_barrier_blocked={}",
+            "seo_site_build_canonical_cutover_ok run_id={} preflight_status={} support_bundle={} raw_pages={} semantic_pages={} page_utility_sections={} dom_blocked={} sections={} sectioning_blocked={} cas_blocked={} evidence_sections={} raw_evidence_barrier_status={} layer_router_hitl={} subspan_split={} entity_mentions={} canonical_mapping_hitl={} ontology_gate_hitl={} procedural_rules={} operational_entities={} editorial_topics={} seo_signals={} commercial_signals={} schema_invalid={} candidate_hitl={} triples={} completeness_hitl={} resolution_hitl={} contradiction_conflicts={} truth_verified={} truth_hitl={} verified_writes={} graph_gate_blocked={} retrieval_gate_blocked={} semantic_projection_barrier_blocked={} neo4j_failed={} qdrant_failed={} serp_patterns={} opportunity_clusters={} ia_pages={} link_recommendations={} global_reconcile_pages={} global_reconcile_links={} planning_projection_barrier_blocked={} published_pages={} publish_projection_barrier_blocked={} rebuild_verdict={}",
             run_id,
             preflight.status,
             support_bundle.len(),
@@ -741,7 +1250,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             link_recommend.link_recommendations.len(),
             global_site_reconcile.page_nodes.len(),
             global_site_reconcile.link_recommendations.len(),
-            planning_projection_barrier.blocked_events
+            planning_projection_barrier.blocked_events,
+            published_pages,
+            publish_projection_barrier
+                .as_ref()
+                .map(|barrier| barrier.blocked_events)
+                .unwrap_or_default(),
+            rebuild
+                .as_ref()
+                .map(|output| output.verdict.as_str())
+                .unwrap_or("not_run")
         ))
     }
 
@@ -753,8 +1271,14 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
 
     #[signal(name = "resume")]
     fn resume(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
-        self.paused = false;
-        self.phase = "resumed".to_string();
+        if self.waiting_hitl {
+            self.resume_requested = true;
+            self.paused = false;
+            self.phase = "resumed_hitl_review".to_string();
+        } else {
+            self.paused = false;
+            self.phase = "resumed".to_string();
+        }
     }
 
     #[query(name = "status")]

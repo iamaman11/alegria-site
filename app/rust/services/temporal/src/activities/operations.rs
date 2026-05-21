@@ -1,6 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use contracts::generated::alegria::temporal::v1::{FreshnessReport, SeoScopePayload, StepContractMeta};
+use contracts::generated::alegria::temporal::v1::{
+    FreshnessReport, SeoScopePayload, SeoVerifiedFactSupportState, StepContractMeta,
+};
 use infrastructure::adapters::projection_materialize_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
@@ -123,6 +125,29 @@ pub struct SeoPreflightOutput {
     pub qdrant_point_count: i64,
     pub projection_blocked: bool,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdmissibilityGateInput {
+    pub run_id: String,
+    pub context_key: String,
+    pub applicant_profile: String,
+    pub verified_support: Vec<SeoVerifiedFactSupportState>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TruthAdmissibilityGateOutput {
+    pub context_key: String,
+    pub applicant_profile: String,
+    pub admissible_support_count: usize,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HumanApprovalWaitInput {
+    pub run_id: String,
+    pub page_node_key: String,
+    pub revision_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -810,6 +835,18 @@ impl_json_runtime_payload_local!(
 );
 impl_json_runtime_payload_local!(SeoPreflightInput, "alegria.runtime.json.SeoPreflightInput");
 impl_json_runtime_payload_local!(SeoPreflightOutput, "alegria.runtime.json.SeoPreflightOutput");
+impl_json_runtime_payload_local!(
+    TruthAdmissibilityGateInput,
+    "alegria.runtime.json.TruthAdmissibilityGateInput"
+);
+impl_json_runtime_payload_local!(
+    TruthAdmissibilityGateOutput,
+    "alegria.runtime.json.TruthAdmissibilityGateOutput"
+);
+impl_json_runtime_payload_local!(
+    HumanApprovalWaitInput,
+    "alegria.runtime.json.HumanApprovalWaitInput"
+);
 impl_json_runtime_payload_local!(
     WholePageSemanticPassInput,
     "alegria.runtime.json.WholePageSemanticPassInput"
