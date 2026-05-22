@@ -218,9 +218,9 @@ run_ping_and_demo() {
 run_seo_site_build_workflow() {
   local rid
   rid="$(cat /proc/sys/kernel/random/uuid)"
-  log "seo site-build workflow run_id=$rid"
+  log "seo canonical-cutover workflow run_id=$rid"
   (cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- start \
-      --workflow seo-site-build \
+      --workflow seo-site-build-canonical-cutover \
       --workflow-id "$rid" \
       --database-url "$DB_DSN" \
       --context-key "es:tourist:by" \
@@ -290,9 +290,9 @@ run_seo_site_build_workflow() {
 run_seo_empty_support_failure() {
   local rid
   rid="$(cat /proc/sys/kernel/random/uuid)"
-  log "seo empty-support workflow run_id=$rid"
+  log "seo canonical-cutover empty-support workflow run_id=$rid"
   (cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- start \
-      --workflow seo-site-build \
+      --workflow seo-site-build-canonical-cutover \
       --workflow-id "$rid" \
       --database-url "$DB_DSN" \
       --context-key "es:tourist:empty:by" \

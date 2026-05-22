@@ -55,16 +55,22 @@ The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value st
 
 ### 2.1 Active production workflow
 
-The only active production workflow is:
+The active forward workflow for new production-style site-build execution is:
+
+- `SeoSiteBuildCanonicalCutoverWorkflow`
+
+Compat/drain workflow still present during the rollout window:
 
 - `SeoSiteBuildWorkflow`
+  - retained for replay-safe compatibility and explicit legacy drain only
+  - not the forward architecture target for new feature work
 
-Additional first-class rollout/support workflows now exist without replacing the canonical site-build path:
+Additional first-class rollout/support workflows remain available only for controlled investigation and diagnostics:
 
-- `ExpertExtractionWorkflow` for focused expert truth extraction rollout;
-- `ExpertDecomposedExtractionWorkflow` for focused decomposition rollout of the current `raw_knowledge_ingestion` macro-step into explicit semantic prelude plus current truth-core;
-- `ExpertProjectionWorkflow` for focused truth-to-projection rollout with explicit graph/retrieval admissibility checkpoints;
-- `ExpertSemanticSliceWorkflow` for focused real-section rollout of deferred rich semantic stages such as utility classification, DOM filtering, entity spans, canonical mapping, procedural extraction, completeness, triples, contradiction, and HITL routing;
+- `ExpertExtractionWorkflow` as migration-only diagnostic extraction surface;
+- `ExpertDecomposedExtractionWorkflow` as migration-only diagnostic decomposition surface;
+- `ExpertProjectionWorkflow` as migration-only diagnostic truth-to-projection surface;
+- `ExpertSemanticSliceWorkflow` as migration-only diagnostic real-section semantic surface;
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
 - `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
 
@@ -93,8 +99,9 @@ Current truth extraction policy:
 
 Current rollout-safe promotion rule:
 
-- new extraction orchestration may be introduced as a separate workflow type;
-- current `SeoSiteBuildWorkflow` remains the canonical publishing path until a future build-id rollout promotes a richer workflow as primary.
+- `SeoSiteBuildCanonicalCutoverWorkflow` is the accepted replacement candidate and active forward path;
+- `SeoSiteBuildWorkflow` stays alive only for the explicit compatibility window and replay/drain discipline;
+- no new product logic should land in the `Expert*Workflow` family.
 
 Current execution-plan semantics:
 

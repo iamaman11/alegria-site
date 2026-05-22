@@ -222,6 +222,8 @@ def main() -> int:
         "ExpertSemanticSliceWorkflow",
         "ProjectionReconcileWorkflow",
         "SeoSiteBuildCanonicalCutoverWorkflow",
+        "default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover",
+        "SeoSiteBuildLegacyCompat",
     ]:
         if needle not in starter:
             failures.append(f"temporal starter missing `{needle}`")

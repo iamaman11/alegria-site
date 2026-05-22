@@ -29,7 +29,7 @@ def main() -> int:
 
     for needle in [
         "WorkflowKind::ContentGeneration",
-        "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildWorkflow for production SEO generation.",
+        "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildCanonicalCutoverWorkflow for production SEO generation.",
     ]:
         if needle not in starter:
             failures.append(f"temporal_starter.rs missing `{needle}`")

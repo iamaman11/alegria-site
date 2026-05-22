@@ -86,7 +86,9 @@ The following `V5` or legacy planning files are reference-only:
 - `release_and_restore_gate` currently has operator probe/execution coverage through `cli_tools SeoReleaseRestoreGate`.
 - `release_and_restore_gate` currently emits machine-readable evidence through `--report-json`.
 - `release_and_restore_gate` currently executes heavyweight gates through `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, and `infra/backups/restore_drill.sh`.
-- focused extraction rollout currently executes through `ExpertExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for the extraction core.
-- focused decomposition rollout currently executes through `ExpertDecomposedExtractionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for splitting the `raw_knowledge_ingestion` macro-step into explicit semantic prelude plus current truth-core.
-- focused extraction-to-projection rollout currently executes through `ExpertProjectionWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for explicit graph/retrieval admissibility and sync stages.
-- focused semantic-step rollout currently executes through `ExpertSemanticSliceWorkflow`; this is not itself a support-plane process, but it is the current safe promotion surface for deferred rich semantic stages on real crawled sections.
+- `SeoSiteBuildCanonicalCutoverWorkflow` is now the active forward workflow for canonical site-build execution; support-plane operators that start new expert rebuild/site-build work should target it by default.
+- `SeoSiteBuildWorkflow` remains executable only for explicit compat/drain, replay-safe legacy runs, and controlled comparison.
+- `ExpertExtractionWorkflow` remains executable only as a migration-only diagnostic extraction surface; it is not a support-plane process and is not a target for new product logic.
+- `ExpertDecomposedExtractionWorkflow` remains executable only as a migration-only diagnostic decomposition surface; it is not a support-plane process and is not a target for new product logic.
+- `ExpertProjectionWorkflow` remains executable only as a migration-only diagnostic truth-to-projection surface; it is not a support-plane process and is not a target for new product logic.
+- `ExpertSemanticSliceWorkflow` remains executable only as a migration-only diagnostic semantic-step surface; it is not a support-plane process and is not a target for new product logic.

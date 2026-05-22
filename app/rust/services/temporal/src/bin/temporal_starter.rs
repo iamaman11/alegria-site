@@ -119,7 +119,7 @@ enum Command {
         limit: i64,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        #[arg(long, value_enum, default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuild)]
+        #[arg(long, value_enum, default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover)]
         workflow: RebuildDispatchWorkflowKind,
         #[arg(long)]
         report_json: Option<String>,
@@ -216,22 +216,24 @@ impl WorkflowKind {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum RebuildDispatchWorkflowKind {
-    ExpertExtraction,
-    SeoSiteBuild,
+    SeoSiteBuildCanonicalCutover,
+    SeoSiteBuildLegacyCompat,
 }
 
 impl RebuildDispatchWorkflowKind {
     fn workflow_type(self) -> &'static str {
         match self {
-            RebuildDispatchWorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
-            RebuildDispatchWorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
+            RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover => {
+                "SeoSiteBuildCanonicalCutoverWorkflow"
+            }
+            RebuildDispatchWorkflowKind::SeoSiteBuildLegacyCompat => "SeoSiteBuildWorkflow",
         }
     }
 
     fn run_mode(self) -> &'static str {
         match self {
-            RebuildDispatchWorkflowKind::ExpertExtraction => "draft_only",
-            RebuildDispatchWorkflowKind::SeoSiteBuild => "publish_with_hitl",
+            RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover
+            | RebuildDispatchWorkflowKind::SeoSiteBuildLegacyCompat => "publish_with_hitl",
         }
     }
 }
@@ -1254,7 +1256,7 @@ async fn main() -> Result<()> {
         } => {
             if workflow == WorkflowKind::ContentGeneration {
                 anyhow::bail!(
-                    "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildWorkflow for production SEO generation."
+                    "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildCanonicalCutoverWorkflow for production SEO generation."
                 );
             }
             let wf_id = match workflow_id {

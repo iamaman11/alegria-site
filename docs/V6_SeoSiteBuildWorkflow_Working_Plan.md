@@ -3,15 +3,15 @@
 **Status:** active versioned working plan
 **Class:** `current-execution-satellite`
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
-**Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
+**Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.20`
+**Current version:** `6.21`
 
 ---
 
 ## 1. Mission
 
-`SeoSiteBuildWorkflow` must become the single active orchestration path that:
+The active forward orchestration path must remain a single workflow that:
 
 - keeps Truth Plane authoritative,
 - restores the full rich semantic/graph/retrieval flow on top of truth-core,
@@ -134,7 +134,7 @@ Current active flow:
 
 Additional first-class workflow surfaces now present for phased rollout.
 
-These surfaces are migration-only. They are not the long-term target architecture and they do not create a second permanent production flow. The single intended replacement candidate for the future canonical path is `SeoSiteBuildCanonicalCutoverWorkflow`, introduced as a cutover target in `Section 8 / Phase M`.
+These surfaces are migration-only. They are not the long-term target architecture and they do not create a second permanent production flow. The single accepted forward path is `SeoSiteBuildCanonicalCutoverWorkflow`, with `SeoSiteBuildWorkflow` retained only for explicit compat/drain.
 
 - `ExpertExtractionWorkflow`:
   - isolated truth/extraction rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> optional support refresh`
@@ -149,7 +149,7 @@ These surfaces are migration-only. They are not the long-term target architectur
 - `FreshnessCheckWorkflow`:
   - support-plane freshness monitor
 - `SeoSiteBuildCanonicalCutoverWorkflow`:
-  - partial canonical-cutover surface now wired for canonical `steps 1-36`, ending in `projection_barrier(semantic_projection)`
+  - accepted canonical-cutover surface now wired and runtime-accepted for canonical `steps 1-56`
 
 Additional support-plane executable surfaces now present outside the 56-step run:
 
@@ -237,7 +237,7 @@ Canonical live envs:
 - deferred reactivation below refers to the richer semantic stages around early gates, router, entity spans, canonical mapping, triple building, completeness, and resolution. It does not mean removing the active truth-core validator/adjudicator.
 - the current `raw_knowledge_ingestion` is a migration macro-step. In the V6.3 target it must be decomposed into explicit evidence preparation, rich extraction, validation, completeness, resolution, and truth-adjudication stages.
 - `code-present, runtime-inactive` source files are not counted as active implementation until crate export, live invocation, and automation coverage all exist.
-- `ExpertExtractionWorkflow` is the current safe promotion surface for extraction-core hardening; it does not replace `SeoSiteBuildWorkflow` yet.
+- `ExpertExtractionWorkflow` remains available only as a migration-only diagnostic extraction surface; it is not the forward runtime path.
 
 ---
 
@@ -879,9 +879,9 @@ Exit:
 #### Canonical replacement target
 
 - the long-term target remains the canonical 56-step flow in `Section 4.1`;
-- the single replacement candidate is `SeoSiteBuildCanonicalCutoverWorkflow`;
-- current `SeoSiteBuildWorkflow` remains the canonical publish path only for the compatibility window while cutover is in progress;
-- `SeoSiteBuildCanonicalCutoverWorkflow` is the only workflow that may become the future canonical path;
+- the single accepted forward path is `SeoSiteBuildCanonicalCutoverWorkflow`;
+- `SeoSiteBuildWorkflow` remains alive only for the compatibility window, replay safety, and explicit legacy drain;
+- no second canonical candidate exists;
 - no new `Expert*Workflow` surfaces should be added after this point.
 
 #### Phase M1 - Steps 1-36
@@ -910,7 +910,7 @@ Phase M2 is the later cutover stage for the remainder of the canonical flow:
 Rules:
 
 - publish is not considered cut over by Phase M1;
-- until Phase M2 is complete, old `SeoSiteBuildWorkflow` remains the canonical publish path;
+- until Phase M2 acceptance, old `SeoSiteBuildWorkflow` remained the canonical publish path;
 - Phase M2 must preserve existing HITL, preview validation, finalize publish, and rebuild semantics.
 
 #### Migration-only workflow status
@@ -921,22 +921,22 @@ The following workflows are migration-only rollout surfaces:
   - `migration-only`
   - `not canonical`
   - `not permanent product runtime`
-  - `eligible for retirement after V2 cutover evidence`
+  - `eligible for retirement after full cutover convergence evidence`
 - `ExpertDecomposedExtractionWorkflow`
   - `migration-only`
   - `not canonical`
   - `not permanent product runtime`
-  - `eligible for retirement after V2 cutover evidence`
+  - `eligible for retirement after full cutover convergence evidence`
 - `ExpertProjectionWorkflow`
   - `migration-only`
   - `not canonical`
   - `not permanent product runtime`
-  - `eligible for retirement after V2 cutover evidence`
+  - `eligible for retirement after full cutover convergence evidence`
 - `ExpertSemanticSliceWorkflow`
   - `migration-only`
   - `not canonical`
   - `not permanent product runtime`
-  - `eligible for retirement after V2 cutover evidence`
+  - `eligible for retirement after full cutover convergence evidence`
 
 #### Cutover acceptance
 
@@ -1120,7 +1120,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.2 Partial now
 
 - `seo_preflight`
-- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-56` wired through `rebuild_detect` as the current real cutover slice
+- `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-56` wired through `rebuild_detect` as the current active forward workflow
 - `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for accepted `Phase M1` and `Phase M2` cutover verification
 - first real paired-run Phase M1 shadow report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json)
 - accepted Phase M1 cutover evidence status:
@@ -1136,7 +1136,7 @@ Before continuing development past planning, the repository must satisfy this cl
   - accepted cutover full-flow run id `35bbdec3-04f5-4f68-9035-df6ea9a128d1`
   - `Phase M2` runtime evidence proved preserved review, HITL, preview, finalize publish, publish barrier, and rebuild semantics on a shared acceptance fixture
   - the critical publish-tail bug fixed during acceptance was stale in-memory `qa_verdict` propagation between `draft_qa` and `cms_request_review`; both legacy and cutover runtimes now pass the updated draft state into CMS review/publish steps
-- accepted `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, with the remaining work now limited to promotion/drain/retirement rather than missing canonical step coverage
+- accepted `SeoSiteBuildCanonicalCutoverWorkflow` forward path defined in `Phase M`, with the remaining work now limited to promotion/drain/retirement rather than missing canonical step coverage
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
 - `Voyage` embedding adapter surface
@@ -1313,6 +1313,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - fixed the publish-tail runtime bug where `cms_request_review` could still see stale `draft.qa_verdict=not_run` after `draft_qa`, by propagating the updated QA verdict through the scenario path, legacy workflow, and canonical cutover workflow before CMS review/publish steps;
 - extended `SeoCutoverShadowVerify` to validate `Phase M2` publish/HITL/rebuild semantics from stable run-scoped `pipeline.step_executions` evidence, instead of relying on mutable CMS event rows that can be overwritten by later runs on the same page/revision keys;
 - updated the working-plan status so `SeoSiteBuildCanonicalCutoverWorkflow` is now accepted through canonical `steps 1-56`, while `SeoSiteBuildWorkflow` remains present only for drain/compat and not as the forward architecture target.
+
+### 6.21
+
+- switched convergence wording from "future replacement candidate" to "accepted forward path" now that `SeoSiteBuildCanonicalCutoverWorkflow` is runtime-accepted through canonical `steps 1-56`;
+- updated active-surface status so `SeoSiteBuildCanonicalCutoverWorkflow` is the active forward workflow, while `SeoSiteBuildWorkflow` is documented only as compat/drain and replay-safe legacy support;
+- reclassified the `Expert*Workflow` family everywhere in this working plan as migration-only diagnostic surfaces eligible for retirement after full convergence, not as current promotion targets.
 
 ### 6.19
 

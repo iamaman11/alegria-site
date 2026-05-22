@@ -74,7 +74,70 @@ Owner-boundary note:
 
 ## 2) Current workflow chains
 
+- `SeoSiteBuildCanonicalCutoverWorkflow`:
+  - active forward workflow for new production-style site-build execution
+  - `seo_preflight`
+  - `load_seo_site_build_input`
+  - `load_verified_support_bundle.initial`
+  - `serp_ingest`
+  - `crawl_sources`
+  - `whole_page_semantic_pass`
+  - `page_utility_classifier`
+  - `dom_block_relevance_filter`
+  - `sectioning`
+  - `sectioning_contract_gate`
+  - `cas_gate`
+  - `raw_evidence_register`
+  - `projection_barrier(raw_evidence)`
+  - `layer_router`
+  - `subspan_layer_router`
+  - `entity_span_detection`
+  - `canonical_mapping`
+  - `ontology_intake_gate`
+  - `procedural_extraction`
+  - `operational_extraction`
+  - `editorial_extraction`
+  - `seo_signal_extraction`
+  - `commercial_signal_extraction`
+  - `extraction_schema_validate`
+  - `candidate_validation`
+  - `triple_builder`
+  - `completeness_judge`
+  - `resolution_loop`
+  - `contradiction_gate`
+  - `truth_adjudication`
+  - `verified_truth_write`
+  - optional `load_verified_support_bundle.refresh`
+  - `serp_normalize`
+  - `opportunity_build`
+  - `ia_build`
+  - `link_recommend`
+  - `global_site_reconcile`
+  - `projection_barrier(global_site_reconcile)`
+  - per-page:
+    - `draft_assemble`
+    - `editorial_draft_generate`
+    - `draft_normalize`
+    - `content_contract_validate`
+    - `draft_qa`
+    - conditional publish-control path:
+      - `truth_admissibility_gate`
+      - `cms_request_review`
+      - `human_approval_wait`
+      - `cms_publish_approved`
+      - `publish_materialize`
+      - `render_preview_validate`
+      - `finalize_publish`
+      - `projection_barrier(publish)`
+  - conditional final phase:
+    - `rebuild_detect`
+  - current execution plan is branch-sensitive to normalized `run_mode`, scenario, and policy:
+    - `crawl_only` stops before planning/drafting
+    - `draft_only` and `dry_run` persist without publish
+    - publish phases run only when publish policy and scenario both allow them
+    - workflow may terminate early with `done:no_pages`
 - `SeoSiteBuildWorkflow`:
+  - compat/drain workflow only; retained for replay-safe legacy histories and controlled comparison
   - `load_seo_site_build_input`
   - `load_verified_support_bundle`
   - `serp_ingest`
@@ -110,7 +173,7 @@ Owner-boundary note:
     - `raw_knowledge_ingestion`
     - `global_site_reconcile`
 - `ExpertExtractionWorkflow`:
-  - rollout-safe extraction-only surface
+  - migration-only diagnostic extraction surface
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -118,7 +181,7 @@ Owner-boundary note:
   - `raw_knowledge_ingestion`
   - optional `load_verified_support_bundle.refresh`
 - `ExpertDecomposedExtractionWorkflow`:
-  - rollout-safe decomposition surface for the current extraction macro-step
+  - migration-only diagnostic decomposition surface for the legacy extraction macro-step
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -139,7 +202,7 @@ Owner-boundary note:
   - `raw_knowledge_ingestion`
   - optional `load_verified_support_bundle.refresh`
 - `ExpertProjectionWorkflow`:
-  - rollout-safe extraction-plus-projection surface
+  - migration-only diagnostic extraction-plus-projection surface
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -152,7 +215,7 @@ Owner-boundary note:
   - `projection_barrier.post_projection`
   - optional `load_verified_support_bundle.refresh`
 - `ExpertSemanticSliceWorkflow`:
-  - rollout-safe real-section semantic surface
+  - migration-only diagnostic real-section semantic surface
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -281,7 +344,7 @@ Out of scope:
 1. E2E run on production-like dataset
 2. Metrics/alerts on failures, retry storm, lag
 3. Full pass of `automation/ci_verify.sh`
-4. SEO launch path uses `SeoSiteBuildWorkflow` with runtime-loaded verified support bundle
+4. SEO launch path uses `SeoSiteBuildCanonicalCutoverWorkflow` with runtime-loaded verified support bundle
 5. SEO publish path materializes artifact through workflow-owned incremental build with validated fallback
 
 ## 6) Backup and restore

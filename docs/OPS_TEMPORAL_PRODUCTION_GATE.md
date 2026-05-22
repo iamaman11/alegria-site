@@ -42,7 +42,7 @@ python3 automation/check_truth_extraction_provider_ready.py
 - `demo-hitl` проходит (`demo_hitl_ok`).
 
 4. Проверяет реальные workflow в боевом контуре:
-- `SeoSiteBuildWorkflow`:
+- `SeoSiteBuildCanonicalCutoverWorkflow`:
   - старт по валидному UUID `workflow_id=run_id`;
   - загружает `verified_support_bundle` из БД по `context_key`;
   - не продолжает draft path при пустом support bundle;
@@ -50,6 +50,8 @@ python3 automation/check_truth_extraction_provider_ready.py
   - после approval signal выполняет materialization и render validation;
   - завершение `COMPLETED`;
   - `pipeline.execution_runs.status = done`.
+- `SeoSiteBuildWorkflow`:
+  - допускается только как legacy compat/drain path и не является forward smoke target для production gate.
 - `FreshnessCheckWorkflow`:
   - завершение `COMPLETED`.
 

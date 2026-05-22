@@ -34,6 +34,9 @@ def main() -> int:
         "OntologyBackfillPlan",
         "run_ontology_backfill_plan(",
         "RebuildDispatchWorkflowKind",
+        "default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover",
+        "SeoSiteBuildCanonicalCutover",
+        "SeoSiteBuildLegacyCompat",
         "report_json: Option<String>",
         "write_report(",
     ]:
