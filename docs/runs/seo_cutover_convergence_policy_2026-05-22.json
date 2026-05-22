@@ -1,0 +1,52 @@
+{
+  "artifact_id": "seo_cutover_convergence_policy@2026-05-22",
+  "status": "LOCAL_COMPAT_DRAIN_CLOSED",
+  "scope": "seo canonical cutover convergence",
+  "legacy_workflow_type": "SeoSiteBuildWorkflow",
+  "forward_workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
+  "expert_workflow_family": [
+    "ExpertExtractionWorkflow",
+    "ExpertDecomposedExtractionWorkflow",
+    "ExpertProjectionWorkflow",
+    "ExpertSemanticSliceWorkflow"
+  ],
+  "compat_drain_window": {
+    "policy": "legacy workflow remains available only for replay-safe compatibility and explicit controlled drain",
+    "open_condition": "legacy workflow histories still exist or explicit replay/drain signoff is not yet captured for the target environment",
+    "close_condition": [
+      "legacy replay evidence proves total_runs=0 and open_runs=0 for the target environment, or a production replay/drain signoff artifact proves all remaining histories drained safely",
+      "forward workflow is the default operator path for new site-build and rebuild execution",
+      "production gate targets the forward workflow rather than the legacy workflow",
+      "legacy workflow remains excluded from new feature work"
+    ],
+    "current_verdict": "closed for the current local environment because the recorded legacy replay evidence shows no historical SeoSiteBuildWorkflow executions"
+  },
+  "expert_workflow_policy": {
+    "classification": "diagnostic-only",
+    "registration_gate": "ALLOW_EXPERT_MIGRATION_WORKFLOWS=true",
+    "starter_gate": "ALLOW_EXPERT_MIGRATION_WORKFLOWS=true",
+    "allowed_use": "controlled migration diagnostics only",
+    "forbidden_use": [
+      "canonical site-build execution",
+      "default rebuild dispatch",
+      "new product logic landing zone"
+    ],
+    "retirement_decision": "keep as narrow diagnostic toolset during compat/drain; delete later only if they stop providing unique replay/migration debugging value"
+  },
+  "workflow_naming_decision": {
+    "decision": "keep SeoSiteBuildCanonicalCutoverWorkflow as the runtime workflow type after drain; do not create a new workflow type purely to rename it",
+    "operator_policy": "docs and starter should treat this workflow as the canonical forward path; legacy SeoSiteBuildWorkflow stays compat-only",
+    "future_rename_rule": "a future rename is allowed only if another workflow-semantics change already requires a new workflow type, or if a dedicated zero-history cleanup window is explicitly approved",
+    "rationale": [
+      "renaming only for cosmetics creates another migration surface without increasing correctness",
+      "the current workflow type already has accepted end-to-end evidence and production-gate alignment",
+      "operator confusion is better solved through docs, starter defaults, and legacy quarantine than by introducing another runtime identity"
+    ]
+  },
+  "evidence_refs": [
+    "docs/runs/seo_site_build_legacy_replay_evidence.json",
+    "docs/runs/seo_cutover_shadow_verify_2026-05-22_phase_m1_accepted.json",
+    "docs/runs/seo_cutover_shadow_verify_2026-05-22_full_acceptance.json"
+  ],
+  "updated_at": "2026-05-22"
+}

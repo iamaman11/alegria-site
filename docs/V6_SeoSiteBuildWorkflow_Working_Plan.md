@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.22`
+**Current version:** `6.23`
 
 ---
 
@@ -1092,6 +1092,15 @@ Before continuing development past planning, the repository must satisfy this cl
 - the next implementation target must be post-acceptance convergence work: promote `SeoSiteBuildCanonicalCutoverWorkflow` from accepted replacement candidate to the single active canonical path, drain compat-only dependence on `SeoSiteBuildWorkflow`, and retire migration-only rollout surfaces under the Phase M retirement rule;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
+#### Convergence closure policy
+
+The remaining post-acceptance work is operational convergence, not missing workflow coverage.
+
+- `SeoSiteBuildWorkflow` compat/drain window closes for an environment only when legacy replay evidence shows `total_runs=0` and `open_runs=0`, or an explicit production drain artifact proves all remaining histories safely drained.
+- `Expert*Workflow` surfaces remain as a narrow diagnostic-only toolset behind explicit opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`; they are not a landing zone for new product logic and they are not part of canonical execution.
+- the runtime workflow type name remains `SeoSiteBuildCanonicalCutoverWorkflow` after drain; we do not create a new workflow type purely to rename it.
+- a future rename is allowed only if another semantics change already requires a new workflow type, or if a zero-history cleanup window is explicitly approved.
+
 ---
 
 ## 9. Step-by-Step Status Ledger
@@ -1141,6 +1150,10 @@ Before continuing development past planning, the repository must satisfy this cl
   - `Phase M2` runtime evidence proved preserved review, HITL, preview, finalize publish, publish barrier, and rebuild semantics on a shared acceptance fixture
   - the critical publish-tail bug fixed during acceptance was stale in-memory `qa_verdict` propagation between `draft_qa` and `cms_request_review`; both legacy and cutover runtimes now pass the updated draft state into CMS review/publish steps
 - accepted `SeoSiteBuildCanonicalCutoverWorkflow` forward path defined in `Phase M`, with the remaining work now limited to promotion/drain/retirement rather than missing canonical step coverage
+- formal convergence policy artifact captured at [docs/runs/seo_cutover_convergence_policy_2026-05-22.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_convergence_policy_2026-05-22.json), recording:
+  - local compat/drain window closed because the legacy replay inventory contains zero `SeoSiteBuildWorkflow` runs in the current environment;
+  - `Expert*Workflow` family retained only as diagnostic-only opt-in tooling;
+  - runtime naming decision fixed to keep `SeoSiteBuildCanonicalCutoverWorkflow` and avoid a cosmetic post-drain workflow-type rename
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
 - `Voyage` embedding adapter surface
@@ -1329,6 +1342,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - quarantined the `Expert*Workflow` family behind explicit worker/starter opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`, so canonical execution cannot accidentally fall back to migration-only diagnostic surfaces;
 - updated the legacy/quarantine status block to reflect that these workflows no longer wait on cutover evidence and now remain only as explicit diagnostics during the compat/drain window;
 - extended runtime-policy checks so worker registration and starter launch both fail closed for `Expert*Workflow` surfaces unless the explicit migration-diagnostics env flag is present.
+
+### 6.23
+
+- formalized the `SeoSiteBuildWorkflow` compat/drain window with explicit closure criteria tied to legacy replay evidence and replay/drain signoff, rather than leaving the drain end-state implicit;
+- fixed the post-cutover naming decision: keep `SeoSiteBuildCanonicalCutoverWorkflow` as the runtime workflow type after drain and do not introduce a new workflow type purely for cosmetic rename;
+- recorded a machine-readable convergence policy artifact at `docs/runs/seo_cutover_convergence_policy_2026-05-22.json` and wired a dedicated automation check so the drain window, `Expert*` diagnostic-only status, and naming decision remain enforced.
 
 ### 6.19
 

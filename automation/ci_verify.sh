@@ -160,6 +160,9 @@ python3 automation/check_cli_tools_seo_surface.py
 echo "[35g1/58] Cutover shadow verification surface"
 python3 automation/check_shadow_verification_surface.py
 
+echo "[35g2/58] Cutover convergence policy"
+python3 automation/check_cutover_convergence_policy.py
+
 echo "[35h/59] SEO architecture wording"
 python3 automation/check_seo_architecture_wording.py
 

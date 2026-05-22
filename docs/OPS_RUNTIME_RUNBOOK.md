@@ -379,6 +379,14 @@ Heavyweight execution can be requested explicitly:
 
 - `cargo run -p cli_tools -- seo-release-restore-gate --run-ci-verify --run-temporal-gate --run-restore-drill --report-json automation/reports/release_restore_gate.full.json`
 
+## 7.1 Compat / drain closure and naming
+
+- `SeoSiteBuildWorkflow` remains in code only as compat/drain and controlled replay surface.
+- For the current local environment, the compat/drain window is considered closed because [docs/runs/seo_site_build_legacy_replay_evidence.json](/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json) records `total_runs=0` and `open_runs=0`.
+- For any other environment, the window closes only with equivalent machine-readable legacy replay evidence or explicit production drain signoff.
+- `Expert*Workflow` surfaces remain diagnostic-only and require `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`.
+- `SeoSiteBuildCanonicalCutoverWorkflow` remains the runtime workflow type after drain; there is no follow-up workflow-type rename just for naming cosmetics.
+
 ## 8) Archive policy
 
 Любой файл, выводимый из runtime-пути, переносится в `docs/_archive/*` с датой и без удаления истории.
