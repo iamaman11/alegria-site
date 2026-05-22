@@ -247,6 +247,13 @@ fn default_database_url() -> String {
         .unwrap_or_else(|_| "postgres://postgres:postgres_password@localhost:5433/alegria".into())
 }
 
+fn expert_migration_workflows_enabled() -> bool {
+    std::env::var("ALLOW_EXPERT_MIGRATION_WORKFLOWS")
+        .ok()
+        .as_deref()
+        == Some("true")
+}
+
 fn write_report(report_path: &str, payload: &Value) -> Result<PathBuf> {
     let out = PathBuf::from(report_path);
     if let Some(parent) = out.parent() {
@@ -1257,6 +1264,18 @@ async fn main() -> Result<()> {
             if workflow == WorkflowKind::ContentGeneration {
                 anyhow::bail!(
                     "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildCanonicalCutoverWorkflow for production SEO generation."
+                );
+            }
+            if matches!(
+                workflow,
+                WorkflowKind::ExpertDecomposedExtraction
+                    | WorkflowKind::ExpertExtraction
+                    | WorkflowKind::ExpertProjection
+                    | WorkflowKind::ExpertSemanticSlice
+            ) && !expert_migration_workflows_enabled()
+            {
+                anyhow::bail!(
+                    "Expert migration workflows are diagnostic-only. Set ALLOW_EXPERT_MIGRATION_WORKFLOWS=true for explicit migration diagnostics, or use SeoSiteBuildCanonicalCutoverWorkflow for canonical execution."
                 );
             }
             let wf_id = match workflow_id {

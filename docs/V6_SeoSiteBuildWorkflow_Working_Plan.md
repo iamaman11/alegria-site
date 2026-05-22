@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.21`
+**Current version:** `6.22`
 
 ---
 
@@ -138,12 +138,16 @@ These surfaces are migration-only. They are not the long-term target architectur
 
 - `ExpertExtractionWorkflow`:
   - isolated truth/extraction rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> optional support refresh`
+  - now quarantine-only and startable only with `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
 - `ExpertDecomposedExtractionWorkflow`:
   - isolated decomposition rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> load_semantic_section_sample -> page_utility_classifier -> dom_block_relevance_filter -> layer_router -> entity_span_detection -> canonical_mapping -> procedural_extraction -> operational_extraction -> editorial_extraction -> completeness_judge -> triple_builder -> contradiction_gate -> hitl_decision -> raw_knowledge_ingestion -> optional support refresh`
+  - now quarantine-only and startable only with `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
 - `ExpertProjectionWorkflow`:
   - isolated truth-to-projection rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> raw_knowledge_ingestion -> graph_admissibility_gate -> neo4j_sync -> retrieval_admissibility_gate -> voyage_qdrant_sync -> projection_barrier.post_projection -> optional support refresh`
+  - now quarantine-only and startable only with `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
 - `ExpertSemanticSliceWorkflow`:
   - isolated real-section rollout path for `load_seo_site_build_input -> load_verified_support_bundle.initial -> serp_ingest -> crawl_sources -> load_semantic_section_sample -> page_utility_classifier -> dom_block_relevance_filter -> layer_router -> entity_span_detection -> canonical_mapping -> procedural_extraction -> operational_extraction -> editorial_extraction -> completeness_judge -> triple_builder -> contradiction_gate -> hitl_decision`
+  - now quarantine-only and startable only with `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
 - `ProjectionReconcileWorkflow`:
   - explicit reconcile surface for `neo4j` and `qdrant`
 - `FreshnessCheckWorkflow`:
@@ -1153,7 +1157,7 @@ Before continuing development past planning, the repository must satisfy this cl
 ### 9.4 Legacy / quarantined now
 
 - `ContentGenerationWorkflow`
-- migration-only rollout workflows pending cutover evidence:
+- migration-only rollout workflows quarantined behind explicit opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`:
   - `ExpertExtractionWorkflow`
   - `ExpertDecomposedExtractionWorkflow`
   - `ExpertProjectionWorkflow`
@@ -1319,6 +1323,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - switched convergence wording from "future replacement candidate" to "accepted forward path" now that `SeoSiteBuildCanonicalCutoverWorkflow` is runtime-accepted through canonical `steps 1-56`;
 - updated active-surface status so `SeoSiteBuildCanonicalCutoverWorkflow` is the active forward workflow, while `SeoSiteBuildWorkflow` is documented only as compat/drain and replay-safe legacy support;
 - reclassified the `Expert*Workflow` family everywhere in this working plan as migration-only diagnostic surfaces eligible for retirement after full convergence, not as current promotion targets.
+
+### 6.22
+
+- quarantined the `Expert*Workflow` family behind explicit worker/starter opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`, so canonical execution cannot accidentally fall back to migration-only diagnostic surfaces;
+- updated the legacy/quarantine status block to reflect that these workflows no longer wait on cutover evidence and now remain only as explicit diagnostics during the compat/drain window;
+- extended runtime-policy checks so worker registration and starter launch both fail closed for `Expert*Workflow` surfaces unless the explicit migration-diagnostics env flag is present.
 
 ### 6.19
 

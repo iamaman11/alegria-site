@@ -58,6 +58,16 @@ def main() -> int:
             failures.append(f"workflow registry missing `{needle}`")
 
     for needle in [
+        'if std::env::var("ALLOW_EXPERT_MIGRATION_WORKFLOWS")',
+        "expert_decomposed_extraction::register(&mut opts);",
+        "expert_extraction::register(&mut opts);",
+        "expert_projection::register(&mut opts);",
+        "expert_semantic_slice::register(&mut opts);",
+    ]:
+        if needle not in workflows_mod:
+            failures.append(f"workflow registry missing expert quarantine guard `{needle}`")
+
+    for needle in [
         "struct ExpertExtractionWorkflow",
         "load_verified_support_bundle.initial",
         "raw_knowledge_ingestion",
@@ -224,6 +234,8 @@ def main() -> int:
         "SeoSiteBuildCanonicalCutoverWorkflow",
         "default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover",
         "SeoSiteBuildLegacyCompat",
+        "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
+        "Expert migration workflows are diagnostic-only. Set ALLOW_EXPERT_MIGRATION_WORKFLOWS=true for explicit migration diagnostics, or use SeoSiteBuildCanonicalCutoverWorkflow for canonical execution.",
     ]:
         if needle not in starter:
             failures.append(f"temporal starter missing `{needle}`")

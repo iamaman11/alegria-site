@@ -34,10 +34,16 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
     {
         content_generation::register(&mut opts);
     }
-    expert_decomposed_extraction::register(&mut opts);
-    expert_extraction::register(&mut opts);
-    expert_projection::register(&mut opts);
-    expert_semantic_slice::register(&mut opts);
+    if std::env::var("ALLOW_EXPERT_MIGRATION_WORKFLOWS")
+        .ok()
+        .as_deref()
+        == Some("true")
+    {
+        expert_decomposed_extraction::register(&mut opts);
+        expert_extraction::register(&mut opts);
+        expert_projection::register(&mut opts);
+        expert_semantic_slice::register(&mut opts);
+    }
     freshness::register(&mut opts);
     projection_reconcile::register(&mut opts);
     seo_site_build_canonical_cutover::register(&mut opts);

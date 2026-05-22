@@ -74,6 +74,8 @@ Additional first-class rollout/support workflows remain available only for contr
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
 - `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
 
+`Expert*Workflow` surfaces are not registered by default in the worker fleet. They require explicit opt-in through `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true` and are retained only for controlled diagnostics during the compatibility window.
+
 The current active runtime sequence is:
 
 1. `load_verified_support_bundle`
@@ -342,6 +344,10 @@ Authority remains upstream in the Truth Plane.
 ### 7.4 Legacy / Quarantined
 
 - `ContentGenerationWorkflow`
+- `ExpertExtractionWorkflow`
+- `ExpertDecomposedExtractionWorkflow`
+- `ExpertProjectionWorkflow`
+- `ExpertSemanticSliceWorkflow`
 - any direct truth creation through regex extraction
 - any source-tier shortcut such as `government|vfs => verified`
 - any path where graph or retrieval upgrades truth directly

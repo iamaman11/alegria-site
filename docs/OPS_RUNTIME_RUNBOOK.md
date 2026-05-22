@@ -174,6 +174,7 @@ Owner-boundary note:
     - `global_site_reconcile`
 - `ExpertExtractionWorkflow`:
   - migration-only diagnostic extraction surface
+  - disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -182,6 +183,7 @@ Owner-boundary note:
   - optional `load_verified_support_bundle.refresh`
 - `ExpertDecomposedExtractionWorkflow`:
   - migration-only diagnostic decomposition surface for the legacy extraction macro-step
+  - disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -203,6 +205,7 @@ Owner-boundary note:
   - optional `load_verified_support_bundle.refresh`
 - `ExpertProjectionWorkflow`:
   - migration-only diagnostic extraction-plus-projection surface
+  - disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
@@ -216,6 +219,7 @@ Owner-boundary note:
   - optional `load_verified_support_bundle.refresh`
 - `ExpertSemanticSliceWorkflow`:
   - migration-only diagnostic real-section semantic surface
+  - disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
   - `load_seo_site_build_input`
   - `load_verified_support_bundle.initial`
   - `serp_ingest`
