@@ -49,12 +49,12 @@
 | [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | superseded-reference | reference | historical rich extraction and target protocol context; superseded by `V6` |
 | [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-satellite | live | runtime persistence, retry, replay, HITL, and DLQ satellite contract under `V6` |
 | [V5_Truth_Extraction_LLM_Contract.md](V5_Truth_Extraction_LLM_Contract.md) | current-runtime-satellite | live | exact truth-extraction LLM prompt, wire format, response contract, validation, and adjudication boundaries under `V6` |
-| [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md) | current-runtime-spec | partial | step ledger and step contract rules |
+| [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md) | current-runtime-spec | live | step ledger and step contract rules; historical framing in the intro predates the accepted cutover workflow |
 | [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md) | current-ops | live | runtime architecture and operational rules |
 | [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md) | current-ops | live | worker build-id / rollout / drain rules |
 | [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md) | current-ops | live | canonical production gate |
 | [SEO_ARCHITECTURE_FINALIZATION_CHANGE_NOTE.md](SEO_ARCHITECTURE_FINALIZATION_CHANGE_NOTE.md) | current-ops | live | architecture migration summary for team review and ADR follow-up |
-| [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md) | current-seo-execution-plan | partial | live-aligned SEO supersite capability, gaps, and execution order |
+| [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md) | reference-execution-snapshot | reference | historical SEO supersite capability snapshot; canonical current runtime/execution state lives in `V6` owner docs |
 | [SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md](SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md) | superseded-reference | reference | historical code-anchored gap-closure and release evidence context; superseded by `V6` |
 | [V5_SEO_Identity_And_Applicability_Hardening_Plan.md](V5_SEO_Identity_And_Applicability_Hardening_Plan.md) | current-seo-execution-plan | partial | live-aligned identity, applicability, and scope-hardening plan for SEO runtime |
 | [V5_SEO_Live_Schema_Design_Spec.md](V5_SEO_Live_Schema_Design_Spec.md) | current-seo-build-spec | partial | SEO relational source-of-record design + SQLx persistence |

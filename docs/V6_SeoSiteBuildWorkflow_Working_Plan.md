@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.23`
+**Current version:** `6.24`
 
 ---
 
@@ -201,26 +201,13 @@ Current runtime branching semantics already present in code:
 - publish path runs only when publish policy and scenario both allow it
 - workflow may terminate early with `done:no_pages`
 
-### 2.2 What is not yet active as mandatory runtime
+### 2.2 What is not yet complete in steady-state
 
-- `whole_page_semantic_pass`
-- `page_utility_classifier`
-- `dom_block_relevance_filter`
-- `sectioning_contract_gate`
-- `cas_gate`
-- `layer_router`
-- `subspan_layer_router`
-- `entity_span_detection`
-- `canonical_mapping`
-- rich layer-specific extraction for procedural, operational, editorial, SEO, and commercial objects
-- mandatory `triple_builder`
-- mandatory `completeness_judge`
-- mandatory `resolution_loop`
-- mandatory `contradiction_gate` as a first-class rich-flow gate
-- mandatory `graph_admissibility_gate`
-- mandatory `retrieval_admissibility_gate`
-- first-class `neo4j_sync` and `voyage_qdrant_sync` workflow phases
-- full evidence-grade entity/relation graph extraction
+- production provider configuration for live truth extraction remains an external prerequisite;
+- `SeoSiteBuildWorkflow` still exists as compat/drain workflow type outside the active forward path;
+- `Expert*Workflow` surfaces are quarantined but not yet physically removed from the codebase;
+- full graph-backed cluster/topic reasoning remains deferred;
+- some downstream materialization still uses outbox-backed async surfaces even though the canonical workflow already owns admissibility and barrier decisions.
 
 ### 2.3 Current blocker
 
@@ -236,10 +223,10 @@ Canonical live envs:
 ### 2.4 Important clarifications
 
 - `seo_preflight` is a pre-run outer gate and operator entrypoint, not a current `SeoPhaseKey`.
-- `neo4j_sync` and `voyage_qdrant_sync` already have partial outbox-backed surfaces, but are not current first-class synchronous workflow phases.
-- current truth-core `validator` and `adjudication` are already active inside `raw_knowledge_ingestion`.
-- deferred reactivation below refers to the richer semantic stages around early gates, router, entity spans, canonical mapping, triple building, completeness, and resolution. It does not mean removing the active truth-core validator/adjudicator.
-- the current `raw_knowledge_ingestion` is a migration macro-step. In the V6.3 target it must be decomposed into explicit evidence preparation, rich extraction, validation, completeness, resolution, and truth-adjudication stages.
+- the accepted forward path is `SeoSiteBuildCanonicalCutoverWorkflow`; descriptions of `raw_knowledge_ingestion` as the main runtime contour apply only to legacy compat/drain understanding.
+- `neo4j_sync` and `voyage_qdrant_sync` are active canonical workflow phases in the forward path, even if downstream projection materialization still relies on async outbox/reconcile surfaces.
+- current truth-core `validator` and `adjudication` remain part of the canonical truth path; the important distinction now is forward-path step ownership versus legacy macro-step compatibility.
+- deferred items below refer only to genuinely deferred capabilities such as richer graph-first reasoning, not to already accepted canonical step coverage.
 - `code-present, runtime-inactive` source files are not counted as active implementation until crate export, live invocation, and automation coverage all exist.
 - `ExpertExtractionWorkflow` remains available only as a migration-only diagnostic extraction surface; it is not the forward runtime path.
 
@@ -1089,7 +1076,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be post-acceptance convergence work: promote `SeoSiteBuildCanonicalCutoverWorkflow` from accepted replacement candidate to the single active canonical path, drain compat-only dependence on `SeoSiteBuildWorkflow`, and retire migration-only rollout surfaces under the Phase M retirement rule;
+- the next implementation target must be post-acceptance convergence work: keep `SeoSiteBuildCanonicalCutoverWorkflow` as the single active canonical path, drain compat-only dependence on `SeoSiteBuildWorkflow`, and retire or quarantine migration-only rollout surfaces under the Phase M retirement rule;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 #### Convergence closure policy
@@ -1342,6 +1329,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - quarantined the `Expert*Workflow` family behind explicit worker/starter opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`, so canonical execution cannot accidentally fall back to migration-only diagnostic surfaces;
 - updated the legacy/quarantine status block to reflect that these workflows no longer wait on cutover evidence and now remain only as explicit diagnostics during the compat/drain window;
 - extended runtime-policy checks so worker registration and starter launch both fail closed for `Expert*Workflow` surfaces unless the explicit migration-diagnostics env flag is present.
+
+### 6.24
+
+- removed stale pre-cutover wording that still claimed rich semantic, truth, and projection stages were "not yet active as mandatory runtime" even after accepted canonical `steps 1-56` coverage;
+- clarified that `raw_knowledge_ingestion` macro-step language now applies only to legacy compat/drain understanding, while the accepted forward path is `SeoSiteBuildCanonicalCutoverWorkflow`;
+- aligned deferred/steady-state wording so remaining work now refers to provider configuration, legacy surface retirement, and deeper graph reasoning rather than to already accepted canonical workflow phases.
 
 ### 6.23
 

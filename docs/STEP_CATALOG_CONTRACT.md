@@ -1,7 +1,12 @@
-# Step Catalog Contract (Runtime-First, Orchestration-Later)
+# Step Catalog Contract (Step Ledger And Contracts)
 
-**Статус:** нормативный документ для поэтапной сборки V5 pipeline из независимых шагов.  
-**Цель:** реализовать шаги отдельно, не фиксируя финальный порядок workflow заранее.
+**Статус:** current runtime-spec for step ledger/status semantics; historical framing below predates the accepted canonical cutover workflow.
+**Цель:** определить контракт шага, статусную модель и execution-record semantics, even though the canonical orchestration workflow is already assembled.
+
+Owner/runtime note:
+
+- the canonical workflow ordering now lives in [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md);
+- this file should be used for step record semantics, not for deciding whether orchestration exists yet.
 
 ---
 
@@ -27,7 +32,7 @@
 
 ---
 
-## 2. Модель “сначала каталог шагов, потом поток”
+## 2. Историческая модель “сначала каталог шагов, потом поток”
 
 Обязательная последовательность внедрения:
 1. Каждый шаг реализуется как отдельный Rust `use_case` (детерминированная логика).
@@ -35,7 +40,7 @@
 3. Шаги запускаются вручную по одному (CLI/API), без “большого” workflow.
 4. Только после стабилизации контрактов шагов собирается orchestration-workflow.
 
-Эта модель предотвращает раннюю связанность и ускоряет эволюцию протокола.
+Эта модель была полезна на этапе сборки. В текущем состоянии проекта она сохраняется как объяснение происхождения step-ledger discipline, а не как описание отсутствующего orchestration workflow.
 
 ---
 
@@ -174,4 +179,3 @@
 - [V5_Runtime_Contract.md](V5_Runtime_Contract.md)
 - [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
 - [DOMAIN_MODEL.md](DOMAIN_MODEL.md)
-

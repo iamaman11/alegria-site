@@ -1,9 +1,18 @@
 # SEO Supersite 10/10 Execution Plan
 
-Status: partial live-aligned execution plan
+Status: reference execution snapshot; not the canonical owner or current runtime source
 Parent owner document: `V6_Expert_Truth_Graph_Runtime.md`
 Owner: Alegria SEO site build runtime
-Last updated: 2026-05-16
+Last updated: 2026-05-22
+
+This file is retained as a SEO supersite capability snapshot and historical execution companion.
+
+Canonical current runtime truth now lives in:
+
+- [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
+- [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md)
+
+If this file conflicts with those documents, `V6` owner/runtime docs win. Statements below about "partial reactivation", "critical gaps", or older `SeoSiteBuildWorkflow` behavior should be read as historical gap framing unless they are still explicitly repeated in the current `V6` owner docs.
 
 ## Target
 
@@ -24,7 +33,7 @@ Alegria is 10/10 when a production run can create or update a real SEO supersite
 
 ## Current Capability
 
-Implemented baseline:
+Implemented baseline at the time of this snapshot:
 
 - `SeoSiteBuildWorkflow` runs multi-page site build stages.
 - DataForSEO results can enqueue scoped crawl jobs.
@@ -40,7 +49,7 @@ Implemented baseline:
 - Draft/QA/CMS/static publishing gates exist.
 - `outbox-worker` is present in Compose for Neo4j/Qdrant/CMS projection materialization.
 
-Critical gaps:
+Historical gaps at the time of this snapshot:
 
 - New scopes have starter-side bootstrap/preflight and direct Neo4j/Qdrant probes, but DataForSEO is still credential-checked rather than queried in preflight.
 - `SeoSiteBuildWorkflow` already exposes normalized `run_mode` branching such as `crawl_only`, `draft_only`, `publish_with_hitl`, and `full_auto_after_approval`, but the richer semantic/graph path is still not reactivated as a mandatory runtime contour.

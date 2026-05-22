@@ -76,20 +76,16 @@ Additional first-class rollout/support workflows remain available only for contr
 
 `Expert*Workflow` surfaces are not registered by default in the worker fleet. They require explicit opt-in through `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true` and are retained only for controlled diagnostics during the compatibility window.
 
-The current active runtime sequence is:
+The current active runtime sequence for the forward path is the accepted canonical cutover flow:
 
-1. `load_verified_support_bundle`
-2. `serp_ingest`
-3. `crawl_sources`
-4. `raw_knowledge_ingestion`
-5. optional `load_verified_support_bundle.refresh`
-6. `serp_normalize`
-7. `opportunity_build`
-8. `ia_build`
-9. `link_recommend`
-10. `global_site_reconcile`
-11. per-page drafting and publish-control phases
-12. conditional `rebuild_detect`
+1. preflight, support loading, source discovery, crawl, evidence preparation, and section gating;
+2. semantic routing, span detection, canonical mapping, ontology intake, layer-specific extraction, completeness, resolution, contradiction handling, adjudication, and verified truth write;
+3. graph/retrieval admissibility, `Neo4j` sync, `Voyage/Qdrant` sync, and projection barriers;
+4. planning and global reconcile;
+5. per-page drafting, QA, review, publish-control, publish materialization, and publish barrier;
+6. conditional `rebuild_detect`.
+
+The legacy macro-step sequence centered on `raw_knowledge_ingestion` remains relevant only for compat/drain understanding of `SeoSiteBuildWorkflow`, not as the active forward runtime description.
 
 Current truth extraction policy:
 
