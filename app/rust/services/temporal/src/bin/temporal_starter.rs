@@ -148,6 +148,11 @@ enum Command {
         #[arg(long, default_value_t = 700)]
         wait_before_resume_ms: u64,
     },
+    /// Send a resume signal to a paused workflow.
+    WorkflowResume {
+        #[arg(long)]
+        workflow_id: String,
+    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -1365,6 +1370,18 @@ async fn main() -> Result<()> {
                 handle.info().run_id,
                 result_raw.payloads.len()
             );
+        }
+        Command::WorkflowResume { workflow_id } => {
+            let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.clone());
+            handle
+                .signal(
+                    UntypedSignal::<UntypedWorkflow>::new("resume"),
+                    empty_payload(),
+                    WorkflowSignalOptions::default(),
+                )
+                .await
+                .with_context(|| format!("failed to send resume signal to {workflow_id}"))?;
+            println!("resume_sent workflow_id={workflow_id}");
         }
     }
     Ok(())

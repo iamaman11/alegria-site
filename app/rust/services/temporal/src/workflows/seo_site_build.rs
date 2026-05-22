@@ -444,7 +444,7 @@ impl SeoSiteBuildWorkflow {
                             }
                             SeoPhaseKey::DraftQa => {
                                 let draft_ref = draft.as_ref().expect("draft_normalize required");
-                                let _qa: DraftQaOutputPayload = ctx
+                                let qa: DraftQaOutputPayload = ctx
                                     .start_activity(
                                         AlegriaActivities::run_draft_qa_step,
                                         DraftQaInputPayload {
@@ -456,6 +456,11 @@ impl SeoSiteBuildWorkflow {
                                         db_opts(30),
                                     )
                                     .await?;
+                                if let Some(draft_state) =
+                                    draft.as_mut().and_then(|state| state.draft.as_mut())
+                                {
+                                    draft_state.qa_verdict = qa.verdict;
+                                }
                             }
                             SeoPhaseKey::CmsRequestReview => {
                                 let draft_ref = draft.as_ref().expect("draft_normalize required");

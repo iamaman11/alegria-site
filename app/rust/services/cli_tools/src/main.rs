@@ -344,6 +344,49 @@ const CUTOVER_PHASE_M1_NON_LEDGERED_ACTIVITY_STEPS: &[&str] = &[
     "load_verified_support_bundle.refresh",
 ];
 
+const CUTOVER_PHASE_M2_LEDGER_STEPS: &[&str] = &[
+    "serp_normalize",
+    "opportunity_build",
+    "ia_build",
+    "link_recommend",
+    "global_site_reconcile",
+    "projection_barrier(global_site_reconcile)",
+    "truth_admissibility_gate",
+    "draft_assemble",
+    "editorial_draft_generate",
+    "draft_normalize",
+    "content_contract_validate",
+    "draft_qa",
+    "cms_request_review",
+    "human_approval_wait",
+    "load_cms_approval_decision",
+    "cms_publish_approved",
+    "publish_materialize",
+    "render_preview_validate",
+    "finalize_publish",
+    "projection_barrier(publish)",
+    "rebuild_detect",
+];
+
+const LEGACY_PHASE_M2_LEDGER_STEPS: &[&str] = &[
+    "serp_normalize",
+    "opportunity_build",
+    "ia_build",
+    "link_recommend",
+    "global_site_reconcile",
+    "draft_assemble",
+    "editorial_draft_generate",
+    "draft_normalize",
+    "content_contract_validate",
+    "draft_qa",
+    "cms_publish",
+    "load_cms_approval_decision",
+    "publish_materialize",
+    "render_preview_validate",
+    "finalize_publish",
+    "rebuild_detect",
+];
+
 fn read_text(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("read file failed: {}", path.display()))
 }
@@ -665,6 +708,57 @@ async fn projection_status_value(pool: &sqlx::PgPool, run_id: &str) -> Result<Va
             "latest_failed_error": status.latest_failed_error,
         }))
         .collect::<Vec<_>>()))
+}
+
+async fn cms_publish_event_summary(pool: &sqlx::PgPool, run_id: &str) -> Result<Value> {
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            COUNT(*) FILTER (WHERE event_type = 'seo_page_review_requested')::BIGINT AS review_requested_events,
+            COUNT(DISTINCT page_node_key) FILTER (WHERE event_type = 'seo_page_review_requested')::BIGINT AS review_requested_pages,
+            COUNT(*) FILTER (WHERE event_type = 'seo_page_approved')::BIGINT AS approved_events,
+            COUNT(DISTINCT page_node_key) FILTER (WHERE event_type = 'seo_page_approved')::BIGINT AS approved_pages,
+            COUNT(*) FILTER (WHERE event_type = 'seo_page_publish_blocked')::BIGINT AS blocked_events,
+            COUNT(DISTINCT page_node_key) FILTER (WHERE event_type = 'seo_page_publish_blocked')::BIGINT AS blocked_pages
+        FROM site.cms_publish_events
+        WHERE event_payload ->> 'run_id' = $1
+        "#,
+    )
+    .bind(run_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(json!({
+        "review_requested_events": rows.get::<i64, _>("review_requested_events"),
+        "review_requested_pages": rows.get::<i64, _>("review_requested_pages"),
+        "approved_events": rows.get::<i64, _>("approved_events"),
+        "approved_pages": rows.get::<i64, _>("approved_pages"),
+        "blocked_events": rows.get::<i64, _>("blocked_events"),
+        "blocked_pages": rows.get::<i64, _>("blocked_pages"),
+    }))
+}
+
+async fn step_execution_counts(pool: &sqlx::PgPool, run_id: &str) -> Result<HashMap<String, i64>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT step_name, COUNT(*)::BIGINT AS step_count
+        FROM pipeline.step_executions
+        WHERE run_id = $1
+          AND status = 'done'
+        GROUP BY step_name
+        "#,
+    )
+    .bind(Uuid::parse_str(run_id).with_context(|| format!("invalid run_id uuid: {run_id}"))?)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("step_name"),
+                row.get::<i64, _>("step_count"),
+            )
+        })
+        .collect())
 }
 
 fn default_seo_run_id() -> String {
@@ -2300,7 +2394,12 @@ async fn seo_cutover_shadow_verify(
         load_candidate_status_counts(&pool, &legacy_context_key, &legacy_raw_page_ids).await?;
     let cutover_projection_status = projection_status_value(&pool, cutover_run_id).await?;
     let legacy_projection_status = projection_status_value(&pool, legacy_run_id).await?;
+    let legacy_publish_events = cms_publish_event_summary(&pool, legacy_run_id).await?;
+    let cutover_publish_events = cms_publish_event_summary(&pool, cutover_run_id).await?;
     let cutover_step_statuses = list_run_step_statuses(&pool, cutover_run_id).await?;
+    let legacy_step_statuses = list_run_step_statuses(&pool, legacy_run_id).await?;
+    let cutover_step_counts = step_execution_counts(&pool, cutover_run_id).await?;
+    let legacy_step_counts = step_execution_counts(&pool, legacy_run_id).await?;
 
     let mut findings = Vec::new();
     if legacy_context_key != cutover_context_key {
@@ -2309,18 +2408,6 @@ async fn seo_cutover_shadow_verify(
             format!(
                 "legacy context_key `{legacy_context_key}` does not match cutover context_key `{cutover_context_key}`"
             ),
-        ));
-    }
-    if legacy_raw_page_ids.is_empty() {
-        findings.push(error_finding(
-            "SHADOW_LEGACY_RAW_PAGES_MISSING",
-            "legacy crawl_sources output has no raw_page_ids",
-        ));
-    }
-    if cutover_raw_page_ids.is_empty() {
-        findings.push(error_finding(
-            "SHADOW_CUTOVER_RAW_PAGES_MISSING",
-            "cutover candidate_validation input has no raw_page_ids",
         ));
     }
     if legacy_raw_page_ids != cutover_raw_page_ids {
@@ -2420,6 +2507,144 @@ async fn seo_cutover_shadow_verify(
         ));
     }
 
+    let cutover_m2_observed =
+        value_as_i64(&cutover_publish_events, "review_requested_events").unwrap_or_default() > 0
+            || CUTOVER_PHASE_M2_LEDGER_STEPS.iter().any(|step_name| {
+                cutover_step_statuses.get(*step_name) == Some(&"done".to_string())
+            });
+    let legacy_m2_observed =
+        value_as_i64(&legacy_publish_events, "review_requested_events").unwrap_or_default() > 0
+            || LEGACY_PHASE_M2_LEDGER_STEPS.iter().any(|step_name| {
+                legacy_step_statuses.get(*step_name) == Some(&"done".to_string())
+            });
+
+    let m1_raw_scope_required = !(legacy_m2_observed
+        && cutover_m2_observed
+        && legacy_raw_page_ids.is_empty()
+        && cutover_raw_page_ids.is_empty());
+    if legacy_raw_page_ids.is_empty() && m1_raw_scope_required {
+        findings.push(error_finding(
+            "SHADOW_LEGACY_RAW_PAGES_MISSING",
+            "legacy crawl_sources output has no raw_page_ids",
+        ));
+    }
+    if cutover_raw_page_ids.is_empty() && m1_raw_scope_required {
+        findings.push(error_finding(
+            "SHADOW_CUTOVER_RAW_PAGES_MISSING",
+            "cutover candidate_validation input has no raw_page_ids",
+        ));
+    }
+
+    let cutover_missing_m2_steps = if cutover_m2_observed {
+        CUTOVER_PHASE_M2_LEDGER_STEPS
+            .iter()
+            .filter(|step_name| cutover_step_statuses.get(**step_name) != Some(&"done".to_string()))
+            .map(|step_name| (*step_name).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let legacy_missing_m2_steps = if legacy_m2_observed {
+        LEGACY_PHASE_M2_LEDGER_STEPS
+            .iter()
+            .filter(|step_name| legacy_step_statuses.get(**step_name) != Some(&"done".to_string()))
+            .map(|step_name| (*step_name).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    let legacy_review_requested_pages = *legacy_step_counts.get("load_cms_approval_decision").unwrap_or(&0);
+    let legacy_approved_pages = *legacy_step_counts.get("finalize_publish").unwrap_or(&0);
+    let cutover_review_requested_pages = *cutover_step_counts.get("human_approval_wait").unwrap_or(&0);
+    let cutover_approved_pages = *cutover_step_counts.get("finalize_publish").unwrap_or(&0);
+    let legacy_blocked_pages =
+        value_as_i64(&legacy_publish_events, "blocked_pages").unwrap_or_default();
+    let cutover_blocked_pages =
+        value_as_i64(&cutover_publish_events, "blocked_pages").unwrap_or_default();
+
+    if cutover_m2_observed {
+        if !cutover_missing_m2_steps.is_empty() {
+            findings.push(error_finding(
+                "SHADOW_CUTOVER_PHASE_M2_STEP_COVERAGE",
+                format!(
+                    "cutover run is missing completed Phase M2 steps: {}",
+                    cutover_missing_m2_steps.join(", ")
+                ),
+            ));
+        }
+        if cutover_review_requested_pages == 0 {
+            findings.push(error_finding(
+                "SHADOW_CUTOVER_PHASE_M2_NO_REVIEW_REQUESTS",
+                "cutover run emitted no seo_page_review_requested events",
+            ));
+        }
+        if cutover_blocked_pages > 0 {
+            findings.push(error_finding(
+                "SHADOW_CUTOVER_PHASE_M2_BLOCKED_PAGES",
+                format!(
+                    "cutover run still has {} blocked publish pages",
+                    cutover_blocked_pages
+                ),
+            ));
+        }
+        if cutover_approved_pages != cutover_review_requested_pages {
+            findings.push(error_finding(
+                "SHADOW_CUTOVER_PHASE_M2_APPROVAL_COUNT_MISMATCH",
+                format!(
+                    "cutover approved_pages {} differs from review_requested_pages {}",
+                    cutover_approved_pages, cutover_review_requested_pages
+                ),
+            ));
+        }
+    }
+
+    if legacy_m2_observed {
+        if !legacy_missing_m2_steps.is_empty() {
+            findings.push(error_finding(
+                "SHADOW_LEGACY_PHASE_M2_STEP_COVERAGE",
+                format!(
+                    "legacy run is missing completed Phase M2 steps: {}",
+                    legacy_missing_m2_steps.join(", ")
+                ),
+            ));
+        }
+        if legacy_review_requested_pages == 0 {
+            findings.push(error_finding(
+                "SHADOW_LEGACY_PHASE_M2_NO_REVIEW_REQUESTS",
+                "legacy run emitted no seo_page_review_requested events",
+            ));
+        }
+        if legacy_blocked_pages > 0 {
+            findings.push(error_finding(
+                "SHADOW_LEGACY_PHASE_M2_BLOCKED_PAGES",
+                format!(
+                    "legacy run still has {} blocked publish pages",
+                    legacy_blocked_pages
+                ),
+            ));
+        }
+        if legacy_approved_pages != legacy_review_requested_pages {
+            findings.push(error_finding(
+                "SHADOW_LEGACY_PHASE_M2_APPROVAL_COUNT_MISMATCH",
+                format!(
+                    "legacy approved_pages {} differs from review_requested_pages {}",
+                    legacy_approved_pages, legacy_review_requested_pages
+                ),
+            ));
+        }
+    }
+
+    if legacy_m2_observed && cutover_m2_observed && legacy_approved_pages != cutover_approved_pages {
+        findings.push(error_finding(
+            "SHADOW_PHASE_M2_PUBLISHED_PAGE_COUNT_DIFF",
+            format!(
+                "legacy approved_pages {} differs from cutover approved_pages {}",
+                legacy_approved_pages, cutover_approved_pages
+            ),
+        ));
+    }
+
     let status = status_from_findings(&findings, strict);
     let payload = json!({
         "status": status,
@@ -2431,6 +2656,7 @@ async fn seo_cutover_shadow_verify(
             "cutover": cutover_context_key,
         },
         "phase_m1": {
+            "raw_scope_required_for_verdict": m1_raw_scope_required,
             "expected_ledger_steps": CUTOVER_PHASE_M1_LEDGER_STEPS,
             "non_ledgered_activity_steps": CUTOVER_PHASE_M1_NON_LEDGERED_ACTIVITY_STEPS,
             "completed_ledger_steps": cutover_step_statuses
@@ -2439,6 +2665,22 @@ async fn seo_cutover_shadow_verify(
                 .map(|(step_name, _)| step_name.clone())
                 .collect::<Vec<_>>(),
             "missing_ledger_steps": missing_cutover_steps,
+        },
+        "phase_m2": {
+            "legacy": {
+                "observed": legacy_m2_observed,
+                "expected_ledger_steps": LEGACY_PHASE_M2_LEDGER_STEPS,
+                "missing_ledger_steps": legacy_missing_m2_steps,
+                "publish_events": legacy_publish_events,
+                "step_counts": legacy_step_counts,
+            },
+            "cutover": {
+                "observed": cutover_m2_observed,
+                "expected_ledger_steps": CUTOVER_PHASE_M2_LEDGER_STEPS,
+                "missing_ledger_steps": cutover_missing_m2_steps,
+                "publish_events": cutover_publish_events,
+                "step_counts": cutover_step_counts,
+            }
         },
         "legacy_runtime": {
             "crawl_sources": legacy_crawl,

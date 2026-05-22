@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for evolving `SeoSiteBuildWorkflow` into the single active orchestration flow for Truth, Graph, and Retrieval planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.19`
+**Current version:** `6.20`
 
 ---
 
@@ -1085,7 +1085,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - only user-owned unrelated dirty files may remain outside accepted cutover work;
 - there must be no unfinished migration-only workflow identity outside the four explicitly listed `Expert*Workflow` surfaces;
-- the next implementation target must be the earliest non-accepted cutover checkpoint, currently producing `Phase M2` runtime evidence and acceptance for canonical `steps 43-56` after the cutover workflow reached full step coverage;
+- the next implementation target must be post-acceptance convergence work: promote `SeoSiteBuildCanonicalCutoverWorkflow` from accepted replacement candidate to the single active canonical path, drain compat-only dependence on `SeoSiteBuildWorkflow`, and retire migration-only rollout surfaces under the Phase M retirement rule;
 - any future cutover code must begin from this baseline rather than reopening retired WIP directions.
 
 ---
@@ -1121,7 +1121,7 @@ Before continuing development past planning, the repository must satisfy this cl
 
 - `seo_preflight`
 - `SeoSiteBuildCanonicalCutoverWorkflow` with canonical `steps 1-56` wired through `rebuild_detect` as the current real cutover slice
-- `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for the Phase M1 shadow gate
+- `cli_tools SeoCutoverShadowVerify` as the current machine-readable operator surface and paired-run evidence producer for accepted `Phase M1` and `Phase M2` cutover verification
 - first real paired-run Phase M1 shadow report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-21_phase_m1.json)
 - accepted Phase M1 cutover evidence status:
   - legacy run id `d1e6a42c-f896-4420-8caa-effd07a0e28b`
@@ -1130,10 +1130,13 @@ Before continuing development past planning, the repository must satisfy this cl
   - canonical ledger coverage for `steps 1-36`: complete
   - `projection_barrier(semantic_projection)`: clear with `blocked_events=0`
 - current Phase M2 planning status:
-  - canonical `steps 37-56` are now runtime-wired in `SeoSiteBuildCanonicalCutoverWorkflow`
-  - explicit canonical step wrappers now exist for `truth_admissibility_gate`, `human_approval_wait`, `cms_request_review`, `cms_publish_approved`, and `projection_barrier(publish)`
-  - `Phase M2` is not yet accepted: publish, HITL, preview, finalize publish, publish barrier, and rebuild still need runtime evidence before the old canonical publish path can be drained
-- future `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, but not yet the active canonical path
+  - canonical `steps 37-56` are runtime-wired and now runtime-accepted in `SeoSiteBuildCanonicalCutoverWorkflow`
+  - accepted full-cutover acceptance report captured at [docs/runs/seo_cutover_shadow_verify_2026-05-22_full_acceptance.json](/home/bose/projects/alegria-site/docs/runs/seo_cutover_shadow_verify_2026-05-22_full_acceptance.json)
+  - accepted legacy full-flow run id `4bbb4100-5013-4e52-a307-0b74f882b2fd`
+  - accepted cutover full-flow run id `35bbdec3-04f5-4f68-9035-df6ea9a128d1`
+  - `Phase M2` runtime evidence proved preserved review, HITL, preview, finalize publish, publish barrier, and rebuild semantics on a shared acceptance fixture
+  - the critical publish-tail bug fixed during acceptance was stale in-memory `qa_verdict` propagation between `draft_qa` and `cms_request_review`; both legacy and cutover runtimes now pass the updated draft state into CMS review/publish steps
+- accepted `SeoSiteBuildCanonicalCutoverWorkflow` replacement candidate defined in `Phase M`, with the remaining work now limited to promotion/drain/retirement rather than missing canonical step coverage
 - `Neo4j` projection surface
 - `Qdrant` retrieval surface
 - `Voyage` embedding adapter surface
@@ -1303,6 +1306,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.20
+
+- accepted `Phase M2` with a strict machine-readable full-flow report at `docs/runs/seo_cutover_shadow_verify_2026-05-22_full_acceptance.json`, using legacy run `4bbb4100-5013-4e52-a307-0b74f882b2fd` and cutover run `35bbdec3-04f5-4f68-9035-df6ea9a128d1` on the shared `ES|tourist||BY` acceptance fixture;
+- fixed the publish-tail runtime bug where `cms_request_review` could still see stale `draft.qa_verdict=not_run` after `draft_qa`, by propagating the updated QA verdict through the scenario path, legacy workflow, and canonical cutover workflow before CMS review/publish steps;
+- extended `SeoCutoverShadowVerify` to validate `Phase M2` publish/HITL/rebuild semantics from stable run-scoped `pipeline.step_executions` evidence, instead of relying on mutable CMS event rows that can be overwritten by later runs on the same page/revision keys;
+- updated the working-plan status so `SeoSiteBuildCanonicalCutoverWorkflow` is now accepted through canonical `steps 1-56`, while `SeoSiteBuildWorkflow` remains present only for drain/compat and not as the forward architecture target.
 
 ### 6.19
 

@@ -635,6 +635,13 @@ async fn run_page_phase<
                 &page_node.page_node_key,
                 "qa_complete",
             ));
+            if let Some(draft_state) = page_state
+                .draft
+                .as_mut()
+                .and_then(|state| state.draft.as_mut())
+            {
+                draft_state.qa_verdict = output.verdict.clone();
+            }
             page_state.qa = Some(output);
             Ok(None)
         }
