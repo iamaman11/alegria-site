@@ -5,7 +5,7 @@
 **Owner:** Alegria SEO runtime and knowledge architecture
 **Supersedes:** `V5_Ultimate_Extraction_Protocol.md`, `SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md`
 **Priority rule:** if any `V5` owner or execution document conflicts with this file, `V6` wins.
-**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`
+**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`, `V6_Truth_Governance_Policy.md`
 
 ---
 
@@ -45,6 +45,10 @@ The named support-plane contracts that are outside the 56-step flow live in:
 
 - [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md)
 
+The current truth-governance policy tables and regex authority boundary live in:
+
+- [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md)
+
 That working plan has been expanded to match the actual active runtime surface, including support loading, publish-control phases, projection barriers, rebuild detection, and explicit run-mode/scenario branching semantics.
 
 The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value stream. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow and must be listed in [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md).
@@ -78,6 +82,11 @@ Additional first-class rollout/support workflows remain available only for contr
 
 The current active runtime sequence for the forward path is the accepted canonical cutover flow:
 
+- certification remains a proof layer only and never writes authority truth;
+- corroboration must respect source independence rather than raw source count;
+- single-source verification is allowed only through explicit authority-override policy;
+- regex may remain in utility surfaces or heuristic hints, but not as final authority for `verified` truth promotion.
+
 1. preflight, support loading, source discovery, crawl, evidence preparation, and section gating;
 2. semantic routing, span detection, canonical mapping, ontology intake, layer-specific extraction, completeness, resolution, contradiction handling, adjudication, and verified truth write;
 3. graph/retrieval admissibility, `Neo4j` sync, `Voyage/Qdrant` sync, and projection barriers;
@@ -101,6 +110,13 @@ Current rollout-safe promotion rule:
 - `SeoSiteBuildWorkflow` stays alive only for the explicit compatibility window and replay/drain discipline;
 - no new product logic should land in the `Expert*Workflow` family.
 - the explicit naming decision is to keep `SeoSiteBuildCanonicalCutoverWorkflow` as the runtime workflow type after drain, rather than creating another workflow type only to rename it.
+
+Current certification state:
+
+- local/CI truth certification is accepted against [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
+- certification remains evidence-only and never writes authority truth;
+- `automation/run_truth_certification_gate.sh` is the canonical certification runner and diff gate against the accepted baseline;
+- truth-governance changes and regex-authority changes must stay behind that regression gate.
 
 Current execution-plan semantics:
 

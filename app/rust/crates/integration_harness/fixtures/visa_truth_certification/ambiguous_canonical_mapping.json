@@ -1,0 +1,46 @@
+{
+  "fixture_id": "ambiguous_canonical_mapping",
+  "description": "Unknown concept mention should force HITL instead of silent acceptance.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain visa income certificate processing time",
+    "pages": [
+      {
+        "route": "/official/ambiguous-mapping",
+        "domain": "mfa.gov.example",
+        "title": "Official additional requirements",
+        "description": "Additional documents and timeline",
+        "html_file": "ambiguous_mapping_source.html"
+      }
+    ]
+  },
+  "model_stub_inputs": {
+    "editorial_response": {
+      "sections": {
+        "overview": "Additional requirements require review."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "processing_time|{\"days\":15}|resolution_loop_requires_hitl"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.24`
+**Current version:** `6.26`
 
 ---
 
@@ -446,7 +446,7 @@ Each target step must have:
 | `layer_router` | semantic | Assign full independent score vector across procedural, operational, editorial, SEO, and commercial layers for every extraction-eligible section. | Full score vector, primary layer, secondary layers, confidence, HITL flags. Returning only one label is invalid. |
 | `subspan_layer_router` | semantic | Split mixed sections into sentences, list items, table rows, or FAQ units when multiple layers compete. | Subspans inherit section evidence and receive their own layer scores. Mandatory secondary layers are not ignored. |
 | `entity_span_detection` | semantic | Detect entity mentions as evidence-bearing spans without extracting rules. | Stable `mention_id`, raw text, entity type, char offsets, numeric flag, centrality, confidence. |
-| `canonical_mapping` | semantic/truth support | Map mentions to canonical registry keys through exact alias, normalized alias, rule/regex, then vector fallback. | Mapping output references `mention_id`, original span, target registry, canonical key or null, match method, confidence, HITL need. |
+| `canonical_mapping` | semantic/truth support | Map mentions to canonical registry keys through exact alias, normalized alias, heuristic rule/regex hint, then vector fallback. Regex may assist mapping, but it is not final authority for verified truth. | Mapping output references `mention_id`, original span, target registry, canonical key or null, match method, confidence, HITL need. |
 | `ontology_intake_gate` | ontology | Route unmapped or ambiguous mentions into evolutionary ontology intake. | New keys may become `detected` or `proposed`; they cannot participate in extraction until `indexed`. Ambiguous aliases block auto-map. |
 
 ### 5.3 Layer-specific extraction
@@ -1264,6 +1264,38 @@ Required:
 - ontology ambiguity fixture blocks auto-map;
 - replay proves deterministic output for unchanged inputs.
 
+### Post-Gate 10 Tranche Order
+
+After `Gate 10` is green, the execution order is fixed:
+
+1. close certification drift with an accepted local/CI baseline artifact;
+2. introduce truth-governance policy:
+   - source independence
+   - source trust weighting
+   - authority override
+   - freshness policy
+3. only then remove regex as final authority from the expert truth path.
+
+The single governance satellite for those rules is:
+
+- [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md)
+
+Mandatory consequences:
+
+- certification remains proof-only and never writes authority truth;
+- corroboration must respect `independence_group_key`, not raw source count;
+- single-source verification is allowed only through explicit override policy;
+- regex may remain as heuristic or utility support, but not as final authority for `verified` truth.
+
+Current accepted state:
+
+- `Phase A / Knowledge Certification` is now accepted locally with baseline artifact at [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
+- `automation/run_truth_certification_gate.sh` is the canonical local/CI certification wrapper;
+- `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
+- `automation/ci_verify.sh` now includes the truth certification regression gate;
+- `Phase B / Truth Governance` remains frozen prework until changes are explicitly validated against the accepted certification baseline;
+- `Phase C / Regex De-Authority` remains blocked until `Phase B` acceptance is complete.
+
 ---
 
 ## 11. Machine-Verification Requirements
@@ -1310,6 +1342,20 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.26
+
+- accepted `Phase A / Knowledge Certification` by calibrating the full certification fixture pack and capturing the immutable baseline artifact at `docs/runs/truth_certification_local_ci_baseline.json`;
+- fixed draft certification allow-cases by aligning per-page required-section behavior with blueprint-required sections and by seeding explicit preverified support where fixtures required publish-ready draft coverage;
+- added certification diagnostics for temporal step multisets, semantic draft counts, and missing required factual support refs to keep future calibration work machine-auditable;
+- wired `automation/run_truth_certification_gate.sh` into `automation/ci_verify.sh` so truth-diff regression is mandatory in local/CI before further governance or regex-authority work lands;
+- clarified that `Phase B` is frozen-prepared rather than accepted behavior and that `Phase C` stays blocked behind the certification baseline.
+
+### 6.25
+
+- added the fixed post-certification tranche order: certification closure, then truth governance, then regex de-authority;
+- linked the new `V6_Truth_Governance_Policy.md` satellite as the single policy surface for source independence, trust weighting, authority override, freshness, and regex-boundary rules;
+- clarified under `Gate 10` that certification is proof-only and cannot become a second truth path.
 
 ### 6.20
 

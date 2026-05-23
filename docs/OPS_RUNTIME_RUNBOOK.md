@@ -271,7 +271,11 @@ Owner-boundary note:
 - `release_and_restore_gate`
   - operator surface: `cli_tools SeoReleaseRestoreGate`
   - evidence surface: `--report-json`
-  - heavyweight executable surfaces: `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `infra/backups/restore_drill.sh`
+- heavyweight executable surfaces: `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `infra/backups/restore_drill.sh`
+- truth certification is a mandatory local/CI gate and writes only evidence under `docs/runs/**`; it never writes authority truth
+- accepted local/CI certification baseline artifact: [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json)
+- canonical certification entrypoint: `automation/run_truth_certification_gate.sh`
+- truth-governance decision tables and regex authority boundaries are owned by [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md), not by ad hoc runtime overrides
 
 ## 3) HITL contract
 

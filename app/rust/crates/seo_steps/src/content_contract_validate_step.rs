@@ -4,7 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload, DraftQaInputPayload,
     RenderedContentBlock, SeoPublishBlockerState,
 };
-use runtime_models::seo_blocks::{block_type_for_role, default_section_roles, factual_role};
+use runtime_models::seo_blocks::{block_type_for_role, factual_role};
 
 fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerState {
     SeoPublishBlockerState {
@@ -57,23 +57,25 @@ pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
         }
     }
 
-    for role in default_section_roles() {
-        let Some(block) = find_block(&draft.content_blocks, role) else {
-            blockers.push(blocker(
-                "missing_required_content_block",
-                "Build the complete canonical content block plan before publish gate.",
-            ));
-            continue;
-        };
-        if *role == "related_pages"
-            && !input.required_links.is_empty()
-            && block.markdown.trim().is_empty()
-        {
+    if !draft.content_blocks.iter().any(|block| block.required) {
+        blockers.push(blocker(
+            "missing_required_content_block",
+            "Build the complete canonical content block plan before publish gate.",
+        ));
+    }
+
+    if let Some(block) = find_block(&draft.content_blocks, "related_pages") {
+        if !input.required_links.is_empty() && block.markdown.trim().is_empty() {
             blockers.push(blocker(
                 "missing_required_internal_links",
                 "Render required internal link obligations into the related pages block.",
             ));
         }
+    } else if !input.required_links.is_empty() {
+        blockers.push(blocker(
+            "missing_required_internal_links",
+            "Render required internal link obligations into the related pages block.",
+        ));
     }
 
     blockers.sort_by(|left, right| left.reason_code.cmp(&right.reason_code));
@@ -165,13 +167,13 @@ mod tests {
         let input = DraftQaInputPayload {
             run_id: "run".to_string(),
             draft: Some(DraftState {
-                content_blocks: default_section_roles()
+                content_blocks: mandatory_section_roles()
                     .iter()
                     .map(|role| {
                         block(
                             role,
                             block_type_for_role(role),
-                            !matches!(*role, "documents"),
+                            !matches!(role, &"documents"),
                         )
                     })
                     .collect(),

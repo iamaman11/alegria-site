@@ -11,7 +11,8 @@ use contracts::generated::alegria::temporal::v1::{
     SeoVerifiedFactSupportState,
 };
 use runtime_models::seo_blocks::{
-    default_section_roles, factual_role, heading_for_role, planned_content_blocks,
+    default_section_roles, factual_role, heading_for_role, mandatory_section_roles,
+    planned_content_blocks,
     support_traceability_label, supports_for_role,
 };
 
@@ -52,6 +53,29 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
         .as_ref()
         .map(|blueprint| blueprint.dominant_intent.clone())
         .unwrap_or_else(|| "informational".to_string());
+    let required_roles = input
+        .page_blueprint
+        .as_ref()
+        .map(|blueprint| {
+            if blueprint.required_sections.is_empty() {
+                mandatory_section_roles()
+                    .iter()
+                    .map(|role| (*role).to_string())
+                    .collect::<BTreeSet<_>>()
+            } else {
+                blueprint
+                    .required_sections
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+            }
+        })
+        .unwrap_or_else(|| {
+            mandatory_section_roles()
+                .iter()
+                .map(|role| (*role).to_string())
+                .collect::<BTreeSet<_>>()
+        });
     default_section_roles()
         .iter()
         .map(|role| SectionTemplateBinding {
@@ -64,7 +88,7 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
                 "Write the {role} section using only verified support refs and neutral expert tone."
             ),
             template_version: 1,
-            required: true,
+            required: required_roles.contains(*role),
         })
         .collect()
 }
@@ -132,7 +156,7 @@ fn deterministic_section_body(
 ) -> String {
     if section_role == "related_pages" {
         if required_links.is_empty() {
-            return "- [unsupported:missing_required_internal_links]\n".to_string();
+            return "No mandatory related pages are required for this scope.\n".to_string();
         }
         let mut body = String::new();
         for link in required_links {
@@ -277,7 +301,7 @@ fn build_fallback_draft_parts(
             section_role: section_role.clone(),
             heading: heading.clone(),
             body_markdown: section_body.clone(),
-            required: true,
+            required: block.required,
             traceability_label: if factual_role(&section_role) {
                 support_traceability_label(&section_role).to_string()
             } else {
@@ -302,7 +326,7 @@ fn build_fallback_draft_parts(
             } else {
                 "business_copy".to_string()
             },
-            required: true,
+            required: block.required,
         });
     }
 

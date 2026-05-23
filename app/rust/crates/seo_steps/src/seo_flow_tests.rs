@@ -327,7 +327,8 @@ fn seo_steps_form_publish_ready_pipeline() {
         supported_fragments: Vec::new(),
         required_links: Vec::new(),
     });
-    assert!(qa_without_links
+    assert_eq!(qa_without_links.verdict, "publish_ready");
+    assert!(!qa_without_links
         .blocking_reasons
         .contains(&"missing_required_internal_links".to_string()));
 

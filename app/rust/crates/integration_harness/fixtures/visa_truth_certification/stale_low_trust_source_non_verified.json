@@ -1,0 +1,46 @@
+{
+  "fixture_id": "stale_low_trust_source_non_verified",
+  "description": "Single low-trust page must not auto-verify structured truth.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain tourist visa fee travel blog",
+    "pages": [
+      {
+        "route": "/blog/low-trust-fee",
+        "domain": "travelblog.example",
+        "title": "Traveler blog",
+        "description": "Blog summary",
+        "html_file": "low_trust_single_source_source.html"
+      }
+    ]
+  },
+  "model_stub_inputs": {
+    "editorial_response": {
+      "sections": {
+        "overview": "Blog claims require verification."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=editorial"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

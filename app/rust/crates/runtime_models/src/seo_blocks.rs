@@ -94,6 +94,17 @@ pub fn default_section_roles() -> &'static [&'static str] {
     ]
 }
 
+pub fn mandatory_section_roles() -> &'static [&'static str] {
+    &[
+        "overview",
+        "documents",
+        "fees",
+        "timing",
+        "related_pages",
+        "cta_disclaimer",
+    ]
+}
+
 pub fn planned_content_blocks(
     templates: &[SectionTemplateBinding],
     verified_support: &[SeoVerifiedFactSupportState],

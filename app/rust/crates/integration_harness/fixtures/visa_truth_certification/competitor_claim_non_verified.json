@@ -1,0 +1,89 @@
+{
+  "fixture_id": "competitor_claim_non_verified",
+  "description": "Commercial or competitor-only claims must not become verified visa truth.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "visa agency service fee",
+    "pages": [
+      {
+        "route": "/agency/service-fee",
+        "domain": "visa-agency.example",
+        "title": "Agency service page",
+        "description": "Agency service page",
+        "html_file": "competitor_claim_source.html"
+      }
+    ],
+    "support_bundle_seed": {
+      "concepts": [
+        {
+          "concept_key": "consular_fee",
+          "concept_type": "fee",
+          "label_ru": "Консульский сбор"
+        }
+      ]
+    }
+  },
+  "model_stub_inputs": {
+    "extraction_responses": [
+      {
+        "candidates": [
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Our agency service costs 250 EUR.",
+            "params": {
+              "amount": 250,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.88,
+            "evidence_section_id": 0,
+            "evidence_quote": "Our agency service costs 250 EUR.",
+            "span_start": 0,
+            "span_end": 33,
+            "uncertainty_flags": [
+              "commercial_source"
+            ]
+          }
+        ]
+      }
+    ],
+    "editorial_response": {
+      "sections": {
+        "overview": "Agency claim is not visa truth."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=low_trust"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

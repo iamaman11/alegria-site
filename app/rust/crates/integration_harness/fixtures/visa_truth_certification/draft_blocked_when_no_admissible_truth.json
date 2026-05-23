@@ -1,0 +1,44 @@
+{
+  "fixture_id": "draft_blocked_when_no_admissible_truth",
+  "description": "No admissible verified truth must block the draft path.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain visa generic travel note",
+    "pages": [
+      {
+        "route": "/editorial/generic-note",
+        "domain": "news.example",
+        "title": "Generic travel note",
+        "description": "Travel note",
+        "html_file": "draft_blocked_missing_truth_source.html"
+      }
+    ]
+  },
+  "model_stub_inputs": {
+    "editorial_response": {
+      "sections": {
+        "overview": "No verified truth is available."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

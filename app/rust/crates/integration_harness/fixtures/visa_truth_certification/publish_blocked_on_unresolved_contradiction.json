@@ -1,0 +1,54 @@
+{
+  "fixture_id": "publish_blocked_on_unresolved_contradiction",
+  "description": "Contradictory verified-intent inputs must block publish progression.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain visa conflicting timeline",
+    "pages": [
+      {
+        "route": "/official/timeline-a",
+        "domain": "mfa.gov.example",
+        "title": "Official timeline A",
+        "description": "Official timeline A",
+        "html_file": "publish_blocked_contradiction_a.html"
+      },
+      {
+        "route": "/official/timeline-b",
+        "domain": "embassy.gov.example",
+        "title": "Official timeline B",
+        "description": "Official timeline B",
+        "html_file": "publish_blocked_contradiction_b.html"
+      }
+    ]
+  },
+  "model_stub_inputs": {
+    "editorial_response": {
+      "sections": {
+        "overview": "Timeline conflict requires review."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "processing_time|{\"days\":10}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government",
+      "processing_time|{\"days\":30}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

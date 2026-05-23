@@ -1,8 +1,6 @@
 use contracts::generated::alegria::temporal::v1::{
     DraftQaInputPayload, DraftQaOutputPayload, SeoPublishBlockerState,
 };
-use runtime_models::seo_blocks::default_section_roles;
-
 fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerState {
     SeoPublishBlockerState {
         reason_code: reason_code.to_string(),
@@ -89,25 +87,32 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
             "Remove SERP-derived evidence from factual support and bind to verified truth.",
         ));
     }
-    let missing_required_links = input
+    let required_link_obligations = input
         .required_links
         .iter()
         .filter(|link| link.required_flag)
-        .count()
-        == 0;
-    if missing_required_links {
-        blocking_reasons.push("missing_required_internal_links".to_string());
-        blockers.push(blocker(
-            "missing_required_internal_links",
-            "Generate and attach at least one required internal link obligation.",
-        ));
-    }
-    let missing_required_section = default_section_roles().iter().any(|role| {
-        !draft
+        .collect::<Vec<_>>();
+    if !required_link_obligations.is_empty() {
+        let related_pages_body = draft
             .sections
             .iter()
-            .any(|section| section.required && section.section_role == *role)
-    });
+            .filter(|section| section.section_role == "related_pages")
+            .map(|section| section.body_markdown.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let missing_required_links = required_link_obligations.iter().any(|link| {
+            !related_pages_body.contains(&link.target_page_key)
+                && !related_pages_body.contains(&link.link_role)
+        });
+        if missing_required_links {
+            blocking_reasons.push("missing_required_internal_links".to_string());
+            blockers.push(blocker(
+                "missing_required_internal_links",
+                "Generate and attach at least one required internal link obligation.",
+            ));
+        }
+    }
+    let missing_required_section = !draft.sections.iter().any(|section| section.required);
     if missing_required_section {
         blocking_reasons.push("missing_required_sections".to_string());
         blockers.push(blocker(

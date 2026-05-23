@@ -82,18 +82,22 @@ pub use containers::{InfraHarness, Neo4jHarness, PostgresHarness, QdrantHarness,
 mod tests {
     use super::*;
     use contracts::generated::alegria::temporal::v1::{
-        EditorialBrief, EditorialDraftGenerateInputPayload, LinkRecommendationState,
-        LlmDraftRequest, SectionTemplateBinding, SeoVerifiedFactSupportState,
+        CmsPublishOutputPayload, DraftNormalizeOutputPayload, DraftQaOutputPayload, EditorialBrief,
+        EditorialDraftGenerateInputPayload, LinkRecommendationState, LlmDraftRequest,
+        ProjectionBarrierAuditOutputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
+        SeoVerifiedFactSupportState,
     };
     use infrastructure::adapters::{
         dataforseo_serp_adapter::{DataForSeoConfig, DataForSeoSerpClient},
         editorial_llm_adapter, raw_crawl_adapter,
+        proto_runtime_payload_store::RuntimeProtoPayload,
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
         temporalio_sdk_adapter::{
             connect_client, RawValue, UntypedWorkflow, WorkflowGetResultOptions,
             WorkflowStartOptions,
         },
     };
+    use seo_steps::seo_step_support::artifact_key;
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
         registration::register_site_build_input,
@@ -105,14 +109,15 @@ mod tests {
     use serial_test::serial;
     use sqlx::{types::Json, Row};
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, BTreeSet},
         env, fs,
         path::PathBuf,
         process::{Child, Command, Stdio},
-        time::Duration,
+        time::{Duration, Instant},
     };
     use tokio::time::timeout;
     use uuid::Uuid;
+    use std::sync::OnceLock;
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     struct SemanticPageNode {
@@ -137,6 +142,132 @@ mod tests {
         page_drafts: Vec<SemanticPageDraft>,
     }
 
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationFixture {
+        fixture_id: String,
+        #[serde(rename = "description")]
+        _description: String,
+        run_mode: String,
+        business_scope: TruthCertificationScope,
+        source_inputs: TruthCertificationSourceInputs,
+        model_stub_inputs: TruthCertificationModelStubInputs,
+        expected_outcomes: TruthCertificationExpectedOutcomes,
+        invariants: TruthCertificationInvariants,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationScope {
+        truth_identity_tuple: String,
+        publishing_scope_tuple: String,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationSourceInputs {
+        query: String,
+        pages: Vec<TruthCertificationSourcePage>,
+        #[serde(default)]
+        support_bundle_seed: Option<TruthCertificationSupportBundleSeed>,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationSourcePage {
+        route: String,
+        domain: String,
+        title: String,
+        description: String,
+        html_file: String,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationModelStubInputs {
+        #[serde(default)]
+        extraction_responses: Vec<serde_json::Value>,
+        editorial_response: serde_json::Value,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationSupportBundleSeed {
+        #[serde(default)]
+        concepts: Vec<TruthCertificationConceptSeed>,
+        #[serde(default)]
+        preverified_rules: Vec<TruthCertificationPreverifiedRuleSeed>,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationConceptSeed {
+        concept_key: String,
+        concept_type: String,
+        label_ru: String,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationPreverifiedRuleSeed {
+        rule_instance_id: String,
+        rule_type_key: String,
+        concept_key: String,
+        role_type: String,
+        params: serde_json::Value,
+        source_key: String,
+        source_url: String,
+        evidence_quote: String,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationExpectedOutcomes {
+        verified_rule_set: Vec<String>,
+        needs_hitl_set: Vec<String>,
+        rejected_set: Vec<String>,
+        contradiction_groups: Vec<String>,
+        completeness_failures: Vec<String>,
+        draft_verdict: String,
+        publish_verdict: String,
+        projection_verdict: String,
+        rebuild_impact_emitted: bool,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationInvariants {
+        no_truth_promotion_from_retrieval_or_graph: bool,
+        no_source_tier_shortcut_to_verified: bool,
+        no_unsupported_claim_reaches_draft_as_truth: bool,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+    struct TruthCertificationFixtureReport {
+        fixture_id: String,
+        run_id: String,
+        context_key: String,
+        scope_signature: String,
+        verified_rule_set: Vec<String>,
+        needs_hitl_set: Vec<String>,
+        rejected_set: Vec<String>,
+        contradiction_groups: Vec<String>,
+        completeness_failures: Vec<String>,
+        draft_verdict: String,
+        draft_blocking_reasons: Vec<String>,
+        publish_verdict: String,
+        projection_verdict: String,
+        changed_truth_keys: Vec<String>,
+        rebuild_impact_emitted: bool,
+        rebuild_impacted_page_count: usize,
+        temporal_step_multiset: BTreeMap<String, usize>,
+        semantic_page_node_count: usize,
+        semantic_page_draft_count: usize,
+        semantic_page_draft_qa_verdicts: Vec<String>,
+        required_factual_blocks_without_support: Vec<String>,
+        pass: bool,
+        failure_reasons: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workflow_failure_diagnostics: Option<String>,
+    }
+
+    #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+    struct TruthCertificationSuiteReport {
+        workflow_type: String,
+        fixture_count: usize,
+        fixtures: Vec<TruthCertificationFixtureReport>,
+    }
+
     struct ChildGuard {
         child: Child,
     }
@@ -156,6 +287,12 @@ mod tests {
             .to_path_buf()
     }
 
+    fn truth_certification_fixtures_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("fixtures")
+            .join("visa_truth_certification")
+    }
+
     fn target_dir() -> PathBuf {
         env::var_os("CARGO_TARGET_DIR")
             .map(PathBuf::from)
@@ -163,22 +300,49 @@ mod tests {
     }
 
     fn build_temporal_worker_binary() -> PathBuf {
-        let binary = target_dir()
-            .join("debug")
-            .join(format!("temporal_worker{}", env::consts::EXE_SUFFIX));
-        if binary.exists() {
-            return binary;
-        }
-        let workspace = workspace_root();
-        let status = Command::new("cargo")
-            .args(["build", "-p", "temporal_worker", "--bin", "temporal_worker"])
-            .current_dir(&workspace)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("build temporal_worker");
-        assert!(status.success(), "cargo build -p temporal_worker failed");
-        binary
+        static BIN: OnceLock<PathBuf> = OnceLock::new();
+        BIN.get_or_init(|| {
+            let binary = target_dir()
+                .join("debug")
+                .join(format!("temporal_worker{}", env::consts::EXE_SUFFIX));
+            if binary.exists() {
+                return binary;
+            }
+            let workspace = workspace_root();
+            let status = Command::new("cargo")
+                .args(["build", "-p", "temporal_worker", "--bin", "temporal_worker"])
+                .current_dir(&workspace)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .expect("build temporal_worker");
+            assert!(status.success(), "cargo build -p temporal_worker failed");
+            binary
+        })
+        .clone()
+    }
+
+    fn build_outbox_worker_binary() -> PathBuf {
+        static BIN: OnceLock<PathBuf> = OnceLock::new();
+        BIN.get_or_init(|| {
+            let binary = target_dir()
+                .join("debug")
+                .join(format!("outbox_worker{}", env::consts::EXE_SUFFIX));
+            if binary.exists() {
+                return binary;
+            }
+            let workspace = workspace_root();
+            let status = Command::new("cargo")
+                .args(["build", "-p", "outbox_worker", "--bin", "outbox_worker"])
+                .current_dir(&workspace)
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .expect("build outbox_worker");
+            assert!(status.success(), "cargo build -p outbox_worker failed");
+            binary
+        })
+        .clone()
     }
 
     fn spawn_temporal_worker(envs: &BTreeMap<String, String>) -> ChildGuard {
@@ -186,8 +350,8 @@ mod tests {
         let mut command = Command::new(binary);
         command
             .current_dir(workspace_root())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .env("RUST_LOG", "warn")
             .env(
                 "WORKER_BUILD_ID",
@@ -199,6 +363,757 @@ mod tests {
         }
         let child = command.spawn().expect("spawn temporal_worker");
         ChildGuard { child }
+    }
+
+    fn spawn_outbox_worker(envs: &BTreeMap<String, String>) -> ChildGuard {
+        let binary = build_outbox_worker_binary();
+        let mut command = Command::new(binary);
+        command
+            .current_dir(workspace_root())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .env("RUST_LOG", "warn")
+            .env("RUST_LOG_STYLE", "never")
+            .env(
+                "OUTBOX_WORKER_BUILD_ID",
+                format!("integration-outbox-{}", Uuid::new_v4()),
+            )
+            .env(
+                "OUTBOX_WORKER_ID",
+                format!("integration-outbox-worker-{}", Uuid::new_v4()),
+            );
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let child = command.spawn().expect("spawn outbox_worker");
+        ChildGuard { child }
+    }
+
+    fn load_truth_certification_fixtures() -> Vec<TruthCertificationFixture> {
+        let mut paths = fs::read_dir(truth_certification_fixtures_dir())
+            .unwrap()
+            .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.into_iter()
+            .map(|path| {
+                serde_json::from_slice::<TruthCertificationFixture>(&fs::read(&path).unwrap())
+                    .unwrap_or_else(|err| panic!("failed to decode fixture {}: {err}", path.display()))
+            })
+            .collect()
+    }
+
+    async fn render_fixture_source_pages(
+        fixtures: &[TruthCertificationFixture],
+    ) -> (
+        Vec<stub_servers::StubServerHandle>,
+        Vec<(String, serde_json::Value)>,
+    ) {
+        let mut source_servers = Vec::new();
+        let mut serp_sequence = Vec::new();
+        for fixture in fixtures {
+            let mut items = Vec::new();
+            for (idx, page) in fixture.source_inputs.pages.iter().enumerate() {
+                let body = fs::read_to_string(truth_certification_fixtures_dir().join(&page.html_file))
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "failed to read source HTML {} for fixture {}: {err}",
+                            page.html_file, fixture.fixture_id
+                        )
+                    });
+                let server =
+                    stub_servers::spawn_text_stub(&page.route, body, "text/html; charset=utf-8")
+                        .await
+                        .unwrap();
+                let url = format!("{}{}", server.base_url, page.route);
+                source_servers.push(server);
+                items.push(serde_json::json!({
+                    "type": "organic",
+                    "rank_group": idx + 1,
+                    "rank_absolute": idx + 1,
+                    "title": page.title,
+                    "url": url,
+                    "domain": page.domain,
+                    "description": page.description
+                }));
+            }
+            serp_sequence.push((
+                fixture.fixture_id.clone(),
+                serde_json::json!({
+                    "tasks": [{
+                        "result": [{
+                            "items": items
+                        }]
+                    }]
+                }),
+            ));
+        }
+        (source_servers, serp_sequence)
+    }
+
+    fn truth_certification_editorial_sequence(
+        fixtures: &[TruthCertificationFixture],
+    ) -> Vec<serde_json::Value> {
+        fixtures
+            .iter()
+            .map(|fixture| {
+                serde_json::json!({
+                    "id": format!("chatcmpl-cert-editorial-{}", fixture.fixture_id),
+                    "choices": [{
+                        "message": {
+                            "role": "assistant",
+                            "content": fixture.model_stub_inputs.editorial_response.to_string()
+                        }
+                    }]
+                })
+            })
+            .collect()
+    }
+
+    fn truth_certification_truth_sequence(
+        fixtures: &[TruthCertificationFixture],
+    ) -> Vec<serde_json::Value> {
+        fixtures
+            .iter()
+            .flat_map(|fixture| {
+                let responses = if fixture.model_stub_inputs.extraction_responses.is_empty() {
+                    vec![serde_json::json!({ "candidates": [] }); fixture.source_inputs.pages.len()]
+                } else {
+                    assert_eq!(
+                        fixture.model_stub_inputs.extraction_responses.len(),
+                        fixture.source_inputs.pages.len(),
+                        "fixture {} must provide one extraction response per source page",
+                        fixture.fixture_id
+                    );
+                    fixture.model_stub_inputs.extraction_responses.clone()
+                };
+                responses
+                    .into_iter()
+                    .map(|payload| {
+                        if payload.get("choices").is_some() {
+                            payload
+                        } else {
+                            local_truth_response(payload)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn truth_certification_env(
+        serp_endpoint: &str,
+        truth_endpoint: &str,
+        editorial_endpoint: &str,
+    ) -> BTreeMap<String, String> {
+        let mut envs = env_overrides::btree_env([
+            ("DATAFORSEO_ENDPOINT".to_string(), serp_endpoint.to_string()),
+            ("DATAFORSEO_LOGIN".to_string(), "stub-login".to_string()),
+            ("DATAFORSEO_PASSWORD".to_string(), "stub-password".to_string()),
+            ("DATAFORSEO_LANGUAGE_CODE".to_string(), "en".to_string()),
+            ("DATAFORSEO_LOCATION_CODE".to_string(), "2840".to_string()),
+            ("DATAFORSEO_DEPTH".to_string(), "10".to_string()),
+            ("SEO_LLM_PROVIDER".to_string(), "local_compatible".to_string()),
+            (
+                "SEO_LLM_LOCAL_ENDPOINT".to_string(),
+                editorial_endpoint.to_string(),
+            ),
+            (
+                "SEO_LLM_LOCAL_MODEL".to_string(),
+                "stub-editorial-model".to_string(),
+            ),
+        ]);
+        envs.extend(local_truth_env(truth_endpoint));
+        envs.insert(
+            "QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(),
+            "true".to_string(),
+        );
+        envs
+    }
+
+    async fn reset_truth_certification_state(
+        pool: &sqlx::PgPool,
+        context_key: &str,
+    ) {
+        let site_tables = sqlx::query_scalar::<_, String>(
+            r#"
+            SELECT tablename
+            FROM pg_tables
+            WHERE schemaname = 'site'
+              AND tablename NOT IN ('section_templates', 'page_blueprints')
+            ORDER BY tablename
+            "#,
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        if !site_tables.is_empty() {
+            let statement = format!(
+                "TRUNCATE TABLE {} RESTART IDENTITY CASCADE",
+                site_tables
+                    .iter()
+                    .map(|table| format!("site.{table}"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            sqlx::query(&statement).execute(pool).await.unwrap();
+        }
+
+        sqlx::query("TRUNCATE TABLE monitoring.seo_rebuild_backlog RESTART IDENTITY")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM verified.rule_instances WHERE context_key = $1")
+            .bind(context_key)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM extracted.rule_candidates WHERE context_key = $1")
+            .bind(context_key)
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM raw.section_context_candidates WHERE context_key = $1")
+            .bind(context_key)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    async fn seed_truth_certification_support_bundle(
+        pool: &sqlx::PgPool,
+        context_key: &str,
+        fixture: &TruthCertificationFixture,
+    ) {
+        let Some(seed) = fixture.source_inputs.support_bundle_seed.as_ref() else {
+            return;
+        };
+
+        for concept in &seed.concepts {
+            seed_truth_context_and_concept(
+                pool,
+                context_key,
+                &concept.concept_key,
+                &concept.concept_type,
+                &concept.label_ru,
+            )
+            .await;
+        }
+
+        for rule in &seed.preverified_rules {
+            seed_admissible_verified_rule(
+                pool,
+                context_key,
+                &rule.rule_instance_id,
+                &rule.rule_type_key,
+                &rule.concept_key,
+                &rule.role_type,
+                rule.params.clone(),
+                &rule.source_key,
+                &rule.source_url,
+                &rule.evidence_quote,
+            )
+            .await;
+        }
+    }
+
+    async fn register_truth_certification_input(
+        repo: &SqlxSeoRuntimeRepository<'_>,
+        run_id: String,
+        query_batch_key: String,
+        query: String,
+        run_mode: String,
+    ) -> contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload {
+        register_site_build_input(
+            repo,
+            &SeoSiteBuildRegistrationRequest {
+                run_id,
+                context_key: None,
+                market: "alegria-site".to_string(),
+                locale: "ru-RU".to_string(),
+                country_code: "ES".to_string(),
+                visa_type: "tourist".to_string(),
+                visa_subtype: None,
+                applicant_profile: "standard".to_string(),
+                citizenship_code: "BY".to_string(),
+                bootstrap_context: true,
+                queries: vec![query],
+                query_batch_key: Some(query_batch_key),
+                run_mode: Some(run_mode),
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    async fn latest_output_payload_bytes(
+        pool: &sqlx::PgPool,
+        run_id: &str,
+        step_name: &str,
+    ) -> Vec<Vec<u8>> {
+        sqlx::query(
+            r#"
+            SELECT payload_bytes
+            FROM pipeline.step_payload_blobs
+            WHERE run_id = $1
+              AND step_name = $2
+              AND payload_kind = 'output'
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(Uuid::parse_str(run_id).unwrap())
+        .bind(step_name)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|row| row.get::<Vec<u8>, _>("payload_bytes"))
+        .collect()
+    }
+
+    async fn latest_output_payload_json(
+        pool: &sqlx::PgPool,
+        run_id: &str,
+        step_name: &str,
+    ) -> Vec<serde_json::Value> {
+        latest_output_payload_bytes(pool, run_id, step_name)
+            .await
+            .into_iter()
+            .map(|payload| serde_json::from_slice::<serde_json::Value>(&payload).unwrap())
+            .collect()
+    }
+
+    async fn latest_proto_outputs<T: RuntimeProtoPayload>(
+        pool: &sqlx::PgPool,
+        run_id: &str,
+        step_name: &str,
+    ) -> Vec<T> {
+        latest_output_payload_bytes(pool, run_id, step_name)
+            .await
+            .into_iter()
+            .map(|payload| T::decode_payload_bytes(&payload).unwrap())
+            .collect()
+    }
+
+    fn stable_rule_key(rule_type_key: &str, concept_key: &str, params: &serde_json::Value) -> String {
+        format!(
+            "{}|{}|{}",
+            rule_type_key,
+            concept_key,
+            serde_json::to_string(params).unwrap()
+        )
+    }
+
+    fn stable_decision_key(
+        concept_key: &str,
+        params: &serde_json::Value,
+        reason: &str,
+    ) -> String {
+        format!(
+            "{}|{}|{}",
+            concept_key,
+            serde_json::to_string(params).unwrap(),
+            reason
+        )
+    }
+
+    async fn insert_preapproved_decisions_when_ready(
+        pool: sqlx::PgPool,
+        scope_signature: String,
+        deadline: Instant,
+    ) {
+        while Instant::now() < deadline {
+            let rows = sqlx::query(
+                r#"
+                SELECT d.page_draft_key, d.draft_revision, n.page_node_key
+                FROM site.page_drafts d
+                JOIN site.page_nodes n ON n.page_node_key = d.page_node_key
+                WHERE n.scope_signature = $1
+                "#,
+            )
+            .bind(&scope_signature)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+            if !rows.is_empty() {
+                for row in rows {
+                    let page_node_key: String = row.get("page_node_key");
+                    let page_draft_key: String = row.get("page_draft_key");
+                    let draft_revision: i32 = row.get("draft_revision");
+                    let revision_id = artifact_key(
+                        "cms_revision",
+                        &[
+                            &page_node_key,
+                            &page_draft_key,
+                            &draft_revision.to_string(),
+                            "seo_cms_publish@1",
+                        ],
+                    );
+                    let decision_key =
+                        artifact_key("cms_approval", &[&page_node_key, &revision_id, "approved"]);
+                    sqlx::query(
+                        r#"
+                        INSERT INTO site.cms_approval_decisions
+                            (decision_key, page_node_key, revision_id, actor_role, decision, reason,
+                             decided_at, decision_payload)
+                        VALUES ($1, $2, $3, 'seo_reviewer', 'approved', 'truth_certification_preapproval',
+                                now(), '{"actor_role":"seo_reviewer","reason":"truth_certification_preapproval"}'::jsonb)
+                        ON CONFLICT (decision_key) DO NOTHING
+                        "#,
+                    )
+                    .bind(decision_key)
+                    .bind(page_node_key)
+                    .bind(revision_id)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+                }
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn collect_truth_certification_fixture_report(
+        pool: &sqlx::PgPool,
+        fixture: &TruthCertificationFixture,
+        run_id: &str,
+        context_key: &str,
+        scope_signature: &str,
+    ) -> TruthCertificationFixtureReport {
+        let verified_rows = sqlx::query(
+            r#"
+            SELECT rule_type_key, concept_key, params
+            FROM verified.rule_instances
+            WHERE context_key = $1
+              AND status = 'verified'
+            ORDER BY rule_type_key, concept_key
+            "#,
+        )
+        .bind(context_key)
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let verified_rule_set = verified_rows
+            .into_iter()
+            .map(|row| {
+                stable_rule_key(
+                    &row.get::<String, _>("rule_type_key"),
+                    &row.get::<String, _>("concept_key"),
+                    &row.get::<serde_json::Value, _>("params"),
+                )
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let truth_adjudication = latest_output_payload_json(pool, run_id, "truth_adjudication").await;
+        let mut needs_hitl_set = BTreeSet::new();
+        let mut rejected_set = BTreeSet::new();
+        for payload in &truth_adjudication {
+            for decision in payload
+                .get("decisions")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let concept = decision
+                    .get("concept_canonical_key")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                let params = decision.get("params").cloned().unwrap_or_else(|| serde_json::json!({}));
+                let reason = decision
+                    .get("adjudication_reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                match decision.get("decision").and_then(|value| value.as_str()) {
+                    Some("needs_hitl") => {
+                        needs_hitl_set.insert(stable_decision_key(concept, &params, reason));
+                    }
+                    Some("rejected") => {
+                        rejected_set.insert(stable_decision_key(concept, &params, reason));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        let contradiction = latest_output_payload_json(pool, run_id, "contradiction_gate").await;
+        let contradiction_groups = contradiction
+            .iter()
+            .flat_map(|payload| {
+                payload
+                    .get("sections")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|section| {
+                        section
+                            .get("output")
+                            .and_then(|value| value.get("conflicts"))
+                            .and_then(|value| value.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|conflict| {
+                                Some(format!(
+                                    "{}|{}|{}|{}|{}",
+                                    conflict.get("subject_key")?.as_str()?,
+                                    conflict.get("predicate_key")?.as_str()?,
+                                    conflict.get("value_left")?.as_str()?,
+                                    conflict.get("value_right")?.as_str()?,
+                                    conflict.get("severity")?.as_str()?
+                                ))
+                            })
+                    })
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let completeness = latest_output_payload_json(pool, run_id, "completeness_judge").await;
+        let completeness_failures = completeness
+            .iter()
+            .flat_map(|payload| {
+                payload
+                    .get("sections")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .flat_map(|section| {
+                        let blocked = section
+                            .get("blocked_by_gate")
+                            .and_then(|value| value.as_bool())
+                            .unwrap_or(false);
+                        if blocked {
+                            Vec::new()
+                        } else {
+                            section
+                                .get("output")
+                                .and_then(|value| value.get("missing_elements"))
+                                .and_then(|value| value.as_array())
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|missing| {
+                                    Some(format!(
+                                        "{}|{}|{}",
+                                        missing.get("loss_type")?.as_str()?,
+                                        missing.get("raw_fragment")?.as_str()?,
+                                        missing.get("action")?.as_str()?
+                                    ))
+                                })
+                                .collect::<Vec<_>>()
+                        }
+                    })
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let draft_qas = latest_proto_outputs::<DraftQaOutputPayload>(pool, run_id, "draft_qa").await;
+        let draft_blocking_reasons = draft_qas
+            .iter()
+            .flat_map(|output| output.blocking_reasons.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let draft_verdict = if draft_qas.is_empty() {
+            "blocked".to_string()
+        } else if draft_qas.iter().any(|output| output.verdict == "publish_ready") {
+            "allow".to_string()
+        } else {
+            "blocked".to_string()
+        };
+
+        let cms_approved =
+            latest_proto_outputs::<CmsPublishOutputPayload>(pool, run_id, "cms_publish_approved")
+                .await;
+        let cms_review =
+            latest_proto_outputs::<CmsPublishOutputPayload>(pool, run_id, "cms_request_review")
+                .await;
+        let publish_verdict = if cms_approved.iter().any(|output| output.verdict == "approved") {
+            "allow".to_string()
+        } else if !cms_review.is_empty() || fixture.run_mode.contains("publish") {
+            "blocked".to_string()
+        } else {
+            "not_attempted".to_string()
+        };
+
+        let projection_barriers =
+            latest_proto_outputs::<ProjectionBarrierAuditOutputPayload>(
+                pool,
+                run_id,
+                "projection_barrier(semantic_projection)",
+            )
+            .await;
+        let projection_verdict = if projection_barriers
+            .last()
+            .map(|output| output.status.as_str() == "clear")
+            .unwrap_or(false)
+        {
+            "allow".to_string()
+        } else {
+            "blocked".to_string()
+        };
+
+        let verified_truth_write =
+            latest_output_payload_json(pool, run_id, "verified_truth_write").await;
+        let changed_truth_keys = verified_truth_write
+            .iter()
+            .flat_map(|payload| {
+                payload
+                    .get("changed_truth_keys")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let rebuild_outputs =
+            latest_proto_outputs::<RebuildDetectOutputPayload>(pool, run_id, "rebuild_detect")
+                .await;
+        let rebuild_impacted_page_count = rebuild_outputs
+            .iter()
+            .map(|output| output.impacts.len())
+            .sum::<usize>();
+        let rebuild_impact_emitted = rebuild_outputs
+            .iter()
+            .any(|output| !output.impacted_page_node_keys.is_empty());
+        let draft_normalize_outputs =
+            latest_proto_outputs::<DraftNormalizeOutputPayload>(pool, run_id, "draft_normalize")
+                .await;
+        let required_factual_blocks_without_support = draft_normalize_outputs
+            .iter()
+            .flat_map(|output| {
+                output
+                    .draft
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|draft| {
+                        draft.content_blocks.iter().filter_map(|block| {
+                            let factual = !matches!(
+                                block.section_role.as_str(),
+                                "related_pages" | "cta_disclaimer"
+                            );
+                            if block.required && factual && block.support_refs.is_empty() {
+                                Some(block.section_role.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let temporal_step_multiset = temporal_step_multiset(pool, run_id).await;
+        let semantic_snapshot = capture_semantic_snapshot(pool, scope_signature).await;
+        let semantic_page_draft_qa_verdicts = semantic_snapshot
+            .page_drafts
+            .iter()
+            .map(|draft| draft.qa_verdict.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let mut failure_reasons = Vec::new();
+        if verified_rule_set != fixture.expected_outcomes.verified_rule_set {
+            failure_reasons.push("verified_rule_set_mismatch".to_string());
+        }
+        if needs_hitl_set.iter().cloned().collect::<Vec<_>>() != fixture.expected_outcomes.needs_hitl_set {
+            failure_reasons.push("needs_hitl_set_mismatch".to_string());
+        }
+        if rejected_set.iter().cloned().collect::<Vec<_>>() != fixture.expected_outcomes.rejected_set {
+            failure_reasons.push("rejected_set_mismatch".to_string());
+        }
+        if contradiction_groups != fixture.expected_outcomes.contradiction_groups {
+            failure_reasons.push("contradiction_groups_mismatch".to_string());
+        }
+        if completeness_failures != fixture.expected_outcomes.completeness_failures {
+            failure_reasons.push("completeness_failures_mismatch".to_string());
+        }
+        if draft_verdict != fixture.expected_outcomes.draft_verdict {
+            failure_reasons.push("draft_verdict_mismatch".to_string());
+        }
+        if publish_verdict != fixture.expected_outcomes.publish_verdict {
+            failure_reasons.push("publish_verdict_mismatch".to_string());
+        }
+        if projection_verdict != fixture.expected_outcomes.projection_verdict {
+            failure_reasons.push("projection_verdict_mismatch".to_string());
+        }
+        if rebuild_impact_emitted != fixture.expected_outcomes.rebuild_impact_emitted {
+            failure_reasons.push("rebuild_impact_mismatch".to_string());
+        }
+
+        TruthCertificationFixtureReport {
+            fixture_id: fixture.fixture_id.clone(),
+            run_id: run_id.to_string(),
+            context_key: context_key.to_string(),
+            scope_signature: scope_signature.to_string(),
+            verified_rule_set,
+            needs_hitl_set: needs_hitl_set.into_iter().collect(),
+            rejected_set: rejected_set.into_iter().collect(),
+            contradiction_groups,
+            completeness_failures,
+            draft_verdict,
+            draft_blocking_reasons,
+            publish_verdict,
+            projection_verdict,
+            changed_truth_keys,
+            rebuild_impact_emitted,
+            rebuild_impacted_page_count,
+            temporal_step_multiset,
+            semantic_page_node_count: semantic_snapshot.page_nodes.len(),
+            semantic_page_draft_count: semantic_snapshot.page_drafts.len(),
+            semantic_page_draft_qa_verdicts,
+            required_factual_blocks_without_support,
+            pass: failure_reasons.is_empty(),
+            failure_reasons,
+            workflow_failure_diagnostics: None,
+        }
+    }
+
+    async fn certification_failure_diagnostics(pool: &sqlx::PgPool, run_id: &str) -> String {
+        let rows = sqlx::query(
+            r#"
+            SELECT step_name, status, COALESCE(error_class, '') AS error_class, COALESCE(error_message, '') AS error_message
+            FROM pipeline.step_executions
+            WHERE run_id = $1
+            ORDER BY updated_at DESC, step_execution_id DESC
+            LIMIT 12
+            "#,
+        )
+        .bind(Uuid::parse_str(run_id).unwrap())
+        .fetch_all(pool)
+        .await
+        .unwrap();
+        let summary = rows
+            .into_iter()
+            .map(|row| {
+                format!(
+                    "{}:{}:{}:{}",
+                    row.get::<String, _>("step_name"),
+                    row.get::<String, _>("status"),
+                    row.get::<String, _>("error_class"),
+                    row.get::<String, _>("error_message")
+                )
+            })
+            .collect::<Vec<_>>();
+        summary.join("\n")
+    }
+
+    fn expected_workflow_failure_allowed(
+        fixture: &TruthCertificationFixture,
+        report: &TruthCertificationFixtureReport,
+        diagnostics: &str,
+    ) -> bool {
+        fixture.expected_outcomes.draft_verdict == "blocked"
+            && report.draft_verdict == "blocked"
+            && report.publish_verdict == fixture.expected_outcomes.publish_verdict
+            && diagnostics.contains("truth_admissibility_gate:failed:")
     }
 
     async fn register_synthetic_site_input(
@@ -289,6 +1204,28 @@ mod tests {
         source_url: &str,
         fragment_text: &str,
     ) {
+        let source_base_url = source_url
+            .split('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("/");
+        sqlx::query(
+            r#"
+            INSERT INTO kb.sources (source_key, source_type, source_label, base_url, trust_level, status)
+            VALUES ($1, 'government', 'Synthetic support source', $2, 5, 'active')
+            ON CONFLICT (source_key) DO UPDATE
+            SET source_label = EXCLUDED.source_label,
+                base_url = EXCLUDED.base_url,
+                trust_level = EXCLUDED.trust_level,
+                status = EXCLUDED.status,
+                updated_at = now()
+            "#,
+        )
+        .bind(source_key)
+        .bind(source_base_url)
+        .execute(pool)
+        .await
+        .unwrap();
         let raw_html = format!("<html><body><main><p>{fragment_text}</p></main></body></html>");
         let snapshot_hash = format!("seed:{}:{}", rule_instance_id, raw_html.len());
         let page_id: i64 = sqlx::query_scalar(
@@ -1167,6 +2104,233 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(admissible_verified_rows, 0);
+    }
+
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    #[serial]
+    async fn truth_certification_suite_matches_fixture_expectations() {
+        let fixtures = load_truth_certification_fixtures();
+        let fixture_ids = env::var("TRUTH_CERT_FIXTURE_IDS").ok().map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<BTreeSet<_>>()
+        });
+        let fixtures = if let Some(fixture_ids) = fixture_ids {
+            fixtures
+                .into_iter()
+                .filter(|fixture| fixture_ids.contains(&fixture.fixture_id))
+                .collect::<Vec<_>>()
+        } else {
+            fixtures
+        };
+        let fixture_limit = env::var("TRUTH_CERT_LIMIT")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok());
+        let fixtures = if let Some(limit) = fixture_limit {
+            fixtures.into_iter().take(limit).collect::<Vec<_>>()
+        } else {
+            fixtures
+        };
+        assert!(
+            !fixtures.is_empty(),
+            "expected at least one certification fixture"
+        );
+
+        let (source_servers, serp_sequence) = render_fixture_source_pages(&fixtures).await;
+        assert_eq!(source_servers.len(), fixtures.iter().map(|fixture| fixture.source_inputs.pages.len()).sum::<usize>());
+        let serp_stub = stub_servers::spawn_json_sequence_stub(
+            "/v3/serp/google/organic/live/advanced",
+            serp_sequence.into_iter().map(|(_, payload)| payload).collect(),
+        )
+        .await
+        .unwrap();
+        let truth_stub = stub_servers::spawn_json_sequence_stub(
+            "/v1/chat/completions",
+            truth_certification_truth_sequence(&fixtures),
+        )
+        .await
+        .unwrap();
+        let editorial_stub = stub_servers::spawn_json_sequence_stub(
+            "/v1/chat/completions",
+            truth_certification_editorial_sequence(&fixtures),
+        )
+        .await
+        .unwrap();
+        let infra = InfraHarness::start().await.unwrap();
+        let temporal = TemporalHarness::start().await.unwrap();
+
+        let mut worker_env = infra.runtime_env();
+        worker_env.insert("TEMPORAL_URL".to_string(), temporal.temporal_url.clone());
+        worker_env.insert("TEMPORAL_NAMESPACE".to_string(), temporal.namespace.clone());
+        worker_env.extend(truth_certification_env(
+            &format!(
+                "{}/v3/serp/google/organic/live/advanced",
+                serp_stub.base_url
+            ),
+            &format!("{}/v1/chat/completions", truth_stub.base_url),
+            &format!("{}/v1/chat/completions", editorial_stub.base_url),
+        ));
+        let mut worker = spawn_temporal_worker(&worker_env);
+        let mut outbox_worker = spawn_outbox_worker(&worker_env);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(
+            worker.child.try_wait().unwrap().is_none(),
+            "temporal_worker exited before certification workflow start"
+        );
+        assert!(
+            outbox_worker.child.try_wait().unwrap().is_none(),
+            "outbox_worker exited before certification workflow start"
+        );
+
+        let client = connect_client(
+            &temporal.temporal_url,
+            format!("truth-cert-client-{}", Uuid::new_v4()),
+            &temporal.namespace,
+        )
+        .await
+        .unwrap();
+        let repo = SqlxSeoRuntimeRepository::new(&infra.postgres.pool);
+        let mut reports = Vec::new();
+
+        for fixture in &fixtures {
+            assert_eq!(
+                fixture.business_scope.truth_identity_tuple,
+                "ES|tourist||BY",
+                "fixture {} drifted from certification truth tuple",
+                fixture.fixture_id
+            );
+            assert_eq!(
+                fixture.business_scope.publishing_scope_tuple,
+                "alegria-site|ru-RU|ES|tourist|BY",
+                "fixture {} drifted from certification publish tuple",
+                fixture.fixture_id
+            );
+            assert!(fixture
+                .invariants
+                .no_truth_promotion_from_retrieval_or_graph);
+            assert!(fixture.invariants.no_source_tier_shortcut_to_verified);
+            assert!(fixture
+                .invariants
+                .no_unsupported_claim_reaches_draft_as_truth);
+
+            let run_id = Uuid::new_v4().to_string();
+            let site_input = register_truth_certification_input(
+                &repo,
+                run_id.clone(),
+                format!("truth-cert-batch-{}", fixture.fixture_id),
+                fixture.source_inputs.query.clone(),
+                fixture.run_mode.clone(),
+            )
+            .await;
+            let scope_signature = site_input
+                .scope
+                .as_ref()
+                .expect("scope payload")
+                .scope_signature
+                .clone();
+            reset_truth_certification_state(&infra.postgres.pool, &site_input.context_key).await;
+            seed_truth_certification_support_bundle(
+                &infra.postgres.pool,
+                &site_input.context_key,
+                fixture,
+            )
+            .await;
+
+            let approval_task = if fixture.run_mode == "full_auto_after_approval" {
+                Some(tokio::spawn(insert_preapproved_decisions_when_ready(
+                    infra.postgres.pool.clone(),
+                    scope_signature.clone(),
+                    Instant::now() + Duration::from_secs(30),
+                )))
+            } else {
+                None
+            };
+
+            let handle = client
+                .start_workflow(
+                    UntypedWorkflow::new("SeoSiteBuildCanonicalCutoverWorkflow"),
+                    RawValue::default(),
+                    WorkflowStartOptions::new("alegria-pipeline", run_id.clone()).build(),
+                )
+                .await
+                .unwrap();
+            let workflow_result = timeout(
+                Duration::from_secs(180),
+                handle.get_result(WorkflowGetResultOptions::default()),
+            )
+            .await;
+            let workflow_failed = match workflow_result {
+                Ok(Ok(_)) => false,
+                Ok(Err(_err)) => {
+                    true
+                }
+                Err(err) => {
+                    let diagnostics =
+                        certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                    panic!(
+                        "workflow timed out for fixture {} run_id={} error={err:?}\n{}",
+                        fixture.fixture_id, run_id, diagnostics
+                    );
+                }
+            };
+
+            if let Some(task) = approval_task {
+                task.await.unwrap();
+            }
+
+            let mut report = collect_truth_certification_fixture_report(
+                &infra.postgres.pool,
+                fixture,
+                &run_id,
+                &site_input.context_key,
+                &scope_signature,
+            )
+            .await;
+            if workflow_failed {
+                let diagnostics =
+                    certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                if !expected_workflow_failure_allowed(fixture, &report, &diagnostics) {
+                    report.pass = false;
+                    report
+                        .failure_reasons
+                        .push("workflow_failed".to_string());
+                }
+                report.workflow_failure_diagnostics = Some(diagnostics);
+            }
+            reports.push(report);
+            if let Ok(report_path) = env::var("TRUTH_CERT_REPORT_PATH") {
+                let partial = TruthCertificationSuiteReport {
+                    workflow_type: "SeoSiteBuildCanonicalCutoverWorkflow".to_string(),
+                    fixture_count: reports.len(),
+                    fixtures: reports.clone(),
+                };
+                fs::write(&report_path, serde_json::to_vec_pretty(&partial).unwrap()).unwrap();
+            }
+        }
+
+        let suite_report = TruthCertificationSuiteReport {
+            workflow_type: "SeoSiteBuildCanonicalCutoverWorkflow".to_string(),
+            fixture_count: reports.len(),
+            fixtures: reports,
+        };
+
+        if let Ok(report_path) = env::var("TRUTH_CERT_REPORT_PATH") {
+            fs::write(
+                &report_path,
+                serde_json::to_vec_pretty(&suite_report).unwrap(),
+            )
+            .unwrap();
+        }
+
+        assert!(
+            suite_report.fixtures.iter().all(|fixture| fixture.pass),
+            "truth certification mismatches: {}",
+            serde_json::to_string_pretty(&suite_report).unwrap()
+        );
     }
 
     #[cfg(feature = "e2e")]

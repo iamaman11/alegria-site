@@ -1,0 +1,465 @@
+{
+  "workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
+  "fixture_count": 11,
+  "fixtures": [
+    {
+      "fixture_id": "ambiguous_canonical_mapping",
+      "run_id": "b9f0be22-2ab7-4fae-9980-f257af623aba",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "processing_time|{\"days\":15}|resolution_loop_requires_hitl"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d8d8d0a0e0da3bfded556b37be5b92524bb1a4cf24facc3373dd86723bf504ac"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "competitor_claim_non_verified",
+      "run_id": "b4424240-a4c6-4841-ac59-900e2b3133a6",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=low_trust"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "conflicting_structured_candidates",
+      "run_id": "dd10cc20-7950-40c5-8015-f4944360920b",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "consular_fee|{\"amount\":120.0,\"currency\":\"EUR\"}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "draft_blocked_when_no_admissible_truth",
+      "run_id": "fdb1ab91-0f4b-4182-b5fa-070b3ebef0d8",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "happy_path_publish_allowed",
+      "run_id": "5867bb85-2da6-43a5-ac82-20ef4e4c8810",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [
+        "document_required|passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}",
+        "eligibility_rule|applicant_eligibility|{\"profile\":\"standard_tourist_applicant\"}",
+        "fee_item|consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}",
+        "step|application_step_submit|{\"action\":\"submit_application\",\"order\":1}",
+        "timeline_item|processing_time|{\"days\":15}",
+        "where_to_apply|application_location|{\"channel\":\"consulate_appointment\"}"
+      ],
+      "needs_hitl_set": [],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "allow",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0",
+        "verified.rule_instance:d8d8d0a0e0da3bfded556b37be5b92524bb1a4cf24facc3373dd86723bf504ac",
+        "verified.rule_instance:ff5563d334b6061de20b403dcf46b58764363d50088bf40b4c97610ad254f077"
+      ],
+      "rebuild_impact_emitted": true,
+      "rebuild_impacted_page_count": 3,
+      "temporal_step_multiset": {
+        "content_contract_validate": 3,
+        "crawl_sources": 1,
+        "draft_assemble": 3,
+        "draft_normalize": 3,
+        "draft_qa": 3,
+        "editorial_draft_generate": 3,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "rebuild_detect": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 3,
+      "semantic_page_draft_qa_verdicts": [
+        "publish_ready"
+      ],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": []
+    },
+    {
+      "fixture_id": "incomplete_fee_needs_hitl",
+      "run_id": "c61c676a-fca9-4b60-946d-9ae69417b873",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "processing_time|{\"days\":15}|resolution_loop_requires_hitl"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [
+        "number|80|add_numeric_fact"
+      ],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d8d8d0a0e0da3bfded556b37be5b92524bb1a4cf24facc3373dd86723bf504ac"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "procedural_vs_operational_split",
+      "run_id": "f44920cd-600d-4868-a0c6-bc3d9dcb4c2b",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=government"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:ff5563d334b6061de20b403dcf46b58764363d50088bf40b4c97610ad254f077"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "projection_allowed_after_admissibility",
+      "run_id": "14c2cb01-7fa3-4b4a-b143-c04da3ad377d",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [
+        "document_required|passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}",
+        "eligibility_rule|applicant_eligibility|{\"profile\":\"standard_tourist_applicant\"}",
+        "fee_item|consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}",
+        "step|application_step_submit|{\"action\":\"submit_application\",\"order\":1}",
+        "timeline_item|processing_time|{\"days\":15}",
+        "where_to_apply|application_location|{\"channel\":\"consulate_appointment\"}"
+      ],
+      "needs_hitl_set": [],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "allow",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0",
+        "verified.rule_instance:ff5563d334b6061de20b403dcf46b58764363d50088bf40b4c97610ad254f077"
+      ],
+      "rebuild_impact_emitted": true,
+      "rebuild_impacted_page_count": 3,
+      "temporal_step_multiset": {
+        "content_contract_validate": 3,
+        "crawl_sources": 1,
+        "draft_assemble": 3,
+        "draft_normalize": 3,
+        "draft_qa": 3,
+        "editorial_draft_generate": 3,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "rebuild_detect": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 3,
+      "semantic_page_draft_qa_verdicts": [
+        "publish_ready"
+      ],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": []
+    },
+    {
+      "fixture_id": "publish_blocked_on_unresolved_contradiction",
+      "run_id": "cb68a35d-aa7a-43fa-82e4-8c1e88643271",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "processing_time|{\"days\":10}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government",
+        "processing_time|{\"days\":30}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d8d8d0a0e0da3bfded556b37be5b92524bb1a4cf24facc3373dd86723bf504ac"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "rebuild_impact_emitted",
+      "run_id": "1345a21e-f151-489f-9c25-58a2f9455059",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [
+        "document_required|passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}",
+        "eligibility_rule|applicant_eligibility|{\"profile\":\"standard_tourist_applicant\"}",
+        "fee_item|consular_fee|{\"amount\":90.0,\"currency\":\"EUR\"}",
+        "step|application_step_submit|{\"action\":\"submit_application\",\"order\":1}",
+        "timeline_item|processing_time|{\"days\":20}",
+        "where_to_apply|application_location|{\"channel\":\"consulate_appointment\"}"
+      ],
+      "needs_hitl_set": [],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "allow",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0",
+        "verified.rule_instance:d8d8d0a0e0da3bfded556b37be5b92524bb1a4cf24facc3373dd86723bf504ac",
+        "verified.rule_instance:ff5563d334b6061de20b403dcf46b58764363d50088bf40b4c97610ad254f077"
+      ],
+      "rebuild_impact_emitted": true,
+      "rebuild_impacted_page_count": 3,
+      "temporal_step_multiset": {
+        "content_contract_validate": 3,
+        "crawl_sources": 1,
+        "draft_assemble": 3,
+        "draft_normalize": 3,
+        "draft_qa": 3,
+        "editorial_draft_generate": 3,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "rebuild_detect": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 3,
+      "semantic_page_draft_qa_verdicts": [
+        "publish_ready"
+      ],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": []
+    },
+    {
+      "fixture_id": "stale_low_trust_source_non_verified",
+      "run_id": "7ba5b5f0-2afa-4d6f-88cc-cec6a00f79a6",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=editorial"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    }
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "fixture_id": "projection_allowed_after_admissibility",
+  "description": "Projection should clear only when admissible truth exists.",
+  "run_mode": "draft_only",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain official requirements projection",
+    "support_bundle_seed": {
+      "concepts": [
+        {
+          "concept_key": "passport",
+          "concept_type": "document",
+          "label_ru": "Passport"
+        },
+        {
+          "concept_key": "consular_fee",
+          "concept_type": "fee",
+          "label_ru": "Consular fee"
+        },
+        {
+          "concept_key": "processing_time",
+          "concept_type": "timeline",
+          "label_ru": "Processing time"
+        },
+        {
+          "concept_key": "applicant_eligibility",
+          "concept_type": "rule",
+          "label_ru": "Applicant eligibility"
+        },
+        {
+          "concept_key": "application_step_submit",
+          "concept_type": "process",
+          "label_ru": "Application step"
+        },
+        {
+          "concept_key": "application_location",
+          "concept_type": "location",
+          "label_ru": "Where to apply"
+        }
+      ],
+      "preverified_rules": [
+        {
+          "rule_instance_id": "seed-projection-timeline-1",
+          "rule_type_key": "timeline_item",
+          "concept_key": "processing_time",
+          "role_type": "timeline_item",
+          "params": {
+            "days": 15
+          },
+          "source_key": "source.official.synthetic",
+          "source_url": "https://mfa.gov.example/official/projection-happy/timing",
+          "evidence_quote": "Processing time is 15 days."
+        },
+        {
+          "rule_instance_id": "seed-projection-eligibility-1",
+          "rule_type_key": "eligibility_rule",
+          "concept_key": "applicant_eligibility",
+          "role_type": "eligibility_rule",
+          "params": {
+            "profile": "standard_tourist_applicant"
+          },
+          "source_key": "source.official.synthetic",
+          "source_url": "https://mfa.gov.example/official/projection-happy/eligibility",
+          "evidence_quote": "Eligibility rule: standard tourist applicant."
+        },
+        {
+          "rule_instance_id": "seed-projection-step-1",
+          "rule_type_key": "step",
+          "concept_key": "application_step_submit",
+          "role_type": "step",
+          "params": {
+            "action": "submit_application",
+            "order": 1
+          },
+          "source_key": "source.official.synthetic",
+          "source_url": "https://mfa.gov.example/official/projection-happy/process",
+          "evidence_quote": "Application step 1: submit the application."
+        },
+        {
+          "rule_instance_id": "seed-projection-where-1",
+          "rule_type_key": "where_to_apply",
+          "concept_key": "application_location",
+          "role_type": "where_to_apply",
+          "params": {
+            "channel": "consulate_appointment"
+          },
+          "source_key": "source.official.synthetic",
+          "source_url": "https://mfa.gov.example/official/projection-happy/where",
+          "evidence_quote": "Where to apply: consulate via appointment."
+        }
+      ]
+    },
+    "pages": [
+      {
+        "route": "/official/projection-happy",
+        "domain": "mfa.gov.example",
+        "title": "Official source",
+        "description": "Official requirements",
+        "html_file": "projection_allowed_after_admissibility_source.html"
+      },
+      {
+        "route": "/official/projection-happy-b",
+        "domain": "consulate.gov.example",
+        "title": "Official source B",
+        "description": "Official requirements duplicate",
+        "html_file": "projection_allowed_after_admissibility_source_b.html"
+      }
+    ]
+  },
+  "model_stub_inputs": {
+    "editorial_response": {
+      "sections": {
+        "overview": "Passport is required and the consular fee is 80 EUR."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [
+      "document_required|passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}",
+      "eligibility_rule|applicant_eligibility|{\"profile\":\"standard_tourist_applicant\"}",
+      "fee_item|consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}",
+      "step|application_step_submit|{\"action\":\"submit_application\",\"order\":1}",
+      "timeline_item|processing_time|{\"days\":15}",
+      "where_to_apply|application_location|{\"channel\":\"consulate_appointment\"}"
+    ],
+    "needs_hitl_set": [],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "allow",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": true
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}
