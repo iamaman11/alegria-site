@@ -121,10 +121,15 @@ CREATE TABLE IF NOT EXISTS kb.sources (
     source_key   TEXT PRIMARY KEY,
     source_type  TEXT NOT NULL
         CHECK (source_type IN ('government','vfs','niche_agency','editorial','internal','forum','low_trust')),
+    authority_class TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (authority_class IN ('primary_authority','delegated_authority','official_publisher','editorial','agency','forum','unknown')),
+    independence_group_key TEXT NOT NULL DEFAULT '',
     source_label TEXT NOT NULL,
     base_url     TEXT,
     -- 1=forum/aggregator  2=niche_agency  3=editorial  4=vfs  5=government
     trust_level  INTEGER NOT NULL CHECK (trust_level BETWEEN 1 AND 5),
+    freshness_ttl_days INTEGER NOT NULL DEFAULT 30 CHECK (freshness_ttl_days >= 0),
+    override_eligible BOOLEAN NOT NULL DEFAULT false,
     status       TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active','deprecated')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),

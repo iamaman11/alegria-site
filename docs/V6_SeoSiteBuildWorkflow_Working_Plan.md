@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.26`
+**Current version:** `6.27`
 
 ---
 
@@ -1293,8 +1293,8 @@ Current accepted state:
 - `automation/run_truth_certification_gate.sh` is the canonical local/CI certification wrapper;
 - `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
 - `automation/ci_verify.sh` now includes the truth certification regression gate;
-- `Phase B / Truth Governance` remains frozen prework until changes are explicitly validated against the accepted certification baseline;
-- `Phase C / Regex De-Authority` remains blocked until `Phase B` acceptance is complete.
+- `Phase B / Truth Governance` is now accepted locally against the frozen certification baseline, with source independence, weak-source rejection, freshness blocking, and explicit authority-override checks wired into truth adjudication and CI policy checks;
+- `Phase C / Regex De-Authority` remains blocked until regex-removal slices are validated against that same frozen certification baseline.
 
 ---
 
@@ -1342,6 +1342,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.27
+
+- accepted `Phase B / Truth Governance` locally after wiring governance adjudication into both persisted and workflow truth-adjudication paths and keeping the frozen certification baseline green;
+- added explicit machine-checked governance protections for weak-source corroboration rejection, freshness blocking reason codes, and authority-override denial for non-authoritative source classes;
+- added `automation/check_truth_governance_policy.py` to `automation/ci_verify.sh` so the governance satellite, schema fields, policy engine markers, and runtime wiring are enforced together;
+- clarified that `Phase C / Regex De-Authority` remains the next blocked tranche and must be validated against the frozen certification baseline before merge.
 
 ### 6.26
 

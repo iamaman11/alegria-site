@@ -84,6 +84,29 @@ fn pseudo_qdrant_score(s: &str) -> f32 {
 pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
     let mut out = Vec::with_capacity(input.mentions.len());
     for m in &input.mentions {
+        let entity_type = normalized(&m.entity_type);
+        let entity_type_map = match entity_type.as_str() {
+            "fee" => Some(("consular_fee", "typed_entity", 0.97f32)),
+            "timeline" => Some(("processing_time", "typed_entity", 0.96f32)),
+            "organization" if normalized(&m.raw_text).contains("vfs") => {
+                Some(("vfs_global", "typed_entity", 0.94f32))
+            }
+            _ => None,
+        };
+        if let Some((canonical_key, method, confidence)) = entity_type_map {
+            out.push(MappingResult {
+                raw_text: m.raw_text.clone(),
+                canonical_key: Some(canonical_key.to_string()),
+                mapping_type: "typed_entity".to_string(),
+                match_method: method.to_string(),
+                matching_stage: MatchingStage::RegexSymbolic,
+                qdrant_score: None,
+                confidence,
+                needs_hitl: false,
+            });
+            continue;
+        }
+
         let exact = alias_lookup(m.raw_text.as_str());
         if let Some(k) = exact {
             out.push(MappingResult {
@@ -161,4 +184,41 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
         });
     }
     CanonicalMappingOutput { mappings: out }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map_one(raw_text: &str) -> MappingResult {
+        execute(&CanonicalMappingInput {
+            section_id: "section-1".to_string(),
+            mentions: vec![MentionForMapping {
+                raw_text: raw_text.to_string(),
+                entity_type: "concept".to_string(),
+            }],
+        })
+        .mappings
+        .into_iter()
+        .next()
+        .unwrap()
+    }
+
+    #[test]
+    fn alias_mapping_is_stable_across_whitespace_and_case() {
+        let variants = ["паспорт", " Паспорт ", "ПАСПОРТ", "passport"];
+        let baseline = map_one(variants[0]);
+        for variant in variants.iter().skip(1) {
+            let mapped = map_one(variant);
+            assert_eq!(mapped.canonical_key, baseline.canonical_key);
+            assert!(!mapped.needs_hitl);
+        }
+    }
+
+    #[test]
+    fn unknown_concept_does_not_silently_verify() {
+        let mapped = map_one("mysterious sponsor credential");
+        assert!(mapped.needs_hitl || mapped.canonical_key.is_none());
+        assert_ne!(mapped.mapping_type, "alias");
+    }
 }

@@ -996,4 +996,46 @@ mod tests {
         assert!(report.contradiction_conflict_count >= 1);
         assert_eq!(report.sections[0].final_status, ExpertStageStatus::Rejected);
     }
+
+    #[test]
+    fn section_order_permutation_does_not_change_truth_ready_counts() {
+        let sections = vec![
+            section(1, "Passport required. Fee 80 EUR."),
+            section(2, "Processing time 15 days. Appointment schedule applies."),
+        ];
+        let forward = run_expert_extraction_core("run-a", "ES|tourist||BY", &sections);
+        let reverse = run_expert_extraction_core(
+            "run-b",
+            "ES|tourist||BY",
+            &sections.iter().cloned().rev().collect::<Vec<_>>(),
+        );
+        assert_eq!(forward.section_count, reverse.section_count);
+        assert_eq!(
+            forward.verified_ready_section_count,
+            reverse.verified_ready_section_count
+        );
+        assert_eq!(forward.needs_hitl_section_count, reverse.needs_hitl_section_count);
+    }
+
+    #[test]
+    fn irrelevant_footer_injection_does_not_remove_procedural_detection() {
+        let base = run_expert_extraction_core(
+            "run-footer-base",
+            "ES|tourist||BY",
+            &[section(1, "Passport required. Fee 80 EUR.")],
+        );
+        let with_footer = run_expert_extraction_core(
+            "run-footer-injected",
+            "ES|tourist||BY",
+            &[section(
+                1,
+                "Passport required. Fee 80 EUR.\nFooter: contact us for updates and newsletter.",
+            )],
+        );
+        assert!(with_footer.procedural_rule_count >= base.procedural_rule_count);
+        assert!(with_footer.sections[0]
+            .stage_records
+            .iter()
+            .any(|record| record.stage_name == "procedural_extraction"));
+    }
 }

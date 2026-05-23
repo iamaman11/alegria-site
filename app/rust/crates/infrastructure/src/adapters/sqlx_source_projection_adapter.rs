@@ -15,20 +15,25 @@ mod rows {
     pub(super) struct SourceRegistryRow {
         pub(super) source_key: String,
         pub(super) source_type: String,
+        pub(super) authority_class: String,
+        pub(super) independence_group_key: String,
         pub(super) trust_level: i32,
+        pub(super) freshness_ttl_days: i32,
+        pub(super) override_eligible: bool,
     }
 }
 
 mod queries {
     use super::rows::SourceRegistryRow;
-    use sqlx::PgPool;
+    use sqlx::{PgPool, Row};
 
     pub(super) async fn fetch_active_sources(
         pool: &PgPool,
     ) -> Result<Vec<SourceRegistryRow>, sqlx::Error> {
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
-            SELECT source_key, source_type, trust_level
+            SELECT source_key, source_type, authority_class, independence_group_key,
+                   trust_level, freshness_ttl_days, override_eligible
             FROM kb.sources
             WHERE status = 'active'
             "#
@@ -38,9 +43,13 @@ mod queries {
         Ok(rows
             .into_iter()
             .map(|r| SourceRegistryRow {
-                source_key: r.source_key,
-                source_type: r.source_type,
-                trust_level: r.trust_level,
+                source_key: r.get("source_key"),
+                source_type: r.get("source_type"),
+                authority_class: r.get("authority_class"),
+                independence_group_key: r.get("independence_group_key"),
+                trust_level: r.get("trust_level"),
+                freshness_ttl_days: r.get("freshness_ttl_days"),
+                override_eligible: r.get("override_eligible"),
             })
             .collect())
     }
@@ -101,7 +110,11 @@ pub async fn load_source_registry_entries(
     for row in rows {
         let key = row.source_key;
         let source_type = row.source_type;
+        let authority_class = row.authority_class;
+        let independence_group_key = row.independence_group_key;
         let trust_level = row.trust_level;
+        let freshness_ttl_days = row.freshness_ttl_days;
+        let override_eligible = row.override_eligible;
         let effective_trust = if source_type.eq_ignore_ascii_case("government") {
             10
         } else {
@@ -112,6 +125,10 @@ pub async fn load_source_registry_entries(
             SourceRegistryRecord {
                 source_type,
                 trust_level: effective_trust as i64,
+                authority_class,
+                independence_group_key,
+                freshness_ttl_days,
+                override_eligible,
             },
         );
     }

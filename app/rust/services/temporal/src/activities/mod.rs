@@ -785,7 +785,7 @@ impl AlegriaActivities {
     ) -> Result<operations::TruthAdjudicationSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "truth_adjudication", 1, &input, || async {
-            operations::truth_adjudication_sweep_impl(&input).await
+            operations::truth_adjudication_sweep_impl(self.as_ref(), &input).await
         })
         .await
     }
@@ -982,10 +982,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "global_site_reconcile", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            let output =
-                seo_application::planning::run_global_site_reconcile(&repo, &input).await?;
-            observe_projection_barrier(&self.pool, "global_site_reconcile", &input.run_id).await?;
-            Ok(output)
+            seo_application::planning::run_global_site_reconcile(&repo, &input).await
         })
         .await
     }

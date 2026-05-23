@@ -116,4 +116,37 @@ mod tests {
             .iter()
             .any(|missing| missing.raw_fragment == "15"));
     }
+
+    #[test]
+    fn completeness_is_monotonic_when_more_numeric_tokens_are_extracted() {
+        let raw_text = "Fee is 80 EUR and processing time is 15 days.";
+        let sparse = execute(&CompletenessJudgeInput {
+            section_id: "section-1".to_string(),
+            raw_text: raw_text.to_string(),
+            extracted_numeric_tokens: vec!["80".to_string()],
+            extracted_rule_keys: vec!["consular_fee".to_string()],
+        });
+        let complete = execute(&CompletenessJudgeInput {
+            section_id: "section-1".to_string(),
+            raw_text: raw_text.to_string(),
+            extracted_numeric_tokens: vec!["80".to_string(), "15".to_string()],
+            extracted_rule_keys: vec![
+                "consular_fee".to_string(),
+                "processing_time".to_string(),
+            ],
+        });
+        assert!(complete.completeness_score >= sparse.completeness_score);
+        assert!(complete.missing_elements.len() <= sparse.missing_elements.len());
+    }
+
+    #[test]
+    fn irrelevant_footer_text_without_numeric_loss_does_not_force_hitl() {
+        let output = execute(&CompletenessJudgeInput {
+            section_id: "section-1".to_string(),
+            raw_text: "Passport required. Footer: contact us for updates.".to_string(),
+            extracted_numeric_tokens: Vec::new(),
+            extracted_rule_keys: vec!["passport_required".to_string()],
+        });
+        assert!(!output.needs_hitl);
+    }
 }

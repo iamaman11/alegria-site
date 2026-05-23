@@ -11,13 +11,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
 
+use policies::truth_governance::{
+    adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
+};
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
 use primitives::html_sections::{extract_meta_typed, extract_sections_typed};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use primitives::truth_candidates::{
-    adjudicate_truth_candidates, validate_truth_candidate, TruthCandidateRuntime, TruthParamValue,
-    TruthStructuredCandidate,
+    validate_truth_candidate, TruthCandidateRuntime, TruthParamValue, TruthStructuredCandidate,
 };
 use primitives::url_norm::domain_norm;
 
@@ -309,6 +311,7 @@ pub async fn evaluate_robots_policy(source_url: &str) -> Result<RobotsDecisionTr
 pub async fn save_crawled_html(
     pool: &PgPool,
     source_url: &str,
+    source_domain: &str,
     final_url: &str,
     dtype: &str,
     status_code: i32,
@@ -320,7 +323,11 @@ pub async fn save_crawled_html(
     let meta = extract_meta_typed(raw_html);
     let sections = extract_sections_typed(raw_html, source_url);
     let content_hash = content_hash_v1(raw_html);
-    let domain = domain_norm(source_url);
+    let domain = if source_domain.trim().is_empty() {
+        domain_norm(source_url)
+    } else {
+        domain_norm(source_domain)
+    };
     let dtype = if dtype.trim().is_empty() {
         "organic_competitor"
     } else {
@@ -828,7 +835,7 @@ pub async fn ingest_raw_pages_into_verified(
     Ok(report)
 }
 
-async fn ensure_source(
+pub async fn ensure_source(
     pool: &PgPool,
     section: &RawSectionRecord,
 ) -> std::result::Result<(), primitives::errors::DomainError> {
@@ -839,19 +846,29 @@ async fn ensure_source(
     };
     sqlx::query(
         "INSERT INTO kb.sources
-         (source_key, source_type, source_label, base_url, trust_level, status)
-         VALUES ($1, $2, $3, $4, $5, 'active')
+         (source_key, source_type, authority_class, independence_group_key, source_label, base_url, trust_level, freshness_ttl_days, override_eligible, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
          ON CONFLICT (source_key) DO UPDATE
-         SET source_label = EXCLUDED.source_label,
+         SET source_type = EXCLUDED.source_type,
+             authority_class = EXCLUDED.authority_class,
+             independence_group_key = EXCLUDED.independence_group_key,
+             source_label = EXCLUDED.source_label,
              base_url = EXCLUDED.base_url,
+             trust_level = EXCLUDED.trust_level,
+             freshness_ttl_days = EXCLUDED.freshness_ttl_days,
+             override_eligible = EXCLUDED.override_eligible,
              status = 'active',
              updated_at = now()",
     )
     .bind(&section.source_url)
     .bind(source_type_for_section(section))
+    .bind(authority_class_for_section(section))
+    .bind(independence_group_key_for_section(section))
     .bind(source_label)
     .bind(&section.source_url)
     .bind(source_trust_level(section))
+    .bind(freshness_ttl_days_for_section(section))
+    .bind(override_eligible_for_section(section))
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -904,6 +921,41 @@ fn source_trust_level(section: &RawSectionRecord) -> i32 {
         "forum" | "low_trust" => 1,
         _ => 1,
     }
+}
+
+fn authority_class_for_section(section: &RawSectionRecord) -> &'static str {
+    match source_type_for_section(section) {
+        "government" => "primary_authority",
+        "vfs" => "delegated_authority",
+        "editorial" => "editorial",
+        "niche_agency" => "agency",
+        "forum" | "low_trust" => "forum",
+        _ => "unknown",
+    }
+}
+
+fn independence_group_key_for_section(section: &RawSectionRecord) -> String {
+    let domain = domain_norm(&section.source_domain);
+    if domain.is_empty() {
+        domain_norm(&section.source_url)
+    } else {
+        domain
+    }
+}
+
+fn freshness_ttl_days_for_section(section: &RawSectionRecord) -> i32 {
+    match source_type_for_section(section) {
+        "government" | "vfs" => 14,
+        "editorial" | "niche_agency" => 7,
+        "forum" => 3,
+        "low_trust" => 1,
+        _ => 30,
+    }
+}
+
+fn override_eligible_for_section(section: &RawSectionRecord) -> bool {
+    let _ = section;
+    false
 }
 
 async fn persist_extracted_rule_candidates(
@@ -1087,6 +1139,23 @@ async fn adjudicate_persisted_rule_candidates(
     if candidates.is_empty() {
         return Ok(TruthAdjudicationPersistReport::default());
     }
+    let source_registry = super::sqlx_source_projection_adapter::load_source_registry_entries(pool)
+        .await?
+        .into_iter()
+        .map(|(source_key, record)| {
+            (
+                source_key,
+                SourceGovernanceRecord {
+                    source_type: record.source_type,
+                    trust_level: record.trust_level,
+                    authority_class: record.authority_class,
+                    independence_group_key: record.independence_group_key,
+                    freshness_ttl_days: record.freshness_ttl_days,
+                    override_eligible: record.override_eligible,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
 
     let mut report = TruthAdjudicationPersistReport::default();
     let mut groups: BTreeMap<(String, String, String), Vec<PersistedCandidateForAdjudication>> =
@@ -1159,7 +1228,8 @@ async fn adjudicate_persisted_rule_candidates(
             continue;
         }
 
-        let adjudication = adjudicate_truth_candidates(&structured);
+        let adjudication =
+            adjudicate_truth_candidates_with_governance(&structured, &source_registry);
         match adjudication.overall_status.as_str() {
             "verified" => {
                 for decision in &adjudication.decisions {

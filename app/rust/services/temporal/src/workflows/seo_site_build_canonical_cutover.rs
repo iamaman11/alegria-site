@@ -775,7 +775,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                                 AlegriaActivities::run_truth_admissibility_gate_step,
                                 TruthAdmissibilityGateInput {
                                     run_id: run_id.clone(),
-                                    context_key: page_node.page_node_key.clone(),
+                                    context_key: site_input.context_key.clone(),
                                     applicant_profile: scope.applicant_profile.clone(),
                                     verified_support: support_bundle.clone(),
                                 },

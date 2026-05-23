@@ -355,6 +355,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                     match raw_crawl_adapter::save_crawled_html(
                         self.pool,
                         &fetched.source_url,
+                        &item.source_domain,
                         &fetched.final_url,
                         &item.dtype,
                         fetched.status_code,

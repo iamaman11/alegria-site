@@ -166,6 +166,9 @@ python3 automation/check_cutover_convergence_policy.py
 echo "[35g3/58] Truth certification regression gate"
 bash automation/run_truth_certification_gate.sh
 
+echo "[35g4/58] Truth governance policy"
+python3 automation/check_truth_governance_policy.py
+
 echo "[35h/59] SEO architecture wording"
 python3 automation/check_seo_architecture_wording.py
 

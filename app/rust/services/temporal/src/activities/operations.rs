@@ -10,11 +10,15 @@ use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
+use infrastructure::adapters::sqlx_source_projection_adapter::load_source_registry_entries;
+use policies::truth_governance::{
+    adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
+};
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::truth_candidates::{
-    adjudicate_truth_candidates, validate_truth_candidate, TruthCandidateRuntime,
-    TruthCandidateValidationResult, TruthParamValue, TruthStructuredCandidate,
+    validate_truth_candidate, TruthCandidateRuntime, TruthCandidateValidationResult,
+    TruthParamValue, TruthStructuredCandidate,
 };
 use runtime_models::ReconcileTargetReportRecord;
 use serde::{Deserialize, Serialize};
@@ -1261,6 +1265,25 @@ fn extract_first_days(token: &str) -> Option<i64> {
     digits.parse::<i64>().ok()
 }
 
+fn normalize_numeric_token_fragments(tokens: &[String]) -> Vec<String> {
+    tokens
+        .iter()
+        .flat_map(|token| {
+            let normalized = token.replace(',', ".");
+            let fragments = normalized
+                .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+                .filter(|fragment| !fragment.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if fragments.is_empty() {
+                vec![normalized]
+            } else {
+                fragments
+            }
+        })
+        .collect()
+}
+
 fn role_and_concept_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule) -> (&'static str, String) {
     match rule.rule_key.as_str() {
         "consular_fee" => ("FEE_ITEM", "consular_fee".to_string()),
@@ -2172,21 +2195,16 @@ pub(crate) async fn procedural_extraction_sweep_impl(
     let sections =
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
     let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
-    let ontology_by_section: BTreeMap<i64, &OntologyIntakeGateDecision> = input
-        .ontology
-        .sections
-        .iter()
-        .map(|section| (section.section_id, section))
-        .collect();
     let section_states = sections
         .iter()
         .map(|section| {
             let blocked_by_gate = gates.blocked_by_gate(section.id);
-            let ontology_needs_hitl = ontology_by_section
-                .get(&section.id)
-                .map(|decision| decision.needs_hitl)
-                .unwrap_or(false);
-            let skipped = !gates.allow_procedural_extraction(section.id) || ontology_needs_hitl;
+            // Procedural extraction remains allowed even when ontology intake marked
+            // entity-span mentions as unresolved. Otherwise fee/timeline sections with
+            // deterministic numeric patterns get dropped before the strict procedural
+            // path can build candidates, which weakens expert extraction and turns
+            // ontology ambiguity into a false hard skip.
+            let skipped = !gates.allow_procedural_extraction(section.id);
             let rules = if blocked_by_gate || skipped {
                 Vec::new()
             } else {
@@ -2755,7 +2773,7 @@ pub(crate) async fn completeness_judge_sweep_impl(
             let numeric_tokens: BTreeSet<String> = section
                 .rules
                 .iter()
-                .flat_map(|rule| rule.numeric_tokens.iter().cloned())
+                .flat_map(|rule| normalize_numeric_token_fragments(&rule.numeric_tokens))
                 .collect();
             let output = seo_steps::completeness_judge_step::execute(
                 &seo_steps::completeness_judge_step::CompletenessJudgeInput {
@@ -2930,6 +2948,7 @@ pub(crate) async fn contradiction_gate_sweep_impl(
 }
 
 pub(crate) async fn truth_adjudication_sweep_impl(
+    acts: &AlegriaActivities,
     input: &TruthAdjudicationSweepInput,
 ) -> Result<TruthAdjudicationSweepOutput, DomainError> {
     let resolution_by_section: BTreeMap<i64, &ResolutionLoopSectionState> = input
@@ -2946,25 +2965,52 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         .collect();
 
     let mut decisions = Vec::new();
-    let mut section_states = Vec::new();
+    let mut candidate_bindings =
+        BTreeMap::<String, (&ValidatedTruthCandidateRecord, i64, i64)>::new();
+    let mut grouped_candidates =
+        BTreeMap::<(String, String), Vec<&ValidatedTruthCandidateRecord>>::new();
+    let mut fixed_states = BTreeMap::<i64, TruthAdjudicationSectionState>::new();
+    let source_registry = load_source_registry_entries(&acts.pool)
+        .await?
+        .into_iter()
+        .map(|(source_key, record)| {
+            (
+                source_key,
+                SourceGovernanceRecord {
+                    source_type: record.source_type,
+                    trust_level: record.trust_level,
+                    authority_class: record.authority_class,
+                    independence_group_key: record.independence_group_key,
+                    freshness_ttl_days: record.freshness_ttl_days,
+                    override_eligible: record.override_eligible,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
     for section in &input.candidate_validation.sections {
         let resolution = resolution_by_section.get(&section.section_id).copied().unwrap();
         let contradiction = contradiction_by_section.get(&section.section_id).copied().unwrap();
-
-        let mut verified_count = 0usize;
-        let mut needs_hitl_count = 0usize;
-        let mut rejected_count = 0usize;
+        for candidate in &section.candidates {
+            candidate_bindings.insert(
+                candidate.rule_candidate_id.clone(),
+                (candidate, section.section_id, section.page_id),
+            );
+        }
 
         if section.blocked_by_gate {
-            section_states.push(TruthAdjudicationSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                decision: "blocked".to_string(),
-                status: "blocked".to_string(),
-                verified_count,
-                needs_hitl_count,
-                rejected_count,
-            });
+            fixed_states.insert(
+                section.section_id,
+                TruthAdjudicationSectionState {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    decision: "blocked".to_string(),
+                    status: "blocked".to_string(),
+                    verified_count: 0,
+                    needs_hitl_count: 0,
+                    rejected_count: 0,
+                },
+            );
             continue;
         }
 
@@ -2991,86 +3037,24 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     verification_method: "truth_adjudication@1".to_string(),
                     adjudication_reason: "contradiction_block".to_string(),
                 });
-                rejected_count += 1;
             }
-            section_states.push(TruthAdjudicationSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                decision: "rejected".to_string(),
-                status: "rejected".to_string(),
-                verified_count,
-                needs_hitl_count,
-                rejected_count,
-            });
+            fixed_states.insert(
+                section.section_id,
+                TruthAdjudicationSectionState {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    decision: "rejected".to_string(),
+                    status: "rejected".to_string(),
+                    verified_count: 0,
+                    needs_hitl_count: 0,
+                    rejected_count: section.candidates.len(),
+                },
+            );
             continue;
         }
 
-        let mut grouped: BTreeMap<(String, String), Vec<&ValidatedTruthCandidateRecord>> = BTreeMap::new();
-        for candidate in &section.candidates {
-            grouped
-                .entry((candidate.role.clone(), candidate.concept_canonical_key.clone()))
-                .or_default()
-                .push(candidate);
-        }
-
-        for ((_role, _concept), group) in grouped {
-            if resolution.needs_hitl || resolution.decision == "pause_for_hitl" {
-                for candidate in group {
-                    decisions.push(TruthAdjudicationCandidateDecision {
-                        section_id: section.section_id,
-                        page_id: section.page_id,
-                        rule_candidate_id: candidate.rule_candidate_id.clone(),
-                        role: candidate.role.clone(),
-                        concept_canonical_key: candidate.concept_canonical_key.clone(),
-                        params: candidate.params.clone(),
-                        source_key: candidate.source_key.clone(),
-                        source_tier: candidate.source_tier.clone(),
-                        confidence: candidate.confidence,
-                        freshness_class: candidate.freshness_class.clone(),
-                        completeness_class: "partial".to_string(),
-                        evidence_quote: candidate.evidence_quote.clone(),
-                        span_start: candidate.span_start,
-                        span_end: candidate.span_end,
-                        source_snapshot_hash: candidate.source_snapshot_hash.clone(),
-                        decision: "needs_hitl".to_string(),
-                        publish_admissibility: "needs_hitl".to_string(),
-                        verification_method: "truth_adjudication@1".to_string(),
-                        adjudication_reason: "resolution_loop_requires_hitl".to_string(),
-                    });
-                    needs_hitl_count += 1;
-                }
-                continue;
-            }
-
-            let structured = group
-                .iter()
-                .map(|candidate| TruthStructuredCandidate {
-                    rule_candidate_id: candidate.rule_candidate_id.clone(),
-                    context_key: input.context_key.clone(),
-                    role: candidate.role.clone(),
-                    concept_canonical_key: candidate.concept_canonical_key.clone(),
-                    params: candidate.params.clone(),
-                    source_key: candidate.source_key.clone(),
-                    source_tier: candidate.source_tier.clone(),
-                    confidence: candidate.confidence,
-                    freshness_class: candidate.freshness_class.clone(),
-                    completeness_class: candidate.completeness_class.clone(),
-                    evidence_quote: candidate.evidence_quote.clone(),
-                    epistemic_status: candidate.epistemic_status.clone(),
-                })
-                .collect::<Vec<_>>();
-            let adjudication = adjudicate_truth_candidates(&structured);
-            for decision in adjudication.decisions {
-                let candidate = group
-                    .iter()
-                    .find(|candidate| candidate.rule_candidate_id == decision.rule_candidate_id)
-                    .copied()
-                    .unwrap();
-                match decision.decision.as_str() {
-                    "verified" => verified_count += 1,
-                    "needs_hitl" => needs_hitl_count += 1,
-                    _ => rejected_count += 1,
-                }
+        if resolution.needs_hitl || resolution.decision == "pause_for_hitl" {
+            for candidate in &section.candidates {
                 decisions.push(TruthAdjudicationCandidateDecision {
                     section_id: section.section_id,
                     page_id: section.page_id,
@@ -3082,36 +3066,134 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     source_tier: candidate.source_tier.clone(),
                     confidence: candidate.confidence,
                     freshness_class: candidate.freshness_class.clone(),
-                    completeness_class: candidate.completeness_class.clone(),
+                    completeness_class: "partial".to_string(),
                     evidence_quote: candidate.evidence_quote.clone(),
                     span_start: candidate.span_start,
                     span_end: candidate.span_end,
                     source_snapshot_hash: candidate.source_snapshot_hash.clone(),
-                    decision: decision.decision,
-                    publish_admissibility: decision.publish_admissibility,
-                    verification_method: decision.verification_method,
-                    adjudication_reason: decision.adjudication_reason,
+                    decision: "needs_hitl".to_string(),
+                    publish_admissibility: "needs_hitl".to_string(),
+                    verification_method: "truth_adjudication@1".to_string(),
+                    adjudication_reason: "resolution_loop_requires_hitl".to_string(),
                 });
             }
+            fixed_states.insert(
+                section.section_id,
+                TruthAdjudicationSectionState {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    decision: "needs_hitl".to_string(),
+                    status: "needs_hitl".to_string(),
+                    verified_count: 0,
+                    needs_hitl_count: section.candidates.len(),
+                    rejected_count: 0,
+                },
+            );
+            continue;
         }
 
-        let section_decision = if verified_count > 0 {
-            "verified"
-        } else if needs_hitl_count > 0 {
-            "needs_hitl"
-        } else {
-            "rejected"
-        };
-        section_states.push(TruthAdjudicationSectionState {
-            section_id: section.section_id,
-            page_id: section.page_id,
-            decision: section_decision.to_string(),
-            status: section_decision.to_string(),
-            verified_count,
-            needs_hitl_count,
-            rejected_count,
-        });
+        for candidate in &section.candidates {
+            grouped_candidates
+                .entry((candidate.role.clone(), candidate.concept_canonical_key.clone()))
+                .or_default()
+                .push(candidate);
+        }
     }
+
+    for ((_role, _concept), group) in grouped_candidates {
+        let structured = group
+            .iter()
+            .map(|candidate| TruthStructuredCandidate {
+                rule_candidate_id: candidate.rule_candidate_id.clone(),
+                context_key: input.context_key.clone(),
+                role: candidate.role.clone(),
+                concept_canonical_key: candidate.concept_canonical_key.clone(),
+                params: candidate.params.clone(),
+                source_key: candidate.source_key.clone(),
+                source_tier: candidate.source_tier.clone(),
+                confidence: candidate.confidence,
+                freshness_class: candidate.freshness_class.clone(),
+                completeness_class: candidate.completeness_class.clone(),
+                evidence_quote: candidate.evidence_quote.clone(),
+                epistemic_status: candidate.epistemic_status.clone(),
+            })
+            .collect::<Vec<_>>();
+        let adjudication =
+            adjudicate_truth_candidates_with_governance(&structured, &source_registry);
+        for decision in adjudication.decisions {
+            let (candidate, section_id, page_id) = candidate_bindings
+                .get(&decision.rule_candidate_id)
+                .copied()
+                .ok_or_else(|| DomainError::ValidationFailure {
+                    message: format!(
+                        "candidate section binding is missing for `{}`",
+                        decision.rule_candidate_id
+                    ),
+                })?;
+            decisions.push(TruthAdjudicationCandidateDecision {
+                section_id,
+                page_id,
+                rule_candidate_id: candidate.rule_candidate_id.clone(),
+                role: candidate.role.clone(),
+                concept_canonical_key: candidate.concept_canonical_key.clone(),
+                params: candidate.params.clone(),
+                source_key: candidate.source_key.clone(),
+                source_tier: candidate.source_tier.clone(),
+                confidence: candidate.confidence,
+                freshness_class: candidate.freshness_class.clone(),
+                completeness_class: candidate.completeness_class.clone(),
+                evidence_quote: candidate.evidence_quote.clone(),
+                span_start: candidate.span_start,
+                span_end: candidate.span_end,
+                source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                decision: decision.decision,
+                publish_admissibility: decision.publish_admissibility,
+                verification_method: decision.verification_method,
+                adjudication_reason: decision.adjudication_reason,
+            });
+        }
+    }
+
+    let mut section_states = input
+        .candidate_validation
+        .sections
+        .iter()
+        .map(|section| {
+            if let Some(state) = fixed_states.remove(&section.section_id) {
+                return state;
+            }
+            let mut verified_count = 0usize;
+            let mut needs_hitl_count = 0usize;
+            let mut rejected_count = 0usize;
+            for decision in decisions
+                .iter()
+                .filter(|decision| decision.section_id == section.section_id)
+            {
+                match decision.decision.as_str() {
+                    "verified" => verified_count += 1,
+                    "needs_hitl" => needs_hitl_count += 1,
+                    _ => rejected_count += 1,
+                }
+            }
+            let section_decision = if verified_count > 0 {
+                "verified"
+            } else if needs_hitl_count > 0 {
+                "needs_hitl"
+            } else {
+                "rejected"
+            };
+            TruthAdjudicationSectionState {
+                section_id: section.section_id,
+                page_id: section.page_id,
+                decision: section_decision.to_string(),
+                status: section_decision.to_string(),
+                verified_count,
+                needs_hitl_count,
+                rejected_count,
+            }
+        })
+        .collect::<Vec<_>>();
+    section_states.sort_by_key(|section| section.section_id);
 
     Ok(TruthAdjudicationSweepOutput {
         section_count: section_states.len(),
@@ -3134,8 +3216,140 @@ pub(crate) async fn verified_truth_write_impl(
     let mut changed_truth_keys = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
+    let source_section_ids = input
+        .truth_adjudication
+        .decisions
+        .iter()
+        .map(|decision| decision.section_id)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let raw_sections = raw_crawl_adapter::load_raw_sections_by_ids(&acts.pool, &source_section_ids).await?;
+    let raw_by_section: BTreeMap<i64, raw_crawl_adapter::RawSectionRecord> = raw_sections
+        .into_iter()
+        .map(|section| (section.id, section))
+        .collect();
 
     for decision in &input.truth_adjudication.decisions {
+        let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
+            DomainError::ValidationFailure {
+                message: format!(
+                    "verified truth write missing raw section {} for candidate/source registration",
+                    decision.section_id
+                ),
+            }
+        })?;
+        raw_crawl_adapter::ensure_source(&acts.pool, raw_section).await?;
+        let evidence_quote = if decision.evidence_quote.trim().is_empty() {
+            decision.concept_canonical_key.clone()
+        } else {
+            decision.evidence_quote.clone()
+        };
+        let span_start = decision.span_start.max(0) as i32;
+        let span_end = std::cmp::max(decision.span_end as i32, span_start + 1);
+        let severity = decision
+            .params
+            .as_object()
+            .and_then(|params| params.get("severity"))
+            .and_then(|value| match value {
+                TruthParamValue::Text(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .filter(|value| matches!(*value, "mandatory" | "recommended" | "optional" | "unknown"))
+            .unwrap_or("unknown");
+        let is_numeric = decision
+            .params
+            .as_object()
+            .map(|params| {
+                params.contains_key("amount")
+                    || params.contains_key("min_amount")
+                    || params.contains_key("max_amount")
+                    || params.contains_key("days")
+                    || params.contains_key("min_days")
+                    || params.contains_key("max_days")
+                    || params.contains_key("duration_days")
+            })
+            .unwrap_or(false);
+        sqlx::query(
+            "INSERT INTO extracted.rule_candidates (
+                 rule_candidate_id,
+                 context_key,
+                 raw_section_id,
+                 role,
+                 concept_canonical_key,
+                 raw_mention,
+                 params,
+                 scope,
+                 severity,
+                 applies_to_profiles,
+                 exceptions_raw,
+                 conditions_raw,
+                 alternatives,
+                 modality_raw,
+                 derivation_type,
+                 is_numeric,
+                 is_range,
+                 is_incomplete,
+                 confidence,
+                 evidence_section_id,
+                 evidence_quote,
+                 span_start,
+                 span_end,
+                 source_key,
+                 source_snapshot_hash,
+                 llm_provider,
+                 llm_model,
+                 prompt_version,
+                 epistemic_status,
+                 uncertainty_flags
+             )
+             VALUES (
+                 $1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8, '[]'::jsonb,
+                 '', '', '[]'::jsonb, '', 'direct', $9, false, $10, $11, $12,
+                 $13, $14, $15, $16, $17, 'deterministic', 'cutover-runtime', 'cutover@1', $18, '[]'::jsonb
+             )
+             ON CONFLICT (rule_candidate_id) DO UPDATE
+             SET role = EXCLUDED.role,
+                 concept_canonical_key = EXCLUDED.concept_canonical_key,
+                 raw_mention = EXCLUDED.raw_mention,
+                 params = EXCLUDED.params,
+                 severity = EXCLUDED.severity,
+                 is_numeric = EXCLUDED.is_numeric,
+                 is_incomplete = EXCLUDED.is_incomplete,
+                 confidence = EXCLUDED.confidence,
+                 evidence_section_id = EXCLUDED.evidence_section_id,
+                 evidence_quote = EXCLUDED.evidence_quote,
+                 span_start = EXCLUDED.span_start,
+                 span_end = EXCLUDED.span_end,
+                 source_key = EXCLUDED.source_key,
+                 source_snapshot_hash = EXCLUDED.source_snapshot_hash,
+                 llm_provider = EXCLUDED.llm_provider,
+                 llm_model = EXCLUDED.llm_model,
+                 prompt_version = EXCLUDED.prompt_version,
+                 epistemic_status = EXCLUDED.epistemic_status,
+                 updated_at = now()"
+        )
+        .bind(&decision.rule_candidate_id)
+        .bind(&input.context_key)
+        .bind(decision.section_id)
+        .bind(&decision.role)
+        .bind(&decision.concept_canonical_key)
+        .bind(&evidence_quote)
+        .bind(Json::<Value>(truth_param_value_to_json_local(&decision.params)))
+        .bind(severity)
+        .bind(is_numeric)
+        .bind(decision.completeness_class != "complete")
+        .bind(decision.confidence)
+        .bind(decision.section_id)
+        .bind(&evidence_quote)
+        .bind(span_start)
+        .bind(span_end)
+        .bind(&decision.source_key)
+        .bind(&decision.source_snapshot_hash)
+        .bind(&decision.decision)
+        .execute(&*acts.pool)
+        .await
+        .map_err(AlegriaActivities::classify_error)?;
         let rule_instance_id = semantic_rule_instance_id_local(
             &input.context_key,
             &decision.role,
@@ -3212,9 +3426,9 @@ pub(crate) async fn verified_truth_write_impl(
                 .bind(decision.confidence)
                 .bind(&decision.rule_candidate_id)
                 .bind(decision.section_id)
-                .bind(&decision.evidence_quote)
-                .bind(decision.span_start as i32)
-                .bind(decision.span_end as i32)
+                .bind(&evidence_quote)
+                .bind(span_start)
+                .bind(span_end)
                 .bind(&decision.source_snapshot_hash)
                 .bind(&decision.verification_method)
                 .bind(&decision.adjudication_reason)

@@ -187,4 +187,35 @@ mod tests {
         assert_eq!(output.decision, "pass");
         assert!(output.conflicts.is_empty());
     }
+
+    #[test]
+    fn contradiction_verdict_is_order_invariant() {
+        let facts = vec![
+            FactAssertion {
+                subject_key: "fee".to_string(),
+                predicate_key: "amount".to_string(),
+                value_normalized: "80 EUR".to_string(),
+                source_key: Some("source:official".to_string()),
+                confidence: 0.95,
+            },
+            FactAssertion {
+                subject_key: "fee".to_string(),
+                predicate_key: "amount".to_string(),
+                value_normalized: "120 EUR".to_string(),
+                source_key: Some("source:official-2".to_string()),
+                confidence: 0.96,
+            },
+        ];
+        let forward = execute(&ContradictionGateInput {
+            run_id: "run-1".to_string(),
+            facts: facts.clone(),
+        });
+        let reverse = execute(&ContradictionGateInput {
+            run_id: "run-1".to_string(),
+            facts: facts.into_iter().rev().collect(),
+        });
+        assert_eq!(forward.decision, reverse.decision);
+        assert_eq!(forward.conflict_count, reverse.conflict_count);
+        assert_eq!(forward.conflicts[0].severity, reverse.conflicts[0].severity);
+    }
 }

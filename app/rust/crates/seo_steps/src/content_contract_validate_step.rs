@@ -167,13 +167,13 @@ mod tests {
         let input = DraftQaInputPayload {
             run_id: "run".to_string(),
             draft: Some(DraftState {
-                content_blocks: mandatory_section_roles()
+                content_blocks: runtime_models::seo_blocks::mandatory_section_roles()
                     .iter()
                     .map(|role| {
                         block(
                             role,
                             block_type_for_role(role),
-                            !matches!(role, &"documents"),
+                            *role != "documents",
                         )
                     })
                     .collect(),

@@ -72,7 +72,7 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
         sqlx::query(
             "INSERT INTO serp.crawl_queue
              (url, url_norm, source_domain, source_type, dtype, first_seen_run_id, first_seen_job_id, query_batch_key, status, next_attempt_at, notes)
-             VALUES ($1, $2, $3, 'top10', 'organic_competitor', $4, $5, $6, 'pending', now(), $7)
+             VALUES ($1, $2, $3, 'top10', $4, $5, $6, $7, 'pending', now(), $8)
              ON CONFLICT (url_norm) DO UPDATE
              SET status = CASE
                      WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.status
@@ -81,6 +81,10 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
                  source_domain = CASE
                      WHEN serp.crawl_queue.source_domain = '' THEN EXCLUDED.source_domain
                      ELSE serp.crawl_queue.source_domain
+                 END,
+                 dtype = CASE
+                     WHEN coalesce(serp.crawl_queue.dtype, '') = '' THEN EXCLUDED.dtype
+                     ELSE serp.crawl_queue.dtype
                  END,
                  query_batch_key = CASE
                      WHEN serp.crawl_queue.query_batch_key = '' THEN EXCLUDED.query_batch_key
@@ -94,7 +98,8 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
         )
         .bind(&result.url)
         .bind(&result.url_norm)
-        .bind(domain_norm(&result.url))
+        .bind(&result.domain_norm)
+        .bind(&result.source_tier)
         .bind(run_id)
         .bind(job_id)
         .bind(query_batch_key)

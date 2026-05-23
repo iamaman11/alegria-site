@@ -223,6 +223,10 @@ pub struct ValidationInputRecord {
 pub struct SourceRegistryRecord {
     pub source_type: String,
     pub trust_level: i64,
+    pub authority_class: String,
+    pub independence_group_key: String,
+    pub freshness_ttl_days: i32,
+    pub override_eligible: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
