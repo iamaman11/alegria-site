@@ -748,9 +748,16 @@ pub fn run_expert_extraction_core(
             .iter()
             .flat_map(|rule| rule.numeric_tokens.iter().cloned())
             .collect();
+        let source_numeric_tokens: BTreeSet<String> = entity_output
+            .mentions
+            .iter()
+            .filter(|mention| mention.has_numeric)
+            .map(|mention| mention.raw_text.replace(',', "."))
+            .collect();
         let completeness_input = seo_steps::completeness_judge_step::CompletenessJudgeInput {
             section_id: section.id.to_string(),
             raw_text: section.content_md.clone(),
+            source_numeric_tokens: source_numeric_tokens.into_iter().collect(),
             extracted_numeric_tokens: numeric_tokens.into_iter().collect(),
             extracted_rule_keys: procedural_output
                 .rules

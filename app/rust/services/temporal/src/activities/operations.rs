@@ -680,6 +680,7 @@ pub struct TripleBuilderSweepOutput {
 pub struct CompletenessJudgeSweepInput {
     pub run_id: String,
     pub raw_page_ids: Vec<i64>,
+    pub entity_spans: EntitySpanSweepOutput,
     pub procedural: ProceduralExtractionSweepOutput,
 }
 
@@ -2764,21 +2765,35 @@ pub(crate) async fn completeness_judge_sweep_impl(
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
     let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
         raw_sections.iter().map(|section| (section.id, section)).collect();
+    let entity_by_section: BTreeMap<i64, &EntitySpanSectionMentions> = input
+        .entity_spans
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
     let sections = input
         .procedural
         .sections
         .iter()
         .map(|section| {
             let raw = raw_by_section.get(&section.section_id).copied().unwrap();
+            let entity = entity_by_section.get(&section.section_id).copied().unwrap();
             let numeric_tokens: BTreeSet<String> = section
                 .rules
                 .iter()
                 .flat_map(|rule| normalize_numeric_token_fragments(&rule.numeric_tokens))
                 .collect();
+            let source_numeric_tokens: BTreeSet<String> = entity
+                .mentions
+                .iter()
+                .filter(|mention| mention.has_numeric)
+                .flat_map(|mention| normalize_numeric_token_fragments(std::slice::from_ref(&mention.raw_text)))
+                .collect();
             let output = seo_steps::completeness_judge_step::execute(
                 &seo_steps::completeness_judge_step::CompletenessJudgeInput {
                     section_id: section.section_id.to_string(),
                     raw_text: raw.content_md.clone(),
+                    source_numeric_tokens: source_numeric_tokens.into_iter().collect(),
                     extracted_numeric_tokens: numeric_tokens.into_iter().collect(),
                     extracted_rule_keys: section
                         .rules

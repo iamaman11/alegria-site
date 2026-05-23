@@ -275,6 +275,7 @@ Owner-boundary note:
 - truth certification is a mandatory local/CI gate and writes only evidence under `docs/runs/**`; it never writes authority truth
 - accepted local/CI certification baseline artifact: [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json)
 - canonical certification entrypoint: `automation/run_truth_certification_gate.sh`
+- the wrapper's transient current report is local-only and defaults to `/tmp/truth_certification_local_ci_current.json`, not `docs/runs/**`
 - truth-governance decision tables and regex authority boundaries are owned by [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md), not by ad hoc runtime overrides
 
 ## 3) HITL contract

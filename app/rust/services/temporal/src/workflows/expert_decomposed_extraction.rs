@@ -247,6 +247,12 @@ impl ExpertDecomposedExtractionWorkflow {
                     seo_steps::completeness_judge_step::CompletenessJudgeInput {
                         section_id: section.section_id.clone(),
                         raw_text: section.raw_text.clone(),
+                        source_numeric_tokens: spans
+                            .mentions
+                            .iter()
+                            .filter(|mention| mention.has_numeric)
+                            .map(|mention| mention.raw_text.clone())
+                            .collect(),
                         extracted_numeric_tokens: procedural
                             .rules
                             .iter()

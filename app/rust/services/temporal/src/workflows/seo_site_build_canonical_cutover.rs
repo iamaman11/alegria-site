@@ -508,6 +508,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 CompletenessJudgeSweepInput {
                     run_id: run_id.clone(),
                     raw_page_ids: crawled.raw_page_ids.clone(),
+                    entity_spans: entity_spans.clone(),
                     procedural: procedural.clone(),
                 },
                 db_opts(60),

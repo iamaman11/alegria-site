@@ -1,12 +1,11 @@
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletenessJudgeInput {
     pub section_id: String,
     pub raw_text: String,
+    pub source_numeric_tokens: Vec<String>,
     pub extracted_numeric_tokens: Vec<String>,
     pub extracted_rule_keys: Vec<String>,
 }
@@ -27,26 +26,16 @@ pub struct CompletenessJudgeOutput {
     pub hitl_reason: Option<String>,
 }
 
-static NUMBER_RE: OnceLock<Regex> = OnceLock::new();
-fn number_re() -> &'static Regex {
-    // Rust regex does not support look-around; word boundaries are enough for
-    // deterministic numeric-token recovery in completeness judging.
-    NUMBER_RE.get_or_init(|| Regex::new(r"(?m)\b\d+(?:[.,]\d+)?\b").unwrap())
+fn normalize_numeric_tokens(tokens: &[String]) -> BTreeSet<String> {
+    tokens.iter().map(|s| s.replace(',', ".")).collect()
 }
 
 pub fn execute(input: &CompletenessJudgeInput) -> CompletenessJudgeOutput {
     let mut missing = Vec::new();
     let text = input.raw_text.to_lowercase();
 
-    let source_numbers: BTreeSet<String> = number_re()
-        .find_iter(input.raw_text.as_str())
-        .map(|m| m.as_str().replace(',', "."))
-        .collect();
-    let extracted: BTreeSet<String> = input
-        .extracted_numeric_tokens
-        .iter()
-        .map(|s| s.replace(',', "."))
-        .collect();
+    let source_numbers = normalize_numeric_tokens(&input.source_numeric_tokens);
+    let extracted = normalize_numeric_tokens(&input.extracted_numeric_tokens);
     for n in source_numbers.difference(&extracted) {
         missing.push(MissingElement {
             loss_type: "number".to_string(),
@@ -106,6 +95,7 @@ mod tests {
         let output = execute(&CompletenessJudgeInput {
             section_id: "section-1".to_string(),
             raw_text: "Fee is 80 EUR and processing time is 15 days.".to_string(),
+            source_numeric_tokens: vec!["80".to_string(), "15".to_string()],
             extracted_numeric_tokens: vec!["80".to_string()],
             extracted_rule_keys: vec!["consular_fee".to_string()],
         });
@@ -123,12 +113,14 @@ mod tests {
         let sparse = execute(&CompletenessJudgeInput {
             section_id: "section-1".to_string(),
             raw_text: raw_text.to_string(),
+            source_numeric_tokens: vec!["80".to_string(), "15".to_string()],
             extracted_numeric_tokens: vec!["80".to_string()],
             extracted_rule_keys: vec!["consular_fee".to_string()],
         });
         let complete = execute(&CompletenessJudgeInput {
             section_id: "section-1".to_string(),
             raw_text: raw_text.to_string(),
+            source_numeric_tokens: vec!["80".to_string(), "15".to_string()],
             extracted_numeric_tokens: vec!["80".to_string(), "15".to_string()],
             extracted_rule_keys: vec![
                 "consular_fee".to_string(),
@@ -144,6 +136,7 @@ mod tests {
         let output = execute(&CompletenessJudgeInput {
             section_id: "section-1".to_string(),
             raw_text: "Passport required. Footer: contact us for updates.".to_string(),
+            source_numeric_tokens: Vec::new(),
             extracted_numeric_tokens: Vec::new(),
             extracted_rule_keys: vec!["passport_required".to_string()],
         });

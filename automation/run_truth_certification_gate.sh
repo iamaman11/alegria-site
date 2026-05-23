@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-REPORT_PATH="${TRUTH_CERT_REPORT_PATH:-$ROOT_DIR/docs/runs/truth_certification_local_ci_current.json}"
+REPORT_PATH="${TRUTH_CERT_REPORT_PATH:-/tmp/truth_certification_local_ci_current.json}"
 
 cd "$ROOT_DIR"
 
