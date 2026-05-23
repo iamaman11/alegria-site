@@ -115,7 +115,7 @@ impl Neo4jHarness {
     pub async fn start() -> Result<Self> {
         let image = GenericImage::new("neo4j", "5.26.0-community")
             .with_exposed_port(7687.tcp())
-            .with_wait_for(WaitFor::seconds(30));
+            .with_wait_for(WaitFor::seconds(45));
         let image = image.with_env_var("NEO4J_AUTH", "neo4j/neo4j_password");
         let container = image
             .start()
@@ -246,7 +246,7 @@ async fn probe_temporal(temporal_url: &str, namespace: &str) -> Result<()> {
 
 async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
     let mut last_error = None;
-    for _ in 0..60 {
+    for _ in 0..90 {
         match Graph::new(uri, user, password) {
             Ok(graph) => match graph.run(query("RETURN 1 AS ok")).await {
                 Ok(_) => return Ok(()),
