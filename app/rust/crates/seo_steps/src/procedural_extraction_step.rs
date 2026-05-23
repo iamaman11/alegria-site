@@ -1,12 +1,11 @@
-use regex::Regex;
 use runtime_models::RuleRoleType;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProceduralExtractionInput {
     pub section_id: String,
     pub raw_text: String,
+    pub mentions: Vec<crate::entity_span_detection_step::EntityMention>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -22,22 +21,17 @@ pub struct ProceduralExtractionOutput {
     pub rules: Vec<ProceduralRule>,
 }
 
-static MONEY_RE: OnceLock<Regex> = OnceLock::new();
-static DAY_RE: OnceLock<Regex> = OnceLock::new();
-fn money_re() -> &'static Regex {
-    MONEY_RE.get_or_init(|| Regex::new(r"(?i)\b\d+(?:[.,]\d+)?\s*(?:eur|€|евро)\b").unwrap())
-}
-fn day_re() -> &'static Regex {
-    DAY_RE.get_or_init(|| Regex::new(r"(?i)\b\d+\s*(?:дн|дней|day|days)\b").unwrap())
+fn normalized(s: &str) -> String {
+    s.trim().to_lowercase().replace('ё', "е")
 }
 
 pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput {
     let mut rules = Vec::new();
-    let t = input.raw_text.to_lowercase();
-
-    let fee_tokens: Vec<String> = money_re()
-        .find_iter(&input.raw_text)
-        .map(|m| m.as_str().to_string())
+    let fee_tokens: Vec<String> = input
+        .mentions
+        .iter()
+        .filter(|mention| mention.entity_type == "fee" && mention.has_numeric)
+        .map(|mention| mention.raw_text.clone())
         .collect();
     if !fee_tokens.is_empty() {
         rules.push(ProceduralRule {
@@ -48,9 +42,11 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
         });
     }
 
-    let day_tokens: Vec<String> = day_re()
-        .find_iter(&input.raw_text)
-        .map(|m| m.as_str().to_string())
+    let day_tokens: Vec<String> = input
+        .mentions
+        .iter()
+        .filter(|mention| mention.entity_type == "timeline" && mention.has_numeric)
+        .map(|mention| mention.raw_text.clone())
         .collect();
     if !day_tokens.is_empty() {
         rules.push(ProceduralRule {
@@ -61,7 +57,13 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
         });
     }
 
-    if t.contains("паспорт") || t.contains("passport") {
+    if input.mentions.iter().any(|mention| {
+        mention.entity_type == "concept"
+            && matches!(
+                normalized(&mention.raw_text).as_str(),
+                "паспорт" | "passport"
+            )
+    }) {
         rules.push(ProceduralRule {
             rule_key: "passport_required".to_string(),
             role_type: RuleRoleType::MustProvide,
@@ -69,7 +71,11 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
             confidence: 0.84,
         });
     }
-    if t.contains("страхов") || t.contains("insurance") {
+    if input.mentions.iter().any(|mention| {
+        let raw = normalized(&mention.raw_text);
+        mention.entity_type == "concept"
+            && (raw.starts_with("страхов") || raw == "insurance")
+    }) {
         rules.push(ProceduralRule {
             rule_key: "insurance_required".to_string(),
             role_type: RuleRoleType::MustProvide,
@@ -79,4 +85,59 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
     }
 
     ProceduralExtractionOutput { rules }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity_span_detection_step::EntityMention;
+
+    #[test]
+    fn builds_fee_timeline_and_document_rules_from_mentions() {
+        let output = execute(&ProceduralExtractionInput {
+            section_id: "section-1".to_string(),
+            raw_text: "ignored as authority".to_string(),
+            mentions: vec![
+                EntityMention {
+                    raw_text: "80 EUR".to_string(),
+                    entity_type: "fee".to_string(),
+                    has_numeric: true,
+                    is_central: true,
+                    confidence: 0.95,
+                },
+                EntityMention {
+                    raw_text: "15 days".to_string(),
+                    entity_type: "timeline".to_string(),
+                    has_numeric: true,
+                    is_central: true,
+                    confidence: 0.93,
+                },
+                EntityMention {
+                    raw_text: "паспорт".to_string(),
+                    entity_type: "concept".to_string(),
+                    has_numeric: false,
+                    is_central: true,
+                    confidence: 0.82,
+                },
+            ],
+        });
+        let keys = output
+            .rules
+            .iter()
+            .map(|rule| rule.rule_key.as_str())
+            .collect::<Vec<_>>();
+        assert!(keys.contains(&"consular_fee"));
+        assert!(keys.contains(&"processing_time"));
+        assert!(keys.contains(&"passport_required"));
+    }
+
+    #[test]
+    fn raw_text_alone_does_not_create_rules_without_mentions() {
+        let output = execute(&ProceduralExtractionInput {
+            section_id: "section-1".to_string(),
+            raw_text: "Passport required. Fee 80 EUR. 15 days.".to_string(),
+            mentions: Vec::new(),
+        });
+        assert!(output.rules.is_empty());
+    }
 }

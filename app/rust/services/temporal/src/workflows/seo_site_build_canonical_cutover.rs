@@ -373,6 +373,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                         sectioning_contract: sectioning_contract.clone(),
                         cas_gate: cas_gate.clone(),
                     },
+                    entity_spans: entity_spans.clone(),
                     ontology: ontology_intake.clone(),
                 },
                 db_opts(60),

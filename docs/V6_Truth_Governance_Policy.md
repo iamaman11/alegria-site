@@ -24,7 +24,7 @@ Current acceptance status:
 
 - governance adjudication is wired into both persisted truth writes and the canonical workflow truth-adjudication sweep;
 - the frozen local/CI certification baseline remains green under this policy layer;
-- the accepted regex de-authority slices are `canonical_mapping_step` and `completeness_judge_step`;
+- the accepted regex de-authority slices are `canonical_mapping_step`, `completeness_judge_step`, and `procedural_extraction_step`;
 - remaining regex de-authority work stays blocked until each future slice is proven against that same baseline.
 
 ---
@@ -130,7 +130,7 @@ Current accepted slice order for regex de-authority:
 
 1. `canonical_mapping_step` via typed-entity and lexicon-token mapping
 2. `completeness_judge_step` via upstream numeric evidence tokens instead of raw-text regex rescans
-3. `procedural_extraction_step`
+3. `procedural_extraction_step` via structured mention-driven rule assembly
 4. `entity_span_detection_step`
 
 ---

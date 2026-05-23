@@ -87,7 +87,7 @@ The current active runtime sequence for the forward path is the accepted canonic
 - single-source verification is allowed only through explicit authority-override policy;
 - regex may remain in utility surfaces or heuristic hints, but not as final authority for `verified` truth promotion.
 - the active truth-governance layer is accepted locally only because the frozen certification baseline remains green under it.
-- the first regex de-authority slice is accepted only in `canonical_mapping_step`; all remaining regex-authority removals stay baseline-gated.
+- the accepted regex de-authority slices are now `canonical_mapping_step`, `completeness_judge_step`, and `procedural_extraction_step`; only `entity_span_detection_step` remains baseline-gated.
 
 1. preflight, support loading, source discovery, crawl, evidence preparation, and section gating;
 2. semantic routing, span detection, canonical mapping, ontology intake, layer-specific extraction, completeness, resolution, contradiction handling, adjudication, and verified truth write;

@@ -549,6 +549,7 @@ pub fn run_expert_extraction_core(
         let procedural_input = seo_steps::procedural_extraction_step::ProceduralExtractionInput {
             section_id: section.id.to_string(),
             raw_text: section.content_md.clone(),
+            mentions: entity_output.mentions.clone(),
         };
         let procedural_output = if blocked_by_gate || !page_utility.allow_procedural_extraction {
             seo_steps::procedural_extraction_step::ProceduralExtractionOutput { rules: Vec::new() }

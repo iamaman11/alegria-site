@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.29`
+**Current version:** `6.30`
 
 ---
 
@@ -1295,8 +1295,8 @@ Current accepted state:
 - `automation/ci_verify.sh` now includes the truth certification regression gate;
 - `Phase B / Truth Governance` is now accepted locally against the frozen certification baseline, with source independence, weak-source rejection, freshness blocking, and explicit authority-override checks wired into truth adjudication and CI policy checks;
 - `Phase C / Regex De-Authority` has now started with the accepted `canonical_mapping_step` slice, where regex-symbolic acceptance was replaced by explicit typed-entity and lexicon-token mapping while the frozen certification baseline remained green;
-- the accepted regex de-authority slices are now `canonical_mapping_step` and `completeness_judge_step`;
-- the remaining regex-authority slices still pending are `procedural_extraction_step` and `entity_span_detection_step`, each gated by the same frozen certification baseline.
+- the accepted regex de-authority slices are now `canonical_mapping_step`, `completeness_judge_step`, and `procedural_extraction_step`;
+- the only remaining regex-authority slice still pending is `entity_span_detection_step`, gated by the same frozen certification baseline.
 
 ---
 
@@ -1344,6 +1344,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.30
+
+- accepted the `procedural_extraction_step` regex de-authority slice by switching procedural rule formation from raw-text regex/substrings to structured mentions supplied by `entity_span_detection`;
+- kept orchestration and truth-certification behavior stable by validating the slice against the frozen baseline before acceptance;
+- reduced the remaining Phase C regex-authority backlog to a single pending step: `entity_span_detection_step`.
 
 ### 6.29
 

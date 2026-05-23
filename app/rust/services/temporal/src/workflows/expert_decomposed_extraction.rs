@@ -208,6 +208,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     seo_steps::procedural_extraction_step::ProceduralExtractionInput {
                         section_id: section.section_id.clone(),
                         raw_text: section.raw_text.clone(),
+                        mentions: spans.mentions.clone(),
                     },
                     db_opts(30),
                 )

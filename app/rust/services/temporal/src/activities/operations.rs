@@ -440,6 +440,7 @@ pub struct ProceduralExtractionSweepInput {
     pub run_id: String,
     pub raw_page_ids: Vec<i64>,
     pub gates: SectionSemanticGateBundle,
+    pub entity_spans: EntitySpanSweepOutput,
     pub ontology: OntologyIntakeGateOutput,
 }
 
@@ -2196,6 +2197,12 @@ pub(crate) async fn procedural_extraction_sweep_impl(
     let sections =
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
     let gates = SectionSemanticGateIndexes::from_bundle(&input.gates);
+    let entity_by_section: BTreeMap<i64, &EntitySpanSectionMentions> = input
+        .entity_spans
+        .sections
+        .iter()
+        .map(|section| (section.section_id, section))
+        .collect();
     let section_states = sections
         .iter()
         .map(|section| {
@@ -2209,10 +2216,12 @@ pub(crate) async fn procedural_extraction_sweep_impl(
             let rules = if blocked_by_gate || skipped {
                 Vec::new()
             } else {
+                let entity = entity_by_section.get(&section.id).copied().unwrap();
                 seo_steps::procedural_extraction_step::execute(
                     &seo_steps::procedural_extraction_step::ProceduralExtractionInput {
                         section_id: section.id.to_string(),
                         raw_text: section.content_md.clone(),
+                        mentions: entity.mentions.clone(),
                     },
                 )
                 .rules
