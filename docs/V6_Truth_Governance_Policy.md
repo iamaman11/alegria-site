@@ -24,7 +24,8 @@ Current acceptance status:
 
 - governance adjudication is wired into both persisted truth writes and the canonical workflow truth-adjudication sweep;
 - the frozen local/CI certification baseline remains green under this policy layer;
-- regex de-authority work remains blocked until future slices are proven against that same baseline.
+- the first regex de-authority slice is accepted in `canonical_mapping_step`;
+- remaining regex de-authority work stays blocked until each future slice is proven against that same baseline.
 
 ---
 
@@ -124,6 +125,13 @@ Regex is not allowed as final authority for:
 - procedural fact promotion
 
 During migration, regex may remain as heuristic input, but any `verified` promotion must depend on structured spans, ontology-aware mapping, and truth governance policy.
+
+Current accepted slice order for regex de-authority:
+
+1. `canonical_mapping_step` via typed-entity and lexicon-token mapping
+2. `completeness_judge_step`
+3. `procedural_extraction_step`
+4. `entity_span_detection_step`
 
 ---
 

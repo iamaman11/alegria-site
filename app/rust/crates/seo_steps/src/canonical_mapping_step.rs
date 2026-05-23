@@ -1,6 +1,4 @@
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalMappingInput {
@@ -34,9 +32,10 @@ pub struct CanonicalMappingOutput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchingStage {
+    TypedEntity,
     ExactAlias,
     NormalizedAlias,
-    RegexSymbolic,
+    LexiconToken,
     VectorQdrant,
 }
 
@@ -57,20 +56,30 @@ fn alias_lookup(s: &str) -> Option<&'static str> {
     }
 }
 
-static PASSPORT_RE: OnceLock<Regex> = OnceLock::new();
-static INSURANCE_RE: OnceLock<Regex> = OnceLock::new();
-fn passport_re() -> &'static Regex {
-    PASSPORT_RE.get_or_init(|| Regex::new(r"(?i)\b(passport|паспорт)\b").unwrap())
-}
-fn insurance_re() -> &'static Regex {
-    INSURANCE_RE.get_or_init(|| Regex::new(r"(?i)\b(insurance|страхов)\w*\b").unwrap())
+fn token_fragments(s: &str) -> Vec<String> {
+    s.split(|ch: char| !ch.is_alphanumeric())
+        .filter(|fragment| !fragment.trim().is_empty())
+        .map(normalized)
+        .collect()
 }
 
-fn regex_symbolic_lookup(s: &str) -> Option<&'static str> {
-    if passport_re().is_match(s) {
+fn has_token(tokens: &[String], expected: &str) -> bool {
+    tokens.iter().any(|token| token == expected)
+}
+
+fn has_token_prefix(tokens: &[String], prefix: &str) -> bool {
+    tokens.iter().any(|token| token.starts_with(prefix))
+}
+
+fn lexicon_token_lookup(s: &str) -> Option<&'static str> {
+    let tokens = token_fragments(s);
+    if has_token(&tokens, "passport")
+        || has_token(&tokens, "паспорт")
+        || has_token(&tokens, "загранпаспорт")
+    {
         return Some("passport");
     }
-    if insurance_re().is_match(s) {
+    if has_token(&tokens, "insurance") || has_token_prefix(&tokens, "страхов") {
         return Some("medical_insurance");
     }
     None
@@ -99,7 +108,7 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
                 canonical_key: Some(canonical_key.to_string()),
                 mapping_type: "typed_entity".to_string(),
                 match_method: method.to_string(),
-                matching_stage: MatchingStage::RegexSymbolic,
+                matching_stage: MatchingStage::TypedEntity,
                 qdrant_score: None,
                 confidence,
                 needs_hitl: false,
@@ -138,13 +147,13 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
             continue;
         }
 
-        if let Some(k) = regex_symbolic_lookup(&norm) {
+        if let Some(k) = lexicon_token_lookup(&norm) {
             out.push(MappingResult {
                 raw_text: m.raw_text.clone(),
                 canonical_key: Some(k.to_string()),
-                mapping_type: "symbolic".to_string(),
-                match_method: "regex_symbolic".to_string(),
-                matching_stage: MatchingStage::RegexSymbolic,
+                mapping_type: "lexicon_token".to_string(),
+                match_method: "lexicon_token".to_string(),
+                matching_stage: MatchingStage::LexiconToken,
                 qdrant_score: None,
                 confidence: 0.9,
                 needs_hitl: false,
@@ -220,5 +229,14 @@ mod tests {
         let mapped = map_one("mysterious sponsor credential");
         assert!(mapped.needs_hitl || mapped.canonical_key.is_none());
         assert_ne!(mapped.mapping_type, "alias");
+    }
+
+    #[test]
+    fn insurance_phrase_maps_via_lexicon_tokens_without_regex() {
+        let mapped = map_one("требуется страховка путешественника");
+        assert_eq!(mapped.canonical_key.as_deref(), Some("medical_insurance"));
+        assert_eq!(mapped.match_method, "lexicon_token");
+        assert_eq!(mapped.matching_stage, MatchingStage::LexiconToken);
+        assert!(!mapped.needs_hitl);
     }
 }

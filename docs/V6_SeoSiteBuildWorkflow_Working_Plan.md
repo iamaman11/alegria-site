@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.27`
+**Current version:** `6.28`
 
 ---
 
@@ -1294,7 +1294,8 @@ Current accepted state:
 - `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
 - `automation/ci_verify.sh` now includes the truth certification regression gate;
 - `Phase B / Truth Governance` is now accepted locally against the frozen certification baseline, with source independence, weak-source rejection, freshness blocking, and explicit authority-override checks wired into truth adjudication and CI policy checks;
-- `Phase C / Regex De-Authority` remains blocked until regex-removal slices are validated against that same frozen certification baseline.
+- `Phase C / Regex De-Authority` has now started with the accepted `canonical_mapping_step` slice, where regex-symbolic acceptance was replaced by explicit typed-entity and lexicon-token mapping while the frozen certification baseline remained green;
+- the remaining regex-authority slices still pending are `completeness_judge_step`, `procedural_extraction_step`, and `entity_span_detection_step`, each gated by the same frozen certification baseline.
 
 ---
 
@@ -1342,6 +1343,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.28
+
+- started `Phase C / Regex De-Authority` with the first accepted slice in `canonical_mapping_step`;
+- removed regex-symbolic final authority from canonical mapping and replaced it with explicit typed-entity plus lexicon-token mapping;
+- revalidated the frozen truth-certification baseline after that slice so Phase C remains proof-driven rather than refactor-driven;
+- left the remaining regex-authority slices (`completeness_judge_step`, `procedural_extraction_step`, `entity_span_detection_step`) explicitly pending behind the same certification gate.
 
 ### 6.27
 
