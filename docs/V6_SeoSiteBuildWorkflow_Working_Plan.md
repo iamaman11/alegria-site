@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.31`
+**Current version:** `6.32`
 
 ---
 
@@ -1290,7 +1290,9 @@ Mandatory consequences:
 Current accepted state:
 
 - `Phase A / Knowledge Certification` is now accepted locally with baseline artifact at [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
+- the accepted baseline now covers 13 fixtures, including explicit governance-proof cases for non-independent mirror corroboration and single authoritative override;
 - `automation/run_truth_certification_gate.sh` is the canonical local/CI certification wrapper;
+- the canonical wrapper now runs the suite in an isolated Cargo target dir so certification proof does not depend on contaminated shared test artifacts;
 - `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
 - `automation/ci_verify.sh` now includes the truth certification regression gate;
 - `Phase B / Truth Governance` is now accepted locally against the frozen certification baseline, with source independence, weak-source rejection, freshness blocking, and explicit authority-override checks wired into truth adjudication and CI policy checks;
@@ -1345,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.32
+
+- expanded the accepted truth-certification baseline from 11 to 13 fixtures by adding governance-proof cases for non-independent mirror corroboration and single authoritative override;
+- refreshed legacy fixture expectations so governance reason codes now match accepted source-independence and authority-class semantics instead of pre-governance single-source wording;
+- moved the canonical truth-certification suite onto an isolated Cargo target dir inside `automation/run_truth_certification_gate.sh`, eliminating the shared-target `rustls` compile instability from the official proof path.
 
 ### 6.31
 

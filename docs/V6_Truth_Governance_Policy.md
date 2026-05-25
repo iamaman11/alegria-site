@@ -24,6 +24,7 @@ Current acceptance status:
 
 - governance adjudication is wired into both persisted truth writes and the canonical workflow truth-adjudication sweep;
 - the frozen local/CI certification baseline remains green under this policy layer;
+- the accepted baseline now includes explicit fixture proofs for mirror non-independence and single authoritative override;
 - all planned regex de-authority slices are accepted locally against the frozen certification baseline;
 - regex remains permitted only in utility or non-authoritative hint surfaces after that closure.
 

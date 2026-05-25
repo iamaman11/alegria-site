@@ -28,7 +28,7 @@
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=government"
+      "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
     ],
     "rejected_set": [],
     "contradiction_groups": [],

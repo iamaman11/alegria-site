@@ -1,27 +1,43 @@
 {
-  "fixture_id": "conflicting_structured_candidates",
-  "description": "Contradictory fee values from structured official pages must not verify.",
+  "fixture_id": "non_independent_mirror_corroboration",
+  "description": "Matching fee values from the same governance domain must not count as independent corroboration.",
   "run_mode": "dry_run",
   "business_scope": {
     "truth_identity_tuple": "ES|tourist||BY",
     "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
   },
   "source_inputs": {
-    "query": "spain tourist visa conflicting fee",
+    "query": "spain tourist visa official fee mirror",
     "pages": [
       {
-        "route": "/official/conflict-fee-a",
-        "domain": "mfa.gov.example",
-        "title": "Official source A",
-        "description": "Official fee table A",
-        "html_file": "conflicting_fee_a.html"
+        "route": "/official/mirror-fee-a",
+        "domain": "madrid.embassy.gov.example",
+        "title": "Official fee page A",
+        "description": "Official fee statement A",
+        "html_file": "non_independent_mirror_fee_a.html",
+        "governance_override": {
+          "source_type": "government",
+          "authority_class": "primary_authority",
+          "independence_group_key": "spain_fee_mirror_cluster",
+          "trust_level": 5,
+          "freshness_ttl_days": 14,
+          "override_eligible": false
+        }
       },
       {
-        "route": "/official/conflict-fee-b",
-        "domain": "embassy.gov.example",
-        "title": "Official source B",
-        "description": "Official fee table B",
-        "html_file": "conflicting_fee_b.html"
+        "route": "/official/mirror-fee-b",
+        "domain": "visa.mfa.gov.example",
+        "title": "Official fee page B",
+        "description": "Official fee statement B",
+        "html_file": "non_independent_mirror_fee_b.html",
+        "governance_override": {
+          "source_type": "government",
+          "authority_class": "primary_authority",
+          "independence_group_key": "spain_fee_mirror_cluster",
+          "trust_level": 5,
+          "freshness_ttl_days": 14,
+          "override_eligible": false
+        }
       }
     ],
     "support_bundle_seed": {
@@ -71,9 +87,9 @@
           {
             "role": "FEE_ITEM",
             "concept_canonical_key": "consular_fee",
-            "raw_mention": "Consular fee is 35 EUR.",
+            "raw_mention": "Consular fee is 80 EUR.",
             "params": {
-              "amount": 35,
+              "amount": 80,
               "currency": "EUR"
             },
             "scope": {},
@@ -89,7 +105,7 @@
             "is_incomplete": false,
             "confidence": 0.94,
             "evidence_section_id": 0,
-            "evidence_quote": "Consular fee is 35 EUR.",
+            "evidence_quote": "Consular fee is 80 EUR.",
             "span_start": 0,
             "span_end": 24,
             "uncertainty_flags": []
@@ -99,15 +115,14 @@
     ],
     "editorial_response": {
       "sections": {
-        "overview": "Conflicting fee values require review."
+        "overview": "Mirrored official fee pages still require an independent corroboration source."
       }
     }
   },
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "consular_fee|{\"amount\":120.0,\"currency\":\"EUR\"}|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
-      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
+      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|non_independent_corroboration; independence_group=spain_fee_mirror_cluster; source_tiers=government; authority_classes=primary_authority"
     ],
     "rejected_set": [],
     "contradiction_groups": [],

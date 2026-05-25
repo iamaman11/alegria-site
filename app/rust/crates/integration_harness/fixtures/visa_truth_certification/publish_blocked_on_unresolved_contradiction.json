@@ -35,8 +35,8 @@
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "processing_time|{\"days\":10}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government",
-      "processing_time|{\"days\":30}|contradictory_structured_candidates; source_tiers_evaluated_as_signals_only=government"
+      "processing_time|{\"days\":10}|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
+      "processing_time|{\"days\":30}|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
     ],
     "rejected_set": [],
     "contradiction_groups": [],

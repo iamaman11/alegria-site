@@ -1,20 +1,28 @@
 {
-  "fixture_id": "incomplete_fee_needs_hitl",
-  "description": "Missing currency on fee must not verify and should surface completeness/HITL requirements.",
+  "fixture_id": "single_authoritative_override",
+  "description": "A single eligible primary authority source may verify a fact through the explicit override branch.",
   "run_mode": "dry_run",
   "business_scope": {
     "truth_identity_tuple": "ES|tourist||BY",
     "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
   },
   "source_inputs": {
-    "query": "spain tourist visa fee incomplete",
+    "query": "spain tourist visa consular fee official authority override",
     "pages": [
       {
-        "route": "/official/incomplete-fee",
+        "route": "/official/authority-override-fee",
         "domain": "consulate.gov.example",
-        "title": "Official fee notice",
-        "description": "Fee notice",
-        "html_file": "incomplete_fee_needs_hitl_source.html"
+        "title": "Official consular fee",
+        "description": "Primary authority fee statement",
+        "html_file": "single_authoritative_override_fee.html",
+        "governance_override": {
+          "source_type": "government",
+          "authority_class": "primary_authority",
+          "independence_group_key": "consulate_primary_authority",
+          "trust_level": 5,
+          "freshness_ttl_days": 14,
+          "override_eligible": true
+        }
       }
     ],
     "support_bundle_seed": {
@@ -34,8 +42,9 @@
           {
             "role": "FEE_ITEM",
             "concept_canonical_key": "consular_fee",
-            "raw_mention": "Consular fee is payable on submission.",
+            "raw_mention": "Consular fee is 80 EUR.",
             "params": {
+              "amount": 80,
               "currency": "EUR"
             },
             "scope": {},
@@ -48,37 +57,35 @@
             "derivation_type": "direct",
             "is_numeric": true,
             "is_range": false,
-            "is_incomplete": true,
-            "confidence": 0.94,
+            "is_incomplete": false,
+            "confidence": 0.95,
             "evidence_section_id": 0,
-            "evidence_quote": "Consular fee is payable on submission.",
+            "evidence_quote": "Consular fee is 80 EUR.",
             "span_start": 0,
-            "span_end": 39,
-            "uncertainty_flags": [
-              "missing_amount"
-            ]
+            "span_end": 24,
+            "uncertainty_flags": []
           }
         ]
       }
     ],
     "editorial_response": {
       "sections": {
-        "overview": "Fee details require confirmation."
+        "overview": "A single primary authority source may be sufficient when explicit override policy is enabled."
       }
     }
   },
   "expected_outcomes": {
-    "verified_rule_set": [],
-    "needs_hitl_set": [
-      "processing_time|{\"days\":15}|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
+    "verified_rule_set": [
+      "fee_item|consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}"
     ],
+    "needs_hitl_set": [],
     "rejected_set": [],
     "contradiction_groups": [],
     "completeness_failures": [],
     "draft_verdict": "blocked",
     "publish_verdict": "not_attempted",
     "projection_verdict": "allow",
-    "rebuild_impact_emitted": false
+    "rebuild_impact_emitted": true
   },
   "invariants": {
     "no_truth_promotion_from_retrieval_or_graph": true,

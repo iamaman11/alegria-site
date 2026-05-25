@@ -117,7 +117,6 @@ mod tests {
     };
     use tokio::time::timeout;
     use uuid::Uuid;
-    use std::sync::OnceLock;
 
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
     struct SemanticPageNode {
@@ -176,6 +175,24 @@ mod tests {
         title: String,
         description: String,
         html_file: String,
+        #[serde(default)]
+        governance_override: Option<TruthCertificationSourceGovernanceOverride>,
+    }
+
+    #[derive(Debug, Clone, serde::Deserialize)]
+    struct TruthCertificationSourceGovernanceOverride {
+        #[serde(default)]
+        source_type: Option<String>,
+        #[serde(default)]
+        authority_class: Option<String>,
+        #[serde(default)]
+        independence_group_key: Option<String>,
+        #[serde(default)]
+        trust_level: Option<i64>,
+        #[serde(default)]
+        freshness_ttl_days: Option<i32>,
+        #[serde(default)]
+        override_eligible: Option<bool>,
     }
 
     #[derive(Debug, Clone, serde::Deserialize)]
@@ -254,11 +271,21 @@ mod tests {
         semantic_page_node_count: usize,
         semantic_page_draft_count: usize,
         semantic_page_draft_qa_verdicts: Vec<String>,
+        truth_adjudication_decisions: Vec<String>,
+        source_governance_snapshot: Vec<String>,
         required_factual_blocks_without_support: Vec<String>,
         pass: bool,
         failure_reasons: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         workflow_failure_diagnostics: Option<String>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct RenderedTruthCertificationPage {
+        fixture_id: String,
+        route: String,
+        url: String,
+        page: TruthCertificationSourcePage,
     }
 
     #[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
@@ -299,50 +326,64 @@ mod tests {
             .unwrap_or_else(|| workspace_root().join("target"))
     }
 
+    fn nested_worker_target_dir(bin_name: &str) -> PathBuf {
+        target_dir().join("integration-harness-nested").join(bin_name)
+    }
+
     fn build_temporal_worker_binary() -> PathBuf {
-        static BIN: OnceLock<PathBuf> = OnceLock::new();
-        BIN.get_or_init(|| {
-            let binary = target_dir()
-                .join("debug")
-                .join(format!("temporal_worker{}", env::consts::EXE_SUFFIX));
-            if binary.exists() {
-                return binary;
-            }
-            let workspace = workspace_root();
-            let status = Command::new("cargo")
-                .args(["build", "-p", "temporal_worker", "--bin", "temporal_worker"])
-                .current_dir(&workspace)
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()
-                .expect("build temporal_worker");
-            assert!(status.success(), "cargo build -p temporal_worker failed");
-            binary
-        })
-        .clone()
+        if let Some(path) = env::var_os("INTEGRATION_TEMPORAL_WORKER_BIN") {
+            return PathBuf::from(path);
+        }
+        let nested_target = nested_worker_target_dir("temporal_worker");
+        let binary = nested_target
+            .join("debug")
+            .join(format!("temporal_worker{}", env::consts::EXE_SUFFIX));
+        let workspace = workspace_root();
+        let status = Command::new("cargo")
+            .args([
+                "build",
+                "--target-dir",
+                nested_target.to_str().expect("nested temporal_worker target dir"),
+                "-p",
+                "temporal_worker",
+                "--bin",
+                "temporal_worker",
+            ])
+            .current_dir(&workspace)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .expect("build temporal_worker");
+        assert!(status.success(), "cargo build -p temporal_worker failed");
+        binary
     }
 
     fn build_outbox_worker_binary() -> PathBuf {
-        static BIN: OnceLock<PathBuf> = OnceLock::new();
-        BIN.get_or_init(|| {
-            let binary = target_dir()
-                .join("debug")
-                .join(format!("outbox_worker{}", env::consts::EXE_SUFFIX));
-            if binary.exists() {
-                return binary;
-            }
-            let workspace = workspace_root();
-            let status = Command::new("cargo")
-                .args(["build", "-p", "outbox_worker", "--bin", "outbox_worker"])
-                .current_dir(&workspace)
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .status()
-                .expect("build outbox_worker");
-            assert!(status.success(), "cargo build -p outbox_worker failed");
-            binary
-        })
-        .clone()
+        if let Some(path) = env::var_os("INTEGRATION_OUTBOX_WORKER_BIN") {
+            return PathBuf::from(path);
+        }
+        let nested_target = nested_worker_target_dir("outbox_worker");
+        let binary = nested_target
+            .join("debug")
+            .join(format!("outbox_worker{}", env::consts::EXE_SUFFIX));
+        let workspace = workspace_root();
+        let status = Command::new("cargo")
+            .args([
+                "build",
+                "--target-dir",
+                nested_target.to_str().expect("nested outbox_worker target dir"),
+                "-p",
+                "outbox_worker",
+                "--bin",
+                "outbox_worker",
+            ])
+            .current_dir(&workspace)
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .expect("build outbox_worker");
+        assert!(status.success(), "cargo build -p outbox_worker failed");
+        binary
     }
 
     fn spawn_temporal_worker(envs: &BTreeMap<String, String>) -> ChildGuard {
@@ -409,9 +450,11 @@ mod tests {
     ) -> (
         Vec<stub_servers::StubServerHandle>,
         Vec<(String, serde_json::Value)>,
+        Vec<RenderedTruthCertificationPage>,
     ) {
         let mut source_servers = Vec::new();
         let mut serp_sequence = Vec::new();
+        let mut rendered_pages = Vec::new();
         for fixture in fixtures {
             let mut items = Vec::new();
             for (idx, page) in fixture.source_inputs.pages.iter().enumerate() {
@@ -428,6 +471,12 @@ mod tests {
                         .unwrap();
                 let url = format!("{}{}", server.base_url, page.route);
                 source_servers.push(server);
+                rendered_pages.push(RenderedTruthCertificationPage {
+                    fixture_id: fixture.fixture_id.clone(),
+                    route: page.route.clone(),
+                    url: url.clone(),
+                    page: page.clone(),
+                });
                 items.push(serde_json::json!({
                     "type": "organic",
                     "rank_group": idx + 1,
@@ -449,7 +498,7 @@ mod tests {
                 }),
             ));
         }
-        (source_servers, serp_sequence)
+        (source_servers, serp_sequence, rendered_pages)
     }
 
     fn truth_certification_editorial_sequence(
@@ -564,6 +613,14 @@ mod tests {
             .execute(pool)
             .await
             .unwrap();
+        sqlx::query("TRUNCATE TABLE system.sync_outbox RESTART IDENTITY CASCADE")
+            .execute(pool)
+            .await
+            .unwrap();
+        sqlx::query("TRUNCATE TABLE kb.qdrant_points RESTART IDENTITY CASCADE")
+            .execute(pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM verified.rule_instances WHERE context_key = $1")
             .bind(context_key)
             .execute(pool)
@@ -615,6 +672,136 @@ mod tests {
                 &rule.evidence_quote,
             )
             .await;
+        }
+    }
+
+    async fn seed_truth_certification_source_governance(
+        pool: &sqlx::PgPool,
+        fixture: &TruthCertificationFixture,
+        rendered_pages: &[RenderedTruthCertificationPage],
+    ) {
+        for page in &fixture.source_inputs.pages {
+            let rendered = rendered_pages
+                .iter()
+                .find(|rendered| {
+                    rendered.fixture_id == fixture.fixture_id && rendered.route == page.route
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "missing rendered page for fixture {} route {}",
+                        fixture.fixture_id, page.route
+                    )
+                });
+            let domain = page.domain.to_ascii_lowercase();
+            let mut source_type = if domain.contains(".gov")
+                || domain.starts_with("gov.")
+                || domain.contains("mfa.")
+                || domain.contains("mid.")
+                || domain.contains("embassy")
+                || domain.contains("consulate")
+            {
+                "government".to_string()
+            } else if domain.contains("vfs") || domain.contains("vfsglobal") {
+                "vfs".to_string()
+            } else if domain.contains("agency") {
+                "niche_agency".to_string()
+            } else if domain.contains("forum")
+                || domain.contains("reddit.")
+                || domain.contains("quora.")
+                || domain.contains("stackexchange")
+            {
+                "forum".to_string()
+            } else if domain.contains("news")
+                || domain.contains("blog")
+                || domain.contains("media")
+                || domain.contains("magazine")
+                || domain.contains("medium.")
+            {
+                "editorial".to_string()
+            } else {
+                "low_trust".to_string()
+            };
+            let mut authority_class = match source_type.as_str() {
+                "government" => "primary_authority".to_string(),
+                "vfs" => "delegated_authority".to_string(),
+                "editorial" => "editorial".to_string(),
+                "niche_agency" => "agency".to_string(),
+                "forum" => "forum".to_string(),
+                _ => "unknown".to_string(),
+            };
+            let mut independence_group_key = page.domain.clone();
+            let mut trust_level = match source_type.as_str() {
+                "government" => 5,
+                "vfs" => 4,
+                "editorial" => 3,
+                "niche_agency" => 2,
+                _ => 1,
+            };
+            let mut freshness_ttl_days = match source_type.as_str() {
+                "government" | "vfs" => 14,
+                "editorial" | "niche_agency" => 7,
+                "forum" => 3,
+                _ => 1,
+            };
+            let mut override_eligible = false;
+            if let Some(governance) = page.governance_override.as_ref() {
+                if let Some(value) = governance.source_type.clone() {
+                    source_type = value;
+                }
+                if let Some(value) = governance.authority_class.clone() {
+                    authority_class = value;
+                }
+                if let Some(value) = governance.independence_group_key.clone() {
+                    independence_group_key = value;
+                }
+                if let Some(value) = governance.trust_level {
+                    trust_level = value;
+                }
+                if let Some(value) = governance.freshness_ttl_days {
+                    freshness_ttl_days = value;
+                }
+                if let Some(value) = governance.override_eligible {
+                    override_eligible = value;
+                }
+            }
+            let source_label = format!("fixture-source:{}", rendered.page.domain);
+            let base_url = rendered
+                .url
+                .split('/')
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("/");
+            sqlx::query(
+                r#"
+                INSERT INTO kb.sources
+                    (source_key, source_type, authority_class, independence_group_key, source_label, base_url, trust_level, freshness_ttl_days, override_eligible, status)
+                VALUES
+                    ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+                ON CONFLICT (source_key) DO UPDATE
+                SET source_type = EXCLUDED.source_type,
+                    authority_class = EXCLUDED.authority_class,
+                    independence_group_key = EXCLUDED.independence_group_key,
+                    source_label = EXCLUDED.source_label,
+                    base_url = EXCLUDED.base_url,
+                    trust_level = EXCLUDED.trust_level,
+                    freshness_ttl_days = EXCLUDED.freshness_ttl_days,
+                    override_eligible = EXCLUDED.override_eligible,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                "#,
+            )
+            .bind(&rendered.url)
+            .bind(source_type)
+            .bind(authority_class)
+            .bind(independence_group_key)
+            .bind(source_label)
+            .bind(base_url)
+            .bind(trust_level)
+            .bind(freshness_ttl_days)
+            .bind(override_eligible)
+            .execute(pool)
+            .await
+            .unwrap();
         }
     }
 
@@ -811,6 +998,8 @@ mod tests {
         let truth_adjudication = latest_output_payload_json(pool, run_id, "truth_adjudication").await;
         let mut needs_hitl_set = BTreeSet::new();
         let mut rejected_set = BTreeSet::new();
+        let mut truth_adjudication_decisions = BTreeSet::new();
+        let mut truth_adjudication_source_keys = BTreeSet::new();
         for payload in &truth_adjudication {
             for decision in payload
                 .get("decisions")
@@ -827,6 +1016,24 @@ mod tests {
                     .get("adjudication_reason")
                     .and_then(|value| value.as_str())
                     .unwrap_or_default();
+                let source_key = decision
+                    .get("source_key")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default();
+                if !source_key.trim().is_empty() {
+                    truth_adjudication_source_keys.insert(source_key.to_string());
+                }
+                truth_adjudication_decisions.insert(format!(
+                    "{}|{}|{}|{}|{}",
+                    concept,
+                    serde_json::to_string(&params).unwrap_or_else(|_| "{}".to_string()),
+                    source_key,
+                    decision
+                        .get("decision")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default(),
+                    reason
+                ));
                 match decision.get("decision").and_then(|value| value.as_str()) {
                     Some("needs_hitl") => {
                         needs_hitl_set.insert(stable_decision_key(concept, &params, reason));
@@ -870,6 +1077,42 @@ mod tests {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        let source_governance_snapshot = if truth_adjudication_source_keys.is_empty() {
+            Vec::new()
+        } else {
+            sqlx::query(
+                r#"
+                SELECT source_key, source_type, authority_class, independence_group_key,
+                       trust_level, freshness_ttl_days, override_eligible
+                FROM kb.sources
+                WHERE source_key = ANY($1)
+                ORDER BY source_key
+                "#,
+            )
+            .bind(
+                truth_adjudication_source_keys
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                format!(
+                    "{}|{}|{}|{}|{}|{}|{}",
+                    row.get::<String, _>("source_key"),
+                    row.get::<String, _>("source_type"),
+                    row.get::<String, _>("authority_class"),
+                    row.get::<String, _>("independence_group_key"),
+                    row.get::<i32, _>("trust_level"),
+                    row.get::<i32, _>("freshness_ttl_days"),
+                    row.get::<bool, _>("override_eligible"),
+                )
+            })
+            .collect::<Vec<_>>()
+        };
 
         let completeness = latest_output_payload_json(pool, run_id, "completeness_judge").await;
         let completeness_failures = completeness
@@ -917,13 +1160,6 @@ mod tests {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let draft_verdict = if draft_qas.is_empty() {
-            "blocked".to_string()
-        } else if draft_qas.iter().any(|output| output.verdict == "publish_ready") {
-            "allow".to_string()
-        } else {
-            "blocked".to_string()
-        };
 
         let cms_approved =
             latest_proto_outputs::<CmsPublishOutputPayload>(pool, run_id, "cms_publish_approved")
@@ -1018,6 +1254,19 @@ mod tests {
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
+        let draft_verdict = if draft_qas.is_empty()
+            || !draft_blocking_reasons.is_empty()
+            || !required_factual_blocks_without_support.is_empty()
+            || semantic_page_draft_qa_verdicts
+                .iter()
+                .any(|verdict| verdict != "publish_ready")
+        {
+            "blocked".to_string()
+        } else if draft_qas.iter().all(|output| output.verdict == "publish_ready") {
+            "allow".to_string()
+        } else {
+            "blocked".to_string()
+        };
 
         let mut failure_reasons = Vec::new();
         if verified_rule_set != fixture.expected_outcomes.verified_rule_set {
@@ -1069,6 +1318,8 @@ mod tests {
             semantic_page_node_count: semantic_snapshot.page_nodes.len(),
             semantic_page_draft_count: semantic_snapshot.page_drafts.len(),
             semantic_page_draft_qa_verdicts,
+            truth_adjudication_decisions: truth_adjudication_decisions.into_iter().collect(),
+            source_governance_snapshot,
             required_factual_blocks_without_support,
             pass: failure_reasons.is_empty(),
             failure_reasons,
@@ -2140,7 +2391,8 @@ mod tests {
             "expected at least one certification fixture"
         );
 
-        let (source_servers, serp_sequence) = render_fixture_source_pages(&fixtures).await;
+        let (source_servers, serp_sequence, rendered_pages) =
+            render_fixture_source_pages(&fixtures).await;
         assert_eq!(source_servers.len(), fixtures.iter().map(|fixture| fixture.source_inputs.pages.len()).sum::<usize>());
         let serp_stub = stub_servers::spawn_json_sequence_stub(
             "/v3/serp/google/organic/live/advanced",
@@ -2175,17 +2427,11 @@ mod tests {
             &format!("{}/v1/chat/completions", editorial_stub.base_url),
         ));
         let mut worker = spawn_temporal_worker(&worker_env);
-        let mut outbox_worker = spawn_outbox_worker(&worker_env);
         tokio::time::sleep(Duration::from_secs(3)).await;
         assert!(
             worker.child.try_wait().unwrap().is_none(),
             "temporal_worker exited before certification workflow start"
         );
-        assert!(
-            outbox_worker.child.try_wait().unwrap().is_none(),
-            "outbox_worker exited before certification workflow start"
-        );
-
         let client = connect_client(
             &temporal.temporal_url,
             format!("truth-cert-client-{}", Uuid::new_v4()),
@@ -2233,12 +2479,24 @@ mod tests {
                 .scope_signature
                 .clone();
             reset_truth_certification_state(&infra.postgres.pool, &site_input.context_key).await;
+            seed_truth_certification_source_governance(
+                &infra.postgres.pool,
+                fixture,
+                &rendered_pages,
+            )
+            .await;
             seed_truth_certification_support_bundle(
                 &infra.postgres.pool,
                 &site_input.context_key,
                 fixture,
             )
             .await;
+            let mut outbox_worker = spawn_outbox_worker(&worker_env);
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            assert!(
+                outbox_worker.child.try_wait().unwrap().is_none(),
+                "outbox_worker exited before certification workflow start"
+            );
 
             let approval_task = if fixture.run_mode == "full_auto_after_approval" {
                 Some(tokio::spawn(insert_preapproved_decisions_when_ready(
@@ -2310,6 +2568,7 @@ mod tests {
                 };
                 fs::write(&report_path, serde_json::to_vec_pretty(&partial).unwrap()).unwrap();
             }
+            drop(outbox_worker);
         }
 
         let suite_report = TruthCertificationSuiteReport {

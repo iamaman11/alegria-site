@@ -850,13 +850,28 @@ pub async fn ensure_source(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
          ON CONFLICT (source_key) DO UPDATE
          SET source_type = EXCLUDED.source_type,
-             authority_class = EXCLUDED.authority_class,
-             independence_group_key = EXCLUDED.independence_group_key,
+             authority_class = CASE
+                 WHEN kb.sources.authority_class IS NULL
+                      OR kb.sources.authority_class = ''
+                      OR kb.sources.authority_class = 'unknown'
+                 THEN EXCLUDED.authority_class
+                 ELSE kb.sources.authority_class
+             END,
+             independence_group_key = CASE
+                 WHEN kb.sources.independence_group_key IS NULL
+                      OR kb.sources.independence_group_key = ''
+                 THEN EXCLUDED.independence_group_key
+                 ELSE kb.sources.independence_group_key
+             END,
              source_label = EXCLUDED.source_label,
              base_url = EXCLUDED.base_url,
-             trust_level = EXCLUDED.trust_level,
-             freshness_ttl_days = EXCLUDED.freshness_ttl_days,
-             override_eligible = EXCLUDED.override_eligible,
+             trust_level = GREATEST(kb.sources.trust_level, EXCLUDED.trust_level),
+             freshness_ttl_days = CASE
+                 WHEN kb.sources.freshness_ttl_days IS NULL OR kb.sources.freshness_ttl_days <= 0
+                 THEN EXCLUDED.freshness_ttl_days
+                 ELSE kb.sources.freshness_ttl_days
+             END,
+             override_eligible = kb.sources.override_eligible OR EXCLUDED.override_eligible,
              status = 'active',
              updated_at = now()",
     )

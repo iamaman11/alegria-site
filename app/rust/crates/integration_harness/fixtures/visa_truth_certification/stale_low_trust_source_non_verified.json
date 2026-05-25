@@ -28,7 +28,7 @@
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers_evaluated_as_signals_only=editorial"
+      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers=editorial; authority_classes=editorial"
     ],
     "rejected_set": [],
     "contradiction_groups": [],
