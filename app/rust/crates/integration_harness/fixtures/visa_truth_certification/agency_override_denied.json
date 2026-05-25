@@ -1,0 +1,95 @@
+{
+  "fixture_id": "agency_override_denied",
+  "description": "A non-authoritative agency source cannot promote truth even when override eligibility is set.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain tourist visa agency override fee",
+    "pages": [
+      {
+        "route": "/agency/override-fee",
+        "domain": "visa-agency.example",
+        "title": "Agency fee summary",
+        "description": "Agency tries to act authoritative",
+        "html_file": "agency_override_denied.html",
+        "governance_override": {
+          "source_type": "niche_agency",
+          "authority_class": "agency",
+          "independence_group_key": "visa_agency_override_case",
+          "trust_level": 2,
+          "freshness_ttl_days": 7,
+          "override_eligible": true
+        }
+      }
+    ],
+    "support_bundle_seed": {
+      "concepts": [
+        {
+          "concept_key": "consular_fee",
+          "concept_type": "fee",
+          "label_ru": "Консульский сбор"
+        }
+      ]
+    }
+  },
+  "model_stub_inputs": {
+    "extraction_responses": [
+      {
+        "candidates": [
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Agency says the fee is 80 EUR.",
+            "params": {
+              "amount": 80,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.9,
+            "evidence_section_id": 0,
+            "evidence_quote": "Agency says the fee is 80 EUR.",
+            "span_start": 0,
+            "span_end": 30,
+            "uncertainty_flags": []
+          }
+        ]
+      }
+    ],
+    "editorial_response": {
+      "sections": {
+        "overview": "Override flags do not turn agency pages into authority."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|override_not_allowed_for_authority_class; authority_class=agency"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}

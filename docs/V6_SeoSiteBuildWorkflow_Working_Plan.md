@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.32`
+**Current version:** `6.33`
 
 ---
 
@@ -1290,7 +1290,7 @@ Mandatory consequences:
 Current accepted state:
 
 - `Phase A / Knowledge Certification` is now accepted locally with baseline artifact at [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
-- the accepted baseline now covers 13 fixtures, including explicit governance-proof cases for non-independent mirror corroboration and single authoritative override;
+- the accepted baseline now covers 15 fixtures, including explicit governance-proof cases for non-independent mirror corroboration, weak-source corroboration rejection, single authoritative override, and override denial for non-authoritative source classes;
 - `automation/run_truth_certification_gate.sh` is the canonical local/CI certification wrapper;
 - the canonical wrapper now runs the suite in an isolated Cargo target dir so certification proof does not depend on contaminated shared test artifacts;
 - `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.33
+
+- expanded the accepted truth-certification baseline from 13 to 15 fixtures by adding full-flow governance proofs for weak-source corroboration rejection and override denial on non-authoritative source classes;
+- kept the full suite green under the stronger governance proof pack and refreshed the immutable baseline artifact accordingly;
+- clarified that the newly accepted fixture growth strengthens trust/override coverage, while freshness-specific full-flow proof remains a separate follow-up if runtime semantics are tightened further.
 
 ### 6.32
 
