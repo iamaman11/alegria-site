@@ -116,7 +116,7 @@ Current rollout-safe promotion rule:
 Current certification state:
 
 - local/CI truth certification is accepted against [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
-- the accepted baseline currently contains 15 fixtures, including explicit proof cases for mirror non-independence, weak-source corroboration rejection, single-source authority override, and override denial for non-authoritative sources;
+- the accepted baseline currently contains 16 fixtures, including explicit proof cases for mirror non-independence, weak-source corroboration rejection, single-source authority override, override denial for non-authoritative sources, and stale primary-authority override blocking;
 - certification remains evidence-only and never writes authority truth;
 - `automation/run_truth_certification_gate.sh` is the canonical certification runner and diff gate against the accepted baseline, and it uses an isolated Cargo target dir for the suite itself so shared build-cache corruption cannot silently weaken proof execution;
 - truth-governance changes and regex-authority changes must stay behind that regression gate.

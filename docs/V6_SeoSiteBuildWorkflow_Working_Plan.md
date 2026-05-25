@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.33`
+**Current version:** `6.34`
 
 ---
 
@@ -1290,7 +1290,7 @@ Mandatory consequences:
 Current accepted state:
 
 - `Phase A / Knowledge Certification` is now accepted locally with baseline artifact at [docs/runs/truth_certification_local_ci_baseline.json](/home/bose/projects/alegria-site/docs/runs/truth_certification_local_ci_baseline.json);
-- the accepted baseline now covers 15 fixtures, including explicit governance-proof cases for non-independent mirror corroboration, weak-source corroboration rejection, single authoritative override, and override denial for non-authoritative source classes;
+- the accepted baseline now covers 16 fixtures, including explicit governance-proof cases for non-independent mirror corroboration, weak-source corroboration rejection, single authoritative override, override denial for non-authoritative source classes, and stale primary-authority override blocking;
 - `automation/run_truth_certification_gate.sh` is the canonical local/CI certification wrapper;
 - the canonical wrapper now runs the suite in an isolated Cargo target dir so certification proof does not depend on contaminated shared test artifacts;
 - `automation/check_truth_certification_regression.py` is the canonical truth-diff gate against that accepted baseline;
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.34
+
+- expanded the accepted truth-certification baseline from 15 to 16 fixtures by adding a full-flow freshness proof for stale primary-authority override blocking;
+- fixed the cutover candidate-validation and adjudication path so stale deterministic procedural candidates keep freshness-derived `needs_hitl` semantics instead of being silently promoted or downgraded to generic rejection;
+- refreshed the immutable baseline artifact and kept the full certification suite green against the stronger freshness proof pack.
 
 ### 6.33
 

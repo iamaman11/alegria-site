@@ -1374,6 +1374,61 @@ fn classify_candidate_completeness_local(
     }
 }
 
+fn section_uncertainty_flags(raw_text: &str) -> Vec<String> {
+    let lowered = raw_text.to_lowercase();
+    let mut flags = Vec::new();
+    if [
+        "archived",
+        "archive",
+        "outdated",
+        "obsolete",
+        "retained for record-keeping",
+        "retained for record keeping",
+        "устар",
+        "архив",
+        "может быть устар",
+    ]
+    .iter()
+    .any(|marker| lowered.contains(marker))
+    {
+        flags.push("stale_source".to_string());
+    }
+    flags
+}
+
+fn classify_candidate_freshness_local(uncertainty_flags: &[String]) -> String {
+    if uncertainty_flags.iter().any(|flag| {
+        flag == "stale_source" || flag == "validator:freshness_or_temporality_ambiguous"
+    }) {
+        "stale".to_string()
+    } else if uncertainty_flags
+        .iter()
+        .any(|flag| flag == "freshness_ambiguous" || flag == "temporal_ambiguous")
+    {
+        "watch".to_string()
+    } else {
+        "fresh".to_string()
+    }
+}
+
+fn non_structured_candidate_reason(candidate: &ValidatedTruthCandidateRecord) -> String {
+    if candidate.freshness_class != "fresh" {
+        format!(
+            "freshness_block; freshness_class={}",
+            candidate.freshness_class
+        )
+    } else if candidate.completeness_class == "incomplete" {
+        format!(
+            "completeness_block; completeness_class={}",
+            candidate.completeness_class
+        )
+    } else if candidate.epistemic_status == "needs_hitl" {
+        "candidate_validation_requires_hitl".to_string()
+    } else {
+        "non_structured_input".to_string()
+    }
+}
+
 fn semantic_rule_instance_id_local(context_key: &str, role: &str, concept_canonical_key: &str) -> String {
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
@@ -2569,6 +2624,7 @@ pub(crate) async fn candidate_validation_impl(
             };
             let (span_start, span_end, evidence_quote) =
                 find_evidence_span(&raw.content_md, &evidence_targets);
+            let uncertainty_flags = section_uncertainty_flags(&raw.content_md);
             let runtime = TruthCandidateRuntime {
                 rule_candidate_id: blake3_hex(
                     format!(
@@ -2600,7 +2656,7 @@ pub(crate) async fn candidate_validation_impl(
                 is_numeric: !rule.numeric_tokens.is_empty(),
                 is_range: false,
                 is_incomplete: false,
-                uncertainty_flags: Vec::new(),
+                uncertainty_flags: uncertainty_flags.clone(),
             };
             let validation = validate_truth_candidate(&runtime, &raw.content_md);
             let mut epistemic_status = validation.epistemic_status.clone();
@@ -2625,7 +2681,7 @@ pub(crate) async fn candidate_validation_impl(
                 span_start: runtime.span_start,
                 span_end: runtime.span_end,
                 source_snapshot_hash: runtime.source_snapshot_hash,
-                freshness_class: "fresh".to_string(),
+                freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
                 completeness_class: classify_candidate_completeness_local(&validation),
                 epistemic_status,
                 issues: validation
@@ -3032,6 +3088,55 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     status: "blocked".to_string(),
                     verified_count: 0,
                     needs_hitl_count: 0,
+                    rejected_count: 0,
+                },
+            );
+            continue;
+        }
+
+        let structured_count = section
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.epistemic_status == "structured")
+            .count();
+        let needs_hitl_candidates = section
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.epistemic_status == "needs_hitl")
+            .collect::<Vec<_>>();
+        if structured_count == 0 && !needs_hitl_candidates.is_empty() {
+            for candidate in &needs_hitl_candidates {
+                decisions.push(TruthAdjudicationCandidateDecision {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    rule_candidate_id: candidate.rule_candidate_id.clone(),
+                    role: candidate.role.clone(),
+                    concept_canonical_key: candidate.concept_canonical_key.clone(),
+                    params: candidate.params.clone(),
+                    source_key: candidate.source_key.clone(),
+                    source_tier: candidate.source_tier.clone(),
+                    confidence: candidate.confidence,
+                    freshness_class: candidate.freshness_class.clone(),
+                    completeness_class: candidate.completeness_class.clone(),
+                    evidence_quote: candidate.evidence_quote.clone(),
+                    span_start: candidate.span_start,
+                    span_end: candidate.span_end,
+                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                    decision: "needs_hitl".to_string(),
+                    publish_admissibility: "needs_hitl".to_string(),
+                    verification_method: "truth_adjudication@1".to_string(),
+                    adjudication_reason: non_structured_candidate_reason(candidate),
+                });
+            }
+            fixed_states.insert(
+                section.section_id,
+                TruthAdjudicationSectionState {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    decision: "needs_hitl".to_string(),
+                    status: "needs_hitl".to_string(),
+                    verified_count: 0,
+                    needs_hitl_count: needs_hitl_candidates.len(),
                     rejected_count: 0,
                 },
             );

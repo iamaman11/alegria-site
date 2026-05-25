@@ -1,10 +1,10 @@
 {
   "workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
-  "fixture_count": 15,
+  "fixture_count": 16,
   "fixtures": [
     {
       "fixture_id": "agency_override_denied",
-      "run_id": "5f6eae6b-ca3b-4211-8b7e-2f9487cd8bfd",
+      "run_id": "0c0d4617-5d41-4cd7-8fce-d94fe0cb2323",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -36,10 +36,10 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:40713/agency/override-fee|needs_hitl|override_not_allowed_for_authority_class; authority_class=agency"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:42403/agency/override-fee|needs_hitl|override_not_allowed_for_authority_class; authority_class=agency"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:40713/agency/override-fee|niche_agency|agency|visa_agency_override_case|2|7|true"
+        "http://127.0.0.1:42403/agency/override-fee|niche_agency|agency|visa_agency_override_case|2|7|true"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -48,12 +48,12 @@
     },
     {
       "fixture_id": "ambiguous_canonical_mapping",
-      "run_id": "d865a10c-bb31-4b9b-b7d1-8b8b013b1157",
+      "run_id": "37c1437e-808d-4b61-aa6c-4fadfbd22817",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
       "needs_hitl_set": [
-        "processing_time|{\"days\":15}|resolution_loop_requires_hitl"
+        "processing_time|{\"days\":15}|candidate_validation_requires_hitl"
       ],
       "rejected_set": [],
       "contradiction_groups": [],
@@ -80,10 +80,10 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "processing_time|{\"days\":15}|http://127.0.0.1:45901/official/ambiguous-mapping|needs_hitl|resolution_loop_requires_hitl"
+        "processing_time|{\"days\":15}|http://127.0.0.1:39677/official/ambiguous-mapping|needs_hitl|candidate_validation_requires_hitl"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:45901/official/ambiguous-mapping|government|primary_authority|mfa.gov.example|5|14|false"
+        "http://127.0.0.1:39677/official/ambiguous-mapping|government|primary_authority|mfa.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -92,7 +92,7 @@
     },
     {
       "fixture_id": "competitor_claim_non_verified",
-      "run_id": "ad4a4a9d-2ac5-4185-a0c9-907923b91a56",
+      "run_id": "17e323d9-4452-4703-97e0-5cbec7b3cf4c",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -124,10 +124,10 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|http://127.0.0.1:45103/agency/service-fee|needs_hitl|single_source_requires_corroboration; source_tiers=low_trust; authority_classes=agency"
+        "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|http://127.0.0.1:36353/agency/service-fee|needs_hitl|single_source_requires_corroboration; source_tiers=low_trust; authority_classes=agency"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:45103/agency/service-fee|niche_agency|agency|visa-agency.example|2|7|false"
+        "http://127.0.0.1:36353/agency/service-fee|niche_agency|agency|visa-agency.example|2|7|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -136,7 +136,7 @@
     },
     {
       "fixture_id": "conflicting_structured_candidates",
-      "run_id": "d327b6e0-3133-468a-9656-42dc90e43425",
+      "run_id": "0e0ac2bc-2054-4970-b43e-79fc4c220f55",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -169,12 +169,12 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":120.0,\"currency\":\"EUR\"}|http://127.0.0.1:41203/official/conflict-fee-b|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:40529/official/conflict-fee-a|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
+        "consular_fee|{\"amount\":120.0,\"currency\":\"EUR\"}|http://127.0.0.1:41581/official/conflict-fee-b|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:38573/official/conflict-fee-a|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:40529/official/conflict-fee-a|government|primary_authority|mfa.gov.example|5|14|false",
-        "http://127.0.0.1:41203/official/conflict-fee-b|government|primary_authority|embassy.gov.example|5|14|false"
+        "http://127.0.0.1:38573/official/conflict-fee-a|government|primary_authority|mfa.gov.example|5|14|false",
+        "http://127.0.0.1:41581/official/conflict-fee-b|government|primary_authority|embassy.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -183,7 +183,7 @@
     },
     {
       "fixture_id": "draft_blocked_when_no_admissible_truth",
-      "run_id": "9f77a608-94b1-4fb7-91b5-3077427d70e2",
+      "run_id": "a03cf062-3a37-4708-b209-eca51e047085",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -219,7 +219,7 @@
     },
     {
       "fixture_id": "happy_path_publish_allowed",
-      "run_id": "642b3bad-dfbd-4e83-ad84-616dbe0460e2",
+      "run_id": "a2734257-f0d3-479b-b8c2-cbc258defb7e",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [
@@ -266,16 +266,16 @@
         "publish_ready"
       ],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:33571/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:45567/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:33571/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:45567/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "processing_time|{\"days\":15}|http://127.0.0.1:33571/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "processing_time|{\"days\":15}|http://127.0.0.1:45567/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:37171/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:46039/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:37171/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:46039/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "processing_time|{\"days\":15}|http://127.0.0.1:37171/official/happy-path-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "processing_time|{\"days\":15}|http://127.0.0.1:46039/official/happy-path|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:33571/official/happy-path|government|primary_authority|mfa.gov.example|5|14|false",
-        "http://127.0.0.1:45567/official/happy-path-b|government|primary_authority|consulate.gov.example|5|14|false"
+        "http://127.0.0.1:37171/official/happy-path-b|government|primary_authority|consulate.gov.example|5|14|false",
+        "http://127.0.0.1:46039/official/happy-path|government|primary_authority|mfa.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -283,7 +283,7 @@
     },
     {
       "fixture_id": "incomplete_fee_needs_hitl",
-      "run_id": "777238c3-1ec1-4c96-afb3-01844be8be1a",
+      "run_id": "04050294-9c4f-40a2-a1c8-a31a3fec8919",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -315,10 +315,10 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "processing_time|{\"days\":15}|http://127.0.0.1:34423/official/incomplete-fee|needs_hitl|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
+        "processing_time|{\"days\":15}|http://127.0.0.1:44553/official/incomplete-fee|needs_hitl|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:34423/official/incomplete-fee|government|primary_authority|consulate.gov.example|5|14|false"
+        "http://127.0.0.1:44553/official/incomplete-fee|government|primary_authority|consulate.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -327,7 +327,7 @@
     },
     {
       "fixture_id": "non_independent_mirror_corroboration",
-      "run_id": "35bf2d3a-0b1e-41f3-9082-4da3bfedb6bf",
+      "run_id": "5a323a00-f4ee-47ac-94c3-cdeb720b0496",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -359,12 +359,12 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:36863/official/mirror-fee-b|needs_hitl|non_independent_corroboration; independence_group=spain_fee_mirror_cluster; source_tiers=government; authority_classes=primary_authority",
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:44305/official/mirror-fee-a|needs_hitl|non_independent_corroboration; independence_group=spain_fee_mirror_cluster; source_tiers=government; authority_classes=primary_authority"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:33747/official/mirror-fee-b|needs_hitl|non_independent_corroboration; independence_group=spain_fee_mirror_cluster; source_tiers=government; authority_classes=primary_authority",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:43885/official/mirror-fee-a|needs_hitl|non_independent_corroboration; independence_group=spain_fee_mirror_cluster; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:36863/official/mirror-fee-b|government|primary_authority|spain_fee_mirror_cluster|5|14|false",
-        "http://127.0.0.1:44305/official/mirror-fee-a|government|primary_authority|spain_fee_mirror_cluster|5|14|false"
+        "http://127.0.0.1:33747/official/mirror-fee-b|government|primary_authority|spain_fee_mirror_cluster|5|14|false",
+        "http://127.0.0.1:43885/official/mirror-fee-a|government|primary_authority|spain_fee_mirror_cluster|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -373,7 +373,7 @@
     },
     {
       "fixture_id": "procedural_vs_operational_split",
-      "run_id": "e05728e8-e25d-4836-817a-a6dbf193c2b7",
+      "run_id": "0742ccc0-ed33-4ce9-811b-35ed8c92a5fd",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -405,10 +405,10 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:36895/official/procedural-operational-split|needs_hitl|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:41579/official/procedural-operational-split|needs_hitl|single_source_requires_corroboration; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:36895/official/procedural-operational-split|government|primary_authority|embassy.gov.example|5|14|false"
+        "http://127.0.0.1:41579/official/procedural-operational-split|government|primary_authority|embassy.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -417,7 +417,7 @@
     },
     {
       "fixture_id": "projection_allowed_after_admissibility",
-      "run_id": "54ab9291-6948-49f2-b70d-d36c0885434f",
+      "run_id": "0878630a-4f76-4a35-9adc-50856c9a5143",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [
@@ -463,14 +463,14 @@
         "publish_ready"
       ],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:34059/official/projection-happy-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:41877/official/projection-happy|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:34059/official/projection-happy-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:41877/official/projection-happy|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:43003/official/projection-happy|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:46115/official/projection-happy-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:43003/official/projection-happy|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:46115/official/projection-happy-b|verified|independent_corroboration; independence_groups=consulate.gov.example,mfa.gov.example; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:34059/official/projection-happy-b|government|primary_authority|consulate.gov.example|5|14|false",
-        "http://127.0.0.1:41877/official/projection-happy|government|primary_authority|mfa.gov.example|5|14|false"
+        "http://127.0.0.1:43003/official/projection-happy|government|primary_authority|mfa.gov.example|5|14|false",
+        "http://127.0.0.1:46115/official/projection-happy-b|government|primary_authority|consulate.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -478,7 +478,7 @@
     },
     {
       "fixture_id": "publish_blocked_on_unresolved_contradiction",
-      "run_id": "a8732db6-127a-40c5-b55e-467c4b5ecaac",
+      "run_id": "5d899a04-07ca-4b11-bccb-25e885c7cafa",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -511,12 +511,12 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "processing_time|{\"days\":10}|http://127.0.0.1:39853/official/timeline-a|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
-        "processing_time|{\"days\":30}|http://127.0.0.1:37877/official/timeline-b|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
+        "processing_time|{\"days\":10}|http://127.0.0.1:41405/official/timeline-a|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority",
+        "processing_time|{\"days\":30}|http://127.0.0.1:43069/official/timeline-b|needs_hitl|contradictory_structured_candidates; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:37877/official/timeline-b|government|primary_authority|embassy.gov.example|5|14|false",
-        "http://127.0.0.1:39853/official/timeline-a|government|primary_authority|mfa.gov.example|5|14|false"
+        "http://127.0.0.1:41405/official/timeline-a|government|primary_authority|mfa.gov.example|5|14|false",
+        "http://127.0.0.1:43069/official/timeline-b|government|primary_authority|embassy.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -525,7 +525,7 @@
     },
     {
       "fixture_id": "rebuild_impact_emitted",
-      "run_id": "a6db2ee7-5b62-4f77-a524-4d1a2a6c2ca9",
+      "run_id": "0336ca7f-53c6-4a88-bfb0-5b7b07e67c49",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [
@@ -572,16 +572,16 @@
         "publish_ready"
       ],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":90.0,\"currency\":\"EUR\"}|http://127.0.0.1:34505/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "consular_fee|{\"amount\":90.0,\"currency\":\"EUR\"}|http://127.0.0.1:42767/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:34505/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:42767/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "processing_time|{\"days\":20}|http://127.0.0.1:34505/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
-        "processing_time|{\"days\":20}|http://127.0.0.1:42767/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority"
+        "consular_fee|{\"amount\":90.0,\"currency\":\"EUR\"}|http://127.0.0.1:39327/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "consular_fee|{\"amount\":90.0,\"currency\":\"EUR\"}|http://127.0.0.1:44385/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:39327/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "passport|{\"severity\":\"mandatory\",\"subtype\":\"passport\"}|http://127.0.0.1:44385/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "processing_time|{\"days\":20}|http://127.0.0.1:39327/official/rebuild-impact|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority",
+        "processing_time|{\"days\":20}|http://127.0.0.1:44385/official/rebuild-impact-b|verified|independent_corroboration; independence_groups=consulate.gov.example,embassy.gov.example; source_tiers=government; authority_classes=primary_authority"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:34505/official/rebuild-impact-b|government|primary_authority|consulate.gov.example|5|14|false",
-        "http://127.0.0.1:42767/official/rebuild-impact|government|primary_authority|embassy.gov.example|5|14|false"
+        "http://127.0.0.1:39327/official/rebuild-impact|government|primary_authority|embassy.gov.example|5|14|false",
+        "http://127.0.0.1:44385/official/rebuild-impact-b|government|primary_authority|consulate.gov.example|5|14|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -589,7 +589,7 @@
     },
     {
       "fixture_id": "single_authoritative_override",
-      "run_id": "45e367b4-1ef4-4d82-a9ea-bc8ecbdb9d1b",
+      "run_id": "f2fbfb61-05f1-44bb-abd6-be22379aca04",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [
@@ -632,10 +632,10 @@
         "qa_failed"
       ],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:35517/official/authority-override-fee|verified|single_authoritative_source_override; authority_class=primary_authority; freshness_ttl_days=14"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:42541/official/authority-override-fee|verified|single_authoritative_source_override; authority_class=primary_authority; freshness_ttl_days=14"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:35517/official/authority-override-fee|government|primary_authority|consulate_primary_authority|5|14|true"
+        "http://127.0.0.1:42541/official/authority-override-fee|government|primary_authority|consulate_primary_authority|5|14|true"
       ],
       "required_factual_blocks_without_support": [
         "documents",
@@ -649,7 +649,7 @@
     },
     {
       "fixture_id": "stale_low_trust_source_non_verified",
-      "run_id": "76fcaeb0-eb34-43d0-9490-5bd29c593465",
+      "run_id": "06485900-91f6-4462-9006-9f66645963d5",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -681,10 +681,54 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:34001/blog/low-trust-fee|needs_hitl|single_source_requires_corroboration; source_tiers=editorial; authority_classes=editorial"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:37799/blog/low-trust-fee|needs_hitl|single_source_requires_corroboration; source_tiers=editorial; authority_classes=editorial"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:34001/blog/low-trust-fee|editorial|editorial|travelblog.example|3|7|false"
+        "http://127.0.0.1:37799/blog/low-trust-fee|editorial|editorial|travelblog.example|3|7|false"
+      ],
+      "required_factual_blocks_without_support": [],
+      "pass": true,
+      "failure_reasons": [],
+      "workflow_failure_diagnostics": "truth_admissibility_gate:failed:validation_failure:validation failure: truth_admissibility_gate failed: admissible verified support is empty for context_key `ES|tourist||BY` and applicant_profile `standard`\nprojection_barrier(global_site_reconcile):done::\nglobal_site_reconcile:done::\nlink_recommend:done::\nia_build:done::\nopportunity_build:done::\nserp_normalize:done::\nprojection_barrier(semantic_projection):done::\nvoyage_qdrant_sync:done::\nneo4j_sync:done::\nretrieval_admissibility_gate:done::\ngraph_admissibility_gate:done::"
+    },
+    {
+      "fixture_id": "stale_primary_authority_override_blocked",
+      "run_id": "f725a110-045f-451d-85f7-cf0fe4850be9",
+      "context_key": "ES|tourist||BY",
+      "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
+      "verified_rule_set": [],
+      "needs_hitl_set": [
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|freshness_block; freshness_class=stale"
+      ],
+      "rejected_set": [],
+      "contradiction_groups": [],
+      "completeness_failures": [],
+      "draft_verdict": "blocked",
+      "draft_blocking_reasons": [],
+      "publish_verdict": "not_attempted",
+      "projection_verdict": "allow",
+      "changed_truth_keys": [
+        "verified.rule_instance:d3e3ae23f0afe0cbad147747bbacf19e846ecaf1037057b7301f4c8ae701f7a0"
+      ],
+      "rebuild_impact_emitted": false,
+      "rebuild_impacted_page_count": 0,
+      "temporal_step_multiset": {
+        "crawl_sources": 1,
+        "global_site_reconcile": 1,
+        "ia_build": 1,
+        "link_recommend": 1,
+        "opportunity_build": 1,
+        "serp_ingest": 1,
+        "serp_normalize": 1
+      },
+      "semantic_page_node_count": 3,
+      "semantic_page_draft_count": 0,
+      "semantic_page_draft_qa_verdicts": [],
+      "truth_adjudication_decisions": [
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:41243/official/stale-fee-notice|needs_hitl|freshness_block; freshness_class=stale"
+      ],
+      "source_governance_snapshot": [
+        "http://127.0.0.1:41243/official/stale-fee-notice|government|primary_authority|mfa_primary_authority|5|14|true"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,
@@ -693,7 +737,7 @@
     },
     {
       "fixture_id": "weak_source_corroboration_non_verified",
-      "run_id": "57845479-ba2b-4138-9b67-d889d8b2105c",
+      "run_id": "fca38451-c56f-45e3-9b16-88b1ebeb143c",
       "context_key": "ES|tourist||BY",
       "scope_signature": "91b014bff9906414e71da715a03b305390fd633600e564493515cc2ae071b6a7",
       "verified_rule_set": [],
@@ -725,12 +769,12 @@
       "semantic_page_draft_count": 0,
       "semantic_page_draft_qa_verdicts": [],
       "truth_adjudication_decisions": [
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:44833/agency/fee-b|needs_hitl|weak_source_corroboration; independence_groups=visa-agency-a.example,visa-agency-b.example; source_tiers=low_trust; authority_classes=agency",
-        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:45917/agency/fee-a|needs_hitl|weak_source_corroboration; independence_groups=visa-agency-a.example,visa-agency-b.example; source_tiers=low_trust; authority_classes=agency"
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:35395/agency/fee-a|needs_hitl|weak_source_corroboration; independence_groups=visa-agency-a.example,visa-agency-b.example; source_tiers=low_trust; authority_classes=agency",
+        "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|http://127.0.0.1:44579/agency/fee-b|needs_hitl|weak_source_corroboration; independence_groups=visa-agency-a.example,visa-agency-b.example; source_tiers=low_trust; authority_classes=agency"
       ],
       "source_governance_snapshot": [
-        "http://127.0.0.1:44833/agency/fee-b|niche_agency|agency|visa-agency-b.example|2|7|false",
-        "http://127.0.0.1:45917/agency/fee-a|niche_agency|agency|visa-agency-a.example|2|7|false"
+        "http://127.0.0.1:35395/agency/fee-a|niche_agency|agency|visa-agency-a.example|2|7|false",
+        "http://127.0.0.1:44579/agency/fee-b|niche_agency|agency|visa-agency-b.example|2|7|false"
       ],
       "required_factual_blocks_without_support": [],
       "pass": true,

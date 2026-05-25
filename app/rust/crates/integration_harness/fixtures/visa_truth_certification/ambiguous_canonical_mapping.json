@@ -28,7 +28,7 @@
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "processing_time|{\"days\":15}|resolution_loop_requires_hitl"
+      "processing_time|{\"days\":15}|candidate_validation_requires_hitl"
     ],
     "rejected_set": [],
     "contradiction_groups": [],

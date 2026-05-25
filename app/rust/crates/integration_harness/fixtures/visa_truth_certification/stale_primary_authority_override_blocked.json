@@ -1,0 +1,97 @@
+{
+  "fixture_id": "stale_primary_authority_override_blocked",
+  "description": "A stale primary-authority source with override eligibility must still be blocked by freshness before verification.",
+  "run_mode": "dry_run",
+  "business_scope": {
+    "truth_identity_tuple": "ES|tourist||BY",
+    "publishing_scope_tuple": "alegria-site|ru-RU|ES|tourist|BY"
+  },
+  "source_inputs": {
+    "query": "spain tourist visa archived official fee notice",
+    "pages": [
+      {
+        "route": "/official/stale-fee-notice",
+        "domain": "mfa.gov.example",
+        "title": "Archived fee notice",
+        "description": "Primary authority archived fee notice",
+        "html_file": "stale_primary_authority_override_blocked.html",
+        "governance_override": {
+          "source_type": "government",
+          "authority_class": "primary_authority",
+          "independence_group_key": "mfa_primary_authority",
+          "trust_level": 5,
+          "freshness_ttl_days": 14,
+          "override_eligible": true
+        }
+      }
+    ],
+    "support_bundle_seed": {
+      "concepts": [
+        {
+          "concept_key": "consular_fee",
+          "concept_type": "fee",
+          "label_ru": "Консульский сбор"
+        }
+      ]
+    }
+  },
+  "model_stub_inputs": {
+    "extraction_responses": [
+      {
+        "candidates": [
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "The archived notice lists the fee as 80 EUR.",
+            "params": {
+              "amount": 80,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "The archived notice lists the fee as 80 EUR.",
+            "span_start": 0,
+            "span_end": 44,
+            "uncertainty_flags": [
+              "stale_source"
+            ]
+          }
+        ]
+      }
+    ],
+    "editorial_response": {
+      "sections": {
+        "overview": "Archived authority notices still require fresh confirmation."
+      }
+    }
+  },
+  "expected_outcomes": {
+    "verified_rule_set": [],
+    "needs_hitl_set": [
+      "consular_fee|{\"amount\":80.0,\"currency\":\"EUR\"}|freshness_block; freshness_class=stale"
+    ],
+    "rejected_set": [],
+    "contradiction_groups": [],
+    "completeness_failures": [],
+    "draft_verdict": "blocked",
+    "publish_verdict": "not_attempted",
+    "projection_verdict": "allow",
+    "rebuild_impact_emitted": false
+  },
+  "invariants": {
+    "no_truth_promotion_from_retrieval_or_graph": true,
+    "no_source_tier_shortcut_to_verified": true,
+    "no_unsupported_claim_reaches_draft_as_truth": true
+  }
+}
