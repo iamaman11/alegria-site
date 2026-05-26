@@ -66,7 +66,6 @@ The current audit baseline for this file is:
 
 1. real live-provider `PASS`, not `PENDING_CREDENTIALS`
 2. env-by-env production-gate and drain evidence, not only local acceptance
-3. final decision on physical retirement vs permanent diagnostic retention for legacy `Expert*` surfaces
 
 ---
 
@@ -202,24 +201,20 @@ Current local bundle semantics:
 ### Tranche D — Legacy Surface Retirement Decision
 
 **Type:** policy + cleanup  
-**Status:** decision partially made, physical code retention unresolved  
-**Implementation state:** not required for truth correctness, still relevant for repository hygiene
+**Status:** accepted
+**Implementation state:** permanent diagnostic-retention policy accepted; no physical removal scheduled
 
 #### Current state
 
 - `SeoSiteBuildWorkflow` is compat/drain only
-- `Expert*Workflow` family is diagnostic-only behind explicit opt-in
-
-#### Remaining work
-
-Choose one of:
-
-1. retain `Expert*` surfaces permanently as narrow diagnostics and document them as such;
-2. remove them physically after non-local drain evidence exists.
+- `Expert*Workflow` family is retained as a permanent narrow diagnostic toolset behind explicit opt-in
+- machine-readable policy remains pinned in:
+  - `docs/runs/seo_cutover_convergence_policy_2026-05-22.json`
 
 #### Acceptance
 
-- docs, starter, worker registration, and automation all agree on the final policy
+- docs, starter, worker registration, and automation all agree on permanent diagnostic retention;
+- any future removal requires a separate explicit deprecation tranche with replacement diagnostic coverage and no change to canonical forward execution.
 
 ### Tranche E — Optional Post-10/10 Enrichment
 

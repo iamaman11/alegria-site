@@ -59,6 +59,14 @@ def main() -> int:
             failures.append("expert_workflow_policy.classification must be `diagnostic-only`")
         if expert_policy.get("registration_gate") != "ALLOW_EXPERT_MIGRATION_WORKFLOWS=true":
             failures.append("expert workflow registration gate must equal explicit env opt-in")
+        expected_retention = (
+            "retain permanently as a narrow diagnostic toolset behind explicit opt-in; "
+            "do not route new product logic or canonical execution through these workflows"
+        )
+        if expert_policy.get("retention_decision") != expected_retention:
+            failures.append("expert workflow retention decision does not match the accepted permanent-diagnostic policy")
+        if "deprecation_rule" not in expert_policy:
+            failures.append("expert_workflow_policy missing `deprecation_rule`")
 
         naming = payload.get("workflow_naming_decision", {})
         expected = (
@@ -85,6 +93,7 @@ def main() -> int:
                 "diagnostic-only",
                 "ALLOW_EXPERT_MIGRATION_WORKFLOWS=true",
                 "do not create a new workflow type purely to rename it",
+                "permanent narrow diagnostic toolset",
             ],
         ),
         (
@@ -93,6 +102,7 @@ def main() -> int:
                 "Compat/drain workflow still present during the rollout window",
                 "ALLOW_EXPERT_MIGRATION_WORKFLOWS=true",
                 "active forward path",
+                "retained as permanent narrow diagnostics",
             ],
         ),
         (
@@ -100,6 +110,7 @@ def main() -> int:
             [
                 "compat/drain workflow only; retained for replay-safe legacy histories and controlled comparison",
                 "disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`",
+                "permanent narrow diagnostic surfaces",
             ],
         ),
         (

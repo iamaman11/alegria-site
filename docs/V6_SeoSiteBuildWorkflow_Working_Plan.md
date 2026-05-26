@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.46`
+**Current version:** `6.47`
 
 ---
 
@@ -1084,7 +1084,7 @@ Before continuing development past planning, the repository must satisfy this cl
 The remaining post-acceptance work is operational convergence, not missing workflow coverage.
 
 - `SeoSiteBuildWorkflow` compat/drain window closes for an environment only when legacy replay evidence shows `total_runs=0` and `open_runs=0`, or an explicit production drain artifact proves all remaining histories safely drained.
-- `Expert*Workflow` surfaces remain as a narrow diagnostic-only toolset behind explicit opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`; they are not a landing zone for new product logic and they are not part of canonical execution.
+- `Expert*Workflow` surfaces remain as a permanent narrow diagnostic toolset behind explicit opt-in `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`; they are diagnostic-only, they are not a landing zone for new product logic, they are not part of canonical execution, and they are not hidden fallbacks for the forward path.
 - the runtime workflow type name remains `SeoSiteBuildCanonicalCutoverWorkflow` after drain; we do not create a new workflow type purely to rename it.
 - a future rename is allowed only if another semantics change already requires a new workflow type, or if a zero-history cleanup window is explicitly approved.
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.47
+
+- closed the legacy-surface policy tranche by accepting permanent narrow diagnostic retention for the four `Expert*Workflow` surfaces instead of leaving their fate as an unresolved future deletion question;
+- tightened the convergence-policy artifact and automation so docs, starter, worker registration, and CI all agree that these workflows stay opt-in diagnostics only and never become a hidden forward-path fallback;
+- updated the 10/10 completion plan so the remaining open blockers are now operational evidence and live-provider closure, not unresolved legacy-surface policy.
 
 ### 6.46
 

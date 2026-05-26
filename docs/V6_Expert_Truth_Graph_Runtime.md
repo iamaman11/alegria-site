@@ -82,7 +82,7 @@ Additional first-class rollout/support workflows remain available only for contr
 - `FreshnessCheckWorkflow` for scheduled freshness monitoring;
 - `ProjectionReconcileWorkflow` for explicit graph/retrieval reconcile execution.
 
-`Expert*Workflow` surfaces are not registered by default in the worker fleet. They require explicit opt-in through `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true` and are retained only for controlled diagnostics during the compatibility window.
+`Expert*Workflow` surfaces are not registered by default in the worker fleet. They require explicit opt-in through `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true` and are retained as permanent narrow diagnostics rather than as hidden forward-path fallbacks.
 
 The current active runtime sequence for the forward path is the accepted canonical cutover flow:
 
@@ -116,7 +116,7 @@ Current rollout-safe promotion rule:
 
 - `SeoSiteBuildCanonicalCutoverWorkflow` is the accepted active forward path;
 - `SeoSiteBuildWorkflow` stays alive only for the explicit compatibility window and replay/drain discipline;
-- no new product logic should land in the `Expert*Workflow` family.
+- `Expert*Workflow` surfaces are retained as permanent narrow diagnostics only; no new product logic should land in that family and canonical execution must not route through it.
 - the explicit naming decision is to keep `SeoSiteBuildCanonicalCutoverWorkflow` as the runtime workflow type after drain, rather than creating another workflow type only to rename it.
 
 Current certification state:

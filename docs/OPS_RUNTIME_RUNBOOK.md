@@ -438,7 +438,7 @@ Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_LIVE_PROVIDER
 - For the current local environment, the compat/drain window is considered closed because [docs/runs/seo_site_build_legacy_replay_evidence.json](/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json) records `total_runs=0` and `open_runs=0`.
 - Local env bundle evidence is captured in [docs/runs/local_operational_evidence_bundle.json](/home/bose/projects/alegria-site/docs/runs/local_operational_evidence_bundle.json).
 - For any other environment, the window closes only with equivalent machine-readable legacy replay evidence or explicit production drain signoff.
-- `Expert*Workflow` surfaces remain diagnostic-only and require `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`.
+- `Expert*Workflow` surfaces remain permanent narrow diagnostic surfaces, require `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`, and must never become a hidden forward-path fallback for product execution.
 - `SeoSiteBuildCanonicalCutoverWorkflow` remains the runtime workflow type after drain; there is no follow-up workflow-type rename just for naming cosmetics.
 
 ## 8) Archive policy

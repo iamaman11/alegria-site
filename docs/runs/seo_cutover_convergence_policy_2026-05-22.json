@@ -31,7 +31,8 @@
       "default rebuild dispatch",
       "new product logic landing zone"
     ],
-    "retirement_decision": "keep as narrow diagnostic toolset during compat/drain; delete later only if they stop providing unique replay/migration debugging value"
+    "retention_decision": "retain permanently as a narrow diagnostic toolset behind explicit opt-in; do not route new product logic or canonical execution through these workflows",
+    "deprecation_rule": "remove only through a future explicit deprecation tranche that proves replacement diagnostic coverage and keeps canonical forward execution unchanged"
   },
   "workflow_naming_decision": {
     "decision": "keep SeoSiteBuildCanonicalCutoverWorkflow as the runtime workflow type after drain; do not create a new workflow type purely to rename it",
