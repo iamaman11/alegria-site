@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.38`
+**Current version:** `6.39`
 
 ---
 
@@ -1347,6 +1347,11 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.39
+
+- removed the last live-doc references that still described the canonical 56-step flow through legacy `SeoSiteBuildWorkflow` wording in the support-process registry and superseded gap-closure snapshot;
+- extended doc-identity enforcement to cover the support-process registry and to fail if superseded reference docs present legacy workflow identity as current production truth.
 
 ### 6.34
 

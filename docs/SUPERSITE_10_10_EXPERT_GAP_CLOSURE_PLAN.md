@@ -43,7 +43,7 @@ Last updated: 2026-05-15
 ## 2. Current Baseline That Matters
 
 ### 2.1 Что уже считается рабочим baseline
-- `SeoSiteBuildWorkflow` является production SEO orchestration path.
+- `SeoSiteBuildWorkflow` was the production SEO orchestration path at the time of this historical snapshot.
 - `seo_application::scenario` уже позволяет исполнять ту же бизнес-цепочку вне Temporal, но CLI-path не сертифицирован как production-equivalent.
 - DataForSEO ingest, raw crawl persistence, verified rule persistence, Neo4j/Qdrant projection, draft assembly, QA, CMS request/review, static materialization и rebuild detection уже существуют как code path.
 - HITL pause/resume уже есть в runtime; SEO-path умеет блокировать publish на review step и candidate/adjudication loop, а legacy standalone extraction workflow больше не является текущим truth-path.

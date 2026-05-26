@@ -12,6 +12,7 @@ INDEX_DOC = ROOT / "docs" / "INDEX.md"
 V6_OWNER = ROOT / "docs" / "V6_Expert_Truth_Graph_Runtime.md"
 V6_PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
 SUPERSEDED_PLAN = ROOT / "docs" / "SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md"
+SUPPORT_REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 
 
 def main() -> int:
@@ -24,6 +25,7 @@ def main() -> int:
     v6_owner = V6_OWNER.read_text(encoding="utf-8")
     v6_plan = V6_PLAN.read_text(encoding="utf-8")
     superseded_plan = SUPERSEDED_PLAN.read_text(encoding="utf-8")
+    support_registry = SUPPORT_REGISTRY.read_text(encoding="utf-8")
 
     forbidden = "Starting `SeoSiteBuildWorkflow` for a fresh `country_code + visa_type + applicant_profile` can create/resolve context."
     if forbidden in exec_plan:
@@ -99,6 +101,16 @@ def main() -> int:
     ]:
         if needle not in superseded_plan:
             failures.append(f"Superseded expert gap plan missing explicit historical framing `{needle}`")
+
+    if "является production SEO orchestration path" in superseded_plan:
+        failures.append("Superseded expert gap plan still states legacy `SeoSiteBuildWorkflow` as current production path")
+
+    for needle in [
+        "executed by `SeoSiteBuildCanonicalCutoverWorkflow`",
+        "support processes",
+    ]:
+        if needle not in support_registry:
+            failures.append(f"Support registry missing workflow identity framing `{needle}`")
 
     if failures:
         print("SEO_IDENTITY_DOCS: FAILED")

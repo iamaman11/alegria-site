@@ -6,7 +6,7 @@
 **Execution satellite:** [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md)
 **Ops satellite:** [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
 
-This file owns the named processes that are required for a production-complete system but are not steps inside the canonical 56-step `SeoSiteBuildWorkflow` value stream.
+This file owns the named processes that are required for a production-complete system but are not steps inside the canonical 56-step site-build value stream executed by `SeoSiteBuildCanonicalCutoverWorkflow`.
 
 Each support process must have:
 
