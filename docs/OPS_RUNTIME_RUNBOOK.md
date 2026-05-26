@@ -25,6 +25,8 @@
   - `automation/bootstrap_local_runtime_baseline.py`
 - Truth extraction provider preflight:
   - `automation/check_truth_extraction_provider_ready.py`
+- Canonical Step 5 live-provider gate:
+  - `bash automation/run_live_provider_minimal_scope_gate.sh`
 - Business DB container: `alegria_postgres`
 - Business DB pool boundary: `alegria_pgbouncer` (`:6432`, session pooling)
 - Temporal DB container: `alegria_postgres_temporal`
@@ -64,6 +66,7 @@
     - `GEMINI_API_KEY` or `GOOGLE_API_KEY`
   - current recommended live path for `Step 5` and immediate `R3.4` work: `GEMINI_API_KEY` with `GEMINI_TRUTH_MODEL` or fallback `GEMINI_SEO_MODEL`
 - missing truth extraction provider is a hard blocker for live `raw_knowledge_ingestion`
+- missing live-provider credentials must short-circuit the Step 5 gate as `PENDING_CREDENTIALS`, not as a synthetic runtime failure after a long smoke
 
 Owner-boundary note:
 

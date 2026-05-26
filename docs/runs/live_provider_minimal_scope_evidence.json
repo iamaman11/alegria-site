@@ -1,10 +1,10 @@
 {
   "artifact_id": "step5_live_provider_minimal_scope",
   "step": "R1.Step5",
-  "evidence_status": "FAIL",
-  "status_reason": "Live smoke command failed before reaching a passing crawl+extraction verdict.",
-  "failure_class": "extraction_provider_unavailable",
-  "smoke_command": "cargo run -q --manifest-path /home/bose/projects/alegria-site/app/rust/services/cli_tools/Cargo.toml -- seo-run --database-url postgresql://<local-user>:<redacted>@localhost:5433/alegria_runtime_step5_smoke --run-id 58456312-1156-4a29-bf68-a2f69e97af2a --market alegria-site --locale ru-RU --country-code ES --visa-type tourist --citizenship-code BY --applicant-profile standard --query-batch-key live-smoke-58456312-1156-4a29-bf68-a2f69e97af2a --query spain tourist visa belarus official --warn-only-projections --output-dir /home/bose/projects/alegria-site/tmp/live-provider-smoke-58456312-1156-4a29-bf68-a2f69e97af2a crawl-ingest",
+  "evidence_status": "PENDING_CREDENTIALS",
+  "status_reason": "Truth extraction provider is not configured for live smoke; missing GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SEO_TRUTH_LLM_LOCAL_ENDPOINT.",
+  "failure_class": "credential_issue",
+  "smoke_command": "",
   "scope": {
     "market": "alegria-site",
     "locale": "ru-RU",
@@ -21,41 +21,10 @@
     "truth_extraction_provider": {
       "ready": false,
       "providers": []
-    },
-    "bootstrap_seeded_support_bundle": true
+    }
   },
-  "execution": {
-    "run_id": "58456312-1156-4a29-bf68-a2f69e97af2a",
-    "query_batch_key": "live-smoke-58456312-1156-4a29-bf68-a2f69e97af2a",
-    "command_exit_code": 1,
-    "stdout_excerpt": "SEO_RUN_RESULT scenario=site_build_crawl_ingest_only mode=semi_auto_operator status=blocked:no_truth_extraction_provider page_total=0 published_pages=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=load_verified_support_bundle status=done page_node_key= detail=support_count=1\nSEO_RUN_PHASE phase=serp_ingest status=done page_node_key= detail=persisted_snapshot_count=1\nSEO_RUN_PHASE phase=crawl_sources status=partial page_node_key= detail=claimed=10 crawled=6 failed=4 raw_pages=6\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=blocked:no_truth_extraction_provider page_node_key= detail=verified_rules=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=projection_warn page_node_key= detail=blocked_events=48 max_open_lag_ms=8755",
-    "stderr_excerpt": "",
-    "result": {
-      "scenario": "site_build_crawl_ingest_only",
-      "mode": "semi_auto_operator",
-      "status": "blocked:no_truth_extraction_provider",
-      "page_total": 0,
-      "published_pages": 0,
-      "changed_truth_keys": 0
-    },
-    "phase_count": 5
-  },
-  "observed": {
-    "local_db_baseline_status": "OK",
-    "local_db_missing_tables": [],
-    "serp_phase_status": "done",
-    "serp_persisted_snapshot_count": 1,
-    "crawl_phase_status": "partial",
-    "crawl_claimed_count": 10,
-    "crawl_crawled_count": 6,
-    "crawl_failed_count": 4,
-    "crawl_raw_page_count": 6,
-    "raw_knowledge_phase_status": "blocked:no_truth_extraction_provider",
-    "raw_knowledge_verified_rule_count": 0,
-    "raw_knowledge_changed_truth_keys": 0,
-    "db_serp_raw_snapshot_count": 2,
-    "db_crawl_queue_count": 10
-  },
+  "execution": {},
+  "observed": {},
   "required_for_pass": [
     "one real scope",
     "one real SERP fetch",
@@ -64,5 +33,5 @@
     "no publish",
     "immutable artifact with classified verdict"
   ],
-  "updated_at": "2026-05-15T19:32:41Z"
+  "updated_at": "2026-05-26T13:22:50Z"
 }

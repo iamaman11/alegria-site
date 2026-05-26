@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.35`
+**Current version:** `6.36`
 
 ---
 
@@ -1359,6 +1359,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - activated `Graph Reasoning Tranche 1` inside canonical planning steps `38-41` without changing the 56-step ledger or introducing a new workflow type;
 - added planning-only `GraphPlanningContext` loading, richer planning provenance on `keyword_clusters`, `content_gaps`, and `link_recommendations`, and deterministic graph-aware planning tests while keeping truth authority, draft gating, publish semantics, and rebuild policy unchanged;
 - fixed the runtime regression in `load_graph_planning_context` by decoding `site.link_recommendations.score` through an explicit `double precision` read path so `global_site_reconcile` remains certifiably green under the frozen truth baseline.
+
+### 6.36
+
+- hardened the Step 5 live-provider operational lane so missing truth-provider credentials are classified immediately as `PENDING_CREDENTIALS` instead of spending a full smoke run only to fail at `blocked:no_truth_extraction_provider`;
+- added canonical wrapper `automation/run_live_provider_minimal_scope_gate.sh` so provider preflight, live smoke, and evidence-schema validation run through one machine-usable entrypoint;
+- updated the runbook to treat Step 5 as an explicit operational gate with fast credential classification, while preserving the existing evidence artifact and without weakening live smoke semantics once credentials exist.
 
 ### 6.33
 

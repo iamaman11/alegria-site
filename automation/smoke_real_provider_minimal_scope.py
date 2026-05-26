@@ -221,6 +221,9 @@ def main() -> int:
     artifact = read_artifact()
     database_url = resolve_database_url()
     artifact["updated_at"] = utc_now()
+    artifact["smoke_command"] = ""
+    artifact["execution"] = {}
+    artifact["observed"] = {}
     artifact["scope"] = {
         "market": os.environ.get("ALEGRIA_LIVE_SMOKE_MARKET", "alegria-site"),
         "locale": os.environ.get("ALEGRIA_LIVE_SMOKE_LOCALE", "ru-RU"),
@@ -238,6 +241,7 @@ def main() -> int:
         "psql_present": shutil.which("psql") is not None,
     }
     artifact["provider_requirements"]["truth_extraction_provider"] = truth_provider_status()
+    truth_provider_ready = artifact["provider_requirements"]["truth_extraction_provider"]["ready"]
 
     if not artifact["provider_requirements"]["psql_present"]:
         artifact["evidence_status"] = "FAIL"
@@ -248,19 +252,30 @@ def main() -> int:
         print("- `psql` is not available")
         return 1
 
-    if not (
-        artifact["provider_requirements"]["dataforseo_login_present"]
-        and artifact["provider_requirements"]["dataforseo_password_present"]
-    ):
+    missing_credentials: list[str] = []
+    if not artifact["provider_requirements"]["dataforseo_login_present"]:
+        missing_credentials.append("DATAFORSEO_LOGIN")
+    if not artifact["provider_requirements"]["dataforseo_password_present"]:
+        missing_credentials.append("DATAFORSEO_PASSWORD")
+    if not truth_provider_ready:
+        missing_credentials.append("GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SEO_TRUTH_LLM_LOCAL_ENDPOINT")
+
+    if missing_credentials:
         artifact["evidence_status"] = "PENDING_CREDENTIALS"
         artifact["failure_class"] = "credential_issue"
-        artifact["status_reason"] = (
-            "DATAFORSEO credentials are not present in the environment; "
-            "Step 5 cannot run to completion in this environment."
-        )
+        if truth_provider_ready:
+            artifact["status_reason"] = (
+                "Provider credentials are incomplete for live smoke; "
+                f"missing {', '.join(missing_credentials)}."
+            )
+        else:
+            artifact["status_reason"] = (
+                "Truth extraction provider is not configured for live smoke; "
+                f"missing {', '.join(missing_credentials)}."
+            )
         write_artifact(artifact)
         print("SMOKE_REAL_PROVIDER_MINIMAL_SCOPE: PENDING_CREDENTIALS")
-        print("- DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD are required")
+        print(f"- missing {', '.join(missing_credentials)}")
         return 2
 
     try:
