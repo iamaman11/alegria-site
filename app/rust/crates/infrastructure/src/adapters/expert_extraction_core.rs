@@ -1195,4 +1195,57 @@ mod tests {
             .iter()
             .any(|record| record.stage_name == "whole_page_semantic_pass"));
     }
+
+    #[test]
+    fn whole_page_semantic_pass_detects_utility_page_shape() {
+        let raw = "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
+        let stage_output = WholePageSemanticPassOutput {
+            page_mode_hint: page_mode_hint(&section(8, raw)),
+            page_mode_confidence: 0.70,
+            dominant_layers: dominant_layers(raw),
+            layer_scores: layer_scores_for_text(raw),
+            page_summary: summarize(raw),
+            page_context_profile: page_context_profile(raw),
+            mixed_section_ids: if dominant_layers(raw).len() > 1 {
+                vec![8]
+            } else {
+                Vec::new()
+            },
+            global_entities: global_entities(raw),
+            advisory_model_used: false,
+            advisory_consensus: "not_used".to_string(),
+            advisory_prototype_families: Vec::new(),
+            uncertainty_flags: Vec::new(),
+            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(8, raw)))],
+        };
+        assert_eq!(stage_output.page_mode_hint, "utility_page");
+    }
+
+    #[test]
+    fn whole_page_semantic_pass_marks_mixed_procedural_editorial_section() {
+        let raw =
+            "Tourist visa requirements. Passport and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid.";
+        let stage_output = WholePageSemanticPassOutput {
+            page_mode_hint: page_mode_hint(&section(9, raw)),
+            page_mode_confidence: 0.70,
+            dominant_layers: dominant_layers(raw),
+            layer_scores: layer_scores_for_text(raw),
+            page_summary: summarize(raw),
+            page_context_profile: page_context_profile(raw),
+            mixed_section_ids: if dominant_layers(raw).len() > 1 {
+                vec![9]
+            } else {
+                Vec::new()
+            },
+            global_entities: global_entities(raw),
+            advisory_model_used: false,
+            advisory_consensus: "not_used".to_string(),
+            advisory_prototype_families: Vec::new(),
+            uncertainty_flags: vec!["multi_layer_page".to_string()],
+            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(9, raw)))],
+        };
+        assert!(stage_output.dominant_layers.contains(&"procedural".to_string()));
+        assert!(stage_output.dominant_layers.contains(&"editorial".to_string()));
+        assert_eq!(stage_output.mixed_section_ids, vec![9]);
+    }
 }

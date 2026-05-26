@@ -142,6 +142,7 @@ These paths now agree with the documented contract on emitted fields. The remain
    - mixed procedural/editorial pages
    - utility/menu/directory false-positive suppression
    - country/visa framing retention under noisy footer injection
+   - noisy footer-heavy pages that must remain `content_page`
 3. calibrate the optional advisory retrieval lane:
    - prototype coverage breadth
    - fusion thresholds

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.42`
+**Current version:** `6.43`
 
 ---
 
@@ -1347,6 +1347,11 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.43
+
+- added noisy whole-page semantic hardening coverage for footer-heavy content pages, utility/login pages, menu-directory pages, and mixed procedural/editorial pages so page-level routing regressions are caught before they can weaken downstream semantic routing;
+- mirrored the same utility and mixed-page expectations in the diagnostic extraction-core test surface so canonical runtime and debug-only semantics remain aligned during future whole-page hardening work.
 
 ### 6.42
 

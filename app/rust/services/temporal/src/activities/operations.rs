@@ -4265,4 +4265,69 @@ mod tests {
             .iter()
             .any(|code| code == "advisory_mixed_section_support"));
     }
+
+    #[test]
+    fn noisy_footer_heavy_page_stays_content_procedural() {
+        let content = "Spain tourist visa requirements. Passport copy, insurance, application form, fee 80 EUR.\n\
+Footer links contact privacy menu privacy cookie login terms.\n\
+Footer navigation directory menu links help login cookie.";
+        let sections = vec![
+            section(
+                21,
+                "Spain tourist visa requirements. Passport copy, insurance, application form, fee 80 EUR.",
+            ),
+            raw_crawl_adapter::RawSectionRecord {
+                id: 22,
+                page_id: 42,
+                source_url: "https://example.test/spain-tourist-visa".to_string(),
+                source_domain: "example.test".to_string(),
+                source_dtype: "html".to_string(),
+                heading_path: "Footer".to_string(),
+                section_type: "footer".to_string(),
+                content_md:
+                    "Footer links contact privacy menu privacy cookie login terms. Footer navigation directory menu links help login cookie."
+                        .to_string(),
+                content_hash: "footer".to_string(),
+            },
+        ];
+        let snapshot = deterministic_whole_page_snapshot(&sections, content);
+        assert_eq!(snapshot.page_mode_hint, "content_page");
+        assert!(snapshot.dominant_layers.contains(&"procedural".to_string()));
+        assert!(!snapshot.uncertainty_flags.is_empty() || snapshot.page_mode_confidence >= 0.45);
+    }
+
+    #[test]
+    fn utility_cookie_login_page_is_classified_as_utility() {
+        let content = "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
+        let sections = vec![section(31, content)];
+        let snapshot = deterministic_whole_page_snapshot(&sections, content);
+        assert_eq!(snapshot.page_mode_hint, "utility_page");
+        assert!(snapshot.page_mode_confidence >= 0.50);
+    }
+
+    #[test]
+    fn menu_directory_page_is_not_misclassified_as_content() {
+        let content = "Breadcrumb menu. Directory of visa pages. Destination index. Category links. Sidebar navigation.";
+        let sections = vec![section(41, content)];
+        let snapshot = deterministic_whole_page_snapshot(&sections, content);
+        assert!(
+            snapshot.page_mode_hint == "menu_page" || snapshot.page_mode_hint == "directory_page",
+            "expected menu/directory classification, got {}",
+            snapshot.page_mode_hint
+        );
+    }
+
+    #[test]
+    fn mixed_procedural_editorial_page_sets_multi_layer_flag() {
+        let content = "Tourist visa requirements. Passport, insurance and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid.";
+        let sections = vec![section(51, content)];
+        let snapshot = deterministic_whole_page_snapshot(&sections, content);
+        assert!(snapshot.dominant_layers.contains(&"procedural".to_string()));
+        assert!(snapshot.dominant_layers.contains(&"editorial".to_string()));
+        assert!(snapshot
+            .uncertainty_flags
+            .iter()
+            .any(|flag| flag == "multi_layer_page"));
+        assert_eq!(snapshot.mixed_section_ids, vec![51]);
+    }
 }
