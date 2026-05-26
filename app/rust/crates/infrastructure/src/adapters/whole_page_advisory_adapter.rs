@@ -10,6 +10,7 @@ const COLLECTION_NAME: &str = "whole_page_advisory_prototypes";
 const DEFAULT_MODEL: &str = "voyage-4-large";
 const DEFAULT_DIMENSION: u32 = 1024;
 const DEFAULT_DTYPE: &str = "float";
+const DEFAULT_MIN_SCORE: f32 = 0.72;
 
 #[derive(Debug, Clone)]
 pub struct WholePageAdvisoryRetrievalHit {
@@ -78,6 +79,26 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         prototype_text: "Tourist visa document checklist plus appointment booking schedule, office hours, submission windows, consulate and VFS procedural and operational guidance.",
     },
     WholePagePrototypeSpec {
+        prototype_family: "content_mixed_procedural_editorial",
+        page_mode: "content_page",
+        dominant_layers: &["procedural", "editorial"],
+        country_hints: &[],
+        visa_type_hints: &["tourist"],
+        authority_hints: &["consulate"],
+        mixed_section_pressure: true,
+        prototype_text: "Visa requirements, fees and passport rules mixed with refusal risks, FAQ, traveller mistakes and preparation advice.",
+    },
+    WholePagePrototypeSpec {
+        prototype_family: "content_mixed_operational_editorial",
+        page_mode: "content_page",
+        dominant_layers: &["operational", "editorial"],
+        country_hints: &[],
+        visa_type_hints: &[],
+        authority_hints: &["visa_center"],
+        mixed_section_pressure: true,
+        prototype_text: "Appointment availability, office closures and booking changes mixed with FAQ, common issues and explanatory advice.",
+    },
+    WholePagePrototypeSpec {
         prototype_family: "utility_page",
         page_mode: "utility_page",
         dominant_layers: &[],
@@ -86,6 +107,16 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         authority_hints: &[],
         mixed_section_pressure: false,
         prototype_text: "Privacy policy, cookie settings, login, account access, terms, legal notice, technical utility page.",
+    },
+    WholePagePrototypeSpec {
+        prototype_family: "utility_cookie_login_heavy",
+        page_mode: "utility_page",
+        dominant_layers: &[],
+        country_hints: &[],
+        visa_type_hints: &[],
+        authority_hints: &[],
+        mixed_section_pressure: false,
+        prototype_text: "Cookie preferences, login, sign in, password reset, privacy controls, account and session management utility page.",
     },
     WholePagePrototypeSpec {
         prototype_family: "menu_page",
@@ -98,6 +129,16 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         prototype_text: "Navigation menu, breadcrumbs, section links, category links, top navigation, sidebar navigation, menu page.",
     },
     WholePagePrototypeSpec {
+        prototype_family: "menu_directory_blend",
+        page_mode: "menu_page",
+        dominant_layers: &["seo"],
+        country_hints: &[],
+        visa_type_hints: &[],
+        authority_hints: &[],
+        mixed_section_pressure: false,
+        prototype_text: "Breadcrumb tree, destination links, sitemap navigation, directory categories, sidebar links, navigational menu-directory blend.",
+    },
+    WholePagePrototypeSpec {
         prototype_family: "directory_page",
         page_mode: "directory_page",
         dominant_layers: &["seo"],
@@ -106,6 +147,16 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         authority_hints: &[],
         mixed_section_pressure: false,
         prototype_text: "Directory of visa pages, catalog, sitemap, destination index, page list, navigational directory.",
+    },
+    WholePagePrototypeSpec {
+        prototype_family: "content_seo",
+        page_mode: "content_page",
+        dominant_layers: &["seo"],
+        country_hints: &[],
+        visa_type_hints: &[],
+        authority_hints: &[],
+        mixed_section_pressure: false,
+        prototype_text: "Keyword opportunities, search demand, ranking landscape, cluster targets, content gaps and organic visibility guidance.",
     },
     WholePagePrototypeSpec {
         prototype_family: "landing_page",
@@ -118,6 +169,16 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         prototype_text: "Consultation, book now, service package, agency offer, turnkey visa support, CTA-heavy landing page.",
     },
     WholePagePrototypeSpec {
+        prototype_family: "content_commercial",
+        page_mode: "content_page",
+        dominant_layers: &["commercial"],
+        country_hints: &[],
+        visa_type_hints: &[],
+        authority_hints: &[],
+        mixed_section_pressure: false,
+        prototype_text: "Service tiers, consultation benefits, agency process, support package details and commercial service explanations without CTA-heavy landing framing.",
+    },
+    WholePagePrototypeSpec {
         prototype_family: "noisy_footer_nav",
         page_mode: "content_page",
         dominant_layers: &["procedural"],
@@ -126,6 +187,16 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
         authority_hints: &[],
         mixed_section_pressure: false,
         prototype_text: "Main visa content with heavy footer links, navigation boilerplate, repeated legal and menu noise, but still primarily procedural content.",
+    },
+    WholePagePrototypeSpec {
+        prototype_family: "country_germany_work_authority",
+        page_mode: "content_page",
+        dominant_layers: &["procedural", "operational"],
+        country_hints: &["DE"],
+        visa_type_hints: &["work"],
+        authority_hints: &["consulate", "government"],
+        mixed_section_pressure: true,
+        prototype_text: "Germany work visa requirements, embassy appointment windows, employment documents, federal authority guidance and consular process notes.",
     },
     WholePagePrototypeSpec {
         prototype_family: "country_spain_tourist_authority",
@@ -161,6 +232,14 @@ const PROTOTYPES: &[WholePagePrototypeSpec] = &[
 
 fn env_model() -> String {
     std::env::var("WHOLE_PAGE_VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_MODEL.to_string())
+}
+
+fn advisory_min_score() -> f32 {
+    std::env::var("WHOLE_PAGE_ADVISORY_MIN_SCORE")
+        .ok()
+        .and_then(|value| value.parse::<f32>().ok())
+        .filter(|value| value.is_finite())
+        .unwrap_or(DEFAULT_MIN_SCORE)
 }
 
 fn parse_csv(payload: &BTreeMap<String, String>, key: &str) -> Vec<String> {
@@ -280,6 +359,7 @@ pub async fn search_whole_page_prototypes(
     let points = qdrant::search_dense(&client, COLLECTION_NAME, vector, limit, None).await?;
     Ok(points
         .into_iter()
+        .filter(|point| point.score >= advisory_min_score())
         .map(|point| {
             let payload = qdrant::scored_point_payload_map(&point);
             WholePageAdvisoryRetrievalHit {

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.41`
+**Current version:** `6.42`
 
 ---
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.42
+
+- expanded the `whole_page_semantic_pass` advisory prototype set across mixed, utility, menu-directory, SEO, commercial, and additional country/authority page families so `voyage-4-large` similarity hints are less brittle under real page variety;
+- added advisory calibration knobs for minimum similarity score and hit-limit selection, and tightened the intended safety rule that low-score advisory hits must not change fused page-mode confidence or promote mixed-section ids without section evidence;
+- added explicit fusion-policy tests for low-score no-op behavior and for mixed-section pressure that lacks section-level support, keeping the advisory lane explainable and non-authoritative.
 
 ### 6.41
 

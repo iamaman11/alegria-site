@@ -145,6 +145,7 @@ These paths now agree with the documented contract on emitted fields. The remain
 3. calibrate the optional advisory retrieval lane:
    - prototype coverage breadth
    - fusion thresholds
+   - minimum score floor and hit-limit tuning
    - disagreement diagnostics
    - fallback behavior under missing Voyage/Qdrant
 4. keep this step non-authoritative:

@@ -1355,6 +1355,14 @@ fn advisory_signal_from_hits(
     }
 }
 
+fn advisory_hit_limit() -> u64 {
+    std::env::var("WHOLE_PAGE_ADVISORY_LIMIT")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(3)
+}
+
 fn summarize(text: &str) -> String {
     text.lines()
         .map(str::trim)
@@ -2266,7 +2274,10 @@ pub(crate) async fn whole_page_semantic_pass_impl(
             let snapshot = deterministic_whole_page_snapshot(&sections, &combined);
             let page_sketch = build_page_sketch(sections[0].page_id, &sections, &snapshot);
             let advisory_hits =
-                match whole_page_advisory_adapter::search_whole_page_prototypes(&page_sketch, 3)
+                match whole_page_advisory_adapter::search_whole_page_prototypes(
+                    &page_sketch,
+                    advisory_hit_limit(),
+                )
                     .await
                 {
                     Ok(hits) => hits,
@@ -4196,5 +4207,62 @@ mod tests {
             .uncertainty_flags
             .iter()
             .any(|flag| flag == "advisory_only_country_hint:PL"));
+    }
+
+    #[test]
+    fn low_score_advisory_hit_does_not_change_page_mode_confidence() {
+        let sections = vec![section(
+            11,
+            "Tourist visa document checklist, fee details and passport requirements.",
+        )];
+        let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
+        let baseline_confidence = snapshot.page_mode_confidence;
+        let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+            prototype_id: "weak".to_string(),
+            prototype_family: "content_operational".to_string(),
+            score: 0.40,
+            page_mode: "content_page".to_string(),
+            dominant_layers: vec!["operational".to_string()],
+            country_hints: Vec::new(),
+            visa_type_hints: Vec::new(),
+            authority_hints: Vec::new(),
+            mixed_section_pressure: false,
+        }];
+
+        let fused = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
+        assert_eq!(fused.page_mode_hint, "content_page");
+        assert!((fused.page_mode_confidence - baseline_confidence).abs() < f32::EPSILON);
+        assert!(!fused
+            .reason_codes
+            .iter()
+            .any(|code| code == "high_confidence_advisory_retrieval"));
+    }
+
+    #[test]
+    fn mixed_pressure_without_section_evidence_does_not_promote_mixed_sections() {
+        let sections = vec![section(
+            13,
+            "Passport and fee guidance only. Consular fee and passport copy.",
+        )];
+        let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
+        assert!(snapshot.mixed_section_ids.is_empty());
+        let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+            prototype_id: "mixed".to_string(),
+            prototype_family: "content_mixed_procedural_operational".to_string(),
+            score: 0.89,
+            page_mode: "content_page".to_string(),
+            dominant_layers: vec!["procedural".to_string(), "operational".to_string()],
+            country_hints: Vec::new(),
+            visa_type_hints: vec!["tourist".to_string()],
+            authority_hints: vec!["consulate".to_string()],
+            mixed_section_pressure: true,
+        }];
+
+        let fused = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
+        assert!(fused.mixed_section_ids.is_empty());
+        assert!(!fused
+            .reason_codes
+            .iter()
+            .any(|code| code == "advisory_mixed_section_support"));
     }
 }
