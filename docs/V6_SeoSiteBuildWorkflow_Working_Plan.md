@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.39`
+**Current version:** `6.40`
 
 ---
 
@@ -1147,7 +1147,7 @@ The remaining post-acceptance work is operational convergence, not missing workf
 - ontology-backed canonical storage
 - graph/retrieval specs and adapters
 - outbox-backed downstream materialization surfaces that are not yet first-class workflow phases
-- prototype `layer_router` and `triple_builder` step code that is not yet mandatory in the production flow
+- heuristic whole-page semantic scaffolding that now emits the required `page_context_profile` and mixed-section hints but still needs stronger deterministic classification coverage before it can be called 10/10-hard
 
 ### 9.3 Deferred now
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.40
+
+- aligned the active `whole_page_semantic_pass` runtime payload with the documented V5/V6 contract by emitting deterministic `page_context_profile` and mixed-section hints in both the canonical activity path and the diagnostic extraction core mirror;
+- removed stale working-plan wording that still implied `layer_router` and `triple_builder` were merely prototype-only despite already being mandatory parts of the accepted canonical flow;
+- added the explicit `V6 10/10 Completion Plan` satellite so the remaining closure work is tracked as code-ready integration, fresh implementation, or external blockers instead of being scattered across owner and ops docs.
 
 ### 6.39
 

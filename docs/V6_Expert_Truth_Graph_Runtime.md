@@ -5,7 +5,7 @@
 **Owner:** Alegria SEO runtime and knowledge architecture
 **Supersedes:** `V5_Ultimate_Extraction_Protocol.md`, `SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md`
 **Priority rule:** if any `V5` owner or execution document conflicts with this file, `V6` wins.
-**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`, `V6_Truth_Governance_Policy.md`
+**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`, `V6_Truth_Governance_Policy.md`, `V6_10_10_COMPLETION_PLAN.md`
 
 ---
 
@@ -48,6 +48,10 @@ The named support-plane contracts that are outside the 56-step flow live in:
 The current truth-governance policy tables and regex authority boundary live in:
 
 - [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md)
+
+The ordered 10/10 closure backlog that distinguishes code-ready integrations from fresh implementation and external blockers lives in:
+
+- [V6_10_10_COMPLETION_PLAN.md](V6_10_10_COMPLETION_PLAN.md)
 
 That working plan has been expanded to match the actual active runtime surface, including support loading, publish-control phases, projection barriers, rebuild detection, and explicit run-mode/scenario branching semantics.
 
@@ -97,6 +101,8 @@ The current active runtime sequence for the forward path is the accepted canonic
 6. conditional `rebuild_detect`.
 
 The legacy macro-step sequence centered on `raw_knowledge_ingestion` remains relevant only for compat/drain understanding of `SeoSiteBuildWorkflow`, not as the active forward runtime description.
+
+The active `whole_page_semantic_pass` is intentionally non-authoritative. It now emits deterministic page-mode, dominant-layer, summary, global-entity, page-context-profile, and mixed-section-hint scaffolding, but that scaffold still exists to route and contextualize downstream expert stages rather than replace them.
 
 Current truth extraction policy:
 

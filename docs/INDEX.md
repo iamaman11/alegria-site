@@ -22,6 +22,7 @@
    - [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
    - [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md)
    - [OPS_TEMPORAL_PRODUCTION_GATE.md](OPS_TEMPORAL_PRODUCTION_GATE.md)
+   - [V6_10_10_COMPLETION_PLAN.md](V6_10_10_COMPLETION_PLAN.md)
    - [SEO_SUPERSITE_10_10_EXECUTION_PLAN.md](SEO_SUPERSITE_10_10_EXECUTION_PLAN.md)
    - [V5_SEO_Identity_And_Applicability_Hardening_Plan.md](V5_SEO_Identity_And_Applicability_Hardening_Plan.md)
 4. Superseded V5 owner/execution docs
@@ -46,6 +47,7 @@
 | [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md) | current-execution-satellite | live | versioned detailed working plan for the canonical 56-step site-build flow under `V6`, executed by `SeoSiteBuildCanonicalCutoverWorkflow` |
 | [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md) | current-support-plane-registry | live | named support processes outside the 56-step flow, with contracts, owners, evidence, and automation coverage |
 | [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md) | current-runtime-satellite | live | source independence, trust weighting, authority override, freshness, and regex authority-boundary policy |
+| [V6_10_10_COMPLETION_PLAN.md](V6_10_10_COMPLETION_PLAN.md) | current-closure-satellite | live | ordered 10/10 closure backlog distinguishing accepted runtime, code-ready integrations, fresh implementation, and external blockers |
 | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |
 | [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | superseded-reference | reference | historical rich extraction and target protocol context; superseded by `V6` |
 | [V5_Runtime_Contract.md](V5_Runtime_Contract.md) | current-runtime-satellite | live | runtime persistence, retry, replay, HITL, and DLQ satellite contract under `V6` |
@@ -85,6 +87,7 @@
 - `V6_SeoSiteBuildWorkflow_Working_Plan.md` owns execution shape and activation status only.
 - `V6_Support_Process_Registry.md` owns required support-plane processes outside the 56-step flow.
 - `V6_Truth_Governance_Policy.md` owns truth-governance decision tables and regex authority boundaries.
+- `V6_10_10_COMPLETION_PLAN.md` owns the remaining closure backlog and its classification as code-ready, needs-build, or external-blocker work.
 - Активные документы — только в `docs/` root.
 - `docs/_archive/` never participates in current truth.
 - Superseded `V5` owner docs may preserve historical and design context, but must not override `V6`.

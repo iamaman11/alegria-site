@@ -161,12 +161,21 @@ pub struct WholePageSemanticPassInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WholePageContextProfile {
+    pub country_hints: Vec<String>,
+    pub visa_type_hints: Vec<String>,
+    pub authority_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholePageSemanticPageState {
     pub page_id: i64,
     pub section_count: usize,
     pub page_mode_hint: String,
     pub dominant_layers: Vec<String>,
     pub page_summary: String,
+    pub page_context_profile: WholePageContextProfile,
+    pub mixed_section_ids: Vec<i64>,
     pub global_entities: Vec<String>,
 }
 
@@ -1116,6 +1125,60 @@ fn global_entities(text: &str) -> Vec<String> {
     entities
 }
 
+fn page_context_profile(text: &str) -> WholePageContextProfile {
+    let lowered = text.to_lowercase();
+
+    let mut country_hints = Vec::new();
+    for (hint, tokens) in [
+        ("ES", &["spain", "spanish", "испан", "españa"][..]),
+        ("PL", &["poland", "polish", "польш", "polska"][..]),
+        ("FR", &["france", "french", "франц"][..]),
+        ("DE", &["germany", "german", "герман", "deutschland"][..]),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            country_hints.push(hint.to_string());
+        }
+    }
+
+    let mut visa_type_hints = Vec::new();
+    for (hint, tokens) in [
+        ("tourist", &["tourist", "tourism", "турист", "шенген"][..]),
+        ("work", &["work visa", "рабоч", "employment visa"][..]),
+        ("student", &["student visa", "study visa", "учеб", "student"][..]),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            visa_type_hints.push(hint.to_string());
+        }
+    }
+
+    let mut authority_hints = Vec::new();
+    for (hint, tokens) in [
+        ("consulate", &["consulate", "consular", "консуль", "посольств"][..]),
+        ("visa_center", &["vfs", "visa center", "визов"][..]),
+        (
+            "government",
+            &["ministry", "gov.", ".gov", "government", "министер"][..],
+        ),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            authority_hints.push(hint.to_string());
+        }
+    }
+
+    country_hints.sort();
+    country_hints.dedup();
+    visa_type_hints.sort();
+    visa_type_hints.dedup();
+    authority_hints.sort();
+    authority_hints.dedup();
+
+    WholePageContextProfile {
+        country_hints,
+        visa_type_hints,
+        authority_hints,
+    }
+}
+
 fn block_role_for_section(
     section: &raw_crawl_adapter::RawSectionRecord,
 ) -> seo_steps::dom_block_relevance_step::BlockRole {
@@ -1769,12 +1832,25 @@ pub(crate) async fn whole_page_semantic_pass_impl(
                 .map(|section| section.content_md.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
+            let mixed_section_ids = sections
+                .iter()
+                .filter_map(|section| {
+                    let layers = dominant_layers(&section.content_md);
+                    if layers.len() > 1 {
+                        Some(section.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
             WholePageSemanticPageState {
                 page_id,
                 section_count: sections.len(),
                 page_mode_hint: page_mode_hint(&combined),
                 dominant_layers: dominant_layers(&combined),
                 page_summary: summarize(&combined),
+                page_context_profile: page_context_profile(&combined),
+                mixed_section_ids,
                 global_entities: global_entities(&combined),
             }
         })

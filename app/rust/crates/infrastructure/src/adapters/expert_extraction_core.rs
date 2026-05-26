@@ -30,10 +30,19 @@ pub struct ExpertStageRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WholePageContextProfile {
+    pub country_hints: Vec<String>,
+    pub visa_type_hints: Vec<String>,
+    pub authority_hints: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholePageSemanticPassOutput {
     pub page_mode_hint: String,
     pub dominant_layers: Vec<String>,
     pub page_summary: String,
+    pub page_context_profile: WholePageContextProfile,
+    pub mixed_section_ids: Vec<i64>,
     pub global_entities: Vec<String>,
 }
 
@@ -254,6 +263,60 @@ fn global_entities(text: &str) -> Vec<String> {
     entities
 }
 
+fn page_context_profile(text: &str) -> WholePageContextProfile {
+    let lowered = text.to_lowercase();
+
+    let mut country_hints = Vec::new();
+    for (hint, tokens) in [
+        ("ES", &["spain", "spanish", "испан", "españa"][..]),
+        ("PL", &["poland", "polish", "польш", "polska"][..]),
+        ("FR", &["france", "french", "франц"][..]),
+        ("DE", &["germany", "german", "герман", "deutschland"][..]),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            country_hints.push(hint.to_string());
+        }
+    }
+
+    let mut visa_type_hints = Vec::new();
+    for (hint, tokens) in [
+        ("tourist", &["tourist", "tourism", "турист", "шенген"][..]),
+        ("work", &["work visa", "рабоч", "employment visa"][..]),
+        ("student", &["student visa", "study visa", "учеб", "student"][..]),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            visa_type_hints.push(hint.to_string());
+        }
+    }
+
+    let mut authority_hints = Vec::new();
+    for (hint, tokens) in [
+        ("consulate", &["consulate", "consular", "консуль", "посольств"][..]),
+        ("visa_center", &["vfs", "visa center", "визов"][..]),
+        (
+            "government",
+            &["ministry", "gov.", ".gov", "government", "министер"][..],
+        ),
+    ] {
+        if tokens.iter().any(|token| lowered.contains(token)) {
+            authority_hints.push(hint.to_string());
+        }
+    }
+
+    country_hints.sort();
+    country_hints.dedup();
+    visa_type_hints.sort();
+    visa_type_hints.dedup();
+    authority_hints.sort();
+    authority_hints.dedup();
+
+    WholePageContextProfile {
+        country_hints,
+        visa_type_hints,
+        authority_hints,
+    }
+}
+
 fn block_role_for_section(
     section: &RawSectionRecord,
 ) -> seo_steps::dom_block_relevance_step::BlockRole {
@@ -316,6 +379,12 @@ pub fn run_expert_extraction_core(
             page_mode_hint: page_mode_hint(section),
             dominant_layers: dominant_layers(&section.content_md),
             page_summary: summarize(&section.content_md),
+            page_context_profile: page_context_profile(&section.content_md),
+            mixed_section_ids: if dominant_layers(&section.content_md).len() > 1 {
+                vec![section.id]
+            } else {
+                Vec::new()
+            },
             global_entities: global_entities(&section.content_md),
         };
         stage_records.push(stage_record(
@@ -1045,5 +1114,53 @@ mod tests {
             .stage_records
             .iter()
             .any(|record| record.stage_name == "procedural_extraction"));
+    }
+
+    #[test]
+    fn whole_page_semantic_pass_emits_context_profile_and_mixed_section_hint() {
+        let raw = "Spain tourist visa. Passport required. Appointment schedule applies through the consulate and VFS.";
+        let stage_output = WholePageSemanticPassOutput {
+            page_mode_hint: page_mode_hint(&section(7, raw)),
+            dominant_layers: dominant_layers(raw),
+            page_summary: summarize(raw),
+            page_context_profile: page_context_profile(raw),
+            mixed_section_ids: if dominant_layers(raw).len() > 1 {
+                vec![7]
+            } else {
+                Vec::new()
+            },
+            global_entities: global_entities(raw),
+        };
+
+        let report = run_expert_extraction_core("run-semantic-page-context", "ES|tourist||BY", &[section(7, raw)]);
+        let whole_page_record = report.sections[0]
+            .stage_records
+            .iter()
+            .find(|record| record.stage_name == "whole_page_semantic_pass")
+            .expect("whole_page_semantic_pass record");
+        assert_eq!(whole_page_record.status, ExpertStageStatus::Executed);
+
+        assert!(stage_output
+            .page_context_profile
+            .country_hints
+            .contains(&"ES".to_string()));
+        assert!(stage_output
+            .page_context_profile
+            .visa_type_hints
+            .contains(&"tourist".to_string()));
+        assert!(stage_output
+            .page_context_profile
+            .authority_hints
+            .contains(&"consulate".to_string()));
+        assert!(stage_output
+            .page_context_profile
+            .authority_hints
+            .contains(&"visa_center".to_string()));
+        assert_eq!(stage_output.mixed_section_ids, vec![7]);
+
+        assert!(report.sections[0]
+            .stage_records
+            .iter()
+            .any(|record| record.stage_name == "whole_page_semantic_pass"));
     }
 }
