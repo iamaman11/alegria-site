@@ -118,6 +118,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         run_id: run_id.clone(),
         scope: Some(scope.clone()),
         serp_patterns: serp.serp_patterns,
+        graph_context: None,
     });
     assert_eq!(opportunities.keyword_clusters.len(), 2);
     assert!(opportunities.content_gaps.is_empty());
@@ -126,6 +127,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         run_id: run_id.clone(),
         scope: Some(scope),
         keyword_clusters: opportunities.keyword_clusters,
+        graph_context: None,
     });
     assert_eq!(ia.page_nodes.len(), 4);
     assert!(ia
@@ -149,6 +151,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         run_id: run_id.clone(),
         page_nodes: ia.page_nodes.clone(),
         max_links_per_page: 1,
+        graph_context: None,
     });
     assert!(links.link_recommendations.len() >= 4);
     assert!(links

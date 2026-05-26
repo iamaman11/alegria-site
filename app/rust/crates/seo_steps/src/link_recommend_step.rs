@@ -1,5 +1,6 @@
 use contracts::generated::alegria::temporal::v1::{
-    LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
+    GraphPlanningContextState, LinkRecommendInputPayload, LinkRecommendOutputPayload,
+    LinkRecommendationState,
 };
 
 use crate::seo_step_support::{artifact_key, score};
@@ -54,6 +55,26 @@ fn semantic_adjacency(source_path: &str, target_path: &str) -> f64 {
     overlap / union
 }
 
+fn topic_overlap(source_topics: &[String], target_topics: &[String]) -> usize {
+    let source = source_topics.iter().collect::<std::collections::BTreeSet<_>>();
+    let target = target_topics.iter().collect::<std::collections::BTreeSet<_>>();
+    source.intersection(&target).count()
+}
+
+fn cluster_topics_by_key(
+    graph_context: Option<&GraphPlanningContextState>,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    graph_context
+        .map(|context| {
+            context
+                .keyword_clusters
+                .iter()
+                .map(|cluster| (cluster.cluster_key.clone(), cluster.topic_keys.clone()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload {
     let max_links = if input.max_links_per_page == 0 {
         3
@@ -61,6 +82,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
         input.max_links_per_page as usize
     };
     let mut link_recommendations = Vec::new();
+    let topics_by_cluster = cluster_topics_by_key(input.graph_context.as_ref());
 
     for source in &input.page_nodes {
         if !linkable_state(&source.lifecycle_state) {
@@ -97,10 +119,24 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
                 0.0
             };
             let family_bonus = if same_family { 0.04 } else { 0.0 };
-            let link_score = score(if same_scope {
-                (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus
+            let source_topics = topics_by_cluster
+                .get(&source.keyword_cluster_key)
+                .cloned()
+                .unwrap_or_default();
+            let target_topics = topics_by_cluster
+                .get(&target.keyword_cluster_key)
+                .cloned()
+                .unwrap_or_default();
+            let shared_topic_count = topic_overlap(&source_topics, &target_topics);
+            let graph_bonus = if shared_topic_count > 0 {
+                0.08
             } else {
-                (base_score * 0.42) + (semantic * 0.13)
+                0.0
+            };
+            let link_score = score(if same_scope {
+                (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus
+            } else {
+                (base_score * 0.42) + (semantic * 0.13) + (graph_bonus * 0.5)
             });
             link_recommendations.push(LinkRecommendationState {
                 link_recommendation_key: artifact_key(
@@ -122,6 +158,19 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
                 required_flag,
                 score: link_score,
                 status: "candidate".to_string(),
+                reason_code: if shared_topic_count > 0 {
+                    "graph_topic_adjacency".to_string()
+                } else {
+                    "structural_link_scoring".to_string()
+                },
+                topic_keys: source_topics
+                    .iter()
+                    .filter(|topic| target_topics.contains(topic))
+                    .cloned()
+                    .collect(),
+                triple_refs: Vec::new(),
+                graph_confidence: if shared_topic_count > 0 { link_score } else { 0.0 },
+                support_refs: Vec::new(),
             });
             if !required_flag {
                 added += 1;
@@ -131,5 +180,60 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
 
     LinkRecommendOutputPayload {
         link_recommendations,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_adjacent_pages_gain_graph_reasoned_link() {
+        let output = execute(&LinkRecommendInputPayload {
+            max_links_per_page: 3,
+            graph_context: Some(GraphPlanningContextState {
+                keyword_clusters: vec![
+                    contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                        cluster_key: "cluster-a".to_string(),
+                        topic_keys: vec!["visa_refusal_pain_point".to_string()],
+                        ..Default::default()
+                    },
+                    contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                        cluster_key: "cluster-b".to_string(),
+                        topic_keys: vec!["visa_refusal_pain_point".to_string()],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            page_nodes: vec![
+                contracts::generated::alegria::temporal::v1::PageNodeState {
+                    page_node_key: "source".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "hub_page".to_string(),
+                    keyword_cluster_key: "cluster-a".to_string(),
+                    canonical_url_path: "/visa/spain/refusal".to_string(),
+                    canonical_url_family: "visa_type_leaf".to_string(),
+                    lifecycle_state: "planned".to_string(),
+                    ..Default::default()
+                },
+                contracts::generated::alegria::temporal::v1::PageNodeState {
+                    page_node_key: "target".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "detail_page".to_string(),
+                    keyword_cluster_key: "cluster-b".to_string(),
+                    canonical_url_path: "/visa/spain/refusal-appeal".to_string(),
+                    canonical_url_family: "visa_type_leaf".to_string(),
+                    lifecycle_state: "planned".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        assert!(output.link_recommendations.iter().any(|link| {
+            link.source_page_key == "source"
+                && link.target_page_key == "target"
+                && link.reason_code == "graph_topic_adjacency"
+        }));
     }
 }

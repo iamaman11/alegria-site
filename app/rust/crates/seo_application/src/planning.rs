@@ -1,13 +1,15 @@
 use contracts::generated::alegria::temporal::v1::{
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
-    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
-    LinkRecommendationState, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, GraphPlanningContextState,
+    GraphPlanningCoverageSignalState, GraphPlanningTopicSignalState,
+    GraphPlanningTripleSignalState, IaBuildInputPayload, IaBuildOutputPayload,
+    LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
 use seo_ports::{PlanningRepository, SemanticLinkSearchPort, SerpSearchPort};
 use std::collections::{HashMap, HashSet};
+use runtime_models::GraphPlanningContext;
 
 fn linkable_state(state: &str) -> bool {
     !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
@@ -15,6 +17,119 @@ fn linkable_state(state: &str) -> bool {
 
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
+}
+
+fn parse_graph_confidence(value: &str) -> f64 {
+    value.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+fn to_graph_planning_context_state(context: GraphPlanningContext) -> GraphPlanningContextState {
+    GraphPlanningContextState {
+        scope_signature: context.scope_signature,
+        topic_signals: context
+            .topic_signals
+            .into_iter()
+            .map(|signal| GraphPlanningTopicSignalState {
+                topic_key: signal.topic_key,
+                topic_type: signal.topic_type,
+                support_refs: signal.support_refs,
+                graph_confidence: signal.graph_confidence,
+            })
+            .collect(),
+        triple_signals: context
+            .triple_signals
+            .into_iter()
+            .map(|signal| GraphPlanningTripleSignalState {
+                triple_id: signal.triple_id,
+                subject_key: signal.subject_key,
+                relation_type: signal.relation_type,
+                object_key: signal.object_key,
+                support_refs: signal.support_refs,
+                graph_confidence: signal.graph_confidence,
+            })
+            .collect(),
+        coverage_signals: context
+            .coverage_signals
+            .into_iter()
+            .map(|signal| GraphPlanningCoverageSignalState {
+                page_node_key: signal.page_node_key,
+                keyword_cluster_key: signal.keyword_cluster_key,
+                covered_topic_keys: signal.covered_topic_keys,
+                missing_topic_keys: signal.missing_topic_keys,
+                graph_confidence: signal.graph_confidence,
+            })
+            .collect(),
+        keyword_clusters: context
+            .keyword_clusters
+            .into_iter()
+            .map(|cluster| contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                cluster_key: cluster.cluster_key,
+                scope_signature: cluster.scope_signature,
+                seed_keyword: cluster.seed_keyword,
+                dominant_intent: cluster.dominant_intent,
+                status: cluster.status,
+                cluster_version: cluster.cluster_version,
+                reason_code: cluster.reason_code,
+                topic_keys: cluster.topic_keys,
+                triple_refs: cluster.triple_refs,
+                graph_confidence: parse_graph_confidence(&cluster.graph_confidence),
+                support_refs: cluster.support_refs,
+            })
+            .collect(),
+        page_nodes: context
+            .page_nodes
+            .into_iter()
+            .map(|node| contracts::generated::alegria::temporal::v1::PageNodeState {
+                page_node_key: node.page_node_key,
+                scope_signature: node.scope_signature,
+                keyword_cluster_key: node.keyword_cluster_key,
+                blueprint_key: node.blueprint_key,
+                page_type_key: node.page_type_key,
+                dominant_intent: node.dominant_intent,
+                canonical_slug: node.canonical_slug,
+                canonical_url_path: node.canonical_url_path,
+                lifecycle_state: node.lifecycle_state,
+                ..Default::default()
+            })
+            .collect(),
+        content_gaps: context
+            .content_gaps
+            .into_iter()
+            .map(|gap| contracts::generated::alegria::temporal::v1::ContentGapState {
+                content_gap_key: gap.content_gap_key,
+                scope_signature: gap.scope_signature,
+                page_node_key: gap.page_node_key,
+                missing_topic: gap.missing_topic,
+                severity: gap.severity,
+                status: gap.status,
+                reason_code: gap.reason_code,
+                topic_keys: gap.topic_keys,
+                triple_refs: gap.triple_refs,
+                graph_confidence: parse_graph_confidence(&gap.graph_confidence),
+                support_refs: gap.support_refs,
+            })
+            .collect(),
+        link_recommendations: context
+            .link_recommendations
+            .into_iter()
+            .map(|link| LinkRecommendationState {
+                link_recommendation_key: link.link_recommendation_key,
+                scope_signature: link.scope_signature,
+                source_page_key: link.source_page_key,
+                target_page_key: link.target_page_key,
+                link_role: link.link_role,
+                anchor_strategy: link.anchor_strategy,
+                required_flag: link.required_flag,
+                score: link.score,
+                status: link.status,
+                reason_code: link.reason_code,
+                topic_keys: link.topic_keys,
+                triple_refs: link.triple_refs,
+                graph_confidence: parse_graph_confidence(&link.graph_confidence),
+                support_refs: link.support_refs,
+            })
+            .collect(),
+    }
 }
 
 async fn enrich_semantic_link_recommendations<S: SemanticLinkSearchPort>(
@@ -125,6 +240,11 @@ async fn enrich_semantic_link_recommendations<S: SemanticLinkSearchPort>(
                 required_flag: false,
                 score: semantic_score,
                 status: "candidate".to_string(),
+                reason_code: "semantic_link_search".to_string(),
+                topic_keys: Vec::new(),
+                triple_refs: Vec::new(),
+                graph_confidence: semantic_score,
+                support_refs: Vec::new(),
             });
             seen.insert((source.page_node_key.clone(), target.page_node_key.clone()));
             added += 1;
@@ -183,8 +303,17 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
     repo: &R,
     input: &OpportunityBuildInputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
-    let output = seo_steps::opportunity_build_step::execute(input);
-    repo.persist_opportunity_build_output(input, &output)
+    let scope_signature = input
+        .scope
+        .as_ref()
+        .map(|scope| scope.scope_signature.clone())
+        .unwrap_or_default();
+    let graph_context =
+        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let mut enriched = input.clone();
+    enriched.graph_context = Some(graph_context);
+    let output = seo_steps::opportunity_build_step::execute(&enriched);
+    repo.persist_opportunity_build_output(&enriched, &output)
         .await?;
     Ok(output)
 }
@@ -193,8 +322,17 @@ pub async fn run_ia_build<R: PlanningRepository>(
     repo: &R,
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
-    let output = seo_steps::ia_build_step::execute(input);
-    repo.persist_ia_build_output(input, &output).await?;
+    let scope_signature = input
+        .scope
+        .as_ref()
+        .map(|scope| scope.scope_signature.clone())
+        .unwrap_or_default();
+    let graph_context =
+        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let mut enriched = input.clone();
+    enriched.graph_context = Some(graph_context);
+    let output = seo_steps::ia_build_step::execute(&enriched);
+    repo.persist_ia_build_output(&enriched, &output).await?;
     Ok(output)
 }
 
@@ -203,9 +341,18 @@ pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort
     search_port: &S,
     input: &LinkRecommendInputPayload,
 ) -> Result<LinkRecommendOutputPayload, DomainError> {
-    let mut output = seo_steps::link_recommend_step::execute(input);
-    enrich_semantic_link_recommendations(search_port, input, &mut output).await?;
-    repo.persist_link_recommend_output(input, &output).await?;
+    let scope_signature = input
+        .page_nodes
+        .first()
+        .map(|node| node.scope_signature.clone())
+        .unwrap_or_default();
+    let graph_context =
+        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let mut enriched = input.clone();
+    enriched.graph_context = Some(graph_context);
+    let mut output = seo_steps::link_recommend_step::execute(&enriched);
+    enrich_semantic_link_recommendations(search_port, &enriched, &mut output).await?;
+    repo.persist_link_recommend_output(&enriched, &output).await?;
     Ok(output)
 }
 
@@ -213,8 +360,17 @@ pub async fn run_global_site_reconcile<R: PlanningRepository>(
     repo: &R,
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
-    let output = seo_steps::global_site_reconcile_step::execute(input);
-    repo.persist_global_site_reconcile_output(input, &output)
+    let scope_signature = input
+        .scope
+        .as_ref()
+        .map(|scope| scope.scope_signature.clone())
+        .unwrap_or_default();
+    let graph_context =
+        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let mut enriched = input.clone();
+    enriched.graph_context = Some(graph_context);
+    let output = seo_steps::global_site_reconcile_step::execute(&enriched);
+    repo.persist_global_site_reconcile_output(&enriched, &output)
         .await?;
     Ok(output)
 }
@@ -223,6 +379,7 @@ pub async fn run_global_site_reconcile<R: PlanningRepository>(
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use std::sync::Mutex;
     use seo_ports::{
         GlobalNavigationPersistReport, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
         SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
@@ -233,6 +390,14 @@ mod tests {
 
     #[async_trait]
     impl PlanningRepository for FakePlanningRepo {
+        async fn load_graph_planning_context(
+            &self,
+            _run_id: &str,
+            _scope_signature: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(runtime_models::GraphPlanningContext::default())
+        }
+
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -333,6 +498,97 @@ mod tests {
         }
     }
 
+    struct RecordingPlanningRepo {
+        graph_context: runtime_models::GraphPlanningContext,
+        opportunity_input: Mutex<Option<OpportunityBuildInputPayload>>,
+        opportunity_output: Mutex<Option<OpportunityBuildOutputPayload>>,
+        reconcile_output: Mutex<Option<GlobalSiteReconcileOutputPayload>>,
+    }
+
+    impl RecordingPlanningRepo {
+        fn new(graph_context: runtime_models::GraphPlanningContext) -> Self {
+            Self {
+                graph_context,
+                opportunity_input: Mutex::new(None),
+                opportunity_output: Mutex::new(None),
+                reconcile_output: Mutex::new(None),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PlanningRepository for RecordingPlanningRepo {
+        async fn load_graph_planning_context(
+            &self,
+            _run_id: &str,
+            _scope_signature: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(self.graph_context.clone())
+        }
+
+        async fn persist_serp_ingest_output(
+            &self,
+            _input: &SerpIngestInputPayload,
+            _output: &SerpIngestOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_live_serp_query_results(
+            &self,
+            _run_id: &str,
+            _query_batch_key: &str,
+            _ordinal: usize,
+            _query: &str,
+            _response: &OrganicSerpResponse,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_serp_normalize_output(
+            &self,
+            _input: &SerpNormalizeInputPayload,
+            _output: &SerpNormalizeOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_opportunity_build_output(
+            &self,
+            input: &OpportunityBuildInputPayload,
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<(), DomainError> {
+            *self.opportunity_input.lock().unwrap() = Some(input.clone());
+            *self.opportunity_output.lock().unwrap() = Some(output.clone());
+            Ok(())
+        }
+
+        async fn persist_ia_build_output(
+            &self,
+            _input: &IaBuildInputPayload,
+            _output: &IaBuildOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_link_recommend_output(
+            &self,
+            _input: &LinkRecommendInputPayload,
+            _output: &LinkRecommendOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_global_site_reconcile_output(
+            &self,
+            _input: &GlobalSiteReconcileInputPayload,
+            output: &GlobalSiteReconcileOutputPayload,
+        ) -> Result<GlobalNavigationPersistReport, DomainError> {
+            *self.reconcile_output.lock().unwrap() = Some(output.clone());
+            Ok(GlobalNavigationPersistReport::default())
+        }
+    }
+
     #[tokio::test]
     async fn planning_serp_ingest_runs_without_sql_adapter() {
         let repo = FakePlanningRepo;
@@ -397,5 +653,118 @@ mod tests {
             .link_recommendations
             .iter()
             .any(|link| { link.source_page_key == "source" && link.target_page_key == "target" }));
+    }
+
+    #[tokio::test]
+    async fn run_opportunity_build_loads_graph_context_and_persists_reason_payload() {
+        let repo = RecordingPlanningRepo::new(runtime_models::GraphPlanningContext {
+            scope_signature: "scope".to_string(),
+            topic_signals: vec![runtime_models::GraphPlanningTopicSignal {
+                topic_key: "spain-tourist-fee".to_string(),
+                topic_type: "fee".to_string(),
+                support_refs: vec!["editorial://topic/fee".to_string()],
+                graph_confidence: 0.84,
+            }],
+            coverage_signals: vec![runtime_models::GraphPlanningCoverageSignal {
+                page_node_key: String::new(),
+                keyword_cluster_key: String::new(),
+                covered_topic_keys: Vec::new(),
+                missing_topic_keys: vec!["processing-time".to_string()],
+                graph_confidence: 0.8,
+            }],
+            ..Default::default()
+        });
+        let output = run_opportunity_build(
+            &repo,
+            &OpportunityBuildInputPayload {
+                run_id: "run-1".to_string(),
+                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    scope_signature: "scope".to_string(),
+                    ..Default::default()
+                }),
+                serp_patterns: vec![
+                    contracts::generated::alegria::temporal::v1::SerpPatternState {
+                        serp_pattern_key: "p1".to_string(),
+                        scope_signature: "scope".to_string(),
+                        query: "Spain tourist visa fee".to_string(),
+                        dominant_intent: "fee".to_string(),
+                        reliability_score: 0.6,
+                        ..Default::default()
+                    },
+                    contracts::generated::alegria::temporal::v1::SerpPatternState {
+                        serp_pattern_key: "p2".to_string(),
+                        scope_signature: "scope".to_string(),
+                        query: "Spain tourist visa costs".to_string(),
+                        dominant_intent: "fee".to_string(),
+                        reliability_score: 0.58,
+                        ..Default::default()
+                    },
+                ],
+                graph_context: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let persisted_input = repo.opportunity_input.lock().unwrap().clone().unwrap();
+        assert!(persisted_input.graph_context.is_some());
+        let persisted_output = repo.opportunity_output.lock().unwrap().clone().unwrap();
+        assert_eq!(persisted_output.keyword_clusters.len(), 1);
+        assert!(persisted_output
+            .keyword_clusters
+            .iter()
+            .all(|cluster| cluster.reason_code == "graph_topic_family_merge"));
+        assert!(persisted_output.content_gaps.iter().any(|gap| {
+            gap.reason_code == "graph_missing_topic_coverage"
+                && gap.topic_keys.iter().any(|topic| topic == "processing-time")
+        }));
+        assert_eq!(output.keyword_clusters.len(), persisted_output.keyword_clusters.len());
+    }
+
+    #[tokio::test]
+    async fn run_global_site_reconcile_emits_graph_reasoned_gap_without_truth_side_effects() {
+        let repo = RecordingPlanningRepo::new(runtime_models::GraphPlanningContext {
+            scope_signature: "scope".to_string(),
+            coverage_signals: vec![runtime_models::GraphPlanningCoverageSignal {
+                page_node_key: "page-spain".to_string(),
+                keyword_cluster_key: String::new(),
+                covered_topic_keys: Vec::new(),
+                missing_topic_keys: vec!["insurance".to_string()],
+                graph_confidence: 0.72,
+            }],
+            ..Default::default()
+        });
+        let output = run_global_site_reconcile(
+            &repo,
+            &GlobalSiteReconcileInputPayload {
+                run_id: "run-2".to_string(),
+                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    scope_signature: "scope".to_string(),
+                    ..Default::default()
+                }),
+                page_nodes: vec![contracts::generated::alegria::temporal::v1::PageNodeState {
+                    page_node_key: "page-spain".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "hub_page".to_string(),
+                    dominant_intent: "requirements".to_string(),
+                    canonical_url_path: "/visa/spain".to_string(),
+                    canonical_url_family: "/visa".to_string(),
+                    lifecycle_state: "active".to_string(),
+                    ..Default::default()
+                }],
+                link_recommendations: Vec::new(),
+                reconcile_reason: "test@1".to_string(),
+                graph_context: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let persisted_output = repo.reconcile_output.lock().unwrap().clone().unwrap();
+        assert!(persisted_output.content_gaps.iter().any(|gap| {
+            gap.reason_code == "global_reconcile_missing_topic"
+                && gap.topic_keys.iter().any(|topic| topic == "insurance")
+        }));
+        assert_eq!(output.page_nodes[0].lifecycle_state, "active");
     }
 }

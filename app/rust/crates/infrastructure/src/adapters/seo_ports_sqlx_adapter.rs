@@ -5,7 +5,7 @@ use contracts::generated::alegria::read_api::v1::{
     StepParams, TimelineItemParams, WhereToApplyParams,
 };
 use primitives::errors::DomainError;
-use runtime_models::RuleParams;
+use runtime_models::{GraphPlanningContext, RuleParams};
 use seo_domain::identity;
 use seo_ports::{
     CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest, CmsReviewPort,
@@ -653,6 +653,14 @@ impl SemanticLinkSearchPort for SqlxSeoRuntimeRepository<'_> {
 
 #[async_trait]
 impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
+    async fn load_graph_planning_context(
+        &self,
+        run_id: &str,
+        scope_signature: &str,
+    ) -> Result<GraphPlanningContext, DomainError> {
+        sqlx_seo_adapter::load_graph_planning_context(self.pool, run_id, scope_signature).await
+    }
+
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,
@@ -757,6 +765,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 run_id: input.run_id.clone(),
                 scope: input.scope.clone(),
                 keyword_clusters: Vec::new(),
+                graph_context: None,
             },
             &IaBuildOutputPayload {
                 page_nodes: output.page_nodes.clone(),
@@ -771,9 +780,24 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 run_id: input.run_id.clone(),
                 page_nodes: output.page_nodes.clone(),
                 max_links_per_page: 0,
+                graph_context: None,
             },
             &LinkRecommendOutputPayload {
                 link_recommendations: output.link_recommendations.clone(),
+            },
+        )
+        .await?;
+        sqlx_seo_adapter::persist_opportunity_build_output(
+            self.pool,
+            &OpportunityBuildInputPayload {
+                run_id: input.run_id.clone(),
+                scope: input.scope.clone(),
+                serp_patterns: Vec::new(),
+                graph_context: None,
+            },
+            &OpportunityBuildOutputPayload {
+                keyword_clusters: Vec::new(),
+                content_gaps: output.content_gaps.clone(),
             },
         )
         .await?;

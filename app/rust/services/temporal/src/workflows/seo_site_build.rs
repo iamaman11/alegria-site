@@ -233,6 +233,7 @@ impl SeoSiteBuildWorkflow {
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         serp_patterns: serp_ref.serp_patterns.clone(),
+                                        graph_context: None,
                                     },
                                     db_opts(30),
                                 )
@@ -251,6 +252,7 @@ impl SeoSiteBuildWorkflow {
                                         keyword_clusters: opportunities_ref
                                             .keyword_clusters
                                             .clone(),
+                                        graph_context: None,
                                     },
                                     db_opts(30),
                                 )
@@ -266,6 +268,7 @@ impl SeoSiteBuildWorkflow {
                                         run_id: run_id.clone(),
                                         page_nodes: ia_ref.page_nodes.clone(),
                                         max_links_per_page: 3,
+                                        graph_context: None,
                                     },
                                     db_opts(30),
                                 )
@@ -286,6 +289,7 @@ impl SeoSiteBuildWorkflow {
                                             .link_recommendations
                                             .clone(),
                                         reconcile_reason: "seo_site_build_workflow@1".to_string(),
+                                        graph_context: None,
                                     },
                                     db_opts(30),
                                 )

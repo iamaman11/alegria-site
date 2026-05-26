@@ -55,6 +55,11 @@ fn required_link(
         required_flag: true,
         score,
         status: "candidate".to_string(),
+        reason_code: "global_site_reconcile".to_string(),
+        topic_keys: Vec::new(),
+        triple_refs: Vec::new(),
+        graph_confidence: 0.0,
+        support_refs: Vec::new(),
     }
 }
 
@@ -62,6 +67,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
     let mut page_nodes = input.page_nodes.clone();
     let mut orphan_page_node_keys = Vec::new();
     let mut cannibalization_conflict_keys = Vec::new();
+    let mut content_gaps = Vec::new();
     let mut updated_page_count = 0u32;
 
     let menu_group = page_nodes
@@ -237,6 +243,40 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         }
     }
 
+    if let Some(graph_context) = input.graph_context.as_ref() {
+        for coverage in &graph_context.coverage_signals {
+            for missing_topic in &coverage.missing_topic_keys {
+                content_gaps.push(contracts::generated::alegria::temporal::v1::ContentGapState {
+                    content_gap_key: primitives::seo::seo_artifact_key(
+                        "content_gap",
+                        &[
+                            &page_nodes
+                                .first()
+                                .map(|page| page.scope_signature.clone())
+                                .unwrap_or_default(),
+                            missing_topic,
+                            "global_reconcile_missing_topic",
+                            "seo_content_gap@1",
+                        ],
+                    ),
+                    scope_signature: page_nodes
+                        .first()
+                        .map(|page| page.scope_signature.clone())
+                        .unwrap_or_default(),
+                    page_node_key: coverage.page_node_key.clone(),
+                    missing_topic: missing_topic.clone(),
+                    severity: "medium".to_string(),
+                    status: "open".to_string(),
+                    reason_code: "global_reconcile_missing_topic".to_string(),
+                    topic_keys: vec![missing_topic.clone()],
+                    triple_refs: Vec::new(),
+                    graph_confidence: coverage.graph_confidence,
+                    support_refs: vec![format!("coverage://{}", coverage.page_node_key)],
+                });
+            }
+        }
+    }
+
     GlobalSiteReconcileOutputPayload {
         page_nodes,
         updated_page_count,
@@ -245,5 +285,58 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         orphan_page_node_keys,
         cannibalization_conflict_keys,
         status: "done".to_string(),
+        content_gaps,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::GraphPlanningCoverageSignalState;
+
+    #[test]
+    fn emits_graph_backed_missing_topic_gap_without_upgrading_page_state() {
+        let output = execute(&GlobalSiteReconcileInputPayload {
+            graph_context: Some(contracts::generated::alegria::temporal::v1::GraphPlanningContextState {
+                coverage_signals: vec![GraphPlanningCoverageSignalState {
+                    page_node_key: "detail".to_string(),
+                    keyword_cluster_key: "cluster-a".to_string(),
+                    covered_topic_keys: vec!["topic_a".to_string()],
+                    missing_topic_keys: vec!["topic_b".to_string()],
+                    graph_confidence: 0.73,
+                }],
+                ..Default::default()
+            }),
+            page_nodes: vec![
+                PageNodeState {
+                    page_node_key: "country".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "country_hub_page".to_string(),
+                    lifecycle_state: "planned".to_string(),
+                    ..Default::default()
+                },
+                PageNodeState {
+                    page_node_key: "hub".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "hub_page".to_string(),
+                    lifecycle_state: "planned".to_string(),
+                    ..Default::default()
+                },
+                PageNodeState {
+                    page_node_key: "detail".to_string(),
+                    scope_signature: "scope".to_string(),
+                    page_type_key: "detail_page".to_string(),
+                    lifecycle_state: "planned".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        assert_eq!(output.content_gaps.len(), 1);
+        assert_eq!(output.content_gaps[0].reason_code, "global_reconcile_missing_topic");
+        assert!(output
+            .page_nodes
+            .iter()
+            .all(|page| page.lifecycle_state == "planned"));
     }
 }

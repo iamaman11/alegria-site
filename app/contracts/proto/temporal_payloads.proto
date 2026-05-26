@@ -460,6 +460,11 @@ message KeywordClusterState {
   string dominant_intent = 4;
   string status = 5;
   uint32 cluster_version = 6;
+  string reason_code = 7;
+  repeated string topic_keys = 8;
+  repeated string triple_refs = 9;
+  double graph_confidence = 10;
+  repeated string support_refs = 11;
 }
 
 message ContentGapState {
@@ -469,6 +474,11 @@ message ContentGapState {
   string missing_topic = 4;
   string severity = 5;
   string status = 6;
+  string reason_code = 7;
+  repeated string topic_keys = 8;
+  repeated string triple_refs = 9;
+  double graph_confidence = 10;
+  repeated string support_refs = 11;
 }
 
 message PageBlueprintState {
@@ -520,6 +530,46 @@ message LinkRecommendationState {
   bool required_flag = 7;
   double score = 8;
   string status = 9;
+  string reason_code = 10;
+  repeated string topic_keys = 11;
+  repeated string triple_refs = 12;
+  double graph_confidence = 13;
+  repeated string support_refs = 14;
+}
+
+message GraphPlanningTopicSignalState {
+  string topic_key = 1;
+  string topic_type = 2;
+  repeated string support_refs = 3;
+  double graph_confidence = 4;
+}
+
+message GraphPlanningTripleSignalState {
+  string triple_id = 1;
+  string subject_key = 2;
+  string relation_type = 3;
+  string object_key = 4;
+  repeated string support_refs = 5;
+  double graph_confidence = 6;
+}
+
+message GraphPlanningCoverageSignalState {
+  string page_node_key = 1;
+  string keyword_cluster_key = 2;
+  repeated string covered_topic_keys = 3;
+  repeated string missing_topic_keys = 4;
+  double graph_confidence = 5;
+}
+
+message GraphPlanningContextState {
+  string scope_signature = 1;
+  repeated GraphPlanningTopicSignalState topic_signals = 2;
+  repeated GraphPlanningTripleSignalState triple_signals = 3;
+  repeated GraphPlanningCoverageSignalState coverage_signals = 4;
+  repeated KeywordClusterState keyword_clusters = 5;
+  repeated PageNodeState page_nodes = 6;
+  repeated ContentGapState content_gaps = 7;
+  repeated LinkRecommendationState link_recommendations = 8;
 }
 
 message PageBriefState {
@@ -629,6 +679,7 @@ message GlobalSiteReconcileInputPayload {
   repeated PageNodeState page_nodes = 3;
   repeated LinkRecommendationState link_recommendations = 4;
   string reconcile_reason = 5;
+  GraphPlanningContextState graph_context = 6;
 }
 
 message GlobalSiteReconcileOutputPayload {
@@ -639,6 +690,7 @@ message GlobalSiteReconcileOutputPayload {
   repeated string orphan_page_node_keys = 5;
   repeated string cannibalization_conflict_keys = 6;
   string status = 7;
+  repeated ContentGapState content_gaps = 8;
 }
 
 message SerpNormalizeInputPayload {
@@ -658,6 +710,7 @@ message OpportunityBuildInputPayload {
   string run_id = 1;
   SeoScopePayload scope = 2;
   repeated SerpPatternState serp_patterns = 3;
+  GraphPlanningContextState graph_context = 4;
 }
 
 message OpportunityBuildOutputPayload {
@@ -669,6 +722,7 @@ message IaBuildInputPayload {
   string run_id = 1;
   SeoScopePayload scope = 2;
   repeated KeywordClusterState keyword_clusters = 3;
+  GraphPlanningContextState graph_context = 4;
 }
 
 message IaBuildOutputPayload {
@@ -681,6 +735,7 @@ message LinkRecommendInputPayload {
   string run_id = 1;
   repeated PageNodeState page_nodes = 2;
   uint32 max_links_per_page = 3;
+  GraphPlanningContextState graph_context = 4;
 }
 
 message LinkRecommendOutputPayload {

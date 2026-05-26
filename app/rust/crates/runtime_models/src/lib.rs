@@ -355,6 +355,11 @@ pub struct KeywordCluster {
     pub dominant_intent: String,
     pub status: String,
     pub cluster_version: u32,
+    pub reason_code: String,
+    pub topic_keys: Vec<String>,
+    pub triple_refs: Vec<String>,
+    pub graph_confidence: String,
+    pub support_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -391,6 +396,11 @@ pub struct LinkRecommendation {
     pub required_flag: bool,
     pub score: f64,
     pub status: String,
+    pub reason_code: String,
+    pub topic_keys: Vec<String>,
+    pub triple_refs: Vec<String>,
+    pub graph_confidence: String,
+    pub support_refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -412,6 +422,50 @@ pub struct ContentGap {
     pub missing_topic: String,
     pub severity: String,
     pub status: String,
+    pub reason_code: String,
+    pub topic_keys: Vec<String>,
+    pub triple_refs: Vec<String>,
+    pub graph_confidence: String,
+    pub support_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GraphPlanningTopicSignal {
+    pub topic_key: String,
+    pub topic_type: String,
+    pub support_refs: Vec<String>,
+    pub graph_confidence: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GraphPlanningTripleSignal {
+    pub triple_id: String,
+    pub subject_key: String,
+    pub relation_type: String,
+    pub object_key: String,
+    pub support_refs: Vec<String>,
+    pub graph_confidence: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GraphPlanningCoverageSignal {
+    pub page_node_key: String,
+    pub keyword_cluster_key: String,
+    pub covered_topic_keys: Vec<String>,
+    pub missing_topic_keys: Vec<String>,
+    pub graph_confidence: f64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GraphPlanningContext {
+    pub scope_signature: String,
+    pub topic_signals: Vec<GraphPlanningTopicSignal>,
+    pub triple_signals: Vec<GraphPlanningTripleSignal>,
+    pub coverage_signals: Vec<GraphPlanningCoverageSignal>,
+    pub keyword_clusters: Vec<KeywordCluster>,
+    pub page_nodes: Vec<PageNode>,
+    pub content_gaps: Vec<ContentGap>,
+    pub link_recommendations: Vec<LinkRecommendation>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

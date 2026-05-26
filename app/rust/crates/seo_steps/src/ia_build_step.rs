@@ -161,6 +161,7 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
     let mut canonical_owner: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
     let mut cannibalization_conflicts = Vec::new();
+    let mut seen_topic_families = std::collections::BTreeMap::<String, String>::new();
 
     let country_prefix = country_prefix(input);
     let canonical_prefix = canonical_prefix(input);
@@ -253,6 +254,13 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         } else {
             cluster.scope_signature.clone()
         };
+        let graph_confidence = cluster.graph_confidence;
+        let ambiguous_topic_family = cluster.topic_keys.len() > 1 && graph_confidence < 0.6;
+        let topic_family_key = if cluster.topic_keys.is_empty() {
+            cluster.seed_keyword.clone()
+        } else {
+            cluster.topic_keys.join("|")
+        };
         let canonical_slug = slug(&cluster.seed_keyword);
         let page_type_key = page_type_for_keyword(&cluster.seed_keyword).to_string();
         let path_segment = page_type_path_segment(&page_type_key, &canonical_slug);
@@ -273,6 +281,23 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             "page_node",
             &[&scope, &page_type_key, &dominant_intent, &canonical_slug],
         );
+        if let Some(existing_owner) =
+            seen_topic_families.insert(topic_family_key.clone(), page_node_key.clone())
+        {
+            cannibalization_conflicts.push(CannibalizationConflictState {
+                conflict_key: artifact_key(
+                    "cannibalization_conflict",
+                    &[&scope, &existing_owner, &page_node_key, "duplicate_topic_family"],
+                ),
+                scope_signature: scope.clone(),
+                page_key_a: existing_owner,
+                page_key_b: page_node_key.clone(),
+                conflict_reason: "duplicate_topic_family".to_string(),
+                severity: "high".to_string(),
+                status: "open".to_string(),
+            });
+            continue;
+        }
 
         if let Some(existing_owner) =
             canonical_owner.insert(canonical_url_path.clone(), page_node_key.clone())
@@ -304,7 +329,11 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             dominant_intent,
             canonical_slug,
             canonical_url_path,
-            lifecycle_state: "planned".to_string(),
+            lifecycle_state: if ambiguous_topic_family {
+                "blocked".to_string()
+            } else {
+                "planned".to_string()
+            },
             parent_page_node_key: hub_page_node_key.clone(),
             hierarchy_depth: 4,
             menu_group: format!("visa:{country_segment}"),
@@ -317,5 +346,78 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         page_nodes,
         page_blueprints,
         cannibalization_conflicts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_topic_family_does_not_create_duplicate_page_nodes() {
+        let output = execute(&IaBuildInputPayload {
+            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                locale: "ru-RU".to_string(),
+                country_code: "ES".to_string(),
+                visa_type: "tourist".to_string(),
+                scope_signature: "scope".to_string(),
+                ..Default::default()
+            }),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-a".to_string(),
+                    scope_signature: "scope".to_string(),
+                    seed_keyword: "visa refusal guide".to_string(),
+                    dominant_intent: "informational".to_string(),
+                    topic_keys: vec!["visa_refusal_pain_point".to_string()],
+                    graph_confidence: 0.9,
+                    ..Default::default()
+                },
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-b".to_string(),
+                    scope_signature: "scope".to_string(),
+                    seed_keyword: "visa refusal appeal".to_string(),
+                    dominant_intent: "informational".to_string(),
+                    topic_keys: vec!["visa_refusal_pain_point".to_string()],
+                    graph_confidence: 0.91,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let detail_pages = output
+            .page_nodes
+            .iter()
+            .filter(|page| page.page_type_key == "detail_page")
+            .count();
+        assert_eq!(detail_pages, 1);
+        assert_eq!(output.cannibalization_conflicts.len(), 1);
+    }
+
+    #[test]
+    fn ambiguous_topic_family_is_blocked() {
+        let output = execute(&IaBuildInputPayload {
+            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                locale: "ru-RU".to_string(),
+                country_code: "ES".to_string(),
+                visa_type: "tourist".to_string(),
+                scope_signature: "scope".to_string(),
+                ..Default::default()
+            }),
+            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                cluster_key: "cluster-a".to_string(),
+                scope_signature: "scope".to_string(),
+                seed_keyword: "visa support".to_string(),
+                dominant_intent: "informational".to_string(),
+                topic_keys: vec!["topic_a".to_string(), "topic_b".to_string()],
+                graph_confidence: 0.4,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"));
     }
 }

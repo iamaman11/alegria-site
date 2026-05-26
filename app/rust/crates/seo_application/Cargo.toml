@@ -9,6 +9,7 @@ primitives = { path = "../primitives" }
 seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
+runtime_models = { path = "../runtime_models" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }

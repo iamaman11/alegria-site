@@ -377,6 +377,7 @@ async fn run_planning_phase<
                     run_id,
                     scope: request.site_input.scope.clone(),
                     serp_patterns: serp.serp_patterns.clone(),
+                    graph_context: None,
                 },
             )
             .await?;
@@ -400,6 +401,7 @@ async fn run_planning_phase<
                     run_id,
                     scope: request.site_input.scope.clone(),
                     keyword_clusters: opportunities.keyword_clusters.clone(),
+                    graph_context: None,
                 },
             )
             .await?;
@@ -421,6 +423,7 @@ async fn run_planning_phase<
                     run_id,
                     page_nodes: ia.page_nodes.clone(),
                     max_links_per_page: 3,
+                    graph_context: None,
                 },
             )
             .await?;
@@ -444,6 +447,7 @@ async fn run_planning_phase<
                     page_nodes: ia.page_nodes.clone(),
                     link_recommendations: links.link_recommendations.clone(),
                     reconcile_reason: format!("{}@1", kind_label(request.scenario)),
+                    graph_context: None,
                 },
             )
             .await?;
@@ -1221,6 +1225,14 @@ mod tests {
 
     #[async_trait]
     impl PlanningRepository for FakeRepo {
+        async fn load_graph_planning_context(
+            &self,
+            _run_id: &str,
+            _scope_signature: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(runtime_models::GraphPlanningContext::default())
+        }
+
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,

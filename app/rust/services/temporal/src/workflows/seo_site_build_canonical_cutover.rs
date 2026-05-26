@@ -658,6 +658,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     scope: Some(scope.clone()),
                     serp_patterns: serp_normalize.serp_patterns.clone(),
+                    graph_context: None,
                 },
                 db_opts(30),
             )
@@ -672,6 +673,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     scope: Some(scope.clone()),
                     keyword_clusters: opportunity_build.keyword_clusters.clone(),
+                    graph_context: None,
                 },
                 db_opts(30),
             )
@@ -686,6 +688,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     page_nodes: ia_build.page_nodes.clone(),
                     max_links_per_page: 3,
+                    graph_context: None,
                 },
                 db_opts(30),
             )
@@ -702,6 +705,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     page_nodes: ia_build.page_nodes.clone(),
                     link_recommendations: link_recommend.link_recommendations.clone(),
                     reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
+                    graph_context: None,
                 },
                 db_opts(30),
             )

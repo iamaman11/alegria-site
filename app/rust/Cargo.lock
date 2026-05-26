@@ -4635,6 +4635,7 @@ dependencies = [
  "async-trait",
  "contracts",
  "primitives",
+ "runtime_models",
  "seo_domain",
  "seo_ports",
  "seo_steps",
@@ -4661,6 +4662,7 @@ dependencies = [
  "contracts",
  "primitives",
  "prost 0.14.3",
+ "runtime_models",
  "serde",
  "serde_json",
 ]

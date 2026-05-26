@@ -328,7 +328,7 @@ Authority remains upstream in the Truth Plane.
 
 ### 7.1 Active
 
-- `SeoSiteBuildWorkflow`
+- `SeoSiteBuildCanonicalCutoverWorkflow`
 - truth extraction candidate path
 - validator foundation
 - adjudication writer path
@@ -340,6 +340,11 @@ Authority remains upstream in the Truth Plane.
   - `ia_build`
   - `link_recommend`
   - `global_site_reconcile`
+- planning-only graph-backed cluster/topic reasoning inside:
+  - `opportunity_build`
+  - `ia_build`
+  - `link_recommend`
+  - `global_site_reconcile`
 
 ### 7.2 Partial
 
@@ -347,15 +352,20 @@ Authority remains upstream in the Truth Plane.
 - `Qdrant` projection surface
 - retrieval support during crawl/runtime
 - ontology-backed canonical keys in relational storage
+- graph-backed planning provenance on:
+  - `site.keyword_clusters`
+  - `site.content_gaps`
+  - `site.link_recommendations`
 
 ### 7.3 Deferred
 
-- `Layer Router` as mandatory active runtime gate
-- `Entity Span Detection` as mandatory active runtime gate
-- `Canonical Mapping` as mandatory active runtime gate
-- `Triple Builder` as mandatory active runtime gate
-- full evidence-grade entity/relation extraction
-- graph-first cluster/topic reasoning
+- any graph tranche that would affect:
+  - `page_brief`
+  - `draft_assemble`
+  - `draft_qa`
+  - `publish_*`
+  - `rebuild_detect`
+- any graph or retrieval path that upgrades truth directly
 
 ### 7.4 Legacy / Quarantined
 

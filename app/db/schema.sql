@@ -547,6 +547,8 @@ CREATE TABLE IF NOT EXISTS site.keyword_clusters (
     seed_keyword      TEXT NOT NULL,
     dominant_intent   TEXT NOT NULL,
     cluster_version   INTEGER NOT NULL DEFAULT 1 CHECK (cluster_version > 0),
+    reason_payload    JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason_version    TEXT NOT NULL DEFAULT 'graph_planning@1',
     derivation_version TEXT NOT NULL DEFAULT 'seo_cluster@1',
     status            TEXT NOT NULL DEFAULT 'candidate'
                       CHECK (status IN ('candidate','accepted','rejected','deprecated')),
@@ -756,6 +758,8 @@ CREATE TABLE IF NOT EXISTS site.content_gaps (
     severity           TEXT NOT NULL DEFAULT 'medium'
                        CHECK (severity IN ('low','medium','high','blocking')),
     evidence_ref       TEXT,
+    reason_payload     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason_version     TEXT NOT NULL DEFAULT 'graph_planning@1',
     detector_version   TEXT NOT NULL DEFAULT 'seo_content_gap@1',
     status             TEXT NOT NULL DEFAULT 'open'
                        CHECK (status IN ('open','accepted','resolved','rejected','deprecated')),
@@ -776,6 +780,8 @@ CREATE TABLE IF NOT EXISTS site.link_recommendations (
     anchor_strategy         TEXT NOT NULL DEFAULT 'descriptive',
     required_flag           BOOLEAN NOT NULL DEFAULT false,
     score                   NUMERIC(6,5) NOT NULL DEFAULT 0 CHECK (score BETWEEN 0 AND 1),
+    reason_payload          JSONB NOT NULL DEFAULT '{}'::jsonb,
+    reason_version          TEXT NOT NULL DEFAULT 'graph_planning@1',
     scoring_version         TEXT NOT NULL DEFAULT 'seo_link_score@1',
     status                  TEXT NOT NULL DEFAULT 'candidate'
                             CHECK (status IN ('candidate','accepted','applied','rejected','expired','deprecated')),

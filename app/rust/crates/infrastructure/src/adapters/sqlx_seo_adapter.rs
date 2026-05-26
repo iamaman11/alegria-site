@@ -14,7 +14,12 @@ use contracts::generated::alegria::temporal::v1::{
 use primitives::errors::DomainError;
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use prost::Message;
+use runtime_models::{
+    ContentGap, GraphPlanningContext, GraphPlanningCoverageSignal, GraphPlanningTopicSignal,
+    GraphPlanningTripleSignal, KeywordCluster, LinkRecommendation, PageNode,
+};
 use seo_domain::{applicability, identity, rebuild};
+use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
 use uuid::Uuid;
@@ -34,6 +39,44 @@ struct ScopeFields {
     country_code: Option<String>,
     visa_type: Option<String>,
     applicant_profile: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EditorialExtractionSweepOutputBlob {
+    sections: Vec<EditorialExtractionSectionBlob>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EditorialExtractionSectionBlob {
+    topics: Vec<EditorialTopicBlob>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct EditorialTopicBlob {
+    topic_type: String,
+    topic_key_candidate: String,
+    #[allow(dead_code)]
+    confidence: f32,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TripleBuilderSweepOutputBlob {
+    sections: Vec<TripleBuilderSectionBlob>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TripleBuilderSectionBlob {
+    triples: Vec<TripleSignalBlob>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TripleSignalBlob {
+    triple_id: String,
+    subject_key: String,
+    relation_type: String,
+    object_key: String,
+    evidence_section_id: String,
+    confidence: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -1515,6 +1558,53 @@ fn label_from_slug(value: &str) -> String {
     }
 }
 
+fn graph_reason_payload(
+    reason_code: &str,
+    topic_keys: &[String],
+    triple_refs: &[String],
+    support_refs: &[String],
+    graph_confidence: f64,
+) -> Value {
+    json!({
+        "reason_code": reason_code,
+        "topic_keys": topic_keys,
+        "triple_refs": triple_refs,
+        "support_refs": support_refs,
+        "graph_confidence": graph_confidence,
+        "source": "graph_planning_context",
+    })
+}
+
+async fn load_latest_step_output_blob<T: DeserializeOwned>(
+    pool: &PgPool,
+    run_id: Uuid,
+    step_name: &str,
+) -> Result<Option<T>, DomainError> {
+    let row = sqlx::query(
+        r#"
+        SELECT payload_bytes
+        FROM pipeline.step_payload_blobs
+        WHERE run_id = $1
+          AND step_name = $2
+          AND payload_kind = 'output'
+        ORDER BY created_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(run_id)
+    .bind(step_name)
+    .fetch_optional(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let payload_bytes: Vec<u8> = row.get("payload_bytes");
+    serde_json::from_slice::<T>(&payload_bytes)
+        .map(Some)
+        .map_err(|e| contract_violation(format!("decode {step_name} output blob: {e}")))
+}
+
 pub async fn load_seo_site_build_input(
     pool: &PgPool,
     run_id: &str,
@@ -1614,6 +1704,250 @@ pub async fn load_seo_site_build_input(
         input.run_mode = "publish_with_hitl".to_string();
     }
     Ok(input)
+}
+
+pub async fn load_graph_planning_context(
+    pool: &PgPool,
+    run_id: &str,
+    scope_signature: &str,
+) -> Result<GraphPlanningContext, DomainError> {
+    let run_uuid = Uuid::parse_str(run_id)
+        .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
+
+    let topic_signals = load_latest_step_output_blob::<EditorialExtractionSweepOutputBlob>(
+        pool,
+        run_uuid,
+        "editorial_extraction",
+    )
+    .await?
+    .map(|payload| {
+        payload
+            .sections
+            .into_iter()
+            .flat_map(|section| {
+                section.topics.into_iter().map(|topic| GraphPlanningTopicSignal {
+                    topic_key: topic.topic_key_candidate.clone(),
+                    topic_type: topic.topic_type,
+                    support_refs: vec![format!("step://editorial_extraction/{}", topic.topic_key_candidate)],
+                    graph_confidence: 0.82,
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+
+    let triple_signals = load_latest_step_output_blob::<TripleBuilderSweepOutputBlob>(
+        pool,
+        run_uuid,
+        "triple_builder",
+    )
+    .await?
+    .map(|payload| {
+        payload
+            .sections
+            .into_iter()
+            .flat_map(|section| {
+                section.triples.into_iter().map(|triple| GraphPlanningTripleSignal {
+                    triple_id: triple.triple_id,
+                    subject_key: triple.subject_key,
+                    relation_type: triple.relation_type,
+                    object_key: triple.object_key,
+                    support_refs: vec![format!("section://{}", triple.evidence_section_id)],
+                    graph_confidence: triple.confidence as f64,
+                })
+            })
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+
+    let keyword_clusters = sqlx::query(
+        r#"
+        SELECT cluster_key, scope_signature, seed_keyword, dominant_intent, status, cluster_version,
+               COALESCE(reason_payload->>'reason_code', '') AS reason_code,
+               COALESCE(reason_payload->'topic_keys', '[]'::jsonb) AS topic_keys,
+               COALESCE(reason_payload->'triple_refs', '[]'::jsonb) AS triple_refs,
+               COALESCE(reason_payload->>'graph_confidence', '0') AS graph_confidence,
+               COALESCE(reason_payload->'support_refs', '[]'::jsonb) AS support_refs
+        FROM site.keyword_clusters
+        WHERE scope_signature = $1
+        ORDER BY updated_at DESC, cluster_key
+        "#,
+    )
+    .bind(scope_signature)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?
+    .into_iter()
+    .map(|row| KeywordCluster {
+        cluster_key: row.get("cluster_key"),
+        scope_signature: row.get("scope_signature"),
+        seed_keyword: row.get("seed_keyword"),
+        dominant_intent: row.get("dominant_intent"),
+        status: row.get("status"),
+        cluster_version: row.get::<i32, _>("cluster_version") as u32,
+        reason_code: row.get("reason_code"),
+        topic_keys: row
+            .get::<Json<Vec<String>>, _>("topic_keys")
+            .0,
+        triple_refs: row
+            .get::<Json<Vec<String>>, _>("triple_refs")
+            .0,
+        graph_confidence: row.get("graph_confidence"),
+        support_refs: row
+            .get::<Json<Vec<String>>, _>("support_refs")
+            .0,
+    })
+    .collect::<Vec<_>>();
+
+    let page_nodes = sqlx::query(
+        r#"
+        SELECT page_node_key, scope_signature, COALESCE(keyword_cluster_key, '') AS keyword_cluster_key,
+               COALESCE(blueprint_key, '') AS blueprint_key, page_type_key, dominant_intent,
+               canonical_slug, canonical_url_path, lifecycle_state
+        FROM site.page_nodes
+        WHERE scope_signature = $1
+        ORDER BY updated_at DESC, page_node_key
+        "#,
+    )
+    .bind(scope_signature)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?
+    .into_iter()
+    .map(|row| PageNode {
+        page_node_key: row.get("page_node_key"),
+        scope_signature: row.get("scope_signature"),
+        keyword_cluster_key: row.get("keyword_cluster_key"),
+        blueprint_key: row.get("blueprint_key"),
+        page_type_key: row.get("page_type_key"),
+        dominant_intent: row.get("dominant_intent"),
+        canonical_slug: row.get("canonical_slug"),
+        canonical_url_path: row.get("canonical_url_path"),
+        lifecycle_state: row.get("lifecycle_state"),
+    })
+    .collect::<Vec<_>>();
+
+    let content_gaps = sqlx::query(
+        r#"
+        SELECT content_gap_key, scope_signature, COALESCE(page_node_key, '') AS page_node_key,
+               missing_topic, severity, status,
+               COALESCE(reason_payload->>'reason_code', '') AS reason_code,
+               COALESCE(reason_payload->'topic_keys', '[]'::jsonb) AS topic_keys,
+               COALESCE(reason_payload->'triple_refs', '[]'::jsonb) AS triple_refs,
+               COALESCE(reason_payload->>'graph_confidence', '0') AS graph_confidence,
+               COALESCE(reason_payload->'support_refs', '[]'::jsonb) AS support_refs
+        FROM site.content_gaps
+        WHERE scope_signature = $1
+        ORDER BY updated_at DESC, content_gap_key
+        "#,
+    )
+    .bind(scope_signature)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?
+    .into_iter()
+    .map(|row| ContentGap {
+        content_gap_key: row.get("content_gap_key"),
+        scope_signature: row.get("scope_signature"),
+        page_node_key: row.get("page_node_key"),
+        missing_topic: row.get("missing_topic"),
+        severity: row.get("severity"),
+        status: row.get("status"),
+        reason_code: row.get("reason_code"),
+        topic_keys: row
+            .get::<Json<Vec<String>>, _>("topic_keys")
+            .0,
+        triple_refs: row
+            .get::<Json<Vec<String>>, _>("triple_refs")
+            .0,
+        graph_confidence: row.get("graph_confidence"),
+        support_refs: row
+            .get::<Json<Vec<String>>, _>("support_refs")
+            .0,
+    })
+    .collect::<Vec<_>>();
+
+    let link_recommendation_rows = sqlx::query(
+        r#"
+        SELECT link_recommendation_key, scope_signature, source_page_key, target_page_key,
+               link_role, anchor_strategy, required_flag, score::double precision AS score, status,
+               COALESCE(reason_payload->>'reason_code', '') AS reason_code,
+               COALESCE(reason_payload->'topic_keys', '[]'::jsonb) AS topic_keys,
+               COALESCE(reason_payload->'triple_refs', '[]'::jsonb) AS triple_refs,
+               COALESCE(reason_payload->>'graph_confidence', '0') AS graph_confidence,
+               COALESCE(reason_payload->'support_refs', '[]'::jsonb) AS support_refs
+        FROM site.link_recommendations
+        WHERE scope_signature = $1
+        ORDER BY updated_at DESC, link_recommendation_key
+        "#,
+    )
+    .bind(scope_signature)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    let mut link_recommendations = Vec::with_capacity(link_recommendation_rows.len());
+    for row in link_recommendation_rows {
+        let recommendation = LinkRecommendation {
+            link_recommendation_key: row.try_get("link_recommendation_key").map_err(classify_sqlx)?,
+            scope_signature: row.try_get("scope_signature").map_err(classify_sqlx)?,
+            source_page_key: row.try_get("source_page_key").map_err(classify_sqlx)?,
+            target_page_key: row.try_get("target_page_key").map_err(classify_sqlx)?,
+            link_role: row.try_get("link_role").map_err(classify_sqlx)?,
+            anchor_strategy: row.try_get("anchor_strategy").map_err(classify_sqlx)?,
+            required_flag: row.try_get("required_flag").map_err(classify_sqlx)?,
+            score: row.try_get::<f64, _>("score").map_err(classify_sqlx)?,
+            status: row.try_get("status").map_err(classify_sqlx)?,
+            reason_code: row.try_get("reason_code").map_err(classify_sqlx)?,
+            topic_keys: row
+                .try_get::<Json<Vec<String>>, _>("topic_keys")
+                .map_err(classify_sqlx)?
+                .0,
+            triple_refs: row
+                .try_get::<Json<Vec<String>>, _>("triple_refs")
+                .map_err(classify_sqlx)?
+                .0,
+            graph_confidence: row.try_get("graph_confidence").map_err(classify_sqlx)?,
+            support_refs: row
+                .try_get::<Json<Vec<String>>, _>("support_refs")
+                .map_err(classify_sqlx)?
+                .0,
+        };
+        link_recommendations.push(recommendation);
+    }
+
+    let coverage_signals = page_nodes
+        .iter()
+        .map(|page| {
+            let cluster_topics = keyword_clusters
+                .iter()
+                .find(|cluster| cluster.cluster_key == page.keyword_cluster_key)
+                .map(|cluster| cluster.topic_keys.clone())
+                .unwrap_or_default();
+            let missing_topic_keys = content_gaps
+                .iter()
+                .filter(|gap| gap.page_node_key == page.page_node_key || gap.page_node_key.is_empty())
+                .map(|gap| gap.missing_topic.clone())
+                .collect::<Vec<_>>();
+            GraphPlanningCoverageSignal {
+                page_node_key: page.page_node_key.clone(),
+                keyword_cluster_key: page.keyword_cluster_key.clone(),
+                covered_topic_keys: cluster_topics,
+                missing_topic_keys,
+                graph_confidence: 0.75,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    Ok(GraphPlanningContext {
+        scope_signature: scope_signature.to_string(),
+        topic_signals,
+        triple_signals,
+        coverage_signals,
+        keyword_clusters,
+        page_nodes,
+        content_gaps,
+        link_recommendations,
+    })
 }
 
 pub async fn load_section_templates(
@@ -1991,8 +2325,8 @@ pub async fn persist_opportunity_build_output(
             INSERT INTO site.keyword_clusters
                 (cluster_key, scope_signature, market, locale, country_code, visa_type,
                  applicant_profile, seed_keyword, dominant_intent, cluster_version,
-                 derivation_version, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'seo_cluster@1', $11)
+                 derivation_version, status, reason_payload, reason_version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'seo_cluster@1', $11, $12, 'graph_planning@1')
             ON CONFLICT (cluster_key) DO UPDATE
             SET scope_signature   = EXCLUDED.scope_signature,
                 market            = EXCLUDED.market,
@@ -2003,6 +2337,8 @@ pub async fn persist_opportunity_build_output(
                 seed_keyword      = EXCLUDED.seed_keyword,
                 dominant_intent   = EXCLUDED.dominant_intent,
                 cluster_version   = EXCLUDED.cluster_version,
+                reason_payload    = EXCLUDED.reason_payload,
+                reason_version    = EXCLUDED.reason_version,
                 status            = EXCLUDED.status,
                 updated_at        = now()
             "#,
@@ -2018,6 +2354,13 @@ pub async fn persist_opportunity_build_output(
         .bind(&cluster.dominant_intent)
         .bind(cluster.cluster_version as i32)
         .bind(&cluster.status)
+        .bind(Json(graph_reason_payload(
+            &cluster.reason_code,
+            &cluster.topic_keys,
+            &cluster.triple_refs,
+            &cluster.support_refs,
+            cluster.graph_confidence,
+        )))
         .execute(pool)
         .await
         .map_err(classify_sqlx)?;
@@ -2092,12 +2435,14 @@ pub async fn persist_opportunity_build_output(
             r#"
             INSERT INTO site.content_gaps
                 (content_gap_key, scope_signature, page_node_key, missing_topic,
-                 severity, detector_version, status)
-            VALUES ($1, $2, $3, $4, $5, 'seo_content_gap@1', $6)
+                 severity, detector_version, status, reason_payload, reason_version)
+            VALUES ($1, $2, $3, $4, $5, 'seo_content_gap@1', $6, $7, 'graph_planning@1')
             ON CONFLICT (content_gap_key) DO UPDATE
             SET page_node_key = EXCLUDED.page_node_key,
                 missing_topic = EXCLUDED.missing_topic,
                 severity      = EXCLUDED.severity,
+                reason_payload = EXCLUDED.reason_payload,
+                reason_version = EXCLUDED.reason_version,
                 status        = EXCLUDED.status,
                 updated_at    = now()
             "#,
@@ -2108,6 +2453,13 @@ pub async fn persist_opportunity_build_output(
         .bind(&gap.missing_topic)
         .bind(&gap.severity)
         .bind(&gap.status)
+        .bind(Json(graph_reason_payload(
+            &gap.reason_code,
+            &gap.topic_keys,
+            &gap.triple_refs,
+            &gap.support_refs,
+            gap.graph_confidence,
+        )))
         .execute(pool)
         .await
         .map_err(classify_sqlx)?;
@@ -2456,11 +2808,14 @@ pub async fn persist_link_recommend_output(
             r#"
             INSERT INTO site.link_recommendations
                 (link_recommendation_key, scope_signature, source_page_key, target_page_key,
-                 link_role, anchor_strategy, required_flag, score, scoring_version, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, 'seo_link_score@1', $9)
+                 link_role, anchor_strategy, required_flag, score, scoring_version, status,
+                 reason_payload, reason_version)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8::numeric, 'seo_link_score@1', $9, $10, 'graph_planning@1')
             ON CONFLICT (link_recommendation_key) DO UPDATE
             SET required_flag   = EXCLUDED.required_flag,
                 score           = EXCLUDED.score,
+                reason_payload  = EXCLUDED.reason_payload,
+                reason_version  = EXCLUDED.reason_version,
                 status          = EXCLUDED.status,
                 updated_at      = now()
             "#,
@@ -2474,6 +2829,13 @@ pub async fn persist_link_recommend_output(
         .bind(link.required_flag)
         .bind(link.score)
         .bind(&link.status)
+        .bind(Json(graph_reason_payload(
+            &link.reason_code,
+            &link.topic_keys,
+            &link.triple_refs,
+            &link.support_refs,
+            link.graph_confidence,
+        )))
         .execute(pool)
         .await
         .map_err(classify_sqlx)?;

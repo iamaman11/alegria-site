@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.34`
+**Current version:** `6.35`
 
 ---
 
@@ -206,7 +206,7 @@ Current runtime branching semantics already present in code:
 - production provider configuration for live truth extraction remains an external prerequisite;
 - `SeoSiteBuildWorkflow` still exists as compat/drain workflow type outside the active forward path;
 - `Expert*Workflow` surfaces are quarantined but not yet physically removed from the codebase;
-- full graph-backed cluster/topic reasoning remains deferred;
+- deeper graph-backed reasoning beyond planning artifacts remains deferred;
 - some downstream materialization still uses outbox-backed async surfaces even though the canonical workflow already owns admissibility and barrier decisions.
 
 ### 2.3 Current blocker
@@ -1151,8 +1151,8 @@ The remaining post-acceptance work is operational convergence, not missing workf
 
 ### 9.3 Deferred now
 
-- full graph-backed cluster/topic reasoning
-- any dormant source files for rich steps such as `canonical_mapping_step`, `entity_span_detection_step`, `procedural_extraction_step`, or `completeness_judge_step` do not count as active until they are exported by the Rust crate, covered by contracts/tests, registered in the executable path, and invoked by the workflow or expert-core runner
+- any future graph tranche that wants to affect `page_brief`, `draft_*`, `publish_*`, or `rebuild_detect`
+- any new graph/retrieval path that would upgrade truth directly instead of staying inside planning artifacts
 
 ### 9.4 Legacy / quarantined now
 
@@ -1353,6 +1353,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - expanded the accepted truth-certification baseline from 15 to 16 fixtures by adding a full-flow freshness proof for stale primary-authority override blocking;
 - fixed the cutover candidate-validation and adjudication path so stale deterministic procedural candidates keep freshness-derived `needs_hitl` semantics instead of being silently promoted or downgraded to generic rejection;
 - refreshed the immutable baseline artifact and kept the full certification suite green against the stronger freshness proof pack.
+
+### 6.35
+
+- activated `Graph Reasoning Tranche 1` inside canonical planning steps `38-41` without changing the 56-step ledger or introducing a new workflow type;
+- added planning-only `GraphPlanningContext` loading, richer planning provenance on `keyword_clusters`, `content_gaps`, and `link_recommendations`, and deterministic graph-aware planning tests while keeping truth authority, draft gating, publish semantics, and rebuild policy unchanged;
+- fixed the runtime regression in `load_graph_planning_context` by decoding `site.link_recommendations.score` through an explicit `double precision` read path so `global_site_reconcile` remains certifiably green under the frozen truth baseline.
 
 ### 6.33
 

@@ -17,6 +17,7 @@ use contracts::generated::alegria::temporal::v1::{
     SerpNormalizeOutputPayload, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
+use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -193,6 +194,12 @@ pub trait SemanticLinkSearchPort: Send + Sync {
 
 #[async_trait]
 pub trait PlanningRepository: Send + Sync {
+    async fn load_graph_planning_context(
+        &self,
+        run_id: &str,
+        scope_signature: &str,
+    ) -> Result<GraphPlanningContext, DomainError>;
+
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,
