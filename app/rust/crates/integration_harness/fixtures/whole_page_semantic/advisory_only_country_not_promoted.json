@@ -1,0 +1,57 @@
+{
+  "fixture_id": "advisory_only_country_not_promoted",
+  "description": "Advisory-only country and authority hints remain diagnostics when deterministic framing does not support them.",
+  "sections": [
+    {
+      "id": 701,
+      "heading_path": "Student visa guidance",
+      "section_type": "content",
+      "content_md": "Student visa guidance with procedural steps and appointment notes."
+    }
+  ],
+  "advisory_hits": [
+    {
+      "prototype_id": "poland",
+      "prototype_family": "country_poland_work_authority",
+      "score": 0.88,
+      "page_mode": "content_page",
+      "dominant_layers": [
+        "procedural"
+      ],
+      "country_hints": [
+        "PL"
+      ],
+      "visa_type_hints": [
+        "work"
+      ],
+      "authority_hints": [
+        "government"
+      ],
+      "mixed_section_pressure": false
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [],
+    "country_hints": [],
+    "visa_type_hints": [
+      "student"
+    ],
+    "authority_hints": [],
+    "mixed_section_ids": [],
+    "advisory_model_used": true,
+    "advisory_consensus": "agree",
+    "required_uncertainty_flags": [
+      "advisory_only_authority_hint:government",
+      "advisory_only_country_hint:PL",
+      "advisory_only_visa_hint:work"
+    ],
+    "required_reason_codes": [
+      "context_visa:student",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": [
+      "country_poland_work_authority"
+    ]
+  }
+}

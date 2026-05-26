@@ -61,9 +61,8 @@ The current audit baseline for this file is:
 ### 2.4 Still real gaps after this audit
 
 1. real live-provider `PASS`, not `PENDING_CREDENTIALS`
-2. stronger whole-page semantic scaffold beyond substring heuristics, even after optional advisory retrieval
-3. env-by-env production-gate and drain evidence, not only local acceptance
-4. final decision on physical retirement vs permanent diagnostic retention for legacy `Expert*` surfaces
+2. env-by-env production-gate and drain evidence, not only local acceptance
+3. final decision on physical retirement vs permanent diagnostic retention for legacy `Expert*` surfaces
 
 ---
 
@@ -109,8 +108,8 @@ The current audit baseline for this file is:
 ### Tranche B — Whole-Page Semantic Closure
 
 **Type:** code + contract hardening  
-**Status:** partially closed by current integration  
-**Implementation state:** deterministic scaffold plus optional `voyage-4-large` advisory retrieval now integrated; still needs broader hardening
+**Status:** accepted for current runtime scope
+**Implementation state:** deterministic scaffold, weighted page-framing heuristics, optional `voyage-4-large` advisory retrieval, and dedicated fixture/regression gate all integrated
 
 #### Now active
 
@@ -122,6 +121,7 @@ The current audit baseline for this file is:
 - deterministic mixed-section hints
 - optional `voyage-4-large` page-sketch retrieval against a dedicated whole-page prototype collection
 - conservative advisory fusion that can raise uncertainty or widen analysis but cannot create truth authority
+- dedicated machine-readable fixture pack and baseline regression gate for whole-page semantics
 
 #### Integrated in code now
 
@@ -132,31 +132,32 @@ The current audit baseline for this file is:
 
 These paths now agree with the documented contract on emitted fields. The remaining gap is output quality hardening, not missing field shape.
 
-#### Remaining work
+#### Accepted evidence
 
-1. replace fragile substring-only `page_context_profile` inference with typed semantic heuristics:
-   - country framing
-   - visa-family framing
-   - authority-page framing
-2. add deterministic coverage tests for:
-   - mixed procedural/editorial pages
-   - utility/menu/directory false-positive suppression
-   - country/visa framing retention under noisy footer injection
-   - noisy footer-heavy pages that must remain `content_page`
-3. calibrate the optional advisory retrieval lane:
-   - prototype coverage breadth
-   - fusion thresholds
-   - minimum score floor and hit-limit tuning
-   - disagreement diagnostics
-   - fallback behavior under missing Voyage/Qdrant
-4. keep this step non-authoritative:
-   - no verified truth
-   - no canonical-key assignment
-   - no publish decision
+- weighted deterministic country/visa/authority framing now uses page-level inputs (`source_url`, headings, primary content, noise content) instead of flat whole-text substring promotion;
+- deterministic fixture coverage now includes:
+  - mixed procedural/editorial pages;
+  - utility/login pages;
+  - menu-directory pages;
+  - noisy footer-heavy content pages;
+  - country/visa framing retention under footer noise;
+  - advisory conflict and advisory-only-hint cases;
+- machine-readable fixture baseline:
+  - `docs/runs/whole_page_semantic_fixture_baseline.json`
+- canonical gate:
+  - `automation/run_whole_page_semantic_gate.sh`
+- baseline drift check:
+  - `automation/check_whole_page_semantic_regression.py`
 
-#### Acceptance
+#### Scope boundary remains
+
+- no verified truth
+- no canonical-key assignment
+- no publish decision
+- no rebuild trigger from advisory retrieval alone
 
 - whole-page outputs are explicitly persisted and tested
+- whole-page fixture gate remains green against the accepted baseline
 - no truth-certification baseline drift
 - docs and runtime contract agree on emitted fields
 

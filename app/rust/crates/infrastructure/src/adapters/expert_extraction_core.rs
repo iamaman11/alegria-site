@@ -198,25 +198,83 @@ fn normalized_marker_score(text: &str, markers: &[&str]) -> f32 {
     hits / markers.len() as f32
 }
 
+fn marker_hit_count(text: &str, markers: &[&str]) -> usize {
+    let lowered = text.to_lowercase();
+    markers
+        .iter()
+        .filter(|marker| lowered.contains(**marker))
+        .count()
+}
+
+fn layer_marker_score(text: &str, markers: &[&str], multi_hit_floor: f32) -> f32 {
+    let normalized = normalized_marker_score(text, markers);
+    if marker_hit_count(text, markers) >= 2 {
+        normalized.max(multi_hit_floor)
+    } else {
+        normalized
+    }
+}
+
 fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
     scores.insert(
         "procedural".to_string(),
-        normalized_marker_score(
+        layer_marker_score(
             text,
-            &["паспорт", "страхов", "анкет", "fee", "eur", "сбор", "visa", "виза"],
+            &[
+                "passport",
+                "паспорт",
+                "insurance",
+                "страхов",
+                "application form",
+                "анкет",
+                "requirements",
+                "document",
+                "fee",
+                "eur",
+                "сбор",
+                "visa",
+                "виза",
+            ],
+            0.24,
         ),
     );
     scores.insert(
         "operational".to_string(),
-        normalized_marker_score(
+        layer_marker_score(
             text,
-            &["schedule", "график", "holiday", "appointment", "запись", "время работы"],
+            &[
+                "schedule",
+                "график",
+                "holiday",
+                "appointment",
+                "booking",
+                "submission window",
+                "office hours",
+                "запись",
+                "время работы",
+            ],
+            0.24,
         ),
     );
     scores.insert(
         "editorial".to_string(),
-        normalized_marker_score(text, &["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]),
+        layer_marker_score(
+            text,
+            &[
+                "faq",
+                "why",
+                "mistakes",
+                "avoid",
+                "what to do",
+                "что делать",
+                "почему",
+                "ошибк",
+                "отказ",
+                "проблем",
+            ],
+            0.24,
+        ),
     );
     scores.insert(
         "seo".to_string(),
@@ -277,44 +335,114 @@ fn global_entities(text: &str) -> Vec<String> {
     entities
 }
 
-fn page_context_profile(text: &str) -> WholePageContextProfile {
-    let lowered = text.to_lowercase();
+fn section_is_noise(section: &RawSectionRecord) -> bool {
+    let lowered_type = section.section_type.to_ascii_lowercase();
+    lowered_type.contains("footer")
+        || lowered_type.contains("nav")
+        || lowered_type.contains("toc")
+        || lowered_type.contains("menu")
+}
+
+fn weighted_family_score(inputs: &[(&str, f32)], markers: &[&str]) -> f32 {
+    if markers.is_empty() {
+        return 0.0;
+    }
+    inputs.iter().fold(0.0_f32, |acc, (text, weight)| {
+        let lowered = text.to_lowercase();
+        if markers.iter().any(|marker| lowered.contains(marker)) {
+            acc + *weight
+        } else {
+            acc
+        }
+    })
+}
+
+fn push_hint_if_supported(
+    target: &mut Vec<String>,
+    hint: &str,
+    score: f32,
+    threshold: f32,
+    strong_support: bool,
+) {
+    if score >= threshold || strong_support {
+        target.push(hint.to_string());
+    }
+}
+
+fn page_context_profile(sections: &[RawSectionRecord], text: &str) -> WholePageContextProfile {
+    let source_url = sections
+        .first()
+        .map(|section| section.source_url.to_lowercase())
+        .unwrap_or_default();
+    let headings = sections
+        .iter()
+        .map(|section| section.heading_path.trim())
+        .filter(|heading| !heading.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let primary_content = sections
+        .iter()
+        .filter(|section| !section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let secondary_content = sections
+        .iter()
+        .filter(|section| section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let combined = text.to_lowercase();
+    let framing_inputs = [
+        (source_url.as_str(), 0.35_f32),
+        (headings.as_str(), 0.35_f32),
+        (primary_content.as_str(), 0.70_f32),
+        (secondary_content.as_str(), 0.10_f32),
+        (combined.as_str(), 0.20_f32),
+    ];
 
     let mut country_hints = Vec::new();
-    for (hint, tokens) in [
-        ("ES", &["spain", "spanish", "испан", "españa"][..]),
-        ("PL", &["poland", "polish", "польш", "polska"][..]),
-        ("FR", &["france", "french", "франц"][..]),
-        ("DE", &["germany", "german", "герман", "deutschland"][..]),
+    for (hint, tokens, threshold) in [
+        ("ES", &["spain", "spanish", "испан", "españa"][..], 0.65_f32),
+        ("PL", &["poland", "polish", "польш", "polska"][..], 0.65_f32),
+        ("FR", &["france", "french", "франц"][..], 0.65_f32),
+        ("DE", &["germany", "german", "герман", "deutschland"][..], 0.65_f32),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            country_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut country_hints, hint, score, threshold, strong_support);
     }
 
     let mut visa_type_hints = Vec::new();
-    for (hint, tokens) in [
-        ("tourist", &["tourist", "tourism", "турист", "шенген"][..]),
-        ("work", &["work visa", "рабоч", "employment visa"][..]),
-        ("student", &["student visa", "study visa", "учеб", "student"][..]),
+    for (hint, tokens, threshold) in [
+        ("tourist", &["tourist", "tourism", "турист", "шенген"][..], 0.60_f32),
+        ("work", &["work visa", "рабоч", "employment visa"][..], 0.60_f32),
+        ("student", &["student visa", "study visa", "учеб", "student"][..], 0.60_f32),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            visa_type_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut visa_type_hints, hint, score, threshold, strong_support);
     }
 
     let mut authority_hints = Vec::new();
-    for (hint, tokens) in [
-        ("consulate", &["consulate", "consular", "консуль", "посольств"][..]),
-        ("visa_center", &["vfs", "visa center", "визов"][..]),
+    for (hint, tokens, threshold) in [
+        ("consulate", &["consulate", "consular", "консуль", "посольств"][..], 0.55_f32),
+        ("visa_center", &["vfs", "visa center", "визов"][..], 0.55_f32),
         (
             "government",
             &["ministry", "gov.", ".gov", "government", "министер"][..],
+            0.55_f32,
         ),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            authority_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut authority_hints, hint, score, threshold, strong_support);
     }
 
     country_hints.sort();
@@ -395,7 +523,7 @@ pub fn run_expert_extraction_core(
             dominant_layers: dominant_layers(&section.content_md),
             layer_scores: layer_scores_for_text(&section.content_md),
             page_summary: summarize(&section.content_md),
-            page_context_profile: page_context_profile(&section.content_md),
+            page_context_profile: page_context_profile(std::slice::from_ref(section), &section.content_md),
             mixed_section_ids: if dominant_layers(&section.content_md).len() > 1 {
                 vec![section.id]
             } else {
@@ -1150,7 +1278,7 @@ mod tests {
             dominant_layers: dominant_layers(raw),
             layer_scores: layer_scores_for_text(raw),
             page_summary: summarize(raw),
-            page_context_profile: page_context_profile(raw),
+            page_context_profile: page_context_profile(&[section(7, raw)], raw),
             mixed_section_ids: if dominant_layers(raw).len() > 1 {
                 vec![7]
             } else {
@@ -1205,7 +1333,7 @@ mod tests {
             dominant_layers: dominant_layers(raw),
             layer_scores: layer_scores_for_text(raw),
             page_summary: summarize(raw),
-            page_context_profile: page_context_profile(raw),
+            page_context_profile: page_context_profile(&[section(8, raw)], raw),
             mixed_section_ids: if dominant_layers(raw).len() > 1 {
                 vec![8]
             } else {
@@ -1231,7 +1359,7 @@ mod tests {
             dominant_layers: dominant_layers(raw),
             layer_scores: layer_scores_for_text(raw),
             page_summary: summarize(raw),
-            page_context_profile: page_context_profile(raw),
+            page_context_profile: page_context_profile(&[section(9, raw)], raw),
             mixed_section_ids: if dominant_layers(raw).len() > 1 {
                 vec![9]
             } else {

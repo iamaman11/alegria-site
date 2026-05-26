@@ -1107,25 +1107,83 @@ fn normalized_marker_score(text: &str, markers: &[&str]) -> f32 {
     hits / markers.len() as f32
 }
 
+fn marker_hit_count(text: &str, markers: &[&str]) -> usize {
+    let lowered = text.to_lowercase();
+    markers
+        .iter()
+        .filter(|marker| lowered.contains(**marker))
+        .count()
+}
+
+fn layer_marker_score(text: &str, markers: &[&str], multi_hit_floor: f32) -> f32 {
+    let normalized = normalized_marker_score(text, markers);
+    if marker_hit_count(text, markers) >= 2 {
+        normalized.max(multi_hit_floor)
+    } else {
+        normalized
+    }
+}
+
 fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
     scores.insert(
         "procedural".to_string(),
-        normalized_marker_score(
+        layer_marker_score(
             text,
-            &["паспорт", "страхов", "анкет", "fee", "eur", "сбор", "visa", "виза"],
+            &[
+                "passport",
+                "паспорт",
+                "insurance",
+                "страхов",
+                "application form",
+                "анкет",
+                "requirements",
+                "document",
+                "fee",
+                "eur",
+                "сбор",
+                "visa",
+                "виза",
+            ],
+            0.24,
         ),
     );
     scores.insert(
         "operational".to_string(),
-        normalized_marker_score(
+        layer_marker_score(
             text,
-            &["schedule", "график", "holiday", "appointment", "запись", "время работы"],
+            &[
+                "schedule",
+                "график",
+                "holiday",
+                "appointment",
+                "booking",
+                "submission window",
+                "office hours",
+                "запись",
+                "время работы",
+            ],
+            0.24,
         ),
     );
     scores.insert(
         "editorial".to_string(),
-        normalized_marker_score(text, &["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]),
+        layer_marker_score(
+            text,
+            &[
+                "faq",
+                "why",
+                "mistakes",
+                "avoid",
+                "what to do",
+                "что делать",
+                "почему",
+                "ошибк",
+                "отказ",
+                "проблем",
+            ],
+            0.24,
+        ),
     );
     scores.insert(
         "seo".to_string(),
@@ -1156,10 +1214,41 @@ fn select_layers_from_scores(scores: &BTreeMap<String, f32>) -> Vec<String> {
 }
 
 fn page_mode_scores(
-    text: &str,
+    _text: &str,
     sections: &[raw_crawl_adapter::RawSectionRecord],
 ) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
+    let source_url = sections
+        .first()
+        .map(|section| section.source_url.to_lowercase())
+        .unwrap_or_default();
+    let headings = sections
+        .iter()
+        .map(|section| section.heading_path.trim())
+        .filter(|heading| !heading.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let primary_content = sections
+        .iter()
+        .filter(|section| !section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let secondary_content = sections
+        .iter()
+        .filter(|section| section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let framing_inputs = [
+        (source_url.as_str(), 0.25_f32),
+        (headings.as_str(), 0.25_f32),
+        (primary_content.as_str(), 0.55_f32),
+        (secondary_content.as_str(), 0.15_f32),
+    ];
     let nav_sections = sections
         .iter()
         .filter(|section| {
@@ -1172,31 +1261,54 @@ fn page_mode_scores(
         .filter(|section| section.section_type.to_ascii_lowercase().contains("footer"))
         .count() as f32;
     let total_sections = sections.len().max(1) as f32;
+    let content_support = weighted_family_score(
+        &framing_inputs,
+        &[
+            "visa",
+            "виза",
+            "requirements",
+            "document",
+            "passport",
+            "appointment",
+            "faq",
+            "guide",
+        ],
+    );
+    let utility_support = weighted_family_score(
+        &framing_inputs,
+        &["privacy", "cookie", "login", "terms", "policy"],
+    );
     scores.insert(
         "directory_page".to_string(),
-        normalized_marker_score(text, &["sitemap", "directory", "каталог", "index page"]) * 0.8,
+        weighted_family_score(
+            &framing_inputs,
+            &["sitemap", "directory", "каталог", "index page"],
+        ) + (nav_sections / total_sections) * 0.10,
     );
     scores.insert(
         "menu_page".to_string(),
-        normalized_marker_score(text, &["breadcrumb", "menu", "навигац", "sidebar"])
-            + (nav_sections / total_sections) * 0.5,
+        weighted_family_score(
+            &framing_inputs,
+            &["breadcrumb", "menu", "навигац", "sidebar"],
+        ) + (nav_sections / total_sections) * 0.50,
     );
     scores.insert(
         "utility_page".to_string(),
-        normalized_marker_score(text, &["privacy", "cookie", "login", "terms", "policy"])
-            + (footer_sections / total_sections) * 0.2,
+        (utility_support + (footer_sections / total_sections) * 0.15 - content_support.min(0.35))
+            .max(0.0),
     );
     scores.insert(
         "landing_page".to_string(),
-        normalized_marker_score(text, &["consultation", "book now", "услуга", "под ключ", "cta"]),
-    );
-    let content_support = normalized_marker_score(
-        text,
-        &["visa", "виза", "requirements", "документ", "appointment", "faq", "guide"],
+        weighted_family_score(
+            &framing_inputs,
+            &["consultation", "book now", "услуга", "под ключ", "cta"],
+        ),
     );
     scores.insert(
         "content_page".to_string(),
-        (0.45 + content_support).min(1.0),
+        (0.40 + content_support + ((total_sections - footer_sections) / total_sections) * 0.10
+            - (nav_sections / total_sections) * 0.30)
+            .clamp(0.0, 1.0),
     );
     scores
 }
@@ -1301,13 +1413,25 @@ fn deterministic_whole_page_snapshot(
     if dominant_layers.len() > 1 {
         uncertainty_flags.push("multi_layer_page".to_string());
     }
+    let page_context_profile = page_context_profile(sections, combined);
+    for hint in &page_context_profile.country_hints {
+        reason_codes.push(format!("context_country:{hint}"));
+    }
+    for hint in &page_context_profile.visa_type_hints {
+        reason_codes.push(format!("context_visa:{hint}"));
+    }
+    for hint in &page_context_profile.authority_hints {
+        reason_codes.push(format!("context_authority:{hint}"));
+    }
+    reason_codes.sort();
+    reason_codes.dedup();
     WholePageDeterministicSnapshot {
         page_mode_hint,
         page_mode_confidence,
         dominant_layers,
         layer_scores,
         page_summary: summarize(combined),
-        page_context_profile: page_context_profile(combined),
+        page_context_profile,
         mixed_section_ids,
         global_entities: global_entities(combined),
         uncertainty_flags,
@@ -1384,44 +1508,117 @@ fn global_entities(text: &str) -> Vec<String> {
     entities
 }
 
-fn page_context_profile(text: &str) -> WholePageContextProfile {
-    let lowered = text.to_lowercase();
+fn section_is_noise(section: &raw_crawl_adapter::RawSectionRecord) -> bool {
+    let lowered_type = section.section_type.to_ascii_lowercase();
+    lowered_type.contains("footer")
+        || lowered_type.contains("nav")
+        || lowered_type.contains("toc")
+        || lowered_type.contains("menu")
+}
+
+fn weighted_family_score(inputs: &[(&str, f32)], markers: &[&str]) -> f32 {
+    if markers.is_empty() {
+        return 0.0;
+    }
+    inputs.iter().fold(0.0_f32, |acc, (text, weight)| {
+        let lowered = text.to_lowercase();
+        if markers.iter().any(|marker| lowered.contains(marker)) {
+            acc + *weight
+        } else {
+            acc
+        }
+    })
+}
+
+fn push_hint_if_supported(
+    target: &mut Vec<String>,
+    hint: &str,
+    score: f32,
+    threshold: f32,
+    strong_support: bool,
+) {
+    if score >= threshold || strong_support {
+        target.push(hint.to_string());
+    }
+}
+
+fn page_context_profile(
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    text: &str,
+) -> WholePageContextProfile {
+    let source_url = sections
+        .first()
+        .map(|section| section.source_url.to_lowercase())
+        .unwrap_or_default();
+    let headings = sections
+        .iter()
+        .map(|section| section.heading_path.trim())
+        .filter(|heading| !heading.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let primary_content = sections
+        .iter()
+        .filter(|section| !section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let secondary_content = sections
+        .iter()
+        .filter(|section| section_is_noise(section))
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase();
+    let combined = text.to_lowercase();
+    let framing_inputs = [
+        (source_url.as_str(), 0.35_f32),
+        (headings.as_str(), 0.35_f32),
+        (primary_content.as_str(), 0.70_f32),
+        (secondary_content.as_str(), 0.10_f32),
+        (combined.as_str(), 0.20_f32),
+    ];
 
     let mut country_hints = Vec::new();
-    for (hint, tokens) in [
-        ("ES", &["spain", "spanish", "испан", "españa"][..]),
-        ("PL", &["poland", "polish", "польш", "polska"][..]),
-        ("FR", &["france", "french", "франц"][..]),
-        ("DE", &["germany", "german", "герман", "deutschland"][..]),
+    for (hint, tokens, threshold) in [
+        ("ES", &["spain", "spanish", "испан", "españa"][..], 0.65_f32),
+        ("PL", &["poland", "polish", "польш", "polska"][..], 0.65_f32),
+        ("FR", &["france", "french", "франц"][..], 0.65_f32),
+        ("DE", &["germany", "german", "герман", "deutschland"][..], 0.65_f32),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            country_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut country_hints, hint, score, threshold, strong_support);
     }
 
     let mut visa_type_hints = Vec::new();
-    for (hint, tokens) in [
-        ("tourist", &["tourist", "tourism", "турист", "шенген"][..]),
-        ("work", &["work visa", "рабоч", "employment visa"][..]),
-        ("student", &["student visa", "study visa", "учеб", "student"][..]),
+    for (hint, tokens, threshold) in [
+        ("tourist", &["tourist", "tourism", "турист", "шенген"][..], 0.60_f32),
+        ("work", &["work visa", "рабоч", "employment visa"][..], 0.60_f32),
+        ("student", &["student visa", "study visa", "учеб", "student"][..], 0.60_f32),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            visa_type_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut visa_type_hints, hint, score, threshold, strong_support);
     }
 
     let mut authority_hints = Vec::new();
-    for (hint, tokens) in [
-        ("consulate", &["consulate", "consular", "консуль", "посольств"][..]),
-        ("visa_center", &["vfs", "visa center", "визов"][..]),
+    for (hint, tokens, threshold) in [
+        ("consulate", &["consulate", "consular", "консуль", "посольств"][..], 0.55_f32),
+        ("visa_center", &["vfs", "visa center", "визов"][..], 0.55_f32),
         (
             "government",
             &["ministry", "gov.", ".gov", "government", "министер"][..],
+            0.55_f32,
         ),
     ] {
-        if tokens.iter().any(|token| lowered.contains(token)) {
-            authority_hints.push(hint.to_string());
-        }
+        let score = weighted_family_score(&framing_inputs, tokens);
+        let strong_support =
+            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        push_hint_if_supported(&mut authority_hints, hint, score, threshold, strong_support);
     }
 
     country_hints.sort();
@@ -1616,6 +1813,20 @@ fn fuse_with_advisory_retrieval(
         uncertainty_flags,
         reason_codes,
     }
+}
+
+#[allow(dead_code)]
+pub fn evaluate_whole_page_semantic_fixture(
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    advisory_hits: &[whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit],
+) -> WholePageSemanticPageState {
+    let combined = sections
+        .iter()
+        .map(|section| section.content_md.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let snapshot = deterministic_whole_page_snapshot(sections, &combined);
+    fuse_with_advisory_retrieval(sections, snapshot, advisory_hits)
 }
 
 fn block_role_for_section(
@@ -4140,6 +4351,209 @@ pub(crate) async fn verified_truth_write_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Deserialize, Serialize};
+    use std::fs;
+    use std::path::PathBuf;
+
+    #[derive(Debug, Deserialize)]
+    struct WholePageSemanticFixtureSection {
+        id: i64,
+        heading_path: String,
+        section_type: String,
+        content_md: String,
+        source_url: Option<String>,
+        source_domain: Option<String>,
+        source_dtype: Option<String>,
+        content_hash: Option<String>,
+    }
+
+    #[derive(Debug, Clone, Deserialize)]
+    struct WholePageSemanticFixtureAdvisoryHit {
+        prototype_id: String,
+        prototype_family: String,
+        score: f32,
+        page_mode: String,
+        dominant_layers: Vec<String>,
+        country_hints: Vec<String>,
+        visa_type_hints: Vec<String>,
+        authority_hints: Vec<String>,
+        mixed_section_pressure: bool,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WholePageSemanticFixtureExpected {
+        page_mode_hint: String,
+        dominant_layers: Vec<String>,
+        country_hints: Vec<String>,
+        visa_type_hints: Vec<String>,
+        authority_hints: Vec<String>,
+        mixed_section_ids: Vec<i64>,
+        advisory_model_used: bool,
+        advisory_consensus: String,
+        required_uncertainty_flags: Vec<String>,
+        required_reason_codes: Vec<String>,
+        advisory_prototype_families: Vec<String>,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct WholePageSemanticFixture {
+        fixture_id: String,
+        description: String,
+        sections: Vec<WholePageSemanticFixtureSection>,
+        advisory_hits: Option<Vec<WholePageSemanticFixtureAdvisoryHit>>,
+        expected: WholePageSemanticFixtureExpected,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct WholePageSemanticFixtureReport {
+        fixture_id: String,
+        description: String,
+        pass: bool,
+        page_mode_hint: String,
+        page_mode_confidence: f32,
+        dominant_layers: Vec<String>,
+        country_hints: Vec<String>,
+        visa_type_hints: Vec<String>,
+        authority_hints: Vec<String>,
+        mixed_section_ids: Vec<i64>,
+        advisory_model_used: bool,
+        advisory_consensus: String,
+        advisory_prototype_families: Vec<String>,
+        uncertainty_flags: Vec<String>,
+        reason_codes: Vec<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    struct WholePageSemanticReportEnvelope {
+        artifact_id: String,
+        fixture_count: usize,
+        fixtures: Vec<WholePageSemanticFixtureReport>,
+    }
+
+    fn whole_page_fixture_dir() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../crates/integration_harness/fixtures/whole_page_semantic")
+    }
+
+    fn load_whole_page_fixtures() -> Vec<WholePageSemanticFixture> {
+        let fixture_dir = whole_page_fixture_dir();
+        let mut paths = fs::read_dir(&fixture_dir)
+            .expect("read whole-page fixture dir")
+            .map(|entry| entry.expect("fixture entry").path())
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
+            .collect::<Vec<_>>();
+        paths.sort();
+        paths.into_iter()
+            .map(|path| {
+                let raw = fs::read_to_string(&path).expect("read whole-page fixture");
+                serde_json::from_str::<WholePageSemanticFixture>(&raw)
+                    .unwrap_or_else(|err| panic!("parse fixture {}: {err}", path.display()))
+            })
+            .collect()
+    }
+
+    fn build_fixture_sections(
+        sections: &[WholePageSemanticFixtureSection],
+    ) -> Vec<raw_crawl_adapter::RawSectionRecord> {
+        sections
+            .iter()
+            .map(|section| raw_crawl_adapter::RawSectionRecord {
+                id: section.id,
+                page_id: 42,
+                source_url: section
+                    .source_url
+                    .clone()
+                    .unwrap_or_else(|| "https://example.test/fixture-page".to_string()),
+                source_domain: section
+                    .source_domain
+                    .clone()
+                    .unwrap_or_else(|| "example.test".to_string()),
+                source_dtype: section
+                    .source_dtype
+                    .clone()
+                    .unwrap_or_else(|| "html".to_string()),
+                heading_path: section.heading_path.clone(),
+                section_type: section.section_type.clone(),
+                content_md: section.content_md.clone(),
+                content_hash: section
+                    .content_hash
+                    .clone()
+                    .unwrap_or_else(|| format!("hash-{}", section.id)),
+            })
+            .collect()
+    }
+
+    fn assert_fixture_expectations(
+        fixture: &WholePageSemanticFixture,
+        actual: &WholePageSemanticPageState,
+    ) -> Vec<String> {
+        let mut failures = Vec::new();
+        if actual.page_mode_hint != fixture.expected.page_mode_hint {
+            failures.push(format!(
+                "page_mode_hint expected {} got {}",
+                fixture.expected.page_mode_hint, actual.page_mode_hint
+            ));
+        }
+        if actual.dominant_layers != fixture.expected.dominant_layers {
+            failures.push(format!(
+                "dominant_layers expected {:?} got {:?}",
+                fixture.expected.dominant_layers, actual.dominant_layers
+            ));
+        }
+        if actual.page_context_profile.country_hints != fixture.expected.country_hints {
+            failures.push(format!(
+                "country_hints expected {:?} got {:?}",
+                fixture.expected.country_hints, actual.page_context_profile.country_hints
+            ));
+        }
+        if actual.page_context_profile.visa_type_hints != fixture.expected.visa_type_hints {
+            failures.push(format!(
+                "visa_type_hints expected {:?} got {:?}",
+                fixture.expected.visa_type_hints, actual.page_context_profile.visa_type_hints
+            ));
+        }
+        if actual.page_context_profile.authority_hints != fixture.expected.authority_hints {
+            failures.push(format!(
+                "authority_hints expected {:?} got {:?}",
+                fixture.expected.authority_hints, actual.page_context_profile.authority_hints
+            ));
+        }
+        if actual.mixed_section_ids != fixture.expected.mixed_section_ids {
+            failures.push(format!(
+                "mixed_section_ids expected {:?} got {:?}",
+                fixture.expected.mixed_section_ids, actual.mixed_section_ids
+            ));
+        }
+        if actual.advisory_model_used != fixture.expected.advisory_model_used {
+            failures.push(format!(
+                "advisory_model_used expected {} got {}",
+                fixture.expected.advisory_model_used, actual.advisory_model_used
+            ));
+        }
+        if actual.advisory_consensus != fixture.expected.advisory_consensus {
+            failures.push(format!(
+                "advisory_consensus expected {} got {}",
+                fixture.expected.advisory_consensus, actual.advisory_consensus
+            ));
+        }
+        if actual.advisory_prototype_families != fixture.expected.advisory_prototype_families {
+            failures.push(format!(
+                "advisory_prototype_families expected {:?} got {:?}",
+                fixture.expected.advisory_prototype_families, actual.advisory_prototype_families
+            ));
+        }
+        for flag in &fixture.expected.required_uncertainty_flags {
+            if !actual.uncertainty_flags.contains(flag) {
+                failures.push(format!("missing uncertainty flag {flag}"));
+            }
+        }
+        for code in &fixture.expected.required_reason_codes {
+            if !actual.reason_codes.contains(code) {
+                failures.push(format!("missing reason code {code}"));
+            }
+        }
+        failures
+    }
 
     fn section(id: i64, content_md: &str) -> raw_crawl_adapter::RawSectionRecord {
         raw_crawl_adapter::RawSectionRecord {
@@ -4152,6 +4566,83 @@ mod tests {
             section_type: "content".to_string(),
             content_md: content_md.to_string(),
             content_hash: "hash".to_string(),
+        }
+    }
+
+    #[test]
+    fn whole_page_semantic_fixture_pack_matches_expectations() {
+        let fixtures = load_whole_page_fixtures();
+        let mut reports = Vec::new();
+        let mut failures = Vec::new();
+
+        for fixture in fixtures {
+            let sections = build_fixture_sections(&fixture.sections);
+            let combined = sections
+                .iter()
+                .map(|section| section.content_md.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let snapshot = deterministic_whole_page_snapshot(&sections, &combined);
+            let advisory_hits = fixture
+                .advisory_hits
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|hit| whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+                    prototype_id: hit.prototype_id,
+                    prototype_family: hit.prototype_family,
+                    score: hit.score,
+                    page_mode: hit.page_mode,
+                    dominant_layers: hit.dominant_layers,
+                    country_hints: hit.country_hints,
+                    visa_type_hints: hit.visa_type_hints,
+                    authority_hints: hit.authority_hints,
+                    mixed_section_pressure: hit.mixed_section_pressure,
+                })
+                .collect::<Vec<_>>();
+            let actual = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
+            let fixture_failures = assert_fixture_expectations(&fixture, &actual);
+            if !fixture_failures.is_empty() {
+                failures.push(format!(
+                    "{}: {}",
+                    fixture.fixture_id,
+                    fixture_failures.join("; ")
+                ));
+            }
+            reports.push(WholePageSemanticFixtureReport {
+                fixture_id: fixture.fixture_id,
+                description: fixture.description,
+                pass: fixture_failures.is_empty(),
+                page_mode_hint: actual.page_mode_hint,
+                page_mode_confidence: (actual.page_mode_confidence * 1000.0).round() / 1000.0,
+                dominant_layers: actual.dominant_layers,
+                country_hints: actual.page_context_profile.country_hints,
+                visa_type_hints: actual.page_context_profile.visa_type_hints,
+                authority_hints: actual.page_context_profile.authority_hints,
+                mixed_section_ids: actual.mixed_section_ids,
+                advisory_model_used: actual.advisory_model_used,
+                advisory_consensus: actual.advisory_consensus,
+                advisory_prototype_families: actual.advisory_prototype_families,
+                uncertainty_flags: actual.uncertainty_flags,
+                reason_codes: actual.reason_codes,
+            });
+        }
+
+        if let Ok(path) = std::env::var("WHOLE_PAGE_SEMANTIC_REPORT_PATH") {
+            let report = WholePageSemanticReportEnvelope {
+                artifact_id: "whole_page_semantic_fixture_report".to_string(),
+                fixture_count: reports.len(),
+                fixtures: reports,
+            };
+            fs::write(
+                &path,
+                serde_json::to_vec_pretty(&report).expect("serialize whole-page report"),
+            )
+            .expect("write whole-page report");
+        }
+
+        if !failures.is_empty() {
+            panic!("whole-page semantic fixture failures:\n{}", failures.join("\n"));
         }
     }
 

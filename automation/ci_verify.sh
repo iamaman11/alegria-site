@@ -402,6 +402,9 @@ python3 automation/check_serp_intelligence_contract.py
 echo "[60g/60] SERP top10 pattern smoke"
 python3 automation/smoke_serp_top10_pattern_pipeline.py
 
+echo "[60h/60] Whole-page semantic fixture gate"
+bash automation/run_whole_page_semantic_gate.sh
+
 echo "[post] Rust migration contract + fact verifier parity"
 SQLX_OFFLINE=true cargo run -q --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
   check-rust-migration-contract \

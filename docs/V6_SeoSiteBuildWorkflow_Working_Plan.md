@@ -1147,7 +1147,7 @@ The remaining post-acceptance work is operational convergence, not missing workf
 - ontology-backed canonical storage
 - graph/retrieval specs and adapters
 - outbox-backed downstream materialization surfaces that are not yet first-class workflow phases
-- heuristic whole-page semantic scaffolding that now includes optional `voyage-4-large` prototype retrieval hints under conservative fusion, but still needs stronger deterministic classification coverage and broader evidence fixtures before it can be called 10/10-hard
+- accepted whole-page semantic scaffolding that now includes weighted deterministic page-framing heuristics, optional `voyage-4-large` prototype retrieval hints under conservative fusion, and a dedicated baseline-backed fixture gate
 
 ### 9.3 Deferred now
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.44
+
+- closed the remaining whole-page semantic hardening tranche by adding a dedicated machine-readable fixture pack, baseline artifact, and regression gate for `whole_page_semantic_pass`;
+- replaced flat whole-text country/visa/authority promotion with weighted page-framing heuristics that consider URL, headings, primary content, and noise sections separately, so footer/menu noise no longer wins over true content framing;
+- strengthened deterministic layer scoring for short English procedural/editorial pages and wired the whole-page fixture gate into `automation/ci_verify.sh` through an isolated target-dir runner.
 
 ### 6.43
 

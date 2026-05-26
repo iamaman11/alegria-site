@@ -1,0 +1,44 @@
+{
+  "fixture_id": "mixed_procedural_editorial_france_student",
+  "description": "France student visa page keeps country, visa, authority and mixed-layer hints together.",
+  "sections": [
+    {
+      "id": 401,
+      "heading_path": "France student visa guidance",
+      "section_type": "content",
+      "content_md": "France student visa requirements. Passport copy and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid. Consulate guidance for student applications."
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [
+      "editorial",
+      "procedural"
+    ],
+    "country_hints": [
+      "FR"
+    ],
+    "visa_type_hints": [
+      "student"
+    ],
+    "authority_hints": [
+      "consulate"
+    ],
+    "mixed_section_ids": [
+      401
+    ],
+    "advisory_model_used": false,
+    "advisory_consensus": "not_used",
+    "required_uncertainty_flags": [
+      "multi_layer_page"
+    ],
+    "required_reason_codes": [
+      "context_authority:consulate",
+      "context_country:FR",
+      "context_visa:student",
+      "mixed_section_detected",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": []
+  }
+}

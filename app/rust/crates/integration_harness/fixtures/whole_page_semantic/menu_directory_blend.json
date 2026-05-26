@@ -1,0 +1,27 @@
+{
+  "fixture_id": "menu_directory_blend",
+  "description": "Navigation-heavy menu/directory page should not fall back to plain content classification.",
+  "sections": [
+    {
+      "id": 301,
+      "heading_path": "Visa directory",
+      "section_type": "nav",
+      "content_md": "Breadcrumb menu. Directory of visa pages. Destination index. Category links. Sidebar navigation."
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "menu_page",
+    "dominant_layers": [],
+    "country_hints": [],
+    "visa_type_hints": [],
+    "authority_hints": [],
+    "mixed_section_ids": [],
+    "advisory_model_used": false,
+    "advisory_consensus": "not_used",
+    "required_uncertainty_flags": [],
+    "required_reason_codes": [
+      "page_mode:menu_page"
+    ],
+    "advisory_prototype_families": []
+  }
+}

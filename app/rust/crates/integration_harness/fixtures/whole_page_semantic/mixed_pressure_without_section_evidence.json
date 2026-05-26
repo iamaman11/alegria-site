@@ -1,0 +1,54 @@
+{
+  "fixture_id": "mixed_pressure_without_section_evidence",
+  "description": "Advisory mixed-section pressure stays advisory-only when sections lack actual mixed-layer evidence.",
+  "sections": [
+    {
+      "id": 801,
+      "heading_path": "Fee guidance",
+      "section_type": "content",
+      "content_md": "Passport and fee guidance only. Consular fee and passport copy."
+    }
+  ],
+  "advisory_hits": [
+    {
+      "prototype_id": "mixed",
+      "prototype_family": "content_mixed_procedural_operational",
+      "score": 0.89,
+      "page_mode": "content_page",
+      "dominant_layers": [
+        "procedural",
+        "operational"
+      ],
+      "country_hints": [],
+      "visa_type_hints": [
+        "tourist"
+      ],
+      "authority_hints": [
+        "consulate"
+      ],
+      "mixed_section_pressure": true
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [
+      "procedural"
+    ],
+    "country_hints": [],
+    "visa_type_hints": [],
+    "authority_hints": [
+      "consulate"
+    ],
+    "mixed_section_ids": [],
+    "advisory_model_used": true,
+    "advisory_consensus": "agree",
+    "required_uncertainty_flags": [],
+    "required_reason_codes": [
+      "context_authority:consulate",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": [
+      "content_mixed_procedural_operational"
+    ]
+  }
+}

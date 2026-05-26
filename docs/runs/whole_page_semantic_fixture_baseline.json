@@ -1,0 +1,249 @@
+{
+  "artifact_id": "whole_page_semantic_fixture_report",
+  "fixture_count": 8,
+  "fixtures": [
+    {
+      "fixture_id": "advisory_conflict_not_promoted",
+      "description": "Conflicting advisory utility hit cannot replace deterministic content-page classification.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.808,
+      "dominant_layers": [
+        "procedural"
+      ],
+      "country_hints": [
+        "ES"
+      ],
+      "visa_type_hints": [
+        "tourist"
+      ],
+      "authority_hints": [
+        "consulate"
+      ],
+      "mixed_section_ids": [],
+      "advisory_model_used": true,
+      "advisory_consensus": "conflict",
+      "advisory_prototype_families": [
+        "utility_page"
+      ],
+      "uncertainty_flags": [
+        "advisory_page_mode_conflict:utility_page"
+      ],
+      "reason_codes": [
+        "advisory_page_mode_candidate:utility_page",
+        "context_authority:consulate",
+        "context_country:ES",
+        "context_visa:tourist",
+        "high_confidence_advisory_retrieval",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "advisory_only_country_not_promoted",
+      "description": "Advisory-only country and authority hints remain diagnostics when deterministic framing does not support them.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.95,
+      "dominant_layers": [],
+      "country_hints": [],
+      "visa_type_hints": [
+        "student"
+      ],
+      "authority_hints": [],
+      "mixed_section_ids": [],
+      "advisory_model_used": true,
+      "advisory_consensus": "agree",
+      "advisory_prototype_families": [
+        "country_poland_work_authority"
+      ],
+      "uncertainty_flags": [
+        "advisory_only_authority_hint:government",
+        "advisory_only_country_hint:PL",
+        "advisory_only_visa_hint:work"
+      ],
+      "reason_codes": [
+        "advisory_page_mode_confirmed:content_page",
+        "context_visa:student",
+        "high_confidence_advisory_retrieval",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "germany_work_authority_footer_noise",
+      "description": "Germany work visa framing survives footer noise without promoting stray footer countries.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.95,
+      "dominant_layers": [
+        "procedural"
+      ],
+      "country_hints": [
+        "DE"
+      ],
+      "visa_type_hints": [
+        "work"
+      ],
+      "authority_hints": [
+        "consulate",
+        "government"
+      ],
+      "mixed_section_ids": [],
+      "advisory_model_used": false,
+      "advisory_consensus": "not_used",
+      "advisory_prototype_families": [],
+      "uncertainty_flags": [],
+      "reason_codes": [
+        "context_authority:consulate",
+        "context_authority:government",
+        "context_country:DE",
+        "context_visa:work",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "menu_directory_blend",
+      "description": "Navigation-heavy menu/directory page should not fall back to plain content classification.",
+      "pass": true,
+      "page_mode_hint": "menu_page",
+      "page_mode_confidence": 0.65,
+      "dominant_layers": [],
+      "country_hints": [],
+      "visa_type_hints": [],
+      "authority_hints": [],
+      "mixed_section_ids": [],
+      "advisory_model_used": false,
+      "advisory_consensus": "not_used",
+      "advisory_prototype_families": [],
+      "uncertainty_flags": [],
+      "reason_codes": [
+        "page_mode:menu_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "mixed_pressure_without_section_evidence",
+      "description": "Advisory mixed-section pressure stays advisory-only when sections lack actual mixed-layer evidence.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.95,
+      "dominant_layers": [
+        "procedural"
+      ],
+      "country_hints": [],
+      "visa_type_hints": [],
+      "authority_hints": [
+        "consulate"
+      ],
+      "mixed_section_ids": [],
+      "advisory_model_used": true,
+      "advisory_consensus": "agree",
+      "advisory_prototype_families": [
+        "content_mixed_procedural_operational"
+      ],
+      "uncertainty_flags": [
+        "advisory_only_visa_hint:tourist"
+      ],
+      "reason_codes": [
+        "advisory_authority_confirmed:consulate",
+        "advisory_page_mode_confirmed:content_page",
+        "context_authority:consulate",
+        "high_confidence_advisory_retrieval",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "mixed_procedural_editorial_france_student",
+      "description": "France student visa page keeps country, visa, authority and mixed-layer hints together.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.95,
+      "dominant_layers": [
+        "editorial",
+        "procedural"
+      ],
+      "country_hints": [
+        "FR"
+      ],
+      "visa_type_hints": [
+        "student"
+      ],
+      "authority_hints": [
+        "consulate"
+      ],
+      "mixed_section_ids": [
+        401
+      ],
+      "advisory_model_used": false,
+      "advisory_consensus": "not_used",
+      "advisory_prototype_families": [],
+      "uncertainty_flags": [
+        "multi_layer_page"
+      ],
+      "reason_codes": [
+        "context_authority:consulate",
+        "context_country:FR",
+        "context_visa:student",
+        "mixed_section_detected",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "spain_procedural_footer_noise",
+      "description": "Procedural Spain page keeps content-page and Spain/tourist/authority framing despite footer noise.",
+      "pass": true,
+      "page_mode_hint": "content_page",
+      "page_mode_confidence": 0.95,
+      "dominant_layers": [
+        "procedural"
+      ],
+      "country_hints": [
+        "ES"
+      ],
+      "visa_type_hints": [
+        "tourist"
+      ],
+      "authority_hints": [
+        "consulate",
+        "visa_center"
+      ],
+      "mixed_section_ids": [],
+      "advisory_model_used": false,
+      "advisory_consensus": "not_used",
+      "advisory_prototype_families": [],
+      "uncertainty_flags": [],
+      "reason_codes": [
+        "context_authority:consulate",
+        "context_authority:visa_center",
+        "context_country:ES",
+        "context_visa:tourist",
+        "page_mode:content_page"
+      ],
+      "failures": []
+    },
+    {
+      "fixture_id": "utility_cookie_login",
+      "description": "Utility/login page remains utility and does not emit content framing hints.",
+      "pass": true,
+      "page_mode_hint": "utility_page",
+      "page_mode_confidence": 0.8,
+      "dominant_layers": [],
+      "country_hints": [],
+      "visa_type_hints": [],
+      "authority_hints": [],
+      "mixed_section_ids": [],
+      "advisory_model_used": false,
+      "advisory_consensus": "not_used",
+      "advisory_prototype_families": [],
+      "uncertainty_flags": [],
+      "reason_codes": [
+        "page_mode:utility_page"
+      ],
+      "failures": []
+    }
+  ]
+}

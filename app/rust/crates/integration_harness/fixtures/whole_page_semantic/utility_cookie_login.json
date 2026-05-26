@@ -1,0 +1,27 @@
+{
+  "fixture_id": "utility_cookie_login",
+  "description": "Utility/login page remains utility and does not emit content framing hints.",
+  "sections": [
+    {
+      "id": 201,
+      "heading_path": "Privacy policy",
+      "section_type": "content",
+      "content_md": "Privacy policy. Cookie settings. Login and account access. Terms and legal notice."
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "utility_page",
+    "dominant_layers": [],
+    "country_hints": [],
+    "visa_type_hints": [],
+    "authority_hints": [],
+    "mixed_section_ids": [],
+    "advisory_model_used": false,
+    "advisory_consensus": "not_used",
+    "required_uncertainty_flags": [],
+    "required_reason_codes": [
+      "page_mode:utility_page"
+    ],
+    "advisory_prototype_families": []
+  }
+}

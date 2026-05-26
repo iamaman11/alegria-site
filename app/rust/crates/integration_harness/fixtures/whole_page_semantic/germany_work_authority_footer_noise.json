@@ -1,0 +1,46 @@
+{
+  "fixture_id": "germany_work_authority_footer_noise",
+  "description": "Germany work visa framing survives footer noise without promoting stray footer countries.",
+  "sections": [
+    {
+      "id": 501,
+      "heading_path": "Germany work visa requirements",
+      "section_type": "content",
+      "content_md": "Germany work visa requirements. Employment visa documents, German consulate filing steps, and ministry guidance for work authorization."
+    },
+    {
+      "id": 502,
+      "heading_path": "Footer",
+      "section_type": "footer",
+      "content_md": "Spain visa links. France visa links. Cookie policy. Login. Directory menu."
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [
+      "procedural"
+    ],
+    "country_hints": [
+      "DE"
+    ],
+    "visa_type_hints": [
+      "work"
+    ],
+    "authority_hints": [
+      "consulate",
+      "government"
+    ],
+    "mixed_section_ids": [],
+    "advisory_model_used": false,
+    "advisory_consensus": "not_used",
+    "required_uncertainty_flags": [],
+    "required_reason_codes": [
+      "context_authority:consulate",
+      "context_authority:government",
+      "context_country:DE",
+      "context_visa:work",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": []
+  }
+}

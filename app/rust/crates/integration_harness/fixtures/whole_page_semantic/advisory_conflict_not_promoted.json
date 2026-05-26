@@ -1,0 +1,53 @@
+{
+  "fixture_id": "advisory_conflict_not_promoted",
+  "description": "Conflicting advisory utility hit cannot replace deterministic content-page classification.",
+  "sections": [
+    {
+      "id": 601,
+      "heading_path": "Spain tourist visa",
+      "section_type": "content",
+      "content_md": "Spain tourist visa requirements. Passport, insurance, fee and appointment details from the consulate."
+    }
+  ],
+  "advisory_hits": [
+    {
+      "prototype_id": "utility",
+      "prototype_family": "utility_page",
+      "score": 0.91,
+      "page_mode": "utility_page",
+      "dominant_layers": [],
+      "country_hints": [],
+      "visa_type_hints": [],
+      "authority_hints": [],
+      "mixed_section_pressure": false
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [
+      "procedural"
+    ],
+    "country_hints": [
+      "ES"
+    ],
+    "visa_type_hints": [
+      "tourist"
+    ],
+    "authority_hints": [
+      "consulate"
+    ],
+    "mixed_section_ids": [],
+    "advisory_model_used": true,
+    "advisory_consensus": "conflict",
+    "required_uncertainty_flags": [
+      "advisory_page_mode_conflict:utility_page"
+    ],
+    "required_reason_codes": [
+      "advisory_page_mode_candidate:utility_page",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": [
+      "utility_page"
+    ]
+  }
+}

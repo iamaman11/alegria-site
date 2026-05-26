@@ -1,0 +1,46 @@
+{
+  "fixture_id": "spain_procedural_footer_noise",
+  "description": "Procedural Spain page keeps content-page and Spain/tourist/authority framing despite footer noise.",
+  "sections": [
+    {
+      "id": 101,
+      "heading_path": "Spain tourist visa requirements",
+      "section_type": "content",
+      "content_md": "Spain tourist visa requirements. Passport copy, insurance, application form, consular fee 80 EUR. Submit through the consulate or VFS visa center."
+    },
+    {
+      "id": 102,
+      "heading_path": "Footer",
+      "section_type": "footer",
+      "content_md": "Privacy policy. Cookie settings. France visa links. Germany visa links. Navigation menu and login help."
+    }
+  ],
+  "expected": {
+    "page_mode_hint": "content_page",
+    "dominant_layers": [
+      "procedural"
+    ],
+    "country_hints": [
+      "ES"
+    ],
+    "visa_type_hints": [
+      "tourist"
+    ],
+    "authority_hints": [
+      "consulate",
+      "visa_center"
+    ],
+    "mixed_section_ids": [],
+    "advisory_model_used": false,
+    "advisory_consensus": "not_used",
+    "required_uncertainty_flags": [],
+    "required_reason_codes": [
+      "context_authority:consulate",
+      "context_authority:visa_center",
+      "context_country:ES",
+      "context_visa:tourist",
+      "page_mode:content_page"
+    ],
+    "advisory_prototype_families": []
+  }
+}
