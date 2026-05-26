@@ -75,6 +75,37 @@ Owner-boundary note:
 - support processes outside the 56-step flow are owned by [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md);
 - this runbook owns only substrate and operational enforcement.
 
+### Build hygiene policy (accepted)
+
+Critical verification surfaces must not rely on whatever happens to be left inside the shared Cargo build cache.
+
+The accepted rule is:
+
+- `app/rust/target/` is disposable build residue, not evidence;
+- critical gates run through isolated `--target-dir` roots;
+- a clean acceptance pass uses dedicated isolated target roots rather than the shared developer cache;
+- accepted evidence lives in `docs/runs/**`, not in build artifacts.
+
+Operational entrypoints:
+
+- build residue cleanup:
+  - `bash automation/clean_build_residue.sh`
+- whole-page semantic gate:
+  - `bash automation/run_whole_page_semantic_gate.sh`
+- truth certification gate:
+  - `bash automation/run_truth_certification_gate.sh`
+- clean acceptance bundle:
+  - `bash automation/run_clean_acceptance_bundle.sh`
+
+Supported overrides:
+
+- `WHOLE_PAGE_SEMANTIC_TARGET_DIR`
+- `TRUTH_CERT_TARGET_ROOT`
+- `CLEAN_ACCEPTANCE_TARGET_ROOT`
+- `CLEAN_ACCEPTANCE_CARGO_HOME`
+
+`CLEAN_ACCEPTANCE_CARGO_HOME` exists for environments where dependency/build-script writes must land in a known writable cargo home. It is an environment contract, not a second runtime path.
+
 ## 2) Current workflow chains
 
 - `SeoSiteBuildCanonicalCutoverWorkflow`:

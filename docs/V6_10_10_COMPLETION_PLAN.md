@@ -38,6 +38,10 @@ The current audit baseline for this file is:
 - regex de-authority is accepted.
 - planning-only graph reasoning tranche is accepted.
 - release path now requires the canonical Step 5 live-provider gate.
+- build hygiene for proof surfaces is now formalized:
+  - shared `app/rust/target/` is disposable;
+  - whole-page and truth-cert gates run through isolated target roots;
+  - a dedicated clean acceptance bundle exists for from-scratch operator verification.
 
 ### 2.2 Already coded but recently missing or incomplete
 
@@ -171,12 +175,14 @@ These paths now agree with the documented contract on emitted fields. The remain
 
 1. capture compat/drain evidence per target environment;
 2. capture release/restore evidence per target environment;
-3. require the same Step 5 and production-gate discipline outside local.
+3. require the same Step 5 and production-gate discipline outside local;
+4. use the clean acceptance bundle for from-scratch operator validation where shared developer caches are not trusted.
 
 #### Acceptance
 
 - machine-readable replay/drain evidence per environment
 - machine-readable release/restore evidence per environment
+- successful `automation/run_clean_acceptance_bundle.sh` in the target environment or equivalent environment-specific wrapper
 
 ### Tranche D — Legacy Surface Retirement Decision
 

@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.43`
+**Current version:** `6.45`
 
 ---
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.45
+
+- formalized build hygiene for proof surfaces by introducing an explicit build-residue cleanup script and a clean acceptance bundle that runs `cargo check`, the whole-page semantic gate, the truth-certification gate, and supporting policy/doc checks against isolated target roots;
+- parameterized the truth-certification gate by target-root environment variables so clean acceptance runs do not need to share build artifacts with day-to-day development or with other gates;
+- documented the accepted rule that `app/rust/target/` is disposable cache state rather than evidence, while `docs/runs/**` remains the canonical evidence surface.
 
 ### 6.44
 
