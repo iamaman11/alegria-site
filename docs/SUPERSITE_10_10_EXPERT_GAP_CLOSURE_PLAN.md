@@ -1,6 +1,8 @@
 # Supersite 10/10 — Release Execution Contract
 
 > Superseded by [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md). Retained for historical execution log, migration context, and evidence trail. Current architecture and execution ownership now live in `V6`.
+>
+> Current forward-path note: `SeoSiteBuildCanonicalCutoverWorkflow` is the accepted active workflow. Mentions below of `SeoSiteBuildWorkflow` describe the historical runtime state captured by this superseded record.
 
 Status: superseded execution reference
 Class: `superseded-reference`

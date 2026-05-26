@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.36`
+**Current version:** `6.38`
 
 ---
 
@@ -43,7 +43,7 @@ This is not an MVP relaxation. It is the expert core extracted from the full tar
 
 ### 1.2 Coverage boundary
 
-The 56-step flow is the canonical product/runtime value stream for one `SeoSiteBuildWorkflow` run.
+The 56-step flow is the canonical product/runtime value stream for one accepted forward site-build run, executed by `SeoSiteBuildCanonicalCutoverWorkflow`.
 
 It is not a list of every process, daemon, migration, CI check, backup script, adapter, or laboratory surface in the repository.
 
@@ -1365,6 +1365,18 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - hardened the Step 5 live-provider operational lane so missing truth-provider credentials are classified immediately as `PENDING_CREDENTIALS` instead of spending a full smoke run only to fail at `blocked:no_truth_extraction_provider`;
 - added canonical wrapper `automation/run_live_provider_minimal_scope_gate.sh` so provider preflight, live smoke, and evidence-schema validation run through one machine-usable entrypoint;
 - updated the runbook to treat Step 5 as an explicit operational gate with fast credential classification, while preserving the existing evidence artifact and without weakening live smoke semantics once credentials exist.
+
+### 6.37
+
+- removed the remaining live-doc wording that equated the canonical 56-step value stream with legacy `SeoSiteBuildWorkflow`; the accepted forward execution identity is now stated consistently as `SeoSiteBuildCanonicalCutoverWorkflow`;
+- tightened reference-doc framing so historical mentions of `SeoSiteBuildWorkflow` remain clearly historical and cannot be misread as the current active path;
+- extended doc-identity enforcement to keep `INDEX`, `V6` owner docs, and reference execution snapshots aligned on active-versus-historical workflow naming.
+
+### 6.38
+
+- wired the canonical Step 5 live-provider gate into `automation/temporal_production_gate.sh`, so production release can no longer pass while the real live-provider path is merely `PENDING_CREDENTIALS`;
+- updated production-gate docs to treat `bash automation/run_live_provider_minimal_scope_gate.sh` as part of release discipline rather than as a detached operator helper;
+- extended support-surface enforcement so the production gate must invoke the canonical live-provider wrapper instead of relying on indirect provider wording alone.
 
 ### 6.33
 

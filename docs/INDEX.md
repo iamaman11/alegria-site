@@ -43,7 +43,7 @@
 |---|---|---|---|
 | [INDEX.md](INDEX.md) | current | live | documentation map and priority rules |
 | [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md) | current-canonical-owner | live | single owner-document for active runtime, target expert flow, authority boundaries, and execution sequence |
-| [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md) | current-execution-satellite | live | versioned detailed working plan for evolving `SeoSiteBuildWorkflow` under `V6` |
+| [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md) | current-execution-satellite | live | versioned detailed working plan for the canonical 56-step site-build flow under `V6`, executed by `SeoSiteBuildCanonicalCutoverWorkflow` |
 | [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md) | current-support-plane-registry | live | named support processes outside the 56-step flow, with contracts, owners, evidence, and automation coverage |
 | [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md) | current-runtime-satellite | live | source independence, trust weighting, authority override, freshness, and regex authority-boundary policy |
 | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |

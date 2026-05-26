@@ -85,7 +85,7 @@ The following `V5` or legacy planning files are reference-only:
 - `post_publish_feedback_loop` currently emits machine-readable evidence through `--report-json`.
 - `release_and_restore_gate` currently has operator probe/execution coverage through `cli_tools SeoReleaseRestoreGate`.
 - `release_and_restore_gate` currently emits machine-readable evidence through `--report-json`.
-- `release_and_restore_gate` currently executes heavyweight gates through `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, and `infra/backups/restore_drill.sh`.
+- `release_and_restore_gate` currently executes heavyweight gates through `automation/ci_verify.sh`, `automation/temporal_production_gate.sh`, `automation/run_live_provider_minimal_scope_gate.sh`, and `infra/backups/restore_drill.sh`.
 - `SeoSiteBuildCanonicalCutoverWorkflow` is now the active forward workflow for canonical site-build execution; support-plane operators that start new expert rebuild/site-build work should target it by default.
 - `SeoSiteBuildWorkflow` remains executable only for explicit compat/drain, replay-safe legacy runs, and controlled comparison.
 - `ExpertExtractionWorkflow` remains executable only as a migration-only diagnostic extraction surface; it is not a support-plane process, is not a target for new product logic, and requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`.

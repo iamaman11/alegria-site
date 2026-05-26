@@ -37,7 +37,7 @@ This file does not replace low-level implementation satellites that define:
 
 Those files remain active, but they are satellites, not competing owner-documents.
 
-The detailed versioned execution plan for evolving `SeoSiteBuildWorkflow` lives in:
+The detailed versioned execution plan for the accepted canonical site-build flow lives in:
 
 - [V6_SeoSiteBuildWorkflow_Working_Plan.md](V6_SeoSiteBuildWorkflow_Working_Plan.md)
 
@@ -51,7 +51,7 @@ The current truth-governance policy tables and regex authority boundary live in:
 
 That working plan has been expanded to match the actual active runtime surface, including support loading, publish-control phases, projection barriers, rebuild detection, and explicit run-mode/scenario branching semantics.
 
-The working plan's 56-step flow is the canonical `SeoSiteBuildWorkflow` value stream. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow and must be listed in [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md).
+The working plan's 56-step flow is the canonical current-run site-build value stream, executed by `SeoSiteBuildCanonicalCutoverWorkflow`. It is not an exhaustive list of every support process in the repository. Runtime substrate, release gates, migrations, contract generation, asynchronous outbox workers, backup/restore, monitoring, analytics, and legacy/test/lab surfaces remain required support planes around the flow and must be listed in [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md).
 
 ---
 

@@ -14,6 +14,11 @@ Canonical current runtime truth now lives in:
 
 If this file conflicts with those documents, `V6` owner/runtime docs win. Statements below about "partial reactivation", "critical gaps", or older `SeoSiteBuildWorkflow` behavior should be read as historical gap framing unless they are still explicitly repeated in the current `V6` owner docs.
 
+Current forward-path note:
+
+- the active workflow for new canonical execution is `SeoSiteBuildCanonicalCutoverWorkflow`;
+- references below to `SeoSiteBuildWorkflow` describe the historical runtime shape captured by this snapshot.
+
 ## Target
 
 Alegria is 10/10 when a production run can create or update a real SEO supersite from live sources:
@@ -33,9 +38,9 @@ Alegria is 10/10 when a production run can create or update a real SEO supersite
 
 ## Current Capability
 
-Implemented baseline at the time of this snapshot:
+Implemented baseline at the time of this historical snapshot:
 
-- `SeoSiteBuildWorkflow` runs multi-page site build stages.
+- `SeoSiteBuildWorkflow` ran multi-page site build stages at the time of the snapshot.
 - DataForSEO results can enqueue scoped crawl jobs.
 - `crawl_sources` persists `raw.pages` and `raw.sections`, emits Qdrant outbox, and returns `raw_page_ids`.
 - `raw_knowledge_ingestion` persists source registration, raw-section context binding, and `extracted.rule_candidates`; it does not bridge raw pages directly into `verified.rule_instances`.

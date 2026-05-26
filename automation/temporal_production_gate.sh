@@ -180,6 +180,18 @@ assert_metrics() {
   grep -q "step_execution_reused_total" <<<"$body" || die "missing step_execution_reused_total metric"
 }
 
+run_live_provider_gate() {
+  log "running canonical Step 5 live-provider gate"
+  if bash automation/run_live_provider_minimal_scope_gate.sh; then
+    return 0
+  fi
+  local status=$?
+  if [ "$status" = "2" ]; then
+    die "canonical Step 5 live-provider gate is PENDING_CREDENTIALS; production gate cannot pass without a configured truth provider"
+  fi
+  die "canonical Step 5 live-provider gate failed"
+}
+
 assert_invariants() {
   log "checking DB/runtime invariants"
   apply_business_migrations
@@ -331,6 +343,7 @@ main() {
   run_seo_site_build_workflow
   run_freshness_workflow
   assert_metrics
+  run_live_provider_gate
   log "PRODUCTION_GATE: PASS"
 }
 

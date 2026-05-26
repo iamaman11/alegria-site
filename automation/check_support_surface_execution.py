@@ -27,6 +27,7 @@ def main() -> int:
     cli = read(CLI_MAIN)
     registry = read(REGISTRY)
     ops = read(OPS)
+    prod_gate = read(PROD_GATE)
 
     for needle in [
         "RebuildDispatch",
@@ -79,6 +80,14 @@ def main() -> int:
         failures.append("missing infra/backups/restore_drill.sh")
 
     for needle in [
+        "run_live_provider_gate()",
+        "automation/run_live_provider_minimal_scope_gate.sh",
+        "PENDING_CREDENTIALS",
+    ]:
+        if needle not in prod_gate:
+            failures.append(f"temporal production gate missing live-provider enforcement `{needle}`")
+
+    for needle in [
         "FreshnessCheckWorkflow",
         "ProjectionReconcileWorkflow",
         "RebuildDispatch",
@@ -86,6 +95,7 @@ def main() -> int:
         "SeoPostPublishFeedbackProbe",
         "SeoReleaseRestoreGate",
         "temporal_production_gate.sh",
+        "run_live_provider_minimal_scope_gate.sh",
         "restore_drill.sh",
     ]:
         if needle not in registry:
