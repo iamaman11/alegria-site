@@ -102,7 +102,7 @@ The current active runtime sequence for the forward path is the accepted canonic
 
 The legacy macro-step sequence centered on `raw_knowledge_ingestion` remains relevant only for compat/drain understanding of `SeoSiteBuildWorkflow`, not as the active forward runtime description.
 
-The active `whole_page_semantic_pass` is intentionally non-authoritative. It now emits deterministic page-mode, dominant-layer, summary, global-entity, page-context-profile, and mixed-section-hint scaffolding, but that scaffold still exists to route and contextualize downstream expert stages rather than replace them.
+The active `whole_page_semantic_pass` is intentionally non-authoritative. It now emits deterministic page-mode, confidence, dominant-layer, summary, global-entity, page-context-profile, and mixed-section-hint scaffolding, and it may optionally enrich that scaffold with `voyage-4-large` prototype-retrieval hints under conservative fusion. That scaffold still exists only to route and contextualize downstream expert stages rather than replace them.
 
 Current truth extraction policy:
 

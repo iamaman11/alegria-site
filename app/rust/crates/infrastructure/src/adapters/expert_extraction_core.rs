@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primitives::hash::{blake3_hex, content_hash_v1};
 use serde::{Deserialize, Serialize};
@@ -39,11 +39,18 @@ pub struct WholePageContextProfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholePageSemanticPassOutput {
     pub page_mode_hint: String,
+    pub page_mode_confidence: f32,
     pub dominant_layers: Vec<String>,
+    pub layer_scores: BTreeMap<String, f32>,
     pub page_summary: String,
     pub page_context_profile: WholePageContextProfile,
     pub mixed_section_ids: Vec<i64>,
     pub global_entities: Vec<String>,
+    pub advisory_model_used: bool,
+    pub advisory_consensus: String,
+    pub advisory_prototype_families: Vec<String>,
+    pub uncertainty_flags: Vec<String>,
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,58 +168,65 @@ fn stage_record<T: Serialize, U: Serialize>(
 }
 
 fn dominant_layers(text: &str) -> Vec<String> {
-    let lowered = text.to_lowercase();
-    let mut layers = Vec::new();
-    if [
-        "паспорт",
-        "страхов",
-        "анкет",
-        "fee",
-        "eur",
-        "сбор",
-        "visa",
-        "виза",
-    ]
-    .iter()
-    .any(|token| lowered.contains(token))
-    {
-        layers.push("procedural".to_string());
-    }
-    if [
-        "schedule",
-        "график",
-        "holiday",
-        "appointment",
-        "запись",
-        "время работы",
-    ]
-    .iter()
-    .any(|token| lowered.contains(token))
-    {
-        layers.push("operational".to_string());
-    }
-    if ["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]
+    let scores = layer_scores_for_text(text);
+    let max_score = scores.values().copied().fold(0.0_f32, f32::max);
+    let threshold = if max_score >= 0.55 {
+        max_score * 0.55
+    } else {
+        0.20
+    };
+    let mut layers = scores
         .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("editorial".to_string());
-    }
-    if ["seo", "serp", "ранжир", "ключев"]
-        .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("seo".to_string());
-    }
-    if ["консультац", "заказать", "услуга", "под ключ"]
-        .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("commercial".to_string());
-    }
+        .filter(|(_, score)| **score >= threshold && **score > 0.0)
+        .map(|(layer, _)| layer.clone())
+        .collect::<Vec<_>>();
     if layers.is_empty() {
         layers.push("procedural".to_string());
     }
     layers
+}
+
+fn normalized_marker_score(text: &str, markers: &[&str]) -> f32 {
+    if markers.is_empty() {
+        return 0.0;
+    }
+    let lowered = text.to_lowercase();
+    let hits = markers
+        .iter()
+        .filter(|marker| lowered.contains(**marker))
+        .count() as f32;
+    hits / markers.len() as f32
+}
+
+fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
+    let mut scores = BTreeMap::new();
+    scores.insert(
+        "procedural".to_string(),
+        normalized_marker_score(
+            text,
+            &["паспорт", "страхов", "анкет", "fee", "eur", "сбор", "visa", "виза"],
+        ),
+    );
+    scores.insert(
+        "operational".to_string(),
+        normalized_marker_score(
+            text,
+            &["schedule", "график", "holiday", "appointment", "запись", "время работы"],
+        ),
+    );
+    scores.insert(
+        "editorial".to_string(),
+        normalized_marker_score(text, &["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]),
+    );
+    scores.insert(
+        "seo".to_string(),
+        normalized_marker_score(text, &["seo", "serp", "ранжир", "ключев"]),
+    );
+    scores.insert(
+        "commercial".to_string(),
+        normalized_marker_score(text, &["консультац", "заказать", "услуга", "под ключ"]),
+    );
+    scores
 }
 
 fn page_mode_hint(section: &RawSectionRecord) -> String {
@@ -377,7 +391,9 @@ pub fn run_expert_extraction_core(
         let mut stage_records = Vec::new();
         let whole_page = WholePageSemanticPassOutput {
             page_mode_hint: page_mode_hint(section),
+            page_mode_confidence: 0.70,
             dominant_layers: dominant_layers(&section.content_md),
+            layer_scores: layer_scores_for_text(&section.content_md),
             page_summary: summarize(&section.content_md),
             page_context_profile: page_context_profile(&section.content_md),
             mixed_section_ids: if dominant_layers(&section.content_md).len() > 1 {
@@ -386,6 +402,15 @@ pub fn run_expert_extraction_core(
                 Vec::new()
             },
             global_entities: global_entities(&section.content_md),
+            advisory_model_used: false,
+            advisory_consensus: "not_used".to_string(),
+            advisory_prototype_families: Vec::new(),
+            uncertainty_flags: if dominant_layers(&section.content_md).len() > 1 {
+                vec!["multi_layer_page".to_string()]
+            } else {
+                Vec::new()
+            },
+            reason_codes: vec![format!("page_mode:{}", page_mode_hint(section))],
         };
         stage_records.push(stage_record(
             "whole_page_semantic_pass",
@@ -1121,7 +1146,9 @@ mod tests {
         let raw = "Spain tourist visa. Passport required. Appointment schedule applies through the consulate and VFS.";
         let stage_output = WholePageSemanticPassOutput {
             page_mode_hint: page_mode_hint(&section(7, raw)),
+            page_mode_confidence: 0.70,
             dominant_layers: dominant_layers(raw),
+            layer_scores: layer_scores_for_text(raw),
             page_summary: summarize(raw),
             page_context_profile: page_context_profile(raw),
             mixed_section_ids: if dominant_layers(raw).len() > 1 {
@@ -1130,6 +1157,11 @@ mod tests {
                 Vec::new()
             },
             global_entities: global_entities(raw),
+            advisory_model_used: false,
+            advisory_consensus: "not_used".to_string(),
+            advisory_prototype_families: Vec::new(),
+            uncertainty_flags: vec!["multi_layer_page".to_string()],
+            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(7, raw)))],
         };
 
         let report = run_expert_extraction_core("run-semantic-page-context", "ES|tourist||BY", &[section(7, raw)]);

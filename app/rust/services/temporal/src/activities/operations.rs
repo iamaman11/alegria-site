@@ -11,6 +11,7 @@ use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
 use infrastructure::adapters::sqlx_source_projection_adapter::load_source_registry_entries;
+use infrastructure::adapters::whole_page_advisory_adapter;
 use policies::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
@@ -168,15 +169,31 @@ pub struct WholePageContextProfile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WholePageAdvisorySignal {
+    pub page_mode_candidates: Vec<String>,
+    pub layer_candidates: Vec<String>,
+    pub context_profile_candidates: WholePageContextProfile,
+    pub mixed_section_pressure: bool,
+    pub retrieval_confidence: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholePageSemanticPageState {
     pub page_id: i64,
     pub section_count: usize,
     pub page_mode_hint: String,
+    pub page_mode_confidence: f32,
     pub dominant_layers: Vec<String>,
+    pub layer_scores: BTreeMap<String, f32>,
     pub page_summary: String,
     pub page_context_profile: WholePageContextProfile,
     pub mixed_section_ids: Vec<i64>,
     pub global_entities: Vec<String>,
+    pub advisory_model_used: bool,
+    pub advisory_consensus: String,
+    pub advisory_prototype_families: Vec<String>,
+    pub uncertainty_flags: Vec<String>,
+    pub reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1056,51 +1073,285 @@ impl_json_runtime_payload_local!(
 );
 
 fn dominant_layers(text: &str) -> Vec<String> {
-    let lowered = text.to_lowercase();
-    let mut layers = Vec::new();
-    if ["паспорт", "страхов", "анкет", "fee", "eur", "сбор", "visa", "виза"]
-        .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("procedural".to_string());
-    }
-    if ["schedule", "график", "holiday", "appointment", "запись", "время работы"]
-        .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("operational".to_string());
-    }
-    if ["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]
-        .iter()
-        .any(|token| lowered.contains(token))
-    {
-        layers.push("editorial".to_string());
-    }
+    let scores = layer_scores_for_text(text);
+    let mut layers = select_layers_from_scores(&scores);
     if layers.is_empty() {
         layers.push("procedural".to_string());
     }
     layers
 }
 
-fn page_mode_hint(text: &str) -> String {
+#[derive(Debug, Clone)]
+struct WholePageDeterministicSnapshot {
+    page_mode_hint: String,
+    page_mode_confidence: f32,
+    dominant_layers: Vec<String>,
+    layer_scores: BTreeMap<String, f32>,
+    page_summary: String,
+    page_context_profile: WholePageContextProfile,
+    mixed_section_ids: Vec<i64>,
+    global_entities: Vec<String>,
+    uncertainty_flags: Vec<String>,
+    reason_codes: Vec<String>,
+}
+
+fn normalized_marker_score(text: &str, markers: &[&str]) -> f32 {
+    if markers.is_empty() {
+        return 0.0;
+    }
     let lowered = text.to_lowercase();
-    if lowered.contains("sitemap") || lowered.contains("directory") || lowered.contains("каталог")
-    {
-        "directory_page".to_string()
-    } else if lowered.contains("breadcrumb")
-        || lowered.contains("menu")
-        || lowered.contains("навигац")
-    {
-        "menu_page".to_string()
-    } else if lowered.contains("privacy")
-        || lowered.contains("cookie")
-        || lowered.contains("login")
-    {
-        "utility_page".to_string()
-    } else if lowered.contains("consultation") || lowered.contains("book now") {
-        "landing_page".to_string()
+    let hits = markers
+        .iter()
+        .filter(|marker| lowered.contains(**marker))
+        .count() as f32;
+    hits / markers.len() as f32
+}
+
+fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
+    let mut scores = BTreeMap::new();
+    scores.insert(
+        "procedural".to_string(),
+        normalized_marker_score(
+            text,
+            &["паспорт", "страхов", "анкет", "fee", "eur", "сбор", "visa", "виза"],
+        ),
+    );
+    scores.insert(
+        "operational".to_string(),
+        normalized_marker_score(
+            text,
+            &["schedule", "график", "holiday", "appointment", "запись", "время работы"],
+        ),
+    );
+    scores.insert(
+        "editorial".to_string(),
+        normalized_marker_score(text, &["faq", "что делать", "почему", "ошибк", "отказ", "проблем"]),
+    );
+    scores.insert(
+        "seo".to_string(),
+        normalized_marker_score(text, &["seo", "serp", "ключев", "ranking", "organic traffic"]),
+    );
+    scores.insert(
+        "commercial".to_string(),
+        normalized_marker_score(
+            text,
+            &["consultation", "book now", "услуга", "под ключ", "заказать", "service package"],
+        ),
+    );
+    scores
+}
+
+fn select_layers_from_scores(scores: &BTreeMap<String, f32>) -> Vec<String> {
+    let max_score = scores.values().copied().fold(0.0_f32, f32::max);
+    let threshold = if max_score >= 0.55 {
+        max_score * 0.55
     } else {
-        "content_page".to_string()
+        0.20
+    };
+    scores
+        .iter()
+        .filter(|(_, score)| **score >= threshold && **score > 0.0)
+        .map(|(layer, _)| layer.clone())
+        .collect()
+}
+
+fn page_mode_scores(
+    text: &str,
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+) -> BTreeMap<String, f32> {
+    let mut scores = BTreeMap::new();
+    let nav_sections = sections
+        .iter()
+        .filter(|section| {
+            let kind = section.section_type.to_ascii_lowercase();
+            kind.contains("nav") || kind.contains("toc")
+        })
+        .count() as f32;
+    let footer_sections = sections
+        .iter()
+        .filter(|section| section.section_type.to_ascii_lowercase().contains("footer"))
+        .count() as f32;
+    let total_sections = sections.len().max(1) as f32;
+    scores.insert(
+        "directory_page".to_string(),
+        normalized_marker_score(text, &["sitemap", "directory", "каталог", "index page"]) * 0.8,
+    );
+    scores.insert(
+        "menu_page".to_string(),
+        normalized_marker_score(text, &["breadcrumb", "menu", "навигац", "sidebar"])
+            + (nav_sections / total_sections) * 0.5,
+    );
+    scores.insert(
+        "utility_page".to_string(),
+        normalized_marker_score(text, &["privacy", "cookie", "login", "terms", "policy"])
+            + (footer_sections / total_sections) * 0.2,
+    );
+    scores.insert(
+        "landing_page".to_string(),
+        normalized_marker_score(text, &["consultation", "book now", "услуга", "под ключ", "cta"]),
+    );
+    let content_support = normalized_marker_score(
+        text,
+        &["visa", "виза", "requirements", "документ", "appointment", "faq", "guide"],
+    );
+    scores.insert(
+        "content_page".to_string(),
+        (0.45 + content_support).min(1.0),
+    );
+    scores
+}
+
+fn select_page_mode_and_confidence(scores: &BTreeMap<String, f32>) -> (String, f32) {
+    let mut ranked = scores.iter().collect::<Vec<_>>();
+    ranked.sort_by(|lhs, rhs| rhs.1.total_cmp(lhs.1).then_with(|| lhs.0.cmp(rhs.0)));
+    if let Some((mode, score)) = ranked.first() {
+        let runner_up = ranked.get(1).map(|(_, value)| **value).unwrap_or(0.0);
+        let confidence = (*score - runner_up).max(0.15) + 0.5;
+        (mode.to_string(), confidence.min(0.95))
+    } else {
+        ("content_page".to_string(), 0.5)
+    }
+}
+
+fn section_mixed_layer_score(text: &str) -> usize {
+    layer_scores_for_text(text)
+        .values()
+        .filter(|score| **score >= 0.20)
+        .count()
+}
+
+fn build_page_sketch(
+    page_id: i64,
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    snapshot: &WholePageDeterministicSnapshot,
+) -> String {
+    let source_url = sections
+        .first()
+        .map(|section| section.source_url.as_str())
+        .unwrap_or_default();
+    let headings = sections
+        .iter()
+        .map(|section| section.heading_path.trim())
+        .filter(|heading| !heading.is_empty())
+        .take(6)
+        .collect::<Vec<_>>();
+    let excerpts = sections
+        .iter()
+        .filter(|section| !section.content_md.trim().is_empty())
+        .take(3)
+        .map(|section| {
+            let excerpt = section.content_md.chars().take(220).collect::<String>();
+            format!("section:{} type:{} text:{}", section.id, section.section_type, excerpt)
+        })
+        .collect::<Vec<_>>();
+    let mut section_histogram = BTreeMap::new();
+    for section in sections {
+        *section_histogram
+            .entry(section.section_type.to_ascii_lowercase())
+            .or_insert(0usize) += 1;
+    }
+    let section_histogram = section_histogram
+        .into_iter()
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "page_id:{page_id}\nsource_url:{source_url}\nheadings:{}\nsection_histogram:{}\npage_mode_hint:{}\ndominant_layers:{}\ncontext_country:{}\ncontext_visa:{}\ncontext_authority:{}\nglobal_entities:{}\nsummary:{}\nexcerpts:\n{}",
+        headings.join(" | "),
+        section_histogram,
+        snapshot.page_mode_hint,
+        snapshot.dominant_layers.join("|"),
+        snapshot.page_context_profile.country_hints.join("|"),
+        snapshot.page_context_profile.visa_type_hints.join("|"),
+        snapshot.page_context_profile.authority_hints.join("|"),
+        snapshot.global_entities.join("|"),
+        snapshot.page_summary,
+        excerpts.join("\n")
+    )
+}
+
+fn deterministic_whole_page_snapshot(
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    combined: &str,
+) -> WholePageDeterministicSnapshot {
+    let layer_scores = layer_scores_for_text(combined);
+    let dominant_layers = select_layers_from_scores(&layer_scores);
+    let page_mode_score_map = page_mode_scores(combined, sections);
+    let (page_mode_hint, page_mode_confidence) =
+        select_page_mode_and_confidence(&page_mode_score_map);
+    let mixed_section_ids = sections
+        .iter()
+        .filter_map(|section| {
+            if section_mixed_layer_score(&section.content_md) >= 2 {
+                Some(section.id)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut reason_codes = Vec::new();
+    reason_codes.push(format!("page_mode:{}", page_mode_hint));
+    if !mixed_section_ids.is_empty() {
+        reason_codes.push("mixed_section_detected".to_string());
+    }
+    let mut uncertainty_flags = Vec::new();
+    if page_mode_confidence < 0.65 {
+        uncertainty_flags.push("low_page_mode_confidence".to_string());
+    }
+    if dominant_layers.len() > 1 {
+        uncertainty_flags.push("multi_layer_page".to_string());
+    }
+    WholePageDeterministicSnapshot {
+        page_mode_hint,
+        page_mode_confidence,
+        dominant_layers,
+        layer_scores,
+        page_summary: summarize(combined),
+        page_context_profile: page_context_profile(combined),
+        mixed_section_ids,
+        global_entities: global_entities(combined),
+        uncertainty_flags,
+        reason_codes,
+    }
+}
+
+fn advisory_signal_from_hits(
+    advisory_hits: &[whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit],
+) -> WholePageAdvisorySignal {
+    let mut page_mode_candidates = Vec::new();
+    let mut layer_candidates = Vec::new();
+    let mut country_hints = Vec::new();
+    let mut visa_type_hints = Vec::new();
+    let mut authority_hints = Vec::new();
+    let mut mixed_section_pressure = false;
+    let mut retrieval_confidence = 0.0_f32;
+
+    for hit in advisory_hits {
+        if !page_mode_candidates.contains(&hit.page_mode) {
+            page_mode_candidates.push(hit.page_mode.clone());
+        }
+        for layer in &hit.dominant_layers {
+            if !layer_candidates.contains(layer) {
+                layer_candidates.push(layer.clone());
+            }
+        }
+        merge_unique_strings(&mut country_hints, hit.country_hints.clone());
+        merge_unique_strings(&mut visa_type_hints, hit.visa_type_hints.clone());
+        merge_unique_strings(&mut authority_hints, hit.authority_hints.clone());
+        mixed_section_pressure |= hit.mixed_section_pressure;
+        retrieval_confidence = retrieval_confidence.max(hit.score);
+    }
+
+    WholePageAdvisorySignal {
+        page_mode_candidates,
+        layer_candidates,
+        context_profile_candidates: WholePageContextProfile {
+            country_hints,
+            visa_type_hints,
+            authority_hints,
+        },
+        mixed_section_pressure,
+        retrieval_confidence,
     }
 }
 
@@ -1176,6 +1427,186 @@ fn page_context_profile(text: &str) -> WholePageContextProfile {
         country_hints,
         visa_type_hints,
         authority_hints,
+    }
+}
+
+fn merge_unique_strings(left: &mut Vec<String>, right: impl IntoIterator<Item = String>) {
+    for item in right {
+        if !left.contains(&item) {
+            left.push(item);
+        }
+    }
+}
+
+fn supportive_section_count_for_layer(
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    layer: &str,
+) -> usize {
+    sections
+        .iter()
+        .filter(|section| dominant_layers(&section.content_md).iter().any(|value| value == layer))
+        .count()
+}
+
+fn fuse_with_advisory_retrieval(
+    sections: &[raw_crawl_adapter::RawSectionRecord],
+    snapshot: WholePageDeterministicSnapshot,
+    advisory_hits: &[whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit],
+) -> WholePageSemanticPageState {
+    let mut dominant_layers = snapshot.dominant_layers.clone();
+    let mut layer_scores = snapshot.layer_scores.clone();
+    let mut page_context_profile = snapshot.page_context_profile.clone();
+    let mut mixed_section_ids = snapshot.mixed_section_ids.clone();
+    let global_entities = snapshot.global_entities.clone();
+    let mut uncertainty_flags = snapshot.uncertainty_flags.clone();
+    let mut reason_codes = snapshot.reason_codes.clone();
+    let mut page_mode_confidence = snapshot.page_mode_confidence;
+    let mut advisory_prototype_families = advisory_hits
+        .iter()
+        .map(|hit| hit.prototype_family.clone())
+        .collect::<Vec<_>>();
+    advisory_prototype_families.dedup();
+
+    let advisory_model_used = !advisory_hits.is_empty();
+    let advisory_consensus;
+    if !advisory_model_used {
+        advisory_consensus = "not_used".to_string();
+    } else {
+        let advisory_signal = advisory_signal_from_hits(advisory_hits);
+        let mut mode_votes = BTreeMap::<String, f32>::new();
+        let mut layer_votes = BTreeMap::<String, f32>::new();
+        let mut country_votes = BTreeMap::<String, f32>::new();
+        let mut visa_votes = BTreeMap::<String, f32>::new();
+        let mut authority_votes = BTreeMap::<String, f32>::new();
+
+        for hit in advisory_hits {
+            *mode_votes.entry(hit.page_mode.clone()).or_insert(0.0) += hit.score;
+            for layer in &hit.dominant_layers {
+                *layer_votes.entry(layer.clone()).or_insert(0.0) += hit.score;
+            }
+            for hint in &hit.country_hints {
+                *country_votes.entry(hint.clone()).or_insert(0.0) += hit.score;
+            }
+            for hint in &hit.visa_type_hints {
+                *visa_votes.entry(hint.clone()).or_insert(0.0) += hit.score;
+            }
+            for hint in &hit.authority_hints {
+                *authority_votes.entry(hint.clone()).or_insert(0.0) += hit.score;
+            }
+        }
+
+        let top_mode = mode_votes
+            .iter()
+            .max_by(|lhs, rhs| lhs.1.total_cmp(rhs.1))
+            .map(|(mode, score)| (mode.clone(), *score));
+        advisory_consensus = if let Some((mode, score)) = top_mode {
+            if mode == snapshot.page_mode_hint {
+                page_mode_confidence = page_mode_confidence.max((0.70 + score / 4.0).min(0.92));
+                reason_codes.push(format!("advisory_page_mode_confirmed:{mode}"));
+                "agree".to_string()
+            } else {
+                page_mode_confidence = (page_mode_confidence * 0.85).max(0.45);
+                uncertainty_flags.push(format!("advisory_page_mode_conflict:{mode}"));
+                reason_codes.push(format!("advisory_page_mode_candidate:{mode}"));
+                "conflict".to_string()
+            }
+        } else {
+            "no_signal".to_string()
+        };
+
+        for (layer, vote) in layer_votes {
+            let supported_sections = supportive_section_count_for_layer(sections, &layer);
+            if !dominant_layers.contains(&layer) && vote >= 1.2 && supported_sections > 0 {
+                dominant_layers.push(layer.clone());
+                reason_codes.push(format!("advisory_layer_expansion:{layer}"));
+            }
+            let base = layer_scores.get(&layer).copied().unwrap_or(0.0);
+            let fused = if supported_sections > 0 {
+                base.max((vote / 3.0).min(0.85))
+            } else {
+                base
+            };
+            if fused > 0.0 {
+                layer_scores.insert(layer, fused);
+            }
+        }
+
+        if advisory_signal.mixed_section_pressure && mixed_section_ids.is_empty() {
+            let advisory_mixed = sections
+                .iter()
+                .filter_map(|section| {
+                    if section_mixed_layer_score(&section.content_md) >= 2 {
+                        Some(section.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            if !advisory_mixed.is_empty() {
+                for section_id in advisory_mixed {
+                    if !mixed_section_ids.contains(&section_id) {
+                        mixed_section_ids.push(section_id);
+                    }
+                }
+                reason_codes.push("advisory_mixed_section_support".to_string());
+            }
+        }
+        if advisory_signal.retrieval_confidence >= 0.85 {
+            reason_codes.push("high_confidence_advisory_retrieval".to_string());
+        }
+
+        for (hint, _) in country_votes {
+            if page_context_profile.country_hints.contains(&hint) {
+                reason_codes.push(format!("advisory_country_confirmed:{hint}"));
+            } else {
+                uncertainty_flags.push(format!("advisory_only_country_hint:{hint}"));
+            }
+        }
+        for (hint, _) in visa_votes {
+            if page_context_profile.visa_type_hints.contains(&hint) {
+                reason_codes.push(format!("advisory_visa_confirmed:{hint}"));
+            } else {
+                uncertainty_flags.push(format!("advisory_only_visa_hint:{hint}"));
+            }
+        }
+        for (hint, _) in authority_votes {
+            if page_context_profile.authority_hints.contains(&hint) {
+                reason_codes.push(format!("advisory_authority_confirmed:{hint}"));
+            } else {
+                uncertainty_flags.push(format!("advisory_only_authority_hint:{hint}"));
+            }
+        }
+    }
+
+    dominant_layers.sort();
+    dominant_layers.dedup();
+    page_context_profile.country_hints.sort();
+    page_context_profile.country_hints.dedup();
+    page_context_profile.visa_type_hints.sort();
+    page_context_profile.visa_type_hints.dedup();
+    page_context_profile.authority_hints.sort();
+    page_context_profile.authority_hints.dedup();
+    uncertainty_flags.sort();
+    uncertainty_flags.dedup();
+    reason_codes.sort();
+    reason_codes.dedup();
+
+    WholePageSemanticPageState {
+        page_id: sections.first().map(|section| section.page_id).unwrap_or_default(),
+        section_count: sections.len(),
+        page_mode_hint: snapshot.page_mode_hint,
+        page_mode_confidence,
+        dominant_layers,
+        layer_scores,
+        page_summary: snapshot.page_summary,
+        page_context_profile,
+        mixed_section_ids,
+        global_entities,
+        advisory_model_used,
+        advisory_consensus,
+        advisory_prototype_families,
+        uncertainty_flags,
+        reason_codes,
     }
 }
 
@@ -1826,38 +2257,38 @@ pub(crate) async fn whole_page_semantic_pass_impl(
     }
     let pages = by_page
         .into_iter()
-        .map(|(page_id, sections)| {
+        .map(|(_page_id, sections)| async move {
             let combined = sections
                 .iter()
                 .map(|section| section.content_md.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let mixed_section_ids = sections
-                .iter()
-                .filter_map(|section| {
-                    let layers = dominant_layers(&section.content_md);
-                    if layers.len() > 1 {
-                        Some(section.id)
-                    } else {
-                        None
+            let snapshot = deterministic_whole_page_snapshot(&sections, &combined);
+            let page_sketch = build_page_sketch(sections[0].page_id, &sections, &snapshot);
+            let advisory_hits =
+                match whole_page_advisory_adapter::search_whole_page_prototypes(&page_sketch, 3)
+                    .await
+                {
+                    Ok(hits) => hits,
+                    Err(err) => {
+                        tracing::warn!(
+                            page_id = sections[0].page_id,
+                            error = %err,
+                            "whole-page advisory retrieval unavailable; falling back to deterministic semantics"
+                        );
+                        Vec::new()
                     }
-                })
-                .collect::<Vec<_>>();
-            WholePageSemanticPageState {
-                page_id,
-                section_count: sections.len(),
-                page_mode_hint: page_mode_hint(&combined),
-                dominant_layers: dominant_layers(&combined),
-                page_summary: summarize(&combined),
-                page_context_profile: page_context_profile(&combined),
-                mixed_section_ids,
-                global_entities: global_entities(&combined),
-            }
+                };
+            fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits)
         })
         .collect::<Vec<_>>();
+    let mut resolved_pages = Vec::with_capacity(pages.len());
+    for page in pages {
+        resolved_pages.push(page.await);
+    }
     Ok(WholePageSemanticPassOutput {
-        page_count: pages.len(),
-        pages,
+        page_count: resolved_pages.len(),
+        pages: resolved_pages,
     })
 }
 
@@ -3693,4 +4124,77 @@ pub(crate) async fn verified_truth_write_impl(
         },
         changed_truth_keys,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn section(id: i64, content_md: &str) -> raw_crawl_adapter::RawSectionRecord {
+        raw_crawl_adapter::RawSectionRecord {
+            id,
+            page_id: 42,
+            source_url: "https://example.test/spain-tourist-visa".to_string(),
+            source_domain: "example.test".to_string(),
+            source_dtype: "html".to_string(),
+            heading_path: "Spain tourist visa".to_string(),
+            section_type: "content".to_string(),
+            content_md: content_md.to_string(),
+            content_hash: "hash".to_string(),
+        }
+    }
+
+    #[test]
+    fn advisory_conflict_does_not_replace_deterministic_page_mode() {
+        let sections = vec![section(
+            7,
+            "Spain tourist visa requirements. Passport, insurance, fee and appointment details.",
+        )];
+        let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
+        let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+            prototype_id: "utility".to_string(),
+            prototype_family: "utility_page".to_string(),
+            score: 0.91,
+            page_mode: "utility_page".to_string(),
+            dominant_layers: Vec::new(),
+            country_hints: Vec::new(),
+            visa_type_hints: Vec::new(),
+            authority_hints: Vec::new(),
+            mixed_section_pressure: false,
+        }];
+
+        let fused = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
+        assert_eq!(fused.page_mode_hint, "content_page");
+        assert!(fused
+            .uncertainty_flags
+            .iter()
+            .any(|flag| flag == "advisory_page_mode_conflict:utility_page"));
+    }
+
+    #[test]
+    fn advisory_only_country_hint_does_not_promote_context_profile() {
+        let sections = vec![section(
+            9,
+            "Student visa guidance with procedural steps and appointment notes.",
+        )];
+        let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
+        let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+            prototype_id: "poland".to_string(),
+            prototype_family: "country_poland_work_authority".to_string(),
+            score: 0.88,
+            page_mode: "content_page".to_string(),
+            dominant_layers: vec!["procedural".to_string()],
+            country_hints: vec!["PL".to_string()],
+            visa_type_hints: vec!["work".to_string()],
+            authority_hints: vec!["government".to_string()],
+            mixed_section_pressure: false,
+        }];
+
+        let fused = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
+        assert!(!fused.page_context_profile.country_hints.contains(&"PL".to_string()));
+        assert!(fused
+            .uncertainty_flags
+            .iter()
+            .any(|flag| flag == "advisory_only_country_hint:PL"));
+    }
 }

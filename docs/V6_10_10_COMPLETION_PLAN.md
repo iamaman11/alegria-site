@@ -61,7 +61,7 @@ The current audit baseline for this file is:
 ### 2.4 Still real gaps after this audit
 
 1. real live-provider `PASS`, not `PENDING_CREDENTIALS`
-2. stronger whole-page semantic scaffold beyond substring heuristics
+2. stronger whole-page semantic scaffold beyond substring heuristics, even after optional advisory retrieval
 3. env-by-env production-gate and drain evidence, not only local acceptance
 4. final decision on physical retirement vs permanent diagnostic retention for legacy `Expert*` surfaces
 
@@ -110,7 +110,7 @@ The current audit baseline for this file is:
 
 **Type:** code + contract hardening  
 **Status:** partially closed by current integration  
-**Implementation state:** needs stronger build beyond current heuristics
+**Implementation state:** deterministic scaffold plus optional `voyage-4-large` advisory retrieval now integrated; still needs broader hardening
 
 #### Now active
 
@@ -120,6 +120,8 @@ The current audit baseline for this file is:
 - deterministic `global_entities`
 - deterministic `page_context_profile`
 - deterministic mixed-section hints
+- optional `voyage-4-large` page-sketch retrieval against a dedicated whole-page prototype collection
+- conservative advisory fusion that can raise uncertainty or widen analysis but cannot create truth authority
 
 #### Integrated in code now
 
@@ -140,7 +142,12 @@ These paths now agree with the documented contract on emitted fields. The remain
    - mixed procedural/editorial pages
    - utility/menu/directory false-positive suppression
    - country/visa framing retention under noisy footer injection
-3. keep this step non-authoritative:
+3. calibrate the optional advisory retrieval lane:
+   - prototype coverage breadth
+   - fusion thresholds
+   - disagreement diagnostics
+   - fallback behavior under missing Voyage/Qdrant
+4. keep this step non-authoritative:
    - no verified truth
    - no canonical-key assignment
    - no publish decision
@@ -217,7 +224,7 @@ These must stay separate from the core 10/10 closure program.
 | Planning-only graph reasoning | accepted | keep green |
 | Step 5 live-provider wrapper | code-ready | requires real credentials and live `PASS` |
 | Production gate live-provider enforcement | integrated | requires real credentials and live `PASS` |
-| Whole-page `page_context_profile` + mixed-section hints | now integrated | strengthen heuristics and tests |
+| Whole-page `page_context_profile` + mixed-section hints | now integrated | strengthen deterministic heuristics, advisory prototype coverage, and tests |
 | Legacy workflow quarantine | accepted | final retirement decision later |
 | Full non-local operational evidence | incomplete | gather environment evidence |
 

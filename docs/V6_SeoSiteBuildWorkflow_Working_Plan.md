@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.40`
+**Current version:** `6.41`
 
 ---
 
@@ -430,7 +430,7 @@ Each target step must have:
 | `load_verified_support_bundle.initial` | truth | Load existing admissible verified truth for the current context and profile before deciding whether the run can draft immediately or must crawl/extract. | Support bundle persisted as runtime artifact. Empty bundle is allowed before crawl but blocks drafting later. |
 | `serp_ingest` | planning/raw | Ingest real or configured SERP candidates and source candidates. | Query batch, source observations, rank/title/snippet/domain/source metadata persisted. Low-trust sources remain signals only. |
 | `crawl_sources` | raw | Fetch pages, persist raw page snapshots, redirect/canonical metadata, crawl provenance, and raw fetch diagnostics. | `raw.pages` exists with immutable source snapshot hashes. Failed crawls are recorded without poisoning the run. |
-| `whole_page_semantic_pass` | raw/semantic | Understand each page as a whole before section-level extraction. This step does not extract facts. | Page mode, dominant layers, page summary, page context profile, global entities, mixed-section hints. |
+| `whole_page_semantic_pass` | raw/semantic | Understand each page as a whole before section-level extraction. This step does not extract facts. | Page mode, page-mode confidence, dominant layers, layer scores, page summary, page context profile, global entities, mixed-section hints, and optional advisory retrieval diagnostics. |
 | `page_utility_classifier` | raw/semantic gate | Decide whether procedural, operational, editorial, SEO, commercial, or structural extraction is allowed for the page. | Hard allow/deny flags. Deny flags override router output. |
 | `dom_block_relevance_filter` | raw gate | Remove or mark navigation, footer, header, cookie, sidebar, promo, and directory blocks before sectioning. | Only extraction-eligible blocks enter sectioning. Denied blocks are auditable with reason. |
 | `sectioning` | raw | Create stable sections from headings, tables, lists, FAQ units, and fallback page sections. | `raw.sections` with stable section ids, block type, position, source snapshot binding, content hash, and source metadata. |
@@ -1147,7 +1147,7 @@ The remaining post-acceptance work is operational convergence, not missing workf
 - ontology-backed canonical storage
 - graph/retrieval specs and adapters
 - outbox-backed downstream materialization surfaces that are not yet first-class workflow phases
-- heuristic whole-page semantic scaffolding that now emits the required `page_context_profile` and mixed-section hints but still needs stronger deterministic classification coverage before it can be called 10/10-hard
+- heuristic whole-page semantic scaffolding that now includes optional `voyage-4-large` prototype retrieval hints under conservative fusion, but still needs stronger deterministic classification coverage and broader evidence fixtures before it can be called 10/10-hard
 
 ### 9.3 Deferred now
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.41
+
+- activated a non-authoritative `voyage-4-large` advisory retrieval lane inside `whole_page_semantic_pass` by building a page sketch, retrieving nearest whole-page prototypes from a dedicated Qdrant collection, and fusing only conservative diagnostics back into the page scaffold;
+- kept the 56-step ledger unchanged and preserved the rule that whole-page semantics may widen routing analysis and confidence reporting but may not write truth, approve canonical mapping, gate publish, or trigger rebuild on their own;
+- aligned the diagnostic extraction-core mirror to the richer whole-page output shape so canonical runtime and debug surfaces do not diverge on page-level semantic fields.
 
 ### 6.40
 
