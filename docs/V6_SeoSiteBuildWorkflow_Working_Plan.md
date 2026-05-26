@@ -5,7 +5,7 @@
 **Parent owner document:** [V6_Expert_Truth_Graph_Runtime.md](V6_Expert_Truth_Graph_Runtime.md)
 **Purpose:** detailed implementation plan for converging the accepted canonical cutover workflow into the single active orchestration flow for Truth, Graph, Retrieval, and Serving planes.
 **Editing rule:** this file is intentionally versioned and updated during execution.
-**Current version:** `6.45`
+**Current version:** `6.46`
 
 ---
 
@@ -1347,6 +1347,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 ---
 
 ## 13. Versioned Change Log
+
+### 6.46
+
+- formalized local env operational evidence bundling as a wrapper around existing proof surfaces instead of adding a new runtime gate or workflow path;
+- added `automation/run_local_operational_evidence_bundle.sh` to aggregate clean acceptance, release/restore gate, legacy replay evidence, and live-provider evidence into one machine-readable env artifact;
+- added `automation/check_local_operational_evidence_schema.py` and committed the accepted local artifact `docs/runs/local_operational_evidence_bundle.json`, with `BLOCKED_ON_LIVE_PROVIDER` documented as the honest local verdict while real provider credentials remain an external blocker.
 
 ### 6.45
 

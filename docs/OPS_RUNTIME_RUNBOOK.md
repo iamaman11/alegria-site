@@ -419,10 +419,24 @@ Heavyweight execution can be requested explicitly:
 
 - `cargo run -p cli_tools -- seo-release-restore-gate --run-ci-verify --run-temporal-gate --run-restore-drill --report-json automation/reports/release_restore_gate.full.json`
 
+Canonical local env evidence bundling for this support plane is:
+
+- `bash automation/run_local_operational_evidence_bundle.sh`
+
+This wrapper does not create a new runtime gate. It bundles existing evidence surfaces:
+
+- isolated clean acceptance output;
+- release/restore gate report;
+- legacy replay evidence;
+- live-provider minimal-scope evidence.
+
+Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_LIVE_PROVIDER` is a valid and expected local verdict when all local operational surfaces are green but the real live provider still lacks credentials.
+
 ## 7.1 Compat / drain closure and naming
 
 - `SeoSiteBuildWorkflow` remains in code only as compat/drain and controlled replay surface.
 - For the current local environment, the compat/drain window is considered closed because [docs/runs/seo_site_build_legacy_replay_evidence.json](/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json) records `total_runs=0` and `open_runs=0`.
+- Local env bundle evidence is captured in [docs/runs/local_operational_evidence_bundle.json](/home/bose/projects/alegria-site/docs/runs/local_operational_evidence_bundle.json).
 - For any other environment, the window closes only with equivalent machine-readable legacy replay evidence or explicit production drain signoff.
 - `Expert*Workflow` surfaces remain diagnostic-only and require `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`.
 - `SeoSiteBuildCanonicalCutoverWorkflow` remains the runtime workflow type after drain; there is no follow-up workflow-type rename just for naming cosmetics.

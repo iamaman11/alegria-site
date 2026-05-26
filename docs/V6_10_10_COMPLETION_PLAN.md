@@ -169,7 +169,21 @@ These paths now agree with the documented contract on emitted fields. The remain
 
 **Type:** operations + evidence  
 **Status:** local accepted, broader environments not yet proven  
-**Implementation state:** code-ready, evidence incomplete
+**Implementation state:** local env bundle now wired; broader environment evidence incomplete
+
+#### Local env evidence now captured
+
+- canonical bundle:
+  - `bash automation/run_local_operational_evidence_bundle.sh`
+- accepted local artifact:
+  - `docs/runs/local_operational_evidence_bundle.json`
+
+Current local bundle semantics:
+
+- `clean acceptance bundle` must pass;
+- `release/restore gate` must return `ok`;
+- `legacy replay evidence` must be `PASS`;
+- `live provider minimal scope` may still leave the bundle at `BLOCKED_ON_LIVE_PROVIDER` until real credentials exist.
 
 #### Remaining work
 
@@ -183,6 +197,7 @@ These paths now agree with the documented contract on emitted fields. The remain
 - machine-readable replay/drain evidence per environment
 - machine-readable release/restore evidence per environment
 - successful `automation/run_clean_acceptance_bundle.sh` in the target environment or equivalent environment-specific wrapper
+- env-scoped operational bundle per environment with no unresolved blockers other than explicitly classified external provider readiness
 
 ### Tranche D — Legacy Surface Retirement Decision
 

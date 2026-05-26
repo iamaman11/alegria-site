@@ -304,6 +304,9 @@ python3 automation/check_seo_legacy_replay_inventory_contract.py
 echo "[52p/53] Legacy replay environment probe"
 python3 automation/check_seo_legacy_replay_environment_probe.py
 
+echo "[52q/53] Local operational evidence schema"
+python3 automation/check_local_operational_evidence_schema.py
+
 echo "[41/53] Temporal build-id policy"
 python3 automation/check_temporal_build_id_policy.py
 
