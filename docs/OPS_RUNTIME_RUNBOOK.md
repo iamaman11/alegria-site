@@ -94,6 +94,8 @@ Operational entrypoints:
   - `bash automation/run_whole_page_semantic_gate.sh`
 - truth certification gate:
   - `bash automation/run_truth_certification_gate.sh`
+- Voyage evaluation bundle:
+  - `bash automation/run_voyage_evaluation_bundle.sh`
 - clean acceptance bundle:
   - `bash automation/run_clean_acceptance_bundle.sh`
 
@@ -105,6 +107,31 @@ Supported overrides:
 - `CLEAN_ACCEPTANCE_CARGO_HOME`
 
 `CLEAN_ACCEPTANCE_CARGO_HOME` exists for environments where dependency/build-script writes must land in a known writable cargo home. It is an environment contract, not a second runtime path.
+
+## 1a) Voyage retrieval policy
+
+Current-runtime Voyage ownership lives in [V6_Voyage_Retrieval_Policy.md](V6_Voyage_Retrieval_Policy.md).
+
+Operational defaults:
+
+- `VOYAGE_MODEL=voyage-4-large`
+- `VOYAGE_CONTEXT_MODEL=voyage-context-3`
+- `VOYAGE_RERANK_MODEL=rerank-2.5`
+
+Current active retrieval collections:
+
+- `raw_chunks_4`
+- `raw_chunks_ctx`
+- `whole_page_advisory_prototypes`
+- compatibility surface: `ontology`
+
+Hard rules:
+
+- retrieval indexing uses `input_type=document`;
+- runtime search uses `input_type=query`;
+- peer clustering omits `input_type`;
+- truth- and draft-adjacent retrieval input must not silently truncate;
+- retrieval remains non-authoritative.
 
 ## 2) Current workflow chains
 
@@ -294,7 +321,8 @@ Supported overrides:
   - evidence surface: `--report-json`
 - `ontology_backfill_reindex`
   - executable surface: `temporal_starter OntologyBackfillPlan`
-  - current hard guarantee: concept impact planning plus optional Neo4j materialization and optional Voyage/Qdrant ontology materialization with `kb.qdrant_points` ledger update
+  - named support capability: `Voyage/Qdrant ontology materialization`
+  - current hard guarantee: concept impact planning plus optional Neo4j materialization and optional Voyage/Qdrant ontology compatibility materialization with `kb.qdrant_points` ledger update
   - operator knobs: `--apply-neo4j`, `--apply-qdrant` (`apply_qdrant` retrieval materialization path)
   - evidence surface: `--report-json`
 - `post_publish_feedback_loop`

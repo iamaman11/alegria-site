@@ -2041,7 +2041,7 @@ mod tests {
         let harness = QdrantHarness::start().await.unwrap();
         let exists = harness
             .client
-            .collection_exists("content_chunks")
+            .collection_exists("raw_chunks_4")
             .await
             .unwrap();
         assert!(!exists);

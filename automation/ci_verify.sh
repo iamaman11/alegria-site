@@ -34,6 +34,9 @@ python3 automation/check_release_restore_gate_surface.py
 echo "[4d/50] Voyage retrieval surface"
 python3 automation/check_voyage_retrieval_surface.py
 
+echo "[4d1/50] Voyage evaluation bundle"
+python3 automation/check_voyage_evaluation_bundle.py
+
 echo "[5/50] R5-R8 boundary check (no Python hot-path violations)"
 bash automation/check_python_rust_boundary.sh
 

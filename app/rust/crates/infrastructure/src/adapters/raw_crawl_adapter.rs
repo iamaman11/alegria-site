@@ -29,11 +29,18 @@ use super::semantic_search_adapter;
 use super::sqlx_outbox_adapter::OutboxEnvelope;
 use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
 use super::truth_extraction_llm_adapter;
-use super::voyage_api_adapter::VoyageClient;
+use super::voyage_api_adapter::{
+    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+};
 
 const CRAWL_USER_AGENT: &str = "AlegriaBot/1.0 (+https://alegria.local/seo-research)";
 const MAX_REDIRECT_HOPS: usize = 10;
 const MAX_CRAWL_ATTEMPTS: i32 = 4;
+const RAW_CHUNKS_STANDARD_COLLECTION: &str = "raw_chunks_4";
+const RAW_CHUNKS_CONTEXT_COLLECTION: &str = "raw_chunks_ctx";
+const DEFAULT_VOYAGE_STANDARD_MODEL: &str = "voyage-4-large";
+const DEFAULT_VOYAGE_CONTEXT_MODEL: &str = "voyage-context-3";
+const DEFAULT_VOYAGE_DIMENSION: u32 = 1024;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RobotsDecisionTrace {
@@ -1814,14 +1821,24 @@ pub async fn emit_raw_section_qdrant_events(
         .map(|section| section.content_md.clone())
         .collect::<Vec<_>>();
     let voyage_api_key = std::env::var("VOYAGE_API_KEY").ok();
-    let voyage_model =
-        std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-3-large".to_string());
-    let real_vectors = if let Some(api_key) = voyage_api_key {
+    let voyage_model = std::env::var("VOYAGE_MODEL")
+        .unwrap_or_else(|_| DEFAULT_VOYAGE_STANDARD_MODEL.to_string());
+    let voyage_context_model = std::env::var("VOYAGE_CONTEXT_MODEL")
+        .unwrap_or_else(|_| DEFAULT_VOYAGE_CONTEXT_MODEL.to_string());
+    let standard_vectors = if let Some(api_key) = voyage_api_key.clone() {
         if texts.is_empty() {
             Vec::new()
         } else {
             VoyageClient::new(api_key, voyage_model.clone())
-                .embed_all(&texts)
+                .embed_all_with_settings(
+                    &texts,
+                    &VoyageEmbeddingOptions {
+                        input_type: Some(VoyageInputType::Document),
+                        output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
+                        output_dtype: Some(VoyageOutputDtype::Float),
+                        truncation: Some(false),
+                    },
+                )
                 .await
                 .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
                     message: format!("Voyage raw section embedding failed: {err}"),
@@ -1830,83 +1847,138 @@ pub async fn emit_raw_section_qdrant_events(
     } else {
         Vec::new()
     };
-    let mut real_vector_iter = real_vectors.into_iter();
+    let contextual_vectors = if let Some(api_key) = voyage_api_key {
+        if texts.is_empty() {
+            Vec::new()
+        } else {
+            let grouped = vec![texts.iter().map(String::as_str).collect::<Vec<_>>()];
+            VoyageClient::new(api_key, voyage_context_model.clone())
+                .contextualized_embed(
+                    &grouped,
+                    &VoyageEmbeddingOptions {
+                        input_type: Some(VoyageInputType::Document),
+                        output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
+                        output_dtype: Some(VoyageOutputDtype::Float),
+                        truncation: Some(false),
+                    },
+                    Some(&voyage_context_model),
+                )
+                .await
+                .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
+                    message: format!("Voyage contextualized raw section embedding failed: {err}"),
+                })?
+                .into_iter()
+                .next()
+                .unwrap_or_default()
+        }
+    } else {
+        Vec::new()
+    };
+    let mut standard_vector_iter = standard_vectors.into_iter();
+    let mut contextual_vector_iter = contextual_vectors.into_iter();
     let mut events = Vec::with_capacity(sections.len());
     for section in &sections {
         if section.content_md.trim().is_empty() {
             continue;
         }
-        let (vector, embedding_model, embedding_version) =
-            if let Some(vector) = real_vector_iter.next() {
-                (vector, voyage_model.as_str(), "raw_section_voyage@1")
-            } else {
-                (
-                    fingerprint_vector(&section.content_md),
-                    "deterministic-fingerprint",
-                    "raw_section_bootstrap@1",
-                )
-            };
         let entity_key = format!("raw_section:{}", section.id);
-        let point_id = qdrant_point_id_v1("content_chunks", "raw_section", &entity_key);
-        let mut metadata = HashMap::new();
-        metadata.insert("page_id".to_string(), section.page_id.to_string());
-        metadata.insert("section_id".to_string(), section.id.to_string());
-        metadata.insert("heading_path".to_string(), section.heading_path.clone());
-        metadata.insert("section_type".to_string(), section.section_type.clone());
-        metadata.insert("content_hash".to_string(), section.content_hash.clone());
-        metadata.insert("source_url".to_string(), section.source_url.clone());
-        metadata.insert("source_domain".to_string(), section.source_domain.clone());
-        metadata.insert("embedding_model".to_string(), embedding_model.to_string());
-        metadata.insert(
-            "embedding_version".to_string(),
-            embedding_version.to_string(),
-        );
-        let vector_size = vector.len() as u32;
-        let payload_bytes = QdrantUpsertCommand {
-            event_id: String::new(),
-            collection_name: "content_chunks".to_string(),
-            entity_type: "raw_section".to_string(),
-            entity_key: entity_key.clone(),
-            point_id: point_id.clone(),
-            vector,
-            payload: None,
-            distance: "cosine".to_string(),
-            vector_size,
-            metadata,
-        }
-        .encode_to_vec();
-        events.push(OutboxEnvelope {
-            run_id: run_id.to_string(),
-            aggregate_type: "raw_section".to_string(),
-            aggregate_key: entity_key.clone(),
-            target_system: "qdrant".to_string(),
-            event_type: "QdrantUpsertCommand".to_string(),
-            payload_type: "alegria.outbox.qdrant_upsert_command.v1".to_string(),
-            schema_version: 1,
-            idempotency_key: content_hash_v1(&format!(
-                "{entity_key}|QdrantUpsertCommand|{}",
-                primitives::hash::blake3_hex(&payload_bytes)
-            )),
-            payload_bytes,
-        });
+        let standard_point = if let Some(vector) = standard_vector_iter.next() {
+            (
+                vector,
+                voyage_model.as_str(),
+                "raw_section_voyage_4@1",
+                RAW_CHUNKS_STANDARD_COLLECTION,
+            )
+        } else {
+            (
+                fingerprint_vector(&section.content_md),
+                "deterministic-fingerprint",
+                "raw_section_bootstrap_4@1",
+                RAW_CHUNKS_STANDARD_COLLECTION,
+            )
+        };
+        let contextual_point = if let Some(vector) = contextual_vector_iter.next() {
+            (
+                vector,
+                voyage_context_model.as_str(),
+                "raw_section_context_voyage@1",
+                RAW_CHUNKS_CONTEXT_COLLECTION,
+            )
+        } else {
+            (
+                fingerprint_vector(&section.content_md),
+                "deterministic-fingerprint",
+                "raw_section_bootstrap_ctx@1",
+                RAW_CHUNKS_CONTEXT_COLLECTION,
+            )
+        };
 
-        sqlx::query(
-            "INSERT INTO kb.qdrant_points
-             (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version)
-             VALUES ($1, 'raw_section', $2, 'content_chunks', $3, $4)
-             ON CONFLICT (entity_type, entity_key, collection_name) DO UPDATE
-             SET point_id = EXCLUDED.point_id,
-                 embedding_model = EXCLUDED.embedding_model,
-                 embedding_version = EXCLUDED.embedding_version,
-                 updated_at = now()",
-        )
-        .bind(&point_id)
-        .bind(&entity_key)
-        .bind(embedding_model)
-        .bind(embedding_version)
-        .execute(pool)
-        .await
-        .map_err(classify_sqlx)?;
+        for (vector, embedding_model, embedding_version, collection_name) in
+            [standard_point, contextual_point]
+        {
+            let point_id = qdrant_point_id_v1(collection_name, "raw_section", &entity_key);
+            let mut metadata = HashMap::new();
+            metadata.insert("page_id".to_string(), section.page_id.to_string());
+            metadata.insert("section_id".to_string(), section.id.to_string());
+            metadata.insert("heading_path".to_string(), section.heading_path.clone());
+            metadata.insert("section_type".to_string(), section.section_type.clone());
+            metadata.insert("content_hash".to_string(), section.content_hash.clone());
+            metadata.insert("source_url".to_string(), section.source_url.clone());
+            metadata.insert("source_domain".to_string(), section.source_domain.clone());
+            metadata.insert("embedding_model".to_string(), embedding_model.to_string());
+            metadata.insert(
+                "embedding_version".to_string(),
+                embedding_version.to_string(),
+            );
+            metadata.insert("retrieval_text".to_string(), section.content_md.clone());
+            let vector_size = vector.len() as u32;
+            let payload_bytes = QdrantUpsertCommand {
+                event_id: String::new(),
+                collection_name: collection_name.to_string(),
+                entity_type: "raw_section".to_string(),
+                entity_key: entity_key.clone(),
+                point_id: point_id.clone(),
+                vector,
+                payload: None,
+                distance: "cosine".to_string(),
+                vector_size,
+                metadata,
+            }
+            .encode_to_vec();
+            events.push(OutboxEnvelope {
+                run_id: run_id.to_string(),
+                aggregate_type: "raw_section".to_string(),
+                aggregate_key: format!("{entity_key}|{collection_name}"),
+                target_system: "qdrant".to_string(),
+                event_type: "QdrantUpsertCommand".to_string(),
+                payload_type: "alegria.outbox.qdrant_upsert_command.v1".to_string(),
+                schema_version: 1,
+                idempotency_key: content_hash_v1(&format!(
+                    "{entity_key}|{collection_name}|QdrantUpsertCommand|{}",
+                    primitives::hash::blake3_hex(&payload_bytes)
+                )),
+                payload_bytes,
+            });
+
+            sqlx::query(
+                "INSERT INTO kb.qdrant_points
+                 (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version)
+                 VALUES ($1, 'raw_section', $2, $3, $4, $5)
+                 ON CONFLICT (entity_type, entity_key, collection_name) DO UPDATE
+                 SET point_id = EXCLUDED.point_id,
+                     embedding_model = EXCLUDED.embedding_model,
+                     embedding_version = EXCLUDED.embedding_version,
+                     updated_at = now()",
+            )
+            .bind(&point_id)
+            .bind(&entity_key)
+            .bind(collection_name)
+            .bind(embedding_model)
+            .bind(embedding_version)
+            .execute(pool)
+            .await
+            .map_err(classify_sqlx)?;
+        }
     }
     let emitted = outbox_emit_many(pool, &events).await?;
     Ok(emitted as usize)
@@ -1920,11 +1992,38 @@ pub async fn retrieve_source_context_chunks(
     if std::env::var("VOYAGE_API_KEY").is_err() {
         return Ok(Vec::new());
     }
-    let results = semantic_search_adapter::search_by_text(query, "content_chunks", limit)
+    let results = match semantic_search_adapter::search_by_text_with_surface(
+        query,
+        RAW_CHUNKS_CONTEXT_COLLECTION,
+        limit,
+        semantic_search_adapter::VoyageSearchSurface::Contextualized,
+    )
+    .await
+    {
+        Ok(found) if !found.is_empty() => found,
+        Ok(_) => semantic_search_adapter::search_by_text_with_surface(
+            query,
+            RAW_CHUNKS_STANDARD_COLLECTION,
+            limit,
+            semantic_search_adapter::VoyageSearchSurface::Standard,
+        )
         .await
         .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-            message: format!("source context semantic search failed: {err}"),
-        })?;
+            message: format!("source context semantic fallback search failed: {err}"),
+        })?,
+        Err(err) => semantic_search_adapter::search_by_text_with_surface(
+            query,
+            RAW_CHUNKS_STANDARD_COLLECTION,
+            limit,
+            semantic_search_adapter::VoyageSearchSurface::Standard,
+        )
+        .await
+        .map_err(|fallback| primitives::errors::DomainError::InfraUnavailable {
+            message: format!(
+                "source context semantic search failed: primary={err}; fallback={fallback}"
+            ),
+        })?,
+    };
     let mut section_ids = Vec::new();
     let mut score_by_section = HashMap::new();
     for result in results {

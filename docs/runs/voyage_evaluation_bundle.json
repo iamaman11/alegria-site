@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-05-26T23:54:01.500130+00:00",
+  "status": "PENDING_CREDENTIALS",
+  "provider": {
+    "embeddings_model": "voyage-4-large",
+    "context_model": "voyage-context-3",
+    "rerank_model": "rerank-2.5",
+    "credentials_ready": false
+  },
+  "collections": [
+    "raw_chunks_4",
+    "raw_chunks_ctx",
+    "kb_canonical_4",
+    "verified_rules_4",
+    "editorial_topics_4",
+    "seo_keyword_clusters_4",
+    "whole_page_advisory_prototypes"
+  ],
+  "samples": {
+    "russian_retrieval": "pending",
+    "contextualized_chunk_recall": "pending",
+    "canonical_mapping_fallback": "pending",
+    "draft_support_rerank": "pending",
+    "planning_cluster_merge": "pending"
+  },
+  "notes": [
+    "This bundle is a policy/evidence surface, not a truth authority surface.",
+    "PENDING_CREDENTIALS is the honest verdict until VOYAGE_API_KEY exists in the target environment."
+  ]
+}

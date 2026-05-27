@@ -263,7 +263,7 @@ async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
 async fn probe_qdrant(client: &Qdrant) -> Result<()> {
     let mut last_error = None;
     for _ in 0..20 {
-        match client.collection_exists("content_chunks").await {
+        match client.collection_exists("raw_chunks_4").await {
             Ok(_) => return Ok(()),
             Err(err) => last_error = Some(anyhow::anyhow!(err)),
         }

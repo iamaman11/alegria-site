@@ -505,7 +505,7 @@ Raw-section embeddings могут появляться отдельно чере
 
 - `emit_raw_section_qdrant_events(...)`
 - VoyageAI embeddings
-- semantic search over `content_chunks`
+- semantic search over `raw_chunks_ctx` with `raw_chunks_4` fallback
 
 Это retrieval layer, а не truth verdict.
 

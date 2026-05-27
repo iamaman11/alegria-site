@@ -1803,6 +1803,8 @@ Any forbidden transformation is a protocol violation.
 
 #### 8.6.0 voyage-context-3 API contract
 
+`V6` note: this section remains a target/reference contract for contextualized chunk embeddings. Current-runtime model defaults, collection ownership, and active-versus-target status are owned by `V6_Voyage_Retrieval_Policy.md`.
+
 voyage-context-3 uses a **list-of-lists** input structure. All sections (chunks) from one page must be grouped into a single inner list and sent in one request. Sending sections individually degrades contextual quality because the model infers document-level context from the co-presence of all chunks in the same inner list.
 
 **Endpoint:** `POST https://api.voyageai.com/v1/contextualizedembeddings`

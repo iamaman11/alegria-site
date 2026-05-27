@@ -123,6 +123,7 @@ The current audit baseline for this file is:
 - deterministic `page_context_profile`
 - deterministic mixed-section hints
 - optional `voyage-4-large` page-sketch retrieval against a dedicated whole-page prototype collection
+- active raw-evidence retrieval modernization now uses `voyage-4-large` for generic raw chunks, `voyage-context-3` for contextualized page-scoped chunk embeddings, and `rerank-2.5` for advisory prototype reranking under a strict non-authority boundary
 - conservative advisory fusion that can raise uncertainty or widen analysis but cannot create truth authority
 - dedicated machine-readable fixture pack and baseline regression gate for whole-page semantics
 
@@ -150,7 +151,9 @@ These paths now agree with the documented contract on emitted fields. The remain
 - canonical gate:
   - `automation/run_whole_page_semantic_gate.sh`
 - baseline drift check:
-  - `automation/check_whole_page_semantic_regression.py`
+- `automation/check_whole_page_semantic_regression.py`
+- `automation/run_voyage_evaluation_bundle.sh`
+- `docs/runs/voyage_evaluation_bundle.json`
 
 #### Scope boundary remains
 

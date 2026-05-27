@@ -5,6 +5,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use infrastructure::adapters::projection_materialize_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
+use infrastructure::adapters::semantic_search_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
 use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
@@ -128,6 +129,10 @@ pub struct SeoPreflightOutput {
     pub verified_rule_count: i64,
     pub pending_rule_count: i64,
     pub qdrant_point_count: i64,
+    pub voyage_embeddings_ready: bool,
+    pub voyage_contextualized_ready: bool,
+    pub voyage_rerank_ready: bool,
+    pub qdrant_collection_contract_ready: bool,
     pub projection_blocked: bool,
     pub status: String,
 }
@@ -2442,6 +2447,21 @@ pub(crate) async fn seo_preflight_impl(
             .fetch_one(&*acts.pool)
             .await
             .map_err(AlegriaActivities::classify_error)?;
+    let collection_contract_count: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT collection_name)::bigint
+         FROM kb.qdrant_points
+         WHERE collection_name = ANY($1)",
+    )
+    .bind(vec![
+        "raw_chunks_4",
+        "raw_chunks_ctx",
+        "whole_page_advisory_prototypes",
+        "seo_keyword_clusters",
+        "ontology",
+    ])
+    .fetch_one(&*acts.pool)
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
     let projection_blocked = projection_statuses.iter().any(|status| {
@@ -2449,6 +2469,10 @@ pub(crate) async fn seo_preflight_impl(
             || (status.open_event_count() > 0
                 && status.max_open_lag_ms > input.projection_max_lag_ms)
     });
+    let voyage_ready = std::env::var("VOYAGE_API_KEY")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
 
     Ok(SeoPreflightOutput {
         context_key: input.context_key.clone(),
@@ -2459,6 +2483,10 @@ pub(crate) async fn seo_preflight_impl(
         verified_rule_count,
         pending_rule_count,
         qdrant_point_count,
+        voyage_embeddings_ready: voyage_ready,
+        voyage_contextualized_ready: voyage_ready,
+        voyage_rerank_ready: voyage_ready,
+        qdrant_collection_contract_ready: collection_contract_count > 0,
         projection_blocked,
         status: if projection_blocked { "warn" } else { "ok" }.to_string(),
     })
@@ -2863,26 +2891,24 @@ pub(crate) async fn entity_span_sweep_impl(
 pub(crate) async fn canonical_mapping_sweep_impl(
     input: &CanonicalMappingSweepInput,
 ) -> Result<CanonicalMappingSweepOutput, DomainError> {
-    let sections = input
-        .entity_spans
-        .sections
-        .iter()
-        .map(|section| {
-            let output = seo_steps::canonical_mapping_step::execute(
-                &seo_steps::canonical_mapping_step::CanonicalMappingInput {
-                    section_id: section.section_id.to_string(),
-                    mentions: section
-                        .mentions
-                        .iter()
-                        .map(
-                            |mention| seo_steps::canonical_mapping_step::MentionForMapping {
-                                raw_text: mention.raw_text.clone(),
-                                entity_type: mention.entity_type.clone(),
-                            },
-                        )
-                        .collect(),
-                },
-            );
+    let mut sections = Vec::with_capacity(input.entity_spans.sections.len());
+    for section in &input.entity_spans.sections {
+        let mut output = seo_steps::canonical_mapping_step::execute(
+            &seo_steps::canonical_mapping_step::CanonicalMappingInput {
+                section_id: section.section_id.to_string(),
+                mentions: section
+                    .mentions
+                    .iter()
+                    .map(
+                        |mention| seo_steps::canonical_mapping_step::MentionForMapping {
+                            raw_text: mention.raw_text.clone(),
+                            entity_type: mention.entity_type.clone(),
+                        },
+                    )
+                    .collect(),
+            },
+        );
+        output.mappings = resolve_canonical_vector_fallbacks(output.mappings).await;
             let needs_hitl = output
                 .mappings
                 .iter()
@@ -2894,16 +2920,15 @@ pub(crate) async fn canonical_mapping_sweep_impl(
             } else {
                 "pass"
             };
-            CanonicalMappingSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                mappings: output.mappings,
-                blocked_by_gate: section.blocked_by_gate,
-                needs_hitl,
-                decision: decision.to_string(),
-            }
-        })
-        .collect::<Vec<_>>();
+        sections.push(CanonicalMappingSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            mappings: output.mappings,
+            blocked_by_gate: section.blocked_by_gate,
+            needs_hitl,
+            decision: decision.to_string(),
+        });
+    }
     let blocked_section_count = sections
         .iter()
         .filter(|section| section.blocked_by_gate)
@@ -2918,6 +2943,131 @@ pub(crate) async fn canonical_mapping_sweep_impl(
         needs_hitl_count,
         sections,
     })
+}
+
+fn canonical_candidate_key(payload: &BTreeMap<String, String>) -> Option<String> {
+    payload
+        .get("concept_key")
+        .cloned()
+        .or_else(|| payload.get("entity_key").cloned())
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn canonical_candidate_text(payload: &BTreeMap<String, String>) -> String {
+    [
+        payload.get("label_ru"),
+        payload.get("aliases"),
+        payload.get("concept_key"),
+        payload.get("entity_key"),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|value| value.as_str())
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+async fn resolve_canonical_vector_fallbacks(
+    mappings: Vec<seo_steps::canonical_mapping_step::MappingResult>,
+) -> Vec<seo_steps::canonical_mapping_step::MappingResult> {
+    let mut resolved = Vec::with_capacity(mappings.len());
+    for mapping in mappings {
+        if mapping.matching_stage != seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant
+        {
+            resolved.push(mapping);
+            continue;
+        }
+        let upgraded = match resolve_single_canonical_vector_fallback(&mapping).await {
+            Ok(Some(value)) => value,
+            _ => mapping,
+        };
+        resolved.push(upgraded);
+    }
+    resolved
+}
+
+async fn resolve_single_canonical_vector_fallback(
+    mapping: &seo_steps::canonical_mapping_step::MappingResult,
+) -> Result<Option<seo_steps::canonical_mapping_step::MappingResult>, DomainError> {
+    if std::env::var("VOYAGE_API_KEY").is_err() || mapping.raw_text.trim().is_empty() {
+        return Ok(None);
+    }
+    let primary_collection = std::env::var("VOYAGE_CANONICAL_COLLECTION")
+        .unwrap_or_else(|_| "kb_canonical_4".to_string());
+    let fallback_collection = std::env::var("VOYAGE_CANONICAL_FALLBACK_COLLECTION")
+        .unwrap_or_else(|_| "ontology".to_string());
+    let mut results = match semantic_search_adapter::search_by_text_with_surface(
+        &mapping.raw_text,
+        &primary_collection,
+        5,
+        semantic_search_adapter::VoyageSearchSurface::Standard,
+    )
+    .await
+    {
+        Ok(found) if !found.is_empty() => found,
+        Ok(_) => semantic_search_adapter::search_by_text_with_surface(
+            &mapping.raw_text,
+            &fallback_collection,
+            5,
+            semantic_search_adapter::VoyageSearchSurface::Standard,
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("canonical mapping fallback retrieval failed: {err}"),
+        })?,
+        Err(_) => semantic_search_adapter::search_by_text_with_surface(
+            &mapping.raw_text,
+            &fallback_collection,
+            5,
+            semantic_search_adapter::VoyageSearchSurface::Standard,
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("canonical mapping fallback retrieval failed: {err}"),
+        })?,
+    };
+    if results.is_empty() {
+        return Ok(None);
+    }
+    for record in &mut results {
+        if !record.payload.contains_key("retrieval_text") {
+            let text = canonical_candidate_text(&record.payload);
+            if !text.trim().is_empty() {
+                record.payload.insert("retrieval_text".to_string(), text);
+            }
+        }
+    }
+    let candidates = match semantic_search_adapter::rerank_records(&mapping.raw_text, results.clone(), Some(3)).await {
+        Ok(reranked) if !reranked.is_empty() => reranked,
+        _ => results,
+    };
+    let top = candidates.first().cloned();
+    let Some(top) = top else {
+        return Ok(None);
+    };
+    let top_key = canonical_candidate_key(&top.payload);
+    let margin = if candidates.len() > 1 {
+        top.score - candidates[1].score
+    } else {
+        top.score
+    };
+    let (mapping_type, needs_hitl, canonical_key) = if top.score >= 0.88 && margin >= 0.03 {
+        ("auto_map".to_string(), false, top_key)
+    } else if top.score >= 0.75 {
+        ("review".to_string(), true, top_key)
+    } else {
+        ("new_candidate".to_string(), true, None)
+    };
+    Ok(Some(seo_steps::canonical_mapping_step::MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key,
+        mapping_type,
+        match_method: "qdrant_retrieval".to_string(),
+        matching_stage: seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant,
+        qdrant_score: Some(top.score),
+        confidence: top.score,
+        needs_hitl,
+    }))
 }
 
 pub(crate) async fn ontology_intake_gate_impl(

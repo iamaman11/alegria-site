@@ -6,7 +6,8 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 };
 use infrastructure::adapters::{
     neo4rs_adapter, qdrant_client_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-    sqlx_adapter::connect_pg, sqlx_seo_adapter, voyage_api_adapter::VoyageClient,
+    sqlx_adapter::connect_pg, sqlx_seo_adapter,
+    voyage_api_adapter::{VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype},
 };
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
 use seo_application::execution::normalize_run_mode;
@@ -342,8 +343,9 @@ fn llm_configured() -> bool {
 
 async fn probe_qdrant(qdrant_url: &str) -> Result<bool> {
     let client = qdrant_client_adapter::connect_qdrant(qdrant_url).await?;
-    let exists = client.collection_exists("content_chunks").await?;
-    Ok(exists)
+    let raw_chunks_4 = client.collection_exists("raw_chunks_4").await?;
+    let raw_chunks_ctx = client.collection_exists("raw_chunks_ctx").await?;
+    Ok(raw_chunks_4 || raw_chunks_ctx)
 }
 
 async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
@@ -557,15 +559,21 @@ async fn run_seo_preflight(
     }
     if env_set("VOYAGE_API_KEY") {
         println!("OK voyage_credentials");
+        println!(
+            "OK voyage_models embedding={} contextualized={} rerank={}",
+            env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string()),
+            env::var("VOYAGE_CONTEXT_MODEL").unwrap_or_else(|_| "voyage-context-3".to_string()),
+            env::var("VOYAGE_RERANK_MODEL").unwrap_or_else(|_| "rerank-2.5".to_string())
+        );
     } else {
         println!("WARN voyage_credentials missing; semantic retrieval will be limited");
     }
     let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
     match tokio::time::timeout(Duration::from_secs(3), probe_qdrant(&qdrant_url)).await {
-        Ok(Ok(content_chunks_exists)) => {
+        Ok(Ok(raw_chunk_collections_exist)) => {
             println!(
-                "OK qdrant_connect url={} content_chunks_collection={}",
-                qdrant_url, content_chunks_exists
+                "OK qdrant_connect url={} raw_chunks_4_or_ctx_collection={}",
+                qdrant_url, raw_chunk_collections_exist
             );
         }
         Ok(Err(err)) => {
@@ -888,7 +896,7 @@ async fn run_ontology_backfill_plan(
     let pool = connect_pg(&database_url).await?;
     let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
     let voyage_api_key = env::var("VOYAGE_API_KEY").ok();
-    let voyage_model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-3-large".to_string());
+    let voyage_model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
     let rows = sqlx::query(
         r#"
         SELECT
@@ -979,7 +987,15 @@ async fn run_ontology_backfill_plan(
                 Vec::new()
             } else {
                 VoyageClient::new(api_key, voyage_model.clone())
-                    .embed_all(&texts)
+                    .embed_all_with_settings(
+                        &texts,
+                        &VoyageEmbeddingOptions {
+                            input_type: Some(VoyageInputType::Document),
+                            output_dimension: Some(1024),
+                            output_dtype: Some(VoyageOutputDtype::Float),
+                            truncation: Some(false),
+                        },
+                    )
                     .await?
             }
         } else {

@@ -4,13 +4,15 @@ use std::collections::BTreeMap;
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 
 use super::qdrant_client_adapter as qdrant;
-use super::voyage_api_adapter::VoyageClient;
+use super::voyage_api_adapter::{
+    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
+};
 
 const COLLECTION_NAME: &str = "whole_page_advisory_prototypes";
 const DEFAULT_MODEL: &str = "voyage-4-large";
 const DEFAULT_DIMENSION: u32 = 1024;
-const DEFAULT_DTYPE: &str = "float";
 const DEFAULT_MIN_SCORE: f32 = 0.72;
+const DEFAULT_RERANK_MODEL: &str = "rerank-2.5";
 
 #[derive(Debug, Clone)]
 pub struct WholePageAdvisoryRetrievalHit {
@@ -273,9 +275,9 @@ async fn ensure_seeded(
     let vectors = voyage
         .embed_batch_with_options(
             &texts,
-            Some("document"),
+            Some(VoyageInputType::Document),
             Some(DEFAULT_DIMENSION),
-            Some(DEFAULT_DTYPE),
+            Some(VoyageOutputDtype::Float),
         )
         .await?;
 
@@ -312,6 +314,10 @@ async fn ensure_seeded(
                 "mixed_section_pressure".to_string(),
                 prototype.mixed_section_pressure.to_string(),
             );
+            payload.insert(
+                "retrieval_text".to_string(),
+                prototype.prototype_text.to_string(),
+            );
             qdrant::DenseEmbeddingPoint {
                 point_id: prototype_id,
                 vector,
@@ -342,11 +348,14 @@ pub async fn search_whole_page_prototypes(
     ensure_seeded(&client, &voyage).await?;
 
     let vector = voyage
-        .embed_batch_with_options(
+        .embed_batch_with_settings(
             &[page_sketch],
-            Some("query"),
-            Some(DEFAULT_DIMENSION),
-            Some(DEFAULT_DTYPE),
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Query),
+                output_dimension: Some(DEFAULT_DIMENSION),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
         )
         .await?
         .into_iter()
@@ -357,7 +366,7 @@ pub async fn search_whole_page_prototypes(
     }
 
     let points = qdrant::search_dense(&client, COLLECTION_NAME, vector, limit, None).await?;
-    Ok(points
+    let mut hits = points
         .into_iter()
         .filter(|point| point.score >= advisory_min_score())
         .map(|point| {
@@ -386,5 +395,47 @@ pub async fn search_whole_page_prototypes(
                     .unwrap_or(false),
             }
         })
-        .collect())
+        .collect::<Vec<_>>();
+    if hits.len() > 1 {
+        let documents = hits
+            .iter()
+            .map(|hit| {
+                PROTOTYPES
+                    .iter()
+                    .find(|prototype| prototype.prototype_family == hit.prototype_family)
+                    .map(|prototype| prototype.prototype_text)
+                    .unwrap_or("")
+            })
+            .collect::<Vec<_>>();
+        if let Ok(reranked) = voyage
+            .rerank(
+                page_sketch,
+                &documents,
+                &VoyageRerankOptions {
+                    top_k: Some(documents.len()),
+                    truncation: Some(false),
+                    return_documents: false,
+                },
+                Some(
+                    &std::env::var("WHOLE_PAGE_VOYAGE_RERANK_MODEL")
+                        .unwrap_or_else(|_| DEFAULT_RERANK_MODEL.to_string()),
+                ),
+            )
+            .await
+        {
+            let mut reordered = Vec::with_capacity(reranked.len());
+            for entry in reranked {
+                if let Some(mut hit) = hits.get(entry.index).cloned() {
+                    if entry.relevance_score >= advisory_min_score() {
+                        hit.score = entry.relevance_score;
+                    }
+                    reordered.push(hit);
+                }
+            }
+            if !reordered.is_empty() {
+                hits = reordered;
+            }
+        }
+    }
+    Ok(hits)
 }

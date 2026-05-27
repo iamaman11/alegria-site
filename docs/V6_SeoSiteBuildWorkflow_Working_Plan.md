@@ -1354,6 +1354,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - tightened the convergence-policy artifact and automation so docs, starter, worker registration, and CI all agree that these workflows stay opt-in diagnostics only and never become a hidden forward-path fallback;
 - updated the 10/10 completion plan so the remaining open blockers are now operational evidence and live-provider closure, not unresolved legacy-surface policy.
 
+### 6.48
+
+- introduced `V6_Voyage_Retrieval_Policy.md` as the current `V6` owner satellite for Voyage model defaults, collection contracts, parameter policy, and active-versus-target retrieval surfaces;
+- upgraded the active raw-evidence retrieval lane to project both `raw_chunks_4` via `voyage-4-large` and `raw_chunks_ctx` via `voyage-context-3`, with `input_type=document`, `truncation=false`, and explicit float 1024-d quality defaults;
+- corrected the live generic retrieval path to embed runtime queries with `input_type=query`, added shared reranker and contextualized-embedding client surfaces, and upgraded canonical vector fallback from pseudo-only scoring to optional live retrieval plus rerank when provider and collection surfaces are available.
+
 ### 6.46
 
 - formalized local env operational evidence bundling as a wrapper around existing proof surfaces instead of adding a new runtime gate or workflow path;

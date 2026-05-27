@@ -5,7 +5,7 @@
 **Owner:** Alegria SEO runtime and knowledge architecture
 **Supersedes:** `V5_Ultimate_Extraction_Protocol.md`, `SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md`
 **Priority rule:** if any `V5` owner or execution document conflicts with this file, `V6` wins.
-**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`, `V6_Truth_Governance_Policy.md`, `V6_10_10_COMPLETION_PLAN.md`
+**Satellite docs:** `V5_Truth_Extraction_LLM_Contract.md`, `V5_Runtime_Contract.md`, `V5_SEO_Graph_And_Retrieval_Projection_Spec.md`, `OPS_RUNTIME_RUNBOOK.md`, `OPS_TEMPORAL_PRODUCTION_GATE.md`, `V6_SeoSiteBuildWorkflow_Working_Plan.md`, `V6_Support_Process_Registry.md`, `V6_Truth_Governance_Policy.md`, `V6_Voyage_Retrieval_Policy.md`, `V6_10_10_COMPLETION_PLAN.md`
 
 ---
 
@@ -48,6 +48,10 @@ The named support-plane contracts that are outside the 56-step flow live in:
 The current truth-governance policy tables and regex authority boundary live in:
 
 - [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md)
+
+The current-versus-target Voyage model, collection, and parameter policy lives in:
+
+- [V6_Voyage_Retrieval_Policy.md](V6_Voyage_Retrieval_Policy.md)
 
 The ordered 10/10 closure backlog that distinguishes code-ready integrations from fresh implementation and external blockers lives in:
 
@@ -196,6 +200,14 @@ Canonical duties:
 - embeddings via `Voyage AI` or another configured embedding provider
 - vector storage and retrieval via `Qdrant`
 - clustering, topic support, semantic recall, and similarity search
+
+Current accepted Voyage policy under `V6`:
+
+- `voyage-4-large` is the general embedding default;
+- `voyage-context-3` is a separate contextualized chunk capability, not an obsolete alias of `voyage-4-large`;
+- `rerank-2.5` is the accepted reranker target;
+- retrieval indexing uses `input_type=document`, runtime search uses `input_type=query`, and clustering among peer texts omits `input_type`;
+- truth- and draft-adjacent retrieval inputs must not silently truncate; upstream chunking is required instead.
 
 Rules:
 
@@ -478,3 +490,9 @@ Phase exit requires:
 - pointed the owner-level target expert flow at the detailed 56-step working plan;
 - clarified that the 56 steps cover the canonical current-run SEO/truth/site-build value stream, while runtime substrate, contracts, outbox workers, release gates, backup/restore, monitoring, analytics, privacy/licensing/quality gates, and legacy/test/lab surfaces are required support planes outside the step list;
 - added an explicit rule that support planes may gate or observe the workflow but may not redefine truth authority.
+
+### V6.3
+
+- added `V6_Voyage_Retrieval_Policy.md` as the single current-runtime satellite for Voyage model defaults, collection contracts, and parameter policy;
+- documented that `voyage-4-large` is the active general embedding default while `voyage-context-3` remains a separate contextualized capability and `rerank-2.5` is the accepted reranker target;
+- clarified that the active retrieval plane now includes dual raw-chunk projection (`raw_chunks_4` plus `raw_chunks_ctx`) under the same non-authority boundary.

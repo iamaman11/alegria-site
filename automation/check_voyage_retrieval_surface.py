@@ -10,6 +10,7 @@ STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "tem
 REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 OPS = ROOT / "docs" / "OPS_RUNTIME_RUNBOOK.md"
 PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
+POLICY = ROOT / "docs" / "V6_Voyage_Retrieval_Policy.md"
 
 
 def read(path: Path) -> str:
@@ -21,14 +22,18 @@ def main() -> int:
     registry = read(REGISTRY)
     ops = read(OPS)
     plan = read(PLAN)
+    policy = read(POLICY)
     failures: list[str] = []
 
     for needle in [
         "apply_qdrant: bool",
         "VoyageClient",
+        "VoyageEmbeddingOptions",
+        "VOYAGE_CONTEXT_MODEL",
+        "VOYAGE_RERANK_MODEL",
         "connect_qdrant",
-        "ensure_default_dense_collection",
-        "upsert_embedding_points",
+        "raw_chunks_4",
+        "raw_chunks_ctx",
         "kb.qdrant_points",
         "qdrant_point_id_v1(\"ontology\", \"concept\", &concept_key)",
         "\"ontology_voyage@1\"",
@@ -39,6 +44,9 @@ def main() -> int:
     for needle in [
         "Voyage/Qdrant ontology materialization",
         "apply_qdrant",
+        "V6_Voyage_Retrieval_Policy.md",
+        "raw_chunks_4",
+        "raw_chunks_ctx",
     ]:
         if needle not in ops:
             failures.append(f"OPS runbook missing `{needle}`")
@@ -48,6 +56,17 @@ def main() -> int:
 
     if "`Voyage/Qdrant` ontology retrieval projection" not in plan:
         failures.append("working plan missing promoted ontology retrieval projection wording")
+
+    for needle in [
+        "voyage-4-large",
+        "voyage-context-3",
+        "rerank-2.5",
+        "raw_chunks_4",
+        "raw_chunks_ctx",
+        "whole_page_advisory_prototypes",
+    ]:
+        if needle not in policy:
+            failures.append(f"Voyage retrieval policy missing `{needle}`")
 
     if failures:
         print("VOYAGE_RETRIEVAL_SURFACE: FAILED")
