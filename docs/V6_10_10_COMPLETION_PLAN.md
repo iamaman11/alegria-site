@@ -185,7 +185,8 @@ Current local bundle semantics:
 - `clean acceptance bundle` must pass;
 - `release/restore gate` must return `ok`;
 - `legacy replay evidence` must be `PASS`;
-- `live provider minimal scope` may still leave the bundle at `BLOCKED_ON_LIVE_PROVIDER` until real credentials exist.
+- `retrieval contract gate` must be `pass` under hard-required Voyage/Qdrant policy;
+- `live provider minimal scope` may still leave the bundle at `BLOCKED_ON_LIVE_PROVIDER` only after retrieval readiness itself is green.
 
 #### Remaining work
 

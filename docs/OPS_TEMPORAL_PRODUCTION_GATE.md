@@ -16,6 +16,7 @@ bash automation/temporal_production_gate.sh
 python3 automation/check_local_runtime_db_baseline.py --database-url "$DATABASE_URL"
 python3 automation/bootstrap_local_runtime_baseline.py --database-url "$DATABASE_URL" --recreate
 python3 automation/check_truth_extraction_provider_ready.py
+bash automation/run_retrieval_contract_gate.sh
 bash automation/run_live_provider_minimal_scope_gate.sh
 ```
 
@@ -71,6 +72,8 @@ bash automation/run_live_provider_minimal_scope_gate.sh
 6. Проверяет deployment discipline:
 - worker стартует с `WORKER_BUILD_ID`;
 - docker-mode прогон использует актуальный контейнерный runtime.
+- hard-required retrieval contract runs through `bash automation/run_retrieval_contract_gate.sh`.
+- if the retrieval contract is blocked, production gate fails before workflow smoke.
 - canonical Step 5 live-provider gate runs through `bash automation/run_live_provider_minimal_scope_gate.sh`.
 - live truth extraction path не считается ready без одного из configured provider paths:
   - `SEO_TRUTH_LLM_LOCAL_ENDPOINT|SEO_LLM_LOCAL_ENDPOINT`

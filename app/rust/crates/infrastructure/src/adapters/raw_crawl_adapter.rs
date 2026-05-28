@@ -1989,7 +1989,22 @@ pub async fn retrieve_source_context_chunks(
     query: &str,
     limit: u64,
 ) -> std::result::Result<Vec<SourceContextChunkState>, primitives::errors::DomainError> {
+    let contextual_required = std::env::var("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
     if std::env::var("VOYAGE_API_KEY").is_err() {
+        if contextual_required {
+            return Err(primitives::errors::DomainError::InfraUnavailable {
+                message: "contextual raw-chunk retrieval is required, but VOYAGE_API_KEY is not set"
+                    .to_string(),
+            });
+        }
         return Ok(Vec::new());
     }
     let results = match semantic_search_adapter::search_by_text_with_surface(
@@ -2001,7 +2016,7 @@ pub async fn retrieve_source_context_chunks(
     .await
     {
         Ok(found) if !found.is_empty() => found,
-        Ok(_) => semantic_search_adapter::search_by_text_with_surface(
+        Ok(_) if !contextual_required => semantic_search_adapter::search_by_text_with_surface(
             query,
             RAW_CHUNKS_STANDARD_COLLECTION,
             limit,
@@ -2011,7 +2026,13 @@ pub async fn retrieve_source_context_chunks(
         .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
             message: format!("source context semantic fallback search failed: {err}"),
         })?,
-        Err(err) => semantic_search_adapter::search_by_text_with_surface(
+        Ok(_) => {
+            return Err(primitives::errors::DomainError::InfraUnavailable {
+                message: "contextual raw-chunk retrieval is required, but raw_chunks_ctx returned no candidates"
+                    .to_string(),
+            });
+        }
+        Err(err) if !contextual_required => semantic_search_adapter::search_by_text_with_surface(
             query,
             RAW_CHUNKS_STANDARD_COLLECTION,
             limit,
@@ -2023,6 +2044,13 @@ pub async fn retrieve_source_context_chunks(
                 "source context semantic search failed: primary={err}; fallback={fallback}"
             ),
         })?,
+        Err(err) => {
+            return Err(primitives::errors::DomainError::InfraUnavailable {
+                message: format!(
+                    "contextual raw-chunk retrieval is required, and raw_chunks_ctx search failed: {err}"
+                ),
+            });
+        }
     };
     let mut section_ids = Vec::new();
     let mut score_by_section = HashMap::new();

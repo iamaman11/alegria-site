@@ -4,6 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
     FreshnessReport, SeoScopePayload, SeoVerifiedFactSupportState, StepContractMeta,
 };
 use infrastructure::adapters::projection_materialize_adapter;
+use infrastructure::adapters::qdrant_client_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::semantic_search_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
@@ -132,9 +133,29 @@ pub struct SeoPreflightOutput {
     pub voyage_embeddings_ready: bool,
     pub voyage_contextualized_ready: bool,
     pub voyage_rerank_ready: bool,
+    pub qdrant_ready: bool,
     pub qdrant_collection_contract_ready: bool,
+    pub retrieval_capability_required: bool,
+    pub canonical_vector_retrieval_required: bool,
+    pub contextual_raw_chunk_retrieval_required: bool,
+    pub voyage_rerank_required: bool,
+    pub retrieval_contract_status: String,
+    pub retrieval_block_reason: Option<String>,
+    pub required_collection_statuses: Vec<SeoPreflightCollectionStatus>,
     pub projection_blocked: bool,
     pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeoPreflightCollectionStatus {
+    pub collection_name: String,
+    pub exists: bool,
+    pub fresh: bool,
+    pub projection_complete: bool,
+    pub point_count: i64,
+    pub last_materialized_at: Option<String>,
+    pub last_source_change_at: Option<String>,
+    pub lag_seconds: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1060,6 +1081,57 @@ impl_json_runtime_payload_local!(
     ContradictionGateSweepOutput,
     "alegria.runtime.json.ContradictionGateSweepOutput"
 );
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn required_retrieval_collections() -> [&'static str; 7] {
+    [
+        "raw_chunks_4",
+        "raw_chunks_ctx",
+        "kb_canonical_4",
+        "verified_rules_4",
+        "editorial_topics_4",
+        "seo_keyword_clusters_4",
+        "whole_page_advisory_prototypes",
+    ]
+}
+
+async fn probe_qdrant_required_collections(
+    required_collections: &[&str],
+) -> (bool, BTreeMap<String, bool>) {
+    let qdrant_url =
+        std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let mut statuses = BTreeMap::new();
+    let connect = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        qdrant_client_adapter::connect_qdrant(&qdrant_url),
+    )
+    .await;
+    let Ok(Ok(client)) = connect else {
+        return (false, statuses);
+    };
+    for collection in required_collections {
+        let exists = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client.collection_exists(*collection),
+        )
+        .await
+        {
+            Ok(Ok(value)) => value,
+            _ => false,
+        };
+        statuses.insert((*collection).to_string(), exists);
+    }
+    (true, statuses)
+}
 impl_json_runtime_payload_local!(
     TruthAdjudicationSweepInput,
     "alegria.runtime.json.TruthAdjudicationSweepInput"
@@ -2447,21 +2519,33 @@ pub(crate) async fn seo_preflight_impl(
             .fetch_one(&*acts.pool)
             .await
             .map_err(AlegriaActivities::classify_error)?;
-    let collection_contract_count: i64 = sqlx::query_scalar(
-        "SELECT count(DISTINCT collection_name)::bigint
-         FROM kb.qdrant_points
-         WHERE collection_name = ANY($1)",
+    let required_collections = required_retrieval_collections();
+    let collection_statuses = sqlx_seo_adapter::read_qdrant_collection_statuses(
+        &acts.pool,
+        &required_collections,
     )
-    .bind(vec![
-        "raw_chunks_4",
-        "raw_chunks_ctx",
-        "whole_page_advisory_prototypes",
-        "seo_keyword_clusters",
-        "ontology",
-    ])
-    .fetch_one(&*acts.pool)
-    .await
-    .map_err(AlegriaActivities::classify_error)?;
+    .await?;
+    let required_collection_statuses = collection_statuses
+        .into_iter()
+        .map(|status| SeoPreflightCollectionStatus {
+            exists: status.point_count > 0,
+            fresh: status
+                .lag_seconds
+                .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                .unwrap_or(false),
+            projection_complete: status.point_count > 0,
+            collection_name: status.collection_name,
+            point_count: status.point_count,
+            last_materialized_at: status.last_materialized_at,
+            last_source_change_at: None,
+            lag_seconds: status.lag_seconds,
+        })
+        .collect::<Vec<_>>();
+    let qdrant_collection_contract_ready = required_collection_statuses
+        .iter()
+        .all(|status| status.exists && status.projection_complete);
+    let (qdrant_ready, qdrant_collection_presence) =
+        probe_qdrant_required_collections(&required_collections).await;
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
     let projection_blocked = projection_statuses.iter().any(|status| {
@@ -2473,6 +2557,91 @@ pub(crate) async fn seo_preflight_impl(
         .ok()
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
+    let retrieval_capability_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
+    let canonical_vector_retrieval_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
+    let contextual_raw_chunk_retrieval_required = env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
+    let voyage_rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
+
+    let missing_collections = required_collection_statuses
+        .iter()
+        .filter(|status| !status.exists)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let stale_collections = required_collection_statuses
+        .iter()
+        .filter(|status| status.exists && !status.fresh)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let incomplete_collections = required_collection_statuses
+        .iter()
+        .filter(|status| status.exists && !status.projection_complete)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let missing_qdrant_collections = required_collections
+        .iter()
+        .filter(|collection| {
+            !qdrant_collection_presence
+                .get(**collection)
+                .copied()
+                .unwrap_or(false)
+        })
+        .map(|collection| (*collection).to_string())
+        .collect::<Vec<_>>();
+
+    let retrieval_contract_status = if retrieval_capability_required {
+        if !voyage_ready
+            || (contextual_raw_chunk_retrieval_required && !voyage_ready)
+            || (voyage_rerank_required && !voyage_ready)
+            || (canonical_vector_retrieval_required && !voyage_ready)
+        {
+            "blocked_provider_capability".to_string()
+        } else if !qdrant_ready {
+            "blocked_retrieval_contract".to_string()
+        } else if !missing_qdrant_collections.is_empty() || !missing_collections.is_empty() {
+            "blocked_missing_collection".to_string()
+        } else if !stale_collections.is_empty() {
+            "blocked_stale_collection".to_string()
+        } else if projection_blocked || !incomplete_collections.is_empty() {
+            "blocked_projection_incomplete".to_string()
+        } else {
+            "pass".to_string()
+        }
+    } else if projection_blocked {
+        "warn".to_string()
+    } else {
+        "pass".to_string()
+    };
+    let retrieval_block_reason = match retrieval_contract_status.as_str() {
+        "blocked_provider_capability" => Some(
+            "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, but provider credentials are not ready".to_string(),
+        ),
+        "blocked_retrieval_contract" => Some(
+            "retrieval contract requires reachable Qdrant and required retrieval surfaces".to_string(),
+        ),
+        "blocked_missing_collection" => Some(format!(
+            "missing required retrieval collections: ledger_missing=[{}] qdrant_missing=[{}]",
+            missing_collections.join(","),
+            missing_qdrant_collections.join(",")
+        )),
+        "blocked_stale_collection" => Some(format!(
+            "stale required retrieval collections: {}",
+            stale_collections.join(",")
+        )),
+        "blocked_projection_incomplete" => Some(format!(
+            "projection backlog or incomplete retrieval collections block the required retrieval contract: projection_blocked={} incomplete=[{}]",
+            projection_blocked,
+            incomplete_collections.join(",")
+        )),
+        _ => None,
+    };
+
+    if retrieval_capability_required && retrieval_contract_status != "pass" {
+        return Err(DomainError::ValidationFailure {
+            message: retrieval_block_reason
+                .clone()
+                .unwrap_or_else(|| "retrieval contract blocked canonical runtime".to_string()),
+        });
+    }
 
     Ok(SeoPreflightOutput {
         context_key: input.context_key.clone(),
@@ -2486,9 +2655,27 @@ pub(crate) async fn seo_preflight_impl(
         voyage_embeddings_ready: voyage_ready,
         voyage_contextualized_ready: voyage_ready,
         voyage_rerank_ready: voyage_ready,
-        qdrant_collection_contract_ready: collection_contract_count > 0,
+        qdrant_ready,
+        qdrant_collection_contract_ready,
+        retrieval_capability_required,
+        canonical_vector_retrieval_required,
+        contextual_raw_chunk_retrieval_required,
+        voyage_rerank_required,
+        retrieval_contract_status: retrieval_contract_status.clone(),
+        retrieval_block_reason,
+        required_collection_statuses,
         projection_blocked,
-        status: if projection_blocked { "warn" } else { "ok" }.to_string(),
+        status: if retrieval_contract_status == "warn" {
+            "warn".to_string()
+        } else if retrieval_contract_status == "pass" {
+            if projection_blocked {
+                "warn".to_string()
+            } else {
+                "ok".to_string()
+            }
+        } else {
+            retrieval_contract_status
+        },
     })
 }
 
@@ -2989,13 +3176,22 @@ async fn resolve_canonical_vector_fallbacks(
 async fn resolve_single_canonical_vector_fallback(
     mapping: &seo_steps::canonical_mapping_step::MappingResult,
 ) -> Result<Option<seo_steps::canonical_mapping_step::MappingResult>, DomainError> {
-    if std::env::var("VOYAGE_API_KEY").is_err() || mapping.raw_text.trim().is_empty() {
+    let canonical_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
+    let rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
+    if mapping.raw_text.trim().is_empty() {
+        return Ok(None);
+    }
+    if std::env::var("VOYAGE_API_KEY").is_err() {
+        if canonical_required {
+            return Err(DomainError::InfraUnavailable {
+                message: "canonical vector retrieval is required, but VOYAGE_API_KEY is not set"
+                    .to_string(),
+            });
+        }
         return Ok(None);
     }
     let primary_collection = std::env::var("VOYAGE_CANONICAL_COLLECTION")
         .unwrap_or_else(|_| "kb_canonical_4".to_string());
-    let fallback_collection = std::env::var("VOYAGE_CANONICAL_FALLBACK_COLLECTION")
-        .unwrap_or_else(|_| "ontology".to_string());
     let mut results = match semantic_search_adapter::search_by_text_with_surface(
         &mapping.raw_text,
         &primary_collection,
@@ -3005,26 +3201,22 @@ async fn resolve_single_canonical_vector_fallback(
     .await
     {
         Ok(found) if !found.is_empty() => found,
-        Ok(_) => semantic_search_adapter::search_by_text_with_surface(
-            &mapping.raw_text,
-            &fallback_collection,
-            5,
-            semantic_search_adapter::VoyageSearchSurface::Standard,
-        )
-        .await
-        .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("canonical mapping fallback retrieval failed: {err}"),
-        })?,
-        Err(_) => semantic_search_adapter::search_by_text_with_surface(
-            &mapping.raw_text,
-            &fallback_collection,
-            5,
-            semantic_search_adapter::VoyageSearchSurface::Standard,
-        )
-        .await
-        .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("canonical mapping fallback retrieval failed: {err}"),
-        })?,
+        Ok(_) if canonical_required => {
+            return Err(DomainError::InfraUnavailable {
+                message: format!(
+                    "canonical vector retrieval is required, but `{primary_collection}` returned no candidates"
+                ),
+            });
+        }
+        Ok(_) => return Ok(None),
+        Err(err) if canonical_required => {
+            return Err(DomainError::InfraUnavailable {
+                message: format!(
+                    "canonical vector retrieval is required, but `{primary_collection}` search failed: {err}"
+                ),
+            });
+        }
+        Err(_) => return Ok(None),
     };
     if results.is_empty() {
         return Ok(None);
@@ -3037,8 +3229,21 @@ async fn resolve_single_canonical_vector_fallback(
             }
         }
     }
-    let candidates = match semantic_search_adapter::rerank_records(&mapping.raw_text, results.clone(), Some(3)).await {
+    let candidates = match semantic_search_adapter::rerank_records(
+        &mapping.raw_text,
+        results.clone(),
+        Some(3),
+    )
+    .await
+    {
         Ok(reranked) if !reranked.is_empty() => reranked,
+        Err(err) if rerank_required => {
+            return Err(DomainError::InfraUnavailable {
+                message: format!(
+                    "canonical vector retrieval requires rerank, but rerank failed: {err}"
+                ),
+            });
+        }
         _ => results,
     };
     let top = candidates.first().cloned();

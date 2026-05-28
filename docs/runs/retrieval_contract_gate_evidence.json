@@ -1,0 +1,96 @@
+{
+  "artifact_id": "seo_preflight",
+  "status": "blocked_retrieval_contract",
+  "context_key": "es:tourist:by",
+  "normalized_profile": "unknown",
+  "retrieval_capability_required": true,
+  "canonical_vector_retrieval_required": true,
+  "contextual_raw_chunk_retrieval_required": true,
+  "voyage_rerank_required": true,
+  "voyage_embeddings_ready": false,
+  "voyage_contextualized_ready": false,
+  "voyage_rerank_ready": false,
+  "qdrant_ready": false,
+  "qdrant_collection_contract_ready": false,
+  "projection_blocked": true,
+  "retrieval_block_reason": "    1: relation \"site.navigation_items\" does not exist",
+  "required_collections": [
+    {
+      "collection_name": "raw_chunks_4",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "raw_chunks_ctx",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "kb_canonical_4",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "verified_rules_4",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "editorial_topics_4",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "seo_keyword_clusters_4",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    },
+    {
+      "collection_name": "whole_page_advisory_prototypes",
+      "exists": false,
+      "fresh": false,
+      "projection_complete": false,
+      "point_count": 0,
+      "last_materialized_at": null,
+      "last_source_change_at": null,
+      "lag_seconds": null,
+      "qdrant_collection_exists": false
+    }
+  ]
+}

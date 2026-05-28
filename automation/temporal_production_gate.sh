@@ -192,6 +192,16 @@ run_live_provider_gate() {
   die "canonical Step 5 live-provider gate failed"
 }
 
+run_retrieval_contract_gate() {
+  log "running hard-required retrieval contract gate"
+  RETRIEVAL_CONTRACT_GATE_REPORT_PATH="${RETRIEVAL_CONTRACT_GATE_REPORT_PATH:-/tmp/retrieval_contract_gate_current.json}" \
+  RETRIEVAL_CAPABILITY_REQUIRED=true \
+  CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true \
+  CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED=true \
+  VOYAGE_RERANK_REQUIRED=true \
+    bash automation/run_retrieval_contract_gate.sh || die "hard-required retrieval contract gate failed"
+}
+
 assert_invariants() {
   log "checking DB/runtime invariants"
   apply_business_migrations
@@ -338,6 +348,7 @@ main() {
   trap 'if [ -n "${WORKER_PID:-}" ]; then kill "${WORKER_PID}" >/dev/null 2>&1 || true; fi' EXIT
   start_services
   assert_invariants
+  run_retrieval_contract_gate
   run_ping_and_demo
   run_seo_empty_support_failure
   run_seo_site_build_workflow

@@ -89,6 +89,22 @@ Legacy collection names may continue to exist during migration, especially `onto
 
 Named vectors are not part of the accepted first full migration. Alegria uses separate collections per retrieval surface.
 
+## 4.1 Hard-required retrieval contract
+
+When the hard-required retrieval lane is enabled, these env flags govern canonical runtime:
+
+- `RETRIEVAL_CAPABILITY_REQUIRED=true`
+- `CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true`
+- `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED=true`
+- `VOYAGE_RERANK_REQUIRED=true`
+
+In that mode:
+
+- `seo_preflight` must return `pass` for the retrieval contract;
+- missing provider capability, missing collections, stale collections, or incomplete projection state block canonical runtime;
+- production gate must fail instead of silently downgrading retrieval quality;
+- blocked verdicts must be emitted as machine-readable evidence, not only log lines.
+
 ---
 
 ## 5. Surface Map
@@ -120,6 +136,7 @@ Named vectors are not part of the accepted first full migration. Alegria uses se
 
 - the current executable materialization path still writes concept vectors into legacy collection `ontology`
 - this remains an accepted compatibility surface until `kb_canonical_4` is fully populated in runtime
+- when `CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true`, this compatibility surface is not an accepted runtime substitute for canonical mapping
 
 ### 5.2 Target-next, not yet universally active
 

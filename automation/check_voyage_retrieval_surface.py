@@ -11,6 +11,8 @@ REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 OPS = ROOT / "docs" / "OPS_RUNTIME_RUNBOOK.md"
 PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
 POLICY = ROOT / "docs" / "V6_Voyage_Retrieval_Policy.md"
+PROD_GATE = ROOT / "automation" / "temporal_production_gate.sh"
+RETRIEVAL_GATE = ROOT / "automation" / "run_retrieval_contract_gate.sh"
 
 
 def read(path: Path) -> str:
@@ -23,6 +25,8 @@ def main() -> int:
     ops = read(OPS)
     plan = read(PLAN)
     policy = read(POLICY)
+    prod_gate = read(PROD_GATE)
+    retrieval_gate = read(RETRIEVAL_GATE)
     failures: list[str] = []
 
     for needle in [
@@ -64,9 +68,30 @@ def main() -> int:
         "raw_chunks_4",
         "raw_chunks_ctx",
         "whole_page_advisory_prototypes",
+        "RETRIEVAL_CAPABILITY_REQUIRED",
     ]:
         if needle not in policy:
             failures.append(f"Voyage retrieval policy missing `{needle}`")
+
+    for needle in [
+        "run_retrieval_contract_gate",
+        "RETRIEVAL_CAPABILITY_REQUIRED=true",
+        "CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true",
+        "CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED=true",
+        "VOYAGE_RERANK_REQUIRED=true",
+    ]:
+        if needle not in prod_gate:
+            failures.append(f"temporal_production_gate missing `{needle}`")
+
+    for needle in [
+        "RETRIEVAL_CAPABILITY_REQUIRED",
+        "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
+        "CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED",
+        "VOYAGE_RERANK_REQUIRED",
+        "seo-preflight",
+    ]:
+        if needle not in retrieval_gate:
+            failures.append(f"retrieval contract gate missing `{needle}`")
 
     if failures:
         print("VOYAGE_RETRIEVAL_SURFACE: FAILED")

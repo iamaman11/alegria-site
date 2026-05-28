@@ -22,7 +22,12 @@ REQUIRED_TOP_LEVEL = {
     "updated_at": str,
 }
 
-ALLOWED_STATUS = {"PASS", "BLOCKED_ON_LIVE_PROVIDER", "FAIL"}
+ALLOWED_STATUS = {
+    "PASS",
+    "BLOCKED_ON_LIVE_PROVIDER",
+    "BLOCKED_ON_RETRIEVAL_CONTRACT",
+    "FAIL",
+}
 
 
 def main() -> int:
@@ -58,6 +63,7 @@ def main() -> int:
             "clean_acceptance_bundle",
             "release_restore_gate",
             "legacy_replay_evidence",
+            "retrieval_contract_gate",
             "live_provider_minimal_scope",
         ]:
             if key not in checks:
@@ -69,6 +75,7 @@ def main() -> int:
             "clean_acceptance_bundle",
             "release_restore_gate",
             "legacy_replay_evidence",
+            "retrieval_contract_gate",
             "live_provider_minimal_scope",
         ]:
             if key not in artifacts:

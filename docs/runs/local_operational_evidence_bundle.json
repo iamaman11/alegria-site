@@ -1,28 +1,33 @@
 {
   "artifact_id": "local_operational_evidence_bundle",
   "environment_key": "local-dev",
-  "evidence_status": "BLOCKED_ON_LIVE_PROVIDER",
-  "status_reason": "All local operational evidence surfaces pass except live-provider closure, which remains blocked on external credentials.",
-  "blocking_reasons": [],
+  "evidence_status": "BLOCKED_ON_RETRIEVAL_CONTRACT",
+  "status_reason": "Local operational evidence is blocked before live-provider closure because the hard-required retrieval contract is not yet satisfied in the current local runtime baseline.",
+  "blocking_reasons": [
+    "retrieval contract gate is not pass"
+  ],
   "external_blockers": [
-    "live truth-extraction provider credentials are missing"
+    "retrieval contract is blocked on Voyage provider capability or credentials"
   ],
   "checks": {
     "clean_acceptance_bundle": "PASS",
     "release_restore_gate": "ok",
     "legacy_replay_evidence": "PASS",
+    "retrieval_contract_gate": "blocked_retrieval_contract",
     "live_provider_minimal_scope": "PENDING_CREDENTIALS"
   },
   "artifacts": {
     "clean_acceptance_bundle": "/tmp/clean_acceptance_bundle_current.json",
     "release_restore_gate": "/tmp/release_restore_gate_current.json",
     "legacy_replay_evidence": "/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json",
+    "retrieval_contract_gate": "/home/bose/projects/alegria-site/docs/runs/retrieval_contract_gate_evidence.json",
     "live_provider_minimal_scope": "/home/bose/projects/alegria-site/docs/runs/live_provider_minimal_scope_evidence.json"
   },
   "required_for_pass": [
     "clean acceptance bundle passes from an isolated build root",
     "release/restore gate returns ok",
     "legacy replay evidence is PASS for the target environment",
+    "retrieval contract gate is pass under hard-required Voyage/Qdrant policy",
     "live provider minimal scope evidence is PASS with a real provider"
   ],
   "updated_at": "2026-05-26T21:17:06.361143Z"

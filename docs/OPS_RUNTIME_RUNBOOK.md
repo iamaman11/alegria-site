@@ -132,6 +132,13 @@ Hard rules:
 - peer clustering omits `input_type`;
 - truth- and draft-adjacent retrieval input must not silently truncate;
 - retrieval remains non-authoritative.
+- hard-required retrieval enforcement runs through `bash automation/run_retrieval_contract_gate.sh`.
+- with
+  - `RETRIEVAL_CAPABILITY_REQUIRED=true`
+  - `CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true`
+  - `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED=true`
+  - `VOYAGE_RERANK_REQUIRED=true`
+  canonical runtime must block on missing provider capability, missing required collections, stale required collections, or incomplete retrieval projection state.
 
 ## 2) Current workflow chains
 
@@ -456,9 +463,10 @@ This wrapper does not create a new runtime gate. It bundles existing evidence su
 - isolated clean acceptance output;
 - release/restore gate report;
 - legacy replay evidence;
+- retrieval contract gate evidence;
 - live-provider minimal-scope evidence.
 
-Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_LIVE_PROVIDER` is a valid and expected local verdict when all local operational surfaces are green but the real live provider still lacks credentials.
+Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_RETRIEVAL_CONTRACT` is the correct local verdict while hard-required Voyage/Qdrant readiness is not yet satisfied. `BLOCKED_ON_LIVE_PROVIDER` is valid only after retrieval contract readiness itself is already green.
 
 ## 7.1 Compat / drain closure and naming
 

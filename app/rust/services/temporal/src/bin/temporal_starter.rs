@@ -111,6 +111,8 @@ enum Command {
         projection_max_lag_ms: i64,
         #[arg(long, default_value = "app/rust/dist/static-site")]
         output_dir: String,
+        #[arg(long)]
+        report_json: Option<String>,
     },
     /// Consume queued rebuild backlog rows and start scoped rebuild runs.
     RebuildDispatch {
@@ -154,6 +156,39 @@ enum Command {
         #[arg(long)]
         workflow_id: String,
     },
+}
+
+#[derive(serde::Serialize)]
+struct SeoPreflightCollectionReport {
+    collection_name: String,
+    exists: bool,
+    fresh: bool,
+    projection_complete: bool,
+    point_count: i64,
+    last_materialized_at: Option<String>,
+    last_source_change_at: Option<String>,
+    lag_seconds: Option<i64>,
+    qdrant_collection_exists: bool,
+}
+
+#[derive(serde::Serialize)]
+struct SeoPreflightReport {
+    artifact_id: String,
+    status: String,
+    context_key: String,
+    normalized_profile: String,
+    retrieval_capability_required: bool,
+    canonical_vector_retrieval_required: bool,
+    contextual_raw_chunk_retrieval_required: bool,
+    voyage_rerank_required: bool,
+    voyage_embeddings_ready: bool,
+    voyage_contextualized_ready: bool,
+    voyage_rerank_ready: bool,
+    qdrant_ready: bool,
+    qdrant_collection_contract_ready: bool,
+    projection_blocked: bool,
+    retrieval_block_reason: Option<String>,
+    required_collections: Vec<SeoPreflightCollectionReport>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -333,6 +368,28 @@ fn env_set(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
+        })
+        .unwrap_or(false)
+}
+
+fn required_retrieval_collections() -> [&'static str; 7] {
+    [
+        "raw_chunks_4",
+        "raw_chunks_ctx",
+        "kb_canonical_4",
+        "verified_rules_4",
+        "editorial_topics_4",
+        "seo_keyword_clusters_4",
+        "whole_page_advisory_prototypes",
+    ]
+}
+
 fn llm_configured() -> bool {
     env_set("OPENAI_API_KEY")
         || env_set("ANTHROPIC_API_KEY")
@@ -341,11 +398,19 @@ fn llm_configured() -> bool {
         || env_set("SEO_LLM_LOCAL_ENDPOINT")
 }
 
-async fn probe_qdrant(qdrant_url: &str) -> Result<bool> {
+async fn probe_required_qdrant_collections(
+    qdrant_url: &str,
+    required_collections: &[&str],
+) -> Result<BTreeMap<String, bool>> {
     let client = qdrant_client_adapter::connect_qdrant(qdrant_url).await?;
-    let raw_chunks_4 = client.collection_exists("raw_chunks_4").await?;
-    let raw_chunks_ctx = client.collection_exists("raw_chunks_ctx").await?;
-    Ok(raw_chunks_4 || raw_chunks_ctx)
+    let mut statuses = BTreeMap::new();
+    for collection in required_collections {
+        statuses.insert(
+            (*collection).to_string(),
+            client.collection_exists(*collection).await?,
+        );
+    }
+    Ok(statuses)
 }
 
 async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
@@ -368,6 +433,7 @@ async fn run_seo_preflight(
     strict_projections: bool,
     projection_max_lag_ms: i64,
     output_dir: String,
+    report_json: Option<String>,
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = tokio::time::timeout(Duration::from_secs(10), connect_pg(&database_url))
@@ -494,6 +560,55 @@ async fn run_seo_preflight(
     let qdrant_point_count: i64 = sqlx::Row::get(&qdrant_point_row, "count");
     println!("OK qdrant_point_ledger points={qdrant_point_count}");
 
+    let required_collections = required_retrieval_collections();
+    let collection_status_rows =
+        sqlx_seo_adapter::read_qdrant_collection_statuses(&pool, &required_collections)
+            .await
+            .context("qdrant collection status read failed")?;
+    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
+    let qdrant_probe = tokio::time::timeout(
+        Duration::from_secs(3),
+        probe_required_qdrant_collections(&qdrant_url, &required_collections),
+    )
+    .await;
+    let (qdrant_ready, qdrant_collection_presence) = match qdrant_probe {
+        Ok(Ok(statuses)) => (true, statuses),
+        Ok(Err(err)) => {
+            println!("WARN qdrant_connect url={} error={}", qdrant_url, err);
+            (false, BTreeMap::new())
+        }
+        Err(_) => {
+            println!("WARN qdrant_connect url={} error=timeout", qdrant_url);
+            (false, BTreeMap::new())
+        }
+    };
+    let required_collection_statuses = collection_status_rows
+        .into_iter()
+        .map(|status| {
+            let qdrant_collection_exists = qdrant_collection_presence
+                .get(&status.collection_name)
+                .copied()
+                .unwrap_or(false);
+            SeoPreflightCollectionReport {
+                collection_name: status.collection_name,
+                exists: status.point_count > 0,
+                fresh: status
+                    .lag_seconds
+                    .map(|lag| lag * 1000 <= projection_max_lag_ms.max(0))
+                    .unwrap_or(false),
+                projection_complete: status.point_count > 0,
+                point_count: status.point_count,
+                last_materialized_at: status.last_materialized_at,
+                last_source_change_at: None,
+                lag_seconds: status.lag_seconds,
+                qdrant_collection_exists,
+            }
+        })
+        .collect::<Vec<_>>();
+    let qdrant_collection_contract_ready = required_collection_statuses
+        .iter()
+        .all(|status| status.exists && status.projection_complete && status.qdrant_collection_exists);
+
     let mut projection_blocked = false;
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&pool)
         .await
@@ -550,6 +665,73 @@ async fn run_seo_preflight(
         println!("OK projection_barrier all_targets_drained=true");
     }
 
+    let voyage_ready = env_set("VOYAGE_API_KEY");
+    let retrieval_capability_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
+    let canonical_vector_retrieval_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
+    let contextual_raw_chunk_retrieval_required = env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
+    let voyage_rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
+
+    let missing_collections = required_collection_statuses
+        .iter()
+        .filter(|status| !status.exists || !status.qdrant_collection_exists)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let stale_collections = required_collection_statuses
+        .iter()
+        .filter(|status| status.exists && !status.fresh)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let incomplete_collections = required_collection_statuses
+        .iter()
+        .filter(|status| status.exists && !status.projection_complete)
+        .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let retrieval_status = if retrieval_capability_required {
+        if !voyage_ready
+            || (contextual_raw_chunk_retrieval_required && !voyage_ready)
+            || (voyage_rerank_required && !voyage_ready)
+            || (canonical_vector_retrieval_required && !voyage_ready)
+        {
+            "blocked_provider_capability".to_string()
+        } else if !qdrant_ready {
+            "blocked_retrieval_contract".to_string()
+        } else if !missing_collections.is_empty() {
+            "blocked_missing_collection".to_string()
+        } else if !stale_collections.is_empty() {
+            "blocked_stale_collection".to_string()
+        } else if projection_blocked || !incomplete_collections.is_empty() {
+            "blocked_projection_incomplete".to_string()
+        } else {
+            "pass".to_string()
+        }
+    } else if projection_blocked {
+        "warn".to_string()
+    } else {
+        "pass".to_string()
+    };
+    let retrieval_block_reason = match retrieval_status.as_str() {
+        "blocked_provider_capability" => Some(
+            "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, but provider credentials are not ready".to_string(),
+        ),
+        "blocked_retrieval_contract" => Some(
+            "retrieval contract requires reachable Qdrant and required retrieval surfaces".to_string(),
+        ),
+        "blocked_missing_collection" => Some(format!(
+            "missing required retrieval collections: {}",
+            missing_collections.join(",")
+        )),
+        "blocked_stale_collection" => Some(format!(
+            "stale required retrieval collections: {}",
+            stale_collections.join(",")
+        )),
+        "blocked_projection_incomplete" => Some(format!(
+            "projection backlog or incomplete retrieval collections block the required retrieval contract: projection_blocked={} incomplete=[{}]",
+            projection_blocked,
+            incomplete_collections.join(",")
+        )),
+        _ => None,
+    };
+
     if env_set("DATAFORSEO_LOGIN") && env_set("DATAFORSEO_PASSWORD") {
         println!("OK dataforseo_credentials");
     } else {
@@ -557,7 +739,7 @@ async fn run_seo_preflight(
             "WARN dataforseo_credentials missing; live SERP discovery will not populate crawl queue"
         );
     }
-    if env_set("VOYAGE_API_KEY") {
+    if voyage_ready {
         println!("OK voyage_credentials");
         println!(
             "OK voyage_models embedding={} contextualized={} rerank={}",
@@ -568,20 +750,11 @@ async fn run_seo_preflight(
     } else {
         println!("WARN voyage_credentials missing; semantic retrieval will be limited");
     }
-    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
-    match tokio::time::timeout(Duration::from_secs(3), probe_qdrant(&qdrant_url)).await {
-        Ok(Ok(raw_chunk_collections_exist)) => {
-            println!(
-                "OK qdrant_connect url={} raw_chunks_4_or_ctx_collection={}",
-                qdrant_url, raw_chunk_collections_exist
-            );
-        }
-        Ok(Err(err)) => {
-            println!("WARN qdrant_connect url={} error={}", qdrant_url, err);
-        }
-        Err(_) => {
-            println!("WARN qdrant_connect url={} error=timeout", qdrant_url);
-        }
+    if qdrant_ready {
+        println!(
+            "OK qdrant_connect url={} required_collection_contract={}",
+            qdrant_url, qdrant_collection_contract_ready
+        );
     }
     let neo4j_uri = env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
     let neo4j_user = env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
@@ -612,6 +785,48 @@ async fn run_seo_preflight(
     std::fs::create_dir_all(&output_dir)
         .with_context(|| format!("static output dir is not writable: {output_dir}"))?;
     println!("OK static_output_dir path={output_dir}");
+
+    let report = SeoPreflightReport {
+        artifact_id: "seo_preflight".to_string(),
+        status: retrieval_status.clone(),
+        context_key: resolved_context_key.clone(),
+        normalized_profile,
+        retrieval_capability_required,
+        canonical_vector_retrieval_required,
+        contextual_raw_chunk_retrieval_required,
+        voyage_rerank_required,
+        voyage_embeddings_ready: voyage_ready,
+        voyage_contextualized_ready: voyage_ready,
+        voyage_rerank_ready: voyage_ready,
+        qdrant_ready,
+        qdrant_collection_contract_ready,
+        projection_blocked,
+        retrieval_block_reason: retrieval_block_reason.clone(),
+        required_collections: required_collection_statuses,
+    };
+    if let Some(path) = report_json.as_deref() {
+        let path = PathBuf::from(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create seo preflight report parent: {}", parent.display()))?;
+        }
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&report).context("serialize seo preflight report")?,
+        )
+        .with_context(|| format!("write seo preflight report: {}", path.display()))?;
+        println!("INFO seo_preflight_report path={}", path.display());
+    }
+
+    if retrieval_capability_required && retrieval_status != "pass" {
+        println!(
+            "FAIL retrieval_contract status={} reason={}",
+            retrieval_status,
+            retrieval_block_reason.as_deref().unwrap_or("")
+        );
+        return Ok(2);
+    }
+
     Ok(0)
 }
 
@@ -1204,6 +1419,7 @@ async fn main() -> Result<()> {
             strict_projections,
             projection_max_lag_ms,
             output_dir,
+            report_json,
         } => {
             let code = run_seo_preflight(
                 database_url,
@@ -1219,6 +1435,7 @@ async fn main() -> Result<()> {
                 strict_projections,
                 projection_max_lag_ms,
                 output_dir,
+                report_json,
             )
             .await?;
             std::process::exit(code);

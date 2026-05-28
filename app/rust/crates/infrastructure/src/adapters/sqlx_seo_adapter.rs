@@ -111,6 +111,14 @@ pub struct ProjectionSyncStatus {
     pub latest_failed_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct QdrantCollectionStatus {
+    pub collection_name: String,
+    pub point_count: i64,
+    pub last_materialized_at: Option<String>,
+    pub lag_seconds: Option<i64>,
+}
+
 impl ProjectionSyncStatus {
     pub fn open_event_count(&self) -> i64 {
         self.pending_events + self.processing_events
@@ -119,6 +127,54 @@ impl ProjectionSyncStatus {
     pub fn blocking_event_count(&self) -> i64 {
         self.open_event_count() + self.failed_events
     }
+}
+
+pub async fn read_qdrant_collection_statuses(
+    pg: &PgPool,
+    expected_collections: &[&str],
+) -> Result<Vec<QdrantCollectionStatus>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        WITH expected(collection_name) AS (
+            SELECT unnest($1::text[])
+        ),
+        aggregated AS (
+            SELECT
+                collection_name,
+                count(*)::bigint AS point_count,
+                max(updated_at) AS last_materialized_at
+            FROM kb.qdrant_points
+            WHERE collection_name = ANY($1)
+            GROUP BY collection_name
+        )
+        SELECT
+            expected.collection_name,
+            coalesce(aggregated.point_count, 0)::bigint AS point_count,
+            aggregated.last_materialized_at::text AS last_materialized_at,
+            CASE
+                WHEN aggregated.last_materialized_at IS NULL THEN NULL
+                ELSE greatest(extract(epoch from (now() - aggregated.last_materialized_at))::bigint, 0)
+            END AS lag_seconds
+        FROM expected
+        LEFT JOIN aggregated
+            ON aggregated.collection_name = expected.collection_name
+        ORDER BY expected.collection_name
+        "#,
+    )
+    .bind(expected_collections)
+    .fetch_all(pg)
+    .await
+    .map_err(classify_sqlx)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| QdrantCollectionStatus {
+            collection_name: row.get("collection_name"),
+            point_count: row.get("point_count"),
+            last_materialized_at: row.get("last_materialized_at"),
+            lag_seconds: row.get("lag_seconds"),
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone)]
