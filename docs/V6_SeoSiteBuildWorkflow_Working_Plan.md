@@ -1364,7 +1364,7 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 
 - introduced the canonical hard-required retrieval gate `automation/run_retrieval_contract_gate.sh` and wired the same contract into `seo_preflight`, `temporal_starter`, local operational evidence, and `automation/temporal_production_gate.sh`;
 - added explicit retrieval contract env flags (`RETRIEVAL_CAPABILITY_REQUIRED`, `CANONICAL_VECTOR_RETRIEVAL_REQUIRED`, `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED`, `VOYAGE_RERANK_REQUIRED`) so missing Voyage capability, missing retrieval collections, stale retrieval collections, or incomplete projection state now surface as machine-readable blocked verdicts instead of silent quality downgrade;
-- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready, while leaving later collection-activation tranches (`kb_canonical_4`, `verified_rules_4`, `editorial_topics_4`, `seo_keyword_clusters_4`) explicitly unfinished rather than pretending they are active.
+- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready, while leaving later collection-activation tranches (`kb_canonical_4`, `verified_rules_voyage4`, `editorial_topics_voyage4`, `seo_keyword_clusters_voyage4`) explicitly unfinished rather than pretending they are active.
 
 ### 6.50
 

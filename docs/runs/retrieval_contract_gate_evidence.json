@@ -49,7 +49,7 @@
       "qdrant_collection_exists": false
     },
     {
-      "collection_name": "verified_rules_4",
+      "collection_name": "verified_rules_voyage4",
       "exists": false,
       "fresh": false,
       "projection_complete": false,
@@ -60,7 +60,7 @@
       "qdrant_collection_exists": false
     },
     {
-      "collection_name": "editorial_topics_4",
+      "collection_name": "editorial_topics_voyage4",
       "exists": false,
       "fresh": false,
       "projection_complete": false,
@@ -71,7 +71,7 @@
       "qdrant_collection_exists": false
     },
     {
-      "collection_name": "seo_keyword_clusters_4",
+      "collection_name": "seo_keyword_clusters_voyage4",
       "exists": false,
       "fresh": false,
       "projection_complete": false,

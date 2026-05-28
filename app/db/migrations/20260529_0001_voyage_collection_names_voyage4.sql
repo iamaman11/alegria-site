@@ -1,3 +1,15 @@
+UPDATE kb.qdrant_points
+SET collection_name = 'verified_rules_voyage4'
+WHERE collection_name = 'verified_rules_4';
+
+UPDATE kb.qdrant_points
+SET collection_name = 'editorial_topics_voyage4'
+WHERE collection_name = 'editorial_topics_4';
+
+UPDATE kb.qdrant_points
+SET collection_name = 'seo_keyword_clusters_voyage4'
+WHERE collection_name = 'seo_keyword_clusters_4';
+
 ALTER TABLE kb.qdrant_points
     DROP CONSTRAINT IF EXISTS qdrant_points_collection_name_check;
 

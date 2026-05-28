@@ -80,9 +80,9 @@ The current accepted collection families are:
 - `raw_chunks_4`
 - `raw_chunks_ctx`
 - `kb_canonical_4`
-- `verified_rules_4`
-- `editorial_topics_4`
-- `seo_keyword_clusters_4`
+- `verified_rules_voyage4`
+- `editorial_topics_voyage4`
+- `seo_keyword_clusters_voyage4`
 - `whole_page_advisory_prototypes`
 
 Legacy collection names may continue to exist during migration, especially `ontology` for concept retrieval materialization and `seo_link_targets` for planning support. They are compatibility surfaces, not the target naming policy.
@@ -140,9 +140,9 @@ In that mode:
 
 ### 5.2 Target-next, not yet universally active
 
-- `verified_rules_4` for truth-support retrieval
-- `editorial_topics_4` for draft/planning topical retrieval
-- `seo_keyword_clusters_4` for planning cluster retrieval
+- `verified_rules_voyage4` for truth-support retrieval
+- `editorial_topics_voyage4` for draft/planning topical retrieval
+- `seo_keyword_clusters_voyage4` for planning cluster retrieval
 - `rerank-2.5` inside draft support ordering and planning merge/link refinement
 - non-authoritative semantic-loss diagnostics in `completeness_judge`
 
