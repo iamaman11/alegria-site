@@ -7,6 +7,8 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter.rs"
+OPS_RUNTIME = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs"
+SEO_STEPS_CANONICAL = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "canonical_mapping_step.rs"
 REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 OPS = ROOT / "docs" / "OPS_RUNTIME_RUNBOOK.md"
 PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
@@ -21,6 +23,8 @@ def read(path: Path) -> str:
 
 def main() -> int:
     starter = read(STARTER)
+    ops_runtime = read(OPS_RUNTIME)
+    seo_steps_canonical = read(SEO_STEPS_CANONICAL)
     registry = read(REGISTRY)
     ops = read(OPS)
     plan = read(PLAN)
@@ -92,6 +96,29 @@ def main() -> int:
     ]:
         if needle not in retrieval_gate:
             failures.append(f"retrieval contract gate missing `{needle}`")
+
+    for needle in [
+        "resolve_canonical_vector_mappings(output.mappings).await?;",
+        "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
+        "VOYAGE_RERANK_REQUIRED",
+        "\"kb_canonical_4\"",
+    ]:
+        if needle not in ops_runtime:
+            failures.append(f"operations canonical mapping path missing `{needle}`")
+
+    if "resolve_canonical_vector_fallbacks(output.mappings).await" in ops_runtime:
+        failures.append("operations still reference legacy canonical vector fallback resolver")
+
+    for needle in [
+        "matching_stage: MatchingStage::VectorQdrant",
+        "mapping_type: \"vector_required\".to_string()",
+        "match_method: \"vector_qdrant_required\".to_string()",
+    ]:
+        if needle not in seo_steps_canonical:
+            failures.append(f"seo_steps canonical mapping missing `{needle}`")
+
+    if "pseudo_qdrant_score(" in seo_steps_canonical:
+        failures.append("seo_steps canonical mapping still contains pseudo_qdrant_score")
 
     if failures:
         print("VOYAGE_RETRIEVAL_SURFACE: FAILED")

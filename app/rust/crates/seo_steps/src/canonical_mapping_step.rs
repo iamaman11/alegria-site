@@ -85,11 +85,6 @@ fn lexicon_token_lookup(s: &str) -> Option<&'static str> {
     None
 }
 
-fn pseudo_qdrant_score(s: &str) -> f32 {
-    let len = s.chars().count() as f32;
-    (0.45 + (len.min(24.0) / 100.0)).min(0.90)
-}
-
 pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
     let mut out = Vec::with_capacity(input.mentions.len());
     for m in &input.mentions {
@@ -161,35 +156,18 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
             continue;
         }
 
-        // Symbolic path is exhausted; vector stage is allowed only here.
-        let score = pseudo_qdrant_score(&norm);
-        let (mapping_type, needs_hitl, key, confidence) = if score >= 0.88 {
-            (
-                "auto_map",
-                false,
-                Some(format!("candidate:{}", norm.replace(' ', "_"))),
-                score,
-            )
-        } else if score >= 0.75 {
-            (
-                "review",
-                true,
-                Some(format!("candidate:{}", norm.replace(' ', "_"))),
-                score,
-            )
-        } else {
-            ("new_candidate", true, None, score)
-        };
+        // Symbolic path is exhausted; runtime must resolve through real vector retrieval.
+        let normalized_candidate = norm.replace(' ', "_");
 
         out.push(MappingResult {
             raw_text: m.raw_text.clone(),
-            canonical_key: key,
-            mapping_type: mapping_type.to_string(),
-            match_method: "qdrant".to_string(),
+            canonical_key: Some(format!("candidate:{normalized_candidate}")),
+            mapping_type: "vector_required".to_string(),
+            match_method: "vector_qdrant_required".to_string(),
             matching_stage: MatchingStage::VectorQdrant,
-            qdrant_score: Some(score),
-            confidence,
-            needs_hitl,
+            qdrant_score: None,
+            confidence: 0.0,
+            needs_hitl: true,
         });
     }
     CanonicalMappingOutput { mappings: out }

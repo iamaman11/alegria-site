@@ -446,7 +446,7 @@ Each target step must have:
 | `layer_router` | semantic | Assign full independent score vector across procedural, operational, editorial, SEO, and commercial layers for every extraction-eligible section. | Full score vector, primary layer, secondary layers, confidence, HITL flags. Returning only one label is invalid. |
 | `subspan_layer_router` | semantic | Split mixed sections into sentences, list items, table rows, or FAQ units when multiple layers compete. | Subspans inherit section evidence and receive their own layer scores. Mandatory secondary layers are not ignored. |
 | `entity_span_detection` | semantic | Detect entity mentions as evidence-bearing spans without extracting rules. | Stable `mention_id`, raw text, entity type, char offsets, numeric flag, centrality, confidence. |
-| `canonical_mapping` | semantic/truth support | Map mentions to canonical registry keys through exact alias, normalized alias, heuristic rule/regex hint, then vector fallback. Regex may assist mapping, but it is not final authority for verified truth. | Mapping output references `mention_id`, original span, target registry, canonical key or null, match method, confidence, HITL need. |
+| `canonical_mapping` | semantic/truth support | Map mentions to canonical registry keys through exact alias, normalized alias, lexicon-token mapping, then hard-required vector retrieval (`kb_canonical_4` + rerank) after deterministic tiers are exhausted. Pseudo-vector scoring is forbidden. | Mapping output references `mention_id`, original span, target registry, canonical key or null, match method, confidence, HITL need; required retrieval failures yield explicit blocked status rather than silent downgrade. |
 | `ontology_intake_gate` | ontology | Route unmapped or ambiguous mentions into evolutionary ontology intake. | New keys may become `detected` or `proposed`; they cannot participate in extraction until `indexed`. Ambiguous aliases block auto-map. |
 
 ### 5.3 Layer-specific extraction
@@ -1365,6 +1365,12 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - introduced the canonical hard-required retrieval gate `automation/run_retrieval_contract_gate.sh` and wired the same contract into `seo_preflight`, `temporal_starter`, local operational evidence, and `automation/temporal_production_gate.sh`;
 - added explicit retrieval contract env flags (`RETRIEVAL_CAPABILITY_REQUIRED`, `CANONICAL_VECTOR_RETRIEVAL_REQUIRED`, `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED`, `VOYAGE_RERANK_REQUIRED`) so missing Voyage capability, missing retrieval collections, stale retrieval collections, or incomplete projection state now surface as machine-readable blocked verdicts instead of silent quality downgrade;
 - updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready, while leaving later collection-activation tranches (`kb_canonical_4`, `verified_rules_4`, `editorial_topics_4`, `seo_keyword_clusters_4`) explicitly unfinished rather than pretending they are active.
+
+### 6.50
+
+- removed pseudo-vector compatibility scoring from `seo_steps::canonical_mapping_step`; unresolved symbolic mappings now emit explicit `vector_required` state for runtime retrieval resolution;
+- upgraded canonical mapping runtime upgrade path to fail-fast under required contract instead of silently swallowing vector-resolution errors, so required retrieval failures can no longer degrade to pseudo behavior;
+- tightened retrieval surface verification automation with explicit guards that block regressions if pseudo-vector code paths or legacy canonical fallback resolver wiring are reintroduced.
 
 ### 6.46
 

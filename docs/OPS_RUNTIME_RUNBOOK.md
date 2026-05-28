@@ -122,8 +122,9 @@ Current active retrieval collections:
 
 - `raw_chunks_4`
 - `raw_chunks_ctx`
+- `kb_canonical_4` (required for canonical vector retrieval lane)
 - `whole_page_advisory_prototypes`
-- compatibility surface: `ontology`
+- legacy materialization compatibility surface: `ontology` (not an accepted canonical mapping substitute)
 
 Hard rules:
 

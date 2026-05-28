@@ -3095,7 +3095,7 @@ pub(crate) async fn canonical_mapping_sweep_impl(
                     .collect(),
             },
         );
-        output.mappings = resolve_canonical_vector_fallbacks(output.mappings).await;
+        output.mappings = resolve_canonical_vector_mappings(output.mappings).await?;
             let needs_hitl = output
                 .mappings
                 .iter()
@@ -3154,9 +3154,9 @@ fn canonical_candidate_text(payload: &BTreeMap<String, String>) -> String {
     .join(" ")
 }
 
-async fn resolve_canonical_vector_fallbacks(
+async fn resolve_canonical_vector_mappings(
     mappings: Vec<seo_steps::canonical_mapping_step::MappingResult>,
-) -> Vec<seo_steps::canonical_mapping_step::MappingResult> {
+) -> Result<Vec<seo_steps::canonical_mapping_step::MappingResult>, DomainError> {
     let mut resolved = Vec::with_capacity(mappings.len());
     for mapping in mappings {
         if mapping.matching_stage != seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant
@@ -3164,13 +3164,13 @@ async fn resolve_canonical_vector_fallbacks(
             resolved.push(mapping);
             continue;
         }
-        let upgraded = match resolve_single_canonical_vector_fallback(&mapping).await {
-            Ok(Some(value)) => value,
-            _ => mapping,
+        let upgraded = match resolve_single_canonical_vector_fallback(&mapping).await? {
+            Some(value) => value,
+            None => mapping,
         };
         resolved.push(upgraded);
     }
-    resolved
+    Ok(resolved)
 }
 
 async fn resolve_single_canonical_vector_fallback(

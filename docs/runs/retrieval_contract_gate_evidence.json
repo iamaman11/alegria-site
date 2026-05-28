@@ -13,7 +13,7 @@
   "qdrant_ready": false,
   "qdrant_collection_contract_ready": false,
   "projection_blocked": true,
-  "retrieval_block_reason": "    1: relation \"site.navigation_items\" does not exist",
+  "retrieval_block_reason": "Error: database_connect timed out after 10s",
   "required_collections": [
     {
       "collection_name": "raw_chunks_4",

@@ -118,7 +118,7 @@ In that mode:
   - `raw_chunks_ctx`
 - `raw_chunks_4` uses `voyage-4-large` with `input_type=document`
 - `raw_chunks_ctx` uses `voyage-context-3` with one list-of-lists request per page, `input_type=document`
-- when provider credentials are absent, deterministic fingerprint vectors remain a bootstrap-only fallback for projection continuity
+- production-quality retrieval lanes are contract-required; missing provider capability yields explicit block status rather than silent projection continuity fallback
 
 #### Whole-page semantic advisory
 
@@ -134,20 +134,19 @@ In that mode:
 
 #### Ontology / canonical concept materialization
 
-- the current executable materialization path still writes concept vectors into legacy collection `ontology`
-- this remains an accepted compatibility surface until `kb_canonical_4` is fully populated in runtime
-- when `CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true`, this compatibility surface is not an accepted runtime substitute for canonical mapping
+- concept vectors may still be materialized into legacy collection `ontology` for migration and replay continuity
+- canonical runtime mapping does not use `ontology` as a vector substitute
+- canonical vector retrieval targets `kb_canonical_4` only; missing `kb_canonical_4` under required contract is a hard block
 
 ### 5.2 Target-next, not yet universally active
 
-- `kb_canonical_4` as the canonical vector-fallback collection for canonical mapping
 - `verified_rules_4` for truth-support retrieval
 - `editorial_topics_4` for draft/planning topical retrieval
 - `seo_keyword_clusters_4` for planning cluster retrieval
 - `rerank-2.5` inside draft support ordering and planning merge/link refinement
 - non-authoritative semantic-loss diagnostics in `completeness_judge`
 
-These are target policy surfaces. They must not be documented elsewhere as already universal runtime behavior until code and evidence land.
+`kb_canonical_4` is now the only accepted canonical vector retrieval surface in runtime policy; remaining items above are still target-next and require explicit evidence before they can be marked universally active.
 
 ---
 
@@ -172,8 +171,8 @@ This applies to Russian, mixed Russian/English, and multilingual demand text. `v
 ### Steps 13-17
 
 - canonical mapping stays symbolic-first
-- vector fallback may propose or route to `needs_hitl`
-- vector fallback may not silently verify truth
+- once symbolic tiers are exhausted, runtime must resolve against `kb_canonical_4` with rerank; pseudo-vector scoring is not allowed
+- under required contract, unresolved vector retrieval yields explicit block state and cannot silently downgrade
 
 ### Steps 18-31
 
