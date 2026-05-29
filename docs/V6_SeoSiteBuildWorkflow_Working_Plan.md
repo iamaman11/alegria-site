@@ -1372,6 +1372,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 - upgraded canonical mapping runtime upgrade path to fail-fast under required contract instead of silently swallowing vector-resolution errors, so required retrieval failures can no longer degrade to pseudo behavior;
 - tightened retrieval surface verification automation with explicit guards that block regressions if pseudo-vector code paths or legacy canonical fallback resolver wiring are reintroduced.
 
+### 6.51
+
+- activated voyage4 projection producers for `verified_rules_voyage4`, `editorial_topics_voyage4`, and `seo_keyword_clusters_voyage4` instead of leaving those collection names as policy-only targets;
+- migrated the SEO projection persistence path away from legacy `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets`, and tightened the `kb.qdrant_points` collection-name contract so new rows use the voyage4 collection names;
+- added lifecycle-complete demotion cleanup for `verified_rules_voyage4`: demoted or rejected rules are removed from the ledger and, under the hard-required retrieval contract, from Qdrant itself;
+- kept the remaining Tranche 3 caveat explicit: live freshness/projection-completeness evidence is still required before the retrieval contour can be called fully operationally closed.
+
 ### 6.46
 
 - formalized local env operational evidence bundling as a wrapper around existing proof surfaces instead of adding a new runtime gate or workflow path;

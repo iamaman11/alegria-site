@@ -85,7 +85,7 @@ The current accepted collection families are:
 - `seo_keyword_clusters_voyage4`
 - `whole_page_advisory_prototypes`
 
-Legacy collection names may continue to exist during migration, especially `ontology` for concept retrieval materialization and `seo_link_targets` for planning support. They are compatibility surfaces, not the target naming policy.
+Legacy SEO retrieval collection names are not accepted in the final runtime contract. `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets` are migrated into voyage4 collections and rejected for new `kb.qdrant_points` rows. `ontology` may exist only as a non-canonical concept materialization surface; canonical vector mapping may not use it as a substitute for `kb_canonical_4`.
 
 Named vectors are not part of the accepted first full migration. Alegria uses separate collections per retrieval surface.
 
@@ -138,15 +138,23 @@ In that mode:
 - canonical runtime mapping does not use `ontology` as a vector substitute
 - canonical vector retrieval targets `kb_canonical_4` only; missing `kb_canonical_4` under required contract is a hard block
 
+#### Voyage4 projection producers
+
+- `verified_truth_write` emits verified rule projections to `verified_rules_voyage4` with `voyage-4-large`, `input_type=document`, `truncation=false`, float 1024-d vectors, and typed Qdrant outbox payloads when Voyage credentials are present; under `RETRIEVAL_CAPABILITY_REQUIRED=true`, missing Voyage credentials hard-block instead of falling back to fake vectors
+- `verified_truth_write` deletes demoted/rejected rule projections from `verified_rules_voyage4` ledger and, under the hard-required contract, from Qdrant itself
+- `opportunity_build` emits keyword cluster projections to `seo_keyword_clusters_voyage4`
+- IA page-node projection, draft assembly, QA persistence, and semantic link search use `editorial_topics_voyage4` instead of `seo_link_targets` or `seo_draft_support_sections`
+- DB collection contracts migrate legacy `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets` ledger rows into voyage4 collection names and reject those legacy names for new `kb.qdrant_points` rows
+
+These producers are active projection surfaces. Their retrieval consumers remain bounded by the step policy below and may not become authority paths.
+
 ### 5.2 Target-next, not yet universally active
 
-- `verified_rules_voyage4` for truth-support retrieval
-- `editorial_topics_voyage4` for draft/planning topical retrieval
-- `seo_keyword_clusters_voyage4` for planning cluster retrieval
 - `rerank-2.5` inside draft support ordering and planning merge/link refinement
 - non-authoritative semantic-loss diagnostics in `completeness_judge`
+- live evidence proving every required collection is populated, fresh, and projection-complete under the hard-required retrieval contract
 
-`kb_canonical_4` is now the only accepted canonical vector retrieval surface in runtime policy; remaining items above are still target-next and require explicit evidence before they can be marked universally active.
+`kb_canonical_4` is now the only accepted canonical vector retrieval surface in runtime policy. The voyage4 projection producers above are active; remaining items here require explicit evidence before they can be marked universally active.
 
 ---
 
@@ -185,10 +193,12 @@ This applies to Russian, mixed Russian/English, and multilingual demand text. `v
 
 ### Steps 37-42
 
-- planning retrieval/rerank expansion is target policy, not yet universally active
+- planning projection to `seo_keyword_clusters_voyage4` is active
+- planning retrieval/rerank expansion beyond existing semantic link search remains target policy, not yet universally active
 
 ### Steps 43-56
 
+- draft/topical support projection to `editorial_topics_voyage4` is active
 - draft support ordering, unsupported-claim retrieval, plagiarism-risk retrieval, and rebuild neighborhood widening remain target policy unless a specific tranche marks them active
 
 ---

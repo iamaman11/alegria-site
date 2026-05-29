@@ -632,7 +632,7 @@ impl SemanticLinkSearchPort for SqlxSeoRuntimeRepository<'_> {
     ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
         let results = semantic_search_adapter::search_by_text(
             query,
-            "seo_link_targets",
+            "editorial_topics_voyage4",
             u64::try_from(limit).map_err(|_| DomainError::ValidationFailure {
                 message: format!("semantic link search limit too large: {limit}"),
             })?,

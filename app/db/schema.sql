@@ -172,11 +172,8 @@ CREATE TABLE IF NOT EXISTS kb.qdrant_points (
             'editorial_topics_voyage4',
             'seo_keyword_clusters_voyage4',
             'whole_page_advisory_prototypes',
-            'seo_keyword_clusters',
             'seo_page_blueprints',
-            'seo_serp_patterns',
-            'seo_link_targets',
-            'seo_draft_support_sections'
+            'seo_serp_patterns'
         )),
     embedding_model   TEXT NOT NULL,
     embedding_version TEXT NOT NULL,

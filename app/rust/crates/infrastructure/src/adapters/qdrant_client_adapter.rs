@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 pub use qdrant_client::qdrant::{
-    CreateCollectionBuilder, Distance, Filter, PointStruct, ScoredPoint, SearchPointsBuilder,
-    UpsertPointsBuilder, VectorParamsBuilder,
+    CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct, PointsIdsList,
+    ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
 };
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
@@ -182,6 +182,27 @@ pub async fn upsert_embedding_points(
         .map(|point| (point.point_id, point.vector, point.payload))
         .collect();
     upsert_batch_map(client, collection_name, mapped).await
+}
+
+pub async fn delete_point_ids(
+    client: &AlegriaQdrantClient,
+    collection_name: &str,
+    point_ids: Vec<String>,
+) -> Result<()> {
+    if point_ids.is_empty() {
+        return Ok(());
+    }
+    client
+        .delete_points(
+            DeletePointsBuilder::new(collection_name)
+                .points(PointsIdsList {
+                    ids: point_ids.into_iter().map(Into::into).collect(),
+                })
+                .wait(true),
+        )
+        .await
+        .with_context(|| format!("failed qdrant delete for collection={collection_name}"))?;
+    Ok(())
 }
 
 pub async fn search_dense(

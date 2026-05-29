@@ -11,14 +11,19 @@ use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
 use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
 use infrastructure::adapters::sqlx_reconcile_adapter;
+use infrastructure::adapters::sqlx_runtime_outbox_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
 use infrastructure::adapters::sqlx_source_projection_adapter::load_source_registry_entries;
+use infrastructure::adapters::voyage_api_adapter::{
+    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+};
 use infrastructure::adapters::whole_page_advisory_adapter;
 use policies::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
+use primitives::qdrant_point_id::qdrant_point_id_v1;
 use primitives::truth_candidates::{
     validate_truth_candidate, TruthCandidateRuntime, TruthCandidateValidationResult,
     TruthParamValue, TruthStructuredCandidate,
@@ -2221,6 +2226,183 @@ fn non_structured_candidate_reason(candidate: &ValidatedTruthCandidateRecord) ->
 
 fn semantic_rule_instance_id_local(context_key: &str, role: &str, concept_canonical_key: &str) -> String {
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
+}
+
+const VERIFIED_RULES_COLLECTION: &str = "verified_rules_voyage4";
+
+#[derive(Debug, Clone)]
+struct VerifiedRuleProjectionCandidate {
+    rule_instance_id: String,
+    role_type: String,
+    concept_key: String,
+    source_key: String,
+    evidence_quote: String,
+}
+
+fn verified_rule_projection_text(
+    context_key: &str,
+    candidate: &VerifiedRuleProjectionCandidate,
+) -> String {
+    format!(
+        "{} {} {} {} {}",
+        context_key,
+        candidate.role_type,
+        candidate.concept_key,
+        candidate.source_key,
+        candidate.evidence_quote
+    )
+    .trim()
+    .to_string()
+}
+
+async fn delete_verified_rules_voyage4_projection(
+    acts: &AlegriaActivities,
+    rule_instance_ids: &[String],
+) -> Result<(), DomainError> {
+    if rule_instance_ids.is_empty() {
+        return Ok(());
+    }
+
+    let point_ids = rule_instance_ids
+        .iter()
+        .map(|rule_instance_id| {
+            qdrant_point_id_v1(VERIFIED_RULES_COLLECTION, "rule_instance", rule_instance_id)
+        })
+        .collect::<Vec<_>>();
+
+    if env_flag("RETRIEVAL_CAPABILITY_REQUIRED") {
+        let qdrant_url = std::env::var("QDRANT_URL")
+            .unwrap_or_else(|_| "http://localhost:6334".to_string());
+        let client = qdrant_client_adapter::connect_qdrant(&qdrant_url)
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("connect Qdrant for verified_rules_voyage4 delete failed: {err}"),
+            })?;
+        qdrant_client_adapter::delete_point_ids(
+            &client,
+            VERIFIED_RULES_COLLECTION,
+            point_ids.clone(),
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("delete verified_rules_voyage4 points failed: {err}"),
+        })?;
+    }
+
+    sqlx::query(
+        "DELETE FROM kb.qdrant_points
+         WHERE collection_name = $1
+           AND entity_type = 'rule_instance'
+           AND entity_key = ANY($2)",
+    )
+    .bind(VERIFIED_RULES_COLLECTION)
+    .bind(rule_instance_ids)
+    .execute(&*acts.pool)
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
+    Ok(())
+}
+
+async fn emit_verified_rules_voyage4_projection(
+    acts: &AlegriaActivities,
+    run_id: &str,
+    context_key: &str,
+    candidates: &[VerifiedRuleProjectionCandidate],
+) -> Result<(), DomainError> {
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let voyage_api_key = match std::env::var("VOYAGE_API_KEY") {
+        Ok(value) => value,
+        Err(_) if env_flag("RETRIEVAL_CAPABILITY_REQUIRED") => {
+            return Err(DomainError::InfraUnavailable {
+                message: "verified_rules_voyage4 projection requires VOYAGE_API_KEY".to_string(),
+            });
+        }
+        Err(_) => return Ok(()),
+    };
+    let voyage_model = std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
+    let voyage = VoyageClient::new(voyage_api_key, voyage_model.clone());
+    let texts = candidates
+        .iter()
+        .map(|candidate| verified_rule_projection_text(context_key, candidate))
+        .collect::<Vec<_>>();
+    let embeddings = voyage
+        .embed_all_with_settings(
+            &texts,
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Document),
+                output_dimension: Some(1024),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("embed verified_rules_voyage4 projection with Voyage failed: {err}"),
+        })?;
+    if embeddings.len() != candidates.len() {
+        return Err(DomainError::InfraUnavailable {
+            message: format!(
+                "verified_rules_voyage4 embedding size mismatch: expected {}, got {}",
+                candidates.len(),
+                embeddings.len()
+            ),
+        });
+    }
+
+    let mut events = Vec::with_capacity(candidates.len());
+    for (candidate, vector) in candidates.iter().zip(embeddings.into_iter()) {
+        let typed_event = seo_steps::outbox_builder::qdrant_rule_upsert(
+            &candidate.rule_instance_id,
+            context_key,
+            &candidate.role_type,
+            &candidate.concept_key,
+            &candidate.role_type,
+            &candidate.source_key,
+            VERIFIED_RULES_COLLECTION,
+            vector.iter().map(|value| *value as f64).collect(),
+        );
+        events.push(sqlx_outbox_adapter::OutboxEnvelope {
+            run_id: run_id.to_string(),
+            aggregate_type: typed_event.aggregate_type,
+            aggregate_key: typed_event.aggregate_key,
+            target_system: typed_event.target_system,
+            event_type: typed_event.event_type,
+            payload_type: typed_event.payload_type,
+            schema_version: typed_event.schema_version,
+            idempotency_key: typed_event.idempotency_key,
+            payload_bytes: typed_event.payload_bytes,
+        });
+
+        let point_id = qdrant_point_id_v1(
+            VERIFIED_RULES_COLLECTION,
+            "rule_instance",
+            &candidate.rule_instance_id,
+        );
+        sqlx::query(
+            "INSERT INTO kb.qdrant_points
+                 (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version)
+             VALUES ($1, 'rule_instance', $2, $3, $4, $5)
+             ON CONFLICT (entity_type, entity_key, collection_name) DO UPDATE
+             SET point_id = EXCLUDED.point_id,
+                 embedding_model = EXCLUDED.embedding_model,
+                 embedding_version = EXCLUDED.embedding_version,
+                 updated_at = now()",
+        )
+        .bind(&point_id)
+        .bind(&candidate.rule_instance_id)
+        .bind(VERIFIED_RULES_COLLECTION)
+        .bind(&voyage_model)
+        .bind("verified_rules_voyage4@1")
+        .execute(&*acts.pool)
+        .await
+        .map_err(AlegriaActivities::classify_error)?;
+    }
+
+    sqlx_runtime_outbox_adapter::outbox_emit_many(&acts.pool, &events).await?;
+    Ok(())
 }
 
 pub(crate) fn test_step_prepare_impl(workflow_id: &str) -> String {
@@ -4427,6 +4609,8 @@ pub(crate) async fn verified_truth_write_impl(
     input: &VerifiedTruthWriteInput,
 ) -> Result<VerifiedTruthWriteOutput, DomainError> {
     let mut changed_truth_keys = Vec::new();
+    let mut verified_rule_projections = Vec::new();
+    let mut demoted_rule_projection_ids = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
     let source_section_ids = input
@@ -4656,6 +4840,13 @@ pub(crate) async fn verified_truth_write_impl(
                 .await
                 .map_err(AlegriaActivities::classify_error)?;
                 verified_rule_count += 1;
+                verified_rule_projections.push(VerifiedRuleProjectionCandidate {
+                    rule_instance_id: rule_instance_id.clone(),
+                    role_type: decision.role.to_ascii_lowercase(),
+                    concept_key: decision.concept_canonical_key.clone(),
+                    source_key: decision.source_key.clone(),
+                    evidence_quote: evidence_quote.clone(),
+                });
                 changed_truth_keys.push(changed_key);
             }
             "needs_hitl" | "rejected" => {
@@ -4682,11 +4873,21 @@ pub(crate) async fn verified_truth_write_impl(
                 .await
                 .map_err(AlegriaActivities::classify_error)?;
                 demoted_rule_count += 1;
+                demoted_rule_projection_ids.push(rule_instance_id.clone());
                 changed_truth_keys.push(changed_key);
             }
             _ => {}
         }
     }
+
+    delete_verified_rules_voyage4_projection(acts, &demoted_rule_projection_ids).await?;
+    emit_verified_rules_voyage4_projection(
+        acts,
+        &input.run_id,
+        &input.context_key,
+        &verified_rule_projections,
+    )
+    .await?;
 
     changed_truth_keys.sort();
     changed_truth_keys.dedup();
