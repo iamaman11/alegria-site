@@ -19,7 +19,7 @@
   "samples": {
     "russian_retrieval": "pending",
     "contextualized_chunk_recall": "pending",
-    "canonical_mapping_fallback": "pending",
+    "canonical_mapping_vector_retrieval": "pending",
     "draft_support_rerank": "pending",
     "planning_cluster_merge": "pending"
   },

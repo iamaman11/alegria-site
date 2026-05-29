@@ -3346,7 +3346,7 @@ async fn resolve_canonical_vector_mappings(
             resolved.push(mapping);
             continue;
         }
-        let upgraded = match resolve_single_canonical_vector_fallback(&mapping).await? {
+        let upgraded = match resolve_single_canonical_vector_mapping(&mapping).await? {
             Some(value) => value,
             None => mapping,
         };
@@ -3355,7 +3355,7 @@ async fn resolve_canonical_vector_mappings(
     Ok(resolved)
 }
 
-async fn resolve_single_canonical_vector_fallback(
+async fn resolve_single_canonical_vector_mapping(
     mapping: &seo_steps::canonical_mapping_step::MappingResult,
 ) -> Result<Option<seo_steps::canonical_mapping_step::MappingResult>, DomainError> {
     let canonical_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");

@@ -44,7 +44,7 @@ def main() -> int:
     for field in [
         "russian_retrieval",
         "contextualized_chunk_recall",
-        "canonical_mapping_fallback",
+        "canonical_mapping_vector_retrieval",
         "draft_support_rerank",
         "planning_cluster_merge",
     ]:

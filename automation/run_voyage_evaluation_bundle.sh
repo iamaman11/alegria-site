@@ -39,7 +39,7 @@ payload = {
     "samples": {
         "russian_retrieval": "pending" if not has_voyage else "configured",
         "contextualized_chunk_recall": "pending" if not has_voyage else "configured",
-        "canonical_mapping_fallback": "pending" if not has_voyage else "configured",
+        "canonical_mapping_vector_retrieval": "pending" if not has_voyage else "configured",
         "draft_support_rerank": "pending" if not has_voyage else "configured",
         "planning_cluster_merge": "pending" if not has_voyage else "configured",
     },

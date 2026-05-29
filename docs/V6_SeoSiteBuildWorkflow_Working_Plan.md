@@ -564,7 +564,7 @@ Retrieval and indexing sequence:
 
 Canonical rule:
 
-- retrieval supports search, clustering, canonical mapping fallback, topic understanding, and recall;
+- retrieval supports search, clustering, hard-required canonical vector resolution, topic understanding, and recall;
 - retrieval does not create or upgrade truth.
 
 ### 6.4 Evolutionary ontology plane
@@ -812,7 +812,7 @@ Work:
 - allow `Voyage/Qdrant` sync only from approved indexing surfaces;
 - restore retrieval support for:
   - raw evidence recall,
-  - canonical mapping fallback,
+  - hard-required canonical vector resolution,
   - verified rule recall,
   - editorial topic recall,
   - cluster/topic understanding,
@@ -1196,7 +1196,7 @@ Required:
 - `layer_router`, `subspan_layer_router`, `entity_span_detection`, `canonical_mapping`, and `ontology_intake_gate` active in workflow order;
 - full five-layer score vector for every extraction-eligible section or subspan;
 - entity spans have stable ids and offsets;
-- canonical mapping uses symbolic-first matching and vector fallback only after deterministic tiers;
+- canonical mapping uses symbolic-first matching and then hard-required `kb_canonical_4` vector retrieval after deterministic tiers;
 - ambiguous or new ontology items do not auto-map.
 
 ### Gate 4 - Rich extraction and schema validation
@@ -1358,13 +1358,13 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 
 - introduced `V6_Voyage_Retrieval_Policy.md` as the current `V6` owner satellite for Voyage model defaults, collection contracts, parameter policy, and active-versus-target retrieval surfaces;
 - upgraded the active raw-evidence retrieval lane to project both `raw_chunks_4` via `voyage-4-large` and `raw_chunks_ctx` via `voyage-context-3`, with `input_type=document`, `truncation=false`, and explicit float 1024-d quality defaults;
-- corrected the live generic retrieval path to embed runtime queries with `input_type=query`, added shared reranker and contextualized-embedding client surfaces, and upgraded canonical vector fallback from pseudo-only scoring to optional live retrieval plus rerank when provider and collection surfaces are available.
+- corrected the live generic retrieval path to embed runtime queries with `input_type=query`, added shared reranker and contextualized-embedding client surfaces, and moved canonical vector resolution from pseudo scoring to hard-required `kb_canonical_4` retrieval plus rerank under the retrieval contract.
 
 ### 6.49
 
 - introduced the canonical hard-required retrieval gate `automation/run_retrieval_contract_gate.sh` and wired the same contract into `seo_preflight`, `temporal_starter`, local operational evidence, and `automation/temporal_production_gate.sh`;
 - added explicit retrieval contract env flags (`RETRIEVAL_CAPABILITY_REQUIRED`, `CANONICAL_VECTOR_RETRIEVAL_REQUIRED`, `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED`, `VOYAGE_RERANK_REQUIRED`) so missing Voyage capability, missing retrieval collections, stale retrieval collections, or incomplete projection state now surface as machine-readable blocked verdicts instead of silent quality downgrade;
-- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready, while leaving later collection-activation tranches (`kb_canonical_4`, `verified_rules_voyage4`, `editorial_topics_voyage4`, `seo_keyword_clusters_voyage4`) explicitly unfinished rather than pretending they are active.
+- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready; later commits activated `kb_canonical_4`, `verified_rules_voyage4`, `editorial_topics_voyage4`, and `seo_keyword_clusters_voyage4` producers without changing the local blocked verdict.
 
 ### 6.50
 

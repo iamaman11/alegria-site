@@ -8,6 +8,7 @@ SYNC_PROTO = ROOT / "app" / "contracts" / "proto" / "sync.proto"
 SEO_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
 NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "neo4j_materialization_adapter.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
+PROJECTION_MATERIALIZER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "projection_materialize_adapter.rs"
 SEO_DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src"
 CI = ROOT / "automation" / "ci_verify.sh"
 
@@ -40,11 +41,16 @@ REQUIRED_RELATIONSHIPS = [
 ]
 
 REQUIRED_QDRANT_COLLECTIONS = [
-    "seo_keyword_clusters",
+    "seo_keyword_clusters_voyage4",
     "seo_page_blueprints",
     "seo_serp_patterns",
-    "seo_link_targets",
-    "seo_draft_support_sections",
+    "editorial_topics_voyage4",
+]
+
+FORBIDDEN_ACTIVE_QDRANT_COLLECTIONS = [
+    '"seo_keyword_clusters"',
+    '"seo_link_targets"',
+    '"seo_draft_support_sections"',
 ]
 
 
@@ -53,6 +59,7 @@ def main() -> int:
     seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
     neo4j_adapter = NEO4J_ADAPTER.read_text(encoding="utf-8")
     outbox_worker = OUTBOX_WORKER.read_text(encoding="utf-8")
+    projection_materializer = PROJECTION_MATERIALIZER.read_text(encoding="utf-8")
     seo_domain = (SEO_DOMAIN / "rebuild.rs").read_text(encoding="utf-8")
     ci = CI.read_text(encoding="utf-8")
     failures: list[str] = []
@@ -79,17 +86,22 @@ def main() -> int:
     for collection in REQUIRED_QDRANT_COLLECTIONS:
         if collection not in seo_adapter:
             failures.append(f"SEO persistence adapter missing Qdrant collection `{collection}`")
+    for collection in FORBIDDEN_ACTIVE_QDRANT_COLLECTIONS:
+        if collection in seo_adapter:
+            failures.append(f"SEO persistence adapter still emits legacy Qdrant collection {collection}")
 
     if "SeoGraphProjectionUpserted" not in seo_adapter:
         failures.append("SEO persistence adapter does not emit SeoGraphProjectionUpserted")
-    if "SeoGraphProjectionUpserted" not in outbox_worker:
-        failures.append("outbox worker does not dispatch SeoGraphProjectionUpserted")
-    if "cmd.metadata" not in outbox_worker:
-        failures.append("outbox worker does not pass Qdrant metadata payloads")
-    if "dispatch_seo_graph_projection" not in outbox_worker:
-        failures.append("outbox worker does not own SEO graph projection dispatch")
-    if "materialize_seo_artifact" not in outbox_worker:
-        failures.append("outbox worker does not materialize SEO graph artifacts through Neo4j adapter")
+    if "projection_materialize_adapter::dispatch_event" not in outbox_worker:
+        failures.append("outbox worker does not delegate projection dispatch to infrastructure materializer")
+    if "SeoGraphProjectionUpserted" not in projection_materializer:
+        failures.append("projection materializer does not dispatch SeoGraphProjectionUpserted")
+    if "cmd.metadata" not in projection_materializer:
+        failures.append("projection materializer does not pass Qdrant metadata payloads")
+    if "dispatch_seo_graph_projection" not in projection_materializer:
+        failures.append("projection materializer does not own SEO graph projection dispatch")
+    if "materialize_seo_artifact" not in projection_materializer:
+        failures.append("projection materializer does not materialize SEO graph artifacts through Neo4j adapter")
     if "classify_trigger" not in seo_domain:
         failures.append("seo_domain rebuild module is missing canonical rebuild trigger ownership")
     if "check_seo_projection_contract.py" not in ci:

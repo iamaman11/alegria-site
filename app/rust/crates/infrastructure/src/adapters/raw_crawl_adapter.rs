@@ -2016,34 +2016,14 @@ pub async fn retrieve_source_context_chunks(
     .await
     {
         Ok(found) if !found.is_empty() => found,
-        Ok(_) if !contextual_required => semantic_search_adapter::search_by_text_with_surface(
-            query,
-            RAW_CHUNKS_STANDARD_COLLECTION,
-            limit,
-            semantic_search_adapter::VoyageSearchSurface::Standard,
-        )
-        .await
-        .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-            message: format!("source context semantic fallback search failed: {err}"),
-        })?,
+        Ok(_) if !contextual_required => return Ok(Vec::new()),
         Ok(_) => {
             return Err(primitives::errors::DomainError::InfraUnavailable {
                 message: "contextual raw-chunk retrieval is required, but raw_chunks_ctx returned no candidates"
                     .to_string(),
             });
         }
-        Err(err) if !contextual_required => semantic_search_adapter::search_by_text_with_surface(
-            query,
-            RAW_CHUNKS_STANDARD_COLLECTION,
-            limit,
-            semantic_search_adapter::VoyageSearchSurface::Standard,
-        )
-        .await
-        .map_err(|fallback| primitives::errors::DomainError::InfraUnavailable {
-            message: format!(
-                "source context semantic search failed: primary={err}; fallback={fallback}"
-            ),
-        })?,
+        Err(_) if !contextual_required => return Ok(Vec::new()),
         Err(err) => {
             return Err(primitives::errors::DomainError::InfraUnavailable {
                 message: format!(
