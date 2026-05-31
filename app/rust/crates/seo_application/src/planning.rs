@@ -8,7 +8,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
-use seo_ports::{PlanningRepository, SemanticLinkSearchPort, SerpSearchPort};
+use seo_ports::{GraphReasoningPort, PlanningRepository, SemanticLinkSearchPort, SerpSearchPort};
 use std::collections::{HashMap, HashSet};
 
 fn env_flag(name: &str) -> bool {
@@ -52,6 +52,16 @@ fn voyage_retrieval_ready_or_optional() -> Result<bool, DomainError> {
         });
     }
     Ok(false)
+}
+
+async fn ensure_graph_required_for_phase(phase: &str) -> Result<(), DomainError> {
+    seo_steps::read_neo4j_context::read_neo4j_context(phase)
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!(
+                "graph capability contract failed for planning phase `{phase}`: {err}"
+            ),
+        })
 }
 
 fn to_graph_planning_context_state(context: GraphPlanningContext) -> GraphPlanningContextState {
@@ -340,6 +350,7 @@ pub async fn run_serp_normalize<R: PlanningRepository>(
     search_port: &impl SemanticLinkSearchPort,
     input: &SerpNormalizeInputPayload,
 ) -> Result<SerpNormalizeOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("serp_normalize").await?;
     let mut output = seo_steps::serp_normalize_step::execute(input);
     if voyage_retrieval_ready_or_optional()? {
         let clusters = search_port.cluster_demand_queries(&input.queries).await?;
@@ -390,18 +401,19 @@ pub async fn run_serp_normalize<R: PlanningRepository>(
     Ok(output)
 }
 
-pub async fn run_opportunity_build<R: PlanningRepository>(
+pub async fn run_opportunity_build<R: PlanningRepository + GraphReasoningPort>(
     repo: &R,
     search_port: &impl SemanticLinkSearchPort,
     input: &OpportunityBuildInputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("opportunity_build").await?;
     let scope_signature = input
         .scope
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
-        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+        repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
@@ -432,18 +444,19 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
     Ok(output)
 }
 
-pub async fn run_ia_build<R: PlanningRepository>(
+pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort>(
     repo: &R,
     search_port: &impl SemanticLinkSearchPort,
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("ia_build").await?;
     let scope_signature = input
         .scope
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
-        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+        repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
@@ -507,18 +520,22 @@ pub async fn run_ia_build<R: PlanningRepository>(
     Ok(output)
 }
 
-pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort>(
+pub async fn run_link_recommend<
+    R: PlanningRepository + GraphReasoningPort,
+    S: SemanticLinkSearchPort,
+>(
     repo: &R,
     search_port: &S,
     input: &LinkRecommendInputPayload,
 ) -> Result<LinkRecommendOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("link_recommend").await?;
     let scope_signature = input
         .page_nodes
         .first()
         .map(|node| node.scope_signature.clone())
         .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
-        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+        repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
@@ -530,18 +547,19 @@ pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort
     Ok(output)
 }
 
-pub async fn run_global_site_reconcile<R: PlanningRepository>(
+pub async fn run_global_site_reconcile<R: PlanningRepository + GraphReasoningPort>(
     repo: &R,
     search_port: &impl SemanticLinkSearchPort,
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("global_site_reconcile").await?;
     let scope_signature = input
         .scope
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
-        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+        repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
@@ -601,8 +619,9 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use seo_ports::{
-        GlobalNavigationPersistReport, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
-        SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
+        GlobalNavigationPersistReport, GraphCoverageEvaluation, GraphNeighborhoodHit,
+        GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
+        RebuildDependencyEvidence, SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
     };
     use std::sync::Mutex;
 
@@ -676,6 +695,47 @@ mod tests {
             _output: &GlobalSiteReconcileOutputPayload,
         ) -> Result<GlobalNavigationPersistReport, DomainError> {
             Ok(GlobalNavigationPersistReport::default())
+        }
+    }
+
+    #[async_trait]
+    impl GraphReasoningPort for FakePlanningRepo {
+        async fn load_planning_graph_context(
+            &self,
+            _scope_signature: &str,
+            _run_id: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(runtime_models::GraphPlanningContext::default())
+        }
+
+        async fn find_conflict_neighborhood(
+            &self,
+            _scope_signature: &str,
+            _page_node_key: &str,
+        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn find_rebuild_impact_neighborhood(
+            &self,
+            _changed_truth_keys: &[String],
+            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn evaluate_draft_coverage_neighborhood(
+            &self,
+            page_node_key: &str,
+            _draft_markdown: &str,
+        ) -> Result<GraphCoverageEvaluation, DomainError> {
+            Ok(GraphCoverageEvaluation {
+                page_node_key: page_node_key.to_string(),
+                coverage_score: 0.0,
+                missing_topics: Vec::new(),
+                reason_codes: vec!["graph_draft_coverage".to_string()],
+                support_refs: Vec::new(),
+            })
         }
     }
 
@@ -829,6 +889,47 @@ mod tests {
         ) -> Result<GlobalNavigationPersistReport, DomainError> {
             *self.reconcile_output.lock().unwrap() = Some(output.clone());
             Ok(GlobalNavigationPersistReport::default())
+        }
+    }
+
+    #[async_trait]
+    impl GraphReasoningPort for RecordingPlanningRepo {
+        async fn load_planning_graph_context(
+            &self,
+            _scope_signature: &str,
+            _run_id: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(self.graph_context.clone())
+        }
+
+        async fn find_conflict_neighborhood(
+            &self,
+            _scope_signature: &str,
+            _page_node_key: &str,
+        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn find_rebuild_impact_neighborhood(
+            &self,
+            _changed_truth_keys: &[String],
+            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn evaluate_draft_coverage_neighborhood(
+            &self,
+            page_node_key: &str,
+            _draft_markdown: &str,
+        ) -> Result<GraphCoverageEvaluation, DomainError> {
+            Ok(GraphCoverageEvaluation {
+                page_node_key: page_node_key.to_string(),
+                coverage_score: 0.0,
+                missing_topics: Vec::new(),
+                reason_codes: vec!["graph_draft_coverage".to_string()],
+                support_refs: Vec::new(),
+            })
         }
     }
 

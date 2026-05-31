@@ -17,6 +17,7 @@ python3 automation/check_local_runtime_db_baseline.py --database-url "$DATABASE_
 python3 automation/bootstrap_local_runtime_baseline.py --database-url "$DATABASE_URL" --recreate
 python3 automation/check_truth_extraction_provider_ready.py
 bash automation/run_retrieval_contract_gate.sh
+bash automation/run_graph_contract_gate.sh
 bash automation/run_live_provider_minimal_scope_gate.sh
 ```
 
@@ -70,6 +71,13 @@ bash automation/run_live_provider_minimal_scope_gate.sh
 - hard-required retrieval contract runs through `bash automation/run_retrieval_contract_gate.sh`.
 - retrieval contract gate auto-bootstraps local `postgres`/`qdrant` by default (`RETRIEVAL_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=1`) and sets `QDRANT_SKIP_COMPATIBILITY_CHECK=true` unless explicitly overridden.
 - if the retrieval contract is blocked, production gate fails before workflow smoke.
+- hard-required graph contract runs through `bash automation/run_graph_contract_gate.sh`.
+- graph contract gate enforces:
+  - `GRAPH_CAPABILITY_REQUIRED=true`
+  - `NEO4J_SYNC_REQUIRED=true`
+  - `GRAPH_QUERY_REQUIRED=true`
+  - `GRAPH_GDS_REQUIRED=true`
+- if the graph contract is blocked, production gate fails before workflow smoke.
 - active voyage4 retrieval materialization must prove real Voyage vectors for required Qdrant collections; deterministic fingerprint vectors are rejected as production-quality substitutes.
 - draft support retrieval must use the required collection order and `rerank-2.5`; missing rerank capability is a production-gate failure.
 - canonical Step 5 live-provider gate runs through `bash automation/run_live_provider_minimal_scope_gate.sh`.

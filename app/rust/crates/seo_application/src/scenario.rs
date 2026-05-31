@@ -17,9 +17,10 @@ use contracts::generated::alegria::temporal::v1::{
 use primitives::errors::DomainError;
 use seo_ports::{
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
-    PlanningRepository, ProjectionStatusRepository, PublishArtifactRepository, RebuildRepository,
-    SectionTemplateRepository, SemanticLinkSearchPort, SeoBuildInputRepository, SerpSearchPort,
-    SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
+    GraphReasoningPort, PlanningRepository, ProjectionStatusRepository, PublishArtifactRepository,
+    RebuildRepository, SectionTemplateRepository, SemanticLinkSearchPort, SeoBuildInputRepository,
+    SerpSearchPort, SourceContextRepository, VerifiedSupportBundleRequest,
+    VerifiedSupportRepository,
 };
 
 use crate::execution::{
@@ -316,10 +317,12 @@ async fn run_initial_phase<
 
 async fn run_planning_phase<
     R: PlanningRepository
+        + GraphReasoningPort
         + VerifiedSupportRepository
         + ProjectionStatusRepository
         + SerpSearchPort
-        + SemanticLinkSearchPort,
+        + SemanticLinkSearchPort
+        + GraphReasoningPort,
 >(
     repo: &R,
     request: &SeoScenarioRequest,
@@ -892,7 +895,8 @@ where
         + RebuildRepository
         + ProjectionStatusRepository
         + SerpSearchPort
-        + SemanticLinkSearchPort,
+        + SemanticLinkSearchPort
+        + GraphReasoningPort,
 {
     let plan = build_execution_plan(request);
     let mut state = ScenarioState::default();
@@ -1111,7 +1115,8 @@ mod tests {
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
-        CrawlIngestRepository, OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
+        CrawlIngestRepository, GraphCoverageEvaluation, GraphNeighborhoodHit, GraphReasoningPort,
+        OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
         RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
@@ -1308,6 +1313,47 @@ mod tests {
                 page_item_count: output.page_nodes.len() as u64,
                 silo_group_count: 0,
                 rebuild_plan_count: 0,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl GraphReasoningPort for FakeRepo {
+        async fn load_planning_graph_context(
+            &self,
+            _scope_signature: &str,
+            _run_id: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            Ok(runtime_models::GraphPlanningContext::default())
+        }
+
+        async fn find_conflict_neighborhood(
+            &self,
+            _scope_signature: &str,
+            _page_node_key: &str,
+        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn find_rebuild_impact_neighborhood(
+            &self,
+            _changed_truth_keys: &[String],
+            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn evaluate_draft_coverage_neighborhood(
+            &self,
+            page_node_key: &str,
+            _draft_markdown: &str,
+        ) -> Result<GraphCoverageEvaluation, DomainError> {
+            Ok(GraphCoverageEvaluation {
+                page_node_key: page_node_key.to_string(),
+                coverage_score: 0.0,
+                missing_topics: Vec::new(),
+                reason_codes: vec!["graph_draft_coverage".to_string()],
+                support_refs: Vec::new(),
             })
         }
     }

@@ -26,6 +26,7 @@ ALLOWED_STATUS = {
     "PASS",
     "BLOCKED_ON_LIVE_PROVIDER",
     "BLOCKED_ON_RETRIEVAL_CONTRACT",
+    "BLOCKED_ON_GRAPH_CONTRACT",
     "FAIL",
 }
 
@@ -64,6 +65,7 @@ def main() -> int:
             "release_restore_gate",
             "legacy_replay_evidence",
             "retrieval_contract_gate",
+            "graph_contract_gate",
             "live_provider_minimal_scope",
         ]:
             if key not in checks:
@@ -76,6 +78,7 @@ def main() -> int:
             "release_restore_gate",
             "legacy_replay_evidence",
             "retrieval_contract_gate",
+            "graph_contract_gate",
             "live_provider_minimal_scope",
         ]:
             if key not in artifacts:

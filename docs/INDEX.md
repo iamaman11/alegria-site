@@ -19,6 +19,7 @@
    - [V5_SEO_Graph_And_Retrieval_Projection_Spec.md](V5_SEO_Graph_And_Retrieval_Projection_Spec.md)
    - [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md)
    - [V6_Voyage_Retrieval_Policy.md](V6_Voyage_Retrieval_Policy.md)
+   - [V6_Neo4j_Runtime_Policy.md](V6_Neo4j_Runtime_Policy.md)
    - [STEP_CATALOG_CONTRACT.md](STEP_CATALOG_CONTRACT.md)
    - [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)
    - [OPS_TEMPORAL_BUILD_MODES.md](OPS_TEMPORAL_BUILD_MODES.md)
@@ -49,6 +50,7 @@
 | [V6_Support_Process_Registry.md](V6_Support_Process_Registry.md) | current-support-plane-registry | live | named support processes outside the 56-step flow, with contracts, owners, evidence, and automation coverage |
 | [V6_Truth_Governance_Policy.md](V6_Truth_Governance_Policy.md) | current-runtime-satellite | live | source independence, trust weighting, authority override, freshness, and regex authority-boundary policy |
 | [V6_Voyage_Retrieval_Policy.md](V6_Voyage_Retrieval_Policy.md) | current-runtime-satellite | live | current-versus-target Voyage model, collection, parameter, and non-authority policy |
+| [V6_Neo4j_Runtime_Policy.md](V6_Neo4j_Runtime_Policy.md) | current-runtime-satellite | live | hard-required Neo4j contract (capabilities, graph projection freshness/completeness, blocked taxonomy) |
 | [V6_10_10_COMPLETION_PLAN.md](V6_10_10_COMPLETION_PLAN.md) | current-closure-satellite | live | ordered 10/10 closure backlog distinguishing accepted runtime, code-ready integrations, fresh implementation, and external blockers |
 | [DOMAIN_MODEL.md](DOMAIN_MODEL.md) | current | live | domain invariants and taxonomy |
 | [V5_Ultimate_Extraction_Protocol.md](V5_Ultimate_Extraction_Protocol.md) | superseded-reference | reference | historical rich extraction and target protocol context; superseded by `V6` |
@@ -90,6 +92,7 @@
 - `V6_Support_Process_Registry.md` owns required support-plane processes outside the 56-step flow.
 - `V6_Truth_Governance_Policy.md` owns truth-governance decision tables and regex authority boundaries.
 - `V6_Voyage_Retrieval_Policy.md` owns current-versus-target Voyage model, collection, and parameter policy.
+- `V6_Neo4j_Runtime_Policy.md` owns the hard-required Neo4j runtime capability/projection contract.
 - `V6_10_10_COMPLETION_PLAN.md` owns the remaining closure backlog and its classification as code-ready, needs-build, or external-blocker work.
 - Активные документы — только в `docs/` root.
 - `docs/_archive/` never participates in current truth.

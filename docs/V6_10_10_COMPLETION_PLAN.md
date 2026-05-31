@@ -186,6 +186,7 @@ Current local bundle semantics:
 - `release/restore gate` must return `ok`;
 - `legacy replay evidence` must be `PASS`;
 - `retrieval contract gate` must be `pass` under hard-required Voyage/Qdrant policy;
+- `graph contract gate` must be `pass` under hard-required Neo4j query/GDS policy;
 - required voyage4 Qdrant collections must be materialized with real `voyage-4-large` vectors, not deterministic fingerprint continuity vectors;
 - draft support retrieval must prove the required collection order plus `rerank-2.5` ordering path;
 - truth-adjacent diagnostics now emit machine-readable retrieval traces in `completeness_judge`, `resolution_loop`, and `contradiction_gate` while preserving non-authority semantics;

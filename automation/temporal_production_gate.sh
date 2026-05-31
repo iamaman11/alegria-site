@@ -205,6 +205,17 @@ run_retrieval_contract_gate() {
     bash automation/run_retrieval_contract_gate.sh || die "hard-required retrieval contract gate failed"
 }
 
+run_graph_contract_gate() {
+  log "running hard-required graph contract gate"
+  GRAPH_CONTRACT_GATE_REPORT_PATH="${GRAPH_CONTRACT_GATE_REPORT_PATH:-/tmp/graph_contract_gate_current.json}" \
+  GRAPH_CAPABILITY_REQUIRED=true \
+  NEO4J_SYNC_REQUIRED=true \
+  GRAPH_QUERY_REQUIRED=true \
+  GRAPH_GDS_REQUIRED=true \
+  RETRIEVAL_CAPABILITY_REQUIRED=false \
+    bash automation/run_graph_contract_gate.sh || die "hard-required graph contract gate failed"
+}
+
 assert_invariants() {
   log "checking DB/runtime invariants"
   apply_business_migrations
@@ -352,6 +363,7 @@ main() {
   start_services
   assert_invariants
   run_retrieval_contract_gate
+  run_graph_contract_gate
   run_ping_and_demo
   run_seo_empty_support_failure
   run_seo_site_build_workflow

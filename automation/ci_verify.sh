@@ -390,6 +390,9 @@ echo "[60/60] Integration harness e2e surface compile"
 echo "[60a/60] Live-provider smoke evidence schema"
 python3 automation/check_live_provider_smoke_evidence_schema.py
 
+echo "[60aa/60] Graph contract gate evidence schema"
+python3 automation/check_graph_contract_gate.py docs/runs/graph_contract_gate_evidence.json
+
 echo "[60b/60] Crawler invariants contract"
 python3 automation/check_crawler_invariants.py
 

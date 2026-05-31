@@ -119,6 +119,14 @@ pub struct QdrantCollectionStatus {
     pub lag_seconds: Option<i64>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct GraphProjectionStatus {
+    pub artifact_name: String,
+    pub point_count: i64,
+    pub last_materialized_at: Option<String>,
+    pub lag_seconds: Option<i64>,
+}
+
 impl ProjectionSyncStatus {
     pub fn open_event_count(&self) -> i64 {
         self.pending_events + self.processing_events
@@ -170,6 +178,67 @@ pub async fn read_qdrant_collection_statuses(
         .into_iter()
         .map(|row| QdrantCollectionStatus {
             collection_name: row.get("collection_name"),
+            point_count: row.get("point_count"),
+            last_materialized_at: row.get("last_materialized_at"),
+            lag_seconds: row.get("lag_seconds"),
+        })
+        .collect())
+}
+
+pub async fn read_graph_projection_statuses(
+    pg: &PgPool,
+    expected_artifacts: &[&str],
+) -> Result<Vec<GraphProjectionStatus>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        WITH expected(artifact_name) AS (
+            SELECT unnest($1::text[])
+        ),
+        aggregated AS (
+            SELECT 'keyword_cluster'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.keyword_clusters
+            UNION ALL
+            SELECT 'serp_pattern'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM serp.serp_patterns
+            UNION ALL
+            SELECT 'page_blueprint'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.page_blueprints
+            UNION ALL
+            SELECT 'page_node'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.page_nodes
+            UNION ALL
+            SELECT 'content_gap'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.content_gaps
+            UNION ALL
+            SELECT 'link_recommendation'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.link_recommendations
+            UNION ALL
+            SELECT 'page_brief'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
+              FROM site.page_briefs
+        )
+        SELECT
+            expected.artifact_name,
+            coalesce(aggregated.point_count, 0)::bigint AS point_count,
+            aggregated.last_materialized_at::text AS last_materialized_at,
+            CASE
+                WHEN aggregated.last_materialized_at IS NULL THEN NULL
+                ELSE greatest(extract(epoch from (now() - aggregated.last_materialized_at))::bigint, 0)
+            END AS lag_seconds
+        FROM expected
+        LEFT JOIN aggregated
+            ON aggregated.artifact_name = expected.artifact_name
+        ORDER BY expected.artifact_name
+        "#,
+    )
+    .bind(expected_artifacts)
+    .fetch_all(pg)
+    .await
+    .map_err(classify_sqlx)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| GraphProjectionStatus {
+            artifact_name: row.get("artifact_name"),
             point_count: row.get("point_count"),
             last_materialized_at: row.get("last_materialized_at"),
             lag_seconds: row.get("lag_seconds"),

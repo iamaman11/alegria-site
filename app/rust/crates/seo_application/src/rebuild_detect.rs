@@ -7,10 +7,19 @@ use seo_ports::{RebuildDependencyEvidence, RebuildRepository};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
+async fn ensure_graph_required_for_phase(phase: &str) -> Result<(), DomainError> {
+    seo_steps::read_neo4j_context::read_neo4j_context(phase)
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("graph capability contract failed for rebuild phase `{phase}`: {err}"),
+        })
+}
+
 pub async fn execute<R: RebuildRepository>(
     repo: &R,
     input: &RebuildDetectInputPayload,
 ) -> Result<RebuildDetectOutputPayload, DomainError> {
+    ensure_graph_required_for_phase("rebuild_detect").await?;
     let mut narrowed_input = input.clone();
     let mut semantic_neighbor_evidence: Vec<RebuildDependencyEvidence> = Vec::new();
     if !input.changed_truth_keys.is_empty() {

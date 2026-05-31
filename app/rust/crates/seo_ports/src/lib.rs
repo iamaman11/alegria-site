@@ -75,6 +75,24 @@ pub struct GlobalNavigationPersistReport {
     pub rebuild_plan_count: u64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphNeighborhoodHit {
+    pub entity_key: String,
+    pub relation_type: String,
+    pub score: f64,
+    pub reason_code: String,
+    pub support_refs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GraphCoverageEvaluation {
+    pub page_node_key: String,
+    pub coverage_score: f64,
+    pub missing_topics: Vec<String>,
+    pub reason_codes: Vec<String>,
+    pub support_refs: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CmsReviewDecisionRequest {
     pub page_node_key: String,
@@ -215,6 +233,33 @@ pub trait SemanticLinkSearchPort: Send + Sync {
         &self,
         queries: &[String],
     ) -> Result<Vec<SemanticDemandCluster>, DomainError>;
+}
+
+#[async_trait]
+pub trait GraphReasoningPort: Send + Sync {
+    async fn load_planning_graph_context(
+        &self,
+        scope_signature: &str,
+        run_id: &str,
+    ) -> Result<GraphPlanningContext, DomainError>;
+
+    async fn find_conflict_neighborhood(
+        &self,
+        scope_signature: &str,
+        page_node_key: &str,
+    ) -> Result<Vec<GraphNeighborhoodHit>, DomainError>;
+
+    async fn find_rebuild_impact_neighborhood(
+        &self,
+        changed_truth_keys: &[String],
+        page_nodes: &[PageNodeState],
+    ) -> Result<Vec<RebuildDependencyEvidence>, DomainError>;
+
+    async fn evaluate_draft_coverage_neighborhood(
+        &self,
+        page_node_key: &str,
+        draft_markdown: &str,
+    ) -> Result<GraphCoverageEvaluation, DomainError>;
 }
 
 #[async_trait]

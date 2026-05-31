@@ -146,6 +146,13 @@ Hard rules:
   - `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED=true`
   - `VOYAGE_RERANK_REQUIRED=true`
   canonical runtime must block on missing provider capability, missing required collections, stale required collections, or incomplete retrieval projection state.
+- hard-required graph enforcement runs through `bash automation/run_graph_contract_gate.sh`.
+- with
+  - `GRAPH_CAPABILITY_REQUIRED=true`
+  - `NEO4J_SYNC_REQUIRED=true`
+  - `GRAPH_QUERY_REQUIRED=true`
+  - `GRAPH_GDS_REQUIRED=true`
+  canonical runtime must block on missing Neo4j capability, missing required graph projections, stale graph projections, or incomplete Neo4j projection state.
 
 ## 2) Current workflow chains
 

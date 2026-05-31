@@ -8,12 +8,14 @@ RUN_CLEAN_ACCEPTANCE="${LOCAL_OPS_EVIDENCE_RUN_CLEAN_ACCEPTANCE:-1}"
 RUN_RELEASE_GATE="${LOCAL_OPS_EVIDENCE_RUN_RELEASE_GATE:-1}"
 RUN_LIVE_PROVIDER_GATE="${LOCAL_OPS_EVIDENCE_RUN_LIVE_PROVIDER_GATE:-0}"
 RUN_RETRIEVAL_CONTRACT_GATE="${LOCAL_OPS_EVIDENCE_RUN_RETRIEVAL_CONTRACT_GATE:-0}"
+RUN_GRAPH_CONTRACT_GATE="${LOCAL_OPS_EVIDENCE_RUN_GRAPH_CONTRACT_GATE:-0}"
 
 CLEAN_ACCEPTANCE_REPORT="${LOCAL_OPS_EVIDENCE_CLEAN_ACCEPTANCE_REPORT:-/tmp/clean_acceptance_bundle_current.json}"
 RELEASE_GATE_REPORT="${LOCAL_OPS_EVIDENCE_RELEASE_GATE_REPORT:-/tmp/release_restore_gate_current.json}"
 LIVE_PROVIDER_EVIDENCE="${LOCAL_OPS_EVIDENCE_LIVE_PROVIDER_EVIDENCE:-$ROOT_DIR/docs/runs/live_provider_minimal_scope_evidence.json}"
 LEGACY_REPLAY_EVIDENCE="${LOCAL_OPS_EVIDENCE_LEGACY_REPLAY_EVIDENCE:-$ROOT_DIR/docs/runs/seo_site_build_legacy_replay_evidence.json}"
 RETRIEVAL_CONTRACT_EVIDENCE="${LOCAL_OPS_EVIDENCE_RETRIEVAL_CONTRACT_EVIDENCE:-$ROOT_DIR/docs/runs/retrieval_contract_gate_evidence.json}"
+GRAPH_CONTRACT_EVIDENCE="${LOCAL_OPS_EVIDENCE_GRAPH_CONTRACT_EVIDENCE:-$ROOT_DIR/docs/runs/graph_contract_gate_evidence.json}"
 CLI_TARGET_DIR="${LOCAL_OPS_EVIDENCE_CLI_TARGET_DIR:-$ROOT_DIR/app/rust/target/local-ops-evidence-cli}"
 
 cd "$ROOT_DIR"
@@ -44,9 +46,15 @@ if [[ "$RUN_RETRIEVAL_CONTRACT_GATE" == "1" ]]; then
     bash automation/run_retrieval_contract_gate.sh || true
 fi
 
+if [[ "$RUN_GRAPH_CONTRACT_GATE" == "1" ]]; then
+  GRAPH_CONTRACT_GATE_REPORT_PATH="$GRAPH_CONTRACT_EVIDENCE" \
+    bash automation/run_graph_contract_gate.sh || true
+fi
+
 python3 automation/check_live_provider_smoke_evidence_schema.py
 python3 automation/check_seo_legacy_replay_evidence_schema.py
 python3 automation/check_retrieval_contract_gate.py "$RETRIEVAL_CONTRACT_EVIDENCE"
+python3 automation/check_graph_contract_gate.py "$GRAPH_CONTRACT_EVIDENCE"
 
 python3 - <<'PY' \
   "$REPORT_PATH" \
@@ -55,7 +63,8 @@ python3 - <<'PY' \
   "$RELEASE_GATE_REPORT" \
   "$LIVE_PROVIDER_EVIDENCE" \
   "$LEGACY_REPLAY_EVIDENCE" \
-  "$RETRIEVAL_CONTRACT_EVIDENCE"
+  "$RETRIEVAL_CONTRACT_EVIDENCE" \
+  "$GRAPH_CONTRACT_EVIDENCE"
 import json
 import sys
 from datetime import datetime, timezone
@@ -68,6 +77,7 @@ release_gate_path = Path(sys.argv[4])
 live_provider_path = Path(sys.argv[5])
 legacy_replay_path = Path(sys.argv[6])
 retrieval_contract_path = Path(sys.argv[7])
+graph_contract_path = Path(sys.argv[8])
 
 
 def load_json(path: Path) -> dict:
@@ -85,6 +95,7 @@ release_gate = require(release_gate_path, "release_restore_gate")
 live_provider = require(live_provider_path, "live_provider")
 legacy_replay = require(legacy_replay_path, "legacy_replay")
 retrieval_contract = require(retrieval_contract_path, "retrieval_contract")
+graph_contract = require(graph_contract_path, "graph_contract")
 
 blocking_reasons: list[str] = []
 external_blockers: list[str] = []
@@ -97,15 +108,22 @@ if legacy_replay.get("evidence_status") != "PASS":
     blocking_reasons.append("legacy replay evidence is not PASS")
 if retrieval_contract.get("status") != "pass":
     blocking_reasons.append("retrieval contract gate is not pass")
+if graph_contract.get("graph_contract_status") != "pass":
+    blocking_reasons.append("graph contract gate is not pass")
 
 live_status = live_provider.get("evidence_status")
 retrieval_status = retrieval_contract.get("status")
-if live_status == "PASS" and retrieval_status == "pass":
+graph_status = graph_contract.get("graph_contract_status")
+if live_status == "PASS" and retrieval_status == "pass" and graph_status == "pass":
     overall_status = "PASS"
 elif retrieval_status and retrieval_status.startswith("blocked_"):
     overall_status = "BLOCKED_ON_RETRIEVAL_CONTRACT"
     if retrieval_status == "blocked_provider_capability":
         external_blockers.append("retrieval contract is blocked on Voyage provider capability or credentials")
+elif graph_status and graph_status.startswith("blocked_"):
+    overall_status = "BLOCKED_ON_GRAPH_CONTRACT"
+    if graph_status == "blocked_provider_capability":
+        external_blockers.append("graph contract is blocked on Neo4j provider capability or credentials")
 elif live_status == "PENDING_CREDENTIALS":
     overall_status = "BLOCKED_ON_LIVE_PROVIDER"
     external_blockers.append("live truth-extraction provider credentials are missing")
@@ -136,6 +154,7 @@ payload = {
         "release_restore_gate": release_gate.get("status"),
         "legacy_replay_evidence": legacy_replay.get("evidence_status"),
         "retrieval_contract_gate": retrieval_status,
+        "graph_contract_gate": graph_status,
         "live_provider_minimal_scope": live_status,
     },
     "artifacts": {
@@ -143,6 +162,7 @@ payload = {
         "release_restore_gate": str(release_gate_path),
         "legacy_replay_evidence": str(legacy_replay_path),
         "retrieval_contract_gate": str(retrieval_contract_path),
+        "graph_contract_gate": str(graph_contract_path),
         "live_provider_minimal_scope": str(live_provider_path),
     },
     "required_for_pass": [
@@ -150,6 +170,7 @@ payload = {
         "release/restore gate returns ok",
         "legacy replay evidence is PASS for the target environment",
         "retrieval contract gate is pass under hard-required Voyage/Qdrant policy",
+        "graph contract gate is pass under hard-required Neo4j query/GDS policy",
         "live provider minimal scope evidence is PASS with a real provider",
     ],
     "updated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

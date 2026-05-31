@@ -177,6 +177,18 @@ struct SeoPreflightCollectionReport {
 }
 
 #[derive(serde::Serialize)]
+struct SeoPreflightGraphProjectionReport {
+    projection_name: String,
+    exists: bool,
+    fresh: bool,
+    projection_complete: bool,
+    point_count: i64,
+    last_materialized_at: Option<String>,
+    last_source_change_at: Option<String>,
+    lag_seconds: Option<i64>,
+}
+
+#[derive(serde::Serialize)]
 struct SeoPreflightReport {
     artifact_id: String,
     status: String,
@@ -191,9 +203,20 @@ struct SeoPreflightReport {
     voyage_rerank_ready: bool,
     qdrant_ready: bool,
     qdrant_collection_contract_ready: bool,
+    neo4j_ready: bool,
+    graph_query_ready: bool,
+    graph_gds_ready: bool,
+    graph_projection_contract_ready: bool,
+    graph_capability_required: bool,
+    neo4j_sync_required: bool,
+    graph_query_required: bool,
+    graph_gds_required: bool,
     projection_blocked: bool,
     retrieval_block_reason: Option<String>,
+    graph_contract_status: String,
+    graph_block_reason: Option<String>,
     required_collections: Vec<SeoPreflightCollectionReport>,
+    required_graph_projections: Vec<SeoPreflightGraphProjectionReport>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -395,6 +418,18 @@ fn required_retrieval_collections() -> [&'static str; 7] {
     ]
 }
 
+fn required_graph_projections() -> [&'static str; 7] {
+    [
+        "keyword_cluster",
+        "serp_pattern",
+        "page_blueprint",
+        "page_node",
+        "content_gap",
+        "link_recommendation",
+        "page_brief",
+    ]
+}
+
 fn llm_configured() -> bool {
     env_set("OPENAI_API_KEY")
         || env_set("ANTHROPIC_API_KEY")
@@ -418,10 +453,64 @@ async fn probe_required_qdrant_collections(
     Ok(statuses)
 }
 
-async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
-    let graph = neo4rs_adapter::connect_neo4j(uri, user, password).await?;
-    neo4rs_adapter::run_cypher(&graph, "RETURN 1 AS ok").await?;
-    Ok(())
+#[derive(Debug, Clone, Default)]
+struct Neo4jCapabilityProbe {
+    neo4j_ready: bool,
+    graph_query_ready: bool,
+    graph_gds_ready: bool,
+    errors: Vec<String>,
+}
+
+async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
+    let neo4j_uri = env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
+    let neo4j_user = env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
+    let neo4j_password =
+        env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
+    let mut probe = Neo4jCapabilityProbe::default();
+
+    let graph = match tokio::time::timeout(
+        Duration::from_secs(4),
+        neo4rs_adapter::connect_neo4j(&neo4j_uri, &neo4j_user, &neo4j_password),
+    )
+    .await
+    {
+        Ok(Ok(graph)) => {
+            probe.neo4j_ready = true;
+            graph
+        }
+        Ok(Err(err)) => {
+            probe.errors.push(format!("neo4j_connect:{err}"));
+            return probe;
+        }
+        Err(_) => {
+            probe.errors.push("neo4j_connect:timeout".to_string());
+            return probe;
+        }
+    };
+
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        neo4rs_adapter::run_cypher(&graph, "RETURN 1 AS ok"),
+    )
+    .await
+    {
+        Ok(Ok(())) => probe.graph_query_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("neo4j_query:{err}")),
+        Err(_) => probe.errors.push("neo4j_query:timeout".to_string()),
+    }
+
+    match tokio::time::timeout(
+        Duration::from_secs(3),
+        neo4rs_adapter::run_cypher(&graph, "CALL gds.version() YIELD version RETURN version"),
+    )
+    .await
+    {
+        Ok(Ok(())) => probe.graph_gds_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("neo4j_gds:{err}")),
+        Err(_) => probe.errors.push("neo4j_gds:timeout".to_string()),
+    }
+
+    probe
 }
 
 #[derive(Debug, Clone, Default)]
@@ -711,8 +800,33 @@ async fn run_seo_preflight(
     let qdrant_collection_contract_ready = required_collection_statuses.iter().all(|status| {
         status.exists && status.projection_complete && status.qdrant_collection_exists
     });
+    let required_graph_projection_names = required_graph_projections();
+    let graph_projection_status_rows =
+        sqlx_seo_adapter::read_graph_projection_statuses(&pool, &required_graph_projection_names)
+            .await
+            .context("graph projection status read failed")?;
+    let required_graph_projections = graph_projection_status_rows
+        .into_iter()
+        .map(|status| SeoPreflightGraphProjectionReport {
+            projection_name: status.artifact_name,
+            exists: status.point_count > 0,
+            fresh: status
+                .lag_seconds
+                .map(|lag| lag * 1000 <= projection_max_lag_ms.max(0))
+                .unwrap_or(false),
+            projection_complete: status.point_count > 0,
+            point_count: status.point_count,
+            last_materialized_at: status.last_materialized_at,
+            last_source_change_at: None,
+            lag_seconds: status.lag_seconds,
+        })
+        .collect::<Vec<_>>();
+    let graph_projection_contract_ready = required_graph_projections
+        .iter()
+        .all(|status| status.exists && status.projection_complete);
 
     let mut projection_blocked = false;
+    let mut graph_projection_blocked = false;
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&pool)
         .await
         .context("projection sync status failed")?;
@@ -722,6 +836,9 @@ async fn run_seo_preflight(
         if blocked_events > 0 {
             projection_blocked = true;
         }
+        if status.target_system == "neo4j" && blocked_events > 0 {
+            graph_projection_blocked = true;
+        }
         let state = if status.failed_events > 0 {
             "FAIL"
         } else if open_events > 0 && status.max_open_lag_ms > projection_max_lag_ms {
@@ -729,6 +846,12 @@ async fn run_seo_preflight(
         } else {
             "OK"
         };
+        if status.target_system == "neo4j"
+            && open_events > 0
+            && status.max_open_lag_ms > projection_max_lag_ms
+        {
+            graph_projection_blocked = true;
+        }
         println!(
             "{} projection_status target={} pending={} processing={} failed={} done={} max_open_lag_ms={}",
             state,
@@ -772,11 +895,19 @@ async fn run_seo_preflight(
     let voyage_embeddings_ready = capability_probe.embeddings_ready;
     let voyage_contextualized_ready = capability_probe.contextualized_ready;
     let voyage_rerank_ready = capability_probe.rerank_ready;
+    let neo4j_probe = probe_neo4j_capabilities().await;
+    let neo4j_ready = neo4j_probe.neo4j_ready;
+    let graph_query_ready = neo4j_probe.graph_query_ready;
+    let graph_gds_ready = neo4j_probe.graph_gds_ready;
     let retrieval_capability_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
     let canonical_vector_retrieval_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
     let contextual_raw_chunk_retrieval_required =
         env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
     let voyage_rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
+    let graph_capability_required = env_flag("GRAPH_CAPABILITY_REQUIRED");
+    let neo4j_sync_required = env_flag("NEO4J_SYNC_REQUIRED");
+    let graph_query_required = env_flag("GRAPH_QUERY_REQUIRED");
+    let graph_gds_required = env_flag("GRAPH_GDS_REQUIRED");
 
     let missing_collections = required_collection_statuses
         .iter()
@@ -792,6 +923,21 @@ async fn run_seo_preflight(
         .iter()
         .filter(|status| status.exists && !status.projection_complete)
         .map(|status| status.collection_name.clone())
+        .collect::<Vec<_>>();
+    let missing_graph_projections = required_graph_projections
+        .iter()
+        .filter(|status| !status.exists)
+        .map(|status| status.projection_name.clone())
+        .collect::<Vec<_>>();
+    let stale_graph_projections = required_graph_projections
+        .iter()
+        .filter(|status| status.exists && !status.fresh)
+        .map(|status| status.projection_name.clone())
+        .collect::<Vec<_>>();
+    let incomplete_graph_projections = required_graph_projections
+        .iter()
+        .filter(|status| status.exists && !status.projection_complete)
+        .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
     let retrieval_status = if retrieval_capability_required {
         if !voyage_embeddings_ready
@@ -845,6 +991,50 @@ async fn run_seo_preflight(
         )),
         _ => None,
     };
+    let graph_contract_status = if graph_capability_required {
+        if (neo4j_sync_required && !neo4j_ready)
+            || (graph_query_required && !graph_query_ready)
+            || (graph_gds_required && !graph_gds_ready)
+        {
+            "blocked_provider_capability".to_string()
+        } else if !missing_graph_projections.is_empty() {
+            "blocked_missing_projection".to_string()
+        } else if !stale_graph_projections.is_empty() {
+            "blocked_stale_projection".to_string()
+        } else if graph_projection_blocked || !incomplete_graph_projections.is_empty() {
+            "blocked_projection_incomplete".to_string()
+        } else {
+            "pass".to_string()
+        }
+    } else if graph_projection_blocked {
+        "warn".to_string()
+    } else {
+        "pass".to_string()
+    };
+    let graph_block_reason = match graph_contract_status.as_str() {
+        "blocked_provider_capability" => Some(format!(
+            "graph contract requires neo4j/gds/query capabilities, probe failed: {}",
+            if neo4j_probe.errors.is_empty() {
+                "unknown neo4j probe failure".to_string()
+            } else {
+                neo4j_probe.errors.join("; ")
+            }
+        )),
+        "blocked_missing_projection" => Some(format!(
+            "missing required graph projections: {}",
+            missing_graph_projections.join(",")
+        )),
+        "blocked_stale_projection" => Some(format!(
+            "stale required graph projections: {}",
+            stale_graph_projections.join(",")
+        )),
+        "blocked_projection_incomplete" => Some(format!(
+            "graph projection backlog or incomplete projections block contract: graph_projection_blocked={} incomplete=[{}]",
+            graph_projection_blocked,
+            incomplete_graph_projections.join(",")
+        )),
+        _ => None,
+    };
 
     if env_set("DATAFORSEO_LOGIN") && env_set("DATAFORSEO_PASSWORD") {
         println!("OK dataforseo_credentials");
@@ -875,25 +1065,17 @@ async fn run_seo_preflight(
             qdrant_url, qdrant_collection_contract_ready
         );
     }
-    let neo4j_uri = env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
-    let neo4j_user = env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
-    let neo4j_password =
-        env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
-    match tokio::time::timeout(
-        Duration::from_secs(3),
-        probe_neo4j(&neo4j_uri, &neo4j_user, &neo4j_password),
-    )
-    .await
-    {
-        Ok(Ok(())) => {
-            println!("OK neo4j_connect uri={neo4j_uri}");
-        }
-        Ok(Err(err)) => {
-            println!("WARN neo4j_connect uri={} error={}", neo4j_uri, err);
-        }
-        Err(_) => {
-            println!("WARN neo4j_connect uri={} error=timeout", neo4j_uri);
-        }
+    if neo4j_ready {
+        println!("OK neo4j_connect");
+    } else {
+        println!(
+            "WARN neo4j_capability_probe failed: {}",
+            if neo4j_probe.errors.is_empty() {
+                "unknown".to_string()
+            } else {
+                neo4j_probe.errors.join("; ")
+            }
+        );
     }
     if llm_configured() {
         println!("OK llm_provider");
@@ -907,7 +1089,11 @@ async fn run_seo_preflight(
 
     let report = SeoPreflightReport {
         artifact_id: "seo_preflight".to_string(),
-        status: retrieval_status.clone(),
+        status: if retrieval_status != "pass" {
+            retrieval_status.clone()
+        } else {
+            graph_contract_status.clone()
+        },
         context_key: resolved_context_key.clone(),
         normalized_profile,
         retrieval_capability_required,
@@ -919,9 +1105,20 @@ async fn run_seo_preflight(
         voyage_rerank_ready,
         qdrant_ready,
         qdrant_collection_contract_ready,
+        neo4j_ready,
+        graph_query_ready,
+        graph_gds_ready,
+        graph_projection_contract_ready,
+        graph_capability_required,
+        neo4j_sync_required,
+        graph_query_required,
+        graph_gds_required,
         projection_blocked,
         retrieval_block_reason: retrieval_block_reason.clone(),
+        graph_contract_status: graph_contract_status.clone(),
+        graph_block_reason: graph_block_reason.clone(),
         required_collections: required_collection_statuses,
+        required_graph_projections,
     };
     if let Some(path) = report_json.as_deref() {
         let path = PathBuf::from(path);
@@ -943,6 +1140,14 @@ async fn run_seo_preflight(
             "FAIL retrieval_contract status={} reason={}",
             retrieval_status,
             retrieval_block_reason.as_deref().unwrap_or("")
+        );
+        return Ok(2);
+    }
+    if graph_capability_required && graph_contract_status != "pass" {
+        println!(
+            "FAIL graph_contract status={} reason={}",
+            graph_contract_status,
+            graph_block_reason.as_deref().unwrap_or("")
         );
         return Ok(2);
     }
