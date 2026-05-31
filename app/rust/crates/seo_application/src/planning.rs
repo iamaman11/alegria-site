@@ -11,6 +11,18 @@ use seo_ports::{PlanningRepository, SemanticLinkSearchPort, SerpSearchPort};
 use std::collections::{HashMap, HashSet};
 use runtime_models::GraphPlanningContext;
 
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
 fn linkable_state(state: &str) -> bool {
     !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
 }
@@ -21,6 +33,25 @@ fn clamp01(value: f64) -> f64 {
 
 fn parse_graph_confidence(value: &str) -> f64 {
     value.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+fn high_similarity(score: f32) -> bool {
+    score >= 0.86
+}
+
+fn voyage_retrieval_ready_or_optional() -> Result<bool, DomainError> {
+    let retrieval_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
+    if std::env::var("VOYAGE_API_KEY").is_ok() {
+        return Ok(true);
+    }
+    if retrieval_required {
+        return Err(DomainError::InfraUnavailable {
+            message:
+                "planning retrieval requires VOYAGE_API_KEY under hard-required retrieval contract"
+                    .to_string(),
+        });
+    }
+    Ok(false)
 }
 
 fn to_graph_planning_context_state(context: GraphPlanningContext) -> GraphPlanningContextState {
@@ -137,7 +168,15 @@ async fn enrich_semantic_link_recommendations<S: SemanticLinkSearchPort>(
     input: &LinkRecommendInputPayload,
     output: &mut LinkRecommendOutputPayload,
 ) -> Result<(), DomainError> {
+    let retrieval_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
     if std::env::var("VOYAGE_API_KEY").is_err() {
+        if retrieval_required {
+            return Err(DomainError::InfraUnavailable {
+                message:
+                    "semantic link retrieval requires VOYAGE_API_KEY under hard-required retrieval contract"
+                        .to_string(),
+            });
+        }
         return Ok(());
     }
     let max_semantic_links = input.max_links_per_page.max(3) as usize;
@@ -292,15 +331,39 @@ pub async fn run_serp_ingest<R: PlanningRepository, S: SerpSearchPort>(
 
 pub async fn run_serp_normalize<R: PlanningRepository>(
     repo: &R,
+    search_port: &impl SemanticLinkSearchPort,
     input: &SerpNormalizeInputPayload,
 ) -> Result<SerpNormalizeOutputPayload, DomainError> {
-    let output = seo_steps::serp_normalize_step::execute(input);
+    let mut output = seo_steps::serp_normalize_step::execute(input);
+    if voyage_retrieval_ready_or_optional()? {
+        for pattern in &mut output.serp_patterns {
+            let candidates = search_port.search_keyword_clusters(&pattern.query, 3).await?;
+            let Some(best) = candidates.first() else {
+                continue;
+            };
+            if !best.entity_key.trim().is_empty() {
+                let cluster_ref = format!("cluster_ref:{}", best.entity_key);
+                if pattern.evidence_ref.trim().is_empty() {
+                    pattern.evidence_ref = cluster_ref;
+                } else if !pattern.evidence_ref.contains(&cluster_ref) {
+                    pattern.evidence_ref = format!("{}|{}", pattern.evidence_ref, cluster_ref);
+                }
+            }
+            pattern.reliability_score = clamp01(
+                pattern.reliability_score + (best.score as f64 * 0.15),
+            );
+            if pattern.status == "partial" && pattern.reliability_score >= 0.5 {
+                pattern.status = "active".to_string();
+            }
+        }
+    }
     repo.persist_serp_normalize_output(input, &output).await?;
     Ok(output)
 }
 
 pub async fn run_opportunity_build<R: PlanningRepository>(
     repo: &R,
+    search_port: &impl SemanticLinkSearchPort,
     input: &OpportunityBuildInputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
     let scope_signature = input
@@ -312,7 +375,29 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
         to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let output = seo_steps::opportunity_build_step::execute(&enriched);
+    let mut output = seo_steps::opportunity_build_step::execute(&enriched);
+    if voyage_retrieval_ready_or_optional()? {
+        for cluster in &mut output.keyword_clusters {
+            let query = format!("{} {}", cluster.seed_keyword, cluster.dominant_intent);
+            let candidates = search_port.search_keyword_clusters(&query, 4).await?;
+            let Some(best) = candidates.first() else {
+                continue;
+            };
+            cluster.graph_confidence = cluster.graph_confidence.max(best.score as f64);
+            if cluster.reason_code == "serp_seed_cluster" {
+                cluster.reason_code = "voyage_cluster_affinity".to_string();
+            }
+            for candidate in candidates.iter().take(3) {
+                let support_ref = format!(
+                    "qdrant://seo_keyword_clusters_4/{}",
+                    candidate.entity_key
+                );
+                if !cluster.support_refs.contains(&support_ref) {
+                    cluster.support_refs.push(support_ref);
+                }
+            }
+        }
+    }
     repo.persist_opportunity_build_output(&enriched, &output)
         .await?;
     Ok(output)
@@ -320,6 +405,7 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
 
 pub async fn run_ia_build<R: PlanningRepository>(
     repo: &R,
+    search_port: &impl SemanticLinkSearchPort,
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
     let scope_signature = input
@@ -331,7 +417,64 @@ pub async fn run_ia_build<R: PlanningRepository>(
         to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let output = seo_steps::ia_build_step::execute(&enriched);
+    let mut output = seo_steps::ia_build_step::execute(&enriched);
+    if voyage_retrieval_ready_or_optional()? {
+        let mut cluster_owner = HashMap::<String, String>::new();
+        for node in &output.page_nodes {
+            if !node.keyword_cluster_key.trim().is_empty() {
+                cluster_owner.insert(
+                    node.keyword_cluster_key.clone(),
+                    node.page_node_key.clone(),
+                );
+            }
+        }
+        for node in &output.page_nodes {
+            if node.keyword_cluster_key.trim().is_empty() {
+                continue;
+            }
+            let query = format!(
+                "{} {} {}",
+                node.canonical_url_path, node.page_type_key, node.dominant_intent
+            );
+            let candidates = search_port.search_keyword_clusters(&query, 4).await?;
+            let Some(best) = candidates.first() else {
+                continue;
+            };
+            if !high_similarity(best.score) || best.entity_key == node.keyword_cluster_key {
+                continue;
+            }
+            let Some(owner) = cluster_owner.get(&best.entity_key) else {
+                continue;
+            };
+            let conflict_key = primitives::seo::seo_artifact_key(
+                "cannibalization_conflict",
+                &[
+                    &node.scope_signature,
+                    &node.page_node_key,
+                    owner,
+                    "semantic_cluster_owner_overlap",
+                ],
+            );
+            if output
+                .cannibalization_conflicts
+                .iter()
+                .any(|conflict| conflict.conflict_key == conflict_key)
+            {
+                continue;
+            }
+            output.cannibalization_conflicts.push(
+                contracts::generated::alegria::temporal::v1::CannibalizationConflictState {
+                    conflict_key,
+                    scope_signature: node.scope_signature.clone(),
+                    page_key_a: node.page_node_key.clone(),
+                    page_key_b: owner.clone(),
+                    conflict_reason: "semantic_cluster_owner_overlap".to_string(),
+                    severity: "medium".to_string(),
+                    status: "open".to_string(),
+                },
+            );
+        }
+    }
     repo.persist_ia_build_output(&enriched, &output).await?;
     Ok(output)
 }
@@ -358,6 +501,7 @@ pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort
 
 pub async fn run_global_site_reconcile<R: PlanningRepository>(
     repo: &R,
+    search_port: &impl SemanticLinkSearchPort,
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
     let scope_signature = input
@@ -369,7 +513,51 @@ pub async fn run_global_site_reconcile<R: PlanningRepository>(
         to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let output = seo_steps::global_site_reconcile_step::execute(&enriched);
+    let mut output = seo_steps::global_site_reconcile_step::execute(&enriched);
+    if voyage_retrieval_ready_or_optional()? {
+        let node_by_key = output
+            .page_nodes
+            .iter()
+            .map(|node| (node.page_node_key.clone(), node))
+            .collect::<HashMap<_, _>>();
+        for source in &output.page_nodes {
+            if !linkable_state(&source.lifecycle_state) {
+                continue;
+            }
+            let query = format!(
+                "{} {} {}",
+                source.canonical_url_path, source.page_type_key, source.dominant_intent
+            );
+            let candidates = search_port.search_link_targets(&query, 4).await?;
+            for candidate in candidates {
+                if !high_similarity(candidate.score) || candidate.entity_key == source.page_node_key
+                {
+                    continue;
+                }
+                let Some(target) = node_by_key.get(&candidate.entity_key) else {
+                    continue;
+                };
+                if !linkable_state(&target.lifecycle_state)
+                    || source.dominant_intent != target.dominant_intent
+                {
+                    continue;
+                }
+                let conflict_key = primitives::seo::seo_artifact_key(
+                    "cannibalization_conflict",
+                    &[
+                        &source.scope_signature,
+                        &source.page_node_key,
+                        &target.page_node_key,
+                        "semantic_neighborhood_overlap",
+                    ],
+                );
+                if !output.cannibalization_conflict_keys.contains(&conflict_key) {
+                    output.cannibalization_conflict_keys.push(conflict_key);
+                }
+                break;
+            }
+        }
+    }
     repo.persist_global_site_reconcile_output(&enriched, &output)
         .await?;
     Ok(output)
@@ -494,6 +682,17 @@ mod tests {
             Ok(vec![SemanticLinkCandidate {
                 entity_key: "target".to_string(),
                 score: 0.92,
+            }])
+        }
+
+        async fn search_keyword_clusters(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            Ok(vec![SemanticLinkCandidate {
+                entity_key: "cluster:spain-tourist".to_string(),
+                score: 0.89,
             }])
         }
     }
@@ -647,7 +846,6 @@ mod tests {
         )
         .await
         .unwrap();
-        std::env::remove_var("VOYAGE_API_KEY");
         assert!(output.link_recommendations.len() >= 1);
         assert!(output
             .link_recommendations
@@ -676,6 +874,7 @@ mod tests {
         });
         let output = run_opportunity_build(
             &repo,
+            &FakeSemanticSearchPort,
             &OpportunityBuildInputPayload {
                 run_id: "run-1".to_string(),
                 scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -736,6 +935,7 @@ mod tests {
         });
         let output = run_global_site_reconcile(
             &repo,
+            &FakeSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
                 run_id: "run-2".to_string(),
                 scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -766,5 +966,124 @@ mod tests {
                 && gap.topic_keys.iter().any(|topic| topic == "insurance")
         }));
         assert_eq!(output.page_nodes[0].lifecycle_state, "active");
+    }
+
+    struct OverlapSemanticSearchPort;
+
+    #[async_trait]
+    impl SemanticLinkSearchPort for OverlapSemanticSearchPort {
+        async fn search_link_targets(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            Ok(vec![SemanticLinkCandidate {
+                entity_key: "target".to_string(),
+                score: 0.91,
+            }])
+        }
+
+        async fn search_keyword_clusters(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            Ok(vec![SemanticLinkCandidate {
+                entity_key: "cluster-b".to_string(),
+                score: 0.9,
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn run_ia_build_adds_semantic_overlap_conflict_when_cluster_owner_diverges() {
+        std::env::set_var("VOYAGE_API_KEY", "test");
+        let repo = FakePlanningRepo;
+        let output = run_ia_build(
+            &repo,
+            &OverlapSemanticSearchPort,
+            &IaBuildInputPayload {
+                run_id: "run-ia".to_string(),
+                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    scope_signature: "scope".to_string(),
+                    locale: "ru-RU".to_string(),
+                    country_code: "ES".to_string(),
+                    visa_type: "tourist".to_string(),
+                    ..Default::default()
+                }),
+                keyword_clusters: vec![
+                    contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                        cluster_key: "cluster-a".to_string(),
+                        scope_signature: "scope".to_string(),
+                        seed_keyword: "spain visa requirements".to_string(),
+                        dominant_intent: "informational".to_string(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                    contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                        cluster_key: "cluster-b".to_string(),
+                        scope_signature: "scope".to_string(),
+                        seed_keyword: "spain visa cost".to_string(),
+                        dominant_intent: "informational".to_string(),
+                        status: "active".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                graph_context: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(output
+            .cannibalization_conflicts
+            .iter()
+            .any(|conflict| conflict.conflict_reason == "semantic_cluster_owner_overlap"),
+            "conflicts={:?}",
+            output
+                .cannibalization_conflicts
+                .iter()
+                .map(|conflict| (&conflict.conflict_key, &conflict.conflict_reason))
+                .collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn run_global_site_reconcile_adds_semantic_overlap_conflict_key() {
+        std::env::set_var("VOYAGE_API_KEY", "test");
+        let repo = FakePlanningRepo;
+        let output = run_global_site_reconcile(
+            &repo,
+            &OverlapSemanticSearchPort,
+            &GlobalSiteReconcileInputPayload {
+                run_id: "run-global".to_string(),
+                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    scope_signature: "scope".to_string(),
+                    ..Default::default()
+                }),
+                page_nodes: vec![
+                    contracts::generated::alegria::temporal::v1::PageNodeState {
+                        page_node_key: "source".to_string(),
+                        scope_signature: "scope".to_string(),
+                        page_type_key: "detail_page".to_string(),
+                        dominant_intent: "informational".to_string(),
+                        canonical_url_path: "/ru/visa/spain/source/".to_string(),
+                        lifecycle_state: "active".to_string(),
+                        ..Default::default()
+                    },
+                    contracts::generated::alegria::temporal::v1::PageNodeState {
+                        page_node_key: "target".to_string(),
+                        scope_signature: "scope".to_string(),
+                        page_type_key: "detail_page".to_string(),
+                        dominant_intent: "informational".to_string(),
+                        canonical_url_path: "/ru/visa/spain/target/".to_string(),
+                        lifecycle_state: "active".to_string(),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!output.cannibalization_conflict_keys.is_empty());
     }
 }

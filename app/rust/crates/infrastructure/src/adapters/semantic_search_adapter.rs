@@ -76,7 +76,10 @@ pub async fn rerank_records(
         )
         .await?;
     if reranked.is_empty() {
-        return Ok(records);
+        return Err(anyhow!(
+            "Voyage rerank returned no records for {} input records",
+            records.len()
+        ));
     }
     let mut reordered = Vec::with_capacity(reranked.len());
     for entry in reranked {
@@ -86,7 +89,10 @@ pub async fn rerank_records(
         }
     }
     if reordered.is_empty() {
-        Ok(records)
+        Err(anyhow!(
+            "Voyage rerank returned only out-of-range indexes for {} input records",
+            records.len()
+        ))
     } else {
         Ok(reordered)
     }

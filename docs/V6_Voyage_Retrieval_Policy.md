@@ -80,9 +80,9 @@ The current accepted collection families are:
 - `raw_chunks_4`
 - `raw_chunks_ctx`
 - `kb_canonical_4`
-- `verified_rules_voyage4`
-- `editorial_topics_voyage4`
-- `seo_keyword_clusters_voyage4`
+- `verified_rules_4`
+- `editorial_topics_4`
+- `seo_keyword_clusters_4`
 - `whole_page_advisory_prototypes`
 
 Legacy SEO retrieval collection names are not accepted in the final runtime contract. `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets` are migrated into voyage4 collections and rejected for new `kb.qdrant_points` rows. `ontology` may exist only as a non-canonical concept materialization surface; canonical vector mapping may not use it as a substitute for `kb_canonical_4`.
@@ -119,6 +119,7 @@ In that mode:
 - `raw_chunks_4` uses `voyage-4-large` with `input_type=document`
 - `raw_chunks_ctx` uses `voyage-context-3` with one list-of-lists request per page, `input_type=document`
 - production-quality retrieval lanes are contract-required; missing provider capability yields explicit block status rather than silent projection continuity fallback
+- raw chunk projection no longer emits deterministic fingerprint vectors for `raw_chunks_4` or `raw_chunks_ctx`; missing Voyage embeddings/contextualized embeddings hard-block the projection
 
 #### Whole-page semantic advisory
 
@@ -140,18 +141,19 @@ In that mode:
 
 #### Voyage4 projection producers
 
-- `verified_truth_write` emits verified rule projections to `verified_rules_voyage4` with `voyage-4-large`, `input_type=document`, `truncation=false`, float 1024-d vectors, and typed Qdrant outbox payloads when Voyage credentials are present; under `RETRIEVAL_CAPABILITY_REQUIRED=true`, missing Voyage credentials hard-block instead of falling back to fake vectors
-- `verified_truth_write` deletes demoted/rejected rule projections from `verified_rules_voyage4` ledger and, under the hard-required contract, from Qdrant itself
-- `opportunity_build` emits keyword cluster projections to `seo_keyword_clusters_voyage4`
-- IA page-node projection, draft assembly, QA persistence, and semantic link search use `editorial_topics_voyage4` instead of `seo_link_targets` or `seo_draft_support_sections`
+- `verified_truth_write` emits verified rule projections to `verified_rules_4` with `voyage-4-large`, `input_type=document`, `truncation=false`, float 1024-d vectors, and typed Qdrant outbox payloads when Voyage credentials are present; under `RETRIEVAL_CAPABILITY_REQUIRED=true`, missing Voyage credentials hard-block instead of falling back to fake vectors
+- `verified_truth_write` deletes demoted/rejected rule projections from `verified_rules_4` ledger and, under the hard-required contract, from Qdrant itself
+- `opportunity_build` emits keyword cluster projections to `seo_keyword_clusters_4`
+- IA page-node projection, draft assembly, QA persistence, and semantic link search use `editorial_topics_4` instead of `seo_link_targets` or `seo_draft_support_sections`
+- Qdrant materialization for `kb_canonical_4`, `editorial_topics_4`, and `seo_keyword_clusters_4` replaces bootstrap fingerprint payloads with `voyage-4-large`, `input_type=document`, `truncation=false`, float 1024-d vectors at dispatch time; missing Voyage credentials block materialization
+- `draft_assemble` source-context assembly reads and reranks support blocks in this order: `verified_rules_4`, `raw_chunks_ctx`, `editorial_topics_4`, `raw_chunks_4`
 - DB collection contracts migrate legacy `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets` ledger rows into voyage4 collection names and reject those legacy names for new `kb.qdrant_points` rows
 
 These producers are active projection surfaces. Their retrieval consumers remain bounded by the step policy below and may not become authority paths.
 
 ### 5.2 Target-next, not yet universally active
 
-- `rerank-2.5` inside draft support ordering and planning merge/link refinement
-- non-authoritative semantic-loss diagnostics in `completeness_judge`
+- `rerank-2.5` inside planning merge/refinement surfaces beyond link recommendation
 - live evidence proving every required collection is populated, fresh, and projection-complete under the hard-required retrieval contract
 
 `kb_canonical_4` is now the only accepted canonical vector retrieval surface in runtime policy. The voyage4 projection producers above are active; remaining items here require explicit evidence before they can be marked universally active.
@@ -185,6 +187,9 @@ This applies to Russian, mixed Russian/English, and multilingual demand text. `v
 ### Steps 18-31
 
 - retrieval may improve support recall and diagnostics
+- `completeness_judge` now records non-authoritative semantic neighborhood diagnostics (`raw_chunks_ctx` with policy-allowed fallback to `raw_chunks_4`) and reranked evidence refs
+- `resolution_loop` now records machine-readable retrieval trace refs from `verified_rules_4` and `kb_canonical_4` for blocked/needs_hitl branches
+- `contradiction_gate` now records semantic-neighbor retrieval refs from `verified_rules_4` for conflict review pressure
 - retrieval may not assign truth verdicts
 
 ### Steps 32-36
@@ -193,12 +198,12 @@ This applies to Russian, mixed Russian/English, and multilingual demand text. `v
 
 ### Steps 37-42
 
-- planning projection to `seo_keyword_clusters_voyage4` is active
+- planning projection to `seo_keyword_clusters_4` is active
 - planning retrieval/rerank expansion beyond existing semantic link search remains target policy, not yet universally active
 
 ### Steps 43-56
 
-- draft/topical support projection to `editorial_topics_voyage4` is active
+- draft/topical support projection to `editorial_topics_4` is active
 - draft support ordering, unsupported-claim retrieval, plagiarism-risk retrieval, and rebuild neighborhood widening remain target policy unless a specific tranche marks them active
 
 ---

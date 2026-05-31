@@ -190,6 +190,12 @@ pub trait SemanticLinkSearchPort: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SemanticLinkCandidate>, DomainError>;
+
+    async fn search_keyword_clusters(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SemanticLinkCandidate>, DomainError>;
 }
 
 #[async_trait]

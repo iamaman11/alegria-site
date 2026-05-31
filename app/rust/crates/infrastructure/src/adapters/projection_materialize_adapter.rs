@@ -12,8 +12,21 @@ use super::neo4j_materialization_adapter;
 use super::qdrant_client_adapter::{
     connect_qdrant, ensure_dense_collection, normalize_payload, parse_distance, upsert_dense_point,
 };
+use super::voyage_api_adapter::{
+    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+};
 
 const DEFAULT_QDRANT_URL: &str = "http://localhost:6334";
+const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-large";
+const VOYAGE4_COLLECTIONS: [&str; 3] = [
+    "kb_canonical_4",
+    "editorial_topics_4",
+    "seo_keyword_clusters_4",
+];
+
+fn requires_voyage4_projection(collection_name: &str) -> bool {
+    VOYAGE4_COLLECTIONS.contains(&collection_name)
+}
 
 fn qdrant_payload_value(
     payload: Option<QdrantEntityPayload>,
@@ -53,10 +66,11 @@ fn qdrant_payload_value(
 }
 
 async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
-    let cmd = QdrantUpsertCommand::decode(payload_bytes)
+    let mut cmd = QdrantUpsertCommand::decode(payload_bytes)
         .context("invalid protobuf payload for QdrantUpsertCommand")?;
 
-    let collection_name = cmd.collection_name.trim();
+    let collection_name_owned = cmd.collection_name.trim().to_string();
+    let collection_name = collection_name_owned.as_str();
     if collection_name.is_empty() {
         bail!("QdrantUpsertCommand.collection_name is empty");
     }
@@ -70,6 +84,55 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
     }
     if cmd.vector.is_empty() {
         bail!("QdrantUpsertCommand.vector is empty");
+    }
+
+    if requires_voyage4_projection(collection_name)
+        && cmd
+            .metadata
+            .get("embedding_model")
+            .map(|value| value == "deterministic-fingerprint")
+            .unwrap_or(false)
+    {
+        let retrieval_text = cmd
+            .metadata
+            .get("retrieval_text")
+            .map(String::as_str)
+            .unwrap_or("")
+            .trim();
+        if retrieval_text.is_empty() {
+            bail!(
+                "{collection_name} projection requires retrieval_text for Voyage materialization"
+            );
+        }
+        let api_key = env::var("VOYAGE_API_KEY")
+            .context("VOYAGE_API_KEY is required to materialize Voyage4 Qdrant projection")?;
+        let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_VOYAGE_MODEL.to_string());
+        let voyage = VoyageClient::new(api_key, model.clone());
+        let vector = voyage
+            .embed_batch_with_settings(
+                &[retrieval_text],
+                &VoyageEmbeddingOptions {
+                    input_type: Some(VoyageInputType::Document),
+                    output_dimension: Some(1024),
+                    output_dtype: Some(VoyageOutputDtype::Float),
+                    truncation: Some(false),
+                },
+            )
+            .await
+            .with_context(|| {
+                format!("Voyage materialization failed for collection `{collection_name}`")
+            })?
+            .into_iter()
+            .next()
+            .context("Voyage materialization returned no embedding")?;
+        cmd.vector = vector;
+        cmd.vector_size = 1024;
+        cmd.metadata
+            .insert("embedding_model".to_string(), model);
+        cmd.metadata.insert(
+            "embedding_version".to_string(),
+            format!("{collection_name}@voyage4_document_1024_float"),
+        );
     }
 
     let vector_size = if cmd.vector_size == 0 {

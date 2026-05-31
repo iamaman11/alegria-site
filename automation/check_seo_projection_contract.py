@@ -41,10 +41,10 @@ REQUIRED_RELATIONSHIPS = [
 ]
 
 REQUIRED_QDRANT_COLLECTIONS = [
-    "seo_keyword_clusters_voyage4",
+    "seo_keyword_clusters_4",
     "seo_page_blueprints",
     "seo_serp_patterns",
-    "editorial_topics_voyage4",
+    "editorial_topics_4",
 ]
 
 FORBIDDEN_ACTIVE_QDRANT_COLLECTIONS = [

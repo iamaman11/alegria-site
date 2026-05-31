@@ -74,6 +74,8 @@ bash automation/run_live_provider_minimal_scope_gate.sh
 - docker-mode прогон использует актуальный контейнерный runtime.
 - hard-required retrieval contract runs through `bash automation/run_retrieval_contract_gate.sh`.
 - if the retrieval contract is blocked, production gate fails before workflow smoke.
+- active voyage4 retrieval materialization must prove real Voyage vectors for required Qdrant collections; deterministic fingerprint vectors are rejected as production-quality substitutes.
+- draft support retrieval must use the required collection order and `rerank-2.5`; missing rerank capability is a production-gate failure.
 - canonical Step 5 live-provider gate runs through `bash automation/run_live_provider_minimal_scope_gate.sh`.
 - live truth extraction path не считается ready без одного из configured provider paths:
   - `SEO_TRUTH_LLM_LOCAL_ENDPOINT|SEO_LLM_LOCAL_ENDPOINT`

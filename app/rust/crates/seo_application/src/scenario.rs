@@ -352,6 +352,7 @@ async fn run_planning_phase<
             let ingest = state.ingest.as_ref().expect("serp_ingest required");
             let output = planning::run_serp_normalize(
                 repo,
+                repo,
                 &SerpNormalizeInputPayload {
                     run_id,
                     query_batch_key: ingest.query_batch_key.clone(),
@@ -372,6 +373,7 @@ async fn run_planning_phase<
         SeoPhaseKey::OpportunityBuild => {
             let serp = state.serp.as_ref().expect("serp_normalize required");
             let output = planning::run_opportunity_build(
+                repo,
                 repo,
                 &OpportunityBuildInputPayload {
                     run_id,
@@ -396,6 +398,7 @@ async fn run_planning_phase<
                 .as_ref()
                 .expect("opportunity_build required");
             let output = planning::run_ia_build(
+                repo,
                 repo,
                 &IaBuildInputPayload {
                     run_id,
@@ -440,6 +443,7 @@ async fn run_planning_phase<
             let ia = state.ia.as_ref().expect("ia_build required");
             let links = state.links.as_ref().expect("link_recommend required");
             let output = planning::run_global_site_reconcile(
+                repo,
                 repo,
                 &GlobalSiteReconcileInputPayload {
                     run_id,
@@ -1215,6 +1219,14 @@ mod tests {
     #[async_trait]
     impl SemanticLinkSearchPort for FakeRepo {
         async fn search_link_targets(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            Ok(Vec::new())
+        }
+
+        async fn search_keyword_clusters(
             &self,
             _query: &str,
             _limit: usize,

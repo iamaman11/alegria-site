@@ -1820,60 +1820,88 @@ pub async fn emit_raw_section_qdrant_events(
         .filter(|section| !section.content_md.trim().is_empty())
         .map(|section| section.content_md.clone())
         .collect::<Vec<_>>();
-    let voyage_api_key = std::env::var("VOYAGE_API_KEY").ok();
+    let retrieval_required = std::env::var("RETRIEVAL_CAPABILITY_REQUIRED")
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+    let voyage_api_key = match std::env::var("VOYAGE_API_KEY") {
+        Ok(value) => value,
+        Err(_) if retrieval_required => {
+            return Err(primitives::errors::DomainError::InfraUnavailable {
+                message: "raw chunk dual projection requires VOYAGE_API_KEY under hard-required retrieval contract"
+                    .to_string(),
+            })
+        }
+        Err(_) => return Ok(0),
+    };
     let voyage_model = std::env::var("VOYAGE_MODEL")
         .unwrap_or_else(|_| DEFAULT_VOYAGE_STANDARD_MODEL.to_string());
     let voyage_context_model = std::env::var("VOYAGE_CONTEXT_MODEL")
         .unwrap_or_else(|_| DEFAULT_VOYAGE_CONTEXT_MODEL.to_string());
-    let standard_vectors = if let Some(api_key) = voyage_api_key.clone() {
-        if texts.is_empty() {
-            Vec::new()
-        } else {
-            VoyageClient::new(api_key, voyage_model.clone())
-                .embed_all_with_settings(
-                    &texts,
-                    &VoyageEmbeddingOptions {
-                        input_type: Some(VoyageInputType::Document),
-                        output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
-                        output_dtype: Some(VoyageOutputDtype::Float),
-                        truncation: Some(false),
-                    },
-                )
-                .await
-                .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-                    message: format!("Voyage raw section embedding failed: {err}"),
-                })?
-        }
-    } else {
+    let standard_vectors = if texts.is_empty() {
         Vec::new()
-    };
-    let contextual_vectors = if let Some(api_key) = voyage_api_key {
-        if texts.is_empty() {
-            Vec::new()
-        } else {
-            let grouped = vec![texts.iter().map(String::as_str).collect::<Vec<_>>()];
-            VoyageClient::new(api_key, voyage_context_model.clone())
-                .contextualized_embed(
-                    &grouped,
-                    &VoyageEmbeddingOptions {
-                        input_type: Some(VoyageInputType::Document),
-                        output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
-                        output_dtype: Some(VoyageOutputDtype::Float),
-                        truncation: Some(false),
-                    },
-                    Some(&voyage_context_model),
-                )
-                .await
-                .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-                    message: format!("Voyage contextualized raw section embedding failed: {err}"),
-                })?
-                .into_iter()
-                .next()
-                .unwrap_or_default()
-        }
     } else {
-        Vec::new()
+        VoyageClient::new(voyage_api_key.clone(), voyage_model.clone())
+            .embed_all_with_settings(
+                &texts,
+                &VoyageEmbeddingOptions {
+                    input_type: Some(VoyageInputType::Document),
+                    output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
+                    output_dtype: Some(VoyageOutputDtype::Float),
+                    truncation: Some(false),
+                },
+            )
+            .await
+            .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
+                message: format!("Voyage raw section embedding failed: {err}"),
+            })?
     };
+    let contextual_vectors = if texts.is_empty() {
+        Vec::new()
+    } else {
+        let grouped = vec![texts.iter().map(String::as_str).collect::<Vec<_>>()];
+        VoyageClient::new(voyage_api_key, voyage_context_model.clone())
+            .contextualized_embed(
+                &grouped,
+                &VoyageEmbeddingOptions {
+                    input_type: Some(VoyageInputType::Document),
+                    output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
+                    output_dtype: Some(VoyageOutputDtype::Float),
+                    truncation: Some(false),
+                },
+                Some(&voyage_context_model),
+            )
+            .await
+            .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
+                message: format!("Voyage contextualized raw section embedding failed: {err}"),
+            })?
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    };
+    if standard_vectors.len() != texts.len() {
+        return Err(primitives::errors::DomainError::InfraUnavailable {
+            message: format!(
+                "raw_chunks_4 embedding count mismatch: expected {}, got {}",
+                texts.len(),
+                standard_vectors.len()
+            ),
+        });
+    }
+    if contextual_vectors.len() != texts.len() {
+        return Err(primitives::errors::DomainError::InfraUnavailable {
+            message: format!(
+                "raw_chunks_ctx embedding count mismatch: expected {}, got {}",
+                texts.len(),
+                contextual_vectors.len()
+            ),
+        });
+    }
     let mut standard_vector_iter = standard_vectors.into_iter();
     let mut contextual_vector_iter = contextual_vectors.into_iter();
     let mut events = Vec::with_capacity(sections.len());
@@ -1882,36 +1910,26 @@ pub async fn emit_raw_section_qdrant_events(
             continue;
         }
         let entity_key = format!("raw_section:{}", section.id);
-        let standard_point = if let Some(vector) = standard_vector_iter.next() {
-            (
-                vector,
-                voyage_model.as_str(),
-                "raw_section_voyage_4@1",
-                RAW_CHUNKS_STANDARD_COLLECTION,
-            )
-        } else {
-            (
-                fingerprint_vector(&section.content_md),
-                "deterministic-fingerprint",
-                "raw_section_bootstrap_4@1",
-                RAW_CHUNKS_STANDARD_COLLECTION,
-            )
-        };
-        let contextual_point = if let Some(vector) = contextual_vector_iter.next() {
-            (
-                vector,
-                voyage_context_model.as_str(),
-                "raw_section_context_voyage@1",
-                RAW_CHUNKS_CONTEXT_COLLECTION,
-            )
-        } else {
-            (
-                fingerprint_vector(&section.content_md),
-                "deterministic-fingerprint",
-                "raw_section_bootstrap_ctx@1",
-                RAW_CHUNKS_CONTEXT_COLLECTION,
-            )
-        };
+        let standard_point = (
+            standard_vector_iter
+                .next()
+                .ok_or_else(|| primitives::errors::DomainError::InfraUnavailable {
+                    message: "raw_chunks_4 projection missing Voyage embedding".to_string(),
+                })?,
+            voyage_model.as_str(),
+            "raw_section_voyage_4@1",
+            RAW_CHUNKS_STANDARD_COLLECTION,
+        );
+        let contextual_point = (
+            contextual_vector_iter
+                .next()
+                .ok_or_else(|| primitives::errors::DomainError::InfraUnavailable {
+                    message: "raw_chunks_ctx projection missing Voyage embedding".to_string(),
+                })?,
+            voyage_context_model.as_str(),
+            "raw_section_context_voyage@1",
+            RAW_CHUNKS_CONTEXT_COLLECTION,
+        );
 
         for (vector, embedding_model, embedding_version, collection_name) in
             [standard_point, contextual_point]
@@ -2066,22 +2084,6 @@ pub async fn retrieve_source_context_chunks(
             usage_policy: "supplemental_context_not_fact_support".to_string(),
         })
         .collect())
-}
-
-fn fingerprint_vector(text: &str) -> Vec<f32> {
-    let digest = primitives::hash::blake3_hex(text.as_bytes());
-    let mut vector = Vec::with_capacity(16);
-    for chunk in digest.as_bytes().chunks(2).take(16) {
-        let Ok(hex) = std::str::from_utf8(chunk) else {
-            continue;
-        };
-        let value = u8::from_str_radix(hex, 16).unwrap_or(0);
-        vector.push((value as f32 / 127.5) - 1.0);
-    }
-    if vector.is_empty() {
-        vector.push(0.0);
-    }
-    vector
 }
 
 #[cfg(test)]

@@ -372,6 +372,7 @@ fn seo_qdrant_projection_event(
     metadata.insert("artifact_type".to_string(), artifact_type.to_string());
     metadata.insert("artifact_key".to_string(), artifact_key.to_string());
     metadata.insert("scope_signature".to_string(), scope_signature.to_string());
+    metadata.insert("retrieval_text".to_string(), embedding_text.to_string());
     metadata.insert(
         "embedding_model".to_string(),
         "deterministic-fingerprint".to_string(),
@@ -2427,7 +2428,7 @@ pub async fn persist_opportunity_build_output(
             cluster_scope,
         ));
         projection_events.push(seo_qdrant_projection_event(
-            "seo_keyword_clusters_voyage4",
+            "seo_keyword_clusters_4",
             "keyword_cluster",
             &cluster.cluster_key,
             cluster_scope,
@@ -2787,7 +2788,7 @@ pub async fn persist_ia_build_output(
             &page.scope_signature,
         ));
         projection_events.push(seo_qdrant_projection_event(
-            "editorial_topics_voyage4",
+            "editorial_topics_4",
             "page_node",
             &page.page_node_key,
             &page.scope_signature,
@@ -3180,7 +3181,7 @@ pub async fn persist_draft_assemble_output(
         }
 
         projection_events.push(seo_qdrant_projection_event(
-            "editorial_topics_voyage4",
+            "editorial_topics_4",
             "page_draft",
             &draft.page_draft_key,
             "",
@@ -3311,7 +3312,7 @@ pub async fn persist_draft_qa_output(
         pool,
         &input.run_id,
         vec![seo_qdrant_projection_event(
-            "editorial_topics_voyage4",
+            "editorial_topics_4",
             "page_draft",
             &draft.page_draft_key,
             "",

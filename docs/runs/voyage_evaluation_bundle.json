@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-26T23:54:01.500130+00:00",
+  "generated_at": "2026-05-31T13:50:24.860744+00:00",
   "status": "PENDING_CREDENTIALS",
   "provider": {
     "embeddings_model": "voyage-4-large",
@@ -11,9 +11,9 @@
     "raw_chunks_4",
     "raw_chunks_ctx",
     "kb_canonical_4",
-    "verified_rules_voyage4",
-    "editorial_topics_voyage4",
-    "seo_keyword_clusters_voyage4",
+    "verified_rules_4",
+    "editorial_topics_4",
+    "seo_keyword_clusters_4",
     "whole_page_advisory_prototypes"
   ],
   "samples": {

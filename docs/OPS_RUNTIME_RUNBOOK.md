@@ -123,6 +123,9 @@ Current active retrieval collections:
 - `raw_chunks_4`
 - `raw_chunks_ctx`
 - `kb_canonical_4` (required for canonical vector retrieval lane)
+- `verified_rules_4`
+- `editorial_topics_4`
+- `seo_keyword_clusters_4`
 - `whole_page_advisory_prototypes`
 - legacy materialization compatibility surface: `ontology` (not an accepted canonical mapping substitute)
 
@@ -133,6 +136,8 @@ Hard rules:
 - peer clustering omits `input_type`;
 - truth- and draft-adjacent retrieval input must not silently truncate;
 - retrieval remains non-authoritative.
+- draft support retrieval is assembled from `verified_rules_4`, `raw_chunks_ctx`, `editorial_topics_4`, and `raw_chunks_4`, with `rerank-2.5` required for candidate ordering.
+- active voyage4 projection materialization must use real `voyage-4-large` vectors; deterministic fingerprint vectors are not accepted for `kb_canonical_4`, `editorial_topics_4`, or `seo_keyword_clusters_4`.
 - hard-required retrieval enforcement runs through `bash automation/run_retrieval_contract_gate.sh`.
 - with
   - `RETRIEVAL_CAPABILITY_REQUIRED=true`

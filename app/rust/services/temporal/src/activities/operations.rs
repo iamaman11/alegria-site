@@ -749,6 +749,9 @@ pub struct CompletenessJudgeSectionState {
     pub output: seo_steps::completeness_judge_step::CompletenessJudgeOutput,
     pub blocked_by_gate: bool,
     pub status: String,
+    pub retrieval_collection_used: Option<String>,
+    pub retrieval_evidence_refs: Vec<String>,
+    pub semantic_diagnostic_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -775,6 +778,8 @@ pub struct ResolutionLoopSectionState {
     pub blockers: Vec<String>,
     pub needs_hitl: bool,
     pub blocked_by_gate: bool,
+    pub retrieval_trace_refs: Vec<String>,
+    pub retrieval_trace_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -799,6 +804,8 @@ pub struct ContradictionGateSectionState {
     pub page_id: i64,
     pub output: seo_steps::contradiction_gate_step::ContradictionGateOutput,
     pub status: String,
+    pub semantic_neighbor_refs: Vec<String>,
+    pub semantic_neighbor_reason_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1102,9 +1109,9 @@ fn required_retrieval_collections() -> [&'static str; 7] {
         "raw_chunks_4",
         "raw_chunks_ctx",
         "kb_canonical_4",
-        "verified_rules_voyage4",
-        "editorial_topics_voyage4",
-        "seo_keyword_clusters_voyage4",
+        "verified_rules_4",
+        "editorial_topics_4",
+        "seo_keyword_clusters_4",
         "whole_page_advisory_prototypes",
     ]
 }
@@ -2228,7 +2235,7 @@ fn semantic_rule_instance_id_local(context_key: &str, role: &str, concept_canoni
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
 
-const VERIFIED_RULES_COLLECTION: &str = "verified_rules_voyage4";
+const VERIFIED_RULES_COLLECTION: &str = "verified_rules_4";
 
 #[derive(Debug, Clone)]
 struct VerifiedRuleProjectionCandidate {
@@ -2255,7 +2262,7 @@ fn verified_rule_projection_text(
     .to_string()
 }
 
-async fn delete_verified_rules_voyage4_projection(
+async fn delete_verified_rules_4_projection(
     acts: &AlegriaActivities,
     rule_instance_ids: &[String],
 ) -> Result<(), DomainError> {
@@ -2276,7 +2283,7 @@ async fn delete_verified_rules_voyage4_projection(
         let client = qdrant_client_adapter::connect_qdrant(&qdrant_url)
             .await
             .map_err(|err| DomainError::InfraUnavailable {
-                message: format!("connect Qdrant for verified_rules_voyage4 delete failed: {err}"),
+                message: format!("connect Qdrant for verified_rules_4 delete failed: {err}"),
             })?;
         qdrant_client_adapter::delete_point_ids(
             &client,
@@ -2285,7 +2292,7 @@ async fn delete_verified_rules_voyage4_projection(
         )
         .await
         .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("delete verified_rules_voyage4 points failed: {err}"),
+            message: format!("delete verified_rules_4 points failed: {err}"),
         })?;
     }
 
@@ -2303,7 +2310,7 @@ async fn delete_verified_rules_voyage4_projection(
     Ok(())
 }
 
-async fn emit_verified_rules_voyage4_projection(
+async fn emit_verified_rules_4_projection(
     acts: &AlegriaActivities,
     run_id: &str,
     context_key: &str,
@@ -2317,7 +2324,7 @@ async fn emit_verified_rules_voyage4_projection(
         Ok(value) => value,
         Err(_) if env_flag("RETRIEVAL_CAPABILITY_REQUIRED") => {
             return Err(DomainError::InfraUnavailable {
-                message: "verified_rules_voyage4 projection requires VOYAGE_API_KEY".to_string(),
+                message: "verified_rules_4 projection requires VOYAGE_API_KEY".to_string(),
             });
         }
         Err(_) => return Ok(()),
@@ -2340,12 +2347,12 @@ async fn emit_verified_rules_voyage4_projection(
         )
         .await
         .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("embed verified_rules_voyage4 projection with Voyage failed: {err}"),
+            message: format!("embed verified_rules_4 projection with Voyage failed: {err}"),
         })?;
     if embeddings.len() != candidates.len() {
         return Err(DomainError::InfraUnavailable {
             message: format!(
-                "verified_rules_voyage4 embedding size mismatch: expected {}, got {}",
+                "verified_rules_4 embedding size mismatch: expected {}, got {}",
                 candidates.len(),
                 embeddings.len()
             ),
@@ -2395,7 +2402,7 @@ async fn emit_verified_rules_voyage4_projection(
         .bind(&candidate.rule_instance_id)
         .bind(VERIFIED_RULES_COLLECTION)
         .bind(&voyage_model)
-        .bind("verified_rules_voyage4@1")
+        .bind("verified_rules_4@1")
         .execute(&*acts.pool)
         .await
         .map_err(AlegriaActivities::classify_error)?;
@@ -4088,6 +4095,116 @@ pub(crate) async fn triple_builder_sweep_impl(
     })
 }
 
+async fn retrieve_semantic_neighbors(
+    query: &str,
+    primary_collection: &str,
+    primary_surface: semantic_search_adapter::VoyageSearchSurface,
+    fallback_collection: Option<(&str, semantic_search_adapter::VoyageSearchSurface)>,
+    limit: u64,
+) -> Result<
+    (
+        Option<String>,
+        Vec<semantic_search_adapter::SearchResultRecord>,
+        Vec<String>,
+    ),
+    DomainError,
+> {
+    let retrieval_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
+    let contextual_required = env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
+    let fallback_allowed = !(contextual_required && primary_collection == "raw_chunks_ctx");
+    if std::env::var("VOYAGE_API_KEY").is_err() {
+        if retrieval_required {
+            return Err(DomainError::InfraUnavailable {
+                message: "retrieval diagnostics require VOYAGE_API_KEY under hard-required retrieval contract"
+                    .to_string(),
+            });
+        }
+        return Ok((None, Vec::new(), vec!["provider_unavailable".to_string()]));
+    }
+    let mut reason_codes = Vec::new();
+    let primary = semantic_search_adapter::search_by_text_with_surface(
+        query,
+        primary_collection,
+        limit,
+        primary_surface,
+    )
+    .await;
+    let mut collection_used = Some(primary_collection.to_string());
+    let mut records = match primary {
+        Ok(found) if !found.is_empty() => found,
+        Ok(_) => {
+            reason_codes.push(format!("{primary_collection}:empty"));
+            if fallback_allowed {
+                if let Some((fallback_name, fallback_surface)) = fallback_collection {
+                    collection_used = Some(fallback_name.to_string());
+                    semantic_search_adapter::search_by_text_with_surface(
+                        query,
+                        fallback_name,
+                        limit,
+                        fallback_surface,
+                    )
+                    .await
+                    .map_err(|err| DomainError::InfraUnavailable {
+                        message: format!(
+                            "semantic retrieval failed for `{fallback_name}` after `{primary_collection}` empty: {err}"
+                        ),
+                    })?
+                } else {
+                    Vec::new()
+                }
+            } else if retrieval_required {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!(
+                        "contextual retrieval is required and `{primary_collection}` returned no neighbors"
+                    ),
+                });
+            } else {
+                reason_codes.push("contextual_primary_required_no_fallback".to_string());
+                Vec::new()
+            }
+        }
+        Err(err) => {
+            if retrieval_required {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!(
+                        "semantic retrieval failed for `{primary_collection}`: {err}"
+                    ),
+                });
+            }
+            reason_codes.push(format!("{primary_collection}:search_failed"));
+            if fallback_allowed {
+                if let Some((fallback_name, fallback_surface)) = fallback_collection {
+                    collection_used = Some(fallback_name.to_string());
+                    semantic_search_adapter::search_by_text_with_surface(
+                        query,
+                        fallback_name,
+                        limit,
+                        fallback_surface,
+                    )
+                    .await
+                    .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                reason_codes.push("contextual_primary_required_no_fallback".to_string());
+                Vec::new()
+            }
+        }
+    };
+    if records.is_empty() {
+        reason_codes.push("semantic_neighbors_empty".to_string());
+        return Ok((collection_used, records, reason_codes));
+    }
+    records = semantic_search_adapter::rerank_records(query, records, Some(limit as usize))
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("semantic rerank failed for `{}`: {err}", collection_used.clone().unwrap_or_default()),
+        })?;
+    reason_codes.push("semantic_neighbors_reranked".to_string());
+    Ok((collection_used, records, reason_codes))
+}
+
 pub(crate) async fn completeness_judge_sweep_impl(
     acts: &AlegriaActivities,
     input: &CompletenessJudgeSweepInput,
@@ -4102,53 +4219,80 @@ pub(crate) async fn completeness_judge_sweep_impl(
         .iter()
         .map(|section| (section.section_id, section))
         .collect();
-    let sections = input
-        .procedural
-        .sections
-        .iter()
-        .map(|section| {
-            let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-            let entity = entity_by_section.get(&section.section_id).copied().unwrap();
-            let numeric_tokens: BTreeSet<String> = section
-                .rules
-                .iter()
-                .flat_map(|rule| normalize_numeric_token_fragments(&rule.numeric_tokens))
+    let mut sections = Vec::with_capacity(input.procedural.sections.len());
+    for section in &input.procedural.sections {
+        let raw = raw_by_section.get(&section.section_id).copied().unwrap();
+        let entity = entity_by_section.get(&section.section_id).copied().unwrap();
+        let numeric_tokens: BTreeSet<String> = section
+            .rules
+            .iter()
+            .flat_map(|rule| normalize_numeric_token_fragments(&rule.numeric_tokens))
+            .collect();
+        let source_numeric_tokens: BTreeSet<String> = entity
+            .mentions
+            .iter()
+            .filter(|mention| mention.has_numeric)
+            .flat_map(|mention| {
+                normalize_numeric_token_fragments(std::slice::from_ref(&mention.raw_text))
+            })
+            .collect();
+        let output = seo_steps::completeness_judge_step::execute(
+            &seo_steps::completeness_judge_step::CompletenessJudgeInput {
+                section_id: section.section_id.to_string(),
+                raw_text: raw.content_md.clone(),
+                source_numeric_tokens: source_numeric_tokens.into_iter().collect(),
+                extracted_numeric_tokens: numeric_tokens.into_iter().collect(),
+                extracted_rule_keys: section
+                    .rules
+                    .iter()
+                    .map(|rule| rule.rule_key.clone())
+                    .collect(),
+            },
+        );
+        let mut retrieval_collection_used = None;
+        let mut retrieval_evidence_refs = Vec::new();
+        let mut semantic_diagnostic_reason_codes = Vec::new();
+        if !section.blocked_by_gate {
+            let (collection_used, neighbors, reason_codes) = retrieve_semantic_neighbors(
+                &raw.content_md,
+                "raw_chunks_ctx",
+                semantic_search_adapter::VoyageSearchSurface::Contextualized,
+                Some((
+                    "raw_chunks_4",
+                    semantic_search_adapter::VoyageSearchSurface::Standard,
+                )),
+                4,
+            )
+            .await?;
+            retrieval_collection_used = collection_used;
+            retrieval_evidence_refs = neighbors
+                .into_iter()
+                .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
                 .collect();
-            let source_numeric_tokens: BTreeSet<String> = entity
-                .mentions
-                .iter()
-                .filter(|mention| mention.has_numeric)
-                .flat_map(|mention| normalize_numeric_token_fragments(std::slice::from_ref(&mention.raw_text)))
-                .collect();
-            let output = seo_steps::completeness_judge_step::execute(
-                &seo_steps::completeness_judge_step::CompletenessJudgeInput {
-                    section_id: section.section_id.to_string(),
-                    raw_text: raw.content_md.clone(),
-                    source_numeric_tokens: source_numeric_tokens.into_iter().collect(),
-                    extracted_numeric_tokens: numeric_tokens.into_iter().collect(),
-                    extracted_rule_keys: section
-                        .rules
-                        .iter()
-                        .map(|rule| rule.rule_key.clone())
-                        .collect(),
-                },
-            );
-            CompletenessJudgeSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                blocked_by_gate: section.blocked_by_gate,
-                status: if section.blocked_by_gate {
-                    "blocked"
-                } else if output.needs_hitl {
-                    "needs_hitl"
-                } else {
-                    "pass"
-                }
-                .to_string(),
-                output,
+            semantic_diagnostic_reason_codes.extend(reason_codes);
+            if retrieval_evidence_refs.is_empty() {
+                semantic_diagnostic_reason_codes
+                    .push("semantic_neighbor_gap_detected".to_string());
             }
-        })
-        .collect::<Vec<_>>();
+        }
+        sections.push(CompletenessJudgeSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            blocked_by_gate: section.blocked_by_gate,
+            status: if section.blocked_by_gate {
+                "blocked"
+            } else if output.needs_hitl {
+                "needs_hitl"
+            } else {
+                "pass"
+            }
+            .to_string(),
+            output,
+            retrieval_collection_used,
+            retrieval_evidence_refs,
+            semantic_diagnostic_reason_codes,
+        });
+    }
     Ok(CompletenessJudgeSweepOutput {
         section_count: sections.len(),
         blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
@@ -4175,40 +4319,85 @@ pub(crate) async fn resolution_loop_impl(
         .iter()
         .map(|section| (section.section_id, section))
         .collect();
-    let sections = input
-        .completeness
-        .sections
-        .iter()
-        .map(|section| {
-            let ontology = ontology_by_section.get(&section.section_id).copied().unwrap();
-            let schema = schema_by_section.get(&section.section_id).copied().unwrap();
-            let decision = if section.blocked_by_gate {
-                "drop_with_reason"
-            } else if section.output.needs_hitl || ontology.needs_hitl {
-                "pause_for_hitl"
-            } else if schema.status == "invalid" {
-                "drop_with_reason"
+    let mut sections = Vec::with_capacity(input.completeness.sections.len());
+    for section in &input.completeness.sections {
+        let ontology = ontology_by_section.get(&section.section_id).copied().unwrap();
+        let schema = schema_by_section.get(&section.section_id).copied().unwrap();
+        let decision = if section.blocked_by_gate {
+            "drop_with_reason"
+        } else if section.output.needs_hitl || ontology.needs_hitl {
+            "pause_for_hitl"
+        } else if schema.status == "invalid" {
+            "drop_with_reason"
+        } else {
+            "accept"
+        };
+        let blockers = section
+            .output
+            .missing_elements
+            .iter()
+            .map(|missing| missing.action.clone())
+            .chain(ontology.unresolved_mentions.iter().cloned())
+            .collect::<Vec<_>>();
+        let mut retrieval_trace_refs = section.retrieval_evidence_refs.clone();
+        let mut retrieval_trace_reason_codes = section.semantic_diagnostic_reason_codes.clone();
+        if !section.blocked_by_gate && (decision == "pause_for_hitl" || decision == "drop_with_reason") {
+            let retrieval_query = if blockers.is_empty() {
+                section
+                    .retrieval_evidence_refs
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" ")
             } else {
-                "accept"
+                blockers.join(" ")
             };
-            let blockers = section
-                .output
-                .missing_elements
-                .iter()
-                .map(|missing| missing.action.clone())
-                .chain(ontology.unresolved_mentions.iter().cloned())
-                .collect::<Vec<_>>();
-            ResolutionLoopSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                decision: decision.to_string(),
-                blockers,
-                needs_hitl: !section.blocked_by_gate
-                    && (section.output.needs_hitl || ontology.needs_hitl),
-                blocked_by_gate: section.blocked_by_gate,
+            if !retrieval_query.trim().is_empty() {
+                let (_, verified_neighbors, verified_reason_codes) = retrieve_semantic_neighbors(
+                    &retrieval_query,
+                    "verified_rules_4",
+                    semantic_search_adapter::VoyageSearchSurface::Standard,
+                    None,
+                    3,
+                )
+                .await?;
+                for neighbor in verified_neighbors {
+                    retrieval_trace_refs.push(format!(
+                        "verified_rules_4:{}:{:.4}",
+                        neighbor.entity_key, neighbor.score
+                    ));
+                }
+                retrieval_trace_reason_codes.extend(verified_reason_codes);
+                let (_, canonical_neighbors, canonical_reason_codes) = retrieve_semantic_neighbors(
+                    &retrieval_query,
+                    "kb_canonical_4",
+                    semantic_search_adapter::VoyageSearchSurface::Standard,
+                    None,
+                    2,
+                )
+                .await?;
+                for neighbor in canonical_neighbors {
+                    retrieval_trace_refs.push(format!(
+                        "kb_canonical_4:{}:{:.4}",
+                        neighbor.entity_key, neighbor.score
+                    ));
+                }
+                retrieval_trace_reason_codes.extend(canonical_reason_codes);
             }
-        })
-        .collect::<Vec<_>>();
+        }
+        sections.push(ResolutionLoopSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            decision: decision.to_string(),
+            blockers,
+            needs_hitl: !section.blocked_by_gate
+                && (section.output.needs_hitl || ontology.needs_hitl),
+            blocked_by_gate: section.blocked_by_gate,
+            retrieval_trace_refs,
+            retrieval_trace_reason_codes,
+        });
+    }
     Ok(ResolutionLoopOutput {
         section_count: sections.len(),
         blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
@@ -4229,58 +4418,86 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
     let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
         raw_sections.iter().map(|section| (section.id, section)).collect();
-    let sections = input
-        .procedural
-        .sections
-        .iter()
-        .map(|section| {
-            let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-            let facts = section
-                .rules
-                .iter()
-                .map(|rule| {
-                    let predicate = match rule.rule_key.as_str() {
-                        "consular_fee" => "amount",
-                        "processing_time" => "days",
-                        _ => "required",
-                    };
-                    let value_normalized = if !rule.numeric_tokens.is_empty() {
-                        rule.numeric_tokens.join("|")
-                    } else {
-                        rule.rule_key.clone()
-                    };
-                    seo_steps::contradiction_gate_step::FactAssertion {
-                        subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
-                        predicate_key: predicate.to_string(),
-                        value_normalized,
-                        source_key: Some(raw.source_url.clone()),
-                        confidence: rule.confidence,
-                    }
-                })
-                .collect::<Vec<_>>();
-            let output = seo_steps::contradiction_gate_step::execute(
-                &seo_steps::contradiction_gate_step::ContradictionGateInput {
-                    run_id: input.run_id.clone(),
-                    facts,
-                },
-            );
-            ContradictionGateSectionState {
-                section_id: section.section_id,
-                page_id: section.page_id,
-                status: if section.blocked_by_gate {
-                    "blocked"
-                } else if output.is_blocked {
-                    "rejected"
-                } else if output.needs_hitl {
-                    "needs_hitl"
+    let mut sections = Vec::with_capacity(input.procedural.sections.len());
+    for section in &input.procedural.sections {
+        let raw = raw_by_section.get(&section.section_id).copied().unwrap();
+        let facts = section
+            .rules
+            .iter()
+            .map(|rule| {
+                let predicate = match rule.rule_key.as_str() {
+                    "consular_fee" => "amount",
+                    "processing_time" => "days",
+                    _ => "required",
+                };
+                let value_normalized = if !rule.numeric_tokens.is_empty() {
+                    rule.numeric_tokens.join("|")
                 } else {
-                    "pass"
+                    rule.rule_key.clone()
+                };
+                seo_steps::contradiction_gate_step::FactAssertion {
+                    subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
+                    predicate_key: predicate.to_string(),
+                    value_normalized,
+                    source_key: Some(raw.source_url.clone()),
+                    confidence: rule.confidence,
                 }
-                .to_string(),
-                output,
+            })
+            .collect::<Vec<_>>();
+        let output = seo_steps::contradiction_gate_step::execute(
+            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+                run_id: input.run_id.clone(),
+                facts,
+            },
+        );
+        let mut semantic_neighbor_refs = Vec::new();
+        let mut semantic_neighbor_reason_codes = Vec::new();
+        if !section.blocked_by_gate {
+            let contradiction_query = format!(
+                "{} {}",
+                raw.heading_path,
+                raw.content_md
+                    .split_whitespace()
+                    .take(64)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            );
+            let (_, neighbors, reason_codes) = retrieve_semantic_neighbors(
+                &contradiction_query,
+                "verified_rules_4",
+                semantic_search_adapter::VoyageSearchSurface::Standard,
+                None,
+                4,
+            )
+            .await?;
+            semantic_neighbor_refs = neighbors
+                .into_iter()
+                .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
+                .collect();
+            semantic_neighbor_reason_codes.extend(reason_codes);
+            if output.needs_hitl && !semantic_neighbor_refs.is_empty() {
+                semantic_neighbor_reason_codes
+                    .push("semantic_neighbor_conflict_review_required".to_string());
             }
-        })
-        .collect::<Vec<_>>();
+        }
+        sections.push(ContradictionGateSectionState {
+            section_id: section.section_id,
+            page_id: section.page_id,
+            status: if section.blocked_by_gate {
+                "blocked"
+            } else if output.is_blocked {
+                "rejected"
+            } else if output.needs_hitl {
+                "needs_hitl"
+            } else {
+                "pass"
+            }
+            .to_string(),
+            output,
+            semantic_neighbor_refs,
+            semantic_neighbor_reason_codes,
+        });
+    }
     Ok(ContradictionGateSweepOutput {
         section_count: sections.len(),
         blocked_section_count: sections.iter().filter(|section| section.status == "blocked").count(),
@@ -4880,8 +5097,8 @@ pub(crate) async fn verified_truth_write_impl(
         }
     }
 
-    delete_verified_rules_voyage4_projection(acts, &demoted_rule_projection_ids).await?;
-    emit_verified_rules_voyage4_projection(
+    delete_verified_rules_4_projection(acts, &demoted_rule_projection_ids).await?;
+    emit_verified_rules_4_projection(
         acts,
         &input.run_id,
         &input.context_key,

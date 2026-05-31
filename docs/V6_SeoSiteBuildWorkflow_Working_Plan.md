@@ -1364,7 +1364,7 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 
 - introduced the canonical hard-required retrieval gate `automation/run_retrieval_contract_gate.sh` and wired the same contract into `seo_preflight`, `temporal_starter`, local operational evidence, and `automation/temporal_production_gate.sh`;
 - added explicit retrieval contract env flags (`RETRIEVAL_CAPABILITY_REQUIRED`, `CANONICAL_VECTOR_RETRIEVAL_REQUIRED`, `CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED`, `VOYAGE_RERANK_REQUIRED`) so missing Voyage capability, missing retrieval collections, stale retrieval collections, or incomplete projection state now surface as machine-readable blocked verdicts instead of silent quality downgrade;
-- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready; later commits activated `kb_canonical_4`, `verified_rules_voyage4`, `editorial_topics_voyage4`, and `seo_keyword_clusters_voyage4` producers without changing the local blocked verdict.
+- updated local operational evidence to classify the current local truth honestly as `BLOCKED_ON_RETRIEVAL_CONTRACT` until the hard-required Voyage/Qdrant contour is actually ready; later commits activated `kb_canonical_4`, `verified_rules_4`, `editorial_topics_4`, and `seo_keyword_clusters_4` producers without changing the local blocked verdict.
 
 ### 6.50
 
@@ -1374,9 +1374,9 @@ V6.3 is an execution-satellite expansion of the existing V6 target expert archit
 
 ### 6.51
 
-- activated voyage4 projection producers for `verified_rules_voyage4`, `editorial_topics_voyage4`, and `seo_keyword_clusters_voyage4` instead of leaving those collection names as policy-only targets;
+- activated voyage4 projection producers for `verified_rules_4`, `editorial_topics_4`, and `seo_keyword_clusters_4` instead of leaving those collection names as policy-only targets;
 - migrated the SEO projection persistence path away from legacy `seo_keyword_clusters`, `seo_draft_support_sections`, and `seo_link_targets`, and tightened the `kb.qdrant_points` collection-name contract so new rows use the voyage4 collection names;
-- added lifecycle-complete demotion cleanup for `verified_rules_voyage4`: demoted or rejected rules are removed from the ledger and, under the hard-required retrieval contract, from Qdrant itself;
+- added lifecycle-complete demotion cleanup for `verified_rules_4`: demoted or rejected rules are removed from the ledger and, under the hard-required retrieval contract, from Qdrant itself;
 - kept the remaining Tranche 3 caveat explicit: live freshness/projection-completeness evidence is still required before the retrieval contour can be called fully operationally closed.
 
 ### 6.46

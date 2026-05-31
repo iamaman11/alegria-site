@@ -52,6 +52,88 @@ impl<'a> SqlxSeoRuntimeRepository<'a> {
     }
 }
 
+fn source_chunk_from_search_result(
+    collection_name: &str,
+    record: semantic_search_adapter::SearchResultRecord,
+) -> SourceContextChunkState {
+    let payload = record.payload;
+    let retrieval_text = payload
+        .get("retrieval_text")
+        .cloned()
+        .or_else(|| payload.get("body_markdown").cloned())
+        .or_else(|| payload.get("fragment_text").cloned())
+        .unwrap_or_default();
+    let entity_key = if record.entity_key.trim().is_empty() {
+        payload
+            .get("entity_key")
+            .cloned()
+            .or_else(|| payload.get("artifact_key").cloned())
+            .unwrap_or_default()
+    } else {
+        record.entity_key
+    };
+    SourceContextChunkState {
+        chunk_key: format!("{collection_name}:{entity_key}"),
+        source_url: payload.get("source_url").cloned().unwrap_or_default(),
+        source_domain: payload.get("source_domain").cloned().unwrap_or_default(),
+        heading_path: payload
+            .get("heading_path")
+            .cloned()
+            .or_else(|| payload.get("canonical_url_path").cloned())
+            .unwrap_or_default(),
+        section_type: payload
+            .get("section_type")
+            .cloned()
+            .or_else(|| payload.get("artifact_type").cloned())
+            .unwrap_or_else(|| collection_name.to_string()),
+        content_md: retrieval_text,
+        retrieval_score: format!("{:.4}", record.score),
+        usage_policy: match collection_name {
+            "verified_rules_4" => "verified_fact_support".to_string(),
+            "raw_chunks_ctx" => "contextual_source_neighborhood_not_fact_support".to_string(),
+            "editorial_topics_4" => "editorial_topic_support_not_fact_support".to_string(),
+            "raw_chunks_4" => "standard_source_neighborhood_not_fact_support".to_string(),
+            _ => "supplemental_context_not_fact_support".to_string(),
+        },
+    }
+}
+
+async fn search_context_collection(
+    collection_name: &str,
+    query: &str,
+    limit: usize,
+    surface: semantic_search_adapter::VoyageSearchSurface,
+) -> Result<Vec<SourceContextChunkState>, DomainError> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let search_limit = u64::try_from(limit.saturating_mul(3).max(limit)).map_err(|_| {
+        DomainError::ValidationFailure {
+            message: format!("source context search limit too large: {limit}"),
+        }
+    })?;
+    let found = semantic_search_adapter::search_by_text_with_surface(
+        query,
+        collection_name,
+        search_limit,
+        surface,
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("{collection_name} source context retrieval failed: {err}"),
+    })?;
+    let reranked = semantic_search_adapter::rerank_records(query, found, Some(limit))
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("{collection_name} source context rerank failed: {err}"),
+        })?;
+    Ok(reranked
+        .into_iter()
+        .take(limit)
+        .map(|record| source_chunk_from_search_result(collection_name, record))
+        .collect())
+}
+
 fn read_role_type(role_type: &str) -> i32 {
     match role_type {
         "must_provide" => RuleRoleTypeV1::MustProvide as i32,
@@ -527,7 +609,71 @@ impl SourceContextRepository for SqlxSeoRuntimeRepository<'_> {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SourceContextChunkState>, DomainError> {
-        raw_crawl_adapter::retrieve_source_context_chunks(self.pool, query, limit as u64).await
+        let retrieval_required = std::env::var("RETRIEVAL_CAPABILITY_REQUIRED")
+            .ok()
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
+            .unwrap_or(false);
+        if std::env::var("VOYAGE_API_KEY").is_err() {
+            if retrieval_required {
+                return Err(DomainError::InfraUnavailable {
+                    message:
+                        "source context retrieval requires VOYAGE_API_KEY under hard-required retrieval contract"
+                            .to_string(),
+                });
+            }
+            return Ok(Vec::new());
+        }
+        let mut chunks = Vec::new();
+        let mut seen = std::collections::BTreeSet::new();
+        let per_collection_limit = limit.max(4);
+        for (collection_name, surface) in [
+            (
+                "verified_rules_4",
+                semantic_search_adapter::VoyageSearchSurface::Standard,
+            ),
+            (
+                "raw_chunks_ctx",
+                semantic_search_adapter::VoyageSearchSurface::Contextualized,
+            ),
+            (
+                "editorial_topics_4",
+                semantic_search_adapter::VoyageSearchSurface::Standard,
+            ),
+            (
+                "raw_chunks_4",
+                semantic_search_adapter::VoyageSearchSurface::Standard,
+            ),
+        ] {
+            let found = match search_context_collection(
+                collection_name,
+                query,
+                per_collection_limit,
+                surface,
+            )
+            .await
+            {
+                Ok(found) => found,
+                Err(err) if !retrieval_required => {
+                    let _ = err;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            for chunk in found {
+                if seen.insert(chunk.chunk_key.clone()) {
+                    chunks.push(chunk);
+                }
+                if chunks.len() >= limit {
+                    return Ok(chunks);
+                }
+            }
+        }
+        Ok(chunks)
     }
 }
 
@@ -632,7 +778,7 @@ impl SemanticLinkSearchPort for SqlxSeoRuntimeRepository<'_> {
     ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
         let results = semantic_search_adapter::search_by_text(
             query,
-            "editorial_topics_voyage4",
+            "editorial_topics_4",
             u64::try_from(limit).map_err(|_| DomainError::ValidationFailure {
                 message: format!("semantic link search limit too large: {limit}"),
             })?,
@@ -641,7 +787,42 @@ impl SemanticLinkSearchPort for SqlxSeoRuntimeRepository<'_> {
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("semantic search failed: {err}"),
         })?;
-        Ok(results
+        let reranked = semantic_search_adapter::rerank_records(query, results, Some(limit))
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("semantic link rerank failed: {err}"),
+            })?;
+        Ok(reranked
+            .into_iter()
+            .map(|candidate| SemanticLinkCandidate {
+                entity_key: candidate.entity_key,
+                score: candidate.score,
+            })
+            .collect())
+    }
+
+    async fn search_keyword_clusters(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+        let results = semantic_search_adapter::search_by_text(
+            query,
+            "seo_keyword_clusters_4",
+            u64::try_from(limit).map_err(|_| DomainError::ValidationFailure {
+                message: format!("semantic keyword cluster search limit too large: {limit}"),
+            })?,
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("semantic keyword cluster search failed: {err}"),
+        })?;
+        let reranked = semantic_search_adapter::rerank_records(query, results, Some(limit))
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("semantic keyword cluster rerank failed: {err}"),
+            })?;
+        Ok(reranked
             .into_iter()
             .map(|candidate| SemanticLinkCandidate {
                 entity_key: candidate.entity_key,

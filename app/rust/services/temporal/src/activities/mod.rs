@@ -922,7 +922,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "serp_normalize", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::planning::run_serp_normalize(&repo, &input).await
+            seo_application::planning::run_serp_normalize(&repo, &repo, &input).await
         })
         .await
     }
@@ -937,7 +937,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "opportunity_build", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::planning::run_opportunity_build(&repo, &input).await
+            seo_application::planning::run_opportunity_build(&repo, &repo, &input).await
         })
         .await
     }
@@ -952,7 +952,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "ia_build", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::planning::run_ia_build(&repo, &input).await
+            seo_application::planning::run_ia_build(&repo, &repo, &input).await
         })
         .await
     }
@@ -982,7 +982,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "global_site_reconcile", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::planning::run_global_site_reconcile(&repo, &input).await
+            seo_application::planning::run_global_site_reconcile(&repo, &repo, &input).await
         })
         .await
     }
