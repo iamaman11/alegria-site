@@ -59,7 +59,7 @@ wait_wf_closed() {
 db_scalar() {
   local sql="$1"
   docker exec -e PGPASSWORD=postgres_password alegria_postgres \
-    psql -U postgres -d alegria -t -A -c "$sql"
+    psql -q -U postgres -d alegria -t -A -c "$sql"
 }
 
 table_exists() {
@@ -150,7 +150,10 @@ start_services() {
     compose_cmd up -d postgres pgbouncer postgres-temporal temporal-server temporal-ui temporal-worker prometheus grafana
   else
     log "starting infra (local worker mode)"
-    compose_cmd up -d postgres postgres-temporal temporal-server temporal-ui prometheus grafana
+    # In local worker mode we intentionally avoid services that depend on the
+    # dockerized temporal-worker image, otherwise compose may trigger an
+    # unnecessary image build/pull and make the gate flaky.
+    compose_cmd up -d postgres pgbouncer postgres-temporal temporal-server temporal-ui neo4j qdrant
     log "starting local temporal_worker from current Rust sources"
     (
       cd app/rust

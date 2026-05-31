@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPORT_PATH="${RETRIEVAL_CONTRACT_GATE_REPORT_PATH:-/tmp/retrieval_contract_gate_current.json}"
 DATABASE_URL="${DATABASE_URL:-postgres://postgres:postgres_password@localhost:5433/alegria}"
 LOG_PATH="${RETRIEVAL_CONTRACT_GATE_LOG_PATH:-/tmp/retrieval_contract_gate_current.log}"
+BOOTSTRAP_LOCAL_INFRA="${RETRIEVAL_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA:-1}"
 if [[ -n "${RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR:-}" ]]; then
   CLI_TARGET_DIR="$RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR"
   CLEANUP_TARGET_DIR=false
@@ -15,10 +16,57 @@ fi
 
 cd "$ROOT_DIR"
 
+compose_cmd() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
+wait_http_ready() {
+  local url="$1"
+  local timeout_s="${2:-30}"
+  local elapsed=0
+  while [[ "$elapsed" -lt "$timeout_s" ]]; do
+    if curl -fsS "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+wait_postgres_ready() {
+  local timeout_s="${1:-45}"
+  local elapsed=0
+  while [[ "$elapsed" -lt "$timeout_s" ]]; do
+    if docker exec -e PGPASSWORD=postgres_password alegria_postgres \
+      pg_isready -U postgres -d alegria >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
+}
+
+if [[ "$BOOTSTRAP_LOCAL_INFRA" == "1" ]]; then
+  if command -v docker >/dev/null 2>&1; then
+    compose_cmd up -d postgres qdrant >/dev/null
+    wait_postgres_ready 45 || true
+    if command -v curl >/dev/null 2>&1; then
+      wait_http_ready "http://localhost:6333/healthz" 30 || true
+    fi
+  fi
+fi
+
 export RETRIEVAL_CAPABILITY_REQUIRED="${RETRIEVAL_CAPABILITY_REQUIRED:-true}"
 export CANONICAL_VECTOR_RETRIEVAL_REQUIRED="${CANONICAL_VECTOR_RETRIEVAL_REQUIRED:-true}"
 export CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED="${CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED:-true}"
 export VOYAGE_RERANK_REQUIRED="${VOYAGE_RERANK_REQUIRED:-true}"
+export QDRANT_SKIP_COMPATIBILITY_CHECK="${QDRANT_SKIP_COMPATIBILITY_CHECK:-true}"
 
 if [[ "$CLEANUP_TARGET_DIR" == "true" ]]; then
   trap 'rm -rf "$CLI_TARGET_DIR"' EXIT

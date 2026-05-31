@@ -22,14 +22,9 @@ bash automation/run_live_provider_minimal_scope_gate.sh
 
 ## Что проверяет gate
 
-1. Поднимает продовый стек в Docker:
-- `postgres`
-- `postgres-temporal`
-- `temporal-server`
-- `temporal-ui`
-- `temporal-worker`
-- `prometheus`
-- `grafana`
+1. Поднимает runtime stack:
+- `docker` mode: `postgres`, `postgres-temporal`, `temporal-server`, `temporal-ui`, `temporal-worker`, `prometheus`, `grafana`
+- `local` mode (default): `postgres`, `pgbouncer`, `postgres-temporal`, `temporal-server`, `temporal-ui`, `neo4j`, `qdrant`, а `temporal_worker` запускается локально из текущих исходников Rust
 
 2. Проверяет инварианты БД:
 - существует dedup-индекс `system.idx_sync_outbox_dedup`;
@@ -73,6 +68,7 @@ bash automation/run_live_provider_minimal_scope_gate.sh
 - worker стартует с `WORKER_BUILD_ID`;
 - docker-mode прогон использует актуальный контейнерный runtime.
 - hard-required retrieval contract runs through `bash automation/run_retrieval_contract_gate.sh`.
+- retrieval contract gate auto-bootstraps local `postgres`/`qdrant` by default (`RETRIEVAL_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=1`) and sets `QDRANT_SKIP_COMPATIBILITY_CHECK=true` unless explicitly overridden.
 - if the retrieval contract is blocked, production gate fails before workflow smoke.
 - active voyage4 retrieval materialization must prove real Voyage vectors for required Qdrant collections; deterministic fingerprint vectors are rejected as production-quality substitutes.
 - draft support retrieval must use the required collection order and `rerank-2.5`; missing rerank capability is a production-gate failure.

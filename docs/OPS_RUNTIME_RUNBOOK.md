@@ -139,6 +139,7 @@ Hard rules:
 - draft support retrieval is assembled from `verified_rules_4`, `raw_chunks_ctx`, `editorial_topics_4`, and `raw_chunks_4`, with `rerank-2.5` required for candidate ordering.
 - active voyage4 projection materialization must use real `voyage-4-large` vectors; deterministic fingerprint vectors are not accepted for `kb_canonical_4`, `editorial_topics_4`, or `seo_keyword_clusters_4`.
 - hard-required retrieval enforcement runs through `bash automation/run_retrieval_contract_gate.sh`.
+- retrieval contract gate can bootstrap local `postgres` and `qdrant` (`RETRIEVAL_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=1` default) before running preflight, so local checks fail on real capability/collection contract issues instead of cold-start timing artifacts.
 - with
   - `RETRIEVAL_CAPABILITY_REQUIRED=true`
   - `CANONICAL_VECTOR_RETRIEVAL_REQUIRED=true`

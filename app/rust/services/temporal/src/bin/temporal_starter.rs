@@ -527,10 +527,22 @@ async fn run_seo_preflight(
     report_json: Option<String>,
 ) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
-    let pool = tokio::time::timeout(Duration::from_secs(10), connect_pg(&database_url))
-        .await
-        .map_err(|_| anyhow::anyhow!("database_connect timed out after 10s"))?
-        .context("database_connect failed")?;
+    let db_connect_timeout_s = env::var("SEO_PREFLIGHT_DB_CONNECT_TIMEOUT_S")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(30);
+    let pool = tokio::time::timeout(
+        Duration::from_secs(db_connect_timeout_s.max(5)),
+        connect_pg(&database_url),
+    )
+    .await
+    .map_err(|_| {
+        anyhow::anyhow!(
+            "database_connect timed out after {}s",
+            db_connect_timeout_s.max(5)
+        )
+    })?
+    .context("database_connect failed")?;
     sqlx_seo_adapter::ensure_seo_runtime_registries(&pool)
         .await
         .map_err(|err| anyhow::anyhow!("{err}"))?;
