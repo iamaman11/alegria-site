@@ -15,7 +15,7 @@ use infrastructure::adapters::sqlx_runtime_outbox_adapter;
 use infrastructure::adapters::sqlx_seo_adapter;
 use infrastructure::adapters::sqlx_source_projection_adapter::load_source_registry_entries;
 use infrastructure::adapters::voyage_api_adapter::{
-    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
 };
 use infrastructure::adapters::whole_page_advisory_adapter;
 use policies::truth_governance::{
@@ -904,7 +904,10 @@ impl_json_runtime_payload_local!(
     "alegria.runtime.json.ProjectionSyncOutput"
 );
 impl_json_runtime_payload_local!(SeoPreflightInput, "alegria.runtime.json.SeoPreflightInput");
-impl_json_runtime_payload_local!(SeoPreflightOutput, "alegria.runtime.json.SeoPreflightOutput");
+impl_json_runtime_payload_local!(
+    SeoPreflightOutput,
+    "alegria.runtime.json.SeoPreflightOutput"
+);
 impl_json_runtime_payload_local!(
     TruthAdmissibilityGateInput,
     "alegria.runtime.json.TruthAdmissibilityGateInput"
@@ -1144,6 +1147,92 @@ async fn probe_qdrant_required_collections(
     }
     (true, statuses)
 }
+
+#[derive(Debug, Clone, Default)]
+struct VoyageCapabilityProbe {
+    embeddings_ready: bool,
+    contextualized_ready: bool,
+    rerank_ready: bool,
+    errors: Vec<String>,
+}
+
+async fn probe_voyage_capabilities() -> VoyageCapabilityProbe {
+    let api_key = match std::env::var("VOYAGE_API_KEY") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            return VoyageCapabilityProbe {
+                errors: vec!["missing VOYAGE_API_KEY".to_string()],
+                ..VoyageCapabilityProbe::default()
+            }
+        }
+    };
+    let model = std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
+    let context_model =
+        std::env::var("VOYAGE_CONTEXT_MODEL").unwrap_or_else(|_| "voyage-context-3".to_string());
+    let voyage = VoyageClient::new(api_key, model);
+    let mut probe = VoyageCapabilityProbe::default();
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        voyage.embed_batch_with_settings(
+            &["voyage_capability_probe"],
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Query),
+                output_dimension: Some(1024),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.embeddings_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("embeddings:{err}")),
+        Err(_) => probe.errors.push("embeddings:timeout".to_string()),
+    }
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        voyage.contextualized_embed(
+            &[vec!["voyage_contextual_probe"]],
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Query),
+                output_dimension: Some(1024),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
+            Some(&context_model),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.contextualized_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("contextualized:{err}")),
+        Err(_) => probe.errors.push("contextualized:timeout".to_string()),
+    }
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        voyage.rerank(
+            "voyage rerank probe",
+            &["voyage rerank probe document"],
+            &VoyageRerankOptions {
+                top_k: Some(1),
+                truncation: Some(false),
+                return_documents: false,
+            },
+            None,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.rerank_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("rerank:{err}")),
+        Err(_) => probe.errors.push("rerank:timeout".to_string()),
+    }
+
+    probe
+}
 impl_json_runtime_payload_local!(
     TruthAdjudicationSweepInput,
     "alegria.runtime.json.TruthAdjudicationSweepInput"
@@ -1276,13 +1365,23 @@ fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
     );
     scores.insert(
         "seo".to_string(),
-        normalized_marker_score(text, &["seo", "serp", "ключев", "ranking", "organic traffic"]),
+        normalized_marker_score(
+            text,
+            &["seo", "serp", "ключев", "ranking", "organic traffic"],
+        ),
     );
     scores.insert(
         "commercial".to_string(),
         normalized_marker_score(
             text,
-            &["consultation", "book now", "услуга", "под ключ", "заказать", "service package"],
+            &[
+                "consultation",
+                "book now",
+                "услуга",
+                "под ключ",
+                "заказать",
+                "service package",
+            ],
         ),
     );
     scores
@@ -1442,7 +1541,10 @@ fn build_page_sketch(
         .take(3)
         .map(|section| {
             let excerpt = section.content_md.chars().take(220).collect::<String>();
-            format!("section:{} type:{} text:{}", section.id, section.section_type, excerpt)
+            format!(
+                "section:{} type:{} text:{}",
+                section.id, section.section_type, excerpt
+            )
         })
         .collect::<Vec<_>>();
     let mut section_histogram = BTreeMap::new();
@@ -1587,7 +1689,14 @@ fn summarize(text: &str) -> String {
 fn global_entities(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     let mut entities = Vec::new();
-    for token in ["passport", "паспорт", "insurance", "страхов", "vfs", "посольств"] {
+    for token in [
+        "passport",
+        "паспорт",
+        "insurance",
+        "страхов",
+        "vfs",
+        "посольств",
+    ] {
         if lowered.contains(token) {
             entities.push(token.to_string());
         }
@@ -1674,30 +1783,56 @@ fn page_context_profile(
         ("ES", &["spain", "spanish", "испан", "españa"][..], 0.65_f32),
         ("PL", &["poland", "polish", "польш", "polska"][..], 0.65_f32),
         ("FR", &["france", "french", "франц"][..], 0.65_f32),
-        ("DE", &["germany", "german", "герман", "deutschland"][..], 0.65_f32),
+        (
+            "DE",
+            &["germany", "german", "герман", "deutschland"][..],
+            0.65_f32,
+        ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut country_hints, hint, score, threshold, strong_support);
     }
 
     let mut visa_type_hints = Vec::new();
     for (hint, tokens, threshold) in [
-        ("tourist", &["tourist", "tourism", "турист", "шенген"][..], 0.60_f32),
-        ("work", &["work visa", "рабоч", "employment visa"][..], 0.60_f32),
-        ("student", &["student visa", "study visa", "учеб", "student"][..], 0.60_f32),
+        (
+            "tourist",
+            &["tourist", "tourism", "турист", "шенген"][..],
+            0.60_f32,
+        ),
+        (
+            "work",
+            &["work visa", "рабоч", "employment visa"][..],
+            0.60_f32,
+        ),
+        (
+            "student",
+            &["student visa", "study visa", "учеб", "student"][..],
+            0.60_f32,
+        ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut visa_type_hints, hint, score, threshold, strong_support);
     }
 
     let mut authority_hints = Vec::new();
     for (hint, tokens, threshold) in [
-        ("consulate", &["consulate", "consular", "консуль", "посольств"][..], 0.55_f32),
-        ("visa_center", &["vfs", "visa center", "визов"][..], 0.55_f32),
+        (
+            "consulate",
+            &["consulate", "consular", "консуль", "посольств"][..],
+            0.55_f32,
+        ),
+        (
+            "visa_center",
+            &["vfs", "visa center", "визов"][..],
+            0.55_f32,
+        ),
         (
             "government",
             &["ministry", "gov.", ".gov", "government", "министер"][..],
@@ -1705,8 +1840,9 @@ fn page_context_profile(
         ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut authority_hints, hint, score, threshold, strong_support);
     }
 
@@ -1738,7 +1874,11 @@ fn supportive_section_count_for_layer(
 ) -> usize {
     sections
         .iter()
-        .filter(|section| dominant_layers(&section.content_md).iter().any(|value| value == layer))
+        .filter(|section| {
+            dominant_layers(&section.content_md)
+                .iter()
+                .any(|value| value == layer)
+        })
         .count()
 }
 
@@ -1886,7 +2026,10 @@ fn fuse_with_advisory_retrieval(
     reason_codes.dedup();
 
     WholePageSemanticPageState {
-        page_id: sections.first().map(|section| section.page_id).unwrap_or_default(),
+        page_id: sections
+            .first()
+            .map(|section| section.page_id)
+            .unwrap_or_default(),
         section_count: sections.len(),
         page_mode_hint: snapshot.page_mode_hint,
         page_mode_confidence,
@@ -1986,9 +2129,17 @@ impl SectionSemanticGateIndexes {
     }
 
     fn blocked_by_gate(&self, section_id: i64) -> bool {
-        !self.structural_allowed.get(&section_id).copied().unwrap_or(false)
+        !self
+            .structural_allowed
+            .get(&section_id)
+            .copied()
+            .unwrap_or(false)
             || !self.dom_allowed.get(&section_id).copied().unwrap_or(false)
-            || !self.contract_pass.get(&section_id).copied().unwrap_or(false)
+            || !self
+                .contract_pass
+                .get(&section_id)
+                .copied()
+                .unwrap_or(false)
             || !self.replay_safe.get(&section_id).copied().unwrap_or(false)
     }
 
@@ -2088,7 +2239,9 @@ fn normalize_numeric_token_fragments(tokens: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn role_and_concept_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule) -> (&'static str, String) {
+fn role_and_concept_for_rule(
+    rule: &seo_steps::procedural_extraction_step::ProceduralRule,
+) -> (&'static str, String) {
     match rule.rule_key.as_str() {
         "consular_fee" => ("FEE_ITEM", "consular_fee".to_string()),
         "processing_time" => ("TIMELINE_ITEM", "processing_time".to_string()),
@@ -2098,7 +2251,9 @@ fn role_and_concept_for_rule(rule: &seo_steps::procedural_extraction_step::Proce
     }
 }
 
-fn params_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule) -> TruthParamValue {
+fn params_for_rule(
+    rule: &seo_steps::procedural_extraction_step::ProceduralRule,
+) -> TruthParamValue {
     match rule.rule_key.as_str() {
         "consular_fee" => {
             let amount = rule
@@ -2124,13 +2279,13 @@ fn params_for_rule(rule: &seo_steps::procedural_extraction_step::ProceduralRule)
             ("severity", TruthParamValue::Text("mandatory".to_string())),
         ]),
         "insurance_required" => TruthParamValue::object([
-            ("subtype", TruthParamValue::Text("medical_insurance".to_string())),
+            (
+                "subtype",
+                TruthParamValue::Text("medical_insurance".to_string()),
+            ),
             ("severity", TruthParamValue::Text("mandatory".to_string())),
         ]),
-        _ => TruthParamValue::object([(
-            "subtype",
-            TruthParamValue::Text(rule.rule_key.clone()),
-        )]),
+        _ => TruthParamValue::object([("subtype", TruthParamValue::Text(rule.rule_key.clone()))]),
     }
 }
 
@@ -2153,9 +2308,7 @@ fn truth_param_value_to_json_local(value: &TruthParamValue) -> Value {
     }
 }
 
-fn classify_candidate_completeness_local(
-    validation: &TruthCandidateValidationResult,
-) -> String {
+fn classify_candidate_completeness_local(validation: &TruthCandidateValidationResult) -> String {
     if validation.issues.iter().any(|issue| {
         matches!(
             issue.code.as_str(),
@@ -2231,7 +2384,11 @@ fn non_structured_candidate_reason(candidate: &ValidatedTruthCandidateRecord) ->
     }
 }
 
-fn semantic_rule_instance_id_local(context_key: &str, role: &str, concept_canonical_key: &str) -> String {
+fn semantic_rule_instance_id_local(
+    context_key: &str,
+    role: &str,
+    concept_canonical_key: &str,
+) -> String {
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
 
@@ -2278,8 +2435,8 @@ async fn delete_verified_rules_4_projection(
         .collect::<Vec<_>>();
 
     if env_flag("RETRIEVAL_CAPABILITY_REQUIRED") {
-        let qdrant_url = std::env::var("QDRANT_URL")
-            .unwrap_or_else(|_| "http://localhost:6334".to_string());
+        let qdrant_url =
+            std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
         let client = qdrant_client_adapter::connect_qdrant(&qdrant_url)
             .await
             .map_err(|err| DomainError::InfraUnavailable {
@@ -2329,7 +2486,8 @@ async fn emit_verified_rules_4_projection(
         }
         Err(_) => return Ok(()),
     };
-    let voyage_model = std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
+    let voyage_model =
+        std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
     let voyage = VoyageClient::new(voyage_api_key, voyage_model.clone());
     let texts = candidates
         .iter()
@@ -2656,9 +2814,11 @@ pub(crate) async fn seo_preflight_impl(
 ) -> Result<SeoPreflightOutput, DomainError> {
     sqlx_seo_adapter::ensure_seo_runtime_registries(&acts.pool).await?;
     let scope = seo_domain::identity::derive_scope_from_payload(&input.scope)?;
-    let normalized_profile =
-        sqlx_seo_adapter::validate_applicant_profile_reference(&acts.pool, &scope.applicant_profile)
-            .await?;
+    let normalized_profile = sqlx_seo_adapter::validate_applicant_profile_reference(
+        &acts.pool,
+        &scope.applicant_profile,
+    )
+    .await?;
 
     let context_row = sqlx::query(
         "SELECT count(*)::bigint AS count FROM kb.visa_contexts WHERE context_key = $1 AND status = 'active'",
@@ -2709,11 +2869,9 @@ pub(crate) async fn seo_preflight_impl(
             .await
             .map_err(AlegriaActivities::classify_error)?;
     let required_collections = required_retrieval_collections();
-    let collection_statuses = sqlx_seo_adapter::read_qdrant_collection_statuses(
-        &acts.pool,
-        &required_collections,
-    )
-    .await?;
+    let collection_statuses =
+        sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
+            .await?;
     let required_collection_statuses = collection_statuses
         .into_iter()
         .map(|status| SeoPreflightCollectionStatus {
@@ -2742,13 +2900,14 @@ pub(crate) async fn seo_preflight_impl(
             || (status.open_event_count() > 0
                 && status.max_open_lag_ms > input.projection_max_lag_ms)
     });
-    let voyage_ready = std::env::var("VOYAGE_API_KEY")
-        .ok()
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
+    let capability_probe = probe_voyage_capabilities().await;
+    let voyage_embeddings_ready = capability_probe.embeddings_ready;
+    let voyage_contextualized_ready = capability_probe.contextualized_ready;
+    let voyage_rerank_ready = capability_probe.rerank_ready;
     let retrieval_capability_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
     let canonical_vector_retrieval_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
-    let contextual_raw_chunk_retrieval_required = env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
+    let contextual_raw_chunk_retrieval_required =
+        env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
     let voyage_rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
 
     let missing_collections = required_collection_statuses
@@ -2778,10 +2937,10 @@ pub(crate) async fn seo_preflight_impl(
         .collect::<Vec<_>>();
 
     let retrieval_contract_status = if retrieval_capability_required {
-        if !voyage_ready
-            || (contextual_raw_chunk_retrieval_required && !voyage_ready)
-            || (voyage_rerank_required && !voyage_ready)
-            || (canonical_vector_retrieval_required && !voyage_ready)
+        if !voyage_embeddings_ready
+            || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
+            || (voyage_rerank_required && !voyage_rerank_ready)
+            || (canonical_vector_retrieval_required && !voyage_embeddings_ready)
         {
             "blocked_provider_capability".to_string()
         } else if !qdrant_ready {
@@ -2802,7 +2961,14 @@ pub(crate) async fn seo_preflight_impl(
     };
     let retrieval_block_reason = match retrieval_contract_status.as_str() {
         "blocked_provider_capability" => Some(
-            "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, but provider credentials are not ready".to_string(),
+            format!(
+                "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, probe failed: {}",
+                if capability_probe.errors.is_empty() {
+                    "unknown capability probe failure".to_string()
+                } else {
+                    capability_probe.errors.join("; ")
+                }
+            ),
         ),
         "blocked_retrieval_contract" => Some(
             "retrieval contract requires reachable Qdrant and required retrieval surfaces".to_string(),
@@ -2841,9 +3007,9 @@ pub(crate) async fn seo_preflight_impl(
         verified_rule_count,
         pending_rule_count,
         qdrant_point_count,
-        voyage_embeddings_ready: voyage_ready,
-        voyage_contextualized_ready: voyage_ready,
-        voyage_rerank_ready: voyage_ready,
+        voyage_embeddings_ready,
+        voyage_contextualized_ready,
+        voyage_rerank_ready,
         qdrant_ready,
         qdrant_collection_contract_ready,
         retrieval_capability_required,
@@ -3285,17 +3451,14 @@ pub(crate) async fn canonical_mapping_sweep_impl(
             },
         );
         output.mappings = resolve_canonical_vector_mappings(output.mappings).await?;
-            let needs_hitl = output
-                .mappings
-                .iter()
-                .any(|mapping| mapping.needs_hitl);
-            let decision = if section.blocked_by_gate {
-                "blocked_by_gate"
-            } else if needs_hitl {
-                "needs_hitl"
-            } else {
-                "pass"
-            };
+        let needs_hitl = output.mappings.iter().any(|mapping| mapping.needs_hitl);
+        let decision = if section.blocked_by_gate {
+            "blocked_by_gate"
+        } else if needs_hitl {
+            "needs_hitl"
+        } else {
+            "pass"
+        };
         sections.push(CanonicalMappingSectionState {
             section_id: section.section_id,
             page_id: section.page_id,
@@ -3418,23 +3581,20 @@ async fn resolve_single_canonical_vector_mapping(
             }
         }
     }
-    let candidates = match semantic_search_adapter::rerank_records(
-        &mapping.raw_text,
-        results.clone(),
-        Some(3),
-    )
-    .await
-    {
-        Ok(reranked) if !reranked.is_empty() => reranked,
-        Err(err) if rerank_required => {
-            return Err(DomainError::InfraUnavailable {
-                message: format!(
-                    "canonical vector retrieval requires rerank, but rerank failed: {err}"
-                ),
-            });
-        }
-        _ => results,
-    };
+    let candidates =
+        match semantic_search_adapter::rerank_records(&mapping.raw_text, results.clone(), Some(3))
+            .await
+        {
+            Ok(reranked) if !reranked.is_empty() => reranked,
+            Err(err) if rerank_required => {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!(
+                        "canonical vector retrieval requires rerank, but rerank failed: {err}"
+                    ),
+                });
+            }
+            _ => results,
+        };
     let top = candidates.first().cloned();
     let Some(top) = top else {
         return Ok(None);
@@ -3577,8 +3737,14 @@ pub(crate) async fn procedural_extraction_sweep_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        skipped_section_count: section_states.iter().filter(|section| section.skipped).count(),
-        rule_count: section_states.iter().map(|section| section.rules.len()).sum(),
+        skipped_section_count: section_states
+            .iter()
+            .filter(|section| section.skipped)
+            .count(),
+        rule_count: section_states
+            .iter()
+            .map(|section| section.rules.len())
+            .sum(),
         sections: section_states,
     })
 }
@@ -3625,7 +3791,10 @@ pub(crate) async fn operational_extraction_sweep_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        entity_count: section_states.iter().map(|section| section.entities.len()).sum(),
+        entity_count: section_states
+            .iter()
+            .map(|section| section.entities.len())
+            .sum(),
         sections: section_states,
     })
 }
@@ -3676,8 +3845,14 @@ pub(crate) async fn editorial_extraction_sweep_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        skipped_section_count: section_states.iter().filter(|section| section.skipped).count(),
-        topic_count: section_states.iter().map(|section| section.topics.len()).sum(),
+        skipped_section_count: section_states
+            .iter()
+            .filter(|section| section.skipped)
+            .count(),
+        topic_count: section_states
+            .iter()
+            .map(|section| section.topics.len())
+            .sum(),
         sections: section_states,
     })
 }
@@ -3702,7 +3877,8 @@ pub(crate) async fn seo_signal_extraction_sweep_impl(
                     confidence: 0.82,
                 });
             }
-            if !blocked_by_gate && (lowered.contains("keyword") || lowered.contains("ключев")) {
+            if !blocked_by_gate && (lowered.contains("keyword") || lowered.contains("ключев"))
+            {
                 signals.push(SeoSignalRecord {
                     signal_type: "keyword_signal".to_string(),
                     value: "keyword_language_present".to_string(),
@@ -3729,7 +3905,10 @@ pub(crate) async fn seo_signal_extraction_sweep_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        signal_count: section_states.iter().map(|section| section.signals.len()).sum(),
+        signal_count: section_states
+            .iter()
+            .map(|section| section.signals.len())
+            .sum(),
         sections: section_states,
     })
 }
@@ -3790,7 +3969,10 @@ pub(crate) async fn commercial_signal_extraction_sweep_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        signal_count: section_states.iter().map(|section| section.signals.len()).sum(),
+        signal_count: section_states
+            .iter()
+            .map(|section| section.signals.len())
+            .sum(),
         sections: section_states,
     })
 }
@@ -3831,7 +4013,10 @@ pub(crate) async fn extraction_schema_validate_impl(
         .collect::<Vec<_>>();
     Ok(ExtractionSchemaValidateOutput {
         section_count: sections.len(),
-        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        blocked_section_count: sections
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
         invalid_section_count: sections
             .iter()
             .filter(|section| section.status == "invalid")
@@ -3846,8 +4031,10 @@ pub(crate) async fn candidate_validation_impl(
 ) -> Result<CandidateValidationOutput, DomainError> {
     let sections =
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
-    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
-        sections.iter().map(|section| (section.id, section)).collect();
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> = sections
+        .iter()
+        .map(|section| (section.id, section))
+        .collect();
     let schema_by_section: BTreeMap<i64, &ExtractionSchemaSectionDecision> = input
         .schema_validate
         .sections
@@ -3862,22 +4049,22 @@ pub(crate) async fn candidate_validation_impl(
         .collect();
     let mut section_states = Vec::new();
     for section in &input.procedural.sections {
-        let raw = raw_by_section
-            .get(&section.section_id)
-            .ok_or_else(|| DomainError::ValidationFailure {
+        let raw = raw_by_section.get(&section.section_id).ok_or_else(|| {
+            DomainError::ValidationFailure {
                 message: format!(
                     "missing raw section for candidate validation: {}",
                     section.section_id
                 ),
-            })?;
-        let schema = schema_by_section
-            .get(&section.section_id)
-            .ok_or_else(|| DomainError::ValidationFailure {
+            }
+        })?;
+        let schema = schema_by_section.get(&section.section_id).ok_or_else(|| {
+            DomainError::ValidationFailure {
                 message: format!(
                     "missing schema validation section for {}",
                     section.section_id
                 ),
-            })?;
+            }
+        })?;
         let ontology = ontology_by_section
             .get(&section.section_id)
             .ok_or_else(|| DomainError::ValidationFailure {
@@ -4002,12 +4189,18 @@ pub(crate) async fn candidate_validation_impl(
             .iter()
             .filter(|section| section.blocked_by_gate)
             .count(),
-        accepted_count: section_states.iter().map(|section| section.accepted_count).sum(),
+        accepted_count: section_states
+            .iter()
+            .map(|section| section.accepted_count)
+            .sum(),
         needs_hitl_count: section_states
             .iter()
             .map(|section| section.needs_hitl_count)
             .sum(),
-        rejected_count: section_states.iter().map(|section| section.rejected_count).sum(),
+        rejected_count: section_states
+            .iter()
+            .map(|section| section.rejected_count)
+            .sum(),
         sections: section_states,
     })
 }
@@ -4046,10 +4239,12 @@ pub(crate) async fn triple_builder_sweep_impl(
                     procedural_rules: section
                         .rules
                         .iter()
-                        .map(|rule| seo_steps::triple_builder_step::ProceduralRuleForTriple {
-                            rule_key: rule.rule_key.clone(),
-                            role_type: rule.role_type,
-                        })
+                        .map(
+                            |rule| seo_steps::triple_builder_step::ProceduralRuleForTriple {
+                                rule_key: rule.rule_key.clone(),
+                                role_type: rule.role_type,
+                            },
+                        )
                         .collect(),
                     operational_entities: operational
                         .entities
@@ -4089,7 +4284,10 @@ pub(crate) async fn triple_builder_sweep_impl(
         .collect::<Vec<_>>();
     Ok(TripleBuilderSweepOutput {
         section_count: sections.len(),
-        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        blocked_section_count: sections
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
         triple_count: sections.iter().map(|section| section.triples.len()).sum(),
         sections,
     })
@@ -4166,9 +4364,7 @@ async fn retrieve_semantic_neighbors(
         Err(err) => {
             if retrieval_required {
                 return Err(DomainError::InfraUnavailable {
-                    message: format!(
-                        "semantic retrieval failed for `{primary_collection}`: {err}"
-                    ),
+                    message: format!("semantic retrieval failed for `{primary_collection}`: {err}"),
                 });
             }
             reason_codes.push(format!("{primary_collection}:search_failed"));
@@ -4199,7 +4395,10 @@ async fn retrieve_semantic_neighbors(
     records = semantic_search_adapter::rerank_records(query, records, Some(limit as usize))
         .await
         .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("semantic rerank failed for `{}`: {err}", collection_used.clone().unwrap_or_default()),
+            message: format!(
+                "semantic rerank failed for `{}`: {err}",
+                collection_used.clone().unwrap_or_default()
+            ),
         })?;
     reason_codes.push("semantic_neighbors_reranked".to_string());
     Ok((collection_used, records, reason_codes))
@@ -4211,8 +4410,10 @@ pub(crate) async fn completeness_judge_sweep_impl(
 ) -> Result<CompletenessJudgeSweepOutput, DomainError> {
     let raw_sections =
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
-    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
-        raw_sections.iter().map(|section| (section.id, section)).collect();
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> = raw_sections
+        .iter()
+        .map(|section| (section.id, section))
+        .collect();
     let entity_by_section: BTreeMap<i64, &EntitySpanSectionMentions> = input
         .entity_spans
         .sections
@@ -4271,8 +4472,7 @@ pub(crate) async fn completeness_judge_sweep_impl(
                 .collect();
             semantic_diagnostic_reason_codes.extend(reason_codes);
             if retrieval_evidence_refs.is_empty() {
-                semantic_diagnostic_reason_codes
-                    .push("semantic_neighbor_gap_detected".to_string());
+                semantic_diagnostic_reason_codes.push("semantic_neighbor_gap_detected".to_string());
             }
         }
         sections.push(CompletenessJudgeSectionState {
@@ -4295,7 +4495,10 @@ pub(crate) async fn completeness_judge_sweep_impl(
     }
     Ok(CompletenessJudgeSweepOutput {
         section_count: sections.len(),
-        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        blocked_section_count: sections
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
         needs_hitl_count: sections
             .iter()
             .filter(|section| !section.blocked_by_gate && section.output.needs_hitl)
@@ -4321,7 +4524,10 @@ pub(crate) async fn resolution_loop_impl(
         .collect();
     let mut sections = Vec::with_capacity(input.completeness.sections.len());
     for section in &input.completeness.sections {
-        let ontology = ontology_by_section.get(&section.section_id).copied().unwrap();
+        let ontology = ontology_by_section
+            .get(&section.section_id)
+            .copied()
+            .unwrap();
         let schema = schema_by_section.get(&section.section_id).copied().unwrap();
         let decision = if section.blocked_by_gate {
             "drop_with_reason"
@@ -4341,7 +4547,9 @@ pub(crate) async fn resolution_loop_impl(
             .collect::<Vec<_>>();
         let mut retrieval_trace_refs = section.retrieval_evidence_refs.clone();
         let mut retrieval_trace_reason_codes = section.semantic_diagnostic_reason_codes.clone();
-        if !section.blocked_by_gate && (decision == "pause_for_hitl" || decision == "drop_with_reason") {
+        if !section.blocked_by_gate
+            && (decision == "pause_for_hitl" || decision == "drop_with_reason")
+        {
             let retrieval_query = if blockers.is_empty() {
                 section
                     .retrieval_evidence_refs
@@ -4400,7 +4608,10 @@ pub(crate) async fn resolution_loop_impl(
     }
     Ok(ResolutionLoopOutput {
         section_count: sections.len(),
-        blocked_section_count: sections.iter().filter(|section| section.blocked_by_gate).count(),
+        blocked_section_count: sections
+            .iter()
+            .filter(|section| section.blocked_by_gate)
+            .count(),
         needs_hitl_count: sections.iter().filter(|section| section.needs_hitl).count(),
         rejected_count: sections
             .iter()
@@ -4416,8 +4627,10 @@ pub(crate) async fn contradiction_gate_sweep_impl(
 ) -> Result<ContradictionGateSweepOutput, DomainError> {
     let raw_sections =
         raw_crawl_adapter::load_raw_sections_by_page_ids(&acts.pool, &input.raw_page_ids).await?;
-    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> =
-        raw_sections.iter().map(|section| (section.id, section)).collect();
+    let raw_by_section: BTreeMap<i64, &raw_crawl_adapter::RawSectionRecord> = raw_sections
+        .iter()
+        .map(|section| (section.id, section))
+        .collect();
     let mut sections = Vec::with_capacity(input.procedural.sections.len());
     for section in &input.procedural.sections {
         let raw = raw_by_section.get(&section.section_id).copied().unwrap();
@@ -4500,12 +4713,18 @@ pub(crate) async fn contradiction_gate_sweep_impl(
     }
     Ok(ContradictionGateSweepOutput {
         section_count: sections.len(),
-        blocked_section_count: sections.iter().filter(|section| section.status == "blocked").count(),
+        blocked_section_count: sections
+            .iter()
+            .filter(|section| section.status == "blocked")
+            .count(),
         needs_hitl_count: sections
             .iter()
             .filter(|section| section.status == "needs_hitl")
             .count(),
-        conflict_count: sections.iter().map(|section| section.output.conflict_count).sum(),
+        conflict_count: sections
+            .iter()
+            .map(|section| section.output.conflict_count)
+            .sum(),
         sections,
     })
 }
@@ -4552,8 +4771,14 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         .collect::<BTreeMap<_, _>>();
 
     for section in &input.candidate_validation.sections {
-        let resolution = resolution_by_section.get(&section.section_id).copied().unwrap();
-        let contradiction = contradiction_by_section.get(&section.section_id).copied().unwrap();
+        let resolution = resolution_by_section
+            .get(&section.section_id)
+            .copied()
+            .unwrap();
+        let contradiction = contradiction_by_section
+            .get(&section.section_id)
+            .copied()
+            .unwrap();
         for candidate in &section.candidates {
             candidate_bindings.insert(
                 candidate.rule_candidate_id.clone(),
@@ -4706,7 +4931,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
 
         for candidate in &section.candidates {
             grouped_candidates
-                .entry((candidate.role.clone(), candidate.concept_canonical_key.clone()))
+                .entry((
+                    candidate.role.clone(),
+                    candidate.concept_canonical_key.clone(),
+                ))
                 .or_default()
                 .push(candidate);
         }
@@ -4813,9 +5041,18 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             .iter()
             .filter(|section| section.status == "blocked")
             .count(),
-        verified_count: section_states.iter().map(|section| section.verified_count).sum(),
-        needs_hitl_count: section_states.iter().map(|section| section.needs_hitl_count).sum(),
-        rejected_count: section_states.iter().map(|section| section.rejected_count).sum(),
+        verified_count: section_states
+            .iter()
+            .map(|section| section.verified_count)
+            .sum(),
+        needs_hitl_count: section_states
+            .iter()
+            .map(|section| section.needs_hitl_count)
+            .sum(),
+        rejected_count: section_states
+            .iter()
+            .map(|section| section.rejected_count)
+            .sum(),
         decisions,
         sections: section_states,
     })
@@ -4838,7 +5075,8 @@ pub(crate) async fn verified_truth_write_impl(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let raw_sections = raw_crawl_adapter::load_raw_sections_by_ids(&acts.pool, &source_section_ids).await?;
+    let raw_sections =
+        raw_crawl_adapter::load_raw_sections_by_ids(&acts.pool, &source_section_ids).await?;
     let raw_by_section: BTreeMap<i64, raw_crawl_adapter::RawSectionRecord> = raw_sections
         .into_iter()
         .map(|section| (section.id, section))
@@ -5028,14 +5266,16 @@ pub(crate) async fn verified_truth_write_impl(
                          prompt_version = EXCLUDED.prompt_version,
                          model_version = EXCLUDED.model_version,
                          pipeline_version = EXCLUDED.pipeline_version,
-                         updated_at = now()"
+                         updated_at = now()",
                 )
                 .bind(&rule_instance_id)
                 .bind(&input.context_key)
                 .bind(decision.role.to_ascii_lowercase())
                 .bind(&decision.concept_canonical_key)
                 .bind(decision.role.to_ascii_lowercase())
-                .bind(Json::<Value>(truth_param_value_to_json_local(&decision.params)))
+                .bind(Json::<Value>(truth_param_value_to_json_local(
+                    &decision.params,
+                )))
                 .bind(&decision.source_key)
                 .bind(decision.confidence)
                 .bind(&decision.rule_candidate_id)
@@ -5216,7 +5456,8 @@ mod tests {
             .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("json"))
             .collect::<Vec<_>>();
         paths.sort();
-        paths.into_iter()
+        paths
+            .into_iter()
             .map(|path| {
                 let raw = fs::read_to_string(&path).expect("read whole-page fixture");
                 serde_json::from_str::<WholePageSemanticFixture>(&raw)
@@ -5361,17 +5602,19 @@ mod tests {
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
-                .map(|hit| whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
-                    prototype_id: hit.prototype_id,
-                    prototype_family: hit.prototype_family,
-                    score: hit.score,
-                    page_mode: hit.page_mode,
-                    dominant_layers: hit.dominant_layers,
-                    country_hints: hit.country_hints,
-                    visa_type_hints: hit.visa_type_hints,
-                    authority_hints: hit.authority_hints,
-                    mixed_section_pressure: hit.mixed_section_pressure,
-                })
+                .map(
+                    |hit| whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+                        prototype_id: hit.prototype_id,
+                        prototype_family: hit.prototype_family,
+                        score: hit.score,
+                        page_mode: hit.page_mode,
+                        dominant_layers: hit.dominant_layers,
+                        country_hints: hit.country_hints,
+                        visa_type_hints: hit.visa_type_hints,
+                        authority_hints: hit.authority_hints,
+                        mixed_section_pressure: hit.mixed_section_pressure,
+                    },
+                )
                 .collect::<Vec<_>>();
             let actual = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
             let fixture_failures = assert_fixture_expectations(&fixture, &actual);
@@ -5415,7 +5658,10 @@ mod tests {
         }
 
         if !failures.is_empty() {
-            panic!("whole-page semantic fixture failures:\n{}", failures.join("\n"));
+            panic!(
+                "whole-page semantic fixture failures:\n{}",
+                failures.join("\n")
+            );
         }
     }
 
@@ -5466,7 +5712,10 @@ mod tests {
         }];
 
         let fused = fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits);
-        assert!(!fused.page_context_profile.country_hints.contains(&"PL".to_string()));
+        assert!(!fused
+            .page_context_profile
+            .country_hints
+            .contains(&"PL".to_string()));
         assert!(fused
             .uncertainty_flags
             .iter()
@@ -5562,7 +5811,8 @@ Footer navigation directory menu links help login cookie.";
 
     #[test]
     fn utility_cookie_login_page_is_classified_as_utility() {
-        let content = "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
+        let content =
+            "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
         let sections = vec![section(31, content)];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
         assert_eq!(snapshot.page_mode_hint, "utility_page");

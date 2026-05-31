@@ -9,12 +9,13 @@ use contracts::generated::alegria::temporal::v1::{
     FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
     GlobalSiteReconcileOutputPayload, HitlDecision, HitlTaskContext, IaBuildInputPayload,
     IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
-    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    SectionTemplateBinding, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload, SourceContextChunkState,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PageNodeState,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
+    RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    SourceContextChunkState,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
@@ -56,6 +57,13 @@ pub struct OrganicSerpResponse {
 pub struct SemanticLinkCandidate {
     pub entity_key: String,
     pub score: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SemanticDemandCluster {
+    pub cluster_key: String,
+    pub member_queries: Vec<String>,
+    pub confidence: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -172,6 +180,12 @@ pub trait RebuildRepository: Send + Sync {
         input: &RebuildDetectInputPayload,
         output: &RebuildDetectOutputPayload,
     ) -> Result<(), DomainError>;
+
+    async fn semantic_neighbor_impacts(
+        &self,
+        changed_truth_keys: &[String],
+        page_nodes: &[PageNodeState],
+    ) -> Result<Vec<RebuildDependencyEvidence>, DomainError>;
 }
 
 #[async_trait]
@@ -196,6 +210,11 @@ pub trait SemanticLinkSearchPort: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SemanticLinkCandidate>, DomainError>;
+
+    async fn cluster_demand_queries(
+        &self,
+        queries: &[String],
+    ) -> Result<Vec<SemanticDemandCluster>, DomainError>;
 }
 
 #[async_trait]

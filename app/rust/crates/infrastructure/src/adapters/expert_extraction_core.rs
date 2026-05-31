@@ -409,30 +409,56 @@ fn page_context_profile(sections: &[RawSectionRecord], text: &str) -> WholePageC
         ("ES", &["spain", "spanish", "испан", "españa"][..], 0.65_f32),
         ("PL", &["poland", "polish", "польш", "polska"][..], 0.65_f32),
         ("FR", &["france", "french", "франц"][..], 0.65_f32),
-        ("DE", &["germany", "german", "герман", "deutschland"][..], 0.65_f32),
+        (
+            "DE",
+            &["germany", "german", "герман", "deutschland"][..],
+            0.65_f32,
+        ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut country_hints, hint, score, threshold, strong_support);
     }
 
     let mut visa_type_hints = Vec::new();
     for (hint, tokens, threshold) in [
-        ("tourist", &["tourist", "tourism", "турист", "шенген"][..], 0.60_f32),
-        ("work", &["work visa", "рабоч", "employment visa"][..], 0.60_f32),
-        ("student", &["student visa", "study visa", "учеб", "student"][..], 0.60_f32),
+        (
+            "tourist",
+            &["tourist", "tourism", "турист", "шенген"][..],
+            0.60_f32,
+        ),
+        (
+            "work",
+            &["work visa", "рабоч", "employment visa"][..],
+            0.60_f32,
+        ),
+        (
+            "student",
+            &["student visa", "study visa", "учеб", "student"][..],
+            0.60_f32,
+        ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut visa_type_hints, hint, score, threshold, strong_support);
     }
 
     let mut authority_hints = Vec::new();
     for (hint, tokens, threshold) in [
-        ("consulate", &["consulate", "consular", "консуль", "посольств"][..], 0.55_f32),
-        ("visa_center", &["vfs", "visa center", "визов"][..], 0.55_f32),
+        (
+            "consulate",
+            &["consulate", "consular", "консуль", "посольств"][..],
+            0.55_f32,
+        ),
+        (
+            "visa_center",
+            &["vfs", "visa center", "визов"][..],
+            0.55_f32,
+        ),
         (
             "government",
             &["ministry", "gov.", ".gov", "government", "министер"][..],
@@ -440,8 +466,9 @@ fn page_context_profile(sections: &[RawSectionRecord], text: &str) -> WholePageC
         ),
     ] {
         let score = weighted_family_score(&framing_inputs, tokens);
-        let strong_support =
-            tokens.iter().any(|token| source_url.contains(token) || headings.contains(token));
+        let strong_support = tokens
+            .iter()
+            .any(|token| source_url.contains(token) || headings.contains(token));
         push_hint_if_supported(&mut authority_hints, hint, score, threshold, strong_support);
     }
 
@@ -523,7 +550,10 @@ pub fn run_expert_extraction_core(
             dominant_layers: dominant_layers(&section.content_md),
             layer_scores: layer_scores_for_text(&section.content_md),
             page_summary: summarize(&section.content_md),
-            page_context_profile: page_context_profile(std::slice::from_ref(section), &section.content_md),
+            page_context_profile: page_context_profile(
+                std::slice::from_ref(section),
+                &section.content_md,
+            ),
             mixed_section_ids: if dominant_layers(&section.content_md).len() > 1 {
                 vec![section.id]
             } else {
@@ -1244,7 +1274,10 @@ mod tests {
             forward.verified_ready_section_count,
             reverse.verified_ready_section_count
         );
-        assert_eq!(forward.needs_hitl_section_count, reverse.needs_hitl_section_count);
+        assert_eq!(
+            forward.needs_hitl_section_count,
+            reverse.needs_hitl_section_count
+        );
     }
 
     #[test]
@@ -1292,7 +1325,11 @@ mod tests {
             reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(7, raw)))],
         };
 
-        let report = run_expert_extraction_core("run-semantic-page-context", "ES|tourist||BY", &[section(7, raw)]);
+        let report = run_expert_extraction_core(
+            "run-semantic-page-context",
+            "ES|tourist||BY",
+            &[section(7, raw)],
+        );
         let whole_page_record = report.sections[0]
             .stage_records
             .iter()
@@ -1326,7 +1363,8 @@ mod tests {
 
     #[test]
     fn whole_page_semantic_pass_detects_utility_page_shape() {
-        let raw = "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
+        let raw =
+            "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
         let stage_output = WholePageSemanticPassOutput {
             page_mode_hint: page_mode_hint(&section(8, raw)),
             page_mode_confidence: 0.70,
@@ -1372,8 +1410,12 @@ mod tests {
             uncertainty_flags: vec!["multi_layer_page".to_string()],
             reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(9, raw)))],
         };
-        assert!(stage_output.dominant_layers.contains(&"procedural".to_string()));
-        assert!(stage_output.dominant_layers.contains(&"editorial".to_string()));
+        assert!(stage_output
+            .dominant_layers
+            .contains(&"procedural".to_string()));
+        assert!(stage_output
+            .dominant_layers
+            .contains(&"editorial".to_string()));
         assert_eq!(stage_output.mixed_section_ids, vec![9]);
     }
 }

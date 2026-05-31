@@ -2514,9 +2514,9 @@ async fn seo_cutover_shadow_verify(
             });
     let legacy_m2_observed =
         value_as_i64(&legacy_publish_events, "review_requested_events").unwrap_or_default() > 0
-            || LEGACY_PHASE_M2_LEDGER_STEPS.iter().any(|step_name| {
-                legacy_step_statuses.get(*step_name) == Some(&"done".to_string())
-            });
+            || LEGACY_PHASE_M2_LEDGER_STEPS
+                .iter()
+                .any(|step_name| legacy_step_statuses.get(*step_name) == Some(&"done".to_string()));
 
     let m1_raw_scope_required = !(legacy_m2_observed
         && cutover_m2_observed
@@ -2554,9 +2554,12 @@ async fn seo_cutover_shadow_verify(
         Vec::new()
     };
 
-    let legacy_review_requested_pages = *legacy_step_counts.get("load_cms_approval_decision").unwrap_or(&0);
+    let legacy_review_requested_pages = *legacy_step_counts
+        .get("load_cms_approval_decision")
+        .unwrap_or(&0);
     let legacy_approved_pages = *legacy_step_counts.get("finalize_publish").unwrap_or(&0);
-    let cutover_review_requested_pages = *cutover_step_counts.get("human_approval_wait").unwrap_or(&0);
+    let cutover_review_requested_pages =
+        *cutover_step_counts.get("human_approval_wait").unwrap_or(&0);
     let cutover_approved_pages = *cutover_step_counts.get("finalize_publish").unwrap_or(&0);
     let legacy_blocked_pages =
         value_as_i64(&legacy_publish_events, "blocked_pages").unwrap_or_default();
@@ -2635,7 +2638,8 @@ async fn seo_cutover_shadow_verify(
         }
     }
 
-    if legacy_m2_observed && cutover_m2_observed && legacy_approved_pages != cutover_approved_pages {
+    if legacy_m2_observed && cutover_m2_observed && legacy_approved_pages != cutover_approved_pages
+    {
         findings.push(error_finding(
             "SHADOW_PHASE_M2_PUBLISHED_PAGE_COUNT_DIFF",
             format!(

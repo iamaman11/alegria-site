@@ -287,7 +287,12 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             cannibalization_conflicts.push(CannibalizationConflictState {
                 conflict_key: artifact_key(
                     "cannibalization_conflict",
-                    &[&scope, &existing_owner, &page_node_key, "duplicate_topic_family"],
+                    &[
+                        &scope,
+                        &existing_owner,
+                        &page_node_key,
+                        "duplicate_topic_family",
+                    ],
                 ),
                 scope_signature: scope.clone(),
                 page_key_a: existing_owner,
@@ -356,13 +361,15 @@ mod tests {
     #[test]
     fn duplicate_topic_family_does_not_create_duplicate_page_nodes() {
         let output = execute(&IaBuildInputPayload {
-            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                locale: "ru-RU".to_string(),
-                country_code: "ES".to_string(),
-                visa_type: "tourist".to_string(),
-                scope_signature: "scope".to_string(),
-                ..Default::default()
-            }),
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    locale: "ru-RU".to_string(),
+                    country_code: "ES".to_string(),
+                    visa_type: "tourist".to_string(),
+                    scope_signature: "scope".to_string(),
+                    ..Default::default()
+                },
+            ),
             keyword_clusters: vec![
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-a".to_string(),
@@ -397,27 +404,30 @@ mod tests {
     #[test]
     fn ambiguous_topic_family_is_blocked() {
         let output = execute(&IaBuildInputPayload {
-            scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                locale: "ru-RU".to_string(),
-                country_code: "ES".to_string(),
-                visa_type: "tourist".to_string(),
-                scope_signature: "scope".to_string(),
-                ..Default::default()
-            }),
-            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
-                cluster_key: "cluster-a".to_string(),
-                scope_signature: "scope".to_string(),
-                seed_keyword: "visa support".to_string(),
-                dominant_intent: "informational".to_string(),
-                topic_keys: vec!["topic_a".to_string(), "topic_b".to_string()],
-                graph_confidence: 0.4,
-                ..Default::default()
-            }],
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    locale: "ru-RU".to_string(),
+                    country_code: "ES".to_string(),
+                    visa_type: "tourist".to_string(),
+                    scope_signature: "scope".to_string(),
+                    ..Default::default()
+                },
+            ),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-a".to_string(),
+                    scope_signature: "scope".to_string(),
+                    seed_keyword: "visa support".to_string(),
+                    dominant_intent: "informational".to_string(),
+                    topic_keys: vec!["topic_a".to_string(), "topic_b".to_string()],
+                    graph_confidence: 0.4,
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         });
-        assert!(output
-            .page_nodes
-            .iter()
-            .any(|page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"));
+        assert!(output.page_nodes.iter().any(
+            |page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"
+        ));
     }
 }

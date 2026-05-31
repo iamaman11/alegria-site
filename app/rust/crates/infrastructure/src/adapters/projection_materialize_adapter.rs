@@ -5,8 +5,8 @@ use contracts::generated::alegria::sync::v1::{
     Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, SeoCmsEventPayload,
     SeoGraphProjectionPayload,
 };
-use prost::Message;
 use primitives::qdrant_point_id::{is_valid_qdrant_point_id, qdrant_point_id_v1};
+use prost::Message;
 
 use super::neo4j_materialization_adapter;
 use super::qdrant_client_adapter::{
@@ -127,8 +127,7 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
             .context("Voyage materialization returned no embedding")?;
         cmd.vector = vector;
         cmd.vector_size = 1024;
-        cmd.metadata
-            .insert("embedding_model".to_string(), model);
+        cmd.metadata.insert("embedding_model".to_string(), model);
         cmd.metadata.insert(
             "embedding_version".to_string(),
             format!("{collection_name}@voyage4_document_1024_float"),

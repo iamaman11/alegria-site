@@ -16,8 +16,8 @@ mod expert_semantic_slice;
 mod freshness;
 mod projection_reconcile;
 mod runtime;
-mod seo_site_build_canonical_cutover;
 mod seo_site_build;
+mod seo_site_build_canonical_cutover;
 mod test_hitl;
 
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.

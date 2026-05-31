@@ -12,8 +12,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use runtime_models::seo_blocks::{
     default_section_roles, factual_role, heading_for_role, mandatory_section_roles,
-    planned_content_blocks,
-    support_traceability_label, supports_for_role,
+    planned_content_blocks, support_traceability_label, supports_for_role,
 };
 
 // Draft assembly must emit traceability_entries with verified_fact / verified_summary

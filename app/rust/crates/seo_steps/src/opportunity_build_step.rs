@@ -34,18 +34,32 @@ fn best_topic_family<'a>(
                 (overlap > 0).then_some((overlap, signal))
             })
             .max_by(|(lhs_overlap, lhs_signal), (rhs_overlap, rhs_signal)| {
-                lhs_overlap
-                    .cmp(rhs_overlap)
-                    .then_with(|| lhs_signal.graph_confidence.total_cmp(&rhs_signal.graph_confidence))
+                lhs_overlap.cmp(rhs_overlap).then_with(|| {
+                    lhs_signal
+                        .graph_confidence
+                        .total_cmp(&rhs_signal.graph_confidence)
+                })
             })
             .map(|(_, signal)| signal)
     })
 }
 
-fn seed_or_topic_key(seed_keyword: &str, topic_signal: Option<&GraphPlanningTopicSignalState>) -> String {
+fn seed_or_topic_key(
+    seed_keyword: &str,
+    topic_signal: Option<&GraphPlanningTopicSignalState>,
+) -> String {
     topic_signal
         .map(|signal| signal.topic_key.clone())
         .unwrap_or_else(|| seed_keyword.to_string())
+}
+
+fn cluster_ref_from_evidence(evidence_ref: &str) -> Option<String> {
+    evidence_ref
+        .split('|')
+        .map(str::trim)
+        .find_map(|part| part.strip_prefix("cluster_ref:"))
+        .map(ToOwned::to_owned)
+        .filter(|value| !value.trim().is_empty())
 }
 
 pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPayload {
@@ -67,11 +81,16 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
             continue;
         }
         let topic_signal = best_topic_family(&seed_keyword, graph_context);
-        let family_key = seed_or_topic_key(&seed_keyword, topic_signal);
+        let family_key = cluster_ref_from_evidence(&pattern.evidence_ref)
+            .unwrap_or_else(|| seed_or_topic_key(&seed_keyword, topic_signal));
         cluster_topics_by_family
             .entry(family_key.clone())
             .or_default()
-            .extend(topic_signal.into_iter().map(|signal| signal.topic_key.clone()));
+            .extend(
+                topic_signal
+                    .into_iter()
+                    .map(|signal| signal.topic_key.clone()),
+            );
         if !seen_cluster_families.insert((scope.clone(), family_key.clone())) {
             continue;
         }
@@ -117,6 +136,8 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
             cluster_version: 1,
             reason_code: if topic_signal.is_some() {
                 "graph_topic_family_merge".to_string()
+            } else if cluster_ref_from_evidence(&pattern.evidence_ref).is_some() {
+                "voyage_step0_cluster_merge".to_string()
             } else {
                 "serp_seed_cluster".to_string()
             },
@@ -201,7 +222,8 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
 mod tests {
     use super::*;
     use contracts::generated::alegria::temporal::v1::{
-        GraphPlanningCoverageSignalState, GraphPlanningTopicSignalState, GraphPlanningTripleSignalState,
+        GraphPlanningCoverageSignalState, GraphPlanningTopicSignalState,
+        GraphPlanningTripleSignalState,
     };
 
     #[test]
@@ -235,7 +257,10 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(output.keyword_clusters.len(), 1);
-        assert_eq!(output.keyword_clusters[0].reason_code, "graph_topic_family_merge");
+        assert_eq!(
+            output.keyword_clusters[0].reason_code,
+            "graph_topic_family_merge"
+        );
     }
 
     #[test]
@@ -262,7 +287,13 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(output.content_gaps.len(), 1);
-        assert_eq!(output.content_gaps[0].reason_code, "graph_missing_topic_coverage");
-        assert_eq!(output.content_gaps[0].triple_refs, vec!["triple-1".to_string()]);
+        assert_eq!(
+            output.content_gaps[0].reason_code,
+            "graph_missing_topic_coverage"
+        );
+        assert_eq!(
+            output.content_gaps[0].triple_refs,
+            vec!["triple-1".to_string()]
+        );
     }
 }

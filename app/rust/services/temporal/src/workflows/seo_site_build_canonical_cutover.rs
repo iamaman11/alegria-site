@@ -5,9 +5,9 @@ use contracts::generated::alegria::temporal::v1::{
     DraftQaInputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
     FinalizePublishInputPayload, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
     LinkRecommendInputPayload, OpportunityBuildInputPayload, ProjectionBarrierAuditInputPayload,
-    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RebuildDetectInputPayload, RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload,
+    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
@@ -23,14 +23,13 @@ use seo_ports::VerifiedSupportBundleRequest;
 
 use crate::activities::operations::{
     CandidateValidationInput, CanonicalMappingSweepInput, CasGateInput,
-    CommercialSignalExtractionSweepInput, CompletenessJudgeSweepInput,
-    ContradictionGateSweepInput, DomBlockRelevanceSweepInput,
-    EditorialExtractionSweepInput, EntitySpanSweepInput, ExtractionSchemaValidateInput,
-    HumanApprovalWaitInput,
-    LayerRouterSweepInput, OntologyIntakeGateInput, OperationalExtractionSweepInput,
-    PageUtilitySweepInput, ProceduralExtractionSweepInput, ProjectionSyncInput,
-    ProjectionSyncOutput, RawEvidenceRegisterInput, ResolutionLoopInput, SectionSemanticGateBundle, SectioningContractGateInput,
-    SectioningInput, SeoPreflightInput, SeoSignalExtractionSweepInput,
+    CommercialSignalExtractionSweepInput, CompletenessJudgeSweepInput, ContradictionGateSweepInput,
+    DomBlockRelevanceSweepInput, EditorialExtractionSweepInput, EntitySpanSweepInput,
+    ExtractionSchemaValidateInput, HumanApprovalWaitInput, LayerRouterSweepInput,
+    OntologyIntakeGateInput, OperationalExtractionSweepInput, PageUtilitySweepInput,
+    ProceduralExtractionSweepInput, ProjectionSyncInput, ProjectionSyncOutput,
+    RawEvidenceRegisterInput, ResolutionLoopInput, SectionSemanticGateBundle,
+    SectioningContractGateInput, SectioningInput, SeoPreflightInput, SeoSignalExtractionSweepInput,
     SubspanLayerRouterInput, TripleBuilderSweepInput, TruthAdjudicationSweepInput,
     TruthAdmissibilityGateInput, VerifiedTruthWriteInput, WholePageSemanticPassInput,
 };
@@ -808,8 +807,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                         );
                     }
                     SeoPhaseKey::EditorialDraftGenerate => {
-                        let draft_plan_ref =
-                            draft_plan.as_ref().expect("draft_assemble required");
+                        let draft_plan_ref = draft_plan.as_ref().expect("draft_assemble required");
                         editorial_candidate = Some(
                             ctx.start_activity(
                                 AlegriaActivities::run_editorial_draft_generate,
@@ -824,8 +822,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                         );
                     }
                     SeoPhaseKey::DraftNormalize => {
-                        let draft_plan_ref =
-                            draft_plan.as_ref().expect("draft_assemble required");
+                        let draft_plan_ref = draft_plan.as_ref().expect("draft_assemble required");
                         let editorial_ref = editorial_candidate
                             .as_ref()
                             .expect("editorial generation required");
@@ -880,7 +877,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                                 db_opts(30),
                             )
                             .await?;
-                        if let Some(draft_state) = draft.as_mut().and_then(|state| state.draft.as_mut())
+                        if let Some(draft_state) =
+                            draft.as_mut().and_then(|state| state.draft.as_mut())
                         {
                             draft_state.qa_verdict = qa.verdict;
                         }
@@ -1036,8 +1034,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                             )
                             .await?,
                         );
-                        if cms_approved.as_ref().expect("cms approved output").verdict
-                            != "approved"
+                        if cms_approved.as_ref().expect("cms approved output").verdict != "approved"
                         {
                             page_blocked = true;
                             ctx.state_mut(|s| {
@@ -1195,9 +1192,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                             AlegriaActivities::run_rebuild_detect_step,
                             RebuildDetectInputPayload {
                                 run_id: run_id.clone(),
-                                changed_truth_keys: verified_truth_write
-                                    .changed_truth_keys
-                                    .clone(),
+                                changed_truth_keys: verified_truth_write.changed_truth_keys.clone(),
                                 page_nodes: page_nodes.clone(),
                             },
                             db_opts(30),

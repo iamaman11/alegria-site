@@ -258,10 +258,7 @@ fn parse_csv(payload: &BTreeMap<String, String>, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-async fn ensure_seeded(
-    client: &qdrant::AlegriaQdrantClient,
-    voyage: &VoyageClient,
-) -> Result<()> {
+async fn ensure_seeded(client: &qdrant::AlegriaQdrantClient, voyage: &VoyageClient) -> Result<()> {
     if client.collection_exists(COLLECTION_NAME).await? {
         return Ok(());
     }
@@ -291,8 +288,14 @@ async fn ensure_seeded(
                 prototype.prototype_family,
             );
             let mut payload = BTreeMap::new();
-            payload.insert("entity_key".to_string(), prototype.prototype_family.to_string());
-            payload.insert("prototype_family".to_string(), prototype.prototype_family.to_string());
+            payload.insert(
+                "entity_key".to_string(),
+                prototype.prototype_family.to_string(),
+            );
+            payload.insert(
+                "prototype_family".to_string(),
+                prototype.prototype_family.to_string(),
+            );
             payload.insert("page_mode".to_string(), prototype.page_mode.to_string());
             payload.insert(
                 "dominant_layers".to_string(),

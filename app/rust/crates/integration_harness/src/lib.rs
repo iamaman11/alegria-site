@@ -89,15 +89,15 @@ mod tests {
     };
     use infrastructure::adapters::{
         dataforseo_serp_adapter::{DataForSeoConfig, DataForSeoSerpClient},
-        editorial_llm_adapter, raw_crawl_adapter,
+        editorial_llm_adapter,
         proto_runtime_payload_store::RuntimeProtoPayload,
+        raw_crawl_adapter,
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
         temporalio_sdk_adapter::{
             connect_client, RawValue, UntypedWorkflow, WorkflowGetResultOptions,
             WorkflowStartOptions,
         },
     };
-    use seo_steps::seo_step_support::artifact_key;
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
         registration::register_site_build_input,
@@ -106,6 +106,7 @@ mod tests {
         },
     };
     use seo_ports::SeoSiteBuildRegistrationRequest;
+    use seo_steps::seo_step_support::artifact_key;
     use serial_test::serial;
     use sqlx::{types::Json, Row};
     use std::{
@@ -327,7 +328,9 @@ mod tests {
     }
 
     fn nested_worker_target_dir(bin_name: &str) -> PathBuf {
-        target_dir().join("integration-harness-nested").join(bin_name)
+        target_dir()
+            .join("integration-harness-nested")
+            .join(bin_name)
     }
 
     fn build_temporal_worker_binary() -> PathBuf {
@@ -343,7 +346,9 @@ mod tests {
             .args([
                 "build",
                 "--target-dir",
-                nested_target.to_str().expect("nested temporal_worker target dir"),
+                nested_target
+                    .to_str()
+                    .expect("nested temporal_worker target dir"),
                 "-p",
                 "temporal_worker",
                 "--bin",
@@ -371,7 +376,9 @@ mod tests {
             .args([
                 "build",
                 "--target-dir",
-                nested_target.to_str().expect("nested outbox_worker target dir"),
+                nested_target
+                    .to_str()
+                    .expect("nested outbox_worker target dir"),
                 "-p",
                 "outbox_worker",
                 "--bin",
@@ -437,10 +444,13 @@ mod tests {
             .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
             .collect::<Vec<_>>();
         paths.sort();
-        paths.into_iter()
+        paths
+            .into_iter()
             .map(|path| {
                 serde_json::from_slice::<TruthCertificationFixture>(&fs::read(&path).unwrap())
-                    .unwrap_or_else(|err| panic!("failed to decode fixture {}: {err}", path.display()))
+                    .unwrap_or_else(|err| {
+                        panic!("failed to decode fixture {}: {err}", path.display())
+                    })
             })
             .collect()
     }
@@ -458,13 +468,14 @@ mod tests {
         for fixture in fixtures {
             let mut items = Vec::new();
             for (idx, page) in fixture.source_inputs.pages.iter().enumerate() {
-                let body = fs::read_to_string(truth_certification_fixtures_dir().join(&page.html_file))
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "failed to read source HTML {} for fixture {}: {err}",
-                            page.html_file, fixture.fixture_id
-                        )
-                    });
+                let body =
+                    fs::read_to_string(truth_certification_fixtures_dir().join(&page.html_file))
+                        .unwrap_or_else(|err| {
+                            panic!(
+                                "failed to read source HTML {} for fixture {}: {err}",
+                                page.html_file, fixture.fixture_id
+                            )
+                        });
                 let server =
                     stub_servers::spawn_text_stub(&page.route, body, "text/html; charset=utf-8")
                         .await
@@ -559,11 +570,17 @@ mod tests {
         let mut envs = env_overrides::btree_env([
             ("DATAFORSEO_ENDPOINT".to_string(), serp_endpoint.to_string()),
             ("DATAFORSEO_LOGIN".to_string(), "stub-login".to_string()),
-            ("DATAFORSEO_PASSWORD".to_string(), "stub-password".to_string()),
+            (
+                "DATAFORSEO_PASSWORD".to_string(),
+                "stub-password".to_string(),
+            ),
             ("DATAFORSEO_LANGUAGE_CODE".to_string(), "en".to_string()),
             ("DATAFORSEO_LOCATION_CODE".to_string(), "2840".to_string()),
             ("DATAFORSEO_DEPTH".to_string(), "10".to_string()),
-            ("SEO_LLM_PROVIDER".to_string(), "local_compatible".to_string()),
+            (
+                "SEO_LLM_PROVIDER".to_string(),
+                "local_compatible".to_string(),
+            ),
             (
                 "SEO_LLM_LOCAL_ENDPOINT".to_string(),
                 editorial_endpoint.to_string(),
@@ -581,10 +598,7 @@ mod tests {
         envs
     }
 
-    async fn reset_truth_certification_state(
-        pool: &sqlx::PgPool,
-        context_key: &str,
-    ) {
+    async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str) {
         let site_tables = sqlx::query_scalar::<_, String>(
             r#"
             SELECT tablename
@@ -883,7 +897,11 @@ mod tests {
             .collect()
     }
 
-    fn stable_rule_key(rule_type_key: &str, concept_key: &str, params: &serde_json::Value) -> String {
+    fn stable_rule_key(
+        rule_type_key: &str,
+        concept_key: &str,
+        params: &serde_json::Value,
+    ) -> String {
         format!(
             "{}|{}|{}",
             rule_type_key,
@@ -892,11 +910,7 @@ mod tests {
         )
     }
 
-    fn stable_decision_key(
-        concept_key: &str,
-        params: &serde_json::Value,
-        reason: &str,
-    ) -> String {
+    fn stable_decision_key(concept_key: &str, params: &serde_json::Value, reason: &str) -> String {
         format!(
             "{}|{}|{}",
             concept_key,
@@ -995,7 +1009,8 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let truth_adjudication = latest_output_payload_json(pool, run_id, "truth_adjudication").await;
+        let truth_adjudication =
+            latest_output_payload_json(pool, run_id, "truth_adjudication").await;
         let mut needs_hitl_set = BTreeSet::new();
         let mut rejected_set = BTreeSet::new();
         let mut truth_adjudication_decisions = BTreeSet::new();
@@ -1011,7 +1026,10 @@ mod tests {
                     .get("concept_canonical_key")
                     .and_then(|value| value.as_str())
                     .unwrap_or_default();
-                let params = decision.get("params").cloned().unwrap_or_else(|| serde_json::json!({}));
+                let params = decision
+                    .get("params")
+                    .cloned()
+                    .unwrap_or_else(|| serde_json::json!({}));
                 let reason = decision
                     .get("adjudication_reason")
                     .and_then(|value| value.as_str())
@@ -1153,7 +1171,8 @@ mod tests {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let draft_qas = latest_proto_outputs::<DraftQaOutputPayload>(pool, run_id, "draft_qa").await;
+        let draft_qas =
+            latest_proto_outputs::<DraftQaOutputPayload>(pool, run_id, "draft_qa").await;
         let draft_blocking_reasons = draft_qas
             .iter()
             .flat_map(|output| output.blocking_reasons.clone())
@@ -1167,7 +1186,10 @@ mod tests {
         let cms_review =
             latest_proto_outputs::<CmsPublishOutputPayload>(pool, run_id, "cms_request_review")
                 .await;
-        let publish_verdict = if cms_approved.iter().any(|output| output.verdict == "approved") {
+        let publish_verdict = if cms_approved
+            .iter()
+            .any(|output| output.verdict == "approved")
+        {
             "allow".to_string()
         } else if !cms_review.is_empty() || fixture.run_mode.contains("publish") {
             "blocked".to_string()
@@ -1175,13 +1197,12 @@ mod tests {
             "not_attempted".to_string()
         };
 
-        let projection_barriers =
-            latest_proto_outputs::<ProjectionBarrierAuditOutputPayload>(
-                pool,
-                run_id,
-                "projection_barrier(semantic_projection)",
-            )
-            .await;
+        let projection_barriers = latest_proto_outputs::<ProjectionBarrierAuditOutputPayload>(
+            pool,
+            run_id,
+            "projection_barrier(semantic_projection)",
+        )
+        .await;
         let projection_verdict = if projection_barriers
             .last()
             .map(|output| output.status.as_str() == "clear")
@@ -1224,23 +1245,19 @@ mod tests {
         let required_factual_blocks_without_support = draft_normalize_outputs
             .iter()
             .flat_map(|output| {
-                output
-                    .draft
-                    .as_ref()
-                    .into_iter()
-                    .flat_map(|draft| {
-                        draft.content_blocks.iter().filter_map(|block| {
-                            let factual = !matches!(
-                                block.section_role.as_str(),
-                                "related_pages" | "cta_disclaimer"
-                            );
-                            if block.required && factual && block.support_refs.is_empty() {
-                                Some(block.section_role.clone())
-                            } else {
-                                None
-                            }
-                        })
+                output.draft.as_ref().into_iter().flat_map(|draft| {
+                    draft.content_blocks.iter().filter_map(|block| {
+                        let factual = !matches!(
+                            block.section_role.as_str(),
+                            "related_pages" | "cta_disclaimer"
+                        );
+                        if block.required && factual && block.support_refs.is_empty() {
+                            Some(block.section_role.clone())
+                        } else {
+                            None
+                        }
                     })
+                })
             })
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -1262,7 +1279,10 @@ mod tests {
                 .any(|verdict| verdict != "publish_ready")
         {
             "blocked".to_string()
-        } else if draft_qas.iter().all(|output| output.verdict == "publish_ready") {
+        } else if draft_qas
+            .iter()
+            .all(|output| output.verdict == "publish_ready")
+        {
             "allow".to_string()
         } else {
             "blocked".to_string()
@@ -1272,10 +1292,14 @@ mod tests {
         if verified_rule_set != fixture.expected_outcomes.verified_rule_set {
             failure_reasons.push("verified_rule_set_mismatch".to_string());
         }
-        if needs_hitl_set.iter().cloned().collect::<Vec<_>>() != fixture.expected_outcomes.needs_hitl_set {
+        if needs_hitl_set.iter().cloned().collect::<Vec<_>>()
+            != fixture.expected_outcomes.needs_hitl_set
+        {
             failure_reasons.push("needs_hitl_set_mismatch".to_string());
         }
-        if rejected_set.iter().cloned().collect::<Vec<_>>() != fixture.expected_outcomes.rejected_set {
+        if rejected_set.iter().cloned().collect::<Vec<_>>()
+            != fixture.expected_outcomes.rejected_set
+        {
             failure_reasons.push("rejected_set_mismatch".to_string());
         }
         if contradiction_groups != fixture.expected_outcomes.contradiction_groups {
@@ -1455,11 +1479,7 @@ mod tests {
         source_url: &str,
         fragment_text: &str,
     ) {
-        let source_base_url = source_url
-            .split('/')
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("/");
+        let source_base_url = source_url.split('/').take(3).collect::<Vec<_>>().join("/");
         sqlx::query(
             r#"
             INSERT INTO kb.sources (source_key, source_type, source_label, base_url, trust_level, status)
@@ -2393,10 +2413,19 @@ mod tests {
 
         let (source_servers, serp_sequence, rendered_pages) =
             render_fixture_source_pages(&fixtures).await;
-        assert_eq!(source_servers.len(), fixtures.iter().map(|fixture| fixture.source_inputs.pages.len()).sum::<usize>());
+        assert_eq!(
+            source_servers.len(),
+            fixtures
+                .iter()
+                .map(|fixture| fixture.source_inputs.pages.len())
+                .sum::<usize>()
+        );
         let serp_stub = stub_servers::spawn_json_sequence_stub(
             "/v3/serp/google/organic/live/advanced",
-            serp_sequence.into_iter().map(|(_, payload)| payload).collect(),
+            serp_sequence
+                .into_iter()
+                .map(|(_, payload)| payload)
+                .collect(),
         )
         .await
         .unwrap();
@@ -2444,24 +2473,26 @@ mod tests {
 
         for fixture in &fixtures {
             assert_eq!(
-                fixture.business_scope.truth_identity_tuple,
-                "ES|tourist||BY",
+                fixture.business_scope.truth_identity_tuple, "ES|tourist||BY",
                 "fixture {} drifted from certification truth tuple",
                 fixture.fixture_id
             );
             assert_eq!(
-                fixture.business_scope.publishing_scope_tuple,
-                "alegria-site|ru-RU|ES|tourist|BY",
+                fixture.business_scope.publishing_scope_tuple, "alegria-site|ru-RU|ES|tourist|BY",
                 "fixture {} drifted from certification publish tuple",
                 fixture.fixture_id
             );
-            assert!(fixture
-                .invariants
-                .no_truth_promotion_from_retrieval_or_graph);
+            assert!(
+                fixture
+                    .invariants
+                    .no_truth_promotion_from_retrieval_or_graph
+            );
             assert!(fixture.invariants.no_source_tier_shortcut_to_verified);
-            assert!(fixture
-                .invariants
-                .no_unsupported_claim_reaches_draft_as_truth);
+            assert!(
+                fixture
+                    .invariants
+                    .no_unsupported_claim_reaches_draft_as_truth
+            );
 
             let run_id = Uuid::new_v4().to_string();
             let site_input = register_truth_certification_input(
@@ -2523,9 +2554,7 @@ mod tests {
             .await;
             let workflow_failed = match workflow_result {
                 Ok(Ok(_)) => false,
-                Ok(Err(_err)) => {
-                    true
-                }
+                Ok(Err(_err)) => true,
                 Err(err) => {
                     let diagnostics =
                         certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
@@ -2553,9 +2582,7 @@ mod tests {
                     certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
                 if !expected_workflow_failure_allowed(fixture, &report, &diagnostics) {
                     report.pass = false;
-                    report
-                        .failure_reasons
-                        .push("workflow_failed".to_string());
+                    report.failure_reasons.push("workflow_failed".to_string());
                 }
                 report.workflow_failure_diagnostics = Some(diagnostics);
             }
@@ -2708,7 +2735,10 @@ mod tests {
             "missing serp_ingest phase: {:?}",
             result.phase_reports
         );
-        assert!(result.phase_reports.iter().any(|r| r.phase == "serp_ingest"));
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|r| r.phase == "serp_ingest"));
         assert!(
             result
                 .phase_reports
@@ -2717,7 +2747,10 @@ mod tests {
             "missing crawl_sources phase: {:?}",
             result.phase_reports
         );
-        assert!(result.phase_reports.iter().any(|r| r.phase == "crawl_sources"));
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|r| r.phase == "crawl_sources"));
         assert!(
             result
                 .phase_reports
@@ -2726,7 +2759,10 @@ mod tests {
             "missing draft_assemble phase: {:?}",
             result.phase_reports
         );
-        assert!(result.phase_reports.iter().any(|r| r.phase == "draft_assemble"));
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|r| r.phase == "draft_assemble"));
 
         let draft_count: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")
             .fetch_one(&infra.postgres.pool)

@@ -7,9 +7,9 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
+use runtime_models::GraphPlanningContext;
 use seo_ports::{PlanningRepository, SemanticLinkSearchPort, SerpSearchPort};
 use std::collections::{HashMap, HashSet};
-use runtime_models::GraphPlanningContext;
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name)
@@ -93,52 +93,58 @@ fn to_graph_planning_context_state(context: GraphPlanningContext) -> GraphPlanni
         keyword_clusters: context
             .keyword_clusters
             .into_iter()
-            .map(|cluster| contracts::generated::alegria::temporal::v1::KeywordClusterState {
-                cluster_key: cluster.cluster_key,
-                scope_signature: cluster.scope_signature,
-                seed_keyword: cluster.seed_keyword,
-                dominant_intent: cluster.dominant_intent,
-                status: cluster.status,
-                cluster_version: cluster.cluster_version,
-                reason_code: cluster.reason_code,
-                topic_keys: cluster.topic_keys,
-                triple_refs: cluster.triple_refs,
-                graph_confidence: parse_graph_confidence(&cluster.graph_confidence),
-                support_refs: cluster.support_refs,
-            })
+            .map(
+                |cluster| contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: cluster.cluster_key,
+                    scope_signature: cluster.scope_signature,
+                    seed_keyword: cluster.seed_keyword,
+                    dominant_intent: cluster.dominant_intent,
+                    status: cluster.status,
+                    cluster_version: cluster.cluster_version,
+                    reason_code: cluster.reason_code,
+                    topic_keys: cluster.topic_keys,
+                    triple_refs: cluster.triple_refs,
+                    graph_confidence: parse_graph_confidence(&cluster.graph_confidence),
+                    support_refs: cluster.support_refs,
+                },
+            )
             .collect(),
         page_nodes: context
             .page_nodes
             .into_iter()
-            .map(|node| contracts::generated::alegria::temporal::v1::PageNodeState {
-                page_node_key: node.page_node_key,
-                scope_signature: node.scope_signature,
-                keyword_cluster_key: node.keyword_cluster_key,
-                blueprint_key: node.blueprint_key,
-                page_type_key: node.page_type_key,
-                dominant_intent: node.dominant_intent,
-                canonical_slug: node.canonical_slug,
-                canonical_url_path: node.canonical_url_path,
-                lifecycle_state: node.lifecycle_state,
-                ..Default::default()
-            })
+            .map(
+                |node| contracts::generated::alegria::temporal::v1::PageNodeState {
+                    page_node_key: node.page_node_key,
+                    scope_signature: node.scope_signature,
+                    keyword_cluster_key: node.keyword_cluster_key,
+                    blueprint_key: node.blueprint_key,
+                    page_type_key: node.page_type_key,
+                    dominant_intent: node.dominant_intent,
+                    canonical_slug: node.canonical_slug,
+                    canonical_url_path: node.canonical_url_path,
+                    lifecycle_state: node.lifecycle_state,
+                    ..Default::default()
+                },
+            )
             .collect(),
         content_gaps: context
             .content_gaps
             .into_iter()
-            .map(|gap| contracts::generated::alegria::temporal::v1::ContentGapState {
-                content_gap_key: gap.content_gap_key,
-                scope_signature: gap.scope_signature,
-                page_node_key: gap.page_node_key,
-                missing_topic: gap.missing_topic,
-                severity: gap.severity,
-                status: gap.status,
-                reason_code: gap.reason_code,
-                topic_keys: gap.topic_keys,
-                triple_refs: gap.triple_refs,
-                graph_confidence: parse_graph_confidence(&gap.graph_confidence),
-                support_refs: gap.support_refs,
-            })
+            .map(
+                |gap| contracts::generated::alegria::temporal::v1::ContentGapState {
+                    content_gap_key: gap.content_gap_key,
+                    scope_signature: gap.scope_signature,
+                    page_node_key: gap.page_node_key,
+                    missing_topic: gap.missing_topic,
+                    severity: gap.severity,
+                    status: gap.status,
+                    reason_code: gap.reason_code,
+                    topic_keys: gap.topic_keys,
+                    triple_refs: gap.triple_refs,
+                    graph_confidence: parse_graph_confidence(&gap.graph_confidence),
+                    support_refs: gap.support_refs,
+                },
+            )
             .collect(),
         link_recommendations: context
             .link_recommendations
@@ -336,8 +342,32 @@ pub async fn run_serp_normalize<R: PlanningRepository>(
 ) -> Result<SerpNormalizeOutputPayload, DomainError> {
     let mut output = seo_steps::serp_normalize_step::execute(input);
     if voyage_retrieval_ready_or_optional()? {
+        let clusters = search_port.cluster_demand_queries(&input.queries).await?;
+        let mut query_cluster = HashMap::<String, (String, f32)>::new();
+        for cluster in clusters {
+            for query in cluster.member_queries {
+                query_cluster.insert(
+                    query.to_ascii_lowercase(),
+                    (cluster.cluster_key.clone(), cluster.confidence),
+                );
+            }
+        }
         for pattern in &mut output.serp_patterns {
-            let candidates = search_port.search_keyword_clusters(&pattern.query, 3).await?;
+            if let Some((cluster_key, confidence)) =
+                query_cluster.get(&pattern.query.to_ascii_lowercase())
+            {
+                let cluster_ref = format!("cluster_ref:{cluster_key}");
+                if pattern.evidence_ref.trim().is_empty() {
+                    pattern.evidence_ref = cluster_ref;
+                } else if !pattern.evidence_ref.contains(&cluster_ref) {
+                    pattern.evidence_ref = format!("{}|{}", pattern.evidence_ref, cluster_ref);
+                }
+                pattern.reliability_score =
+                    clamp01(pattern.reliability_score + (*confidence as f64 * 0.12));
+            }
+            let candidates = search_port
+                .search_keyword_clusters(&pattern.query, 3)
+                .await?;
             let Some(best) = candidates.first() else {
                 continue;
             };
@@ -349,9 +379,8 @@ pub async fn run_serp_normalize<R: PlanningRepository>(
                     pattern.evidence_ref = format!("{}|{}", pattern.evidence_ref, cluster_ref);
                 }
             }
-            pattern.reliability_score = clamp01(
-                pattern.reliability_score + (best.score as f64 * 0.15),
-            );
+            pattern.reliability_score =
+                clamp01(pattern.reliability_score + (best.score as f64 * 0.15));
             if pattern.status == "partial" && pattern.reliability_score >= 0.5 {
                 pattern.status = "active".to_string();
             }
@@ -371,8 +400,10 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
-    let graph_context =
-        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let graph_context = to_graph_planning_context_state(
+        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+            .await?,
+    );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
     let mut output = seo_steps::opportunity_build_step::execute(&enriched);
@@ -388,10 +419,8 @@ pub async fn run_opportunity_build<R: PlanningRepository>(
                 cluster.reason_code = "voyage_cluster_affinity".to_string();
             }
             for candidate in candidates.iter().take(3) {
-                let support_ref = format!(
-                    "qdrant://seo_keyword_clusters_4/{}",
-                    candidate.entity_key
-                );
+                let support_ref =
+                    format!("qdrant://seo_keyword_clusters_4/{}", candidate.entity_key);
                 if !cluster.support_refs.contains(&support_ref) {
                     cluster.support_refs.push(support_ref);
                 }
@@ -413,8 +442,10 @@ pub async fn run_ia_build<R: PlanningRepository>(
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
-    let graph_context =
-        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let graph_context = to_graph_planning_context_state(
+        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+            .await?,
+    );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
     let mut output = seo_steps::ia_build_step::execute(&enriched);
@@ -422,10 +453,7 @@ pub async fn run_ia_build<R: PlanningRepository>(
         let mut cluster_owner = HashMap::<String, String>::new();
         for node in &output.page_nodes {
             if !node.keyword_cluster_key.trim().is_empty() {
-                cluster_owner.insert(
-                    node.keyword_cluster_key.clone(),
-                    node.page_node_key.clone(),
-                );
+                cluster_owner.insert(node.keyword_cluster_key.clone(), node.page_node_key.clone());
             }
         }
         for node in &output.page_nodes {
@@ -489,13 +517,16 @@ pub async fn run_link_recommend<R: PlanningRepository, S: SemanticLinkSearchPort
         .first()
         .map(|node| node.scope_signature.clone())
         .unwrap_or_default();
-    let graph_context =
-        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let graph_context = to_graph_planning_context_state(
+        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+            .await?,
+    );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
     let mut output = seo_steps::link_recommend_step::execute(&enriched);
     enrich_semantic_link_recommendations(search_port, &enriched, &mut output).await?;
-    repo.persist_link_recommend_output(&enriched, &output).await?;
+    repo.persist_link_recommend_output(&enriched, &output)
+        .await?;
     Ok(output)
 }
 
@@ -509,8 +540,10 @@ pub async fn run_global_site_reconcile<R: PlanningRepository>(
         .as_ref()
         .map(|scope| scope.scope_signature.clone())
         .unwrap_or_default();
-    let graph_context =
-        to_graph_planning_context_state(repo.load_graph_planning_context(&input.run_id, &scope_signature).await?);
+    let graph_context = to_graph_planning_context_state(
+        repo.load_graph_planning_context(&input.run_id, &scope_signature)
+            .await?,
+    );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
     let mut output = seo_steps::global_site_reconcile_step::execute(&enriched);
@@ -567,11 +600,11 @@ pub async fn run_global_site_reconcile<R: PlanningRepository>(
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::Mutex;
     use seo_ports::{
         GlobalNavigationPersistReport, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
         SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
     };
+    use std::sync::Mutex;
 
     #[derive(Default)]
     struct FakePlanningRepo;
@@ -693,6 +726,17 @@ mod tests {
             Ok(vec![SemanticLinkCandidate {
                 entity_key: "cluster:spain-tourist".to_string(),
                 score: 0.89,
+            }])
+        }
+
+        async fn cluster_demand_queries(
+            &self,
+            queries: &[String],
+        ) -> Result<Vec<seo_ports::SemanticDemandCluster>, DomainError> {
+            Ok(vec![seo_ports::SemanticDemandCluster {
+                cluster_key: "step0:cluster-spain".to_string(),
+                member_queries: queries.to_vec(),
+                confidence: 0.9,
             }])
         }
     }
@@ -877,10 +921,12 @@ mod tests {
             &FakeSemanticSearchPort,
             &OpportunityBuildInputPayload {
                 run_id: "run-1".to_string(),
-                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    scope_signature: "scope".to_string(),
-                    ..Default::default()
-                }),
+                scope: Some(
+                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                        scope_signature: "scope".to_string(),
+                        ..Default::default()
+                    },
+                ),
                 serp_patterns: vec![
                     contracts::generated::alegria::temporal::v1::SerpPatternState {
                         serp_pattern_key: "p1".to_string(),
@@ -915,9 +961,15 @@ mod tests {
             .all(|cluster| cluster.reason_code == "graph_topic_family_merge"));
         assert!(persisted_output.content_gaps.iter().any(|gap| {
             gap.reason_code == "graph_missing_topic_coverage"
-                && gap.topic_keys.iter().any(|topic| topic == "processing-time")
+                && gap
+                    .topic_keys
+                    .iter()
+                    .any(|topic| topic == "processing-time")
         }));
-        assert_eq!(output.keyword_clusters.len(), persisted_output.keyword_clusters.len());
+        assert_eq!(
+            output.keyword_clusters.len(),
+            persisted_output.keyword_clusters.len()
+        );
     }
 
     #[tokio::test]
@@ -938,10 +990,12 @@ mod tests {
             &FakeSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
                 run_id: "run-2".to_string(),
-                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    scope_signature: "scope".to_string(),
-                    ..Default::default()
-                }),
+                scope: Some(
+                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                        scope_signature: "scope".to_string(),
+                        ..Default::default()
+                    },
+                ),
                 page_nodes: vec![contracts::generated::alegria::temporal::v1::PageNodeState {
                     page_node_key: "page-spain".to_string(),
                     scope_signature: "scope".to_string(),
@@ -993,6 +1047,17 @@ mod tests {
                 score: 0.9,
             }])
         }
+
+        async fn cluster_demand_queries(
+            &self,
+            queries: &[String],
+        ) -> Result<Vec<seo_ports::SemanticDemandCluster>, DomainError> {
+            Ok(vec![seo_ports::SemanticDemandCluster {
+                cluster_key: "step0:overlap".to_string(),
+                member_queries: queries.to_vec(),
+                confidence: 0.9,
+            }])
+        }
     }
 
     #[tokio::test]
@@ -1004,13 +1069,15 @@ mod tests {
             &OverlapSemanticSearchPort,
             &IaBuildInputPayload {
                 run_id: "run-ia".to_string(),
-                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    scope_signature: "scope".to_string(),
-                    locale: "ru-RU".to_string(),
-                    country_code: "ES".to_string(),
-                    visa_type: "tourist".to_string(),
-                    ..Default::default()
-                }),
+                scope: Some(
+                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                        scope_signature: "scope".to_string(),
+                        locale: "ru-RU".to_string(),
+                        country_code: "ES".to_string(),
+                        visa_type: "tourist".to_string(),
+                        ..Default::default()
+                    },
+                ),
                 keyword_clusters: vec![
                     contracts::generated::alegria::temporal::v1::KeywordClusterState {
                         cluster_key: "cluster-a".to_string(),
@@ -1034,16 +1101,18 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(output
-            .cannibalization_conflicts
-            .iter()
-            .any(|conflict| conflict.conflict_reason == "semantic_cluster_owner_overlap"),
+        assert!(
+            output
+                .cannibalization_conflicts
+                .iter()
+                .any(|conflict| conflict.conflict_reason == "semantic_cluster_owner_overlap"),
             "conflicts={:?}",
             output
                 .cannibalization_conflicts
                 .iter()
                 .map(|conflict| (&conflict.conflict_key, &conflict.conflict_reason))
-                .collect::<Vec<_>>());
+                .collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -1055,10 +1124,12 @@ mod tests {
             &OverlapSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
                 run_id: "run-global".to_string(),
-                scope: Some(contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    scope_signature: "scope".to_string(),
-                    ..Default::default()
-                }),
+                scope: Some(
+                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                        scope_signature: "scope".to_string(),
+                        ..Default::default()
+                    },
+                ),
                 page_nodes: vec![
                     contracts::generated::alegria::temporal::v1::PageNodeState {
                         page_node_key: "source".to_string(),

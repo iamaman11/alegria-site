@@ -246,33 +246,35 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
     if let Some(graph_context) = input.graph_context.as_ref() {
         for coverage in &graph_context.coverage_signals {
             for missing_topic in &coverage.missing_topic_keys {
-                content_gaps.push(contracts::generated::alegria::temporal::v1::ContentGapState {
-                    content_gap_key: primitives::seo::seo_artifact_key(
-                        "content_gap",
-                        &[
-                            &page_nodes
-                                .first()
-                                .map(|page| page.scope_signature.clone())
-                                .unwrap_or_default(),
-                            missing_topic,
-                            "global_reconcile_missing_topic",
-                            "seo_content_gap@1",
-                        ],
-                    ),
-                    scope_signature: page_nodes
-                        .first()
-                        .map(|page| page.scope_signature.clone())
-                        .unwrap_or_default(),
-                    page_node_key: coverage.page_node_key.clone(),
-                    missing_topic: missing_topic.clone(),
-                    severity: "medium".to_string(),
-                    status: "open".to_string(),
-                    reason_code: "global_reconcile_missing_topic".to_string(),
-                    topic_keys: vec![missing_topic.clone()],
-                    triple_refs: Vec::new(),
-                    graph_confidence: coverage.graph_confidence,
-                    support_refs: vec![format!("coverage://{}", coverage.page_node_key)],
-                });
+                content_gaps.push(
+                    contracts::generated::alegria::temporal::v1::ContentGapState {
+                        content_gap_key: primitives::seo::seo_artifact_key(
+                            "content_gap",
+                            &[
+                                &page_nodes
+                                    .first()
+                                    .map(|page| page.scope_signature.clone())
+                                    .unwrap_or_default(),
+                                missing_topic,
+                                "global_reconcile_missing_topic",
+                                "seo_content_gap@1",
+                            ],
+                        ),
+                        scope_signature: page_nodes
+                            .first()
+                            .map(|page| page.scope_signature.clone())
+                            .unwrap_or_default(),
+                        page_node_key: coverage.page_node_key.clone(),
+                        missing_topic: missing_topic.clone(),
+                        severity: "medium".to_string(),
+                        status: "open".to_string(),
+                        reason_code: "global_reconcile_missing_topic".to_string(),
+                        topic_keys: vec![missing_topic.clone()],
+                        triple_refs: Vec::new(),
+                        graph_confidence: coverage.graph_confidence,
+                        support_refs: vec![format!("coverage://{}", coverage.page_node_key)],
+                    },
+                );
             }
         }
     }
@@ -297,16 +299,18 @@ mod tests {
     #[test]
     fn emits_graph_backed_missing_topic_gap_without_upgrading_page_state() {
         let output = execute(&GlobalSiteReconcileInputPayload {
-            graph_context: Some(contracts::generated::alegria::temporal::v1::GraphPlanningContextState {
-                coverage_signals: vec![GraphPlanningCoverageSignalState {
-                    page_node_key: "detail".to_string(),
-                    keyword_cluster_key: "cluster-a".to_string(),
-                    covered_topic_keys: vec!["topic_a".to_string()],
-                    missing_topic_keys: vec!["topic_b".to_string()],
-                    graph_confidence: 0.73,
-                }],
-                ..Default::default()
-            }),
+            graph_context: Some(
+                contracts::generated::alegria::temporal::v1::GraphPlanningContextState {
+                    coverage_signals: vec![GraphPlanningCoverageSignalState {
+                        page_node_key: "detail".to_string(),
+                        keyword_cluster_key: "cluster-a".to_string(),
+                        covered_topic_keys: vec!["topic_a".to_string()],
+                        missing_topic_keys: vec!["topic_b".to_string()],
+                        graph_confidence: 0.73,
+                    }],
+                    ..Default::default()
+                },
+            ),
             page_nodes: vec![
                 PageNodeState {
                     page_node_key: "country".to_string(),
@@ -333,7 +337,10 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(output.content_gaps.len(), 1);
-        assert_eq!(output.content_gaps[0].reason_code, "global_reconcile_missing_topic");
+        assert_eq!(
+            output.content_gaps[0].reason_code,
+            "global_reconcile_missing_topic"
+        );
         assert!(output
             .page_nodes
             .iter()

@@ -5,9 +5,14 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
     WorkflowSignalOptions, WorkflowStartOptions,
 };
 use infrastructure::adapters::{
-    neo4rs_adapter, qdrant_client_adapter, seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-    sqlx_adapter::connect_pg, sqlx_seo_adapter,
-    voyage_api_adapter::{VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype},
+    neo4rs_adapter, qdrant_client_adapter,
+    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
+    sqlx_adapter::connect_pg,
+    sqlx_seo_adapter,
+    voyage_api_adapter::{
+        VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+        VoyageRerankOptions,
+    },
 };
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
 use seo_application::execution::normalize_run_mode;
@@ -419,6 +424,92 @@ async fn probe_neo4j(uri: &str, user: &str, password: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Debug, Clone, Default)]
+struct VoyageCapabilityProbe {
+    embeddings_ready: bool,
+    contextualized_ready: bool,
+    rerank_ready: bool,
+    errors: Vec<String>,
+}
+
+async fn probe_voyage_capabilities() -> VoyageCapabilityProbe {
+    let api_key = match env::var("VOYAGE_API_KEY") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            return VoyageCapabilityProbe {
+                errors: vec!["missing VOYAGE_API_KEY".to_string()],
+                ..VoyageCapabilityProbe::default()
+            }
+        }
+    };
+    let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string());
+    let context_model =
+        env::var("VOYAGE_CONTEXT_MODEL").unwrap_or_else(|_| "voyage-context-3".to_string());
+    let voyage = VoyageClient::new(api_key, model);
+    let mut probe = VoyageCapabilityProbe::default();
+
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        voyage.embed_batch_with_settings(
+            &["voyage_capability_probe"],
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Query),
+                output_dimension: Some(1024),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.embeddings_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("embeddings:{err}")),
+        Err(_) => probe.errors.push("embeddings:timeout".to_string()),
+    }
+
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        voyage.contextualized_embed(
+            &[vec!["voyage_contextual_probe"]],
+            &VoyageEmbeddingOptions {
+                input_type: Some(VoyageInputType::Query),
+                output_dimension: Some(1024),
+                output_dtype: Some(VoyageOutputDtype::Float),
+                truncation: Some(false),
+            },
+            Some(&context_model),
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.contextualized_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("contextualized:{err}")),
+        Err(_) => probe.errors.push("contextualized:timeout".to_string()),
+    }
+
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        voyage.rerank(
+            "voyage rerank probe",
+            &["voyage rerank probe document"],
+            &VoyageRerankOptions {
+                top_k: Some(1),
+                truncation: Some(false),
+                return_documents: false,
+            },
+            None,
+        ),
+    )
+    .await
+    {
+        Ok(Ok(_)) => probe.rerank_ready = true,
+        Ok(Err(err)) => probe.errors.push(format!("rerank:{err}")),
+        Err(_) => probe.errors.push("rerank:timeout".to_string()),
+    }
+
+    probe
+}
+
 async fn run_seo_preflight(
     database_url: Option<String>,
     context_key: Option<String>,
@@ -605,9 +696,9 @@ async fn run_seo_preflight(
             }
         })
         .collect::<Vec<_>>();
-    let qdrant_collection_contract_ready = required_collection_statuses
-        .iter()
-        .all(|status| status.exists && status.projection_complete && status.qdrant_collection_exists);
+    let qdrant_collection_contract_ready = required_collection_statuses.iter().all(|status| {
+        status.exists && status.projection_complete && status.qdrant_collection_exists
+    });
 
     let mut projection_blocked = false;
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&pool)
@@ -665,10 +756,14 @@ async fn run_seo_preflight(
         println!("OK projection_barrier all_targets_drained=true");
     }
 
-    let voyage_ready = env_set("VOYAGE_API_KEY");
+    let capability_probe = probe_voyage_capabilities().await;
+    let voyage_embeddings_ready = capability_probe.embeddings_ready;
+    let voyage_contextualized_ready = capability_probe.contextualized_ready;
+    let voyage_rerank_ready = capability_probe.rerank_ready;
     let retrieval_capability_required = env_flag("RETRIEVAL_CAPABILITY_REQUIRED");
     let canonical_vector_retrieval_required = env_flag("CANONICAL_VECTOR_RETRIEVAL_REQUIRED");
-    let contextual_raw_chunk_retrieval_required = env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
+    let contextual_raw_chunk_retrieval_required =
+        env_flag("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED");
     let voyage_rerank_required = env_flag("VOYAGE_RERANK_REQUIRED");
 
     let missing_collections = required_collection_statuses
@@ -687,10 +782,10 @@ async fn run_seo_preflight(
         .map(|status| status.collection_name.clone())
         .collect::<Vec<_>>();
     let retrieval_status = if retrieval_capability_required {
-        if !voyage_ready
-            || (contextual_raw_chunk_retrieval_required && !voyage_ready)
-            || (voyage_rerank_required && !voyage_ready)
-            || (canonical_vector_retrieval_required && !voyage_ready)
+        if !voyage_embeddings_ready
+            || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
+            || (voyage_rerank_required && !voyage_rerank_ready)
+            || (canonical_vector_retrieval_required && !voyage_embeddings_ready)
         {
             "blocked_provider_capability".to_string()
         } else if !qdrant_ready {
@@ -711,7 +806,14 @@ async fn run_seo_preflight(
     };
     let retrieval_block_reason = match retrieval_status.as_str() {
         "blocked_provider_capability" => Some(
-            "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, but provider credentials are not ready".to_string(),
+            format!(
+                "retrieval contract requires Voyage embeddings/contextualized/rerank capabilities, probe failed: {}",
+                if capability_probe.errors.is_empty() {
+                    "unknown capability probe failure".to_string()
+                } else {
+                    capability_probe.errors.join("; ")
+                }
+            ),
         ),
         "blocked_retrieval_contract" => Some(
             "retrieval contract requires reachable Qdrant and required retrieval surfaces".to_string(),
@@ -739,16 +841,21 @@ async fn run_seo_preflight(
             "WARN dataforseo_credentials missing; live SERP discovery will not populate crawl queue"
         );
     }
-    if voyage_ready {
-        println!("OK voyage_credentials");
+    if voyage_embeddings_ready || voyage_contextualized_ready || voyage_rerank_ready {
+        println!("OK voyage_capability_probe");
         println!(
-            "OK voyage_models embedding={} contextualized={} rerank={}",
+            "OK voyage_models embedding={} contextualized={} rerank={} probe={{embeddings:{},contextualized:{},rerank:{}}}",
             env::var("VOYAGE_MODEL").unwrap_or_else(|_| "voyage-4-large".to_string()),
             env::var("VOYAGE_CONTEXT_MODEL").unwrap_or_else(|_| "voyage-context-3".to_string()),
-            env::var("VOYAGE_RERANK_MODEL").unwrap_or_else(|_| "rerank-2.5".to_string())
+            env::var("VOYAGE_RERANK_MODEL").unwrap_or_else(|_| "rerank-2.5".to_string()),
+            voyage_embeddings_ready,
+            voyage_contextualized_ready,
+            voyage_rerank_ready
         );
     } else {
-        println!("WARN voyage_credentials missing; semantic retrieval will be limited");
+        println!(
+            "WARN voyage_capability_probe failed; semantic retrieval contract may block runtime"
+        );
     }
     if qdrant_ready {
         println!(
@@ -795,9 +902,9 @@ async fn run_seo_preflight(
         canonical_vector_retrieval_required,
         contextual_raw_chunk_retrieval_required,
         voyage_rerank_required,
-        voyage_embeddings_ready: voyage_ready,
-        voyage_contextualized_ready: voyage_ready,
-        voyage_rerank_ready: voyage_ready,
+        voyage_embeddings_ready,
+        voyage_contextualized_ready,
+        voyage_rerank_ready,
         qdrant_ready,
         qdrant_collection_contract_ready,
         projection_blocked,
@@ -807,8 +914,9 @@ async fn run_seo_preflight(
     if let Some(path) = report_json.as_deref() {
         let path = PathBuf::from(path);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create seo preflight report parent: {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("create seo preflight report parent: {}", parent.display())
+            })?;
         }
         fs::write(
             &path,

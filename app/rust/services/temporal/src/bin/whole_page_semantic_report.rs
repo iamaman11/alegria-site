@@ -109,7 +109,8 @@ fn load_fixtures(dir: &PathBuf) -> Result<Vec<WholePageSemanticFixture>> {
         .with_context(|| format!("list fixture dir {}", dir.display()))?;
     paths.retain(|path| path.extension().and_then(|value| value.to_str()) == Some("json"));
     paths.sort();
-    paths.into_iter()
+    paths
+        .into_iter()
         .map(|path| {
             let raw = fs::read_to_string(&path)
                 .with_context(|| format!("read fixture {}", path.display()))?;
@@ -237,22 +238,22 @@ fn main() -> Result<()> {
             .clone()
             .unwrap_or_default()
             .into_iter()
-            .map(|hit| whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
-                prototype_id: hit.prototype_id,
-                prototype_family: hit.prototype_family,
-                score: hit.score,
-                page_mode: hit.page_mode,
-                dominant_layers: hit.dominant_layers,
-                country_hints: hit.country_hints,
-                visa_type_hints: hit.visa_type_hints,
-                authority_hints: hit.authority_hints,
-                mixed_section_pressure: hit.mixed_section_pressure,
-            })
+            .map(
+                |hit| whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
+                    prototype_id: hit.prototype_id,
+                    prototype_family: hit.prototype_family,
+                    score: hit.score,
+                    page_mode: hit.page_mode,
+                    dominant_layers: hit.dominant_layers,
+                    country_hints: hit.country_hints,
+                    visa_type_hints: hit.visa_type_hints,
+                    authority_hints: hit.authority_hints,
+                    mixed_section_pressure: hit.mixed_section_pressure,
+                },
+            )
             .collect::<Vec<_>>();
-        let actual = activities::operations::evaluate_whole_page_semantic_fixture(
-            &sections,
-            &advisory_hits,
-        );
+        let actual =
+            activities::operations::evaluate_whole_page_semantic_fixture(&sections, &advisory_hits);
         let fixture_failures = compare_fixture(&fixture, &actual);
         if !fixture_failures.is_empty() {
             failures.push(format!(
@@ -295,7 +296,10 @@ fn main() -> Result<()> {
     println!("report: {}", report_path.display());
 
     if !failures.is_empty() {
-        anyhow::bail!("whole-page semantic fixture failures:\n{}", failures.join("\n"));
+        anyhow::bail!(
+            "whole-page semantic fixture failures:\n{}",
+            failures.join("\n")
+        );
     }
 
     println!("WHOLE_PAGE_SEMANTIC_FIXTURES: OK");

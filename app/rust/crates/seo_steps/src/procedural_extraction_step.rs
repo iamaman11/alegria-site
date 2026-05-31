@@ -73,8 +73,7 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
     }
     if input.mentions.iter().any(|mention| {
         let raw = normalized(&mention.raw_text);
-        mention.entity_type == "concept"
-            && (raw.starts_with("страхов") || raw == "insurance")
+        mention.entity_type == "concept" && (raw.starts_with("страхов") || raw == "insurance")
     }) {
         rules.push(ProceduralRule {
             rule_key: "insurance_required".to_string(),

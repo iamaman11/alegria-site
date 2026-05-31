@@ -36,7 +36,7 @@ mod queries {
                    trust_level, freshness_ttl_days, override_eligible
             FROM kb.sources
             WHERE status = 'active'
-            "#
+            "#,
         )
         .fetch_all(pool)
         .await?;

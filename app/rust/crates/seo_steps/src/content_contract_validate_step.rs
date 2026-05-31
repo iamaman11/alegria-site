@@ -169,13 +169,7 @@ mod tests {
             draft: Some(DraftState {
                 content_blocks: runtime_models::seo_blocks::mandatory_section_roles()
                     .iter()
-                    .map(|role| {
-                        block(
-                            role,
-                            block_type_for_role(role),
-                            *role != "documents",
-                        )
-                    })
+                    .map(|role| block(role, block_type_for_role(role), *role != "documents"))
                     .collect(),
                 ..DraftState::default()
             }),

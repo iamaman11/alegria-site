@@ -48,7 +48,10 @@ pub async fn rerank_records(
     }
     let voyage_api_key =
         std::env::var("VOYAGE_API_KEY").map_err(|_| anyhow!("VOYAGE_API_KEY is not set"))?;
-    let voyage = VoyageClient::new(voyage_api_key, env_voyage_model(VoyageSearchSurface::Standard));
+    let voyage = VoyageClient::new(
+        voyage_api_key,
+        env_voyage_model(VoyageSearchSurface::Standard),
+    );
     let documents = records
         .iter()
         .map(|record| {

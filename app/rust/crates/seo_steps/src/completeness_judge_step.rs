@@ -122,10 +122,7 @@ mod tests {
             raw_text: raw_text.to_string(),
             source_numeric_tokens: vec!["80".to_string(), "15".to_string()],
             extracted_numeric_tokens: vec!["80".to_string(), "15".to_string()],
-            extracted_rule_keys: vec![
-                "consular_fee".to_string(),
-                "processing_time".to_string(),
-            ],
+            extracted_rule_keys: vec!["consular_fee".to_string(), "processing_time".to_string()],
         });
         assert!(complete.completeness_score >= sparse.completeness_score);
         assert!(complete.missing_elements.len() <= sparse.missing_elements.len());

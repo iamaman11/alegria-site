@@ -15,7 +15,7 @@ This file defines:
 - which Qdrant collections belong to each retrieval surface;
 - parameter policy for `input_type`, `truncation`, vector dimension, and dtype;
 - the non-authority boundary between retrieval and truth;
-- which parts are active now and which remain target policy for later tranches.
+- which parts are active now and which remain externally blocked.
 
 ---
 
@@ -151,12 +151,12 @@ In that mode:
 
 These producers are active projection surfaces. Their retrieval consumers remain bounded by the step policy below and may not become authority paths.
 
-### 5.2 Target-next, not yet universally active
+### 5.2 External closure blockers (non-runtime-policy)
 
-- `rerank-2.5` inside planning merge/refinement surfaces beyond link recommendation
-- live evidence proving every required collection is populated, fresh, and projection-complete under the hard-required retrieval contract
+- live evidence proving every required collection is populated, fresh, and projection-complete under the hard-required retrieval contract for each target environment
+- live-provider production gate pass can still be blocked by external infra incidents (for example registry/network outages) even when runtime policy is active in code
 
-`kb_canonical_4` is now the only accepted canonical vector retrieval surface in runtime policy. The voyage4 projection producers above are active; remaining items here require explicit evidence before they can be marked universally active.
+`kb_canonical_4` remains the only accepted canonical vector retrieval surface in runtime policy.
 
 ---
 
@@ -199,12 +199,17 @@ This applies to Russian, mixed Russian/English, and multilingual demand text. `v
 ### Steps 37-42
 
 - planning projection to `seo_keyword_clusters_4` is active
-- planning retrieval/rerank expansion beyond existing semantic link search remains target policy, not yet universally active
+- `serp_normalize` attaches demand-cluster refs from Step 0 clustering
+- `opportunity_build` uses retrieval+rerank-backed `seo_keyword_clusters_4` affinity and writes support refs
+- `ia_build` uses retrieval-backed ownership conflict surfacing for topic families
+- `link_recommend` and `global_site_reconcile` use retrieval+rerank neighbor lanes as active runtime behavior (non-authoritative)
 
 ### Steps 43-56
 
 - draft/topical support projection to `editorial_topics_4` is active
-- draft support ordering, unsupported-claim retrieval, plagiarism-risk retrieval, and rebuild neighborhood widening remain target policy unless a specific tranche marks them active
+- `draft_assemble` active retrieval order: `verified_rules_4 -> raw_chunks_ctx -> editorial_topics_4 -> raw_chunks_4` with rerank
+- `draft_qa` appends machine-readable retrieval diagnostics traces for unsupported-claim retrieval, semantic duplication, and plagiarism/boilerplate risk; verdict authority remains deterministic
+- `rebuild_detect` includes active retrieval-based semantic-neighbor widening evidence as advisory-only reason enrichment
 
 ---
 

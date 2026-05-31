@@ -686,9 +686,15 @@ impl AlegriaActivities {
         input: operations::CommercialSignalExtractionSweepInput,
     ) -> Result<operations::CommercialSignalExtractionSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "commercial_signal_extraction", 1, &input, || async {
-            operations::commercial_signal_extraction_sweep_impl(self.as_ref(), &input).await
-        })
+        self.execute_step(
+            &run_id,
+            "commercial_signal_extraction",
+            1,
+            &input,
+            || async {
+                operations::commercial_signal_extraction_sweep_impl(self.as_ref(), &input).await
+            },
+        )
         .await
     }
 

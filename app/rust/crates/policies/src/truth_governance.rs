@@ -49,9 +49,10 @@ pub fn adjudicate_truth_candidates_with_governance(
             });
             continue;
         }
-        if let Some(reason) =
-            freshness_or_completeness_block_reason(candidate.freshness_class.as_str(), candidate.completeness_class.as_str())
-        {
+        if let Some(reason) = freshness_or_completeness_block_reason(
+            candidate.freshness_class.as_str(),
+            candidate.completeness_class.as_str(),
+        ) {
             decisions.push(TruthAdjudicationDecision {
                 rule_candidate_id: candidate.rule_candidate_id.clone(),
                 decision: "needs_hitl".to_string(),
@@ -179,7 +180,10 @@ pub fn adjudicate_truth_candidates_with_governance(
 
     if structured.len() == 1 {
         let candidate = structured[0];
-        let governance = source_registry.get(&candidate.source_key).cloned().unwrap_or_default();
+        let governance = source_registry
+            .get(&candidate.source_key)
+            .cloned()
+            .unwrap_or_default();
         if governance.override_eligible && is_override_authority(&governance.authority_class) {
             return TruthAdjudicationResult {
                 overall_status: "verified".to_string(),
@@ -221,7 +225,9 @@ pub fn adjudicate_truth_candidates_with_governance(
         }
     }
 
-    let reason = if !structured.is_empty() && unique_independence_groups.len() == 1 && structured.len() >= 2
+    let reason = if !structured.is_empty()
+        && unique_independence_groups.len() == 1
+        && structured.len() >= 2
     {
         format!(
             "non_independent_corroboration; independence_group={}; source_tiers={}; authority_classes={}",
@@ -262,7 +268,11 @@ pub fn adjudicate_truth_candidates_with_governance(
 }
 
 fn contradiction_count(candidates: &[&TruthStructuredCandidate]) -> usize {
-    let signatures = BTreeSet::from_iter(candidates.iter().map(|candidate| stable_value_signature(candidate)));
+    let signatures = BTreeSet::from_iter(
+        candidates
+            .iter()
+            .map(|candidate| stable_value_signature(candidate)),
+    );
     signatures.len().saturating_sub(1)
 }
 
@@ -311,7 +321,9 @@ fn freshness_or_completeness_block_reason(
     completeness_class: &str,
 ) -> Option<String> {
     if freshness_class != "fresh" {
-        return Some(format!("freshness_block; freshness_class={freshness_class}"));
+        return Some(format!(
+            "freshness_block; freshness_class={freshness_class}"
+        ));
     }
     if completeness_class != "complete" {
         return Some(format!(
@@ -341,8 +353,14 @@ mod tests {
             role: "FEE_ITEM".to_string(),
             concept_canonical_key: "consular_fee".to_string(),
             params: TruthParamValue::Object(BTreeMap::from([
-                ("amount".to_string(), TruthParamValue::Decimal(amount as f64)),
-                ("currency".to_string(), TruthParamValue::Text("EUR".to_string())),
+                (
+                    "amount".to_string(),
+                    TruthParamValue::Decimal(amount as f64),
+                ),
+                (
+                    "currency".to_string(),
+                    TruthParamValue::Text("EUR".to_string()),
+                ),
             ])),
             source_key: source_key.to_string(),
             source_tier: "government".to_string(),
@@ -425,7 +443,10 @@ mod tests {
         let result =
             adjudicate_truth_candidates_with_governance(&[candidate("1", "a", 80)], &registry);
         assert_eq!(result.overall_status, "verified");
-        assert_eq!(result.decisions[0].verification_method, "authority_override@1");
+        assert_eq!(
+            result.decisions[0].verification_method,
+            "authority_override@1"
+        );
     }
 
     #[test]
@@ -457,10 +478,9 @@ mod tests {
             &registry,
         );
         assert_eq!(result.overall_status, "needs_hitl");
-        assert!(result
-            .decisions
-            .iter()
-            .all(|decision| decision.adjudication_reason.contains("weak_source_corroboration")));
+        assert!(result.decisions.iter().all(|decision| decision
+            .adjudication_reason
+            .contains("weak_source_corroboration")));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
     DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
     EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
+    SeoTraceabilityEntryState,
 };
 use primitives::errors::DomainError;
 use seo_ports::{
@@ -10,6 +11,7 @@ use seo_ports::{
 };
 
 use crate::seo_runtime;
+use std::collections::HashSet;
 
 fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
     let page_node = input.page_node.clone().unwrap_or_default();
@@ -93,10 +95,169 @@ pub async fn run_content_contract_validate<R: DraftRepository>(
 pub async fn run_draft_qa<R: DraftRepository>(
     repo: &R,
     input: &DraftQaInputPayload,
-) -> Result<DraftQaOutputPayload, DomainError> {
-    let output = seo_steps::draft_qa_step::execute(input);
+) -> Result<DraftQaOutputPayload, DomainError>
+where
+    R: SourceContextRepository,
+{
+    let mut output = seo_steps::draft_qa_step::execute(input);
+    append_retrieval_diagnostics(repo, input, &mut output).await?;
     repo.persist_draft_qa_output(input, &output).await?;
     Ok(output)
+}
+
+fn trimmed_excerpt(value: &str, limit: usize) -> String {
+    value
+        .split_whitespace()
+        .take(limit)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn jaccard_tokens(lhs: &str, rhs: &str) -> f64 {
+    let tokenize = |text: &str| {
+        text.split_whitespace()
+            .map(|token| {
+                token
+                    .trim_matches(|ch: char| !ch.is_alphanumeric())
+                    .to_ascii_lowercase()
+            })
+            .filter(|token| token.len() > 2)
+            .collect::<HashSet<_>>()
+    };
+    let left = tokenize(lhs);
+    let right = tokenize(rhs);
+    if left.is_empty() || right.is_empty() {
+        return 0.0;
+    }
+    let intersection = left.intersection(&right).count() as f64;
+    let union = left.union(&right).count() as f64;
+    if union == 0.0 {
+        0.0
+    } else {
+        intersection / union
+    }
+}
+
+fn semantic_trace(
+    fragment_key: String,
+    fragment_text: String,
+    traceability_label: &str,
+    support_refs: Vec<String>,
+) -> SeoTraceabilityEntryState {
+    SeoTraceabilityEntryState {
+        fragment_key,
+        fragment_text,
+        fragment_kind: "diagnostic".to_string(),
+        traceability_label: traceability_label.to_string(),
+        support_refs,
+        validation_verdict: "diagnostic".to_string(),
+    }
+}
+
+async fn append_retrieval_diagnostics<R: SourceContextRepository>(
+    repo: &R,
+    input: &DraftQaInputPayload,
+    output: &mut DraftQaOutputPayload,
+) -> Result<(), DomainError> {
+    let Some(draft) = input.draft.as_ref() else {
+        return Ok(());
+    };
+
+    let mut diagnostics = Vec::<SeoTraceabilityEntryState>::new();
+
+    // Unsupported-claim retrieval diagnostics.
+    for entry in draft.traceability_entries.iter().filter(|entry| {
+        entry.traceability_label == "unsupported_factual_fragment"
+            || (entry.fragment_kind == "factual" && entry.support_refs.is_empty())
+    }) {
+        if entry.fragment_text.trim().is_empty() {
+            continue;
+        }
+        let query = trimmed_excerpt(&entry.fragment_text, 48);
+        let neighbors = repo.load_source_context_chunks(&query, 3).await?;
+        if neighbors.is_empty() {
+            continue;
+        }
+        let refs = neighbors
+            .iter()
+            .map(|chunk| format!("qdrant://{}/{}", chunk.section_type, chunk.chunk_key))
+            .collect::<Vec<_>>();
+        diagnostics.push(semantic_trace(
+            format!("diag:unsupported:{}", entry.fragment_key),
+            entry.fragment_text.clone(),
+            "qa_unsupported_claim_retrieval",
+            refs,
+        ));
+    }
+
+    // Semantic duplication diagnostics between assembled sections.
+    let sections = &draft.sections;
+    for i in 0..sections.len() {
+        for j in (i + 1)..sections.len() {
+            let left = sections[i].body_markdown.trim();
+            let right = sections[j].body_markdown.trim();
+            if left.is_empty() || right.is_empty() {
+                continue;
+            }
+            let similarity = jaccard_tokens(left, right);
+            if similarity < 0.88 {
+                continue;
+            }
+            diagnostics.push(semantic_trace(
+                format!(
+                    "diag:dup:{}:{}",
+                    sections[i].section_role, sections[j].section_role
+                ),
+                format!(
+                    "{} <-> {}",
+                    sections[i].section_role, sections[j].section_role
+                ),
+                "qa_semantic_duplication",
+                Vec::new(),
+            ));
+        }
+    }
+
+    // Plagiarism/boilerplate leakage diagnostics.
+    if !draft.body_markdown.trim().is_empty() {
+        let query = trimmed_excerpt(&draft.body_markdown, 64);
+        let neighbors = repo.load_source_context_chunks(&query, 4).await?;
+        for chunk in neighbors {
+            let excerpt = trimmed_excerpt(&chunk.content_md, 40);
+            if excerpt.is_empty() {
+                continue;
+            }
+            let similarity = jaccard_tokens(&draft.body_markdown, &chunk.content_md);
+            if similarity < 0.72 {
+                continue;
+            }
+            diagnostics.push(semantic_trace(
+                format!("diag:leakage:{}", chunk.chunk_key),
+                excerpt,
+                "qa_boilerplate_or_plagiarism_risk",
+                vec![format!(
+                    "qdrant://{}/{}",
+                    chunk.section_type, chunk.chunk_key
+                )],
+            ));
+        }
+    }
+
+    if diagnostics.is_empty() {
+        return Ok(());
+    }
+
+    let mut seen = output
+        .traceability_entries
+        .iter()
+        .map(|entry| entry.fragment_key.clone())
+        .collect::<HashSet<_>>();
+    for diagnostic in diagnostics {
+        if seen.insert(diagnostic.fragment_key.clone()) {
+            output.traceability_entries.push(diagnostic);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -106,6 +267,7 @@ mod tests {
     use contracts::generated::alegria::temporal::v1::{
         DraftState, EditorialBrief, EditorialDraftGenerateOutputPayload, LlmDraftCandidate,
         LlmDraftRequest, PageBlueprintState, PageNodeState, SectionTemplateBinding,
+        SeoDraftSectionState, SeoVerifiedFactSupportState, SourceContextChunkState,
     };
     use seo_ports::{
         DraftRepository, EditorialGenerationPort, SectionTemplateRepository,
@@ -236,7 +398,16 @@ mod tests {
                     dominant_intent: "requirements".to_string(),
                     ..Default::default()
                 }),
-                verified_support: Vec::new(),
+                verified_support: vec![SeoVerifiedFactSupportState {
+                    fragment_text: "Passport required".to_string(),
+                    support_ref: "rule:passport".to_string(),
+                    role_type: "document_required".to_string(),
+                    source_label: "Consulate".to_string(),
+                    source_tier: "official".to_string(),
+                    freshness_class: "watch".to_string(),
+                    observed_at: String::new(),
+                    valid_until: String::new(),
+                }],
                 required_links: Vec::new(),
                 section_templates: Vec::new(),
                 factual_fragments: Vec::new(),
@@ -299,5 +470,116 @@ mod tests {
         .await
         .unwrap();
         assert!(!output.verdict.is_empty());
+    }
+
+    struct DiagnosticDraftRepo;
+
+    #[async_trait]
+    impl DraftRepository for DiagnosticDraftRepo {
+        async fn persist_draft_assemble_output(
+            &self,
+            _run_id: &str,
+            _output: &DraftAssembleOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_draft_normalize_output(
+            &self,
+            _input: &DraftNormalizeInputPayload,
+            _output: &DraftNormalizeOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_content_contract_validate_output(
+            &self,
+            _input: &ContentContractValidateInputPayload,
+            _output: &ContentContractValidateOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+
+        async fn persist_draft_qa_output(
+            &self,
+            _input: &DraftQaInputPayload,
+            _output: &DraftQaOutputPayload,
+        ) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl SourceContextRepository for DiagnosticDraftRepo {
+        async fn load_source_context_chunks(
+            &self,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Vec<SourceContextChunkState>, DomainError> {
+            Ok(vec![SourceContextChunkState {
+                chunk_key: "verified_rules_4:rule-passport".to_string(),
+                source_url: "https://example.com/rule".to_string(),
+                source_domain: "example.com".to_string(),
+                heading_path: "passport".to_string(),
+                section_type: "verified_rules_4".to_string(),
+                content_md: "Passport copy is required for tourist visa applications".to_string(),
+                retrieval_score: "0.95".to_string(),
+                usage_policy: "verified_fact_support".to_string(),
+            }])
+        }
+    }
+
+    #[tokio::test]
+    async fn drafting_qa_appends_semantic_diagnostics_trace_entries() {
+        let repo = DiagnosticDraftRepo;
+        let output = run_draft_qa(
+            &repo,
+            &DraftQaInputPayload {
+                run_id: "run-1".to_string(),
+                draft: Some(DraftState {
+                    body_markdown:
+                        "Passport copy is required for tourist visa applications. Passport copy is required for tourist visa applications.".to_string(),
+                    sections: vec![
+                        SeoDraftSectionState {
+                            section_role: "overview".to_string(),
+                            body_markdown:
+                                "Passport copy is required for tourist visa applications."
+                                    .to_string(),
+                            required: true,
+                            ..Default::default()
+                        },
+                        SeoDraftSectionState {
+                            section_role: "documents".to_string(),
+                            body_markdown:
+                                "Passport copy is required for tourist visa applications."
+                                    .to_string(),
+                            required: true,
+                            ..Default::default()
+                        },
+                    ],
+                    traceability_entries: vec![SeoTraceabilityEntryState {
+                        fragment_key: "frag-1".to_string(),
+                        fragment_text: "Passport copy is required".to_string(),
+                        fragment_kind: "factual".to_string(),
+                        traceability_label: "unsupported_factual_fragment".to_string(),
+                        support_refs: Vec::new(),
+                        validation_verdict: "blocked".to_string(),
+                    }],
+                    ..Default::default()
+                }),
+                supported_fragments: Vec::new(),
+                required_links: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        let labels = output
+            .traceability_entries
+            .iter()
+            .map(|entry| entry.traceability_label.as_str())
+            .collect::<Vec<_>>();
+        assert!(labels.contains(&"qa_unsupported_claim_retrieval"));
+        assert!(labels.contains(&"qa_semantic_duplication"));
+        assert!(labels.contains(&"qa_boilerplate_or_plagiarism_risk"));
     }
 }

@@ -252,9 +252,7 @@ impl VoyageClient {
         let mut result = Vec::with_capacity(texts.len());
         for chunk in texts.chunks(128) {
             let refs: Vec<&str> = chunk.iter().map(String::as_str).collect();
-            let mut batch = self
-                .embed_batch_with_settings(&refs, options)
-                .await?;
+            let mut batch = self.embed_batch_with_settings(&refs, options).await?;
             result.append(&mut batch);
         }
         Ok(result)

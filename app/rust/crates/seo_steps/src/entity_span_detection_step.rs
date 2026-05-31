@@ -180,7 +180,9 @@ mod tests {
     fn detects_fee_timeline_date_and_concepts_without_regex() {
         let output = execute(&EntitySpanInput {
             section_id: "section-1".to_string(),
-            raw_text: "Passport required. Fee 80 EUR. Processing time 15 days. Apply before 12/06/2026.".to_string(),
+            raw_text:
+                "Passport required. Fee 80 EUR. Processing time 15 days. Apply before 12/06/2026."
+                    .to_string(),
         });
         let entity_types = output
             .mentions

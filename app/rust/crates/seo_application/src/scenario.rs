@@ -1233,6 +1233,13 @@ mod tests {
         ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
             Ok(Vec::new())
         }
+
+        async fn cluster_demand_queries(
+            &self,
+            _queries: &[String],
+        ) -> Result<Vec<seo_ports::SemanticDemandCluster>, DomainError> {
+            Ok(Vec::new())
+        }
     }
 
     #[async_trait]
@@ -1456,6 +1463,14 @@ mod tests {
             _output: &contracts::generated::alegria::temporal::v1::RebuildDetectOutputPayload,
         ) -> Result<(), DomainError> {
             Ok(())
+        }
+
+        async fn semantic_neighbor_impacts(
+            &self,
+            _changed_truth_keys: &[String],
+            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
+            Ok(Vec::new())
         }
     }
 

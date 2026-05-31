@@ -1782,12 +1782,18 @@ pub async fn load_graph_planning_context(
             .sections
             .into_iter()
             .flat_map(|section| {
-                section.topics.into_iter().map(|topic| GraphPlanningTopicSignal {
-                    topic_key: topic.topic_key_candidate.clone(),
-                    topic_type: topic.topic_type,
-                    support_refs: vec![format!("step://editorial_extraction/{}", topic.topic_key_candidate)],
-                    graph_confidence: 0.82,
-                })
+                section
+                    .topics
+                    .into_iter()
+                    .map(|topic| GraphPlanningTopicSignal {
+                        topic_key: topic.topic_key_candidate.clone(),
+                        topic_type: topic.topic_type,
+                        support_refs: vec![format!(
+                            "step://editorial_extraction/{}",
+                            topic.topic_key_candidate
+                        )],
+                        graph_confidence: 0.82,
+                    })
             })
             .collect::<Vec<_>>()
     })
@@ -1804,14 +1810,17 @@ pub async fn load_graph_planning_context(
             .sections
             .into_iter()
             .flat_map(|section| {
-                section.triples.into_iter().map(|triple| GraphPlanningTripleSignal {
-                    triple_id: triple.triple_id,
-                    subject_key: triple.subject_key,
-                    relation_type: triple.relation_type,
-                    object_key: triple.object_key,
-                    support_refs: vec![format!("section://{}", triple.evidence_section_id)],
-                    graph_confidence: triple.confidence as f64,
-                })
+                section
+                    .triples
+                    .into_iter()
+                    .map(|triple| GraphPlanningTripleSignal {
+                        triple_id: triple.triple_id,
+                        subject_key: triple.subject_key,
+                        relation_type: triple.relation_type,
+                        object_key: triple.object_key,
+                        support_refs: vec![format!("section://{}", triple.evidence_section_id)],
+                        graph_confidence: triple.confidence as f64,
+                    })
             })
             .collect::<Vec<_>>()
     })
@@ -1843,16 +1852,10 @@ pub async fn load_graph_planning_context(
         status: row.get("status"),
         cluster_version: row.get::<i32, _>("cluster_version") as u32,
         reason_code: row.get("reason_code"),
-        topic_keys: row
-            .get::<Json<Vec<String>>, _>("topic_keys")
-            .0,
-        triple_refs: row
-            .get::<Json<Vec<String>>, _>("triple_refs")
-            .0,
+        topic_keys: row.get::<Json<Vec<String>>, _>("topic_keys").0,
+        triple_refs: row.get::<Json<Vec<String>>, _>("triple_refs").0,
         graph_confidence: row.get("graph_confidence"),
-        support_refs: row
-            .get::<Json<Vec<String>>, _>("support_refs")
-            .0,
+        support_refs: row.get::<Json<Vec<String>>, _>("support_refs").0,
     })
     .collect::<Vec<_>>();
 
@@ -1911,16 +1914,10 @@ pub async fn load_graph_planning_context(
         severity: row.get("severity"),
         status: row.get("status"),
         reason_code: row.get("reason_code"),
-        topic_keys: row
-            .get::<Json<Vec<String>>, _>("topic_keys")
-            .0,
-        triple_refs: row
-            .get::<Json<Vec<String>>, _>("triple_refs")
-            .0,
+        topic_keys: row.get::<Json<Vec<String>>, _>("topic_keys").0,
+        triple_refs: row.get::<Json<Vec<String>>, _>("triple_refs").0,
         graph_confidence: row.get("graph_confidence"),
-        support_refs: row
-            .get::<Json<Vec<String>>, _>("support_refs")
-            .0,
+        support_refs: row.get::<Json<Vec<String>>, _>("support_refs").0,
     })
     .collect::<Vec<_>>();
 
@@ -1945,7 +1942,9 @@ pub async fn load_graph_planning_context(
     let mut link_recommendations = Vec::with_capacity(link_recommendation_rows.len());
     for row in link_recommendation_rows {
         let recommendation = LinkRecommendation {
-            link_recommendation_key: row.try_get("link_recommendation_key").map_err(classify_sqlx)?,
+            link_recommendation_key: row
+                .try_get("link_recommendation_key")
+                .map_err(classify_sqlx)?,
             scope_signature: row.try_get("scope_signature").map_err(classify_sqlx)?,
             source_page_key: row.try_get("source_page_key").map_err(classify_sqlx)?,
             target_page_key: row.try_get("target_page_key").map_err(classify_sqlx)?,
@@ -1982,7 +1981,9 @@ pub async fn load_graph_planning_context(
                 .unwrap_or_default();
             let missing_topic_keys = content_gaps
                 .iter()
-                .filter(|gap| gap.page_node_key == page.page_node_key || gap.page_node_key.is_empty())
+                .filter(|gap| {
+                    gap.page_node_key == page.page_node_key || gap.page_node_key.is_empty()
+                })
                 .map(|gap| gap.missing_topic.clone())
                 .collect::<Vec<_>>();
             GraphPlanningCoverageSignal {

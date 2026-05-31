@@ -11,10 +11,10 @@ use contracts::generated::alegria::temporal::v1::{
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision, HitlPauseInfo,
     HitlResolutionInput, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
     LinkRecommendOutputPayload, LlmDraftCandidate, LlmDraftRequest, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, PersistReport, PublishArtifact, PublishMaterializeInputPayload,
+    OpportunityBuildOutputPayload, PersistReport, ProjectionBarrierAuditInputPayload,
+    ProjectionBarrierAuditOutputPayload, PublishArtifact, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, ProjectionBarrierAuditInputPayload,
-    ProjectionBarrierAuditOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
+    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
     ReconcileSummaryPayload, ReconcileTargetInputPayload, ReconcileTargetReportPayload,
     RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
     RuleInstanceCandidateState, RuleParamsState, RuleRoleTypeV1, RuntimeErrorPayload,
@@ -610,7 +610,9 @@ macro_rules! impl_json_runtime_payload {
                     .map_err(|e| contract_violation(format!("failed to encode {}: {e}", $name)))
             }
 
-            fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
+            fn decode_payload_bytes(
+                payload_bytes: &[u8],
+            ) -> std::result::Result<Self, DomainError> {
                 serde_json::from_slice(payload_bytes)
                     .map_err(|e| contract_violation(format!("failed to decode {}: {e}", $name)))
             }

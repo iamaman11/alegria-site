@@ -3,21 +3,30 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use seo_domain::rebuild;
-use seo_ports::RebuildRepository;
+use seo_ports::{RebuildDependencyEvidence, RebuildRepository};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 pub async fn execute<R: RebuildRepository>(
     repo: &R,
     input: &RebuildDetectInputPayload,
 ) -> Result<RebuildDetectOutputPayload, DomainError> {
     let mut narrowed_input = input.clone();
+    let mut semantic_neighbor_evidence: Vec<RebuildDependencyEvidence> = Vec::new();
     if !input.changed_truth_keys.is_empty() {
         let impacted = repo
             .narrow_rebuild_impacts(&input.changed_truth_keys)
             .await?;
-        if !impacted.is_empty() {
-            let impacted_keys = impacted
+        let semantic_impacted = repo
+            .semantic_neighbor_impacts(&input.changed_truth_keys, &input.page_nodes)
+            .await?;
+        semantic_neighbor_evidence = semantic_impacted.clone();
+        let combined = impacted
+            .into_iter()
+            .chain(semantic_impacted.into_iter())
+            .collect::<Vec<_>>();
+        if !combined.is_empty() {
+            let impacted_keys = combined
                 .iter()
                 .map(|evidence| evidence.page_node_key.clone())
                 .collect::<HashSet<_>>();
@@ -30,8 +39,42 @@ pub async fn execute<R: RebuildRepository>(
         }
     }
     let output = execute_rebuild_detect(&narrowed_input);
-    repo.persist_rebuild_detect_output(input, &output).await?;
-    Ok(output)
+    let enriched_output = annotate_semantic_neighbor_evidence(output, &semantic_neighbor_evidence);
+    repo.persist_rebuild_detect_output(input, &enriched_output)
+        .await?;
+    Ok(enriched_output)
+}
+
+fn annotate_semantic_neighbor_evidence(
+    mut output: RebuildDetectOutputPayload,
+    evidence: &[RebuildDependencyEvidence],
+) -> RebuildDetectOutputPayload {
+    if evidence.is_empty() {
+        return output;
+    }
+    let mut by_page = BTreeMap::<String, Vec<Value>>::new();
+    for item in evidence {
+        by_page
+            .entry(item.page_node_key.clone())
+            .or_default()
+            .push(item.reason_package.clone());
+    }
+    for impact in &mut output.impacts {
+        let Some(page_evidence) = by_page.get(&impact.page_node_key) else {
+            continue;
+        };
+        let mut reason = serde_json::from_str::<Value>(&impact.reason_package_json)
+            .unwrap_or_else(|_| Value::Object(Default::default()));
+        if let Value::Object(map) = &mut reason {
+            map.insert("semantic_neighbor_widening".to_string(), Value::Bool(true));
+            map.insert(
+                "semantic_neighbor_evidence".to_string(),
+                Value::Array(page_evidence.clone()),
+            );
+        }
+        impact.reason_package_json = reason.to_string();
+    }
+    output
 }
 
 fn execute_rebuild_detect(input: &RebuildDetectInputPayload) -> RebuildDetectOutputPayload {
@@ -101,6 +144,17 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(())
         }
+
+        async fn semantic_neighbor_impacts(
+            &self,
+            _changed_truth_keys: &[String],
+            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
+            Ok(vec![RebuildDependencyEvidence {
+                page_node_key: "page:a".to_string(),
+                reason_package: json!({"semantic_neighbor_widening": true}),
+            }])
+        }
     }
 
     #[tokio::test]
@@ -125,6 +179,15 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output.impacted_page_node_keys, vec!["page:b".to_string()]);
+        let keys = output
+            .impacted_page_node_keys
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+        assert!(keys.contains("page:a"));
+        assert!(keys.contains("page:b"));
+        assert!(output.impacts.iter().any(|impact| impact
+            .reason_package_json
+            .contains("semantic_neighbor_widening")));
     }
 }

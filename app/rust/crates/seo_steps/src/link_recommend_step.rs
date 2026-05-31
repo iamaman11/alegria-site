@@ -56,8 +56,12 @@ fn semantic_adjacency(source_path: &str, target_path: &str) -> f64 {
 }
 
 fn topic_overlap(source_topics: &[String], target_topics: &[String]) -> usize {
-    let source = source_topics.iter().collect::<std::collections::BTreeSet<_>>();
-    let target = target_topics.iter().collect::<std::collections::BTreeSet<_>>();
+    let source = source_topics
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let target = target_topics
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>();
     source.intersection(&target).count()
 }
 
@@ -128,11 +132,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
                 .cloned()
                 .unwrap_or_default();
             let shared_topic_count = topic_overlap(&source_topics, &target_topics);
-            let graph_bonus = if shared_topic_count > 0 {
-                0.08
-            } else {
-                0.0
-            };
+            let graph_bonus = if shared_topic_count > 0 { 0.08 } else { 0.0 };
             let link_score = score(if same_scope {
                 (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus
             } else {
@@ -169,7 +169,11 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
                     .cloned()
                     .collect(),
                 triple_refs: Vec::new(),
-                graph_confidence: if shared_topic_count > 0 { link_score } else { 0.0 },
+                graph_confidence: if shared_topic_count > 0 {
+                    link_score
+                } else {
+                    0.0
+                },
                 support_refs: Vec::new(),
             });
             if !required_flag {

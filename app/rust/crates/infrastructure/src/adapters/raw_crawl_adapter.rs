@@ -1839,8 +1839,8 @@ pub async fn emit_raw_section_qdrant_events(
         }
         Err(_) => return Ok(0),
     };
-    let voyage_model = std::env::var("VOYAGE_MODEL")
-        .unwrap_or_else(|_| DEFAULT_VOYAGE_STANDARD_MODEL.to_string());
+    let voyage_model =
+        std::env::var("VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_VOYAGE_STANDARD_MODEL.to_string());
     let voyage_context_model = std::env::var("VOYAGE_CONTEXT_MODEL")
         .unwrap_or_else(|_| DEFAULT_VOYAGE_CONTEXT_MODEL.to_string());
     let standard_vectors = if texts.is_empty() {
@@ -1911,21 +1911,21 @@ pub async fn emit_raw_section_qdrant_events(
         }
         let entity_key = format!("raw_section:{}", section.id);
         let standard_point = (
-            standard_vector_iter
-                .next()
-                .ok_or_else(|| primitives::errors::DomainError::InfraUnavailable {
+            standard_vector_iter.next().ok_or_else(|| {
+                primitives::errors::DomainError::InfraUnavailable {
                     message: "raw_chunks_4 projection missing Voyage embedding".to_string(),
-                })?,
+                }
+            })?,
             voyage_model.as_str(),
             "raw_section_voyage_4@1",
             RAW_CHUNKS_STANDARD_COLLECTION,
         );
         let contextual_point = (
-            contextual_vector_iter
-                .next()
-                .ok_or_else(|| primitives::errors::DomainError::InfraUnavailable {
+            contextual_vector_iter.next().ok_or_else(|| {
+                primitives::errors::DomainError::InfraUnavailable {
                     message: "raw_chunks_ctx projection missing Voyage embedding".to_string(),
-                })?,
+                }
+            })?,
             voyage_context_model.as_str(),
             "raw_section_context_voyage@1",
             RAW_CHUNKS_CONTEXT_COLLECTION,
@@ -2019,8 +2019,9 @@ pub async fn retrieve_source_context_chunks(
     if std::env::var("VOYAGE_API_KEY").is_err() {
         if contextual_required {
             return Err(primitives::errors::DomainError::InfraUnavailable {
-                message: "contextual raw-chunk retrieval is required, but VOYAGE_API_KEY is not set"
-                    .to_string(),
+                message:
+                    "contextual raw-chunk retrieval is required, but VOYAGE_API_KEY is not set"
+                        .to_string(),
             });
         }
         return Ok(Vec::new());
