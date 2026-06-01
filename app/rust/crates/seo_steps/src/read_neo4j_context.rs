@@ -33,11 +33,24 @@ pub async fn read_neo4j_context(context_key: &str) -> Result<()> {
         )
         .await?;
     if graph_gds_required {
-        if let Err(err) = graph
-            .run(query("CALL gds.version() YIELD version RETURN version"))
-            .await
-        {
-            bail!("neo4j gds capability unavailable: {err}");
+        let gds_queries = [
+            "CALL gds.version() YIELD version RETURN version",
+            "CALL gds.version() YIELD gdsVersion RETURN gdsVersion",
+            "CALL gds.version()",
+        ];
+        let mut gds_ready = false;
+        let mut gds_error = String::new();
+        for cypher in gds_queries {
+            match graph.run(query(cypher)).await {
+                Ok(_) => {
+                    gds_ready = true;
+                    break;
+                }
+                Err(err) => gds_error = err.to_string(),
+            }
+        }
+        if !gds_ready {
+            bail!("neo4j gds capability unavailable: {gds_error}");
         }
     }
     Ok(())

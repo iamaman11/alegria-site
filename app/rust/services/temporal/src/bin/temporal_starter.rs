@@ -499,15 +499,33 @@ async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
         Err(_) => probe.errors.push("neo4j_query:timeout".to_string()),
     }
 
-    match tokio::time::timeout(
-        Duration::from_secs(3),
-        neo4rs_adapter::run_cypher(&graph, "CALL gds.version() YIELD version RETURN version"),
-    )
-    .await
-    {
-        Ok(Ok(())) => probe.graph_gds_ready = true,
-        Ok(Err(err)) => probe.errors.push(format!("neo4j_gds:{err}")),
-        Err(_) => probe.errors.push("neo4j_gds:timeout".to_string()),
+    let gds_queries = [
+        "CALL gds.version() YIELD version RETURN version",
+        "CALL gds.version() YIELD gdsVersion RETURN gdsVersion",
+        "CALL gds.version()",
+    ];
+    let mut gds_error: Option<String> = None;
+    for cypher in gds_queries {
+        match tokio::time::timeout(
+            Duration::from_secs(3),
+            neo4rs_adapter::run_cypher(&graph, cypher),
+        )
+        .await
+        {
+            Ok(Ok(())) => {
+                probe.graph_gds_ready = true;
+                gds_error = None;
+                break;
+            }
+            Ok(Err(err)) => gds_error = Some(err.to_string()),
+            Err(_) => gds_error = Some("timeout".to_string()),
+        }
+    }
+    if !probe.graph_gds_ready {
+        probe.errors.push(format!(
+            "neo4j_gds:{}",
+            gds_error.unwrap_or_else(|| "unknown".to_string())
+        ));
     }
 
     probe
