@@ -104,7 +104,7 @@ pub async fn ensure_default_dense_collection(
 }
 
 pub async fn upsert_dense_point(
-    client: &Qdrant,
+    _client: &Qdrant,
     collection_name: &str,
     point_id: &str,
     vector: Vec<f32>,
@@ -113,17 +113,51 @@ pub async fn upsert_dense_point(
     if vector.is_empty() {
         bail!("vector is empty");
     }
-    let payload: Payload = payload_value
-        .try_into()
-        .context("failed to convert payload_value into qdrant payload")?;
-    let point = PointStruct::new(point_id.to_string(), vector, payload);
-    client
-        .upsert_points(UpsertPointsBuilder::new(collection_name, vec![point]).wait(true))
+    let rest_url = qdrant_rest_url_from_env();
+    let endpoint = format!(
+        "{}/collections/{}/points?wait=true",
+        rest_url.trim_end_matches('/'),
+        collection_name
+    );
+    let body = serde_json::json!({
+        "points": [{
+            "id": point_id,
+            "vector": vector,
+            "payload": payload_value,
+        }]
+    });
+    let response = reqwest::Client::new()
+        .put(&endpoint)
+        .json(&body)
+        .send()
         .await
-        .with_context(|| {
-            format!("failed qdrant upsert for collection={collection_name}, point_id={point_id}")
-        })?;
+        .with_context(|| format!("failed qdrant REST upsert request: {endpoint}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        let text = response.text().await.unwrap_or_default();
+        bail!(
+            "failed qdrant REST upsert for collection={}, point_id={}, status={}, body={}",
+            collection_name,
+            point_id,
+            status,
+            text
+        );
+    }
     Ok(())
+}
+
+fn qdrant_rest_url_from_env() -> String {
+    env::var("QDRANT_REST_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            let url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
+            if url.contains(":6334") {
+                url.replace(":6334", ":6333")
+            } else {
+                url
+            }
+        })
 }
 
 pub async fn upsert_batch(

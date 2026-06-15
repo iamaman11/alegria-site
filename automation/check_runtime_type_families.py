@@ -13,15 +13,25 @@ PROTO_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "ada
 SEO_RUNTIME = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "seo_runtime.rs"
 
 
-def must_contain(path: Path, needle: str) -> str | None:
+def read_file_resolved(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
+    if path.name == "proto_runtime_payload_store.rs":
+        sub_dir = path.parent / "proto_runtime_payload_store"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
+def must_contain(path: Path, needle: str) -> str | None:
+    text = read_file_resolved(path)
     if needle not in text:
         return f"missing `{needle}` in {path.relative_to(ROOT)}"
     return None
 
 
 def must_not_contain(path: Path, needle: str) -> str | None:
-    text = path.read_text(encoding="utf-8")
+    text = read_file_resolved(path)
     if needle in text:
         return f"unexpected `{needle}` in {path.relative_to(ROOT)}"
     return None

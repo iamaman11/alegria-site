@@ -78,17 +78,33 @@ ALLOWED_OUTBOX_EMIT_CALLS = {
     ],
 }
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
+def clean_str(s: str) -> str:
+    return "".join(s.split())
+
 
 def main() -> int:
     failures: list[str] = []
     for key, path in FILES.items():
-        text = path.read_text(encoding="utf-8")
+        text = read_with_includes(path)
         for needle in REQUIRED.get(key, []):
-            if needle not in text:
+            if clean_str(needle) not in clean_str(text):
                 failures.append(f"{path.relative_to(ROOT)} missing `{needle}`")
 
     for path in ROOT.glob("app/rust/crates/infrastructure/src/adapters/*.rs"):
-        text = path.read_text(encoding="utf-8")
+        text = read_with_includes(path)
         if "run_id: String::new()," in text and path not in ALLOWED_EMPTY_RUN_ID_FILES:
             failures.append(
                 f"{path.relative_to(ROOT)} contains unsanctioned `run_id: String::new(),`"
@@ -96,12 +112,13 @@ def main() -> int:
         if "outbox_emit_many(" not in text:
             continue
         allowed_calls = ALLOWED_OUTBOX_EMIT_CALLS.get(str(path.relative_to(ROOT)), [])
+        cleaned_allowed = {clean_str(call) for call in allowed_calls}
         for line in [
             line.strip()
             for line in text.splitlines()
             if "outbox_emit_many(" in line and "fn outbox_emit_many(" not in line
         ]:
-            if line not in allowed_calls:
+            if clean_str(line) not in cleaned_allowed:
                 failures.append(
                     f"{path.relative_to(ROOT)} contains unsanctioned outbox emit site `{line}`"
                 )

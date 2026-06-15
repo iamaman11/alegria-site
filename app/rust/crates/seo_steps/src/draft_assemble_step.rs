@@ -435,6 +435,69 @@ fn build_content_block_plan(
     }
 }
 
+fn merge_candidate_content_blocks(
+    candidate_blocks: &[RenderedContentBlock],
+    fallback_blocks: &[RenderedContentBlock],
+    support: &[SeoVerifiedFactSupportState],
+) -> Vec<RenderedContentBlock> {
+    let mut merged = Vec::new();
+    let mut seen_roles = BTreeSet::new();
+
+    for fallback in fallback_blocks {
+        let mut block = candidate_blocks
+            .iter()
+            .find(|candidate| candidate.section_role == fallback.section_role)
+            .cloned()
+            .unwrap_or_else(|| fallback.clone());
+
+        if block.block_type.trim().is_empty() || block.block_type != fallback.block_type {
+            block.block_type = fallback.block_type.clone();
+        }
+        if block.heading.trim().is_empty() {
+            block.heading = fallback.heading.clone();
+        }
+        if block.markdown.trim().is_empty() {
+            block.markdown = fallback.markdown.clone();
+        }
+        block.required = fallback.required;
+
+        if block.support_refs.is_empty() && factual_role(&block.section_role) {
+            let refs = supported_refs_for_section(support, &block.section_role);
+            block.support_refs = if refs.is_empty() {
+                fallback.support_refs.clone()
+            } else {
+                refs
+            };
+        }
+        if block.traceability_label.trim().is_empty() {
+            block.traceability_label = if factual_role(&block.section_role) {
+                support_traceability_label(&block.section_role).to_string()
+            } else {
+                fallback.traceability_label.clone()
+            };
+        }
+
+        seen_roles.insert(block.section_role.clone());
+        merged.push(block);
+    }
+
+    for candidate in candidate_blocks {
+        if !seen_roles.insert(candidate.section_role.clone()) {
+            continue;
+        }
+        let mut block = candidate.clone();
+        if block.support_refs.is_empty() && factual_role(&block.section_role) {
+            block.support_refs = supported_refs_for_section(support, &block.section_role);
+        }
+        if block.support_refs.is_empty() && factual_role(&block.section_role) {
+            block.required = false;
+        }
+        merged.push(block);
+    }
+
+    merged
+}
+
 pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload {
     let page_node = input.page_node.clone().unwrap_or_default();
     let blueprint = input.page_blueprint.clone().unwrap_or_default();
@@ -522,11 +585,11 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             },
             traceability_from_claims(&candidate.claim_ledger),
             candidate.claim_ledger.clone(),
-            if candidate.content_blocks.is_empty() {
-                fallback.4
-            } else {
-                candidate.content_blocks.clone()
-            },
+            merge_candidate_content_blocks(
+                &candidate.content_blocks,
+                &fallback.4,
+                &sanitized_support,
+            ),
             if candidate.faq_json.trim().is_empty() {
                 faq_json_from_support(&sanitized_support)
             } else {

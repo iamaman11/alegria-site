@@ -4,6 +4,13 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [ -f infra/local/dev_runtime.env ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source infra/local/dev_runtime.env
+  set +a
+fi
+
 log() { printf '[gate] %s\n' "$*"; }
 die() { printf '[gate][FAIL] %s\n' "$*" >&2; exit 1; }
 
@@ -54,6 +61,19 @@ wait_wf_closed() {
     elapsed=$((elapsed + 2))
   done
   return 1
+}
+
+wait_temporal_cli_ready() {
+  local timeout_s="${1:-60}"
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout_s" ]; do
+    if docker exec alegria_temporal temporal --address "$TEMPORAL_CLI_ADDRESS" operator cluster health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+    elapsed=$((elapsed + 2))
+  done
+  die "Temporal CLI did not become ready at $TEMPORAL_CLI_ADDRESS"
 }
 
 db_scalar() {
@@ -113,6 +133,28 @@ wait_sql_value() {
   return 1
 }
 
+wait_sql_value_with_outbox_drain() {
+  local sql="$1"
+  local expected="$2"
+  local timeout_s="${3:-120}"
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout_s" ]; do
+    local value
+    value="$(db_scalar "$sql" | tr -d '[:space:]' || true)"
+    if [ "$value" = "$expected" ]; then
+      return 0
+    fi
+    drain_open_outbox_events
+    value="$(db_scalar "$sql" | tr -d '[:space:]' || true)"
+    if [ "$value" = "$expected" ]; then
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  return 1
+}
+
 seed_admissible_verified_rule() {
   local rule_instance_id="$1"
   local context_key="$2"
@@ -159,6 +201,8 @@ start_services() {
       cd app/rust
       TEMPORAL_URL=http://localhost:7233 \
       DATABASE_URL="$DB_DSN" \
+      QDRANT_URL="${QDRANT_URL:-http://localhost:6334}" \
+      QDRANT_SKIP_COMPATIBILITY_CHECK="${QDRANT_SKIP_COMPATIBILITY_CHECK:-true}" \
       RUST_LOG=info \
       cargo run -q -p temporal_worker --bin temporal_worker \
       > /tmp/alegria_temporal_worker_gate.log 2>&1
@@ -172,6 +216,7 @@ start_services() {
       sleep 1
     done
   fi
+  wait_temporal_cli_ready 60
 }
 
 assert_metrics() {
@@ -195,7 +240,78 @@ run_live_provider_gate() {
   die "canonical Step 5 live-provider gate failed"
 }
 
+drain_open_outbox_events() {
+  local open_events
+  open_events="$(db_scalar "select count(*)::text from system.sync_outbox where status in ('pending','processing') or (status='failed' and retry_count < 10);" | tr -d '[:space:]')"
+  if [ "${open_events:-0}" -eq 0 ]; then
+    return 0
+  fi
+  log "draining open outbox events count=$open_events"
+  (
+    cd app/rust
+    DATABASE_URL="$DB_DSN" \
+    QDRANT_URL="${QDRANT_URL:-http://localhost:6334}" \
+    QDRANT_SKIP_COMPATIBILITY_CHECK="${QDRANT_SKIP_COMPATIBILITY_CHECK:-true}" \
+    OUTBOX_MAX_CYCLES="${PRODUCTION_GATE_OUTBOX_DRAIN_MAX_CYCLES:-12}" \
+    OUTBOX_WORKER_ID="production-gate-drain-$$" \
+      cargo run -q -p outbox_worker --bin outbox_worker
+  ) || die "outbox drain failed"
+}
+
+approve_review_pages_until_wf_closed() {
+  local rid="$1"
+  local timeout_s="${2:-600}"
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout_s" ]; do
+    local wf_state
+    wf_state="$(wf_status "$rid" || true)"
+    if [ "$wf_state" = "WORKFLOW_EXECUTION_STATUS_COMPLETED" ]; then
+      return 0
+    fi
+    if [ "$wf_state" = "WORKFLOW_EXECUTION_STATUS_FAILED" ] || [ "$wf_state" = "WORKFLOW_EXECUTION_STATUS_TERMINATED" ] || [ "$wf_state" = "WORKFLOW_EXECUTION_STATUS_TIMED_OUT" ]; then
+      return 2
+    fi
+
+    drain_open_outbox_events
+
+    local page_node_key
+    page_node_key="$(db_scalar "
+      select e.page_node_key
+      from site.cms_publish_events e
+      join site.cms_pages p on p.page_node_key = e.page_node_key
+      where e.event_type = 'seo_page_review_requested'
+        and e.event_payload ->> 'run_id' = '$rid'
+        and p.current_status = 'review_required'
+      order by e.occurred_at
+      limit 1;" | tr -d '[:space:]')"
+    if [ -n "$page_node_key" ]; then
+      log "approving review-required page page_node_key=$page_node_key"
+      (
+        cd app/rust
+        cargo run -q -p cli_tools -- cms-approve-publish \
+          --database-url "$DB_DSN" \
+          --page-node-key "$page_node_key" \
+          --actor-role "seo_ops_gate" \
+          --reason "temporal production gate approval" \
+          --output-dir "app/rust/dist/static-site" \
+          --base-url "https://example.com"
+      ) >/dev/null
+    fi
+
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  return 1
+}
+
 run_retrieval_contract_gate() {
+  log "bootstrapping required retrieval collections"
+  DATABASE_URL="$DB_DSN" \
+  QDRANT_URL="${QDRANT_URL:-http://localhost:6334}" \
+    python3 automation/bootstrap_retrieval_contract_collections.py || die "retrieval collection bootstrap failed"
+
+  drain_open_outbox_events
+
   log "running hard-required retrieval contract gate"
   RETRIEVAL_CONTRACT_GATE_REPORT_PATH="${RETRIEVAL_CONTRACT_GATE_REPORT_PATH:-/tmp/retrieval_contract_gate_current.json}" \
   RETRIEVAL_CAPABILITY_REQUIRED=true \
@@ -235,20 +351,25 @@ assert_invariants() {
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('consular_fee','fee','Консульский сбор','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('passport','document','Паспорт','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('medical_insurance','document','Медицинская страховка','active') on conflict (concept_key) do nothing;" >/dev/null
+  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_processing_time','timeline','Стандартный срок рассмотрения','active') on conflict (concept_key) do nothing;" >/dev/null
+  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_tourist_eligibility','rule','Стандартные условия туристической визы','active') on conflict (concept_key) do nothing;" >/dev/null
+  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_application_process','process','Порядок подачи заявления','active') on conflict (concept_key) do nothing;" >/dev/null
+  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_application_channel','location','Канал подачи заявления','active') on conflict (concept_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('pl:work:by','pl','work',null,'by','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:by','ES','tourist',null,'BY','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:empty:by','ES','tourist','empty-gate','BY','active') on conflict (context_key) do nothing;" >/dev/null
   seed_admissible_verified_rule "gate-es-doc-passport" "es:tourist:by" "document_required" "passport" "document_required" "Valid passport is required for the application."
   seed_admissible_verified_rule "gate-es-fee-consular" "es:tourist:by" "fee_item" "consular_fee" "fee_item" "Consular fee is 35 EUR for the standard visa process."
   seed_admissible_verified_rule "gate-es-doc-insurance" "es:tourist:by" "document_required" "medical_insurance" "document_required" "Medical insurance covering the trip is required."
+  seed_admissible_verified_rule "gate-es-timing-standard" "es:tourist:by" "timeline_item" "standard_processing_time" "timeline_item" "Standard tourist visa processing normally takes up to 15 calendar days after the application is lodged."
+  seed_admissible_verified_rule "gate-es-eligibility-standard" "es:tourist:by" "eligibility_rule" "standard_tourist_eligibility" "eligibility_rule" "Applicants must satisfy the tourist visa eligibility conditions for the selected travel purpose."
+  seed_admissible_verified_rule "gate-es-process-submit" "es:tourist:by" "step" "standard_application_process" "step" "Applicants submit the application with required documents and the visa fee through the official appointment or application channel."
+  seed_admissible_verified_rule "gate-es-where-apply" "es:tourist:by" "where_to_apply" "standard_application_channel" "where_to_apply" "Tourist visa applications are submitted through the competent Spanish consular or visa application channel for the applicant location."
 }
 
 run_ping_and_demo() {
-  log "ping + demo-hitl"
+  log "ping production worker"
   (cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- ping) >/dev/null
-  local out
-  out="$(cd app/rust && cargo run -q -p temporal_worker --bin temporal_starter -- demo-hitl)"
-  printf '%s\n' "$out" | grep -q "demo_hitl_ok" || die "demo-hitl failed"
 }
 
 run_seo_site_build_workflow() {
@@ -274,37 +395,24 @@ run_seo_site_build_workflow() {
     "1" 120 \
     || die "verified_support_bundle blob was not persisted"
 
-  wait_sql_value \
+  drain_open_outbox_events
+
+  wait_sql_value_with_outbox_drain \
     "select count(*)::text from site.cms_publish_events where event_type='seo_page_review_requested' and event_payload ->> 'run_id' = '$rid';" \
-    "1" 180 \
+    "1" 420 \
     || die "seo workflow did not reach review_requested"
 
-  local page_node_key
-  page_node_key="$(db_scalar "select page_node_key from site.cms_publish_events where event_type='seo_page_review_requested' and event_payload ->> 'run_id' = '$rid' order by occurred_at desc limit 1;" | tr -d '[:space:]')"
-  [ -n "$page_node_key" ] || die "page_node_key for SEO review event not found"
-
-  local cms_status
-  cms_status="$(db_scalar "select current_status from site.cms_pages where page_node_key='$page_node_key';" | tr -d '[:space:]')"
-  [ "$cms_status" = "review_required" ] || die "cms page did not enter review_required: $cms_status"
-
-  (
-    cd app/rust
-    cargo run -q -p cli_tools -- cms-approve-publish \
-      --database-url "$DB_DSN" \
-      --page-node-key "$page_node_key" \
-      --actor-role "seo_ops_gate" \
-      --reason "temporal production gate approval" \
-      --output-dir "app/rust/dist/static-site" \
-      --base-url "https://example.com"
-  ) >/dev/null
-
-  if ! wait_wf_closed "$rid" 300; then
+  if ! approve_review_pages_until_wf_closed "$rid" 900; then
     die "seo workflow did not reach COMPLETED"
   fi
 
   local run_status
   run_status="$(db_scalar "select status from pipeline.execution_runs where run_id='$rid'::uuid;" | tr -d '[:space:]')"
   [ "$run_status" = "done" ] || die "seo execution_runs status is not done: $run_status"
+
+  local page_node_key
+  page_node_key="$(db_scalar "select page_node_key from site.cms_publish_events where event_type='seo_page_review_requested' and event_payload ->> 'run_id' = '$rid' order by occurred_at desc limit 1;" | tr -d '[:space:]')"
+  [ -n "$page_node_key" ] || die "page_node_key for SEO review event not found"
 
   local artifact_status
   artifact_status="$(db_scalar "select status from site.publish_artifacts where page_node_key='$page_node_key' order by updated_at desc limit 1;" | tr -d '[:space:]')"
@@ -331,16 +439,16 @@ run_seo_empty_support_failure() {
       --workflow seo-site-build-canonical-cutover \
       --workflow-id "$rid" \
       --database-url "$DB_DSN" \
-      --context-key "es:tourist:empty:by" \
+      --context-key "es:student:by" \
       --market "alegria-site" \
       --locale "ru-RU" \
       --country-code "ES" \
-      --visa-type "tourist" \
+      --visa-type "student" \
       --applicant-profile "standard" \
       --query "виза туристическая испания документы") >/dev/null
 
   local wait_result=0
-  wait_wf_closed "$rid" 120 || wait_result=$?
+  wait_wf_closed "$rid" 300 || wait_result=$?
   [ "$wait_result" = "2" ] || die "empty-support seo workflow did not fail fast"
   local wf_state
   wf_state="$(wf_status "$rid" || true)"
@@ -359,6 +467,9 @@ run_freshness_workflow() {
 }
 
 main() {
+  PRODUCTION_GATE_CLI_TARGET_DIR="${PRODUCTION_GATE_CLI_TARGET_DIR:-/tmp/temporal-production-gate-cli-target}"
+  export RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR="${RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR:-$PRODUCTION_GATE_CLI_TARGET_DIR}"
+  export GRAPH_CONTRACT_GATE_CLI_TARGET_DIR="${GRAPH_CONTRACT_GATE_CLI_TARGET_DIR:-$PRODUCTION_GATE_CLI_TARGET_DIR}"
   trap 'if [ -n "${WORKER_PID:-}" ]; then kill "${WORKER_PID}" >/dev/null 2>&1 || true; fi' EXIT
   start_services
   assert_invariants

@@ -10,6 +10,21 @@ from local_env import load_local_env
 
 def configured_providers() -> list[dict[str, str]]:
     providers: list[dict[str, str]] = []
+    vertex_project = (
+        os.environ.get("VERTEX_GEMINI_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("GCLOUD_PROJECT")
+    )
+    if vertex_project and os.environ.get("VERTEX_GEMINI_ENABLED", "true").lower() not in {"0", "false"}:
+        providers.append(
+            {
+                "provider": "vertex_gemini",
+                "model": os.environ.get("VERTEX_GEMINI_TRUTH_MODEL")
+                or os.environ.get("VERTEX_GEMINI_MODEL")
+                or "gemini-2.5-pro",
+                "config_path": "VERTEX_GEMINI_PROJECT|GOOGLE_CLOUD_PROJECT|GCLOUD_PROJECT + ADC",
+            }
+        )
     if os.environ.get("SEO_TRUTH_LLM_LOCAL_ENDPOINT") or os.environ.get("SEO_LLM_LOCAL_ENDPOINT"):
         providers.append(
             {
@@ -46,7 +61,7 @@ def configured_providers() -> list[dict[str, str]]:
                 "provider": "gemini",
                 "model": os.environ.get("GEMINI_TRUTH_MODEL")
                 or os.environ.get("GEMINI_SEO_MODEL")
-                or "gemini-3-pro",
+                or "gemini-2.5-pro",
                 "config_path": "GEMINI_API_KEY|GOOGLE_API_KEY",
             }
         )
@@ -59,7 +74,8 @@ def main() -> int:
     if not providers:
         print("TRUTH_EXTRACTION_PROVIDER_READY: NOT_READY")
         print(
-            "- recommended for current Step 5: GEMINI_API_KEY (fallback GOOGLE_API_KEY); "
+            "- recommended for current Step 5: VERTEX_GEMINI_PROJECT (or GOOGLE_CLOUD_PROJECT) with ADC; "
+            "fallback GEMINI_API_KEY (fallback GOOGLE_API_KEY); "
             "alternatives remain SEO_TRUTH_LLM_LOCAL_ENDPOINT|SEO_LLM_LOCAL_ENDPOINT, "
             "OPENAI_API_KEY, ANTHROPIC_API_KEY"
         )

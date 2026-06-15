@@ -8,9 +8,22 @@ SCHEMA = ROOT / "app/db/schema.sql"
 RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
 def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
-    raw = RAW.read_text(encoding="utf-8")
+    raw = read_with_includes(RAW)
 
     failures: list[str] = []
 

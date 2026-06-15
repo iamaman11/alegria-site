@@ -54,9 +54,19 @@ FORBIDDEN_ACTIVE_QDRANT_COLLECTIONS = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     sync_proto = SYNC_PROTO.read_text(encoding="utf-8")
-    seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
+    seo_adapter = read_file_resolved(SEO_ADAPTER)
     neo4j_adapter = NEO4J_ADAPTER.read_text(encoding="utf-8")
     outbox_worker = OUTBOX_WORKER.read_text(encoding="utf-8")
     projection_materializer = PROJECTION_MATERIALIZER.read_text(encoding="utf-8")

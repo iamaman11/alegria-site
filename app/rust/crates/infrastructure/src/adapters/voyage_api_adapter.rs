@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::adapters::reqwest_adapter::new_default_client;
@@ -79,12 +81,6 @@ struct VoyageContextualizedRequest<'a> {
     model: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     input_type: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_dimension: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    output_dtype: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    truncation: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -111,12 +107,18 @@ struct VoyageResponse {
 
 #[derive(Deserialize)]
 struct VoyageContextualizedResult {
+    #[serde(default)]
     embeddings: Vec<Vec<f32>>,
+    #[serde(default)]
+    data: Vec<VoyageData>,
     index: usize,
 }
 
 #[derive(Deserialize)]
 struct VoyageContextualizedResponse {
+    #[serde(default)]
+    data: Vec<VoyageContextualizedResult>,
+    #[serde(default)]
     results: Vec<VoyageContextualizedResult>,
 }
 
@@ -199,24 +201,19 @@ impl VoyageClient {
         }
         let _permit = self.limiter.acquire().await?;
         let resp = self
-            .http
-            .post(format!("{}/embeddings", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&VoyageRequest {
-                input: texts,
-                model: &self.model,
-                input_type: options.input_type.map(VoyageInputType::as_str),
-                output_dimension: options.output_dimension,
-                output_dtype: options.output_dtype.map(VoyageOutputDtype::as_str),
-                truncation: options.truncation,
-            })
-            .send()
-            .await?
-            .error_for_status()
-            .context("Voyage API HTTP error")?
-            .json::<VoyageResponse>()
-            .await
-            .context("Voyage API response parse error")?;
+            .post_json::<_, VoyageResponse>(
+                "/embeddings",
+                &VoyageRequest {
+                    input: texts,
+                    model: &self.model,
+                    input_type: options.input_type.map(VoyageInputType::as_str),
+                    output_dimension: options.output_dimension,
+                    output_dtype: options.output_dtype.map(VoyageOutputDtype::as_str),
+                    truncation: options.truncation,
+                },
+                "Voyage embeddings",
+            )
+            .await?;
         Ok(resp.data.into_iter().map(|d| d.embedding).collect())
     }
 
@@ -277,29 +274,25 @@ impl VoyageClient {
         }
         let _permit = self.limiter.acquire().await?;
         let resp = self
-            .http
-            .post(format!("{}/contextualizedembeddings", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&VoyageContextualizedRequest {
-                inputs,
-                model: model.unwrap_or(&self.model),
-                input_type: options.input_type.map(VoyageInputType::as_str),
-                output_dimension: options.output_dimension,
-                output_dtype: options.output_dtype.map(VoyageOutputDtype::as_str),
-                truncation: options.truncation,
-            })
-            .send()
-            .await?
-            .error_for_status()
-            .context("Voyage contextualized embeddings HTTP error")?
-            .json::<VoyageContextualizedResponse>()
-            .await
-            .context("Voyage contextualized embeddings parse error")?;
+            .post_json::<_, VoyageContextualizedResponse>(
+                "/contextualizedembeddings",
+                &VoyageContextualizedRequest {
+                    inputs,
+                    model: model.unwrap_or(&self.model),
+                    input_type: options.input_type.map(VoyageInputType::as_str),
+                },
+                "Voyage contextualized embeddings",
+            )
+            .await?;
 
         let mut results = vec![Vec::new(); inputs.len()];
-        for entry in resp.results {
+        for entry in resp.results.into_iter().chain(resp.data.into_iter()) {
             if entry.index < results.len() {
-                results[entry.index] = entry.embeddings;
+                results[entry.index] = if entry.embeddings.is_empty() {
+                    entry.data.into_iter().map(|item| item.embedding).collect()
+                } else {
+                    entry.embeddings
+                };
             }
         }
         Ok(results)
@@ -317,25 +310,65 @@ impl VoyageClient {
         }
         let _permit = self.limiter.acquire().await?;
         let resp = self
-            .http
-            .post(format!("{}/rerank", self.base_url))
-            .bearer_auth(&self.api_key)
-            .json(&VoyageRerankRequest {
-                query,
-                documents,
-                model: model.unwrap_or(&self.rerank_model),
-                top_k: options.top_k,
-                return_documents: options.return_documents,
-                truncation: options.truncation,
-            })
-            .send()
-            .await?
-            .error_for_status()
-            .context("Voyage rerank HTTP error")?
-            .json::<VoyageRerankResponse>()
-            .await
-            .context("Voyage rerank parse error")?;
+            .post_json::<_, VoyageRerankResponse>(
+                "/rerank",
+                &VoyageRerankRequest {
+                    query,
+                    documents,
+                    model: model.unwrap_or(&self.rerank_model),
+                    top_k: options.top_k,
+                    return_documents: options.return_documents,
+                    truncation: options.truncation,
+                },
+                "Voyage rerank",
+            )
+            .await?;
         Ok(resp.data)
+    }
+
+    async fn post_json<B, T>(&self, path: &str, body: &B, operation: &str) -> Result<T>
+    where
+        B: Serialize + ?Sized,
+        T: DeserializeOwned,
+    {
+        let url = format!("{}{}", self.base_url, path);
+        let mut last_error = String::new();
+        for attempt in 0..=3 {
+            let response = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .json(body)
+                .send()
+                .await;
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    let text = response.text().await.with_context(|| {
+                        format!("{operation} response body read failed from {url}")
+                    })?;
+                    if status.is_success() {
+                        return serde_json::from_str::<T>(&text).with_context(|| {
+                            format!("{operation} response parse error from {url}: {text}")
+                        });
+                    }
+                    last_error = format!(
+                        "{operation} HTTP status={} from {} body={}",
+                        status, url, text
+                    );
+                    if !(status.as_u16() == 429 || status.is_server_error()) {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    last_error = format!("{operation} request error from {url}: {error:?}");
+                }
+            }
+            if attempt < 3 {
+                tokio::time::sleep(Duration::from_secs(20 * (attempt + 1))).await;
+            }
+        }
+        anyhow::bail!("{last_error}")
     }
 }
 

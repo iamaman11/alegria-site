@@ -43,6 +43,21 @@ REQUIRED_STAGE_NAMES = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "expert_extraction_core.rs":
+        sub_dir = path.parent / "expert_extraction_core"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "raw_crawl_adapter.rs":
+        sub_dir = path.parent / "raw_crawl_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
@@ -51,8 +66,8 @@ def main() -> int:
     failures: list[str] = []
 
     cargo = read(INFRA_CARGO)
-    expert_core = read(EXPERT_CORE)
-    raw_crawl = read(RAW_CRAWL)
+    expert_core = read_file_resolved(EXPERT_CORE)
+    raw_crawl = read_file_resolved(RAW_CRAWL)
     seo_steps_lib = read(SEO_STEPS_LIB)
 
     if 'seo_steps = { path = "../seo_steps" }' not in cargo:

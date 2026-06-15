@@ -1,0 +1,210 @@
+impl_json_runtime_payload_local!(
+    SemanticSectionSampleInput,
+    "alegria.runtime.json.SemanticSectionSampleInput"
+);
+impl_json_runtime_payload_local!(
+    SemanticSectionSampleOutput,
+    "alegria.runtime.json.SemanticSectionSampleOutput"
+);
+impl_json_runtime_payload_local!(
+    ProjectionSyncInput,
+    "alegria.runtime.json.ProjectionSyncInput"
+);
+impl_json_runtime_payload_local!(
+    ProjectionSyncOutput,
+    "alegria.runtime.json.ProjectionSyncOutput"
+);
+impl_json_runtime_payload_local!(SeoPreflightInput, "alegria.runtime.json.SeoPreflightInput");
+impl_json_runtime_payload_local!(
+    SeoPreflightOutput,
+    "alegria.runtime.json.SeoPreflightOutput"
+);
+impl_json_runtime_payload_local!(
+    TruthAdmissibilityGateInput,
+    "alegria.runtime.json.TruthAdmissibilityGateInput"
+);
+impl_json_runtime_payload_local!(
+    TruthAdmissibilityGateOutput,
+    "alegria.runtime.json.TruthAdmissibilityGateOutput"
+);
+impl_json_runtime_payload_local!(
+    HumanApprovalWaitInput,
+    "alegria.runtime.json.HumanApprovalWaitInput"
+);
+impl_json_runtime_payload_local!(
+    WholePageSemanticPassInput,
+    "alegria.runtime.json.WholePageSemanticPassInput"
+);
+impl_json_runtime_payload_local!(
+    WholePageSemanticPassOutput,
+    "alegria.runtime.json.WholePageSemanticPassOutput"
+);
+impl_json_runtime_payload_local!(SectioningInput, "alegria.runtime.json.SectioningInput");
+impl_json_runtime_payload_local!(SectioningOutput, "alegria.runtime.json.SectioningOutput");
+impl_json_runtime_payload_local!(
+    PageUtilitySweepInput,
+    "alegria.runtime.json.PageUtilitySweepInput"
+);
+impl_json_runtime_payload_local!(
+    PageUtilitySweepOutput,
+    "alegria.runtime.json.PageUtilitySweepOutput"
+);
+impl_json_runtime_payload_local!(
+    DomBlockRelevanceSweepInput,
+    "alegria.runtime.json.DomBlockRelevanceSweepInput"
+);
+impl_json_runtime_payload_local!(
+    DomBlockRelevanceSweepOutput,
+    "alegria.runtime.json.DomBlockRelevanceSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    SectioningContractGateInput,
+    "alegria.runtime.json.SectioningContractGateInput"
+);
+impl_json_runtime_payload_local!(
+    SectioningContractGateOutput,
+    "alegria.runtime.json.SectioningContractGateOutput"
+);
+impl_json_runtime_payload_local!(CasGateInput, "alegria.runtime.json.CasGateInput");
+impl_json_runtime_payload_local!(CasGateOutput, "alegria.runtime.json.CasGateOutput");
+impl_json_runtime_payload_local!(
+    RawEvidenceRegisterInput,
+    "alegria.runtime.json.RawEvidenceRegisterInput"
+);
+impl_json_runtime_payload_local!(
+    RawEvidenceRegisterOutput,
+    "alegria.runtime.json.RawEvidenceRegisterOutput"
+);
+impl_json_runtime_payload_local!(
+    SectionSemanticGateBundle,
+    "alegria.runtime.json.SectionSemanticGateBundle"
+);
+impl_json_runtime_payload_local!(
+    LayerRouterSweepInput,
+    "alegria.runtime.json.LayerRouterSweepInput"
+);
+impl_json_runtime_payload_local!(
+    LayerRouterSweepOutput,
+    "alegria.runtime.json.LayerRouterSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    SubspanLayerRouterInput,
+    "alegria.runtime.json.SubspanLayerRouterInput"
+);
+impl_json_runtime_payload_local!(
+    SubspanLayerRouterOutput,
+    "alegria.runtime.json.SubspanLayerRouterOutput"
+);
+impl_json_runtime_payload_local!(
+    EntitySpanSweepInput,
+    "alegria.runtime.json.EntitySpanSweepInput"
+);
+impl_json_runtime_payload_local!(
+    EntitySpanSweepOutput,
+    "alegria.runtime.json.EntitySpanSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CanonicalMappingSweepInput,
+    "alegria.runtime.json.CanonicalMappingSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CanonicalMappingSweepOutput,
+    "alegria.runtime.json.CanonicalMappingSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    OntologyIntakeGateInput,
+    "alegria.runtime.json.OntologyIntakeGateInput"
+);
+impl_json_runtime_payload_local!(
+    OntologyIntakeGateOutput,
+    "alegria.runtime.json.OntologyIntakeGateOutput"
+);
+impl_json_runtime_payload_local!(
+    ProceduralExtractionSweepInput,
+    "alegria.runtime.json.ProceduralExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    ProceduralExtractionSweepOutput,
+    "alegria.runtime.json.ProceduralExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    OperationalExtractionSweepInput,
+    "alegria.runtime.json.OperationalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    OperationalExtractionSweepOutput,
+    "alegria.runtime.json.OperationalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    EditorialExtractionSweepInput,
+    "alegria.runtime.json.EditorialExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    EditorialExtractionSweepOutput,
+    "alegria.runtime.json.EditorialExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    SeoSignalExtractionSweepInput,
+    "alegria.runtime.json.SeoSignalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    SeoSignalExtractionSweepOutput,
+    "alegria.runtime.json.SeoSignalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CommercialSignalExtractionSweepInput,
+    "alegria.runtime.json.CommercialSignalExtractionSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CommercialSignalExtractionSweepOutput,
+    "alegria.runtime.json.CommercialSignalExtractionSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    ExtractionSchemaValidateInput,
+    "alegria.runtime.json.ExtractionSchemaValidateInput"
+);
+impl_json_runtime_payload_local!(
+    ExtractionSchemaValidateOutput,
+    "alegria.runtime.json.ExtractionSchemaValidateOutput"
+);
+impl_json_runtime_payload_local!(
+    CandidateValidationInput,
+    "alegria.runtime.json.CandidateValidationInput"
+);
+impl_json_runtime_payload_local!(
+    CandidateValidationOutput,
+    "alegria.runtime.json.CandidateValidationOutput"
+);
+impl_json_runtime_payload_local!(
+    TripleBuilderSweepInput,
+    "alegria.runtime.json.TripleBuilderSweepInput"
+);
+impl_json_runtime_payload_local!(
+    TripleBuilderSweepOutput,
+    "alegria.runtime.json.TripleBuilderSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    CompletenessJudgeSweepInput,
+    "alegria.runtime.json.CompletenessJudgeSweepInput"
+);
+impl_json_runtime_payload_local!(
+    CompletenessJudgeSweepOutput,
+    "alegria.runtime.json.CompletenessJudgeSweepOutput"
+);
+impl_json_runtime_payload_local!(
+    ResolutionLoopInput,
+    "alegria.runtime.json.ResolutionLoopInput"
+);
+impl_json_runtime_payload_local!(
+    ResolutionLoopOutput,
+    "alegria.runtime.json.ResolutionLoopOutput"
+);
+impl_json_runtime_payload_local!(
+    ContradictionGateSweepInput,
+    "alegria.runtime.json.ContradictionGateSweepInput"
+);
+impl_json_runtime_payload_local!(
+    ContradictionGateSweepOutput,
+    "alegria.runtime.json.ContradictionGateSweepOutput"
+);
+

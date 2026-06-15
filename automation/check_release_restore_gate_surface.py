@@ -17,7 +17,11 @@ def read(path: Path) -> str:
 
 def main() -> int:
     failures: list[str] = []
-    cli = read(CLI)
+    cli_files = [CLI]
+    cli_dir = CLI.parent / "cli"
+    if cli_dir.is_dir():
+        cli_files.extend(cli_dir.glob("*.rs"))
+    cli = "\n".join(read(f) for f in cli_files)
     registry = read(REGISTRY)
     ops = read(OPS)
 

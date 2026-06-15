@@ -7,9 +7,19 @@ STATIC = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder
 SCHEMA = ROOT / "app/db/schema.sql"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_cms_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_cms_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
-    cms = CMS.read_text(encoding="utf-8")
+    cms = read_file_resolved(CMS)
     static = STATIC.read_text(encoding="utf-8")
     schema = SCHEMA.read_text(encoding="utf-8")
 

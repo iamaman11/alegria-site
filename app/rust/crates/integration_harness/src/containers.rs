@@ -68,13 +68,29 @@ impl PostgresHarness {
             .get_host_port_ipv4(5432.tcp())
             .await
             .context("resolve postgres mapped port failed")?;
+        sleep(Duration::from_secs(10)).await;
         let database_url =
-            format!("postgres://postgres:postgres_password@127.0.0.1:{port}/alegria");
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect(&database_url)
-            .await
-            .context("connect postgres harness failed")?;
+            format!("postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable");
+        let mut pool = None;
+        for i in 0..10 {
+            match PgPoolOptions::new()
+                .max_connections(5)
+                .connect(&database_url)
+                .await
+            {
+                Ok(p) => {
+                    pool = Some(p);
+                    break;
+                }
+                Err(e) => {
+                    if i == 9 {
+                        return Err(anyhow::anyhow!(e).context("connect postgres harness failed after 10 retries"));
+                    }
+                    sleep(Duration::from_millis(2000)).await;
+                }
+            }
+        }
+        let pool = pool.unwrap();
         bootstrap_schema(&pool).await?;
         Ok(Self {
             database_url,

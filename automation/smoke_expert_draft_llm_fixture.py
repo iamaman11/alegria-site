@@ -9,10 +9,24 @@ SCENARIO = ROOT / "app/rust/crates/seo_application/src/scenario.rs"
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "editorial_llm_adapter.rs":
+        sub_dir = path.parent / "editorial_llm_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
-    adapter = ADAPTER.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    adapter = read_file_resolved(ADAPTER)
+    activities = read_file_resolved(ACTIVITIES)
     workflow = WORKFLOW.read_text(encoding="utf-8")
     scenario = SCENARIO.read_text(encoding="utf-8")
     proto = PROTO.read_text(encoding="utf-8")

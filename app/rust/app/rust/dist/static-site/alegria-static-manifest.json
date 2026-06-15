@@ -1,0 +1,42 @@
+{
+  "base_url": "https://example.com",
+  "builder": "alegria_static_site_builder@2",
+  "page_count": 5,
+  "pages": [
+    {
+      "canonical_url_path": "/ru/visa/spain",
+      "page_node_key": "ac93609524e2a661fff59fb351dc84a4193183650f1f4ed6eda14518a5b0bb36",
+      "revision_id": "065039cc07a43a1ae83b76f26591bec891c1c3cef5fddd21f10938f2b9123332",
+      "status": "published",
+      "title": "Spain Visa"
+    },
+    {
+      "canonical_url_path": "/ru/visa/spain/tourist",
+      "page_node_key": "6e5c31cc658bbc233ab02bca7099f9a9de141e45b47e8b210717bcb80e9e1671",
+      "revision_id": "30697df49f32d1e3a39dfe9bd2fa08c41adba4f4b715a30fa470baa93d14ba1b",
+      "status": "published",
+      "title": "Spain Tourist Visa"
+    },
+    {
+      "canonical_url_path": "/ru/visa/spain/tourist/0621648f5287ddb9ab92cf35d7b16ecf76cef69a6dbdbff9b2e8152578925c1c",
+      "page_node_key": "c2b184a0f4242481a8d698fd5755d521ca0fa150c33d6ee22c429cf497057ebb",
+      "revision_id": "47ba0813d1fb8755a30c2e7a50e2d817c16c53e1c352a4cfcbbb865c06ee184f",
+      "status": "published",
+      "title": "0621648f5287ddb9ab92cf35d7b16ecf76cef69a6dbdbff9b2e8152578925c1c"
+    },
+    {
+      "canonical_url_path": "/ru/visa/spain/tourist/378d799eb2dd405d1a370edba58354456487a6dbbbe141229c38a299685acbbe",
+      "page_node_key": "dbccd6d7a9fcf0094b5651dc9af3b88c4507ea66743ac54685d2e1e6006b87f1",
+      "revision_id": "5f48a6a0d24642ec1780db2c14e325b88a89691d9af4a6cac2c62856abe0e775",
+      "status": "approved",
+      "title": "378d799eb2dd405d1a370edba58354456487a6dbbbe141229c38a299685acbbe"
+    },
+    {
+      "canonical_url_path": "/ru/visa/spain/tourist/831ba0bb1431a5c3885bcb96062fb0f30a9748cd4be78236172731f6734d5f4c",
+      "page_node_key": "3703a87604fdbf90b597c76a710b615c4ddd6cb6303b91c5bdf3f75fde4f9749",
+      "revision_id": "7a7e655289b81f497eebc03da782a7c1c9690ec54aa4bcbe5a26def936626b98",
+      "status": "published",
+      "title": "831ba0bb1431a5c3885bcb96062fb0f30a9748cd4be78236172731f6734d5f4c"
+    }
+  ]
+}

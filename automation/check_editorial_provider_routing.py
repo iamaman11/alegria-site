@@ -9,6 +9,14 @@ ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/editorial_llm_adap
 
 def main() -> int:
     text = ADAPTER.read_text(encoding="utf-8")
+    import re
+    # Resolve any include!("...") statements to check the complete source text
+    parent_dir = ADAPTER.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_file = parent_dir / match.group(1)
+        if include_file.exists():
+            text += "\n" + include_file.read_text(encoding="utf-8")
+
     failures: list[str] = []
     for needle in [
         "OPENAI_API_KEY",

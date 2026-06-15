@@ -33,6 +33,13 @@ ALLOWED_FAILURE_CLASSES = {
     "extraction_provider_unavailable",
     "crawl_policy_failure",
     "extraction_mismatch",
+    "db_contract_drift",
+}
+
+PREFLIGHT_FAILURE_CLASSES = {
+    "credential_issue",
+    "db_contract_drift",
+    "extraction_provider_unavailable",
 }
 
 
@@ -95,7 +102,12 @@ def main() -> int:
                 failures.append(f"provider_requirements missing `{key}`")
 
     execution = payload.get("execution", {})
-    if isinstance(execution, dict) and payload.get("evidence_status") != "PENDING_CREDENTIALS":
+    preflight_failure = payload.get("failure_class") in PREFLIGHT_FAILURE_CLASSES
+    if (
+        isinstance(execution, dict)
+        and payload.get("evidence_status") != "PENDING_CREDENTIALS"
+        and not preflight_failure
+    ):
         for key in [
             "run_id",
             "query_batch_key",
@@ -109,7 +121,11 @@ def main() -> int:
                 failures.append(f"execution missing `{key}`")
 
     observed = payload.get("observed", {})
-    if isinstance(observed, dict) and payload.get("evidence_status") != "PENDING_CREDENTIALS":
+    if (
+        isinstance(observed, dict)
+        and payload.get("evidence_status") != "PENDING_CREDENTIALS"
+        and not preflight_failure
+    ):
         for key in [
             "serp_phase_status",
             "serp_persisted_snapshot_count",

@@ -10,9 +10,19 @@ PRIMITIVES = ROOT / "app/rust/crates/primitives/src/truth_candidates.rs"
 RAW_CRAWL = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "raw_crawl_adapter.rs":
+        sub_dir = path.parent / "raw_crawl_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     primitives = PRIMITIVES.read_text(encoding="utf-8")
-    raw_crawl = RAW_CRAWL.read_text(encoding="utf-8")
+    raw_crawl = read_file_resolved(RAW_CRAWL)
     failures: list[str] = []
 
     for needle in [

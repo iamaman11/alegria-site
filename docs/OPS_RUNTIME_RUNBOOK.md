@@ -220,6 +220,8 @@ Hard rules:
     - workflow may terminate early with `done:no_pages`
 - `SeoSiteBuildWorkflow`:
   - compat/drain workflow only; retained for replay-safe legacy histories and controlled comparison
+  - disabled in the default production worker profile
+  - enable only with `ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW=true` or `TEMPORAL_WORKER_PROFILE=compat|all`
   - `load_seo_site_build_input`
   - `load_verified_support_bundle`
   - `serp_ingest`
@@ -484,6 +486,12 @@ Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_RETRIEVAL_CON
 
 ## 7.1 Compat / drain closure and naming
 
+- `TEMPORAL_WORKER_PROFILE=production` is the default worker profile.
+- `TEMPORAL_WORKER_PROFILE=compat` enables the compatibility `SeoSiteBuildWorkflow` surface.
+- `TEMPORAL_WORKER_PROFILE=test` enables the diagnostic `TestHitlWorkflow` surface.
+- `TEMPORAL_WORKER_PROFILE=all` is for explicit local diagnostics only.
+- `ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW=true` enables compat registration without changing the whole worker profile.
+- `ALLOW_TEST_HITL_WORKFLOW=true` enables HITL test registration without changing the whole worker profile.
 - `SeoSiteBuildWorkflow` remains in code only as compat/drain and controlled replay surface.
 - For the current local environment, the compat/drain window is considered closed because [docs/runs/seo_site_build_legacy_replay_evidence.json](/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json) records `total_runs=0` and `open_runs=0`.
 - Local env bundle evidence is captured in [docs/runs/local_operational_evidence_bundle.json](/home/bose/projects/alegria-site/docs/runs/local_operational_evidence_bundle.json).

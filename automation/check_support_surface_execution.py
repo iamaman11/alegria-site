@@ -7,7 +7,11 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPORAL_STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter.rs"
+TEMPORAL_STARTER_SPLIT_DIR = (
+    ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter"
+)
 CLI_MAIN = ROOT / "app" / "rust" / "services" / "cli_tools" / "src" / "main.rs"
+CLI_SPLIT_DIR = ROOT / "app" / "rust" / "services" / "cli_tools" / "src" / "cli"
 FRESHNESS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "freshness.rs"
 RECONCILE = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "projection_reconcile.rs"
 REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
@@ -20,11 +24,19 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def read_module_surface(facade: Path, split_dir: Path) -> str:
+    parts = [read(facade)]
+    if split_dir.exists():
+        for path in sorted(split_dir.rglob("*.rs")):
+            parts.append(read(path))
+    return "\n".join(parts)
+
+
 def main() -> int:
     failures: list[str] = []
 
-    starter = read(TEMPORAL_STARTER)
-    cli = read(CLI_MAIN)
+    starter = read_module_surface(TEMPORAL_STARTER, TEMPORAL_STARTER_SPLIT_DIR)
+    cli = read_module_surface(CLI_MAIN, CLI_SPLIT_DIR)
     registry = read(REGISTRY)
     ops = read(OPS)
     prod_gate = read(PROD_GATE)

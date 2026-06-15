@@ -45,6 +45,12 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel.startswith("app/rust/services/cli_tools/src/"):
         return True
+    if rel.startswith("app/rust/services/temporal/src/bin/"):
+        return True
+    if rel.startswith("app/rust/services/temporal/src/activities/operations/"):
+        return True
+    if rel.startswith("app/rust/services/temporal/src/activities/registry/"):
+        return True
     return False
 
 

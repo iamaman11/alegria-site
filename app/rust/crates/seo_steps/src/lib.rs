@@ -26,7 +26,6 @@ pub mod pii_redaction_prepass_step;
 pub mod procedural_extraction_step;
 pub mod publish_materialize_step;
 pub mod quality_policy_step;
-pub mod read_neo4j_context;
 pub mod rebuild_detect_step;
 pub mod rebuild_ontology;
 pub mod render_preview_validate_step;

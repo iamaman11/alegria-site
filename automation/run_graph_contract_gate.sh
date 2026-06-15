@@ -57,6 +57,9 @@ fi
 
 rm -f "$REPORT_PATH" "$LOG_PATH"
 
+DATABASE_URL="$DATABASE_URL" \
+  python3 automation/bootstrap_graph_contract_projections.py
+
 set +e
 (
   cd app/rust
@@ -69,6 +72,7 @@ set +e
     --country-code "ES" \
     --visa-type "tourist" \
     --applicant-profile "standard" \
+    --projection-max-lag-ms "${GRAPH_CONTRACT_PROJECTION_MAX_LAG_MS:-86400000}" \
     --report-json "$REPORT_PATH"
 ) >"$LOG_PATH" 2>&1
 status=$?

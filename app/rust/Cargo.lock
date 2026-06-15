@@ -4673,7 +4673,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "contracts",
- "neo4rs",
  "policies",
  "primitives",
  "prost 0.14.3",

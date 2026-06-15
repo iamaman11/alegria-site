@@ -86,9 +86,17 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
                      WHEN coalesce(serp.crawl_queue.dtype, '') = '' THEN EXCLUDED.dtype
                      ELSE serp.crawl_queue.dtype
                  END,
+                 first_seen_run_id = CASE
+                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_run_id
+                     ELSE EXCLUDED.first_seen_run_id
+                 END,
+                 first_seen_job_id = CASE
+                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_job_id
+                     ELSE EXCLUDED.first_seen_job_id
+                 END,
                  query_batch_key = CASE
-                     WHEN serp.crawl_queue.query_batch_key = '' THEN EXCLUDED.query_batch_key
-                     ELSE serp.crawl_queue.query_batch_key
+                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.query_batch_key
+                     ELSE EXCLUDED.query_batch_key
                  END,
                  next_attempt_at = CASE
                      WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.next_attempt_at

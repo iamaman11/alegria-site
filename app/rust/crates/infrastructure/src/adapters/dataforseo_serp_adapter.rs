@@ -200,13 +200,20 @@ fn classify_domain_tier(domain: &str, url: &str) -> String {
         url.to_ascii_lowercase()
     );
     if value.contains(".gov")
+        || value.contains(".gob.")
         || value.contains("embassy")
         || value.contains("consulate")
         || value.contains("mfa.")
         || value.contains("mid.")
+        || value.contains("exteriores.gob.es")
     {
         "official".to_string()
-    } else if value.contains("vfsglobal") || value.contains("vfs ") || value.contains(" vfs") {
+    } else if value.contains("vfsglobal")
+        || value.contains("vfs ")
+        || value.contains(" vfs")
+        || value.contains("blsspain")
+        || value.contains("blsspainglobal")
+    {
         "vfs".to_string()
     } else if value.contains("agency") || value.contains("consult") {
         "agency".to_string()

@@ -16,6 +16,20 @@ PURE_RUST_LAYERS = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "operations.rs" and "activities" in path.parts:
+        sub_dir = path.parent / "operations"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -40,7 +54,7 @@ def main() -> int:
         if needle not in fact_text:
             failures.append(f"missing `{needle}` in {ACTIVITIES_FACT.relative_to(ROOT)}")
 
-    mod_text = ACTIVITIES_MOD.read_text(encoding="utf-8")
+    mod_text = read_file_resolved(ACTIVITIES_MOD)
     required_mod = [
         "Self::activity_error_from_domain(&err)",
         "self.execute_step(",
@@ -78,7 +92,7 @@ def main() -> int:
         "use anyhow::Result;",
     ]
     for path in PURE_RUST_LAYERS:
-        text = path.read_text(encoding="utf-8")
+        text = read_file_resolved(path)
         for needle in required_uc_needles:
             if needle not in text:
                 failures.append(f"missing `{needle}` in {path.relative_to(ROOT)}")

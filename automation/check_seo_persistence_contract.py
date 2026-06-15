@@ -52,12 +52,36 @@ REQUIRED_TABLE_TOUCHES = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "seo_ports_sqlx_adapter.rs":
+        sub_dir = path.parent / "seo_ports_sqlx_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "planning.rs" and "seo_application" in path.parts:
+        sub_dir = path.parent / "planning"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
-    adapter = ADAPTER.read_text(encoding="utf-8") if ADAPTER.exists() else ""
+    adapter = read_file_resolved(ADAPTER) if ADAPTER.exists() else ""
     adapter_mod = ADAPTER_MOD.read_text(encoding="utf-8")
-    ports_adapter = PORTS_ADAPTER.read_text(encoding="utf-8")
+    ports_adapter = read_file_resolved(PORTS_ADAPTER)
     seo_ports = SEO_PORTS.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    activities = read_file_resolved(ACTIVITIES)
     serp_adapter = SERP_ADAPTER.read_text(encoding="utf-8")
     failures: list[str] = []
 
@@ -68,7 +92,7 @@ def main() -> int:
 
     for function, (owner_module, owner_token) in PERSISTENCE_OWNERS.items():
         owner_path = SEO_APPLICATION / owner_module
-        owner = owner_path.read_text(encoding="utf-8") if owner_path.exists() else ""
+        owner = read_file_resolved(owner_path) if owner_path.exists() else ""
         if f"pub async fn {function}" not in adapter:
             failures.append(f"missing SEO persistence function `{function}`")
         if f"async fn {function}" not in seo_ports:

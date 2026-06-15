@@ -82,10 +82,6 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
     if entity_key.is_empty() {
         bail!("QdrantUpsertCommand.entity_key is empty");
     }
-    if cmd.vector.is_empty() {
-        bail!("QdrantUpsertCommand.vector is empty");
-    }
-
     if requires_voyage4_projection(collection_name)
         && cmd
             .metadata
@@ -131,6 +127,45 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
         cmd.metadata.insert(
             "embedding_version".to_string(),
             format!("{collection_name}@voyage4_document_1024_float"),
+        );
+    }
+    if cmd.vector.is_empty() {
+        let retrieval_text = cmd
+            .metadata
+            .get("retrieval_text")
+            .map(String::as_str)
+            .unwrap_or("")
+            .trim();
+        if retrieval_text.is_empty() {
+            bail!("QdrantUpsertCommand.vector is empty");
+        }
+        let api_key = env::var("VOYAGE_API_KEY")
+            .context("VOYAGE_API_KEY is required to backfill empty Qdrant projection vectors")?;
+        let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_VOYAGE_MODEL.to_string());
+        let voyage = VoyageClient::new(api_key, model.clone());
+        let vector = voyage
+            .embed_batch_with_settings(
+                &[retrieval_text],
+                &VoyageEmbeddingOptions {
+                    input_type: Some(VoyageInputType::Document),
+                    output_dimension: Some(1024),
+                    output_dtype: Some(VoyageOutputDtype::Float),
+                    truncation: Some(false),
+                },
+            )
+            .await
+            .with_context(|| {
+                format!("Voyage empty-vector backfill failed for collection `{collection_name}`")
+            })?
+            .into_iter()
+            .next()
+            .context("Voyage empty-vector backfill returned no embedding")?;
+        cmd.vector = vector;
+        cmd.vector_size = 1024;
+        cmd.metadata.insert("embedding_model".to_string(), model);
+        cmd.metadata.insert(
+            "embedding_version".to_string(),
+            format!("{collection_name}@voyage4_document_1024_float_backfill"),
         );
     }
 

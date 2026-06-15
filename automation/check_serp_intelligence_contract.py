@@ -11,12 +11,25 @@ SEO_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapt
 SEO_PORTS = ROOT / "app/rust/crates/seo_ports/src/lib.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
 def main() -> int:
-    serp_adapter = SERP_ADAPTER.read_text(encoding="utf-8")
-    dataforseo_adapter = DATAFORSEO_ADAPTER.read_text(encoding="utf-8")
-    serp_normalize = SERP_NORMALIZE.read_text(encoding="utf-8")
-    seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
-    seo_ports = SEO_PORTS.read_text(encoding="utf-8")
+    serp_adapter = read_with_includes(SERP_ADAPTER)
+    dataforseo_adapter = read_with_includes(DATAFORSEO_ADAPTER)
+    serp_normalize = read_with_includes(SERP_NORMALIZE)
+    seo_adapter = read_with_includes(SEO_ADAPTER)
+    seo_ports = read_with_includes(SEO_PORTS)
 
     failures: list[str] = []
 
@@ -25,7 +38,7 @@ def main() -> int:
         "(run_id, job_id, rank, title, url, url_norm, domain_norm, source_tier, also_in_sources)",
         "source_domain",
         "query_batch_key",
-        "domain_norm(&result.url)",
+        "result.domain_norm",
         "source_tier",
     ]:
         if needle not in serp_adapter:
@@ -78,3 +91,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

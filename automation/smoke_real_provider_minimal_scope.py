@@ -158,6 +158,8 @@ def detail_int(detail: str | None, key: str) -> int | None:
 
 def classify_failure(text: str) -> str:
     lower = text.lower()
+    if "timed out" in lower or "timeout" in lower or "timedout" in lower:
+        return "rate_or_transport_issue"
     if "no_truth_extraction_provider" in lower:
         return "extraction_provider_unavailable"
     if any(token in lower for token in ["401", "403", "unauthorized", "authentication failed"]):
@@ -175,6 +177,20 @@ def classify_failure(text: str) -> str:
 
 def truth_provider_status() -> dict[str, Any]:
     providers: list[dict[str, str]] = []
+    vertex_project = (
+        os.environ.get("VERTEX_GEMINI_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("GCLOUD_PROJECT")
+    )
+    if vertex_project and os.environ.get("VERTEX_GEMINI_ENABLED", "true").lower() not in {"0", "false"}:
+        providers.append(
+            {
+                "provider": "vertex_gemini",
+                "model": os.environ.get("VERTEX_GEMINI_TRUTH_MODEL")
+                or os.environ.get("VERTEX_GEMINI_MODEL")
+                or "gemini-2.5-pro",
+            }
+        )
     if os.environ.get("SEO_TRUTH_LLM_LOCAL_ENDPOINT") or os.environ.get("SEO_LLM_LOCAL_ENDPOINT"):
         providers.append(
             {
@@ -208,7 +224,7 @@ def truth_provider_status() -> dict[str, Any]:
                 "provider": "gemini",
                 "model": os.environ.get("GEMINI_TRUTH_MODEL")
                 or os.environ.get("GEMINI_SEO_MODEL")
-                or "gemini-3-pro",
+                or "gemini-2.5-pro",
             }
         )
     return {
@@ -258,7 +274,9 @@ def main() -> int:
     if not artifact["provider_requirements"]["dataforseo_password_present"]:
         missing_credentials.append("DATAFORSEO_PASSWORD")
     if not truth_provider_ready:
-        missing_credentials.append("GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SEO_TRUTH_LLM_LOCAL_ENDPOINT")
+        missing_credentials.append(
+            "VERTEX_GEMINI_PROJECT|GOOGLE_CLOUD_PROJECT(+ADC)|GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SEO_TRUTH_LLM_LOCAL_ENDPOINT"
+        )
 
     if missing_credentials:
         artifact["evidence_status"] = "PENDING_CREDENTIALS"
@@ -310,6 +328,48 @@ def main() -> int:
     output_dir = ROOT / "tmp" / f"live-provider-smoke-{run_id}"
     output_dir.mkdir(parents=True, exist_ok=True)
     scope = artifact["scope"]
+    official_crawl_url = os.environ.get(
+        "ALEGRIA_LIVE_SMOKE_OFFICIAL_CRAWL_URL",
+        "https://www.exteriores.gob.es/Consulados/mumbai/en/ServiciosConsulares/Paginas/Consular/Visados-Schengen.aspx",
+    )
+    official_crawl_url_norm = re.sub(r"^https?://", "", official_crawl_url.rstrip("/"))
+    official_crawl_domain = official_crawl_url_norm.split("/", 1)[0].lower()
+    psql_exec(
+        database_url,
+        f"""
+        INSERT INTO serp.crawl_queue
+            (url, url_norm, source_domain, source_type, dtype, first_seen_run_id, first_seen_job_id,
+             query_batch_key, status, next_attempt_at, locked_until, last_error, notes)
+        VALUES
+            ('{sql_literal(official_crawl_url)}',
+             '{sql_literal(official_crawl_url_norm)}',
+             '{sql_literal(official_crawl_domain)}',
+             'live_smoke_official_seed',
+             'official',
+             '{run_id}',
+             'live_smoke_official_seed',
+             '{query_batch_key}',
+             'pending',
+             now(),
+             NULL,
+             NULL,
+             'live_provider_smoke_official_seed')
+        ON CONFLICT (url_norm) DO UPDATE
+        SET url = EXCLUDED.url,
+            source_domain = EXCLUDED.source_domain,
+            source_type = EXCLUDED.source_type,
+            dtype = EXCLUDED.dtype,
+            first_seen_run_id = EXCLUDED.first_seen_run_id,
+            first_seen_job_id = EXCLUDED.first_seen_job_id,
+            query_batch_key = EXCLUDED.query_batch_key,
+            status = 'pending',
+            next_attempt_at = now(),
+            locked_until = NULL,
+            last_error = NULL,
+            notes = EXCLUDED.notes;
+        """,
+    )
+    artifact["provider_requirements"]["official_crawl_seed_url"] = official_crawl_url
     context_key = f"{scope['country_code']}|{scope['visa_type']}||{scope['citizenship_code']}"
     bootstrap_seeded_support_bundle = False
     verified_rule_count = psql_scalar(
@@ -441,13 +501,62 @@ def main() -> int:
     ]
     artifact["smoke_command"] = " ".join(command)
 
-    proc = subprocess.run(
-        command,
-        cwd=ROOT / "app" / "rust",
-        capture_output=True,
-        text=True,
-        env=os.environ.copy(),
-    )
+    command_timeout = int(os.environ.get("LIVE_PROVIDER_SMOKE_TIMEOUT_SECS", "420"))
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=ROOT / "app" / "rust",
+            capture_output=True,
+            text=True,
+            env=os.environ.copy(),
+            timeout=command_timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout or ""
+        stderr = exc.stderr or ""
+        if isinstance(stdout, bytes):
+            stdout = stdout.decode(errors="replace")
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        artifact["evidence_status"] = "FAIL"
+        artifact["failure_class"] = "rate_or_transport_issue"
+        artifact["status_reason"] = (
+            f"Live smoke command timed out after {command_timeout}s before reaching a "
+            "passing crawl+extraction verdict."
+        )
+        artifact["execution"] = {
+            "run_id": run_id,
+            "query_batch_key": query_batch_key,
+            "command_exit_code": 124,
+            "stdout_excerpt": stdout.strip()[-4000:],
+            "stderr_excerpt": stderr.strip()[-4000:],
+            "result": parse_result(stdout),
+            "phase_count": len(re.findall(r"^SEO_RUN_PHASE ", stdout, flags=re.MULTILINE)),
+        }
+        artifact["observed"] = {
+            **artifact.get("observed", {}),
+            "serp_phase_status": parse_phase(stdout, "serp_ingest")[0],
+            "serp_persisted_snapshot_count": detail_int(
+                parse_phase(stdout, "serp_ingest")[1], "persisted_snapshot_count"
+            ),
+            "crawl_phase_status": parse_phase(stdout, "crawl_sources")[0],
+            "crawl_claimed_count": detail_int(parse_phase(stdout, "crawl_sources")[1], "claimed"),
+            "crawl_crawled_count": detail_int(parse_phase(stdout, "crawl_sources")[1], "crawled"),
+            "crawl_failed_count": detail_int(parse_phase(stdout, "crawl_sources")[1], "failed"),
+            "crawl_raw_page_count": detail_int(parse_phase(stdout, "crawl_sources")[1], "raw_pages"),
+            "raw_knowledge_phase_status": parse_phase(stdout, "raw_knowledge_ingestion")[0],
+            "raw_knowledge_verified_rule_count": detail_int(
+                parse_phase(stdout, "raw_knowledge_ingestion")[1], "verified_rules"
+            ),
+            "raw_knowledge_changed_truth_keys": detail_int(
+                parse_phase(stdout, "raw_knowledge_ingestion")[1], "changed_truth_keys"
+            ),
+        }
+        write_artifact(artifact)
+        print("SMOKE_REAL_PROVIDER_MINIMAL_SCOPE: FAILED")
+        print("- failure_class=rate_or_transport_issue")
+        print(f"- timeout_seconds={command_timeout}")
+        return 1
     combined = "\n".join(
         chunk for chunk in [proc.stdout.strip(), proc.stderr.strip()] if chunk.strip()
     )

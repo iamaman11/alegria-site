@@ -24,8 +24,18 @@ REQUIRED_NEEDLES = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "main.rs" and "cli_tools" in path.parts:
+        sub_dir = path.parent / "cli"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
-    text = CLI_MAIN.read_text(encoding="utf-8")
+    text = read_file_resolved(CLI_MAIN)
     missing = [needle for needle in REQUIRED_NEEDLES if needle not in text]
     if missing:
         print("SHADOW_VERIFICATION_SURFACE: FAILED")

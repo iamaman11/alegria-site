@@ -9,10 +9,25 @@ SEO_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapt
 RAW_CRAWL = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "raw_crawl_adapter.rs":
+        sub_dir = path.parent / "raw_crawl_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     source_projection = SOURCE_PROJECTION.read_text(encoding="utf-8")
-    seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
-    raw_crawl = RAW_CRAWL.read_text(encoding="utf-8")
+    seo_adapter = read_file_resolved(SEO_ADAPTER)
+    raw_crawl = read_file_resolved(RAW_CRAWL)
 
     failures: list[str] = []
 

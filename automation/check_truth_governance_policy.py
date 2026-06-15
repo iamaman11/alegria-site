@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,12 +9,26 @@ OWNER_DOC = ROOT / "docs" / "V6_Expert_Truth_Graph_Runtime.md"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
 POLICY_ENGINE = ROOT / "app" / "rust" / "crates" / "policies" / "src" / "truth_governance.rs"
 RAW_CRAWL = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter.rs"
+RAW_CRAWL_SPLIT_DIR = (
+    ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter"
+)
 TEMPORAL_OPS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs"
+TEMPORAL_OPS_SPLIT_DIR = (
+    ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations"
+)
 CI_VERIFY = ROOT / "automation" / "ci_verify.sh"
 
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def read_module_surface(facade: Path, split_dir: Path) -> str:
+    text = read(facade)
+    if split_dir.exists():
+        for path in sorted(split_dir.rglob("*.rs")):
+            text += "\n" + read(path)
+    return text
 
 
 def main() -> int:
@@ -65,11 +78,13 @@ def main() -> int:
             if needle not in engine:
                 failures.append(f"policy engine missing marker: {needle}")
 
-    for path, label in [
-        (RAW_CRAWL, "raw crawl adapter"),
-        (TEMPORAL_OPS, "temporal truth adjudication"),
+    for text, label in [
+        (read_module_surface(RAW_CRAWL, RAW_CRAWL_SPLIT_DIR), "raw crawl adapter"),
+        (
+            read_module_surface(TEMPORAL_OPS, TEMPORAL_OPS_SPLIT_DIR),
+            "temporal truth adjudication",
+        ),
     ]:
-        text = read(path)
         if "adjudicate_truth_candidates_with_governance" not in text:
             failures.append(f"{label} is not wired to governance adjudication")
 

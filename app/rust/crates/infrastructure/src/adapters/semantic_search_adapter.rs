@@ -52,10 +52,10 @@ pub async fn rerank_records(
         voyage_api_key,
         env_voyage_model(VoyageSearchSurface::Standard),
     );
-    let documents = records
+    let candidates = records
         .iter()
-        .map(|record| {
-            record
+        .filter_map(|record| {
+            let document = record
                 .payload
                 .get("retrieval_text")
                 .or_else(|| record.payload.get("label_ru"))
@@ -64,7 +64,23 @@ pub async fn rerank_records(
                 .or_else(|| record.payload.get("entity_key"))
                 .map(String::as_str)
                 .unwrap_or("")
+                .trim();
+            if document.is_empty() {
+                None
+            } else {
+                Some((record.clone(), document))
+            }
         })
+        .collect::<Vec<_>>();
+    if candidates.len() <= 1 {
+        return Ok(candidates
+            .into_iter()
+            .map(|(record, _)| record)
+            .collect::<Vec<_>>());
+    }
+    let documents = candidates
+        .iter()
+        .map(|(_, document)| *document)
         .collect::<Vec<_>>();
     let reranked = voyage
         .rerank(
@@ -86,7 +102,8 @@ pub async fn rerank_records(
     }
     let mut reordered = Vec::with_capacity(reranked.len());
     for entry in reranked {
-        if let Some(mut record) = records.get(entry.index).cloned() {
+        if let Some((record, _)) = candidates.get(entry.index) {
+            let mut record = record.clone();
             record.score = entry.relevance_score;
             reordered.push(record);
         }

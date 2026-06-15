@@ -12,9 +12,19 @@ SMOKE = ROOT / "automation/smoke_real_provider_minimal_scope.py"
 PROD_GATE = ROOT / "automation/temporal_production_gate.sh"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
-    seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
+    seo_adapter = read_file_resolved(SEO_ADAPTER)
     smoke = SMOKE.read_text(encoding="utf-8")
     prod_gate = PROD_GATE.read_text(encoding="utf-8")
     failures: list[str] = []

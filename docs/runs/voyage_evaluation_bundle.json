@@ -1,11 +1,11 @@
 {
-  "generated_at": "2026-05-31T13:50:24.860744+00:00",
-  "status": "PENDING_CREDENTIALS",
+  "generated_at": "2026-06-12T19:36:05.331877+00:00",
+  "status": "PASS",
   "provider": {
     "embeddings_model": "voyage-4-large",
     "context_model": "voyage-context-3",
     "rerank_model": "rerank-2.5",
-    "credentials_ready": false
+    "credentials_ready": true
   },
   "collections": [
     "raw_chunks_4",
@@ -17,11 +17,11 @@
     "whole_page_advisory_prototypes"
   ],
   "samples": {
-    "russian_retrieval": "pending",
-    "contextualized_chunk_recall": "pending",
-    "canonical_mapping_vector_retrieval": "pending",
-    "draft_support_rerank": "pending",
-    "planning_cluster_merge": "pending"
+    "russian_retrieval": "configured",
+    "contextualized_chunk_recall": "configured",
+    "canonical_mapping_vector_retrieval": "configured",
+    "draft_support_rerank": "configured",
+    "planning_cluster_merge": "configured"
   },
   "notes": [
     "This bundle is a policy/evidence surface, not a truth authority surface.",

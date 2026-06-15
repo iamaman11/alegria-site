@@ -34,9 +34,18 @@ LEDGER_BACKED_STEPS = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     contract = CONTRACT.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    activities = read_file_resolved(ACTIVITIES)
     proto = RUNTIME_PROTO.read_text(encoding="utf-8")
     failures: list[str] = []
 

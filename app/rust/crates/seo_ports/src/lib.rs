@@ -263,6 +263,11 @@ pub trait GraphReasoningPort: Send + Sync {
 }
 
 #[async_trait]
+pub trait GraphCapabilityPort: Send + Sync {
+    async fn ensure_graph_contract(&self, context_key: &str) -> Result<(), DomainError>;
+}
+
+#[async_trait]
 pub trait PlanningRepository: Send + Sync {
     async fn load_graph_planning_context(
         &self,

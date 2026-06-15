@@ -18,10 +18,20 @@ PROTO_RUNTIME_PAYLOAD_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure
 GATE = ROOT / "automation" / "temporal_production_gate.sh"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "proto_runtime_payload_store.rs":
+        sub_dir = path.parent / "proto_runtime_payload_store"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def must_contain(path: Path, needle: str) -> str | None:
     if not path.exists():
         return f"missing file: {path.relative_to(ROOT)}"
-    text = path.read_text(encoding="utf-8")
+    text = read_file_resolved(path)
     if needle not in text:
         return f"missing `{needle}` in {path.relative_to(ROOT)}"
     return None

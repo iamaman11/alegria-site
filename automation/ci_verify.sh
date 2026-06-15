@@ -362,6 +362,7 @@ echo "[53/60] Backup/restore layout"
 python3 automation/check_backup_restore_layout.py
 
 echo "[54/60] SQLx offline contract"
+(cd app/rust && SQLX_OFFLINE=true cargo check -q)
 python3 automation/check_sqlx_offline_contract.py
 
 echo "[55/60] End-to-end invariant checks (schema + JSONL data)"

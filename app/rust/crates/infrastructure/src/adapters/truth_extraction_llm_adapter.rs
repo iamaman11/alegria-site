@@ -2,6 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use super::vertex_gemini_runtime;
 use primitives::errors::DomainError;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
@@ -91,6 +92,7 @@ trait TruthExtractionClient {
 
 struct OpenAiTruthExtractionClient;
 struct AnthropicTruthExtractionClient;
+struct VertexGeminiTruthExtractionClient;
 struct GeminiTruthExtractionClient;
 struct LocalCompatibleTruthExtractionClient;
 
@@ -205,6 +207,61 @@ impl TruthExtractionClient for AnthropicTruthExtractionClient {
     }
 }
 
+impl TruthExtractionClient for VertexGeminiTruthExtractionClient {
+    fn provider_key(&self) -> &'static str {
+        "vertex_gemini"
+    }
+
+    fn model_key(&self) -> String {
+        vertex_gemini_runtime::vertex_model("VERTEX_GEMINI_TRUTH_MODEL", "gemini-2.5-pro")
+    }
+
+    fn is_configured(&self) -> bool {
+        vertex_gemini_runtime::vertex_provider_configured()
+    }
+
+    fn extract<'a>(&'a self, input: &'a TruthExtractionInput) -> ClientFuture<'a> {
+        Box::pin(async move {
+            let body = json!({
+                "generationConfig": {
+                    "temperature": 0.0,
+                    "responseMimeType": "application/json"
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [
+                            {
+                                "text": format!("{}\n\n{}", extraction_system_prompt(), extraction_prompt(input))
+                            }
+                        ]
+                    }
+                ]
+            });
+            let value = post_json_with_retries(
+                &vertex_gemini_runtime::vertex_generate_url(&self.model_key()),
+                vertex_gemini_runtime::vertex_bearer_headers(request_timeout()).await?,
+                &body,
+                request_timeout(),
+                DEFAULT_MAX_RETRIES,
+            )
+            .await?;
+            let text = value
+                .get("candidates")
+                .and_then(Value::as_array)
+                .and_then(|candidates| candidates.first())
+                .and_then(|candidate| candidate.get("content"))
+                .and_then(|content| content.get("parts"))
+                .and_then(Value::as_array)
+                .and_then(|parts| parts.first())
+                .and_then(|part| part.get("text"))
+                .and_then(Value::as_str)
+                .unwrap_or("{}");
+            response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
+        })
+    }
+}
+
 impl TruthExtractionClient for GeminiTruthExtractionClient {
     fn provider_key(&self) -> &'static str {
         "gemini"
@@ -213,7 +270,7 @@ impl TruthExtractionClient for GeminiTruthExtractionClient {
     fn model_key(&self) -> String {
         std::env::var("GEMINI_TRUTH_MODEL")
             .or_else(|_| std::env::var("GEMINI_SEO_MODEL"))
-            .unwrap_or_else(|_| "gemini-3-pro".to_string())
+            .unwrap_or_else(|_| "gemini-2.5-pro".to_string())
     }
 
     fn is_configured(&self) -> bool {
@@ -376,6 +433,7 @@ pub async fn extract_rule_candidates(
 fn provider_clients() -> Vec<Box<dyn TruthExtractionClient + Send + Sync>> {
     vec![
         Box::new(LocalCompatibleTruthExtractionClient),
+        Box::new(VertexGeminiTruthExtractionClient),
         Box::new(OpenAiTruthExtractionClient),
         Box::new(AnthropicTruthExtractionClient),
         Box::new(GeminiTruthExtractionClient),
@@ -507,7 +565,12 @@ fn normalize_role(role: &str) -> Option<String> {
 }
 
 fn request_timeout() -> Duration {
-    Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+    Duration::from_secs(
+        std::env::var("SEO_LLM_TIMEOUT_SECS")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_TIMEOUT_SECS),
+    )
 }
 
 fn basic_json_headers() -> Result<reqwest::header::HeaderMap, DomainError> {
@@ -579,19 +642,26 @@ async fn post_json_with_retries(
         match response {
             Ok(resp) => {
                 let status = resp.status();
-                let value =
-                    resp.json::<Value>()
-                        .await
-                        .map_err(|err| DomainError::InfraUnavailable {
-                            message: format!("decode truth extraction response JSON: {err}"),
-                        })?;
                 if status.is_success() {
+                    let value = resp.json::<Value>().await.map_err(|err| {
+                        DomainError::InfraUnavailable {
+                            message: format!("decode truth extraction response JSON: {err:?}"),
+                        }
+                    })?;
                     return Ok(value);
                 }
-                last_error = Some(format!("truth extraction HTTP {} from {}", status, url));
+                let body = resp.text().await.unwrap_or_else(|err| {
+                    format!("<failed to read truth extraction error body: {err:?}>")
+                });
+                last_error = Some(format!(
+                    "truth extraction HTTP {} from {} body={}",
+                    status, url, body
+                ));
             }
             Err(err) => {
-                last_error = Some(err.to_string());
+                last_error = Some(format!(
+                    "truth extraction request error from {url}: {err:?}"
+                ));
             }
         }
     }

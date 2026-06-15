@@ -15,6 +15,20 @@ ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activiti
 WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
     if not ARTIFACT.exists():
@@ -54,9 +68,9 @@ def main() -> int:
         failures.append("failure_class must equal `none`")
 
     schema = SCHEMA.read_text(encoding="utf-8")
-    adapter = ADAPTER.read_text(encoding="utf-8")
+    adapter = read_file_resolved(ADAPTER)
     application = APPLICATION.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    activities = read_file_resolved(ACTIVITIES)
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     for needle in [
@@ -78,7 +92,7 @@ def main() -> int:
 
     for needle in [
         "execute_rebuild_detect",
-        "persist_rebuild_detect_output(input, &output)",
+        "persist_rebuild_detect_output(input, &",
         "narrowed_input.page_nodes",
     ]:
         if needle not in application:

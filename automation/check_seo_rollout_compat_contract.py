@@ -53,12 +53,29 @@ REQUIRED = {
 }
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
+def clean_str(s: str) -> str:
+    return "".join(s.split())
+
+
 def main() -> int:
     failures: list[str] = []
     for key, path in FILES.items():
-        text = path.read_text(encoding="utf-8")
+        text = read_with_includes(path)
         for needle in REQUIRED.get(key, []):
-            if needle not in text:
+            if clean_str(needle) not in clean_str(text):
                 failures.append(f"{path.relative_to(ROOT)} missing `{needle}`")
 
     if failures:

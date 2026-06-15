@@ -8,12 +8,27 @@ SCHEMA = ROOT / "app/db/schema.sql"
 STATIC = ROOT / "app/rust/services/cli_tools/src/main.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "main.rs" and "cli_tools" in path.parts:
+        sub_dir = path.parent / "cli"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "sqlx_seo_cms_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_cms_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
-    cli = CLI.read_text(encoding="utf-8")
-    cms = CMS.read_text(encoding="utf-8")
+    cli = read_file_resolved(CLI)
+    cms = read_file_resolved(CMS)
     schema = SCHEMA.read_text(encoding="utf-8")
-    static = STATIC.read_text(encoding="utf-8")
+    static = read_file_resolved(STATIC)
     for needle in [
         "CmsReviewList",
         "CmsReviewShow",

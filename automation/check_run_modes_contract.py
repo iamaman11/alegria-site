@@ -11,12 +11,25 @@ CLI = ROOT / "app/rust/services/cli_tools/src/main.rs"
 STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
 def main() -> int:
-    proto = PROTO.read_text(encoding="utf-8")
-    execution = EXECUTION.read_text(encoding="utf-8")
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    cli = CLI.read_text(encoding="utf-8")
-    starter = STARTER.read_text(encoding="utf-8")
+    proto = read_with_includes(PROTO)
+    execution = read_with_includes(EXECUTION)
+    workflow = read_with_includes(WORKFLOW)
+    cli = read_with_includes(CLI)
+    starter = read_with_includes(STARTER)
 
     failures: list[str] = []
 

@@ -21,7 +21,9 @@ TARGETS = [
 # - local baseline/replay probes are ops diagnostics, not runtime modules;
 # - contract scanners may contain SQL snippets only as strings they expect in Rust code.
 ALLOWED_SQL_FILES: set[Path] = {
+    (ROOT / "automation" / "bootstrap_graph_contract_projections.py").resolve(),
     (ROOT / "automation" / "bootstrap_local_runtime_baseline.py").resolve(),
+    (ROOT / "automation" / "bootstrap_retrieval_contract_collections.py").resolve(),
     (ROOT / "automation" / "capture_seo_legacy_replay_inventory.py").resolve(),
     (ROOT / "automation" / "check_extraction_runtime_contract.py").resolve(),
     (ROOT / "automation" / "check_global_navigation_policy.py").resolve(),

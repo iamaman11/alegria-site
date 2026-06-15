@@ -7,14 +7,18 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use seo_ports::{
-    DraftRepository, EditorialGenerationPort, SectionTemplateRepository, SourceContextRepository,
+    DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
+    SourceContextRepository,
 };
 
 use crate::seo_runtime;
 use std::collections::HashSet;
 
-async fn ensure_graph_required_for_phase(phase: &str) -> Result<(), DomainError> {
-    seo_steps::read_neo4j_context::read_neo4j_context(phase)
+async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
+    repo: &R,
+    phase: &str,
+) -> Result<(), DomainError> {
+    repo.ensure_graph_contract(phase)
         .await
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!(
@@ -43,12 +47,12 @@ fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
 }
 
 pub async fn run_draft_assemble<
-    R: DraftRepository + SectionTemplateRepository + SourceContextRepository,
+    R: DraftRepository + SectionTemplateRepository + SourceContextRepository + GraphCapabilityPort,
 >(
     repo: &R,
     input: &DraftAssembleInputPayload,
 ) -> Result<DraftAssembleOutputPayload, DomainError> {
-    ensure_graph_required_for_phase("draft_assemble").await?;
+    ensure_graph_required_for_phase(repo, "draft_assemble").await?;
     seo_runtime::truth_admissibility_gate(
         &input.verified_support,
         input
@@ -103,14 +107,14 @@ pub async fn run_content_contract_validate<R: DraftRepository>(
     Ok(output)
 }
 
-pub async fn run_draft_qa<R: DraftRepository>(
+pub async fn run_draft_qa<R: DraftRepository + GraphCapabilityPort>(
     repo: &R,
     input: &DraftQaInputPayload,
 ) -> Result<DraftQaOutputPayload, DomainError>
 where
     R: SourceContextRepository,
 {
-    ensure_graph_required_for_phase("draft_qa").await?;
+    ensure_graph_required_for_phase(repo, "draft_qa").await?;
     let mut output = seo_steps::draft_qa_step::execute(input);
     append_retrieval_diagnostics(repo, input, &mut output).await?;
     repo.persist_draft_qa_output(input, &output).await?;
@@ -283,11 +287,18 @@ mod tests {
     };
     use seo_ports::{
         DraftRepository, EditorialGenerationPort, SectionTemplateRepository,
-        SourceContextRepository,
+        SourceContextRepository, GraphCapabilityPort,
     };
 
     #[derive(Default)]
     struct FakeDraftRepo;
+
+    #[async_trait]
+    impl GraphCapabilityPort for FakeDraftRepo {
+        async fn ensure_graph_contract(&self, _context_key: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
 
     #[async_trait]
     impl SectionTemplateRepository for FakeDraftRepo {
@@ -485,6 +496,13 @@ mod tests {
     }
 
     struct DiagnosticDraftRepo;
+
+    #[async_trait]
+    impl GraphCapabilityPort for DiagnosticDraftRepo {
+        async fn ensure_graph_contract(&self, _context_key: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
 
     #[async_trait]
     impl DraftRepository for DiagnosticDraftRepo {

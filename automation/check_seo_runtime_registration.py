@@ -37,16 +37,40 @@ APPLICATION_OWNERS = {
 }
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "proto_runtime_payload_store.rs":
+        sub_dir = path.parent / "proto_runtime_payload_store"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "temporal_starter.rs":
+        sub_dir = path.parent / "temporal_starter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    activities = read_file_resolved(ACTIVITIES)
     workflows_mod = WORKFLOWS_MOD.read_text(encoding="utf-8")
     seo_workflow = SEO_WORKFLOW.read_text(encoding="utf-8") if SEO_WORKFLOW.exists() else ""
-    temporal_starter = TEMPORAL_STARTER.read_text(encoding="utf-8")
-    application_modules = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in sorted(SEO_APPLICATION.glob("*.rs"))
-    }
-    payload_store = PAYLOAD_STORE.read_text(encoding="utf-8")
+    temporal_starter = read_file_resolved(TEMPORAL_STARTER)
+    application_modules = {}
+    for path in sorted(SEO_APPLICATION.glob("*.rs")):
+        text = path.read_text(encoding="utf-8")
+        if path.name == "planning.rs":
+            sub_dir = path.parent / "planning"
+            if sub_dir.is_dir():
+                for sub_file in sub_dir.glob("*.rs"):
+                    text += "\n" + sub_file.read_text(encoding="utf-8")
+        application_modules[path.name] = text
+    payload_store = read_file_resolved(PAYLOAD_STORE)
     failures: list[str] = []
     if "load_seo_site_build_input" not in activities:
         failures.append("missing Temporal activity `load_seo_site_build_input`")

@@ -19,10 +19,24 @@ FORBIDDEN = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "temporal_starter.rs":
+        sub_dir = path.parent / "temporal_starter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
-    starter = STARTER.read_text(encoding="utf-8")
+    activities = read_file_resolved(ACTIVITIES)
+    starter = read_file_resolved(STARTER)
     failures: list[str] = []
 
     for needle in FORBIDDEN:

@@ -14,6 +14,16 @@ ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapter
 DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "rebuild.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
     if not ARTIFACT.exists():
@@ -54,7 +64,7 @@ def main() -> int:
 
     schema = SCHEMA.read_text(encoding="utf-8")
     migration = MIGRATION.read_text(encoding="utf-8")
-    adapter = ADAPTER.read_text(encoding="utf-8")
+    adapter = read_file_resolved(ADAPTER)
     domain = DOMAIN.read_text(encoding="utf-8")
 
     for needle in [

@@ -1,10 +1,10 @@
 {
   "artifact_id": "step5_live_provider_minimal_scope",
   "step": "R1.Step5",
-  "evidence_status": "PENDING_CREDENTIALS",
-  "status_reason": "Truth extraction provider is not configured for live smoke; missing GEMINI_API_KEY|GOOGLE_API_KEY|OPENAI_API_KEY|ANTHROPIC_API_KEY|SEO_TRUTH_LLM_LOCAL_ENDPOINT.",
-  "failure_class": "credential_issue",
-  "smoke_command": "",
+  "evidence_status": "PASS",
+  "status_reason": "Live smoke completed one real SERP fetch, one official crawl, one extraction pass, and no publish.",
+  "failure_class": "none",
+  "smoke_command": "cargo run -q --manifest-path /home/bose/projects/alegria-site/app/rust/services/cli_tools/Cargo.toml -- seo-run --database-url postgresql://postgres:postgres_password@localhost:5433/alegria --run-id eaef8ac3-b39b-4e42-9918-0216beb8ad94 --market alegria-site --locale ru-RU --country-code ES --visa-type tourist --citizenship-code BY --applicant-profile standard --query-batch-key live-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94 --query spain tourist visa belarus official --warn-only-projections --output-dir /home/bose/projects/alegria-site/tmp/live-provider-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94 crawl-ingest",
   "scope": {
     "market": "alegria-site",
     "locale": "ru-RU",
@@ -19,12 +19,53 @@
     "dataforseo_password_present": true,
     "psql_present": true,
     "truth_extraction_provider": {
-      "ready": false,
-      "providers": []
-    }
+      "ready": true,
+      "providers": [
+        {
+          "provider": "vertex_gemini",
+          "model": "gemini-2.5-flash"
+        },
+        {
+          "provider": "gemini",
+          "model": "gemini-2.5-pro"
+        }
+      ]
+    },
+    "official_crawl_seed_url": "https://www.exteriores.gob.es/Consulados/mumbai/en/ServiciosConsulares/Paginas/Consular/Visados-Schengen.aspx",
+    "bootstrap_seeded_support_bundle": false
   },
-  "execution": {},
-  "observed": {},
+  "execution": {
+    "run_id": "eaef8ac3-b39b-4e42-9918-0216beb8ad94",
+    "query_batch_key": "live-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94",
+    "command_exit_code": 0,
+    "stdout_excerpt": "SEO_RUN_RESULT scenario=site_build_crawl_ingest_only mode=semi_auto_operator status=empty:no_admissible_verified_rules page_total=0 published_pages=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=load_verified_support_bundle status=done page_node_key= detail=support_count=1\nSEO_RUN_PHASE phase=serp_ingest status=done page_node_key= detail=persisted_snapshot_count=1\nSEO_RUN_PHASE phase=crawl_sources status=partial page_node_key= detail=claimed=3 crawled=1 failed=2 raw_pages=1\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=empty:no_admissible_verified_rules page_node_key= detail=verified_rules=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=projection_clear page_node_key= detail=blocked_events=0 max_open_lag_ms=0",
+    "stderr_excerpt": "",
+    "result": {
+      "scenario": "site_build_crawl_ingest_only",
+      "mode": "semi_auto_operator",
+      "status": "empty:no_admissible_verified_rules",
+      "page_total": 0,
+      "published_pages": 0,
+      "changed_truth_keys": 0
+    },
+    "phase_count": 5
+  },
+  "observed": {
+    "local_db_baseline_status": "OK",
+    "local_db_missing_tables": [],
+    "serp_phase_status": "done",
+    "serp_persisted_snapshot_count": 1,
+    "crawl_phase_status": "partial",
+    "crawl_claimed_count": 3,
+    "crawl_crawled_count": 1,
+    "crawl_failed_count": 2,
+    "crawl_raw_page_count": 1,
+    "raw_knowledge_phase_status": "empty:no_admissible_verified_rules",
+    "raw_knowledge_verified_rule_count": 0,
+    "raw_knowledge_changed_truth_keys": 0,
+    "db_serp_raw_snapshot_count": 2,
+    "db_crawl_queue_count": 3
+  },
   "required_for_pass": [
     "one real scope",
     "one real SERP fetch",
@@ -33,5 +74,5 @@
     "no publish",
     "immutable artifact with classified verdict"
   ],
-  "updated_at": "2026-05-31T17:50:41Z"
+  "updated_at": "2026-06-14T16:57:31Z"
 }

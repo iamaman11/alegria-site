@@ -13,12 +13,22 @@ def require(text: str, needle: str, label: str, failures: list[str]) -> None:
         failures.append(f"missing {label}: `{needle}`")
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "sqlx_seo_cms_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_cms_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
     proto = PROTO.read_text(encoding="utf-8")
     draft = DRAFT.read_text(encoding="utf-8")
     qa = QA.read_text(encoding="utf-8")
-    cms = CMS.read_text(encoding="utf-8")
+    cms = read_file_resolved(CMS)
 
     for message in [
         "message ClaimLedgerEntry",

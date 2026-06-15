@@ -14,11 +14,31 @@ WORKFLOWS_MOD = ROOT / "app/rust/services/temporal/src/workflows/mod.rs"
 PRIMITIVES_LIB = ROOT / "app/rust/crates/primitives/src/lib.rs"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "raw_crawl_adapter.rs":
+        sub_dir = path.parent / "raw_crawl_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "seo_ports_sqlx_adapter.rs":
+        sub_dir = path.parent / "seo_ports_sqlx_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "temporal_starter.rs":
+        sub_dir = path.parent / "temporal_starter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
-    raw_crawl = RAW_CRAWL.read_text(encoding="utf-8")
+    raw_crawl = read_file_resolved(RAW_CRAWL)
     truth_llm = TRUTH_LLM.read_text(encoding="utf-8")
-    seo_ports_sqlx = SEO_PORTS_SQLX.read_text(encoding="utf-8")
-    temporal_starter = TEMPORAL_STARTER.read_text(encoding="utf-8")
+    seo_ports_sqlx = read_file_resolved(SEO_PORTS_SQLX)
+    temporal_starter = read_file_resolved(TEMPORAL_STARTER)
     workflows_mod = WORKFLOWS_MOD.read_text(encoding="utf-8")
     primitives_lib = PRIMITIVES_LIB.read_text(encoding="utf-8")
 
@@ -42,7 +62,7 @@ def main() -> int:
         ],
     }
     for path, needles in required.items():
-        text = path.read_text(encoding="utf-8")
+        text = read_file_resolved(path)
         for needle in needles:
             if needle not in text:
                 failures.append(f"{path.relative_to(ROOT)} missing `{needle}`")

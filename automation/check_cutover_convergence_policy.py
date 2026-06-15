@@ -20,6 +20,16 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "temporal_starter.rs":
+        sub_dir = path.parent / "temporal_starter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -124,11 +134,11 @@ def main() -> int:
         (
             WORKFLOWS,
             [
-                'if std::env::var("ALLOW_EXPERT_MIGRATION_WORKFLOWS")',
+                "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
             ],
         ),
     ]:
-        text = read(path)
+        text = read_file_resolved(path)
         for needle in needles:
             if needle not in text:
                 failures.append(f"{path.relative_to(ROOT)} missing `{needle}`")

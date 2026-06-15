@@ -12,13 +12,30 @@ ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
 SCENARIO = ROOT / "app/rust/crates/seo_application/src/scenario.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
+def clean_str(s: str) -> str:
+    return "".join(s.split())
+
+
 def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     migration = MIGRATION.read_text(encoding="utf-8")
-    seo_adapter = SEO_ADAPTER.read_text(encoding="utf-8")
-    ports_adapter = PORTS_ADAPTER.read_text(encoding="utf-8")
-    activities = ACTIVITIES.read_text(encoding="utf-8")
-    scenario = SCENARIO.read_text(encoding="utf-8")
+    seo_adapter = read_with_includes(SEO_ADAPTER)
+    ports_adapter = read_with_includes(PORTS_ADAPTER)
+    activities = read_with_includes(ACTIVITIES)
+    scenario = read_with_includes(SCENARIO)
 
     failures: list[str] = []
 
@@ -36,14 +53,14 @@ def main() -> int:
         "AND outbox.run_id = $1",
         "AND run_id = $1",
     ]:
-        if needle not in seo_adapter:
+        if clean_str(needle) not in clean_str(seo_adapter):
             failures.append(f"scoped projection status query missing `{needle}`")
 
-    if "read_projection_sync_status_for_run(self.pool, run_id)" not in ports_adapter:
+    if clean_str("read_projection_sync_status_for_run(self.pool, run_id)") not in clean_str(ports_adapter):
         failures.append("SqlxSeoRuntimeRepository does not load run-scoped projection status")
-    if "read_projection_sync_status_for_run(pool, run_id)" not in activities:
+    if clean_str("read_projection_sync_status_for_run(pool, run_id)") not in clean_str(activities):
         failures.append("Temporal activities still use global projection barrier")
-    if "load_projection_barrier_status(run_id)" not in scenario:
+    if clean_str("load_projection_barrier_status(run_id)") not in clean_str(scenario):
         failures.append("Scenario path does not request projection status by run_id")
 
     if failures:

@@ -9,8 +9,25 @@ SQLX_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adap
 STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
+def clean_str(s: str) -> str:
+    return "".join(s.split())
+
+
 def require_contains(text: str, needle: str, failures: list[str], label: str) -> None:
-    if needle not in text:
+    if clean_str(needle) not in clean_str(text):
         failures.append(f"{label} missing `{needle}`")
 
 
@@ -21,9 +38,12 @@ def require_order(
     failures: list[str],
     label: str,
 ) -> None:
+    c_text = clean_str(text)
+    c_first = clean_str(first)
+    c_second = clean_str(second)
     try:
-        first_idx = text.index(first)
-        second_idx = text.index(second)
+        first_idx = c_text.index(c_first)
+        second_idx = c_text.index(c_second)
     except ValueError as exc:
         failures.append(f"{label} missing token for order check: {exc}")
         return
@@ -32,9 +52,9 @@ def require_order(
 
 
 def main() -> int:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    sqlx_adapter = SQLX_ADAPTER.read_text(encoding="utf-8")
-    starter = STARTER.read_text(encoding="utf-8")
+    workflow = read_with_includes(WORKFLOW)
+    sqlx_adapter = read_with_includes(SQLX_ADAPTER)
+    starter = read_with_includes(STARTER)
     failures: list[str] = []
 
     require_contains(

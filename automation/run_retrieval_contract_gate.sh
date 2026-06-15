@@ -90,6 +90,7 @@ set +e
     --country-code "ES" \
     --visa-type "tourist" \
     --applicant-profile "standard" \
+    --projection-max-lag-ms "${RETRIEVAL_CONTRACT_PROJECTION_MAX_LAG_MS:-86400000}" \
     --report-json "$REPORT_PATH"
 ) >"$LOG_PATH" 2>&1
 status=$?

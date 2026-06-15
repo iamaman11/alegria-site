@@ -11,9 +11,19 @@ RAW_CRAWL = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapte
 PLAN = ROOT / "docs/SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md"
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "raw_crawl_adapter.rs":
+        sub_dir = path.parent / "raw_crawl_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     primitives = PRIMITIVES.read_text(encoding="utf-8")
-    raw_crawl = RAW_CRAWL.read_text(encoding="utf-8")
+    raw_crawl = read_file_resolved(RAW_CRAWL)
     plan = PLAN.read_text(encoding="utf-8")
     failures: list[str] = []
 

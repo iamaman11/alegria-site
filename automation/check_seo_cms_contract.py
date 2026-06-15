@@ -41,15 +41,38 @@ REQUIRED_BLOCKERS = [
 ]
 
 
+def read_file_resolved(path: Path) -> str:
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "sqlx_seo_cms_adapter.rs":
+        sub_dir = path.parent / "sqlx_seo_cms_adapter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "proto_runtime_payload_store.rs":
+        sub_dir = path.parent / "proto_runtime_payload_store"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "materialize.rs" and "outbox_worker" in path.parts:
+        delegate_path = path.parents[3] / "crates" / "infrastructure" / "src" / "adapters" / "projection_materialize_adapter.rs"
+        if delegate_path.exists():
+            text += "\n" + delegate_path.read_text(encoding="utf-8")
+    return text
+
+
 def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     sync_proto = SYNC_PROTO.read_text(encoding="utf-8")
     temporal_proto = TEMPORAL_PROTO.read_text(encoding="utf-8")
-    cms_adapter = CMS_ADAPTER.read_text(encoding="utf-8") if CMS_ADAPTER.exists() else ""
-    activities = ACTIVITIES.read_text(encoding="utf-8")
+    cms_adapter = read_file_resolved(CMS_ADAPTER) if CMS_ADAPTER.exists() else ""
+    activities = read_file_resolved(ACTIVITIES)
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    outbox_worker = OUTBOX_WORKER.read_text(encoding="utf-8")
-    payload_store = PAYLOAD_STORE.read_text(encoding="utf-8")
+    outbox_worker = read_file_resolved(OUTBOX_WORKER)
+    payload_store = read_file_resolved(PAYLOAD_STORE)
     failures: list[str] = []
 
     for table in REQUIRED_TABLES:

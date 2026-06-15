@@ -7,8 +7,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def require(path: Path, needle: str, label: str) -> list[str]:
+def read_file_resolved(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
+    if path.name == "main.rs" and "cli_tools" in path.parts:
+        sub_dir = path.parent / "cli"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
+
+
+def require(path: Path, needle: str, label: str) -> list[str]:
+    text = read_file_resolved(path)
     if needle not in text:
         return [f"{label}: missing {needle!r} in {path.relative_to(ROOT)}"]
     return []

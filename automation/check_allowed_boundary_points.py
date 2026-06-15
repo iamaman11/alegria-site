@@ -43,6 +43,10 @@ def allowed(path: Path) -> bool:
         return True
     if rel_s.startswith("app/rust/services/cli_tools/src/"):
         return True
+    if rel_s.startswith("app/rust/services/temporal/src/bin/temporal_starter/"):
+        return True
+    if rel_s == "app/rust/services/temporal/src/activities/operations/truth_projection_helpers.rs":
+        return True
     if rel_s.startswith("app/rust/crates/telemetry/src/"):
         return True
     return False

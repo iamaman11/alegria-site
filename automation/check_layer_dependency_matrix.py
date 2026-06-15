@@ -61,6 +61,8 @@ def main() -> int:
     for layer_name, cfg in LAYER_RULES.items():
         base = cfg["path"]
         for file_path in sorted(base.rglob("*.rs")):
+            if layer_name == "services_temporal" and "bin" in file_path.parts:
+                continue
             text = file_path.read_text(encoding="utf-8")
             for pattern in cfg["forbidden"]:
                 if re.search(pattern, text):

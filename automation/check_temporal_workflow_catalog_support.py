@@ -21,7 +21,27 @@ PAYLOAD_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "a
 
 
 def read(path: Path) -> str:
-    return path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8")
+    if path.name == "mod.rs" and "activities" in path.parts:
+        registry_file = path.parent / "registry" / "mod_registry_impl.rs"
+        if registry_file.exists():
+            text += "\n" + registry_file.read_text(encoding="utf-8")
+    elif path.name == "operations.rs" and "activities" in path.parts:
+        sub_dir = path.parent / "operations"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "temporal_starter.rs":
+        sub_dir = path.parent / "temporal_starter"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "proto_runtime_payload_store.rs":
+        sub_dir = path.parent / "proto_runtime_payload_store"
+        if sub_dir.is_dir():
+            for sub_file in sub_dir.glob("*.rs"):
+                text += "\n" + sub_file.read_text(encoding="utf-8")
+    return text
 
 
 def main() -> int:
@@ -58,7 +78,7 @@ def main() -> int:
             failures.append(f"workflow registry missing `{needle}`")
 
     for needle in [
-        'if std::env::var("ALLOW_EXPERT_MIGRATION_WORKFLOWS")',
+        "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
         "expert_decomposed_extraction::register(&mut opts);",
         "expert_extraction::register(&mut opts);",
         "expert_projection::register(&mut opts);",

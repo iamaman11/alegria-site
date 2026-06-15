@@ -15,6 +15,25 @@ GATE = ROOT / "automation" / "temporal_production_gate.sh"
 HARNESS = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src" / "lib.rs"
 
 
+def read_with_includes(path: Path) -> str:
+    if not path.exists():
+        return ""
+    text = path.read_text(encoding="utf-8")
+    import re
+    parent = path.parent
+    for match in re.finditer(r'include!\("([^"]+)"\);', text):
+        include_path = parent / match.group(1)
+        if include_path.exists():
+            text += "\n" + read_with_includes(include_path)
+    return text
+
+
+def check_contains(text: str, needle: str) -> bool:
+    clean_text = "".join(text.split())
+    clean_needle = "".join(needle.split())
+    return clean_needle in clean_text
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -54,11 +73,11 @@ def main() -> int:
     if artifact.get("failure_class") != "none":
         failures.append("failure_class must equal `none`")
 
-    scenario = SCENARIO.read_text(encoding="utf-8")
-    cli = CLI.read_text(encoding="utf-8")
-    metrics = METRICS.read_text(encoding="utf-8")
-    gate = GATE.read_text(encoding="utf-8")
-    harness = HARNESS.read_text(encoding="utf-8")
+    scenario = read_with_includes(SCENARIO)
+    cli = read_with_includes(CLI)
+    metrics = read_with_includes(METRICS)
+    gate = read_with_includes(GATE)
+    harness = read_with_includes(HARNESS)
 
     for needle in [
         "pub struct SeoPhaseReport",
@@ -67,7 +86,7 @@ def main() -> int:
         "phase_reports: Vec<SeoPhaseReport>",
         "scenario_report_surface_serializes_phase_reports",
     ]:
-        if needle not in scenario:
+        if not check_contains(scenario, needle):
             failures.append(f"scenario.rs missing `{needle}`")
 
     for needle in [
@@ -75,7 +94,7 @@ def main() -> int:
         "SEO_RUN_PHASE phase=",
         "result.phase_reports",
     ]:
-        if needle not in cli:
+        if not check_contains(cli, needle):
             failures.append(f"cli_tools run report surface missing `{needle}`")
 
     for needle in [
@@ -85,21 +104,21 @@ def main() -> int:
         "publish_build_scope_total",
         "/metrics",
     ]:
-        if needle not in metrics:
+        if not check_contains(metrics, needle):
             failures.append(f"metrics.rs missing `{needle}`")
 
     for needle in [
         "checking metrics endpoint",
         "step_execution_reused_total",
     ]:
-        if needle not in gate:
+        if not check_contains(gate, needle):
             failures.append(f"production gate missing `{needle}`")
 
     for needle in [
         "synthetic_full_scenario_persists_page_draft_on_full_harness",
         "phase_reports.iter().any",
     ]:
-        if needle not in harness:
+        if not check_contains(harness, needle):
             failures.append(f"integration harness missing `{needle}`")
 
     if failures:

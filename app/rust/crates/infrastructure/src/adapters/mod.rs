@@ -1,6 +1,7 @@
 pub mod dataforseo_serp_adapter;
 pub mod editorial_llm_adapter;
 pub mod expert_extraction_core;
+pub mod graph_capability_adapter;
 pub mod graph_flow_adapter;
 pub mod hyper_adapter;
 pub mod neo4j_materialization_adapter;
@@ -45,5 +46,6 @@ pub mod tonic_adapter;
 pub mod tower_adapter;
 pub mod tracing_adapter;
 pub mod truth_extraction_llm_adapter;
+pub mod vertex_gemini_runtime;
 pub mod voyage_api_adapter;
 pub mod whole_page_advisory_adapter;

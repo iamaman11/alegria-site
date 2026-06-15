@@ -3,23 +3,26 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use seo_domain::rebuild;
-use seo_ports::{RebuildDependencyEvidence, RebuildRepository};
+use seo_ports::{GraphCapabilityPort, RebuildDependencyEvidence, RebuildRepository};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
-async fn ensure_graph_required_for_phase(phase: &str) -> Result<(), DomainError> {
-    seo_steps::read_neo4j_context::read_neo4j_context(phase)
+async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
+    repo: &R,
+    phase: &str,
+) -> Result<(), DomainError> {
+    repo.ensure_graph_contract(phase)
         .await
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("graph capability contract failed for rebuild phase `{phase}`: {err}"),
         })
 }
 
-pub async fn execute<R: RebuildRepository>(
+pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
     repo: &R,
     input: &RebuildDetectInputPayload,
 ) -> Result<RebuildDetectOutputPayload, DomainError> {
-    ensure_graph_required_for_phase("rebuild_detect").await?;
+    ensure_graph_required_for_phase(repo, "rebuild_detect").await?;
     let mut narrowed_input = input.clone();
     let mut semantic_neighbor_evidence: Vec<RebuildDependencyEvidence> = Vec::new();
     if !input.changed_truth_keys.is_empty() {
@@ -129,10 +132,17 @@ fn execute_rebuild_detect(input: &RebuildDetectInputPayload) -> RebuildDetectOut
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use seo_ports::RebuildDependencyEvidence;
+    use seo_ports::{RebuildDependencyEvidence, GraphCapabilityPort};
     use serde_json::json;
 
     struct FakeRepo;
+
+    #[async_trait]
+    impl GraphCapabilityPort for FakeRepo {
+        async fn ensure_graph_contract(&self, _context_key: &str) -> Result<(), DomainError> {
+            Ok(())
+        }
+    }
 
     #[async_trait]
     impl RebuildRepository for FakeRepo {
