@@ -222,12 +222,17 @@ impl TruthExtractionClient for VertexGeminiTruthExtractionClient {
 
     fn extract<'a>(&'a self, input: &'a TruthExtractionInput) -> ClientFuture<'a> {
         Box::pin(async move {
-            let body = json!({
-                "generationConfig": {
+            let mut body_map = serde_json::Map::new();
+            body_map.insert(
+                "generationConfig".to_string(),
+                json!({
                     "temperature": 0.0,
                     "responseMimeType": "application/json"
-                },
-                "contents": [
+                }),
+            );
+            body_map.insert(
+                "contents".to_string(),
+                json!([
                     {
                         "role": "user",
                         "parts": [
@@ -236,8 +241,23 @@ impl TruthExtractionClient for VertexGeminiTruthExtractionClient {
                             }
                         ]
                     }
-                ]
-            });
+                ]),
+            );
+            if let Some(datastore_path) = vertex_gemini_runtime::vertex_datastore_resource() {
+                body_map.insert(
+                    "tools".to_string(),
+                    json!([
+                        {
+                            "retrieval": {
+                                "vertexAiSearch": {
+                                    "datastore": datastore_path
+                                }
+                            }
+                        }
+                    ]),
+                );
+            }
+            let body = Value::Object(body_map);
             let value = post_json_with_retries(
                 &vertex_gemini_runtime::vertex_generate_url(&self.model_key()),
                 vertex_gemini_runtime::vertex_bearer_headers(request_timeout()).await?,
