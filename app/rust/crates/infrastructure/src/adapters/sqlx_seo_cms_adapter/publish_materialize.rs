@@ -15,10 +15,33 @@ pub async fn persist_publish_materialize_output(
             ],
         );
     }
+
+    let release_id = primitives::hash::content_hash_v1(&format!(
+        "{}|{}|{}|candidate_release@1",
+        input.run_id, input.page_node_key, input.revision_id
+    ));
+    let public_output_dir = Path::new(&runtime.output_dir);
+    let default_release_root = public_output_dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join(".alegria-static-releases");
+    let release_root = std::env::var("SEO_STATIC_RELEASE_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or(default_release_root);
+    let candidate_output_dir = release_root.join(&release_id);
+    if candidate_output_dir == public_output_dir {
+        return Err(validation_failure(
+            "candidate release directory must be isolated from public static output directory",
+        ));
+    }
+
     let mut blocking_reasons = planned.blocking_reasons.clone();
     let build = match static_site_builder_adapter::build_static_site_candidate_incremental(
         pool,
-        Path::new(&runtime.output_dir),
+        &candidate_output_dir,
         &runtime.base_url,
         &input.page_node_key,
         &input.revision_id,
@@ -29,14 +52,17 @@ pub async fn persist_publish_materialize_output(
         Err(err) => {
             blocking_reasons.push("static_candidate_build_failed".to_string());
             artifact.status = "build_failed".to_string();
-            artifact.artifact_uri = runtime.output_dir.clone();
+            artifact.artifact_uri = candidate_output_dir.display().to_string();
             artifact.manifest_json = json!({
                 "build_scope": "candidate_page",
-                "output_dir": runtime.output_dir,
+                "release_id": release_id,
+                "candidate_output_dir": candidate_output_dir,
+                "public_output_dir": runtime.output_dir,
                 "base_url": runtime.base_url,
                 "page_node_key": input.page_node_key,
                 "revision_id": input.revision_id,
                 "candidate_build_error": err.to_string(),
+                "candidate_isolated_from_public_output": true,
                 "public_snapshot_fallback_allowed": false,
             })
             .to_string();
@@ -106,7 +132,9 @@ pub async fn persist_publish_materialize_output(
     };
     artifact.manifest_json = json!({
         "build_scope": "candidate_page",
-        "output_dir": build.output_dir,
+        "release_id": release_id,
+        "candidate_output_dir": build.output_dir,
+        "public_output_dir": runtime.output_dir,
         "base_url": runtime.base_url,
         "artifact_count": build.artifacts.len(),
         "page_count": preview_pages.len(),
@@ -114,6 +142,7 @@ pub async fn persist_publish_materialize_output(
         "revision_id": input.revision_id,
         "content_contract": "headless_cms_blocks@1",
         "renderer_version": "alegria_static_site_builder@2",
+        "candidate_isolated_from_public_output": true,
         "public_snapshot_fallback_allowed": false,
     })
     .to_string();
@@ -141,11 +170,14 @@ pub async fn persist_publish_materialize_output(
     .bind(&artifact.artifact_uri)
     .bind(Json(json!({
         "build_scope": "candidate_page",
-        "output_dir": artifact.artifact_uri.clone(),
+        "release_id": release_id,
+        "candidate_output_dir": artifact.artifact_uri.clone(),
+        "public_output_dir": runtime.output_dir,
         "page_count": preview_pages.len(),
         "page_node_key": input.page_node_key,
         "revision_id": input.revision_id,
         "blocking_reasons": blocking_reasons,
+        "candidate_isolated_from_public_output": true,
         "public_snapshot_fallback_allowed": false,
     })))
     .bind(&artifact.status)
