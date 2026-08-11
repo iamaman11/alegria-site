@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
 PUBLISH = ROOT / "app/rust/crates/seo_steps/src/cms_publish_step.rs"
+RENDER_VALIDATE = ROOT / "app/rust/crates/seo_steps/src/render_preview_validate_step.rs"
 PAGE_PUBLISH = (
     ROOT
     / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs"
@@ -16,6 +17,7 @@ PAGE_PUBLISH = (
 def main() -> int:
     qa = QA.read_text(encoding="utf-8")
     publish = PUBLISH.read_text(encoding="utf-8")
+    render_validate = RENDER_VALIDATE.read_text(encoding="utf-8")
     page_publish = PAGE_PUBLISH.read_text(encoding="utf-8")
     failures: list[str] = []
 
@@ -58,6 +60,19 @@ def main() -> int:
         failures.append(
             "canonical page publish loop still skips a blocked page and can report normal completion"
         )
+
+    for needle in [
+        "page.rendered_link_count < page.required_link_count",
+        '"unsafe_active_content_marker"',
+        '"unsafe_script_structure"',
+        '"<link rel=\\\"canonical\\\" href=\\\""',
+        '"<meta name=\\\"description\\\" content=\\\""',
+        '"<html lang=\\\""',
+        "rejects_active_content_markers",
+        "rejects_non_json_ld_script_elements",
+    ]:
+        if needle not in render_validate:
+            failures.append(f"render_preview_validate_step missing security/product gate `{needle}`")
 
     if failures:
         print("SEO_PUBLISH_GATES: FAILED")
