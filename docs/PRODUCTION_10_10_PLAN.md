@@ -2,7 +2,7 @@
 
 Status: execution in progress
 Owner: repository maintainers
-Target: a real public production system that can create, publish, maintain, and improve a high-quality supersite in any selected niche through configuration/domain packs rather than core-code rewrites.
+Target: a real public production system that can create, publish, maintain, and improve a high-quality supersite in any selected niche through niche discovery/domain-pack compilation rather than core-code rewrites.
 
 ## 0. Mission and audit standard
 
@@ -10,14 +10,14 @@ Alegria is not considered 10/10 merely because the current workflow, contracts, 
 
 The audit standard is external to the implementation:
 
-> Given a selected niche, can Alegria discover the domain, build a trustworthy knowledge model, infer a useful information architecture, generate genuinely useful pages, publish them safely, keep them fresh, improve them from real search/user feedback, and repeat the process at large scale without changing the generic core?
+> Given a selected niche, can Alegria discover the domain, compile a trustworthy operating contract, build a knowledge model, infer a useful information architecture, generate genuinely useful pages, publish them safely, keep them fresh, improve them from real search/user feedback, and repeat the process at large scale without changing the generic core?
 
 Every subsystem must therefore be judged by four questions:
 
 1. Does it materially contribute to the supersite objective?
 2. Is its output actually consumed by downstream product decisions?
 3. Can its behavior be proven on real data rather than probes/fixtures alone?
-4. Can the same core behavior transfer to a materially different niche through a domain configuration contract rather than hard-coded vertical logic?
+4. Can the same core behavior transfer to a materially different niche through a compiled domain contract rather than hard-coded vertical logic?
 
 A subsystem that is installed, health-checked, or projected but does not influence the product is not complete.
 
@@ -25,20 +25,21 @@ A subsystem that is installed, health-checked, or projected but does not influen
 
 The project is 10/10 only when all of the following are simultaneously true:
 
-1. **Domain universality.** The core is domain-agnostic. Niche-specific entities, relations, fact/rule schemas, applicability dimensions, source-governance rules, page archetypes, content blocks, URL rules, freshness SLAs, graph algorithms, and conversion intents are supplied through a versioned domain pack/registry instead of hard-coded visa concepts.
-2. **Real niche bootstrap.** A completely new niche can start with zero pre-existing verified truth, discover authoritative sources, produce admissible knowledge, create an IA, draft pages, pass review, and publish without synthetic truth seeding.
-3. **Truth integrity.** Public factual content is backed by admissible evidence, applicability, effective dates, freshness, provenance, and human review where required. Transport-level success with zero usable truth is failure.
-4. **Graph/GDS is a real reasoning plane.** Neo4j/GDS is not merely reachable. Required graph algorithms and graph queries materially affect clustering, site topology, hub authority, internal linking, coverage, cannibalization, orphan detection, and rebuild impact. When graph reasoning is declared mandatory for a build, absence or stale/incomplete graph state blocks that build.
-5. **Retrieval is a real semantic plane.** Voyage/Qdrant materially support semantic discovery, recall, clustering, cross-page similarity, coverage, and neighborhood expansion while never becoming truth authority.
-6. **Public output is launch-safe and useful.** Real HTTPS origin, correct locale, human-readable routes/titles, no internal IDs, valid canonical/sitemap/robots/schema, safe HTML, source citations, useful structured content, accessible responsive UX, and only deployed/live-verified releases are public/indexable.
-7. **Publication means live.** `published` means the immutable candidate was validated, deployed, fetched from the public origin, matched to the expected release/content hash, and passed live checks. A local filesystem build is not publication.
-8. **Workflow result means product result.** A workflow cannot report normal completion while pages are blocked or zero pages were published in a publish scenario.
-9. **Freshness is active.** Expired/stale critical truth cannot silently remain admissible; freshness triggers recrawl, revalidation, rebuild, review, warning/noindex, or withdrawal according to domain policy.
-10. **Scales operationally.** Incremental rebuild cost is proportional to impacted pages/dependencies rather than the whole site; navigation and sitemap generation scale to large sites; releases are atomic and rollbackable.
-11. **Every merge is governed.** Formatting, linting, architecture, unit/integration, security, dependency, and build gates are enforced by required CI checks.
-12. **Production is observable and recoverable.** Classified failures, SLOs, immutable evidence, encrypted off-host backups, restore drills, deployment rollback, and dependency-failure behavior are demonstrated.
-13. **Outcome loop is closed.** Indexability, index coverage, search impressions/clicks/CTR/position, content freshness, user engagement, conversion, and content-gap discovery feed back into planning/rebuild decisions.
-14. **Cross-niche proof exists.** The same core passes certification in at least three materially different domain packs without modifying generic orchestration/domain-independent crates.
+1. **Niche compilation.** Starting from a niche/topic seed plus market, locale and goals, the system can discover real domain evidence, infer a machine-readable `DomainPackCandidate`, expose uncertainty, route ambiguity to HITL, and produce an approved/versioned Domain Pack without engineering changes to the generic core.
+2. **Domain universality.** The core is domain-agnostic. Niche-specific entities, relations, fact/rule schemas, applicability dimensions, source-governance rules, page archetypes, content blocks, URL rules, freshness SLAs, graph algorithms, and conversion intents are supplied through a versioned domain pack/registry instead of hard-coded visa concepts.
+3. **Real niche bootstrap.** A completely new niche can start with zero pre-existing verified truth, discover authoritative sources, produce admissible knowledge, create an IA, draft pages, pass review, and publish without synthetic truth seeding.
+4. **Truth integrity.** Public factual content is backed by admissible evidence, applicability, effective dates, freshness, provenance, and human review where required. Transport-level success with zero usable truth is failure.
+5. **Graph/GDS is a real reasoning plane.** Neo4j/GDS is not merely reachable. Required graph algorithms and graph queries materially affect clustering, site topology, hub authority, internal linking, coverage, cannibalization, orphan detection, and rebuild impact. When graph reasoning is declared mandatory for a build, absence or stale/incomplete graph state blocks that build.
+6. **Retrieval is a real semantic plane.** Voyage/Qdrant materially support semantic discovery, recall, clustering, cross-page similarity, coverage, and neighborhood expansion while never becoming truth authority.
+7. **Public output is launch-safe and useful.** Real HTTPS origin, correct locale, human-readable routes/titles, no internal IDs, valid canonical/sitemap/robots/schema, safe HTML, source citations, useful structured content, accessible responsive UX, and only deployed/live-verified releases are public/indexable.
+8. **Publication means live.** `published` means the immutable candidate was validated, deployed, fetched from the public origin, matched to the expected release/content hash, and passed live checks. A local filesystem build is not publication.
+9. **Workflow result means product result.** A workflow cannot report normal completion while pages are blocked or zero pages were published in a publish scenario.
+10. **Freshness is active.** Expired/stale critical truth cannot silently remain admissible; freshness triggers recrawl, revalidation, rebuild, review, warning/noindex, or withdrawal according to domain policy.
+11. **Scales operationally.** Incremental rebuild cost is proportional to impacted pages/dependencies rather than the whole site; navigation and sitemap generation scale to large sites; releases are atomic and rollbackable.
+12. **Every merge is governed.** Formatting, linting, architecture, unit/integration, security, dependency, and build gates are enforced by required CI checks.
+13. **Production is observable and recoverable.** Classified failures, SLOs, immutable evidence, encrypted off-host backups, restore drills, deployment rollback, and dependency-failure behavior are demonstrated.
+14. **Outcome loop is closed.** Indexability, index coverage, search impressions/clicks/CTR/position, content freshness, user engagement, conversion, and content-gap discovery feed back into planning/rebuild decisions.
+15. **Cross-niche proof exists.** The same core passes certification in at least three materially different domain packs without modifying generic orchestration/domain-independent crates.
 
 ## 2. Critical architectural correction: current system is not yet niche-generic
 
@@ -54,6 +55,40 @@ The current implementation is deeply optimized for the visa vertical. Examples i
 - visa-specific page-type and section heuristics.
 
 This is valid vertical specialization but not a universal supersite contract.
+
+### Required pre-runtime capability: Niche Compiler / Domain Discovery
+
+A manually authored Domain Pack for every new niche is not sufficient. That would make Alegria a framework engineers adapt per vertical, rather than an engine that can build a supersite in a newly selected niche.
+
+The Niche Compiler must accept at minimum:
+
+- niche/topic seed;
+- target market/geography;
+- target language/locales;
+- site/business goal and conversion model;
+- risk/review strictness;
+- optional known competitors or authoritative sources.
+
+Using real SERP/source evidence, semantic retrieval and graph-assisted discovery where appropriate, it must infer a `DomainPackCandidate` containing:
+
+- entity taxonomy and canonical identity rules;
+- relation/ontology schema;
+- fact/rule types and parameter schemas;
+- applicability dimensions;
+- source authority classes, independence groups, jurisdiction rules and freshness TTLs;
+- user-intent/query families;
+- page archetypes and content-block patterns;
+- URL/localization strategy;
+- graph schema and required reasoning algorithms;
+- retrieval surfaces/models;
+- completeness contracts;
+- conversion/CTA/events;
+- HITL/review policy;
+- freshness/withdrawal policy.
+
+Every inferred field must carry evidence/provenance and confidence/uncertainty. Ambiguity must be explicit and reviewable. Human/domain-expert approval produces an immutable/versioned Domain Pack consumed by the normal runtime. Domain Pack evolution is a versioned migration/rebuild event, not a silent prompt change.
+
+Exit criteria: starting from niche + market + locale + goals, Alegria can compile an approved domain contract without editing generic Rust orchestration/domain-independent crates.
 
 ### Required target: versioned Domain Pack
 
@@ -440,7 +475,17 @@ Exit criteria: the supersite can scale economically as well as functionally.
 
 A 10/10 release program must include all of the following evidence classes.
 
-### A. Fresh-domain bootstrap
+### A. Niche compiler
+
+- start from only niche seed + market/locale/goals;
+- discover real SERP/source evidence;
+- emit evidence-backed `DomainPackCandidate`;
+- expose uncertainty/ambiguity;
+- complete HITL/domain-expert approval;
+- produce immutable/versioned Domain Pack;
+- generic runtime loads the pack without core-code edits.
+
+### B. Fresh-domain bootstrap
 
 - zero pre-existing truth;
 - real sources discovered/crawled;
@@ -450,14 +495,14 @@ A 10/10 release program must include all of the following evidence classes.
 - HITL completed;
 - candidate deployed and live-verified.
 
-### B. Scope expansion
+### C. Scope expansion
 
 - intentional new content appears;
 - existing canonical identity remains stable;
 - topology/nav/link graph updates are bounded and justified;
 - no unexpected cannibalization.
 
-### C. Factual/source change
+### D. Factual/source change
 
 - changed source snapshot produces changed truth where appropriate;
 - precise dependency impact is found;
@@ -465,7 +510,7 @@ A 10/10 release program must include all of the following evidence classes.
 - unrelated pages do not rebuild;
 - old release remains live until new one passes.
 
-### D. Dependency failure
+### E. Dependency failure
 
 For DB, Temporal, provider, Qdrant, Neo4j/GDS, storage/deploy, and critical source failure:
 
@@ -474,19 +519,19 @@ For DB, Temporal, provider, Qdrant, Neo4j/GDS, storage/deploy, and critical sour
 - failure is observable/actionable;
 - retry/recovery does not duplicate/corrupt state.
 
-### E. Security payload
+### F. Security payload
 
 Malicious source/LLM/Markdown/schema inputs cannot execute active content or bypass public-output contracts.
 
-### F. Cross-niche portability
+### G. Cross-niche portability
 
-At least three materially different domain packs pass A-E without generic core changes.
+At least three materially different compiled domain packs pass A-F without generic core changes.
 
 ## 22. Required release verdict
 
 A release is `GO` only when all P0 exit criteria are green for the target domain pack and environment.
 
-The project is not globally `10/10 supersite-ready` until the cross-niche portability certification passes.
+The project is not globally `10/10 supersite-ready` until the Niche Compiler and cross-niche portability certifications pass.
 
 A transport smoke PASS, process exit code 0, available GDS plugin, non-empty synthetic collection, successful local render, or architecture-only gate is insufficient by itself.
 
@@ -494,6 +539,7 @@ A transport smoke PASS, process exit code 0, available GDS plugin, non-empty syn
 
 ### Source-code/design blockers
 
+- no first-class Niche Compiler / Domain Discovery workflow that can compile a newly selected niche into an evidence-backed reviewed Domain Pack without engineering work;
 - hard-coded visa domain identity and page/content semantics in generic runtime paths;
 - fresh-scope bootstrap blocked by mandatory initial verified support;
 - citizenship/truth identity vs SEO scope/page identity mismatch;
@@ -528,22 +574,23 @@ The repository and release process must fail closed when required P0 capabilitie
 
 ## 24. Immediate execution order
 
-Do not add more decorative infrastructure before closing this vertical slice.
+Do not add more decorative infrastructure before closing the actual supersite value chain.
 
-1. Define generic Domain Pack contract and move visa-only identity/content assumptions behind it.
-2. Fix fresh-scope bootstrap and applicability/page identity.
-3. Implement real Graph/GDS reasoning responsibilities and acceptance/ablation tests.
-4. Complete retrieval real-data readiness and product-use contracts.
-5. Fix truth effective/freshness/citation semantics.
-6. Fix workflow page-failure result propagation.
-7. Replace the current public-snapshot fix with explicit approved candidate build + public published snapshot.
-8. Add HTML/JSON-LD security and strong render validation.
-9. Add immutable staging deployment, live verification, atomic promotion, rollback.
-10. Replace CLI approximation with canonical Temporal HITL E2E certification.
-11. Produce one complete real domain vertical slice from zero truth to live page.
-12. Close scalable incremental/nav/sitemap/rebuild loops.
-13. Close active freshness, GSC/analytics, production DR/security.
-14. Prove the same core on at least two additional materially different domain packs.
+1. Implement Niche Compiler / Domain Discovery contract and evidence/HITL lifecycle.
+2. Define generic Domain Pack contract and move visa-only identity/content assumptions behind it.
+3. Fix fresh-scope bootstrap and applicability/page identity.
+4. Implement real Graph/GDS reasoning responsibilities and acceptance/ablation tests.
+5. Complete retrieval real-data readiness and product-use contracts.
+6. Fix truth effective/freshness/citation semantics.
+7. Fix workflow page-failure result propagation.
+8. Replace the current public-snapshot fix with explicit approved candidate build + public published snapshot.
+9. Add HTML/JSON-LD security and strong render validation.
+10. Add immutable staging deployment, live verification, atomic promotion, rollback.
+11. Replace CLI approximation with canonical Temporal HITL E2E certification.
+12. Produce one complete compiled-niche vertical slice from niche seed and zero truth to live page.
+13. Close scalable incremental/nav/sitemap/rebuild loops.
+14. Close active freshness, GSC/analytics, production DR/security.
+15. Prove the same core on at least two additional materially different compiled domain packs.
 
 The governing rule is:
 
