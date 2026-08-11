@@ -17,6 +17,9 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python audit tools
+        run: python -m pip install --disable-pip-version-check ruff==0.15.22
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -34,4 +37,3 @@ jobs:
           path: |
             automation/reports/consistency_report.json
             automation/reports/consistency_report.md
-
