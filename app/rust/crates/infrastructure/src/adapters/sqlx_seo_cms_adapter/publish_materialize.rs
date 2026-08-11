@@ -16,127 +16,67 @@ pub async fn persist_publish_materialize_output(
         );
     }
     let mut blocking_reasons = planned.blocking_reasons.clone();
-    let (build_scope, build, incremental_error) =
-        match static_site_builder_adapter::build_static_site_incremental(
-            pool,
-            Path::new(&runtime.output_dir),
-            &runtime.base_url,
-            &[input.page_node_key.clone()],
-        )
-        .await
-        {
-            Ok(result) => ("page".to_string(), result, None::<String>),
-            Err(incremental_err) if runtime.allow_full_rebuild_fallback => {
-                match static_site_builder_adapter::build_static_site(
-                    pool,
-                    Path::new(&runtime.output_dir),
-                    &runtime.base_url,
-                )
-                .await
-                {
-                    Ok(result) => (
-                        "site".to_string(),
-                        result,
-                        Some(incremental_err.to_string()),
-                    ),
-                    Err(full_err) => {
-                        blocking_reasons.push("static_build_failed".to_string());
-                        artifact.status = "build_failed".to_string();
-                        artifact.artifact_uri = runtime.output_dir.clone();
-                        artifact.manifest_json = json!({
-                            "build_scope": "site",
-                            "output_dir": runtime.output_dir,
-                            "base_url": runtime.base_url,
-                            "incremental_error": incremental_err.to_string(),
-                            "full_rebuild_error": full_err.to_string(),
-                        })
-                        .to_string();
-                        sqlx::query(
-                            r#"
-                            INSERT INTO site.publish_artifacts
-                                (artifact_key, page_node_key, revision_id, artifact_type, artifact_uri,
-                                 manifest_json, status)
-                            VALUES ($1, $2, $3, $4, $5, $6, $7)
-                            ON CONFLICT (artifact_key) DO UPDATE
-                            SET artifact_uri = EXCLUDED.artifact_uri,
-                                manifest_json = EXCLUDED.manifest_json,
-                                status = EXCLUDED.status,
-                                updated_at = now()
-                            "#,
-                        )
-                        .bind(&artifact.artifact_key)
-                        .bind(&input.page_node_key)
-                        .bind(&input.revision_id)
-                        .bind(if artifact.artifact_type.trim().is_empty() {
-                            "headless_snapshot"
-                        } else {
-                            artifact.artifact_type.as_str()
-                        })
-                        .bind(&artifact.artifact_uri)
-                        .bind(Json(json!({
-                            "error": artifact.manifest_json.clone(),
-                        })))
-                        .bind(&artifact.status)
-                        .execute(pool)
-                        .await
-                        .map_err(classify_sqlx)?;
-                        return Ok(PublishMaterializeOutputPayload {
-                            publish_artifact: Some(artifact),
-                            preview_pages: Vec::new(),
-                            materialization_status: "build_failed".to_string(),
-                            blocking_reasons,
-                        });
-                    }
-                }
-            }
-            Err(err) => {
-                blocking_reasons.push("static_build_failed".to_string());
-                artifact.status = "build_failed".to_string();
-                artifact.artifact_uri = runtime.output_dir.clone();
-                artifact.manifest_json = json!({
-                    "build_scope": "page",
-                    "output_dir": runtime.output_dir,
-                    "base_url": runtime.base_url,
-                    "incremental_error": err.to_string(),
-                })
-                .to_string();
-                sqlx::query(
-                    r#"
-                    INSERT INTO site.publish_artifacts
-                        (artifact_key, page_node_key, revision_id, artifact_type, artifact_uri,
-                         manifest_json, status)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (artifact_key) DO UPDATE
-                    SET artifact_uri = EXCLUDED.artifact_uri,
-                        manifest_json = EXCLUDED.manifest_json,
-                        status = EXCLUDED.status,
-                        updated_at = now()
-                    "#,
-                )
-                .bind(&artifact.artifact_key)
-                .bind(&input.page_node_key)
-                .bind(&input.revision_id)
-                .bind(if artifact.artifact_type.trim().is_empty() {
-                    "headless_snapshot"
-                } else {
-                    artifact.artifact_type.as_str()
-                })
-                .bind(&artifact.artifact_uri)
-                .bind(Json(json!({
-                    "error": artifact.manifest_json.clone(),
-                })))
-                .bind(&artifact.status)
-                .execute(pool)
-                .await
-                .map_err(classify_sqlx)?;
-                return Ok(PublishMaterializeOutputPayload {
-                    publish_artifact: Some(artifact),
-                    preview_pages: Vec::new(),
-                    materialization_status: "build_failed".to_string(),
-                    blocking_reasons,
-                });
-            }
-        };
+    let build = match static_site_builder_adapter::build_static_site_candidate_incremental(
+        pool,
+        Path::new(&runtime.output_dir),
+        &runtime.base_url,
+        &input.page_node_key,
+        &input.revision_id,
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(err) => {
+            blocking_reasons.push("static_candidate_build_failed".to_string());
+            artifact.status = "build_failed".to_string();
+            artifact.artifact_uri = runtime.output_dir.clone();
+            artifact.manifest_json = json!({
+                "build_scope": "candidate_page",
+                "output_dir": runtime.output_dir,
+                "base_url": runtime.base_url,
+                "page_node_key": input.page_node_key,
+                "revision_id": input.revision_id,
+                "candidate_build_error": err.to_string(),
+                "public_snapshot_fallback_allowed": false,
+            })
+            .to_string();
+            sqlx::query(
+                r#"
+                INSERT INTO site.publish_artifacts
+                    (artifact_key, page_node_key, revision_id, artifact_type, artifact_uri,
+                     manifest_json, status)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (artifact_key) DO UPDATE
+                SET artifact_uri = EXCLUDED.artifact_uri,
+                    manifest_json = EXCLUDED.manifest_json,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                "#,
+            )
+            .bind(&artifact.artifact_key)
+            .bind(&input.page_node_key)
+            .bind(&input.revision_id)
+            .bind(if artifact.artifact_type.trim().is_empty() {
+                "headless_snapshot"
+            } else {
+                artifact.artifact_type.as_str()
+            })
+            .bind(&artifact.artifact_uri)
+            .bind(Json(json!({
+                "error": artifact.manifest_json.clone(),
+            })))
+            .bind(&artifact.status)
+            .execute(pool)
+            .await
+            .map_err(classify_sqlx)?;
+            return Ok(PublishMaterializeOutputPayload {
+                publish_artifact: Some(artifact),
+                preview_pages: Vec::new(),
+                materialization_status: "build_failed".to_string(),
+                blocking_reasons,
+            });
+        }
+    };
 
     let preview_pages = build
         .previews
@@ -152,17 +92,29 @@ pub async fn persist_publish_materialize_output(
             rendered_link_count: preview.rendered_link_count as u32,
         })
         .collect::<Vec<_>>();
+    if !preview_pages.iter().any(|preview| {
+        preview.page_node_key == input.page_node_key && preview.revision_id == input.revision_id
+    }) {
+        blocking_reasons.push("candidate_revision_missing_from_preview".to_string());
+    }
+
     artifact.artifact_uri = build.output_dir.display().to_string();
-    artifact.status = "built_pending_validation".to_string();
+    artifact.status = if blocking_reasons.is_empty() {
+        "built_pending_validation".to_string()
+    } else {
+        "build_failed".to_string()
+    };
     artifact.manifest_json = json!({
-        "build_scope": build_scope,
+        "build_scope": "candidate_page",
         "output_dir": build.output_dir,
         "base_url": runtime.base_url,
         "artifact_count": build.artifacts.len(),
         "page_count": preview_pages.len(),
+        "page_node_key": input.page_node_key,
+        "revision_id": input.revision_id,
         "content_contract": "headless_cms_blocks@1",
         "renderer_version": "alegria_static_site_builder@2",
-        "incremental_error": incremental_error,
+        "public_snapshot_fallback_allowed": false,
     })
     .to_string();
     sqlx::query(
@@ -188,11 +140,13 @@ pub async fn persist_publish_materialize_output(
     })
     .bind(&artifact.artifact_uri)
     .bind(Json(json!({
-        "build_scope": build_scope,
+        "build_scope": "candidate_page",
         "output_dir": artifact.artifact_uri.clone(),
         "page_count": preview_pages.len(),
+        "page_node_key": input.page_node_key,
+        "revision_id": input.revision_id,
         "blocking_reasons": blocking_reasons,
-        "incremental_error": incremental_error,
+        "public_snapshot_fallback_allowed": false,
     })))
     .bind(&artifact.status)
     .execute(pool)
@@ -234,11 +188,17 @@ pub async fn persist_publish_materialize_output(
         .map_err(classify_sqlx)?;
     }
 
+    let materialization_status = if blocking_reasons.is_empty() {
+        "built_pending_validation:candidate_page"
+    } else {
+        "build_failed"
+    }
+    .to_string();
+
     Ok(PublishMaterializeOutputPayload {
         publish_artifact: Some(artifact),
         preview_pages,
-        materialization_status: format!("built_pending_validation:{build_scope}"),
-        blocking_reasons: planned.blocking_reasons.clone(),
+        materialization_status,
+        blocking_reasons,
     })
 }
-
