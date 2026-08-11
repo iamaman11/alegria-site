@@ -151,7 +151,8 @@ fn qdrant_rest_url_from_env() -> String {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            let url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
+            let url =
+                env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
             if url.contains(":6334") {
                 url.replace(":6334", ":6333")
             } else {
