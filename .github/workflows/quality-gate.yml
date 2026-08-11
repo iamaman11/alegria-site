@@ -1,0 +1,72 @@
+name: quality-gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  architecture-and-rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact commit without third-party actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Install Python quality tooling
+        run: python3 -m pip install --disable-pip-version-check ruff
+
+      - name: Rust formatting
+        working-directory: app/rust
+        run: cargo fmt --all -- --check
+
+      - name: Repository architecture audit
+        run: bash automation/audit.sh fast
+
+      - name: Static-site publication contract
+        run: python3 automation/check_static_site_builder_contract.py
+
+      - name: Rust workspace check
+        working-directory: app/rust
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo check --workspace --locked
+
+      - name: Rust workspace tests
+        working-directory: app/rust
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test --workspace --locked
+
+  rust-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact commit without third-party actions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git checkout --detach FETCH_HEAD
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: RustSec audit
+        working-directory: app/rust
+        run: cargo audit
