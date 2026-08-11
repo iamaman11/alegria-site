@@ -49,6 +49,14 @@ pub fn truth_admissibility_gate(
                 ),
             });
         }
+        if support.freshness_class != "fresh" {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "truth_admissibility_gate failed: support row `{}` has non-fresh freshness_class `{}`",
+                    support.support_ref, support.freshness_class
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -119,6 +127,19 @@ mod tests {
         }
     }
 
+    fn support_with_freshness(freshness_class: &str) -> SeoVerifiedFactSupportState {
+        SeoVerifiedFactSupportState {
+            fragment_text: "Passport required".to_string(),
+            support_ref: "rule:passport".to_string(),
+            role_type: "document_required".to_string(),
+            source_label: "Consulate".to_string(),
+            source_tier: "official".to_string(),
+            freshness_class: freshness_class.to_string(),
+            observed_at: String::new(),
+            valid_until: String::new(),
+        }
+    }
+
     #[tokio::test]
     async fn loads_site_build_input_without_sql_adapter() {
         let repo = FakeRepo;
@@ -166,5 +187,24 @@ mod tests {
         let err = truth_admissibility_gate(&[], "ES|tourist||BY", "standard").unwrap_err();
         assert_eq!(err.class_str(), "validation_failure");
         assert!(err.to_string().contains("truth_admissibility_gate failed"));
+    }
+
+    #[test]
+    fn rejects_non_fresh_truth_bundle_at_admissibility_gate() {
+        for freshness in ["watch", "stale", "unknown", ""] {
+            let err = truth_admissibility_gate(
+                &[support_with_freshness(freshness)],
+                "ES|tourist||BY",
+                "standard",
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains("non-fresh freshness_class"));
+        }
+        truth_admissibility_gate(
+            &[support_with_freshness("fresh")],
+            "ES|tourist||BY",
+            "standard",
+        )
+        .unwrap();
     }
 }
