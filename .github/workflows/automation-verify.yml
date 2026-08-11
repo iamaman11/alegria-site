@@ -50,11 +50,7 @@ jobs:
           (cd app/rust && cargo update)
           (cd app/rust && cargo fmt --all)
 
-      - name: Run full automation audit
-        run: bash automation/audit.sh full
-
       - name: Upload dependency resolver output
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dependency-resolver-output
@@ -62,6 +58,9 @@ jobs:
             app/rust/Cargo.lock
             app/rust/crates/seo_application/src/drafting.rs
             app/rust/crates/seo_application/src/scenario/tests.rs
+
+      - name: Run full automation audit
+        run: bash automation/audit.sh full
 
       - name: Upload consistency reports
         if: always()
