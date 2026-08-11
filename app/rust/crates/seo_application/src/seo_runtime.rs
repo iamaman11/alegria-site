@@ -11,13 +11,17 @@ pub async fn load_site_build_input<R: SeoBuildInputRepository>(
     repo.load_site_build_input(run_id).await
 }
 
+/// Read verified support without imposing the downstream admissibility gate.
+///
+/// The canonical workflow intentionally performs this read before source discovery so
+/// existing truth can enrich a run, but a fresh context is allowed to return an empty
+/// bundle. Mandatory non-empty admissible support is enforced after `verified_truth_write`
+/// by the post-truth projection/planning barrier and again immediately before drafting.
 pub async fn load_verified_support_bundle<R: VerifiedSupportRepository>(
     repo: &R,
     request: &VerifiedSupportBundleRequest,
 ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
-    let bundle = repo.load_verified_support_bundle(request).await?;
-    truth_admissibility_gate(&bundle, &request.context_key, &request.applicant_profile)?;
-    Ok(bundle)
+    repo.load_verified_support_bundle(request).await
 }
 
 pub fn truth_admissibility_gate(
@@ -96,10 +100,22 @@ mod tests {
                 role_type: "document_required".to_string(),
                 source_label: "Consulate".to_string(),
                 source_tier: "official".to_string(),
-                freshness_class: "watch".to_string(),
+                freshness_class: "fresh".to_string(),
                 observed_at: String::new(),
                 valid_until: String::new(),
             }])
+        }
+    }
+
+    struct EmptySupportRepo;
+
+    #[async_trait]
+    impl VerifiedSupportRepository for EmptySupportRepo {
+        async fn load_verified_support_bundle(
+            &self,
+            _request: &VerifiedSupportBundleRequest,
+        ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+            Ok(Vec::new())
         }
     }
 
@@ -129,8 +145,24 @@ mod tests {
         assert_eq!(bundle[0].support_ref, "rule:passport");
     }
 
+    #[tokio::test]
+    async fn initial_support_read_allows_zero_truth_bootstrap() {
+        let bundle = load_verified_support_bundle(
+            &EmptySupportRepo,
+            &VerifiedSupportBundleRequest {
+                run_id: "run-fresh".to_string(),
+                context_key: "fresh-context".to_string(),
+                scope_signature: "fresh-scope".to_string(),
+                applicant_profile: "standard".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(bundle.is_empty());
+    }
+
     #[test]
-    fn rejects_empty_truth_bundle() {
+    fn rejects_empty_truth_bundle_at_admissibility_gate() {
         let err = truth_admissibility_gate(&[], "ES|tourist||BY", "standard").unwrap_err();
         assert_eq!(err.class_str(), "validation_failure");
         assert!(err.to_string().contains("truth_admissibility_gate failed"));
