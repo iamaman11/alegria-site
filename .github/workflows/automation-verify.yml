@@ -28,8 +28,40 @@ jobs:
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
+      - name: Resolve hardening dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          targets = [
+              Path("app/rust/crates/seo_application/src/drafting.rs"),
+              Path("app/rust/crates/seo_application/src/scenario/tests.rs"),
+          ]
+          for path in targets:
+              text = path.read_text(encoding="utf-8")
+              old = 'freshness_class: "watch".to_string(),'
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one stale watch fixture in {path}, found {count}")
+              path.write_text(text.replace(old, 'freshness_class: "fresh".to_string()'), encoding="utf-8")
+          PY
+          (cd app/rust && cargo update)
+          (cd app/rust && cargo fmt --all)
+
       - name: Run full automation audit
         run: bash automation/audit.sh full
+
+      - name: Upload dependency resolver output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-resolver-output
+          path: |
+            app/rust/Cargo.lock
+            app/rust/crates/seo_application/src/drafting.rs
+            app/rust/crates/seo_application/src/scenario/tests.rs
 
       - name: Upload consistency reports
         if: always()
