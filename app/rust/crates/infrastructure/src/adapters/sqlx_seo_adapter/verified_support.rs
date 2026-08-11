@@ -148,6 +148,9 @@ async fn resolve_verified_fact_support(
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'
+          AND (r.effective_from IS NULL OR r.effective_from <= CURRENT_DATE)
+          AND (r.effective_to IS NULL OR r.effective_to >= CURRENT_DATE)
+          AND COALESCE(r.freshness_class, 'unknown') = 'fresh'
           AND r.source_key IS NOT NULL
           AND r.source_key <> ''
           AND r.evidence_section_id IS NOT NULL
