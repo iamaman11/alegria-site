@@ -106,6 +106,26 @@ def main() -> int:
             '"public_snapshot_fallback_allowed": false',
             "candidate/public fail-closed separation",
         )
+        failures += require(
+            publish_materialize,
+            '"candidate_isolated_from_public_output": true',
+            "candidate/public filesystem isolation",
+        )
+        failures += require(
+            publish_materialize,
+            'std::env::var("SEO_STATIC_RELEASE_ROOT")',
+            "candidate release root",
+        )
+        failures += require(
+            publish_materialize,
+            'join(".alegria-static-releases")',
+            "default sibling release root",
+        )
+        failures += require(
+            publish_materialize,
+            "candidate_output_dir == public_output_dir",
+            "candidate/public path equality guard",
+        )
         failures += forbid(
             publish_materialize,
             "build_static_site_incremental(",
