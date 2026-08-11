@@ -595,3 +595,133 @@ Do not add more decorative infrastructure before closing the actual supersite va
 The governing rule is:
 
 > No capability counts as complete because code, a collection, a graph, a model, or a gate exists. It counts only when it changes a justified product decision, is observable in the final supersite, is protected by evidence, and transfers through the generic domain contract where the capability is intended to be generic.
+
+## 25. Repository classification audit — verified deltas
+
+The full component-by-component purpose map is maintained in `docs/PRODUCTION_10_10_REPOSITORY_CLASSIFICATION.md`. The following findings were verified from the working-branch code and are now explicit plan constraints.
+
+### 25.1 Verticality is embedded in authoritative storage and shared runtime types
+
+This is deeper than hard-coded URLs or templates:
+
+- `app/db/schema.sql` owns `kb.visa_families`, `kb.visa_contexts`, fixed applicant-profile semantics, fixed verified rule roles, `label_ru`, and a fixed Qdrant collection allowlist;
+- `runtime_models::RuleRoleType/RuleParams` owns visa/procedure-oriented `Document`, `Fee`, `Timeline`, `WhereToApply`, `AppointmentRule`, `FormRequired`, and `Step` variants;
+- `seo_ports::SeoSiteBuildRegistrationRequest` exposes country/visa/citizenship/profile fields at the generic orchestration boundary.
+
+New required work:
+
+- [ ] Design a pack-neutral persistent `DomainContext`/applicability/fact-schema model, not only a Rust configuration wrapper.
+- [ ] Create an explicit data migration from current visa tables/constraints into visa Domain Pack v1 with compatibility views/read models only where cutover requires them.
+- [ ] Make migration certification prove clean install, existing visa data upgrade, identity collision safety, and a materially different second pack without new vertical SQL tables/check constraints.
+
+### 25.2 Current `FreshnessCheckWorkflow` is not a knowledge-freshness workflow
+
+The workflow currently checks the age of unfinished `pipeline.execution_runs`. That is runtime-lag/stuck-run monitoring. It does not inspect source TTL, source snapshots, `effective_from/effective_to`, verification timestamps, truth dependencies, or schedule revalidation.
+
+New required work:
+
+- [ ] Reclassify/rename the existing check under runtime health/reconcile semantics.
+- [ ] Implement a separate DomainPack-driven knowledge freshness planner and durable revalidation workflow.
+- [ ] Prove TTL → recrawl → source diff → selective extraction/adjudication → truth change/no-change → bounded rebuild/review/withdrawal behavior.
+
+### 25.3 Real GDS algorithms exist off the canonical value stream
+
+`services/analytics_svc` contains real WCC and PageRank execution. In the inspected canonical application/port path, no consumer of this service was found. Canonical `GraphReasoningPort` instead mixes a limited Neo4j link query, relational reads, and Qdrant semantic operations.
+
+New required work:
+
+- [ ] Decide one canonical graph algorithm execution owner; promote/rewrite `analytics_svc` capabilities into it or remove the duplicate service.
+- [ ] Make Domain Pack declare required graph projections and algorithms.
+- [ ] Persist graph projection version, algorithm/version/configuration, inputs, scores/communities/centrality, and reason packages.
+- [ ] Feed those results into IA/silos/hubs/linking/coverage/orphans/cannibalization/rebuild.
+- [ ] Add graph ablation certification that fails because a product decision changes, not because `gds.version()` disappears.
+
+### 25.4 Reasoning planes are currently conflated
+
+`GraphReasoningPort::evaluate_draft_coverage_neighborhood` uses Voyage/Qdrant `editorial_topics_4`; semantic rebuild widening also uses Voyage/Qdrant. These can be useful features but are retrieval, not graph topology.
+
+New required work:
+
+- [ ] Split canonical interfaces/evidence for graph topology reasoning, deterministic dependency lookup, and semantic retrieval.
+- [ ] Prevent a retrieval result from satisfying a required graph-reasoning contract by naming or type alone.
+- [ ] Preserve independent fail-closed readiness and ablation evidence for graph and retrieval planes.
+
+### 25.5 Fresh bootstrap blocker is protected by an automation gate
+
+`automation/smoke_support_bundle_required.py` explicitly requires the adapter to contain the `verified support bundle is empty` failure. Therefore CI currently protects the same wrong invariant that blocks a zero-truth niche.
+
+New required work:
+
+- [ ] Replace this gate with a two-phase support contract: initial support may be empty; refreshed post-truth-write support must satisfy mandatory completeness/applicability/freshness/authority requirements.
+- [ ] Add zero-truth canonical workflow certification and ensure no synthetic verified seed is counted as fresh-bootstrap evidence.
+
+### 25.6 Drafting should be refactored, not discarded
+
+The drafting path already contains useful generic machinery: claim ledger, traceability, deterministic blocks, template bindings, QA and HITL. The vertical semantics are the fixed section ontology and content routing (`documents`, `fees`, `timing`, `where_to_apply`, traveler-specific fallback copy, fixed FAQ/schema behavior).
+
+New required work:
+
+- [ ] Keep evidence/claim/QA machinery in generic core.
+- [ ] Move section roles, block types, required sections, structural renderers, schema templates, CTA/conversion semantics, and fallback policy into the Domain Pack.
+- [ ] Make Niche Compiler infer candidate page/content archetypes from evidence and require review where uncertain.
+
+### 25.7 Link publication state is not revision-safe
+
+The public static snapshot currently loads link recommendations in `candidate`, `accepted`, or `applied` state. A public release must never treat a raw candidate recommendation as revision content.
+
+New required work:
+
+- [ ] Add explicit revision-owned applied-link bindings.
+- [ ] Render only links applied to the candidate/public revision being built.
+- [ ] Keep graph/retrieval recommendation reasons internal while preserving them in audit evidence.
+
+### 25.8 The current PR publication patch remains intentionally non-mergeable
+
+The public published-only snapshot is the correct public-state direction, but `publish_materialize` still builds the approved target through the same snapshot path, so the target cannot be loaded before final publication.
+
+New required work:
+
+- [ ] Add explicit candidate snapshot API: approved target revision + published dependencies/navigation.
+- [ ] Keep the existing public snapshot strictly deployed/live-verified published state.
+- [ ] Do not mark the target published merely to make the builder see it.
+
+PR #2 must remain Draft until this state separation and the rest of the P0 publication semantics are fixed and certified.
+
+### 25.9 Automation is a support plane, not proof by gate count
+
+The repository has broad static/architecture/smoke coverage, which is valuable. Some checks validate string presence, report shape, or current architectural assumptions rather than product behavior. `check_graph_contract_gate.py`, for example, validates the shape/status of graph evidence but not that GDS changes an IA/link/rebuild decision.
+
+New required work:
+
+- [ ] Keep useful architecture/layer/schema gates as fast support checks.
+- [ ] Add mandatory counterfactual/product gates for zero-truth bootstrap, graph ablation, retrieval ablation, durable HITL, malicious renderer payloads, dependency failure with last-known-good serving, and 1k/10k/100k incremental scale.
+- [ ] Make CI terminology distinguish `architecture_contract_pass`, `capability_probe_pass`, `fixture_pass`, and `product_certification_pass`.
+
+### 25.10 DB migration parity is currently structural, not portability proof
+
+The migration parity automation verifies that required SQL needles exist. That is useful structural regression protection but does not prove that schema evolution preserves identity, truth, applicability, pack versioning, or cross-niche portability.
+
+New required work:
+
+- [ ] Add data-bearing migration tests from current production-like visa state to the generic domain schema.
+- [ ] Verify rollback/forward compatibility and collision-free context/page identity migration.
+- [ ] Verify a second pack can be installed and evolved through data/config artifacts without core schema forks.
+
+### 25.11 Publication and rendering findings remain coupled P0 work
+
+Verified code paths additionally show:
+
+- incremental build renders the complete loaded snapshot before filtering target artifacts;
+- global navigation renders every page in the snapshot rather than persisted bounded topology;
+- raw Markdown HTML is rendered without a demonstrated allowlist sanitizer;
+- JSON-LD is inserted into a script element without a script-safe `</script>` boundary;
+- render validation checks markers/placeholders but not semantic canonical/security/link correctness;
+- `finalize_publish` maps local `render_ready` directly to `published` and DB state, without staging deploy/live HTTP/hash/atomic promotion.
+
+These are not independent polish tasks. Candidate/public state separation, secure rendering, true incremental topology, and live publication must converge into one immutable release model.
+
+### 25.12 Classification result
+
+The repository contains a strong reusable foundation in Temporal durability, Postgres authority, outbox/reconcile, evidence traceability, projection adapters, semantic retrieval mechanics, and parts of the deterministic planning/drafting pipeline. The dominant architectural failure is **ownership**: visa semantics and some reasoning responsibilities live inside shared core/storage, while several advanced capabilities exist in support or parallel paths instead of the canonical product-decision stream.
+
+The next implementation work must therefore prefer boundary corrections and end-to-end proof over adding another large subsystem in isolation.
