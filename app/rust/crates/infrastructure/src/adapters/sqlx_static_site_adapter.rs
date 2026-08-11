@@ -56,8 +56,8 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
             COALESCE(p.published_at, r.updated_at)::text AS updated_at
         FROM site.cms_pages p
         JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
-        WHERE p.current_status IN ('approved', 'published')
-          AND r.revision_status IN ('approved', 'published')
+        WHERE p.current_status = 'published'
+          AND r.revision_status = 'published'
         ORDER BY
             CASE WHEN p.canonical_url_path = '/' THEN 0 ELSE 1 END,
             p.canonical_url_path
@@ -113,7 +113,7 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
         JOIN site.cms_pages target_page ON target_page.page_node_key = l.target_page_key
         WHERE l.source_page_key = ANY($1)
           AND l.status IN ('candidate', 'accepted', 'applied')
-          AND target_page.current_status IN ('approved', 'published')
+          AND target_page.current_status = 'published'
         ORDER BY l.required_flag DESC, l.score DESC, l.target_page_key
         "#,
     )
