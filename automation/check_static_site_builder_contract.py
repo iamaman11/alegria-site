@@ -116,6 +116,28 @@ def main() -> int:
             "static_site_builder_adapter::build_static_site(",
             "public full-build fallback in candidate materialization",
         )
+
+        for needle, label in [
+            ("fn safe_markdown_destination(", "Markdown URL allowlist"),
+            ("fn sanitize_markdown_event(", "Markdown event sanitizer"),
+            (
+                "Event::Html(_) | Event::InlineHtml(_) => None",
+                "raw Markdown HTML removal",
+            ),
+            ("dest_url: safe_destination(dest_url)", "link/image destination sanitization"),
+            ("fn json_for_script(", "JSON-LD script-safe serializer"),
+            ('.replace(\'<\', "\\\\u003c")', "JSON-LD less-than escaping"),
+            (
+                "markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls",
+                "renderer security regression test",
+            ),
+            (
+                "json_ld_serialization_cannot_close_script_element",
+                "JSON-LD script-breakout regression test",
+            ),
+        ]:
+            failures += require(builder, needle, label)
+
         failures += require(compose, "/dev/tcp/127.0.0.1/6333", "Qdrant healthcheck")
 
     if failures:
