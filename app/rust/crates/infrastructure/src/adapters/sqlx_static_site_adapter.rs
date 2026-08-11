@@ -127,7 +127,9 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
         .map(|row| StaticCmsLinkRow {
             source_page_key: row.get("source_page_key"),
             target_page_key: row.get("target_page_key"),
-            link_role: row.get("link_role"),
+            // `link_role` is an internal graph/planning concept. Keep it out of the
+            // public rendering surface even though the renderer retains the field.
+            link_role: String::new(),
             required_flag: row.get("required_flag"),
         })
         .collect();
