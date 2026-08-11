@@ -7,7 +7,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::sqlx_static_site_adapter::{
-    load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow,
+    load_static_site_candidate_snapshot, load_static_site_snapshot, StaticCmsLinkRow,
+    StaticCmsPageRow, StaticSiteSnapshot,
 };
 
 #[derive(Debug, Clone)]
@@ -520,16 +521,12 @@ pub async fn build_static_site(
     })
 }
 
-pub async fn build_static_site_incremental(
-    pool: &PgPool,
+fn build_incremental_from_snapshot(
+    snapshot: StaticSiteSnapshot,
     output_dir: &Path,
     base_url: &str,
     target_page_keys: &[String],
 ) -> Result<StaticBuildResult> {
-    if target_page_keys.is_empty() {
-        anyhow::bail!("incremental build requires at least one target page key");
-    }
-    let snapshot = load_static_site_snapshot(pool).await?;
     let target_set = target_page_keys
         .iter()
         .filter(|key| !key.trim().is_empty())
@@ -544,7 +541,7 @@ pub async fn build_static_site_incremental(
         .map(|page| output_path_for_url(&page.canonical_url_path))
         .collect::<Result<std::collections::HashSet<_>>>()?;
     if page_paths.is_empty() {
-        anyhow::bail!("incremental build target pages are not approved/published");
+        anyhow::bail!("incremental build target pages are not present in the selected snapshot");
     }
     let artifacts = all_artifacts
         .into_iter()
@@ -566,4 +563,38 @@ pub async fn build_static_site_incremental(
         previews,
         output_dir: output_dir.to_path_buf(),
     })
+}
+
+pub async fn build_static_site_incremental(
+    pool: &PgPool,
+    output_dir: &Path,
+    base_url: &str,
+    target_page_keys: &[String],
+) -> Result<StaticBuildResult> {
+    if target_page_keys.is_empty() {
+        anyhow::bail!("incremental build requires at least one target page key");
+    }
+    let snapshot = load_static_site_snapshot(pool).await?;
+    build_incremental_from_snapshot(snapshot, output_dir, base_url, target_page_keys)
+}
+
+pub async fn build_static_site_candidate_incremental(
+    pool: &PgPool,
+    output_dir: &Path,
+    base_url: &str,
+    target_page_node_key: &str,
+    target_revision_id: &str,
+) -> Result<StaticBuildResult> {
+    let snapshot = load_static_site_candidate_snapshot(
+        pool,
+        target_page_node_key,
+        target_revision_id,
+    )
+    .await?;
+    build_incremental_from_snapshot(
+        snapshot,
+        output_dir,
+        base_url,
+        &[target_page_node_key.to_string()],
+    )
 }
