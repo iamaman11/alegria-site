@@ -5,3 +5,4 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 bash automation/e2e_supersite_certification.sh
+python3 automation/check_e2e_product_verdict.py
