@@ -509,7 +509,12 @@ async fn run_page_publish_phases(
         }
 
         if page_blocked {
-            continue;
+            return Ok(PagePublishLoopOutcome::Blocked(format!(
+                "{}:page_node_key={}:published_before_block={}",
+                blocked_publish_gate_status(),
+                page_node.page_node_key,
+                published_pages
+            )));
         }
     }
 

@@ -1,0 +1,104 @@
+name: dependency-refresh-branch
+
+# One-shot branch-only resolver. Remove after validated lockfile refresh.
+on:
+  push:
+    branches: ["agent/production-10-10-hardening"]
+    paths:
+      - ".github/workflows/dependency-refresh-branch.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dependency-refresh-branch
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.58.2"
+      SQLX_OFFLINE: "true"
+    steps:
+      - name: Checkout working branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin agent/production-10-10-hardening
+          git checkout -B agent/production-10-10-hardening FETCH_HEAD
+
+      - name: Install native build tools
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Align fresh-only test fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          targets = [
+              Path("app/rust/crates/seo_application/src/drafting.rs"),
+              Path("app/rust/crates/seo_application/src/scenario/tests.rs"),
+          ]
+          for path in targets:
+              text = path.read_text(encoding="utf-8")
+              old = 'freshness_class: "watch".to_string(),'
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one stale watch fixture in {path}, found {count}")
+              path.write_text(text.replace(old, 'freshness_class: "fresh".to_string()'), encoding="utf-8")
+          PY
+
+      - name: Resolve dependency graph
+        working-directory: app/rust
+        run: cargo update
+
+      - name: Rust formatting
+        working-directory: app/rust
+        run: cargo fmt --all
+
+      - name: Workspace compile
+        working-directory: app/rust
+        run: cargo check --workspace --locked
+
+      - name: Workspace tests
+        working-directory: app/rust
+        run: cargo test --workspace --locked
+
+      - name: E2E surface compile
+        working-directory: app/rust
+        run: cargo test -p integration_harness --features e2e --no-run --locked
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: RustSec audit
+        working-directory: app/rust
+        run: cargo audit
+
+      - name: Commit validated resolver output
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git status --short
+          git diff --check
+          git add app/rust/Cargo.lock \
+                  app/rust/crates/seo_application/src/drafting.rs \
+                  app/rust/crates/seo_application/src/scenario/tests.rs
+          if git diff --cached --quiet; then
+            echo "No resolver/fixture changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refresh secure dependency lock"
+          git push origin HEAD:agent/production-10-10-hardening

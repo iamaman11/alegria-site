@@ -24,16 +24,28 @@ def require(path: Path, needle: str, label: str) -> list[str]:
     return []
 
 
+def forbid(path: Path, needle: str, label: str) -> list[str]:
+    text = read_file_resolved(path)
+    if needle in text:
+        return [f"{label}: forbidden {needle!r} in {path.relative_to(ROOT)}"]
+    return []
+
+
 def main() -> int:
     failures: list[str] = []
 
     cli = ROOT / "app/rust/services/cli_tools/src/main.rs"
     adapter = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs"
+    builder = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs"
+    publish_materialize = (
+        ROOT
+        / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publish_materialize.rs"
+    )
     adapter_mod = ROOT / "app/rust/crates/infrastructure/src/adapters/mod.rs"
     cargo = ROOT / "app/rust/services/cli_tools/Cargo.toml"
     compose = ROOT / "docker-compose.yml"
 
-    for path in [cli, adapter, adapter_mod, cargo, compose]:
+    for path in [cli, adapter, builder, publish_materialize, adapter_mod, cargo, compose]:
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
 
@@ -49,13 +61,103 @@ def main() -> int:
         failures += require(cli, "FAQPage", "FAQ JSON-LD")
         failures += require(cli, "alegria-static-manifest.json", "build manifest")
         failures += require(cli, "no approved or published CMS pages", "empty publish guard")
-        failures += require(adapter, "p.current_status IN ('approved', 'published')", "CMS page status gate")
-        failures += require(
-            adapter,
-            "r.revision_status IN ('approved', 'published')",
-            "CMS revision status gate",
-        )
+
+        adapter_text = adapter.read_text(encoding="utf-8")
+        public_marker = "pub async fn load_static_site_snapshot"
+        candidate_marker = "pub async fn load_static_site_candidate_snapshot"
+        if public_marker not in adapter_text or candidate_marker not in adapter_text:
+            failures.append("static adapter must define separate public and candidate snapshot loaders")
+        else:
+            public_start = adapter_text.index(public_marker)
+            candidate_start = adapter_text.index(candidate_marker)
+            public_text = adapter_text[public_start:candidate_start]
+            candidate_text = adapter_text[candidate_start:]
+            if "revision_status = 'published'" not in public_text:
+                failures.append("public snapshot must select only published revisions")
+            if "revision_status = 'approved'" in public_text:
+                failures.append("approved revision leaked into public snapshot query")
+            if "JOIN LATERAL" not in public_text:
+                failures.append(
+                    "public snapshot must resolve latest published revision independently of current candidate pointer"
+                )
+            for needle in [
+                "target_page_node_key",
+                "target_revision_id",
+                "r.revision_status = 'approved'",
+                "published_dependencies",
+            ]:
+                if needle not in candidate_text:
+                    failures.append(f"candidate snapshot missing `{needle}`")
+
         failures += require(adapter, "site.link_recommendations", "internal link source")
+        failures += require(builder, "build_static_site_candidate_incremental", "candidate builder")
+        failures += require(
+            builder,
+            "load_static_site_candidate_snapshot",
+            "candidate snapshot consumption",
+        )
+        failures += require(
+            publish_materialize,
+            "build_static_site_candidate_incremental",
+            "publish materialization candidate build",
+        )
+        failures += require(
+            publish_materialize,
+            '"public_snapshot_fallback_allowed": false',
+            "candidate/public fail-closed separation",
+        )
+        failures += require(
+            publish_materialize,
+            '"candidate_isolated_from_public_output": true',
+            "candidate/public filesystem isolation",
+        )
+        failures += require(
+            publish_materialize,
+            'std::env::var("SEO_STATIC_RELEASE_ROOT")',
+            "candidate release root",
+        )
+        failures += require(
+            publish_materialize,
+            'join(".alegria-static-releases")',
+            "default sibling release root",
+        )
+        failures += require(
+            publish_materialize,
+            "candidate_output_dir == public_output_dir",
+            "candidate/public path equality guard",
+        )
+        failures += forbid(
+            publish_materialize,
+            "build_static_site_incremental(",
+            "public incremental builder in candidate materialization",
+        )
+        failures += forbid(
+            publish_materialize,
+            "static_site_builder_adapter::build_static_site(",
+            "public full-build fallback in candidate materialization",
+        )
+
+        for needle, label in [
+            ("fn safe_markdown_destination(", "Markdown URL allowlist"),
+            ("fn sanitize_markdown_event(", "Markdown event sanitizer"),
+            (
+                "Event::Html(_) | Event::InlineHtml(_) => None",
+                "raw Markdown HTML removal",
+            ),
+            ("dest_url: safe_destination(dest_url)", "link/image destination sanitization"),
+            ("fn json_for_script(", "JSON-LD script-safe serializer"),
+            ('.replace(\'<\', "\\\\u003c")', "JSON-LD less-than escaping"),
+            (
+                "markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls",
+                "renderer security regression test",
+            ),
+            (
+                "json_ld_serialization_cannot_close_script_element",
+                "JSON-LD script-breakout regression test",
+            ),
+        ]:
+            failures += require(builder, needle, label)
+
         failures += require(compose, "/dev/tcp/127.0.0.1/6333", "Qdrant healthcheck")
 
     if failures:

@@ -148,6 +148,9 @@ async fn resolve_verified_fact_support(
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'
+          AND (r.effective_from IS NULL OR r.effective_from <= CURRENT_DATE)
+          AND (r.effective_to IS NULL OR r.effective_to >= CURRENT_DATE)
+          AND COALESCE(r.freshness_class, 'unknown') = 'fresh'
           AND r.source_key IS NOT NULL
           AND r.source_key <> ''
           AND r.evidence_section_id IS NOT NULL
@@ -233,11 +236,6 @@ pub async fn load_verified_support_bundle(
     non_empty(scope_signature, "scope_signature")?;
     let normalized_profile = validate_applicant_profile_reference(pool, applicant_profile).await?;
     let resolution = resolve_verified_fact_support(pool, context_key, &normalized_profile).await?;
-    if resolution.included.is_empty() {
-        return Err(validation_failure(format!(
-            "verified support bundle is empty for context_key `{context_key}` and applicant_profile `{normalized_profile}`"
-        )));
-    }
     let support_count = resolution.included.len();
     let supports = resolution.included;
     let excluded_rule_count = resolution.excluded_rules.len();
@@ -286,6 +284,7 @@ pub async fn load_verified_support_bundle(
             "scope_signature": scope_signature,
             "applicant_profile": normalized_profile,
             "support_count": support_count,
+            "bundle_state": if support_count == 0 { "empty_bootstrap_candidate" } else { "ready" },
             "supports": supports.clone(),
             "excluded_rule_count": excluded_rule_count,
             "excluded_rules": excluded_rules,
@@ -434,4 +433,3 @@ pub async fn resolve_rebuild_impacts(
     }
     Ok(impacted)
 }
-
