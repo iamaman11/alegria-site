@@ -4,7 +4,7 @@
   "evidence_status": "PASS",
   "status_reason": "Live smoke completed one real SERP fetch, one official crawl, one extraction pass, and no publish.",
   "failure_class": "none",
-  "smoke_command": "cargo run -q --manifest-path /home/bose/projects/alegria-site/app/rust/services/cli_tools/Cargo.toml -- seo-run --database-url postgresql://postgres:postgres_password@localhost:5433/alegria --run-id eaef8ac3-b39b-4e42-9918-0216beb8ad94 --market alegria-site --locale ru-RU --country-code ES --visa-type tourist --citizenship-code BY --applicant-profile standard --query-batch-key live-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94 --query spain tourist visa belarus official --warn-only-projections --output-dir /home/bose/projects/alegria-site/tmp/live-provider-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94 crawl-ingest",
+  "smoke_command": "cargo run -q --manifest-path /home/bose/projects/alegria-site/app/rust/services/cli_tools/Cargo.toml -- seo-run --database-url postgresql://postgres:postgres_password@localhost:5433/alegria --run-id b4a263f7-5899-498f-859e-06ab7c89d4ff --market alegria-site --locale ru-RU --country-code ES --visa-type tourist --citizenship-code BY --applicant-profile standard --query-batch-key live-smoke-b4a263f7-5899-498f-859e-06ab7c89d4ff --query spain tourist visa belarus official --warn-only-projections --output-dir /home/bose/projects/alegria-site/tmp/live-provider-smoke-b4a263f7-5899-498f-859e-06ab7c89d4ff crawl-ingest",
   "scope": {
     "market": "alegria-site",
     "locale": "ru-RU",
@@ -35,10 +35,10 @@
     "bootstrap_seeded_support_bundle": false
   },
   "execution": {
-    "run_id": "eaef8ac3-b39b-4e42-9918-0216beb8ad94",
-    "query_batch_key": "live-smoke-eaef8ac3-b39b-4e42-9918-0216beb8ad94",
+    "run_id": "b4a263f7-5899-498f-859e-06ab7c89d4ff",
+    "query_batch_key": "live-smoke-b4a263f7-5899-498f-859e-06ab7c89d4ff",
     "command_exit_code": 0,
-    "stdout_excerpt": "SEO_RUN_RESULT scenario=site_build_crawl_ingest_only mode=semi_auto_operator status=empty:no_admissible_verified_rules page_total=0 published_pages=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=load_verified_support_bundle status=done page_node_key= detail=support_count=1\nSEO_RUN_PHASE phase=serp_ingest status=done page_node_key= detail=persisted_snapshot_count=1\nSEO_RUN_PHASE phase=crawl_sources status=partial page_node_key= detail=claimed=3 crawled=1 failed=2 raw_pages=1\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=empty:no_admissible_verified_rules page_node_key= detail=verified_rules=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=projection_clear page_node_key= detail=blocked_events=0 max_open_lag_ms=0",
+    "stdout_excerpt": "SEO_RUN_RESULT scenario=site_build_crawl_ingest_only mode=semi_auto_operator status=empty:no_admissible_verified_rules page_total=0 published_pages=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=load_verified_support_bundle status=done page_node_key= detail=support_count=1\nSEO_RUN_PHASE phase=serp_ingest status=done page_node_key= detail=persisted_snapshot_count=1\nSEO_RUN_PHASE phase=crawl_sources status=partial page_node_key= detail=claimed=5 crawled=2 failed=3 raw_pages=2\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=empty:no_admissible_verified_rules page_node_key= detail=verified_rules=0 changed_truth_keys=0\nSEO_RUN_PHASE phase=raw_knowledge_ingestion status=projection_warn page_node_key= detail=blocked_events=20 max_open_lag_ms=214768",
     "stderr_excerpt": "",
     "result": {
       "scenario": "site_build_crawl_ingest_only",
@@ -56,15 +56,15 @@
     "serp_phase_status": "done",
     "serp_persisted_snapshot_count": 1,
     "crawl_phase_status": "partial",
-    "crawl_claimed_count": 3,
-    "crawl_crawled_count": 1,
-    "crawl_failed_count": 2,
-    "crawl_raw_page_count": 1,
+    "crawl_claimed_count": 5,
+    "crawl_crawled_count": 2,
+    "crawl_failed_count": 3,
+    "crawl_raw_page_count": 2,
     "raw_knowledge_phase_status": "empty:no_admissible_verified_rules",
     "raw_knowledge_verified_rule_count": 0,
     "raw_knowledge_changed_truth_keys": 0,
     "db_serp_raw_snapshot_count": 2,
-    "db_crawl_queue_count": 3
+    "db_crawl_queue_count": 5
   },
   "required_for_pass": [
     "one real scope",
@@ -74,5 +74,5 @@
     "no publish",
     "immutable artifact with classified verdict"
   ],
-  "updated_at": "2026-06-14T16:57:31Z"
+  "updated_at": "2026-07-14T15:45:04Z"
 }
