@@ -286,8 +286,8 @@ mod tests {
         SeoDraftSectionState, SeoVerifiedFactSupportState, SourceContextChunkState,
     };
     use seo_ports::{
-        DraftRepository, EditorialGenerationPort, SectionTemplateRepository,
-        SourceContextRepository, GraphCapabilityPort,
+        DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
+        SourceContextRepository,
     };
 
     #[derive(Default)]
