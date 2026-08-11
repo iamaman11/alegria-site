@@ -16,6 +16,8 @@ jobs:
   architecture-and-rust:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.58.2"
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
