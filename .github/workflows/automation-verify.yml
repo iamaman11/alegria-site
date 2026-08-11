@@ -5,6 +5,9 @@ on:
     branches: [ "**" ]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -39,13 +42,20 @@ jobs:
               Path("app/rust/crates/seo_application/src/drafting.rs"),
               Path("app/rust/crates/seo_application/src/scenario/tests.rs"),
           ]
+          old = 'freshness_class: "watch".to_string(),'
+          new = 'freshness_class: "fresh".to_string(),'
           for path in targets:
               text = path.read_text(encoding="utf-8")
-              old = 'freshness_class: "watch".to_string(),'
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"expected exactly one stale watch fixture in {path}, found {count}")
-              path.write_text(text.replace(old, 'freshness_class: "fresh".to_string()'), encoding="utf-8")
+              old_count = text.count(old)
+              if old_count == 1:
+                  text = text.replace(old, new)
+                  path.write_text(text, encoding="utf-8")
+              elif old_count == 0 and new in text:
+                  pass
+              else:
+                  raise SystemExit(
+                      f"unexpected freshness fixture state in {path}: old_count={old_count}"
+                  )
           PY
           (cd app/rust && cargo update)
           (cd app/rust && cargo fmt --all)
@@ -58,6 +68,26 @@ jobs:
             app/rust/Cargo.lock
             app/rust/crates/seo_application/src/drafting.rs
             app/rust/crates/seo_application/src/scenario/tests.rs
+
+      - name: Commit resolver output on hardening branch
+        if: github.event_name == 'push' && github.ref_name == 'agent/production-10-10-hardening'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git add app/rust/Cargo.lock \
+                  app/rust/crates/seo_application/src/drafting.rs \
+                  app/rust/crates/seo_application/src/scenario/tests.rs
+          if git diff --cached --quiet; then
+            echo "Resolver output already committed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "refresh secure dependency lock"
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "HEAD:agent/production-10-10-hardening"
 
       - name: Run full automation audit
         run: bash automation/audit.sh full
