@@ -1,5 +1,6 @@
 name: dependency-refresh-branch
 
+# One-shot branch-only resolver. Remove after validated lockfile refresh.
 on:
   push:
     branches: ["agent/production-10-10-hardening"]
