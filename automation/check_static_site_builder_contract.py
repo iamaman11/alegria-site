@@ -24,6 +24,13 @@ def require(path: Path, needle: str, label: str) -> list[str]:
     return []
 
 
+def forbid(path: Path, needle: str, label: str) -> list[str]:
+    text = read_file_resolved(path)
+    if needle in text:
+        return [f"{label}: forbidden {needle!r} in {path.relative_to(ROOT)}"]
+    return []
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -49,11 +56,18 @@ def main() -> int:
         failures += require(cli, "FAQPage", "FAQ JSON-LD")
         failures += require(cli, "alegria-static-manifest.json", "build manifest")
         failures += require(cli, "no approved or published CMS pages", "empty publish guard")
-        failures += require(adapter, "p.current_status IN ('approved', 'published')", "CMS page status gate")
-        failures += require(
+        failures += require(adapter, "p.current_status = 'published'", "CMS page publish gate")
+        failures += require(adapter, "r.revision_status = 'published'", "CMS revision publish gate")
+        failures += require(adapter, "target_page.current_status = 'published'", "link target publish gate")
+        failures += forbid(
+            adapter,
+            "p.current_status IN ('approved', 'published')",
+            "approved page public-export ban",
+        )
+        failures += forbid(
             adapter,
             "r.revision_status IN ('approved', 'published')",
-            "CMS revision status gate",
+            "approved revision public-export ban",
         )
         failures += require(adapter, "site.link_recommendations", "internal link source")
         failures += require(compose, "/dev/tcp/127.0.0.1/6333", "Qdrant healthcheck")
