@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
+use pulldown_cmark::{
+    html, CowStr, Event, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
+};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -83,8 +85,68 @@ fn absolute_url(base_url: &str, url_path: &str) -> Result<String> {
     ))
 }
 
+fn safe_markdown_destination(raw: &str) -> bool {
+    let destination = raw.trim();
+    if destination.is_empty() {
+        return false;
+    }
+    let lowered = destination.to_ascii_lowercase();
+    if lowered.starts_with("//") {
+        return false;
+    }
+    if lowered.starts_with("https://")
+        || lowered.starts_with("http://")
+        || lowered.starts_with("mailto:")
+        || lowered.starts_with('/')
+        || lowered.starts_with('#')
+        || lowered.starts_with("./")
+        || lowered.starts_with("../")
+    {
+        return true;
+    }
+    !lowered.contains(':')
+}
+
+fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
+    if safe_markdown_destination(destination.as_ref()) {
+        destination
+    } else {
+        CowStr::Borrowed("#")
+    }
+}
+
+fn sanitize_markdown_event(event: Event<'_>) -> Option<Event<'_>> {
+    match event {
+        Event::Html(_) | Event::InlineHtml(_) => None,
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Some(Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_destination(dest_url),
+            title,
+            id,
+        })),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Some(Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_destination(dest_url),
+            title,
+            id,
+        })),
+        other => Some(other),
+    }
+}
+
 fn markdown_to_html(markdown: &str) -> String {
-    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all());
+    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all())
+        .filter_map(sanitize_markdown_event);
     let mut rendered = String::new();
     html::push_html(&mut rendered, parser);
     rendered
@@ -262,6 +324,13 @@ fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) ->
     }))
 }
 
+fn json_for_script(value: &Value) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)?
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e"))
+}
+
 fn render_related_links(
     page: &StaticCmsPageRow,
     pages_by_key: &HashMap<String, StaticCmsPageRow>,
@@ -322,7 +391,7 @@ fn render_page(
     let breadcrumbs = render_breadcrumbs(page, base_url)?;
     let (related, required_link_count, rendered_link_count) =
         render_related_links(page, pages_by_key, links_by_source)?;
-    let schema_json = serde_json::to_string_pretty(&page_schema_json(page, &canonical, base_url)?)?;
+    let schema_json = json_for_script(&page_schema_json(page, &canonical, base_url)?)?;
 
     let html = format!(
         r#"<!doctype html>
@@ -593,4 +662,29 @@ pub async fn build_static_site_candidate_incremental(
         base_url,
         &[target_page_node_key.to_string()],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls() {
+        let rendered = markdown_to_html(
+            "before <script>alert(1)</script> [bad](javascript:alert(1)) ![x](data:text/html,boom) after",
+        );
+        assert!(!rendered.to_ascii_lowercase().contains("<script"));
+        assert!(!rendered.to_ascii_lowercase().contains("javascript:"));
+        assert!(!rendered.to_ascii_lowercase().contains("data:text/html"));
+        assert!(rendered.contains("href=\"#\""));
+        assert!(rendered.contains("src=\"#\""));
+    }
+
+    #[test]
+    fn json_ld_serialization_cannot_close_script_element() {
+        let encoded = json_for_script(&json!({"value": "</script><script>alert(1)</script>"}))
+            .expect("json serialization should succeed");
+        assert!(!encoded.to_ascii_lowercase().contains("</script>"));
+        assert!(encoded.contains("\\u003c/script\\u003e"));
+    }
 }
