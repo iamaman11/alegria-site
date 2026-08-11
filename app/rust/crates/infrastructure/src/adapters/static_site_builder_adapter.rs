@@ -585,12 +585,8 @@ pub async fn build_static_site_candidate_incremental(
     target_page_node_key: &str,
     target_revision_id: &str,
 ) -> Result<StaticBuildResult> {
-    let snapshot = load_static_site_candidate_snapshot(
-        pool,
-        target_page_node_key,
-        target_revision_id,
-    )
-    .await?;
+    let snapshot =
+        load_static_site_candidate_snapshot(pool, target_page_node_key, target_revision_id).await?;
     build_incremental_from_snapshot(
         snapshot,
         output_dir,
