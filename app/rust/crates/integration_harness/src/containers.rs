@@ -69,8 +69,9 @@ impl PostgresHarness {
             .await
             .context("resolve postgres mapped port failed")?;
         sleep(Duration::from_secs(10)).await;
-        let database_url =
-            format!("postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable");
+        let database_url = format!(
+            "postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable"
+        );
         let mut pool = None;
         for i in 0..10 {
             match PgPoolOptions::new()
@@ -84,7 +85,8 @@ impl PostgresHarness {
                 }
                 Err(e) => {
                     if i == 9 {
-                        return Err(anyhow::anyhow!(e).context("connect postgres harness failed after 10 retries"));
+                        return Err(anyhow::anyhow!(e)
+                            .context("connect postgres harness failed after 10 retries"));
                     }
                     sleep(Duration::from_millis(2000)).await;
                 }
