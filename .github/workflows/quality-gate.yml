@@ -27,7 +27,10 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install Python quality tooling
-        run: python3 -m pip install --disable-pip-version-check ruff
+        run: python3 -m pip install --disable-pip-version-check ruff==0.15.22
+
+      - name: Install native audit/build tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
       - name: Rust formatting
         working-directory: app/rust
