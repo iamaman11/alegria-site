@@ -23,7 +23,7 @@ tokio = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 axum = { version = "0.8.8", features = ["json"] }
 sqlx = { workspace = true, optional = true }
-testcontainers = { version = "0.23.3", optional = true }
+testcontainers = { version = "0.28.0", optional = true }
 qdrant-client = { workspace = true, optional = true }
 neo4rs = { workspace = true, optional = true }
 temporalio-client = { workspace = true, optional = true }
