@@ -92,10 +92,7 @@ pub fn execute(input: &RenderPreviewValidateInputPayload) -> RenderPreviewValida
             }
         }
         let script_open_count = count_occurrences(&html, "<script");
-        let json_ld_open_count = count_occurrences(
-            &html,
-            "<script type=\"application/ld+json\">",
-        );
+        let json_ld_open_count = count_occurrences(&html, "<script type=\"application/ld+json\">");
         let script_close_count = count_occurrences(&html, "</script>");
         if script_open_count != json_ld_open_count || script_open_count != script_close_count {
             blockers.push(blocker(
