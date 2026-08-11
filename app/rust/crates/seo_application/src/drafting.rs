@@ -427,7 +427,7 @@ mod tests {
                     role_type: "document_required".to_string(),
                     source_label: "Consulate".to_string(),
                     source_tier: "official".to_string(),
-                    freshness_class: "watch".to_string(),
+                    freshness_class: "fresh".to_string(),
                     observed_at: String::new(),
                     valid_until: String::new(),
                 }],
