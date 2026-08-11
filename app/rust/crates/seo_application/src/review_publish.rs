@@ -184,7 +184,7 @@ mod tests {
                 page_node_key: "page-1".to_string(),
                 revision_id: "rev-1".to_string(),
                 canonical_url_path: "/visa/spain".to_string(),
-                rendered_html: "<html><link rel=\"canonical\"/><nav class=\"breadcrumbs\"></nav><script type=\"application/ld+json\">{}</script></html>".to_string(),
+                rendered_html: "<!doctype html><html lang=\"en\"><head><title>Spain visa</title><meta name=\"description\" content=\"Spain visa guide\"><link rel=\"canonical\" href=\"https://example.com/visa/spain\"><script type=\"application/ld+json\">{}</script></head><body><nav class=\"breadcrumbs\"></nav><h1>Spain visa</h1></body></html>".to_string(),
                 has_breadcrumbs: true,
                 has_schema_markup: true,
                 required_link_count: 0,
