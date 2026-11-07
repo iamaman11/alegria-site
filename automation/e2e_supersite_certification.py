@@ -328,9 +328,11 @@ def clean_runtime_preflight() -> dict[str, Any]:
             "canonical_worker_configuration",
             ["docker", "compose", "exec", "-T", "-e",
              f"ALEGRIA_EXPECTED_ORIGIN={os.environ['ALEGRIA_CERT_BASE_URL']}",
+             "-e", f"ALEGRIA_EXPECTED_OUTPUT={os.environ['ALEGRIA_CERT_PUBLIC_OUTPUT_DIR']}",
              "temporal-worker", "sh", "-ec", """
                 set -eu
                 test "${SEO_STATIC_BASE_URL:-}" = "$ALEGRIA_EXPECTED_ORIGIN"
+                test "${SEO_STATIC_OUTPUT_DIR:-}" = "$ALEGRIA_EXPECTED_OUTPUT"
                 test "${SEO_STATIC_PUBLISH_BACKEND:-}" = cloudflare_workers_static_assets
                 test -n "${CLOUDFLARE_API_TOKEN:-}"
                 test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
@@ -543,14 +545,20 @@ def main() -> int:
         # three-scenario R5 checker. Verify actual deployable HTML and
         # bytes independently served by the configured HTTPS origin.
         output_dir = os.environ["ALEGRIA_CERT_PUBLIC_OUTPUT_DIR"]
+        # Release symlinks use container-absolute paths. Running validators
+        # on the host could inspect a different directory or a broken link.
+        worker_prefix = ["docker", "compose", "exec", "-T", "temporal-worker", "python3"]
+        current_run = manifest["scenarios"][0]["run_id"]
         public_checks = (
-            ("static_output", [
-                sys.executable, str(ROOT / "automation/check_public_static_output.py"),
-                output_dir,
+            ("run_release_provenance", worker_prefix + [
+                "/app/automation/check_first_site_release.py",
+                "--run-id", current_run,
             ]),
-            ("independent_https_readback", [
-                sys.executable, str(ROOT / "automation/check_public_http_readback.py"),
-                output_dir,
+            ("static_output", worker_prefix + [
+                "/app/automation/check_public_static_output.py", output_dir,
+            ]),
+            ("independent_https_readback", worker_prefix + [
+                "/app/automation/check_public_http_readback.py", output_dir,
             ]),
         )
         manifest["public_acceptance"] = {}
