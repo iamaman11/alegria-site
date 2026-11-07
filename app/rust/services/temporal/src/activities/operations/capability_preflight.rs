@@ -46,6 +46,19 @@ fn scope_materialized_collection(collection: &str) -> bool {
     matches!(collection, "seo_keyword_clusters_4" | "editorial_topics_4")
 }
 
+// Canonical mapping and whole-page advisory can legitimately produce no
+// searchable entity for a fresh scope. A valid-empty outcome requires the
+// exact run's producer to have finished, plus a real Qdrant collection check.
+// It cannot certify raw evidence, verified rules, or site planning vectors.
+fn optional_retrieval_valid_empty(collection: &str, completed_producers: &[String]) -> bool {
+    let producer = match collection {
+        "kb_canonical_4" => "canonical_mapping",
+        "whole_page_advisory_prototypes" => "whole_page_semantic_pass",
+        _ => return false,
+    };
+    completed_producers.iter().any(|step| step == producer)
+}
+
 fn effective_collection_point_count(sql_count: i64, current_run_count: Option<u64>) -> i64 {
     current_run_count
         .map(|count| i64::try_from(count).unwrap_or(i64::MAX))
@@ -64,6 +77,34 @@ mod scope_materialization_tests {
         assert_eq!(effective_collection_point_count(250, Some(0)), 0);
         assert_eq!(effective_collection_point_count(0, Some(2)), 2);
         assert_eq!(effective_collection_point_count(250, None), 250);
+    }
+
+    #[test]
+    fn only_completed_optional_producers_may_certify_an_empty_collection() {
+        use super::optional_retrieval_valid_empty;
+        let producers = vec![
+            "canonical_mapping".to_string(),
+            "whole_page_semantic_pass".to_string(),
+        ];
+        assert!(optional_retrieval_valid_empty("kb_canonical_4", &producers));
+        assert!(optional_retrieval_valid_empty(
+            "whole_page_advisory_prototypes",
+            &producers
+        ));
+        for required in [
+            "raw_chunks_4",
+            "raw_chunks_ctx",
+            "verified_rules_4",
+            "editorial_topics_4",
+            "seo_keyword_clusters_4",
+        ] {
+            assert!(!optional_retrieval_valid_empty(required, &producers));
+        }
+        assert!(!optional_retrieval_valid_empty("kb_canonical_4", &[]));
+        assert!(!optional_retrieval_valid_empty(
+            "whole_page_advisory_prototypes",
+            &["canonical_mapping".to_string()]
+        ));
     }
 }
 
@@ -98,7 +139,10 @@ async fn probe_qdrant_required_collections(
     };
     let mut provider_ok = true;
     for collection in required_collections {
-        if !probe_all_collections && !scope_materialized_collection(collection) {
+        if !probe_all_collections
+            && !scope_materialized_collection(collection)
+            && !matches!(*collection, "kb_canonical_4" | "whole_page_advisory_prototypes")
+        {
             continue;
         }
         let exists = match tokio::time::timeout(
