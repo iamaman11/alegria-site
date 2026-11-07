@@ -8,7 +8,7 @@ use contracts::generated::alegria::temporal::v1::{
     PageBlueprintState, PageNodeState, ProjectionBarrierAuditInputPayload,
     PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload,
     RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpNormalizeInputPayload,
+    SeoScopePayload, SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
@@ -101,6 +101,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     projection_max_lag_ms: 300_000,
                     require_materialized_projections: false,
                     enforce_required_contract,
+                    require_page_brief_projection: false,
+                    gate_key: String::new(),
                 },
                 db_opts(30),
             )
@@ -730,6 +732,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     projection_max_lag_ms: 300_000,
                     require_materialized_projections: true,
                     enforce_required_contract: true,
+                    require_page_brief_projection: false,
+                    gate_key: String::new(),
                 },
                 db_opts(30),
             )
@@ -754,6 +758,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             &factual_fragments,
             &site_input.context_key,
             &scope.applicant_profile,
+            &scope,
         )
         .await?
         {
