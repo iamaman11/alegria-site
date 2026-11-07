@@ -319,6 +319,7 @@
         );
         let infra = InfraHarness::start().await.unwrap();
         let temporal = &infra.temporal;
+        let voyage_stub = stub_servers::spawn_voyage_contract_stub().await.unwrap();
 
         let client = connect_client(
             &temporal.temporal_url,
@@ -359,6 +360,11 @@
             .unwrap();
 
             let mut worker_env = infra.runtime_env();
+            worker_env.insert("VOYAGE_API_KEY".to_string(), "truth-cert-stub".to_string());
+            worker_env.insert(
+                "VOYAGE_API_BASE_URL".to_string(),
+                format!("{}/v1", voyage_stub.base_url),
+            );
             worker_env.insert("TEMPORAL_URL".to_string(), temporal.temporal_url.clone());
             worker_env.insert("TEMPORAL_NAMESPACE".to_string(), temporal.namespace.clone());
             worker_env.extend(truth_certification_env(
