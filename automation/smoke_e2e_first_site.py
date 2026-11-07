@@ -40,7 +40,7 @@ def fake_scenario(**kwargs: object) -> dict:
 
 class FirstSiteAcceptanceTests(unittest.TestCase):
     def run_case(
-        self, *, first_site: bool, codes: tuple[int, ...] = (0, 0),
+        self, *, first_site: bool, codes: tuple[int, ...] = (0, 0, 0),
         scenario_failure: bool = False,
     ) -> tuple[int, dict, object, object]:
         reports: list[tuple[Path, dict]] = []
@@ -88,16 +88,21 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         self.assertEqual(manifest["certification_scope"], "first_site_only")
         self.assertEqual(manifest["evidence_status"], "PASS")
         self.assertEqual(manifest["public_acceptance"], {
-            "static_output": "PASS", "independent_https_readback": "PASS",
+            "run_release_provenance": "PASS", "static_output": "PASS",
+            "independent_https_readback": "PASS",
         })
-        self.assertEqual(command.call_count, 2)
-        self.assertIn("check_public_http_readback.py", command.call_args.args[0][1])
+        self.assertEqual(command.call_count, 3)
+        self.assertIn("check_public_http_readback.py", " ".join(command.call_args.args[0]))
+        self.assertIn(
+            "check_first_site_release.py", " ".join(command.call_args_list[0].args[0])
+        )
+        self.assertIn("fixture-run", command.call_args_list[0].args[0])
 
     def test_first_site_blocks_failed_remote_bytes(self) -> None:
-        code, manifest, runner, command = self.run_case(first_site=True, codes=(0, 1))
+        code, manifest, runner, command = self.run_case(first_site=True, codes=(0, 0, 1))
         self.assertEqual(code, 1)
         self.assertEqual(runner.call_count, 1)
-        self.assertEqual(command.call_count, 2)
+        self.assertEqual(command.call_count, 3)
         self.assertEqual(manifest["evidence_status"], "FAIL")
         self.assertEqual(manifest["failure_class"], "public_acceptance_failure")
 
