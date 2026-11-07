@@ -295,14 +295,80 @@ fn breadcrumb_list_json(page: &StaticCmsPageRow, base_url: &str) -> Result<Value
     }))
 }
 
+fn push_faq_item(items: &mut Vec<Value>, question: &Option<String>, answer_lines: &[String]) {
+    let Some(question_text) = question.as_ref() else {
+        return;
+    };
+    let answer = answer_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if answer.is_empty() {
+        return;
+    }
+    items.push(json!({
+        "@type": "Question",
+        "name": question_text,
+        "acceptedAnswer": {
+            "@type": "Answer",
+            "text": answer,
+        }
+    }));
+}
+
+fn faq_entities(markdown: &str) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut in_faq = false;
+    let mut question: Option<String> = None;
+    let mut answer_lines: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            let heading_key = heading.trim().to_ascii_lowercase();
+            if in_faq {
+                push_faq_item(&mut items, &question, &answer_lines);
+                question = None;
+                answer_lines.clear();
+            }
+            in_faq = heading_key == "faq"
+                || heading_key == "frequently asked questions"
+                || heading_key == "вопросы и ответы";
+            continue;
+        }
+        if !in_faq {
+            continue;
+        }
+        if let Some(next_question) = trimmed.strip_prefix("### ") {
+            push_faq_item(&mut items, &question, &answer_lines);
+            question = Some(next_question.trim().to_string());
+            answer_lines.clear();
+        } else if question.is_some() {
+            answer_lines.push(trimmed.to_string());
+        }
+    }
+    if in_faq {
+        push_faq_item(&mut items, &question, &answer_lines);
+    }
+    items
+}
+
 fn fallback_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
-    Ok(json!({
-        "@context": "https://schema.org",
-        "@graph": [
-            { "@type": "Article", "headline": page.title, "url": canonical },
-            breadcrumb_list_json(page, base_url)?
-        ]
-    }))
+    let mut graph = vec![
+        json!({ "@type": "Article", "headline": page.title, "url": canonical }),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    append_faq_schema(&mut graph, page);
+    Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
+}
+
+fn append_faq_schema(graph: &mut Vec<Value>, page: &StaticCmsPageRow) {
+    let faq_items = faq_entities(page_markdown(page));
+    if !faq_items.is_empty() {
+        graph.push(json!({ "@type": "FAQPage", "mainEntity": faq_items }));
+    }
 }
 
 fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
@@ -315,13 +381,12 @@ fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) ->
     if !custom_schema {
         return fallback_schema_json(page, canonical, base_url);
     }
-    Ok(json!({
-        "@context": "https://schema.org",
-        "@graph": [
-            page.schema_markup_payload.clone(),
-            breadcrumb_list_json(page, base_url)?
-        ]
-    }))
+    let mut graph = vec![
+        page.schema_markup_payload.clone(),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    append_faq_schema(&mut graph, page);
+    Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
 }
 
 fn json_for_script(value: &Value) -> Result<String> {
@@ -403,6 +468,31 @@ fn render_page(
   <meta name="description" content="{description}">
   <link rel="canonical" href="{canonical}">
   <script type="application/ld+json">{schema_json}</script>
+  <style>
+    :root {{ color-scheme: light; --ink: #182026; --muted: #5a6872; --line: #d9e0e5; --accent: #176b5d; --bg: #fbfcfc; }}
+    body {{ margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); line-height: 1.62; }}
+    header {{ border-bottom: 1px solid var(--line); background: #ffffff; }}
+    nav {{ max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; gap: 16px; overflow-x: auto; }}
+    nav a {{ color: var(--ink); text-decoration: none; white-space: nowrap; font-size: 14px; }}
+    nav a[data-depth="0"] {{ font-weight: 700; }}
+    nav a[data-depth="1"] {{ font-weight: 600; }}
+    nav a[data-depth="2"] {{ color: var(--muted); }}
+    main {{ max-width: 820px; margin: 0 auto; padding: 48px 24px 72px; }}
+    .breadcrumbs {{ max-width: 820px; padding: 0; margin: 0 0 28px; display: block; overflow: visible; }}
+    .breadcrumbs ol {{ display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0; color: var(--muted); font-size: 13px; }}
+    .breadcrumbs li:not(:last-child)::after {{ content: "/"; margin-left: 8px; color: var(--muted); }}
+    .breadcrumbs a {{ color: var(--muted); font-size: 13px; }}
+    article h1 {{ font-size: clamp(32px, 5vw, 48px); line-height: 1.08; margin: 0 0 14px; }}
+    .meta {{ color: var(--muted); font-size: 14px; margin-bottom: 34px; }}
+    article h2 {{ margin-top: 38px; font-size: 26px; line-height: 1.2; }}
+    article a {{ color: var(--accent); }}
+    article code {{ background: #eef3f2; padding: 2px 5px; border-radius: 4px; }}
+    .related {{ margin-top: 52px; border-top: 1px solid var(--line); padding-top: 26px; }}
+    .related ul {{ padding: 0; margin: 0; list-style: none; display: grid; gap: 10px; }}
+    .related li {{ display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }}
+    .related span {{ color: var(--muted); font-size: 13px; }}
+    footer {{ border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; padding: 22px 24px; text-align: center; }}
+  </style>
 </head>
 <body>
   <header><nav>{nav}</nav></header>
