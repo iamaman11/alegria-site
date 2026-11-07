@@ -107,6 +107,6 @@ jobs:
           printf '<!doctype html><html><body><h1>Test</h1></body></html>\\n' > "$public/index.html"
           printf 'User-agent: *\\nDisallow: /\\n' > "$public/robots.txt"
           ALEGRIA_CF_PUBLIC_DIR="$public" ./node_modules/.bin/cf deploy --dry-run
-          built="$(find dist -type f -name index.html -print -quit)"
-          test -n "$built"
+          built=".cloudflare/output/v0/workers/default/assets/index.html"
+          test -f "$built"
           cmp "$public/index.html" "$built"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -108,6 +109,7 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
                     output = config / ".cloudflare/output/v0"
                     output.mkdir(parents=True)
                     (output / "config.json").write_text("{}", encoding="utf-8")
+                    shutil.copytree(source, output / "workers/default/assets")
                 return subprocess.CompletedProcess(argv, 0)
 
             with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):

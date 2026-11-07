@@ -98,6 +98,19 @@ def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
         # cf --prebuilt must use a real validated Build Output, not stale artifacts.
         if not (CLOUD_CONFIG / ".cloudflare/output/v0/config.json").is_file():
             return False
+        output_assets = CLOUD_CONFIG / ".cloudflare/output/v0/workers/default/assets"
+        if not output_assets.is_dir():
+            return False
+        # Vite/Cloudflare must preserve the exact approved bytes, not rewrite HTML.
+        for source in public.rglob("*"):
+            if source.is_file():
+                built_file = output_assets / source.relative_to(public)
+                if not built_file.is_file() or built_file.read_bytes() != source.read_bytes():
+                    return False
+        if (output_assets / "alegria-static-manifest.json").exists() or (
+            output_assets / ".alegria_static_site"
+        ).exists():
+            return False
         uploaded = subprocess.run(
             [str(cf_binary), "deploy", "--prebuilt", "--mode", "production"],
             cwd=CLOUD_CONFIG,
