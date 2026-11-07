@@ -99,6 +99,170 @@
     ]
   },
   "model_stub_inputs": {
+    "extraction_responses": [
+      {
+        "candidates": [
+          {
+            "role": "DOCUMENT_REQUIRED",
+            "concept_canonical_key": "passport",
+            "raw_mention": "Passport is required.",
+            "params": {
+              "severity": "mandatory",
+              "subtype": "passport"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": false,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Passport is required.",
+            "span_start": 0,
+            "span_end": 21,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Consular fee is 90 EUR.",
+            "params": {
+              "amount": 90,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Consular fee is 90 EUR.",
+            "span_start": 0,
+            "span_end": 23,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "TIMELINE_ITEM",
+            "concept_canonical_key": "processing_time",
+            "raw_mention": "Processing time is 20 days.",
+            "params": {
+              "days": 20
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Processing time is 20 days.",
+            "span_start": 0,
+            "span_end": 27,
+            "uncertainty_flags": []
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "role": "DOCUMENT_REQUIRED",
+            "concept_canonical_key": "passport",
+            "raw_mention": "Passport is required.",
+            "params": {
+              "severity": "mandatory",
+              "subtype": "passport"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": false,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Passport is required.",
+            "span_start": 0,
+            "span_end": 21,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Consular fee is 90 EUR.",
+            "params": {
+              "amount": 90,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Consular fee is 90 EUR.",
+            "span_start": 0,
+            "span_end": 23,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "TIMELINE_ITEM",
+            "concept_canonical_key": "processing_time",
+            "raw_mention": "Processing time is 20 days.",
+            "params": {
+              "days": 20
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Processing time is 20 days.",
+            "span_start": 0,
+            "span_end": 27,
+            "uncertainty_flags": []
+          }
+        ]
+      }
+    ],
     "editorial_response": {
       "sections": {
         "overview": "Passport is required. Consular fee is 90 EUR. Processing time is 20 days."
