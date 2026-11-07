@@ -656,12 +656,22 @@ pub async fn build_static_site_candidate_incremental(
 ) -> Result<StaticBuildResult> {
     let snapshot =
         load_static_site_candidate_snapshot(pool, target_page_node_key, target_revision_id).await?;
-    build_incremental_from_snapshot(
-        snapshot,
-        output_dir,
-        base_url,
-        &[target_page_node_key.to_string()],
-    )
+    // Each candidate release gets a separate directory, not an existing public
+    // tree to patch. Emit every published dependency along with the approved
+    // target revision; otherwise the sitemap/manifest would list missing pages.
+    // Only the target needs a preview for its per-page editorial gate.
+    let (artifacts, all_previews) =
+        build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+    write_static_artifacts(output_dir, &artifacts)?;
+    let previews = all_previews
+        .into_iter()
+        .filter(|preview| preview.page_node_key == target_page_node_key)
+        .collect();
+    Ok(StaticBuildResult {
+        artifacts,
+        previews,
+        output_dir: output_dir.to_path_buf(),
+    })
 }
 
 #[cfg(test)]
