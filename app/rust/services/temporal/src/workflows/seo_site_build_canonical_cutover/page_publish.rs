@@ -96,6 +96,7 @@ async fn run_page_publish_phases(
                                 enforce_required_contract: true,
                                 require_page_brief_projection: true,
                                 gate_key: format!("page:{}", page_index + 1),
+                                skip_provider_probes: true,
                             },
                             db_opts(30),
                         )
