@@ -44,6 +44,11 @@ jobs:
       - name: Static-site publication contract
         run: python3 automation/check_static_site_builder_contract.py
 
+      - name: Canonical Temporal launch certification contract (read-only smoke)
+        run: |
+          python3 automation/smoke_e2e_canonical_temporal.py
+          python3 automation/smoke_e2e_publication_verdict.py
+
       - name: Rust workspace check
         working-directory: app/rust
         env:
