@@ -808,18 +808,15 @@ mod tests {
             "alegria-candidate-release-{}",
             uuid::Uuid::new_v4()
         ));
-        write_static_artifacts(&output_dir, &artifacts)
-            .expect("write complete candidate release");
+        write_static_artifacts(&output_dir, &artifacts).expect("write complete candidate release");
         let manifest: serde_json::Value = serde_json::from_slice(
-            &fs::read(output_dir.join("alegria-static-manifest.json"))
-                .expect("manifest exists"),
+            &fs::read(output_dir.join("alegria-static-manifest.json")).expect("manifest exists"),
         )
         .expect("valid JSON manifest");
         assert_eq!(manifest["page_count"], 2);
         assert!(output_dir.join("index.html").exists());
         assert!(output_dir.join("guide/index.html").exists());
-        let sitemap = fs::read_to_string(output_dir.join("sitemap.xml"))
-            .expect("sitemap exists");
+        let sitemap = fs::read_to_string(output_dir.join("sitemap.xml")).expect("sitemap exists");
         assert!(sitemap.contains("https://staging.alegria.by/guide"));
         assert!(output_dir.join("robots.txt").exists());
         fs::remove_dir_all(&output_dir).expect("remove test release");
@@ -838,9 +835,7 @@ mod tests {
 
     #[test]
     fn canonical_renderer_keeps_faq_structured_data() {
-        let faq = faq_entities(
-            "## FAQ\n\n### Is this reviewed?\n\nYes, before publish.",
-        );
+        let faq = faq_entities("## FAQ\n\n### Is this reviewed?\n\nYes, before publish.");
         assert_eq!(faq.len(), 1);
         assert_eq!(faq[0]["@type"], "Question");
         assert_eq!(faq[0]["name"], "Is this reviewed?");
