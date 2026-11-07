@@ -272,7 +272,7 @@ def clean_runtime_preflight() -> dict[str, Any]:
                     CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED VOYAGE_RERANK_REQUIRED \
                     GRAPH_CAPABILITY_REQUIRED NEO4J_SYNC_REQUIRED GRAPH_QUERY_REQUIRED \
                     GRAPH_GDS_REQUIRED; do
-                    eval "value=\\${$flag:-}"
+                    value="$(printenv "$flag" || true)"
                     test "$value" = true
                 done
                 case "${SEO_LLM_PROVIDER:-}" in
@@ -356,10 +356,9 @@ def main() -> int:
         print(f"E2E_SUPERSITE_CERTIFICATION: {status}")
         return 2
 
-    # The old temporal_production_gate and restore_drill were *mutating smoke*
-    # tools: they seeded synthetic verified rules, auto-approved review pages,
-    # and even dropped/restored live PostgreSQL schemas. They MUST NOT run in a
-    # product certification using real sources and real editorial approval.
+    # Previous mutating smoke gates seeded synthetic facts, auto-approved
+    # pages and restored PostgreSQL schemas. Product certification MUST use
+    # only read-only readiness checks and genuine external editorial approval.
     gate_results = clean_runtime_preflight()
     if not gate_results or any(
         check["status"] != "PASS" for check in gate_results.values()
