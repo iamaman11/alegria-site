@@ -355,6 +355,13 @@ struct PublicationActivation {
 }
 
 impl PublicationActivation {
+    // COMMIT may have succeeded even when the database connection drops or the
+    // activity is cancelled. Once COMMIT begins, leave the on-disk journal and
+    // public pointer intact until the next database-aware reconciliation.
+    fn defer_to_recovery(&mut self) {
+        self.armed = false;
+    }
+
     fn confirm(&mut self) {
         self.armed = false;
         #[cfg(unix)]
