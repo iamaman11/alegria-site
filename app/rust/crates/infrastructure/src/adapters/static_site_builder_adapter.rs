@@ -679,6 +679,63 @@ mod tests {
     use super::*;
 
     #[test]
+    fn isolated_release_contains_all_manifest_pages_and_html() {
+        let target = StaticCmsPageRow {
+            page_node_key: "target".to_string(),
+            canonical_url_path: "/".to_string(),
+            locale_code: "ru".to_string(),
+            page_type_key: "home".to_string(),
+            dominant_intent_key: "informational".to_string(),
+            current_status: "approved".to_string(),
+            cms_document_id: "cms-target".to_string(),
+            revision_id: "target-approved".to_string(),
+            title: "Home".to_string(),
+            meta_description: "Home description".to_string(),
+            h1: "Home".to_string(),
+            body_payload: json!({"markdown": "Useful home content"}),
+            schema_markup_payload: json!({}),
+            updated_at: "2026-11-07".to_string(),
+        };
+        let published_dependency = StaticCmsPageRow {
+            page_node_key: "guide".to_string(),
+            canonical_url_path: "/guide".to_string(),
+            current_status: "published".to_string(),
+            cms_document_id: "cms-guide".to_string(),
+            revision_id: "guide-published".to_string(),
+            title: "Guide".to_string(),
+            h1: "Guide".to_string(),
+            ..target.clone()
+        };
+        let (artifacts, previews) = build_static_artifacts(
+            &[target, published_dependency],
+            &[],
+            "https://staging.alegria.by",
+        )
+        .expect("build complete isolated candidate release");
+        assert_eq!(previews.len(), 2);
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "alegria-candidate-release-{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_static_artifacts(&output_dir, &artifacts)
+            .expect("write complete candidate release");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("alegria-static-manifest.json"))
+                .expect("manifest exists"),
+        )
+        .expect("valid JSON manifest");
+        assert_eq!(manifest["page_count"], 2);
+        assert!(output_dir.join("index.html").exists());
+        assert!(output_dir.join("guide/index.html").exists());
+        let sitemap = fs::read_to_string(output_dir.join("sitemap.xml"))
+            .expect("sitemap exists");
+        assert!(sitemap.contains("https://staging.alegria.by/guide"));
+        assert!(output_dir.join("robots.txt").exists());
+        fs::remove_dir_all(&output_dir).expect("remove test release");
+    }
+
+    #[test]
     fn markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls() {
         let rendered = markdown_to_html(
             "before <script>alert(1)</script> [bad](javascript:alert(1)) ![x](data:text/html,boom) after",
