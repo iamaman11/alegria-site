@@ -126,7 +126,7 @@ def parse_result(output: str) -> dict[str, Any]:
     # This is the canonical Temporal completion report, never semi-auto SEO_RUN_RESULT.
     match = re.search(
         r"^WORKFLOW_RESULT workflow_type=SeoSiteBuildCanonicalCutoverWorkflow "
-        r"workflow_id=(?P<workflow_id>\\S+) result=(?P<body>.+)$",
+        r"workflow_id=(?P<workflow_id>\S+) result=(?P<body>.+)$",
         output,
         flags=re.MULTILINE,
     )
@@ -135,7 +135,7 @@ def parse_result(output: str) -> dict[str, Any]:
     body = match.group("body")
     if not body.startswith("seo_site_build_canonical_cutover_ok "):
         return {}
-    fields = dict(re.findall(r"([a-z][a-z_]+)=([^\\s]+)", body))
+    fields = dict(re.findall(r"([a-z][a-z_]+)=([^\s]+)", body))
     required = ("ia_pages", "published_pages", "truth_verified", "run_id")
     if any(name not in fields for name in required):
         return {}
