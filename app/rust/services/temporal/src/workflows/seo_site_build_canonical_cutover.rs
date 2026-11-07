@@ -7,8 +7,8 @@ use contracts::generated::alegria::temporal::v1::{
     LinkRecommendInputPayload, LinkRecommendationState, OpportunityBuildInputPayload,
     PageBlueprintState, PageNodeState, ProjectionBarrierAuditInputPayload,
     PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload,
-    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SeoScopePayload, SerpIngestInputPayload, SerpNormalizeInputPayload,
+    RenderPreviewValidateInputPayload, SeoScopePayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
