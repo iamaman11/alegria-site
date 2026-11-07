@@ -74,6 +74,10 @@ pub struct SeoPreflightInput {
     /// Distinct per-page durable identity for checks after each draft_assemble.
     #[serde(default)]
     pub gate_key: String,
+    /// Per-page materialization checks reuse the provider capability gate
+    /// already completed by this run, avoiding repeated external API probes.
+    #[serde(default)]
+    pub skip_provider_probes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -92,6 +96,9 @@ pub struct SeoPreflightOutput {
     pub qdrant_ready: bool,
     pub qdrant_collection_contract_ready: bool,
     pub neo4j_ready: bool,
+    /// True only for the lightweight post-draft check, not capability readiness.
+    #[serde(default)]
+    pub provider_probes_skipped: bool,
     pub graph_query_ready: bool,
     pub graph_gds_ready: bool,
     pub graph_projection_contract_ready: bool,
