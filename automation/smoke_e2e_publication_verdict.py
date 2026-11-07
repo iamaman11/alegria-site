@@ -53,7 +53,7 @@ def main() -> int:
         check(root, publish=False, published_pages=0, expected_success=False)
         check(root, publish=True, published_pages=0, expected_success=False)
         check(root, publish=True, published_pages=2, mode="semi_auto_operator", expected_success=False)
-        check(root, publish=True, published_pages=2, expected_success=True)
+        check(root, publish=True, published_pages=2, expected_success=False)
         # A scenario label alone is not sufficient to claim a factual rebuild.
         import importlib.util
         spec = importlib.util.spec_from_file_location("e2e_verdict", CHECKER)
@@ -80,7 +80,7 @@ def main() -> int:
         # scenario contains genuine canonical publication evidence.
         singleton_report = root / "singleton.md"
         singleton_report.write_text(
-            "## Test\\n\\n```json\\n" + json.dumps(payload) + "\\n```\\n",
+            "## Test\n\n```json\n" + json.dumps(payload) + "\n```\n",
             encoding="utf-8",
         )
         singleton_manifest = root / "singleton.json"
@@ -94,6 +94,27 @@ def main() -> int:
             capture_output=True, text=True, check=False,
         )
         assert single.returncode != 0 and "three distinct" in single.stdout, single.stdout
+        # Positive contract: all three distinct canonical runs, genuine
+        # publication, and independent factual-change/HTML evidence.
+        scenarios = []
+        for scenario_id in ("fresh_scope", "scope_expansion", "factual_change_rebuild"):
+            full = dict(payload, scenario_id=scenario_id)
+            report_file = root / f"complete_{scenario_id}.md"
+            report_file.write_text(
+                "## Scenario\n\n```json\n" + json.dumps(full) + "\n```\n",
+                encoding="utf-8",
+            )
+            scenarios.append({"scenario_id": scenario_id, "report_path": str(report_file)})
+        complete_manifest = root / "complete.json"
+        complete_manifest.write_text(
+            json.dumps({"evidence_status": "PASS", "scenarios": scenarios}),
+            encoding="utf-8",
+        )
+        complete = subprocess.run(
+            [sys.executable, str(CHECKER), str(complete_manifest)],
+            capture_output=True, text=True, check=False,
+        )
+        assert complete.returncode == 0, complete.stdout + complete.stderr
     print("E2E_PUBLICATION_VERDICT_SMOKE: OK")
     return 0
 
