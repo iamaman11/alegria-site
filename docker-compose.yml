@@ -205,6 +205,13 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Fail closed if no real public HTTPS origin is configured.
+      SEO_STATIC_BASE_URL: ${SEO_STATIC_BASE_URL:-}
+      SEO_STATIC_OUTPUT_DIR: /app/app/rust/dist/static-site
+      SEO_STATIC_RELEASE_ROOT: /app/app/rust/dist/.alegria-static-releases
+    volumes:
+      # Durable immutable releases. The HTTPS origin must serve the live symlink.
+      - ./app/rust/dist:/app/app/rust/dist
     depends_on:
       temporal-server:
         condition: service_healthy
