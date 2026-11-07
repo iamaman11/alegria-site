@@ -31,7 +31,8 @@ pub async fn ensure_graph_contract_if_required(context_key: &str) -> Result<(), 
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("neo4j graph contract connect failed for `{context_key}`: {err}"),
         })?;
-    neo4rs_adapter::run_cypher(&graph, "RETURN $context_key AS context_key")
+    graph
+        .run(neo4rs_adapter::query("RETURN $context_key AS context_key").param("context_key", context_key))
         .await
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("neo4j graph contract query failed for `{context_key}`: {err}"),
