@@ -36,7 +36,10 @@ fn publication_files(
     page_node_key: &str,
     revision_id: &str,
     expected_origin: &str,
+    run_id: &str,
 ) -> Result<Vec<ReleaseArtifact>, String> {
+    uuid::Uuid::parse_str(run_id)
+        .map_err(|_| "publication run_id must be a valid canonical UUID".to_string())?;
     let manifest_path = candidate.join("alegria-static-manifest.json");
     let mut manifest: serde_json::Value = serde_json::from_slice(
         &std::fs::read(&manifest_path).map_err(|err| format!("candidate manifest: {err}"))?,
@@ -96,6 +99,12 @@ fn publication_files(
     if manifest.get("page_count").and_then(|v| v.as_u64()) != Some(actual_page_count) {
         return Err("candidate manifest page_count mismatch".into());
     }
+    // Bind the immutable release to the exact canonical workflow that
+    // materialized this approved page, not merely to an arbitrary older
+    // artifact with matching public HTTPS bytes.
+    manifest["publication_run_id"] = serde_json::json!(run_id);
+    manifest["publication_page_node_key"] = serde_json::json!(page_node_key);
+    manifest["publication_revision_id"] = serde_json::json!(revision_id);
     for (rel, route) in [("sitemap.xml", "/sitemap.xml"), ("robots.txt", "/robots.txt")] {
         artifacts.push(release_file(candidate, rel, route)?);
     }
@@ -489,6 +498,8 @@ async fn promote_and_verify_public_release(
         .and_then(|v| v.as_str()).ok_or("missing public output path")?;
     let origin_raw = meta.get("base_url")
         .and_then(|v| v.as_str()).ok_or("missing public origin")?;
+    let run_id = meta.get("run_id")
+        .and_then(|v| v.as_str()).ok_or("missing canonical publication run_id")?;
     if meta.get("page_node_key").and_then(|v| v.as_str()) != Some(page_node_key)
         || meta.get("revision_id").and_then(|v| v.as_str()) != Some(revision_id)
         || artifact.artifact_uri != candidate_raw
@@ -517,7 +528,7 @@ async fn promote_and_verify_public_release(
     if !candidate.is_dir() || public == candidate {
         return Err("candidate must be isolated from live output".into());
     }
-    let files = publication_files(&candidate, page_node_key, revision_id, origin_raw)?;
+    let files = publication_files(&candidate, page_node_key, revision_id, origin_raw, run_id)?;
     let release = create_immutable_release(&candidate, &files)?;
     let journal_path = pending_publication_path(&public)?;
     let previous = match std::fs::read_link(&public) {
@@ -595,12 +606,28 @@ mod publication_release_tests {
             }]
         });
         std::fs::write(root.join("alegria-static-manifest.json"), manifest.to_string()).unwrap();
-        assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by").is_ok());
-        assert!(publication_files(&root, "page", "wrong", "https://staging.alegria.by").is_err());
+        let files = publication_files(
+            &root, "page", "revision", "https://staging.alegria.by",
+            "9c337079-ae0b-4cb4-b052-bb3a0ca623c1",
+        ).unwrap();
+        let release_manifest: serde_json::Value = serde_json::from_slice(
+            &files.iter().find(|f| f.relative_path == "alegria-static-manifest.json")
+                .unwrap().bytes
+        ).unwrap();
+        assert_eq!(
+            release_manifest["publication_run_id"],
+            "9c337079-ae0b-4cb4-b052-bb3a0ca623c1",
+        );
+        assert_eq!(release_manifest["publication_page_node_key"], "page");
+        assert_eq!(release_manifest["publication_revision_id"], "revision");
+        assert!(publication_files(
+            &root, "page", "revision", "https://staging.alegria.by", "not-a-run-id"
+        ).is_err());
+        assert!(publication_files(&root, "page", "wrong", "https://staging.alegria.by", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1").is_err());
         let mut wrong = manifest;
         wrong["pages"][0]["canonical_url_path"] = serde_json::json!("/missing");
         std::fs::write(root.join("alegria-static-manifest.json"), wrong.to_string()).unwrap();
-        assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by").is_err());
+        assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
