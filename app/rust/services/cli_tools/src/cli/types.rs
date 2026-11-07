@@ -12,12 +12,10 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
 use infrastructure::adapters::{
     reqwest_adapter::new_default_client,
     sqlx_adapter::connect_pg,
-    sqlx_static_site_adapter::{load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow},
     tonic_adapter::AnalyticsClient,
 };
 use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
-use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
 use seo_application::crawl_ingest::run_crawl_sources;
 use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
