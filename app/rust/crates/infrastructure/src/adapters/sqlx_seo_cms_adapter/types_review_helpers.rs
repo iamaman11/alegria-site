@@ -15,7 +15,7 @@ use std::path::Path;
 
 use super::proto_runtime_payload_store::{classify_sqlx, validation_failure};
 use super::sqlx_outbox_adapter::OutboxEnvelope;
-use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
+use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
 use super::static_site_builder_adapter;
 
 #[derive(Debug, Clone)]
