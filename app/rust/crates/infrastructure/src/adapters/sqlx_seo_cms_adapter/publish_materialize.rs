@@ -56,6 +56,7 @@ pub async fn persist_publish_materialize_output(
             artifact.manifest_json = json!({
                 "build_scope": "candidate_page",
                 "release_id": release_id,
+                "run_id": input.run_id,
                 "candidate_output_dir": candidate_output_dir,
                 "public_output_dir": runtime.output_dir,
                 "base_url": runtime.base_url,
@@ -133,6 +134,7 @@ pub async fn persist_publish_materialize_output(
     artifact.manifest_json = json!({
         "build_scope": "candidate_page",
         "release_id": release_id,
+        "run_id": input.run_id,
         "candidate_output_dir": build.output_dir,
         "public_output_dir": runtime.output_dir,
         "base_url": runtime.base_url,
@@ -171,6 +173,7 @@ pub async fn persist_publish_materialize_output(
     .bind(Json(json!({
         "build_scope": "candidate_page",
         "release_id": release_id,
+        "run_id": input.run_id,
         "candidate_output_dir": artifact.artifact_uri.clone(),
         "public_output_dir": runtime.output_dir,
         "page_count": preview_pages.len(),
