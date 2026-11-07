@@ -257,18 +257,25 @@ def main() -> int:
         "public_output_dir_configured": bool(os.environ.get("ALEGRIA_CERT_PUBLIC_OUTPUT_DIR")),
     }
     if not all(required.values()):
+        missing = [key for key, present in required.items() if not present]
+        credentials_missing = any(
+            key in {"DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD", "production_llm_provider"}
+            for key in missing
+        )
+        status = "PENDING_CREDENTIALS" if credentials_missing else "PENDING_CONFIGURATION"
         manifest = {
             "artifact_id": "r5_supersite_certification_manifest",
             "step": "R5.Step4",
-            "evidence_status": "PENDING_CREDENTIALS",
-            "failure_class": "credential_issue",
+            "evidence_status": status,
+            "failure_class": "credential_issue" if credentials_missing else "configuration_issue",
             "status_reason": "Live certification requires credentials, explicit publication, a real HTTPS origin, and public output configuration.",
             "provider_kind": provider_kind,
             "required": required,
+            "missing": missing,
             "updated_at": utc_now(),
         }
         write_json(MANIFEST, manifest)
-        print("E2E_SUPERSITE_CERTIFICATION: PENDING_CREDENTIALS")
+        print(f"E2E_SUPERSITE_CERTIFICATION: {status}")
         return 2
 
     gate_results: dict[str, Any] = {}
