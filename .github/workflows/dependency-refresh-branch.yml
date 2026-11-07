@@ -1,6 +1,7 @@
 name: dependency-refresh-branch
 
-# One-shot branch-only resolver. Remove after validated lockfile refresh.
+# Branch-only resolver. A test-validated lockfile may be committed before audit;
+# an unresolved RustSec advisory still fails this job and blocks production.
 on:
   push:
     branches: ["agent/production-10-10-hardening"]
@@ -64,14 +65,6 @@ jobs:
         working-directory: app/rust
         run: cargo test -p integration_harness --features e2e --no-run --locked
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
-      - name: RustSec audit
-        if: always()
-        working-directory: app/rust
-        run: cargo audit
-
       - name: Commit validated resolver output
         shell: bash
         env:
@@ -89,3 +82,12 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -m "refresh secure dependency lock"
           git push origin HEAD:agent/production-10-10-hardening
+
+      - name: Install cargo-audit
+        if: always()
+        run: cargo install cargo-audit --locked
+
+      - name: RustSec audit
+        if: always()
+        working-directory: app/rust
+        run: cargo audit
