@@ -11,7 +11,9 @@ pub async fn persist_finalize_publish_output(
         .unwrap_or_default();
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
-    let mut is_published = planned.verdict == "published";
+    let mut is_published = planned.verdict == "published"
+        && render_validation.verdict == "render_ready"
+        && blocking_reasons.is_empty();
     let mut activation: Option<PublicationActivation> = None;
     if is_published {
         // Render readiness is NOT publication. Activate an immutable,
