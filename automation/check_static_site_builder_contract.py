@@ -91,10 +91,16 @@ def main() -> int:
                 failures.append("public snapshot must select only published revisions")
             if "revision_status = 'approved'" in public_text:
                 failures.append("approved revision leaked into public snapshot query")
-            if "JOIN LATERAL" not in public_text:
+            if "r.revision_id = p.current_revision_id" not in public_text:
                 failures.append(
-                    "public snapshot must resolve latest published revision independently of current candidate pointer"
+                    "public snapshot must resolve the explicitly committed published revision"
                 )
+            if "r.revision_id = p.current_revision_id" not in candidate_text:
+                failures.append(
+                    "candidate dependencies must use explicitly committed published revisions"
+                )
+            if "ORDER BY published_revision.updated_at" in adapter_text:
+                failures.append("public revision must never be inferred from a mutable timestamp")
             for needle in [
                 "target_page_node_key",
                 "target_revision_id",
