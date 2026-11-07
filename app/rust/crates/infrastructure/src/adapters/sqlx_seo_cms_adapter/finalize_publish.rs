@@ -11,14 +11,34 @@ pub async fn persist_finalize_publish_output(
         .unwrap_or_default();
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
+    let mut is_published = planned.verdict == "published";
+    if is_published {
+        // Render readiness is NOT publication. Only promote an immutable,
+        // human-approved release and verify its bytes over public HTTPS first.
+        if let Err(reason) =
+            promote_and_verify_public_release(&artifact, &input.page_node_key, &input.revision_id)
+                .await
+        {
+            tracing::warn!(
+                page_node_key = %input.page_node_key,
+                revision_id = %input.revision_id,
+                reason = %reason,
+                "public release promotion/readback failed; refusing published state"
+            );
+            blocking_reasons.push("public_deployment_unverified".to_string());
+            is_published = false;
+        }
+    }
     blocking_reasons.sort();
     blocking_reasons.dedup();
-    let is_published = planned.verdict == "published";
+    let final_verdict = if is_published { "published" } else { "blocked" };
 
     sqlx::query(
         r#"
         UPDATE site.cms_page_revisions
-        SET revision_status = $1,
+        SET revision_status = CASE
+                WHEN revision_status = 'published' AND $1 = 'blocked'
+                THEN revision_status ELSE $1 END,
             updated_at = now()
         WHERE revision_id = $2
         "#,
@@ -32,7 +52,9 @@ pub async fn persist_finalize_publish_output(
     sqlx::query(
         r#"
         UPDATE site.cms_pages
-        SET current_status = $1,
+        SET current_status = CASE
+                WHEN $1 = 'blocked' AND published_at IS NOT NULL THEN 'published'
+                ELSE $1 END,
             published_at = CASE WHEN $1 = 'published' THEN COALESCE(published_at, now()) ELSE published_at END,
             updated_at = now()
         WHERE page_node_key = $2
@@ -47,7 +69,12 @@ pub async fn persist_finalize_publish_output(
     sqlx::query(
         r#"
         UPDATE site.page_nodes
-        SET lifecycle_state = $1,
+        SET lifecycle_state = CASE
+                WHEN $1 = 'blocked' AND EXISTS (
+                    SELECT 1 FROM site.cms_pages cp
+                    WHERE cp.page_node_key = $2 AND cp.published_at IS NOT NULL
+                ) THEN 'published'
+                ELSE $1 END,
             updated_at = now()
         WHERE page_node_key = $2
         "#,
@@ -105,7 +132,7 @@ pub async fn persist_finalize_publish_output(
     .bind(event_type)
     .bind(&input.revision_id)
     .bind(Json(json!({
-        "verdict": planned.verdict,
+        "verdict": final_verdict,
         "blocking_reasons": blocking_reasons,
     })))
     .bind(&input.page_node_key)
@@ -123,7 +150,7 @@ pub async fn persist_finalize_publish_output(
         causal_step: "publish_materialize".to_string(),
         occurred_at: chrono::Utc::now().to_rfc3339(),
         payload_version: "seo_cms_event@1".to_string(),
-        metadata: HashMap::from([("verdict".to_string(), planned.verdict.clone())]),
+        metadata: HashMap::from([("verdict".to_string(), final_verdict.to_string())]),
     };
     let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
 
@@ -168,7 +195,7 @@ pub async fn persist_finalize_publish_output(
     }
 
     Ok(FinalizePublishOutputPayload {
-        verdict: planned.verdict.clone(),
+        verdict: final_verdict.to_string(),
         current_status: if is_published {
             "published".to_string()
         } else {
