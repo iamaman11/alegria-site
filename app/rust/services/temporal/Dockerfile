@@ -15,7 +15,7 @@ ENV SQLX_OFFLINE=true
 
 RUN cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \
-    -p temporal_worker --bin temporal_worker
+    -p temporal_worker --bin temporal_worker --bin temporal_starter
 
 # The same Temporal worker owns native Cloudflare static release deployment.
 # Node is required only for the pinned official cf CLI; no extra container.
@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 COPY --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
+COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
 COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static
 COPY automation/deploy_seo_static_cloudflare.py \
      automation/check_public_static_output.py \

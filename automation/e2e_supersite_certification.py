@@ -92,20 +92,15 @@ def canonical_temporal_command(
     if not publish:
         raise ValueError("canonical launch certification requires real HITL publication")
     cmd = [
-        "cargo", "run", "-q",
-        "--manifest-path", "app/rust/Cargo.toml",
-        "-p", "temporal_worker",
-        "--bin", "temporal_starter",
-        "--",
-        "--temporal-url",
-        os.environ.get(
-            "ALEGRIA_CERT_TEMPORAL_URL",
-            os.environ.get("TEMPORAL_URL", "http://localhost:7233"),
-        ),
+        # Execute the starter already bundled in the canonical Temporal worker
+        # container. No host Rust toolchain, extra service or secondary engine.
+        "docker", "compose", "exec", "-T", "temporal-worker",
+        "temporal_starter",
+        "--temporal-url", "http://temporal-server:7233",
         "start",
         "--workflow", "seo-site-build-canonical-cutover",
         "--workflow-id", run_id,
-        "--database-url", resolve_database_url(),
+        # Registration reuses DATABASE_URL from the worker's Compose environment.
         "--market", os.environ.get("ALEGRIA_CERT_MARKET", "alegria-site"),
         "--locale", os.environ.get("ALEGRIA_CERT_LOCALE", "ru-RU"),
         "--country-code", os.environ.get("ALEGRIA_CERT_COUNTRY_CODE", "ES"),

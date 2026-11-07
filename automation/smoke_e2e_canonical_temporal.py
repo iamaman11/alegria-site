@@ -19,10 +19,11 @@ def main() -> int:
             publish=True,
         )
     assert str(UUID(run_id)) == run_id
-    assert command[0:3] == ["cargo", "run", "-q"], command
-    assert ["--bin", "temporal_starter"] == command[
-        command.index("--bin"):command.index("--bin") + 2
-    ]
+    assert command[0:6] == [
+        "docker", "compose", "exec", "-T", "temporal-worker", "temporal_starter"
+    ], command
+    assert command[command.index("--temporal-url") + 1] == "http://temporal-server:7233"
+    assert "cargo" not in command
     assert command[command.index("--workflow") + 1] == "seo-site-build-canonical-cutover"
     assert command[command.index("--run-mode") + 1] == "publish_with_hitl"
     assert command[command.index("--citizenship-code") + 1] == "BY"
