@@ -235,6 +235,27 @@ fn missing_required_contract_flags(flags: &[(&'static str, bool)]) -> Vec<&'stat
         .collect()
 }
 
+/// A zero-point result is admissible for these two optional outputs only
+/// after the exact run has durably completed their producing activities.
+fn optional_projection_valid_empty(
+    name: &str,
+    source_count: i64,
+    provider_count: i64,
+    completed_steps: &[String],
+) -> bool {
+    if source_count != 0 || provider_count != 0 {
+        return false;
+    }
+    let completed = |step: &str| completed_steps.iter().any(|name| name == step);
+    match name {
+        "content_gap" => completed("opportunity_build") && completed("global_site_reconcile"),
+        "link_recommendation" => {
+            completed("link_recommend") && completed("global_site_reconcile")
+        }
+        _ => false,
+    }
+}
+
 /// The last graph projection is generated during draft_assemble, not IA.
 fn graph_projection_due_at_gate(name: &str, require_page_brief_projection: bool) -> bool {
     name != "page_brief" || require_page_brief_projection
