@@ -23,15 +23,22 @@ def main() -> int:
     static = STATIC.read_text(encoding="utf-8")
     schema = SCHEMA.read_text(encoding="utf-8")
 
+    # CMS materialization must build the explicitly approved candidate revision.
+    # The older public-snapshot incremental builder is not the publish entrypoint.
     for needle in [
-        "build_static_site_incremental",
-        "SEO_PUBLISH_ALLOW_FULL_REBUILD_FALLBACK",
-        '"build_scope"',
+        "static_site_builder_adapter::build_static_site_candidate_incremental(",
+        '"build_scope": "candidate_page"',
+        '"candidate_isolated_from_public_output": true',
+        '"public_snapshot_fallback_allowed": false',
         "site.publish_artifact_entries",
     ]:
         if needle not in cms:
             failures.append(f"cms adapter missing `{needle}`")
+    if "static_site_builder_adapter::build_static_site(" in cms:
+        failures.append("cms adapter must not fall back to a public full build")
     for needle in [
+        "pub async fn build_static_site_candidate_incremental",
+        "load_static_site_candidate_snapshot(",
         "pub async fn build_static_site_incremental",
         "write_partial_artifacts",
     ]:
