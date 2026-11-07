@@ -251,7 +251,9 @@ pub async fn search_dense(
     if vector.is_empty() {
         bail!("search vector is empty");
     }
-    let mut builder = SearchPointsBuilder::new(collection, vector, limit);
+    // Callers consume entity_key/retrieval_text to map neighbors and rerank;
+    // Qdrant omits point payloads unless they are explicitly requested.
+    let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
     if let Some(f) = filter {
         builder = builder.filter(f);
     }
