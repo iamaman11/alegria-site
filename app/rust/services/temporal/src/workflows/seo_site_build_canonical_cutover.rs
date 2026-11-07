@@ -243,6 +243,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await;
 
+        // raw_chunks_4/raw_chunks_ctx are emitted during crawl. Their outbox
+        // events must be physically materialized before canonical mapping and
+        // completeness_judge query contextual neighbors. An audit alone only
+        // reports lag and does not drain the outbox.
+        ctx.state_mut(|s| s.phase = "raw_chunk_qdrant_sync".to_string());
+        let raw_chunk_sync =
+            sync_target(ctx, &run_id, "raw_chunk_qdrant_sync", "qdrant").await?;
+        ensure_sync_drained(&raw_chunk_sync, "raw_chunk_qdrant_sync")?;
+        ctx.wait_condition(|s| !s.paused).await;
+
         ctx.state_mut(|s| s.phase = "projection_barrier(raw_evidence)".to_string());
         let raw_evidence_barrier = ctx
             .start_activity(
