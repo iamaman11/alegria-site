@@ -70,6 +70,7 @@ def main() -> int:
         )
 
     scenarios = manifest.get("scenarios")
+    published_scenarios = 0
     if not isinstance(scenarios, list) or not scenarios:
         failures.append("manifest contains no certification scenarios")
     else:
@@ -93,6 +94,19 @@ def main() -> int:
                 failures.append(str(exc))
                 continue
             failures.extend(validate_scenario(payload))
+            result = payload.get("result")
+            if (
+                payload.get("publish_requested") is True
+                and isinstance(result, dict)
+                and int(result.get("published_pages", 0) or 0) > 0
+                and payload.get("evidence_status") == "PASS"
+            ):
+                published_scenarios += 1
+
+    # The first-site certification is not a draft-only certification.
+    # At least one scenario must have attempted and completed publication.
+    if published_scenarios == 0:
+        failures.append("no scenario proved a successful real publication (published_pages > 0)")
 
     if failures:
         print("E2E_PRODUCT_VERDICT: FAILED")
