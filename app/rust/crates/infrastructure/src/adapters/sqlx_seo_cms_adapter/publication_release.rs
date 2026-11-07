@@ -525,4 +525,74 @@ mod publication_release_tests {
         assert_eq!(std::fs::read(public.join("index.html")).unwrap(), b"prior");
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancelled_publication_restores_prior_site_and_clears_journal() {
+        let root = std::env::temp_dir().join(format!("alegria-cancel-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let old = root.join("old");
+        let new = root.join("new");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::create_dir(&new).unwrap();
+        std::fs::write(old.join("index.html"), b"old").unwrap();
+        std::fs::write(new.join("index.html"), b"new").unwrap();
+        let live = root.join("live");
+        swap_public_release(&live, &old).unwrap();
+        let journal = pending_publication_path(&live).unwrap();
+        let pending = PendingPublication {
+            new_release: new.clone(),
+            previous: Some(old.clone()),
+            page_node_key: "page".into(),
+            revision_id: "candidate".into(),
+            artifact_key: "artifact".into(),
+        };
+        write_pending_publication(&journal, &pending).unwrap();
+        assert!(write_pending_publication(&journal, &pending).is_err());
+        let previous = swap_public_release(&live, &new).unwrap();
+        {
+            let _activation = PublicationActivation {
+                public_path: live.clone(),
+                previous,
+                journal_path: journal.clone(),
+                armed: true,
+            };
+            assert_eq!(std::fs::read(live.join("index.html")).unwrap(), b"new");
+        }
+        assert_eq!(std::fs::read(live.join("index.html")).unwrap(), b"old");
+        assert!(!journal.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn committed_publication_keeps_new_site_and_clears_journal() {
+        let root = std::env::temp_dir().join(format!("alegria-commit-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let new = root.join("new");
+        std::fs::create_dir(&new).unwrap();
+        std::fs::write(new.join("index.html"), b"new").unwrap();
+        let live = root.join("live");
+        let journal = pending_publication_path(&live).unwrap();
+        write_pending_publication(&journal, &PendingPublication {
+            new_release: new.clone(),
+            previous: None,
+            page_node_key: "page".into(),
+            revision_id: "candidate".into(),
+            artifact_key: "artifact".into(),
+        }).unwrap();
+        swap_public_release(&live, &new).unwrap();
+        {
+            let mut activation = PublicationActivation {
+                public_path: live.clone(),
+                previous: None,
+                journal_path: journal.clone(),
+                armed: true,
+            };
+            activation.confirm();
+        }
+        assert_eq!(std::fs::read(live.join("index.html")).unwrap(), b"new");
+        assert!(!journal.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
