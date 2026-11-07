@@ -42,7 +42,6 @@ struct PublishDraftRow {
 struct SeoPublishRuntimeConfig {
     output_dir: String,
     base_url: String,
-    allow_full_rebuild_fallback: bool,
 }
 
 fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
@@ -90,13 +89,9 @@ fn seo_publish_runtime_config(input: &PublishMaterializeInputPayload) -> SeoPubl
     } else {
         input.base_url.clone()
     };
-    let allow_full_rebuild_fallback = std::env::var("SEO_PUBLISH_ALLOW_FULL_REBUILD_FALLBACK")
-        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-        .unwrap_or(true);
     SeoPublishRuntimeConfig {
         output_dir,
         base_url,
-        allow_full_rebuild_fallback,
     }
 }
 
