@@ -211,10 +211,12 @@ async fn serve_voyage_rerank(Json(body): Json<Value>) -> Json<Value> {
         .unwrap_or(count)
         .min(count);
     let data = (0..limit)
-        .map(|index| serde_json::json!({
-            "index": index,
-            "relevance_score": 1.0_f32 / (index + 1) as f32,
-        }))
+        .map(|index| {
+            serde_json::json!({
+                "index": index,
+                "relevance_score": 1.0_f32 / (index + 1) as f32,
+            })
+        })
         .collect::<Vec<_>>();
     Json(serde_json::json!({"data": data}))
 }
@@ -226,7 +228,10 @@ pub async fn spawn_voyage_contract_stub() -> Result<StubServerHandle> {
     let addr = listener.local_addr()?;
     let app = Router::new()
         .route("/v1/embeddings", any(serve_voyage_embeddings))
-        .route("/v1/contextualizedembeddings", any(serve_voyage_contextualized))
+        .route(
+            "/v1/contextualizedembeddings",
+            any(serve_voyage_contextualized),
+        )
         .route("/v1/rerank", any(serve_voyage_rerank));
     let (tx, rx) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
