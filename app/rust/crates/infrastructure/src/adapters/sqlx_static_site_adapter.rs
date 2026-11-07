@@ -227,6 +227,11 @@ pub async fn load_static_site_candidate_snapshot(
                 LIMIT 1
             ) r ON TRUE
             WHERE p.page_node_key <> $1
+              AND p.scope_signature = (
+                  SELECT target.scope_signature
+                  FROM site.cms_pages target
+                  WHERE target.page_node_key = $1
+              )
         )
         SELECT * FROM candidate
         UNION ALL
