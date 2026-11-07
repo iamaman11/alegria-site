@@ -317,47 +317,9 @@
                 .map(|fixture| fixture.source_inputs.pages.len())
                 .sum::<usize>()
         );
-        let serp_stub = stub_servers::spawn_json_sequence_stub(
-            "/v3/serp/google/organic/live/advanced",
-            serp_sequence
-                .into_iter()
-                .map(|(_, payload)| payload)
-                .collect(),
-        )
-        .await
-        .unwrap();
-        let truth_stub = stub_servers::spawn_json_sequence_stub(
-            "/v1/chat/completions",
-            truth_certification_truth_sequence(&fixtures),
-        )
-        .await
-        .unwrap();
-        let editorial_stub = stub_servers::spawn_json_sequence_stub(
-            "/v1/chat/completions",
-            truth_certification_editorial_sequence(&fixtures),
-        )
-        .await
-        .unwrap();
         let infra = InfraHarness::start().await.unwrap();
         let temporal = &infra.temporal;
 
-        let mut worker_env = infra.runtime_env();
-        worker_env.insert("TEMPORAL_URL".to_string(), temporal.temporal_url.clone());
-        worker_env.insert("TEMPORAL_NAMESPACE".to_string(), temporal.namespace.clone());
-        worker_env.extend(truth_certification_env(
-            &format!(
-                "{}/v3/serp/google/organic/live/advanced",
-                serp_stub.base_url
-            ),
-            &format!("{}/v1/chat/completions", truth_stub.base_url),
-            &format!("{}/v1/chat/completions", editorial_stub.base_url),
-        ));
-        let mut worker = spawn_temporal_worker(&worker_env);
-        tokio::time::sleep(Duration::from_secs(3)).await;
-        assert!(
-            worker.child.try_wait().unwrap().is_none(),
-            "temporal_worker exited before certification workflow start"
-        );
         let client = connect_client(
             &temporal.temporal_url,
             format!("truth-cert-client-{}", Uuid::new_v4()),
@@ -369,6 +331,51 @@
         let mut reports = Vec::new();
 
         for fixture in &fixtures {
+            // A failed/short-circuited workflow must not consume the next
+            // fixture's provider replies. Keep infrastructure shared, but
+            // bind each worker to independently queued deterministic stubs.
+            let serp_reply = serp_sequence
+                .iter()
+                .find(|(fixture_id, _)| fixture_id == &fixture.fixture_id)
+                .map(|(_, payload)| payload.clone())
+                .expect("SERP response for current fixture");
+            let serp_stub = stub_servers::spawn_json_sequence_stub(
+                "/v3/serp/google/organic/live/advanced",
+                vec![serp_reply],
+            )
+            .await
+            .unwrap();
+            let truth_stub = stub_servers::spawn_json_sequence_stub(
+                "/v1/chat/completions",
+                truth_certification_truth_sequence(std::slice::from_ref(fixture)),
+            )
+            .await
+            .unwrap();
+            let editorial_stub = stub_servers::spawn_json_sequence_stub(
+                "/v1/chat/completions",
+                truth_certification_editorial_sequence(std::slice::from_ref(fixture)),
+            )
+            .await
+            .unwrap();
+
+            let mut worker_env = infra.runtime_env();
+            worker_env.insert("TEMPORAL_URL".to_string(), temporal.temporal_url.clone());
+            worker_env.insert("TEMPORAL_NAMESPACE".to_string(), temporal.namespace.clone());
+            worker_env.extend(truth_certification_env(
+                &format!(
+                    "{}/v3/serp/google/organic/live/advanced",
+                    serp_stub.base_url
+                ),
+                &format!("{}/v1/chat/completions", truth_stub.base_url),
+                &format!("{}/v1/chat/completions", editorial_stub.base_url),
+            ));
+            let mut worker = spawn_temporal_worker(&worker_env);
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            assert!(
+                worker.child.try_wait().unwrap().is_none(),
+                "temporal_worker exited before fixture {}",
+                fixture.fixture_id
+            );
             assert_eq!(
                 fixture.business_scope.truth_identity_tuple, "ES|tourist||BY",
                 "fixture {} drifted from certification truth tuple",
@@ -493,6 +500,7 @@
                 fs::write(&report_path, serde_json::to_vec_pretty(&partial).unwrap()).unwrap();
             }
             drop(outbox_worker);
+            drop(worker);
         }
 
         let suite_report = TruthCertificationSuiteReport {
