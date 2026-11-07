@@ -105,6 +105,17 @@ pub async fn outbox_emit_many(
         return Ok(0);
     }
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let emitted = outbox_emit_many_in_tx(&mut tx, events).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(emitted)
+}
+
+// The same canonical outbox writer also supports the publishing transaction:
+// a CMS "published" row may never commit without its corresponding event.
+pub async fn outbox_emit_many_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    events: &[OutboxEnvelope],
+) -> std::result::Result<i64, DomainError> {
     let mut emitted: i64 = 0;
     for event in events {
         let payload_hash = primitives::hash::blake3_hex(event.payload_bytes());
@@ -125,12 +136,11 @@ pub async fn outbox_emit_many(
         .bind(&event.idempotency_key)
         .bind(event.payload_bytes())
         .bind(&payload_hash)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         emitted += res.rows_affected() as i64;
     }
-    tx.commit().await.map_err(classify_sqlx)?;
     Ok(emitted)
 }
 
