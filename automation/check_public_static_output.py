@@ -94,7 +94,7 @@ def main() -> int:
         segments = path.strip("/").split("/") if path != "/" else []
         if (
             not path.startswith("/")
-            or "\\\\" in path
+            or "\\" in path
             or "//" in path
             or "?" in path
             or "#" in path
