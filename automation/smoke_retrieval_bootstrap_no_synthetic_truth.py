@@ -45,7 +45,8 @@ def main() -> int:
             for method, path, payload in calls
         ), f"legacy probe was not deleted for {collection}"
         assert any(
-            "DELETE FROM kb.qdrant_points" in sql
+            sql.lstrip().startswith("DELETE")
+            and "kb.qdrant_points" in sql
             and f"retrieval_contract_probe:{collection}" in sql
             for sql in sql_statements
         ), f"legacy SQL probe not cleaned for {collection}"
