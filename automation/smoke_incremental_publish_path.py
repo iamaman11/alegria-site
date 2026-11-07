@@ -44,6 +44,19 @@ def main() -> int:
     ]:
         if needle not in static:
             failures.append(f"static builder missing `{needle}`")
+    # A new isolated release directory cannot contain only the changed page:
+    # its manifest and sitemap include previously published dependencies.
+    candidate_body = static.split("pub async fn build_static_site_candidate_incremental(", 1)
+    if len(candidate_body) != 2:
+        failures.append("candidate release builder is absent")
+    else:
+        candidate_body = candidate_body[1].split("#[cfg(test)]", 1)[0]
+        if "write_static_artifacts(output_dir, &artifacts)?" not in candidate_body:
+            failures.append("candidate release does not materialize a complete site tree")
+        if "build_incremental_from_snapshot(" in candidate_body:
+            failures.append("isolated candidate release cannot use partial-only output")
+        if "build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?" not in candidate_body:
+            failures.append("candidate release must include published dependencies")
     for needle in [
         "CREATE TABLE IF NOT EXISTS site.publish_artifact_entries",
     ]:
