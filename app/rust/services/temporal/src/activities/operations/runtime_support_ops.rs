@@ -173,12 +173,29 @@ pub(crate) async fn projection_sync_impl(
         }
     }
 
-    let backlog = sqlx_seo_adapter::projection_backlog_counts(
+    // The main outbox worker may have claimed an event concurrently. Its
+    // processing lease is NOT an already materialized point. Wait for actual
+    // durable completion rather than failing a healthy run on that race.
+    // The bounded drain never treats a failed or stalled event as success.
+    let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut backlog = sqlx_seo_adapter::projection_backlog_counts(
         &acts.pool,
         &input.run_id,
         &input.target_system,
     )
     .await?;
+    while backlog.pending_events > 0
+        && backlog.failed_events == 0
+        && tokio::time::Instant::now() < drain_deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        backlog = sqlx_seo_adapter::projection_backlog_counts(
+            &acts.pool,
+            &input.run_id,
+            &input.target_system,
+        )
+        .await?;
+    }
     let remaining_pending = backlog.pending_events;
     let remaining_failed = backlog.failed_events;
 
