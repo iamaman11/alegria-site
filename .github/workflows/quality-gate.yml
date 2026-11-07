@@ -110,3 +110,24 @@ jobs:
           built=".cloudflare/output/v0/workers/default/assets/index.html"
           test -f "$built"
           cmp "$public/index.html" "$built"
+
+  temporal-worker-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the actual canonical Temporal worker image
+        run: |
+          docker build --progress=plain \
+            -f app/rust/services/temporal/Dockerfile \
+            -t alegria-seo-temporal:ci .
+      - name: Verify the runtime image includes its native deploy tools
+        run: |
+          docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
+            command -v python3
+            command -v node
+            command -v temporal_worker
+            test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
+            test -f /app/infra/cloudflare/seo-static/vite.config.ts
+            python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
+          '
