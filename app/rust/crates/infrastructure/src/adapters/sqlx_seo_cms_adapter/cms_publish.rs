@@ -22,6 +22,9 @@ pub async fn persist_cms_publish_output(
     if row.truth_snapshot_ref.trim().is_empty() {
         blockers.push("missing_traceability_manifest".to_string());
     }
+    if row.locale_code.trim().is_empty() || row.locale_code == "und" {
+        blockers.push("missing_scope_locale".to_string());
+    }
     if count_active_cannibalization(pool, &row.page_node_key).await? > 0 {
         blockers.push("active_cannibalization_conflict".to_string());
     }
@@ -153,10 +156,11 @@ pub async fn persist_cms_publish_output(
             (page_node_key, scope_signature, canonical_url_path, locale_code,
              page_type_key, dominant_intent_key, cms_document_id,
              current_revision_id, current_status, published_at)
-        VALUES ($1, $2, $3, 'und', $4, $5, $6, $7, $8,
+        VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8,
                 CASE WHEN $8 = 'published' THEN now() ELSE NULL END)
         ON CONFLICT (page_node_key) DO UPDATE
         SET canonical_url_path = EXCLUDED.canonical_url_path,
+            locale_code = EXCLUDED.locale_code,
             current_revision_id = EXCLUDED.current_revision_id,
             current_status = EXCLUDED.current_status,
             published_at = CASE
@@ -175,6 +179,7 @@ pub async fn persist_cms_publish_output(
     .bind(&cms_document_id)
     .bind(&revision_id)
     .bind(current_status)
+    .bind(&row.locale_code)
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
