@@ -602,4 +602,39 @@ mod publication_release_tests {
         assert!(!journal.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn uncertain_commit_preserves_journal_and_public_release_for_recovery() {
+        let root = std::env::temp_dir().join(format!("alegria-ambiguous-commit-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let old = root.join("old");
+        let new = root.join("new");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::create_dir(&new).unwrap();
+        let live = root.join("live");
+        let journal = pending_publication_path(&live).unwrap();
+        swap_public_release(&live, &old).unwrap();
+        write_pending_publication(&journal, &PendingPublication {
+            new_release: new.clone(),
+            previous: Some(old.clone()),
+            page_node_key: "page".into(),
+            revision_id: "new-revision".into(),
+            artifact_key: "new-artifact".into(),
+        }).unwrap();
+        let previous = swap_public_release(&live, &new).unwrap();
+        {
+            let mut receipt = PublicationActivation {
+                public_path: live.clone(),
+                previous,
+                journal_path: journal.clone(),
+                armed: true,
+            };
+            // A cancelled/dropped COMMIT future has an unknown DB result.
+            receipt.defer_to_recovery();
+        }
+        assert_eq!(std::fs::read_link(&live).unwrap(), new);
+        assert!(journal.is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
