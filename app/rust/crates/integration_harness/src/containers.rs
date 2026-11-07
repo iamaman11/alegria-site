@@ -128,6 +128,25 @@ impl QdrantHarness {
             .build()
             .context("build qdrant harness client failed")?;
         probe_qdrant(&client).await?;
+        // Match the real bootstrap_retrieval_contract_collections.py inventory.
+        // A fresh scope starts with *empty* collections, not seeded fake
+        // neighbors or verified facts. Collection absence must never disguise
+        // itself as a semantic/transport error in downstream strict searches.
+        for collection in [
+            "raw_chunks_4",
+            "raw_chunks_ctx",
+            "kb_canonical_4",
+            "verified_rules_4",
+            "editorial_topics_4",
+            "seo_keyword_clusters_4",
+            "whole_page_advisory_prototypes",
+        ] {
+            infrastructure::adapters::qdrant_client_adapter::ensure_default_dense_collection(
+                &client, collection, 1024,
+            )
+            .await
+            .with_context(|| format!("bootstrap real Qdrant collection {collection}"))?;
+        }
         Ok(Self {
             qdrant_url,
             qdrant_rest_url,
