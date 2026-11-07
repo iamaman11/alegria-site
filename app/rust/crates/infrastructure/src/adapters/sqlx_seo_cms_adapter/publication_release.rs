@@ -213,8 +213,17 @@ async fn verify_live_release(
     origin: &reqwest::Url,
     files: &[ReleaseArtifact],
 ) -> Result<(), String> {
+    let expected_origin = origin.origin();
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
+        // Static directory indexes may redirect /topic to /topic/. Never
+        // follow redirects to a different origin or to plaintext HTTP.
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            if attempt.previous().len() >= 3 || attempt.url().origin() != expected_origin {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .timeout(std::time::Duration::from_secs(20))
         .build().map_err(|err| format!("configure HTTPS readback: {err}"))?;
     for file in files.iter().filter(|item| !item.public_route.is_empty()) {
