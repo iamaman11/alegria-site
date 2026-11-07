@@ -103,6 +103,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     enforce_required_contract,
                     require_page_brief_projection: false,
                     gate_key: String::new(),
+                    skip_provider_probes: false,
                 },
                 db_opts(30),
             )
@@ -734,6 +735,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     enforce_required_contract: true,
                     require_page_brief_projection: false,
                     gate_key: String::new(),
+                    skip_provider_probes: false,
                 },
                 db_opts(30),
             )
