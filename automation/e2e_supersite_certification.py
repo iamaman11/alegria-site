@@ -370,18 +370,30 @@ def clean_runtime_preflight() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--first-site", action="store_true",
+        help="certify only the first real published site; never claim full R5",
+    )
     args = parser.parse_args()
+    report_path = (
+        RUNS_DIR / f"first_site_certification_{uuid4()}.json"
+        if args.first_site else MANIFEST
+    )
 
     provider_live, provider_kind = classify_provider()
     database_url = resolve_database_url()
 
     if args.dry_run:
         print("R5 certification dry-run")
-        print(f"- database_url={database_url}")
+        print(f"- database_configured={bool(database_url)}")
         print(f"- provider_kind={provider_kind}")
         print("- readiness: non-mutating docker compose checks")
         print("- gate: the real canonical Temporal workflow (no fixture seeds, no restore)")
-        print("- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
+        print(
+            "- scenarios: fresh_scope"
+            if args.first_site else
+            "- scenarios: fresh_scope, scope_expansion, factual_change_rebuild"
+        )
         return 0
 
     # Certification is not allowed to consume live provider calls and later
@@ -421,7 +433,7 @@ def main() -> int:
             "missing": missing,
             "updated_at": utc_now(),
         }
-        write_json(MANIFEST, manifest)
+        write_json(report_path, manifest)
         print(f"E2E_SUPERSITE_CERTIFICATION: {status}")
         return 2
 
@@ -444,7 +456,7 @@ def main() -> int:
             "gate_results": gate_results,
             "updated_at": utc_now(),
         }
-        write_json(MANIFEST, manifest)
+        write_json(report_path, manifest)
         print("E2E_SUPERSITE_CERTIFICATION: FAILED")
         return 1
 
@@ -475,12 +487,23 @@ def main() -> int:
         ),
     ]
 
+    if args.first_site:
+        scenarios = scenarios[:1]
+
     manifest = {
-        "artifact_id": "r5_supersite_certification_manifest",
-        "step": "R5.Step4",
+        "artifact_id": (
+            "first_site_certification_manifest"
+            if args.first_site else "r5_supersite_certification_manifest"
+        ),
+        "step": "FIRST_SITE" if args.first_site else "R5.Step4",
+        "certification_scope": "first_site_only" if args.first_site else "full_r5",
         "evidence_status": "PASS",
         "failure_class": "none",
-        "status_reason": "Three live certification scenarios completed.",
+        "status_reason": (
+            "First canonical real-source site published and independently HTTP verified; "
+            "does not certify full R5."
+            if args.first_site else "Three live certification scenarios completed."
+        ),
         "provider_kind": provider_kind,
         "gate_results": gate_results,
         "scenarios": [],
@@ -515,8 +538,38 @@ def main() -> int:
             manifest["status_reason"] = f"Certification scenario `{scenario_id}` failed."
             break
 
-    write_json(MANIFEST, manifest)
+    if args.first_site and manifest["evidence_status"] == "PASS":
+        # This is a separate product milestone, NOT a shortcut around the
+        # three-scenario R5 checker. Verify actual deployable HTML and
+        # bytes independently served by the configured HTTPS origin.
+        output_dir = os.environ["ALEGRIA_CERT_PUBLIC_OUTPUT_DIR"]
+        public_checks = (
+            ("static_output", [
+                sys.executable, str(ROOT / "automation/check_public_static_output.py"),
+                output_dir,
+            ]),
+            ("independent_https_readback", [
+                sys.executable, str(ROOT / "automation/check_public_http_readback.py"),
+                output_dir,
+            ]),
+        )
+        manifest["public_acceptance"] = {}
+        for name, command in public_checks:
+            checked = run_command(command)
+            manifest["public_acceptance"][name] = (
+                "PASS" if checked.returncode == 0 else "FAIL"
+            )
+            if checked.returncode != 0:
+                manifest["evidence_status"] = "FAIL"
+                manifest["failure_class"] = "public_acceptance_failure"
+                manifest["status_reason"] = (
+                    f"First site {name} failed; no independent public proof."
+                )
+                break
+
+    write_json(report_path, manifest)
     print(f"E2E_SUPERSITE_CERTIFICATION: {manifest['evidence_status']}")
+    print(f"E2E_SUPERSITE_REPORT: {report_path.relative_to(ROOT)}")
     return 0 if manifest["evidence_status"] == "PASS" else 1
 
 
