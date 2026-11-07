@@ -5,7 +5,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CLI = ROOT / "app/rust/services/cli_tools/src/main.rs"
 CMS = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter.rs"
 SCHEMA = ROOT / "app/db/schema.sql"
-STATIC = ROOT / "app/rust/services/cli_tools/src/main.rs"
+STATIC = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs"
+CLI_STATIC = ROOT / "app/rust/services/cli_tools/src/cli/static_site.rs"
 
 
 def read_file_resolved(path: Path) -> str:
@@ -28,7 +29,12 @@ def main() -> int:
     cli = read_file_resolved(CLI)
     cms = read_file_resolved(CMS)
     schema = SCHEMA.read_text(encoding="utf-8")
-    static = read_file_resolved(STATIC)
+    static = STATIC.read_text(encoding="utf-8")
+    cli_static = CLI_STATIC.read_text(encoding="utf-8")
+    if "static_site_builder_adapter::build_static_site(" not in cli_static:
+        failures.append("headless CLI does not delegate to canonical shared renderer")
+    if "fn render_page(" in cli_static or "fn build_static_artifacts(" in cli_static:
+        failures.append("duplicate headless CLI renderer must not exist")
     for needle in [
         "CmsReviewList",
         "CmsReviewShow",
