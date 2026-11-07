@@ -826,6 +826,30 @@ mod tests {
     }
 
     #[test]
+    fn public_paths_keep_directory_indexes_and_reject_traversal() {
+        assert_eq!(output_path_for_url("/").unwrap(), "index.html");
+        assert_eq!(
+            output_path_for_url("/guides/poland-visa/").unwrap(),
+            "guides/poland-visa/index.html"
+        );
+        assert!(output_path_for_url("/../secret").is_err());
+        assert!(output_path_for_url("/safe?x=1").is_err());
+    }
+
+    #[test]
+    fn canonical_renderer_keeps_faq_structured_data() {
+        let faq = faq_entities(
+            "## FAQ\n\n### Is this reviewed?\n\nYes, before publish.",
+        );
+        assert_eq!(faq.len(), 1);
+        assert_eq!(faq[0]["@type"], "Question");
+        assert_eq!(faq[0]["name"], "Is this reviewed?");
+        let rendered = markdown_to_html("# Title\n\nBody with **strong** text.");
+        assert!(rendered.contains("<h1>Title</h1>"));
+        assert!(rendered.contains("<strong>strong</strong>"));
+    }
+
+    #[test]
     fn markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls() {
         let rendered = markdown_to_html(
             "before <script>alert(1)</script> [bad](javascript:alert(1)) ![x](data:text/html,boom) after",
