@@ -122,7 +122,9 @@ pub async fn rerank_records(
 // evidence or canonical mapping candidates, even if old collections still
 // contain them. Bootstrap also deletes legacy probes on the next run.
 fn admissible_retrieval_payload(payload: &BTreeMap<String, String>) -> bool {
-    payload.get("entity_key").is_some_and(|key| !key.trim().is_empty())
+    payload
+        .get("entity_key")
+        .is_some_and(|key| !key.trim().is_empty())
         && payload
             .get("entity_type")
             .is_some_and(|kind| !kind.trim().is_empty() && kind != "retrieval_contract_probe")
