@@ -228,7 +228,7 @@ impl ActivityTimer {
             .observe(self.started.elapsed().as_secs_f64());
         global()
             .activity_failures_total
-            .with_label_values(&[&self.step_name, error_class])
+            .with_label_values(&[self.step_name.as_str(), error_class])
             .inc();
     }
 }

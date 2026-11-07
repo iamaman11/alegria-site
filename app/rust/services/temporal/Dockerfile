@@ -13,9 +13,9 @@ COPY app ./app
 
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release \
+RUN cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \
-    -p temporal_worker
+    -p temporal_worker --bin temporal_worker
 
 # The same Temporal worker owns native Cloudflare static release deployment.
 # Node is required only for the pinned official cf CLI; no extra container.

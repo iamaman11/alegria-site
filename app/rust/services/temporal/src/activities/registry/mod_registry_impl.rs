@@ -955,7 +955,7 @@ impl AlegriaActivities {
             };
             crate::metrics::global()
                 .editorial_provider_events_total
-                .with_label_values(&[&output.provider_key, outcome])
+                .with_label_values(&[output.provider_key.as_str(), outcome])
                 .inc();
             Ok(output)
         })
