@@ -51,7 +51,7 @@ def main() -> int:
             for sql in sql_statements
         ), f"legacy SQL probe not cleaned for {collection}"
     assert not any("/points?wait=true" in path for _, path, _ in calls)
-    assert not any("INSERT INTO kb.qdrant_points" in sql for sql in sql_statements)
+    assert not any(sql.lstrip().startswith("INSERT") for sql in sql_statements)
     print("RETRIEVAL_BOOTSTRAP_NO_SYNTHETIC_TRUTH: OK")
     return 0
 
