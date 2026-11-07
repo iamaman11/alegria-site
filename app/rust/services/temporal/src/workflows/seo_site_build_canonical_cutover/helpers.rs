@@ -50,3 +50,15 @@ async fn sync_target(
         )
         .await?)
 }
+
+fn ensure_sync_drained(output: &ProjectionSyncOutput, stage: &str) -> WorkflowResult<()> {
+    if output.status != "done" || output.remaining_pending != 0 || output.remaining_failed != 0 {
+        anyhow::bail!(
+            "{stage} projection sync not drained: status={} pending={} failed={}",
+            output.status,
+            output.remaining_pending,
+            output.remaining_failed
+        );
+    }
+    Ok(())
+}
