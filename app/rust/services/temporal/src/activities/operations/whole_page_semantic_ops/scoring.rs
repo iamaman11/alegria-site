@@ -197,19 +197,49 @@ fn page_mode_scores(
         .filter(|section| section.section_type.to_ascii_lowercase().contains("footer"))
         .count() as f32;
     let total_sections = sections.len().max(1) as f32;
-    let content_support = weighted_family_score(
-        &framing_inputs,
+    // A stale URL or heading can mention a visa while the actual page is
+    // exclusively login/legal UI or a navigation directory. In that case the
+    // primary body, not the surrounding framing, determines its page mode.
+    let primary_has_substantive_content = marker_hit_count(
+        &primary_content,
         &[
-            "visa",
-            "виза",
             "requirements",
-            "document",
             "passport",
+            "insurance",
+            "application form",
             "appointment",
+            "document",
+            "fee",
             "faq",
             "guide",
         ],
-    );
+    ) > 0;
+    let primary_has_functional_mode =
+        marker_hit_count(
+            &primary_content,
+            &["privacy", "cookie", "login", "terms", "policy"],
+        ) >= 2
+            || marker_hit_count(
+                &primary_content,
+                &["breadcrumb", "menu", "directory", "sitemap", "category", "sidebar"],
+            ) >= 2;
+    let content_support = if !primary_has_substantive_content && primary_has_functional_mode {
+        0.0
+    } else {
+        weighted_family_score(
+            &framing_inputs,
+            &[
+                "visa",
+                "виза",
+                "requirements",
+                "document",
+                "passport",
+                "appointment",
+                "faq",
+                "guide",
+            ],
+        )
+    };
     let utility_support = weighted_family_score(
         &framing_inputs,
         &["privacy", "cookie", "login", "terms", "policy"],
