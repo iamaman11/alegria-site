@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Proof that draft-only R5 scenarios never certify a published site."""
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+CHECKER = ROOT / "automation/check_e2e_product_verdict.py"
+
+
+def check(temp: Path, *, publish: bool, published_pages: int, expected_success: bool) -> None:
+    report = temp / "scenario.md"
+    payload = {
+        "scenario_id": "fresh_scope",
+        "evidence_status": "PASS",
+        "publish_requested": publish,
+        "result": {
+            "status": "completed",
+            "page_total": 2,
+            "published_pages": published_pages,
+        },
+    }
+    report.write_text("## Scenario\n\n```json\n" + json.dumps(payload) + "\n```\n", encoding="utf-8")
+    manifest = temp / "manifest.json"
+    manifest.write_text(
+        json.dumps({"evidence_status": "PASS", "scenarios": [
+            {"scenario_id": "fresh_scope", "report_path": str(report)}
+        ]}), encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(CHECKER), str(manifest)],
+        text=True, capture_output=True, check=False,
+    )
+    if (result.returncode == 0) != expected_success:
+        raise AssertionError(result.stdout + result.stderr)
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory(prefix="alegria-e2e-verdict-") as temp:
+        root = Path(temp)
+        check(root, publish=False, published_pages=0, expected_success=False)
+        check(root, publish=True, published_pages=0, expected_success=False)
+        check(root, publish=True, published_pages=2, expected_success=True)
+    print("E2E_PUBLICATION_VERDICT_SMOKE: OK")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
