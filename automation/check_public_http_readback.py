@@ -30,7 +30,7 @@ def public_paths(manifest: dict) -> list[tuple[str, str]]:
         if not isinstance(route, str) or not route.startswith("/"):
             raise ValueError("invalid page route")
         if (
-            "//" in route or "\\\\" in route or "?" in route or "#" in route
+            "//" in route or "\\" in route or "?" in route or "#" in route
             or any(part in {".", ".."} for part in route.split("/"))
         ):
             raise ValueError("unsafe public page route")
