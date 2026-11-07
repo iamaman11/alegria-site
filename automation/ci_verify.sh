@@ -277,6 +277,9 @@ python3 automation/smoke_e2e_publication_verdict.py
 echo "[52b3/53] HTTPS readback behavioral regression"
 python3 automation/smoke_public_http_readback.py
 
+echo "[52b4/53] Cloudflare SEO immutable deployment boundary (offline only)"
+python3 automation/smoke_seo_cloudflare_deploy.py
+
 echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
