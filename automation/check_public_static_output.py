@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -76,6 +77,11 @@ def main() -> int:
         failures.append("manifest has no public pages")
         pages = []
 
+    expected_html: dict[Path, str] = {}
+    expected_urls: set[str] = set()
+    if manifest.get("page_count") != len(pages):
+        failures.append("manifest page_count does not match listed pages")
+
     for page in pages:
         if not isinstance(page, dict):
             failures.append("manifest contains malformed page entry")
@@ -85,6 +91,28 @@ def main() -> int:
         status = str(page.get("status", ""))
         if status != "published":
             failures.append(f"non-published page leaked into public manifest: {path} status={status!r}")
+        segments = path.strip("/").split("/") if path != "/" else []
+        if (
+            not path.startswith("/")
+            or "\\\\" in path
+            or "//" in path
+            or "?" in path
+            or "#" in path
+            or any(segment in {".", "..", ""} for segment in segments)
+        ):
+            failures.append(f"invalid public route: {path!r}")
+        else:
+            normalized_path = path.rstrip("/") or "/"
+            html_rel = Path("index.html") if normalized_path == "/" else Path(normalized_path.lstrip("/")) / "index.html"
+            expected_url = normalized_origin + normalized_path
+            if normalized_path == "/":
+                expected_url = normalized_origin + "/"
+            if html_rel in expected_html:
+                failures.append(f"duplicate public HTML route: {path}")
+            expected_html[html_rel] = expected_url
+            expected_urls.add(expected_url)
+            if not (output_dir / html_rel).is_file():
+                failures.append(f"manifest page has no HTML artifact: {html_rel}")
         if opaque_path(path):
             failures.append(f"opaque internal identifier leaked into public route: {path}")
         if OPAQUE_SEGMENT.fullmatch(title.strip()):
@@ -95,10 +123,24 @@ def main() -> int:
         failures.append("sitemap does not use manifest base_url")
     if "example.com" in sitemap or "localhost" in sitemap:
         failures.append("sitemap contains placeholder/local origin")
+    try:
+        xml_root = ET.fromstring(sitemap)
+        sitemap_urls = [
+            element.text or ""
+            for element in xml_root.findall(".//{*}loc")
+        ]
+        if len(sitemap_urls) != len(expected_urls) or set(sitemap_urls) != expected_urls:
+            failures.append("sitemap URLs do not match manifest page URLs")
+    except ET.ParseError:
+        failures.append("sitemap.xml is not valid XML")
 
     robots = robots_path.read_text(encoding="utf-8")
     if "User-agent:" not in robots:
         failures.append("robots.txt is malformed")
+
+    actual_html = {path.relative_to(output_dir) for path in output_dir.rglob("*.html")}
+    for unexpected in sorted(actual_html - set(expected_html)):
+        failures.append(f"unlisted HTML artifact in public output: {unexpected}")
 
     for html_path in output_dir.rglob("*.html"):
         text = html_path.read_text(encoding="utf-8")
@@ -111,8 +153,8 @@ def main() -> int:
         canonical = re.search(r'<link\s+rel=["\']canonical["\']\s+href=["\']([^"\']+)', text, re.IGNORECASE)
         if not canonical:
             failures.append(f"missing canonical link: {rel(html_path)}")
-        elif normalized_origin and not canonical.group(1).startswith(normalized_origin + "/"):
-            failures.append(f"canonical origin mismatch: {rel(html_path)} -> {canonical.group(1)}")
+        elif canonical.group(1) != expected_html.get(html_path.relative_to(output_dir)):
+            failures.append(f"canonical URL does not match manifest route: {rel(html_path)} -> {canonical.group(1)}")
 
     if failures:
         print("PUBLIC_STATIC_OUTPUT: FAILED")
