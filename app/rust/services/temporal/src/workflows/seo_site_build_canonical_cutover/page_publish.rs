@@ -80,7 +80,8 @@ async fn run_page_publish_phases(
                     if plan.policy.projection != RunProjectionPolicy::WarnOnly {
                         let sync_step = format!("neo4j_sync_post_brief_{}", page_index + 1);
                         ctx.state_mut(|s| s.phase = sync_step.clone());
-                        sync_target(ctx, run_id, &sync_step, "neo4j").await?;
+                        let brief_sync = sync_target(ctx, run_id, &sync_step, "neo4j").await?;
+                        ensure_sync_drained(&brief_sync, &sync_step)?;
                         ctx.wait_condition(|s| !s.paused).await;
                         ctx.state_mut(|s| {
                             s.phase = format!("seo_materialization_gate:page:{}", page_index + 1)
