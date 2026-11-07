@@ -32,7 +32,8 @@ COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin
 COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static
 COPY automation/deploy_seo_static_cloudflare.py \
      automation/check_public_static_output.py \
-     automation/check_public_http_readback.py /app/automation/
+     automation/check_public_http_readback.py \
+     automation/check_first_site_release.py /app/automation/
 RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund
 
 ENTRYPOINT ["/usr/local/bin/temporal_worker"]
