@@ -161,42 +161,8 @@ def parse_result(output: str) -> dict[str, Any]:
 
 
 def snapshot_verified_facts() -> dict[str, dict[str, Any]]:
-    """Read structured admissible facts, without seeding or mutating a scope."""
-    scope = [
-        os.environ.get("ALEGRIA_CERT_COUNTRY_CODE", "ES"),
-        os.environ.get("ALEGRIA_CERT_VISA_TYPE", "tourist"),
-        os.environ.get("ALEGRIA_CERT_CITIZENSHIP_CODE", "BY"),
-    ]
-    if any(re.fullmatch(r"[A-Za-z0-9_-]{2,32}", part) is None for part in scope):
-        raise ValueError("invalid country/visa/citizenship scope for certified truth readback")
-    country, visa_type, citizenship = scope
-    statement = f"""
-    SELECT coalesce(jsonb_object_agg(
-        r.rule_instance_id,
-        jsonb_build_object(
-            'params', r.params,
-            'evidence_quote', r.evidence_quote,
-            'source_snapshot_hash', r.source_snapshot_hash,
-            'source_key', r.source_key
-        )
-    ), '{{}}'::jsonb)
-    FROM verified.rule_instances r
-    WHERE r.status='verified' AND r.publish_admissibility='admissible'
-      AND r.context_key IN (
-        SELECT context_key FROM kb.visa_contexts
-        WHERE upper(country_code)=upper('{country}')
-          AND lower(visa_family)=lower('{visa_type}')
-          AND upper(citizenship_code)=upper('{citizenship}')
-          AND (visa_subtype IS NULL OR visa_subtype='')
-          AND status='active'
-      )
-    """
-    result = run_command([
-        "docker", "compose", "exec", "-T", "postgres",
-        "sh", "-ec",
-        'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -A -t -U postgres -d alegria -c "$1"',
-        "sh", statement,
-    ])
+    """Read-only authoritative truth snapshot through the existing shell/psql boundary."""
+    result = run_command(["bash", "automation/read_verified_facts_for_certification.sh"])
     if result.returncode != 0:
         raise RuntimeError("read-only verified fact snapshot failed")
     rows = json.loads(result.stdout.strip())
