@@ -699,7 +699,46 @@ pub(crate) async fn seo_preflight_impl(
 
 #[cfg(test)]
 mod canonical_production_contract_tests {
-    use super::{graph_projection_due_at_gate, missing_required_contract_flags};
+    use super::{
+        graph_projection_due_at_gate, missing_required_contract_flags,
+        optional_projection_valid_empty,
+    };
+
+    #[test]
+    fn valid_empty_requires_current_run_producer_evidence() {
+        let completed = vec![
+            "opportunity_build".to_string(),
+            "link_recommend".to_string(),
+            "global_site_reconcile".to_string(),
+        ];
+        assert!(optional_projection_valid_empty("content_gap", 0, 0, &completed));
+        assert!(optional_projection_valid_empty(
+            "link_recommendation",
+            0,
+            0,
+            &completed
+        ));
+        assert!(!optional_projection_valid_empty("page_node", 0, 0, &completed));
+        assert!(!optional_projection_valid_empty("content_gap", 1, 0, &completed));
+        assert!(!optional_projection_valid_empty(
+            "content_gap",
+            0,
+            1,
+            &completed
+        ));
+        assert!(!optional_projection_valid_empty(
+            "link_recommendation",
+            0,
+            0,
+            &["link_recommend".to_string()]
+        ));
+        assert!(!optional_projection_valid_empty(
+            "content_gap",
+            0,
+            0,
+            &["global_site_reconcile".to_string()]
+        ));
+    }
 
     #[test]
     fn required_capabilities_must_be_explicit() {
