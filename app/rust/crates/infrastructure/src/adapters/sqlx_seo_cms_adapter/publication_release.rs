@@ -316,15 +316,33 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(validation_failure(format!("read live publication pointer: {err}"))),
     };
+    require_cloudflare_publication_backend().map_err(validation_failure)?;
     if committed {
         if live.as_deref() != Some(journal.new_release.as_path()) {
             return Err(validation_failure("committed publication no longer matches live pointer"));
         }
-    } else if live.as_deref() == Some(journal.new_release.as_path()) {
-        restore_public_release(&public, journal.previous.as_deref())
+        // The live Worker is the public truth: a local symlink check is not
+        // sufficient after a worker crash. Idempotently restore the committed
+        // Cloudflare asset version and independently verify public HTTPS.
+        deploy_cloudflare_static_release(&journal.new_release, None)
             .map_err(validation_failure)?;
-    } else if live.as_deref() != journal.previous.as_deref() {
-        return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
+    } else {
+        if live.as_deref() != Some(journal.new_release.as_path())
+            && live.as_deref() != journal.previous.as_deref()
+        {
+            return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
+        }
+        // An interrupted first publication has no prior public version.
+        // Preserve the journal and fail closed until a human can inspect
+        // the dedicated staging Worker and revoke any partial first upload.
+        let previous = journal.previous.as_deref().ok_or_else(|| {
+            validation_failure("first remote publication is uncommitted; manual recovery required")
+        })?;
+        deploy_cloudflare_static_release(previous, None).map_err(validation_failure)?;
+        if live.as_deref() == Some(journal.new_release.as_path()) {
+            restore_public_release(&public, Some(previous))
+                .map_err(validation_failure)?;
+        }
     }
     std::fs::remove_file(&journal_path)
         .map_err(|err| validation_failure(format!("clear reconciled publication journal: {err}")))?;
