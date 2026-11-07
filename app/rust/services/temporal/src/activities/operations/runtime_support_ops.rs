@@ -285,9 +285,7 @@ pub(crate) async fn seo_preflight_impl(
             // Scope-dependent SEO collections are certified by the Qdrant
             // provider, NOT by the global kb.qdrant_points SQL ledger.
             let current_run_count = scoped_point_counts.get(&status.collection_name).copied();
-            let point_count = current_run_count
-                .map(|count| i64::try_from(count).unwrap_or(i64::MAX))
-                .unwrap_or(status.point_count);
+            let point_count = effective_collection_point_count(status.point_count, current_run_count);
             let current_run_verified = current_run_count.is_some();
             SeoPreflightCollectionStatus {
                 exists: point_count > 0,
