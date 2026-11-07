@@ -139,4 +139,6 @@ jobs:
             test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
             test -f /app/infra/cloudflare/seo-static/vite.config.ts
             python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
+            python3 -m py_compile /app/automation/check_first_site_release.py
+            test -f /app/automation/check_first_site_release.py
           '
