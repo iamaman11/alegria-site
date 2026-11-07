@@ -551,9 +551,9 @@
                 handle.get_result(WorkflowGetResultOptions::default()),
             )
             .await;
-            let workflow_failed = match workflow_result {
-                Ok(Ok(_)) => false,
-                Ok(Err(_err)) => true,
+            let workflow_error = match workflow_result {
+                Ok(Ok(_)) => None,
+                Ok(Err(err)) => Some(format!("{err:#}")),
                 Err(err) => {
                     let diagnostics =
                         certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
@@ -576,14 +576,18 @@
                 &scope_signature,
             )
             .await;
-            if workflow_failed {
+            if let Some(error) = workflow_error {
+                // The Temporal result error is the authoritative failure
+                // explanation. The step journal alone can end in a successful
+                // sync activity even when a workflow-level drain guard fails.
                 let diagnostics =
                     certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
                 if !expected_workflow_failure_allowed(fixture, &report, &diagnostics) {
                     report.pass = false;
                     report.failure_reasons.push("workflow_failed".to_string());
                 }
-                report.workflow_failure_diagnostics = Some(diagnostics);
+                report.workflow_failure_diagnostics =
+                    Some(format!("workflow_result_error:{error}\n{diagnostics}"));
             }
             reports.push(report);
             if let Ok(report_path) = env::var("TRUTH_CERT_REPORT_PATH") {
