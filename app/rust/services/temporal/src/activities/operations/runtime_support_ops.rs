@@ -356,6 +356,11 @@ pub(crate) async fn seo_preflight_impl(
     } else {
         Default::default()
     };
+    let completed_producers = if input.require_materialized_projections {
+        sqlx_seo_adapter::read_completed_seo_producers(&acts.pool, &input.run_id).await?
+    } else {
+        Vec::new()
+    };
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
@@ -370,14 +375,33 @@ pub(crate) async fn seo_preflight_impl(
                 .get(&status.artifact_name)
                 .copied()
                 .unwrap_or(source_count);
+            let valid_empty = input.require_materialized_projections
+                && optional_projection_valid_empty(
+                    &status.artifact_name,
+                    source_count,
+                    actual_count,
+                    &completed_producers,
+                );
+            let complete = source_count > 0 && actual_count >= source_count;
+            let materialization_outcome = if valid_empty {
+                "valid_empty"
+            } else if source_count <= 0 || actual_count <= 0 {
+                "missing"
+            } else if !complete {
+                "incomplete"
+            } else {
+                "materialized"
+            };
             SeoPreflightGraphProjectionStatus {
                 projection_name: status.artifact_name,
+                materialization_outcome: materialization_outcome.to_string(),
                 exists: source_count > 0 && actual_count > 0,
-                fresh: status
-                    .lag_seconds
-                    .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                    .unwrap_or(false),
-                projection_complete: source_count > 0 && actual_count >= source_count,
+                fresh: valid_empty
+                    || status
+                        .lag_seconds
+                        .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                        .unwrap_or(false),
+                projection_complete: valid_empty || complete,
                 point_count: actual_count,
                 last_materialized_at: status.last_materialized_at,
                 last_source_change_at: None,
@@ -395,7 +419,10 @@ pub(crate) async fn seo_preflight_impl(
         });
     let graph_projection_contract_ready = applicable_graph_projections
         .clone()
-        .all(|status| status.exists && status.projection_complete);
+        .all(|status| {
+            status.projection_complete
+                && (status.exists || status.materialization_outcome == "valid_empty")
+        });
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
     let projection_blocked = projection_statuses.iter().any(|status| {
@@ -483,7 +510,7 @@ pub(crate) async fn seo_preflight_impl(
         .collect::<Vec<_>>();
     let missing_graph_projections = applicable_graph_projections
         .clone()
-        .filter(|status| !status.exists)
+        .filter(|status| !status.exists && status.materialization_outcome != "valid_empty")
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
     let stale_graph_projections = applicable_graph_projections
