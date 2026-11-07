@@ -25,6 +25,7 @@ pub struct PostgresHarness {
 
 pub struct QdrantHarness {
     pub qdrant_url: String,
+    pub qdrant_rest_url: String,
     pub client: Qdrant,
     _container: ContainerAsync<GenericImage>,
 }
@@ -106,6 +107,7 @@ impl QdrantHarness {
     pub async fn start() -> Result<Self> {
         let image = GenericImage::new("qdrant/qdrant", "v1.13.2")
             .with_exposed_port(6334.tcp())
+            .with_exposed_port(6333.tcp())
             .with_wait_for(WaitFor::message_on_stdout("Qdrant HTTP listening on 6333"));
         let container = image
             .start()
@@ -116,6 +118,11 @@ impl QdrantHarness {
             .await
             .context("resolve qdrant mapped port failed")?;
         let qdrant_url = format!("http://127.0.0.1:{port}");
+        let rest_port = container
+            .get_host_port_ipv4(6333.tcp())
+            .await
+            .context("resolve qdrant REST mapped port failed")?;
+        let qdrant_rest_url = format!("http://127.0.0.1:{rest_port}");
         let client = Qdrant::from_url(&qdrant_url)
             .skip_compatibility_check()
             .build()
@@ -123,6 +130,7 @@ impl QdrantHarness {
         probe_qdrant(&client).await?;
         Ok(Self {
             qdrant_url,
+            qdrant_rest_url,
             client,
             _container: container,
         })
@@ -185,6 +193,10 @@ impl InfraHarness {
                 self.postgres.database_url.clone(),
             ),
             ("QDRANT_URL".to_string(), self.qdrant.qdrant_url.clone()),
+            (
+                "QDRANT_REST_URL".to_string(),
+                self.qdrant.qdrant_rest_url.clone(),
+            ),
             ("NEO4J_URI".to_string(), self.neo4j.uri.clone()),
             ("NEO4J_USER".to_string(), self.neo4j.user.clone()),
             ("NEO4J_PASSWORD".to_string(), self.neo4j.password.clone()),
