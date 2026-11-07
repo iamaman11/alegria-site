@@ -40,21 +40,46 @@ async fn ensure_graph_required_for_phase(phase: &str) -> Result<(), DomainError>
         })
 }
 
+/// These two vectors are produced for the current SEO scope. A point from a
+/// different scope or a previous run must never certify a fresh publication.
+fn scope_materialized_collection(collection: &str) -> bool {
+    matches!(collection, "seo_keyword_clusters_4" | "editorial_topics_4")
+}
+
 async fn probe_qdrant_required_collections(
     required_collections: &[&str],
-) -> (bool, BTreeMap<String, bool>) {
+    scope_signature: &str,
+    run_id: &str,
+    require_materialized_projections: bool,
+    probe_all_collections: bool,
+) -> (bool, BTreeMap<String, bool>, BTreeMap<String, u64>) {
     let qdrant_url =
         std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
     let mut statuses = BTreeMap::new();
+    // Missing provider results stay at zero; a global SQL counter is not a
+    // substitute for a matching Qdrant point.
+    let mut scope_counts = BTreeMap::new();
+    if require_materialized_projections {
+        for collection in required_collections
+            .iter()
+            .filter(|name| scope_materialized_collection(name))
+        {
+            scope_counts.insert((*collection).to_string(), 0);
+        }
+    }
     let connect = tokio::time::timeout(
         std::time::Duration::from_secs(3),
         qdrant_client_adapter::connect_qdrant(&qdrant_url),
     )
     .await;
     let Ok(Ok(client)) = connect else {
-        return (false, statuses);
+        return (false, statuses, scope_counts);
     };
+    let mut provider_ok = true;
     for collection in required_collections {
+        if !probe_all_collections && !scope_materialized_collection(collection) {
+            continue;
+        }
         let exists = match tokio::time::timeout(
             std::time::Duration::from_secs(2),
             client.collection_exists(*collection),
@@ -62,11 +87,37 @@ async fn probe_qdrant_required_collections(
         .await
         {
             Ok(Ok(value)) => value,
-            _ => false,
+            _ => {
+                provider_ok = false;
+                false
+            }
         };
         statuses.insert((*collection).to_string(), exists);
+        if require_materialized_projections
+            && exists
+            && scope_materialized_collection(collection)
+        {
+            use qdrant_client_adapter::{Condition, CountPointsBuilder, Filter};
+            let request = CountPointsBuilder::new(*collection)
+                .filter(Filter::must([
+                    Condition::matches("scope_signature", scope_signature.to_string()),
+                    Condition::matches("run_id", run_id.to_string()),
+                ]))
+                .exact(true);
+            match tokio::time::timeout(std::time::Duration::from_secs(4), client.count(request))
+                .await
+            {
+                Ok(Ok(result)) => {
+                    scope_counts.insert(
+                        (*collection).to_string(),
+                        result.result.map(|value| value.count).unwrap_or(0),
+                    );
+                }
+                _ => provider_ok = false,
+            }
+        }
     }
-    (true, statuses)
+    (provider_ok, statuses, scope_counts)
 }
 
 #[derive(Debug, Clone, Default)]
