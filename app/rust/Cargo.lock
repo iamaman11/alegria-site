@@ -627,7 +627,6 @@ dependencies = [
  "infrastructure",
  "primitives",
  "prost",
- "pulldown-cmark",
  "seo_application",
  "seo_ports",
  "seo_steps",
