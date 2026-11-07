@@ -75,3 +75,13 @@ jobs:
       - name: RustSec audit
         working-directory: app/rust
         run: cargo audit
+
+      # Read-only diagnostics run on audit failure. Keep the audit result
+      # blocking; feature paths are required before changing Temporal/SQLx.
+      - name: Diagnose vulnerable dependency feature paths
+        if: failure()
+        working-directory: app/rust
+        run: |
+          cargo tree --locked -e features -i ringbuf
+          cargo tree --locked -e features -i rsa
+          cargo tree --locked -e features -i sqlx-mysql
