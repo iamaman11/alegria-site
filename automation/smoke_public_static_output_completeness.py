@@ -29,7 +29,7 @@ def check(output: Path, *, should_pass: bool, reason: str = "") -> None:
 
 
 def site(output: Path) -> None:
-    (output / "topic").mkdir(parents=True)
+    (output / "topic").mkdir(parents=True, exist_ok=True)
     pages = [
         {
             "page_node_key": "home",
