@@ -275,6 +275,7 @@ echo "[52b2/53] R5 publication verdict regression"
 python3 automation/smoke_e2e_publication_verdict.py
 python3 automation/smoke_e2e_canonical_temporal.py
 python3 automation/smoke_e2e_first_site.py
+python3 automation/smoke_first_site_release.py
 
 echo "[52b3/53] HTTPS readback behavioral regression"
 python3 automation/smoke_public_http_readback.py
