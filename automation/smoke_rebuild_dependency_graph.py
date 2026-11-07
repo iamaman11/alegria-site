@@ -14,12 +14,15 @@ MIGRATION = ROOT / "app" / "db" / "migrations" / "20260515_0004_rebuild_dependen
 
 def load_env() -> dict[str, str]:
     env = os.environ.copy()
-    for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key] = value
+    # CI supplies DATABASE_URL directly. Local development may instead use
+    # infra/local/dev_db.env, which is intentionally not tracked in Git.
+    if not env.get("DATABASE_URL") and LOCAL_ENV.is_file():
+        for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env[key] = value
     return env
 
 
