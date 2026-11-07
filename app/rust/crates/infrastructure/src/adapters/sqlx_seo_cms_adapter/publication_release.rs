@@ -230,6 +230,45 @@ fn write_pending_publication(
 }
 
 #[cfg(unix)]
+fn deploy_cloudflare_static_release(
+    release: &ReleasePath,
+    previous: Option<&ReleasePath>,
+) -> Result<(), String> {
+    // Deployment is a synchronous critical section under the PostgreSQL
+    // advisory lock: cancellation must not leave a detached upload running.
+    // The adapter does not accept raw HTML or a candidate directory.
+    let release_root = std::env::var("SEO_STATIC_RELEASE_ROOT")
+        .map_err(|_| "SEO_STATIC_RELEASE_ROOT must be configured for Cloudflare publication")?;
+    let script = std::env::var("SEO_STATIC_DEPLOY_SCRIPT")
+        .unwrap_or_else(|_| "/app/automation/deploy_seo_static_cloudflare.py".into());
+    let mut command = std::process::Command::new("python3");
+    command.arg(script).arg(release)
+        .arg("--release-root").arg(release_root).arg("--deploy");
+    if let Some(old) = previous {
+        command.arg("--previous-release").arg(old);
+    }
+    let result = command.output().map_err(|err| format!("start Cloudflare deployment: {err}"))?;
+    if !result.status.success() {
+        // The CLI's raw stderr may contain sensitive provider/account metadata.
+        return Err(format!(
+            "Cloudflare deployment/readback failed with status {}; inspect worker logs",
+            result.status
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn require_cloudflare_publication_backend() -> Result<(), String> {
+    if std::env::var("SEO_STATIC_PUBLISH_BACKEND").ok().as_deref()
+        != Some("cloudflare_workers_static_assets")
+    {
+        return Err("SEO_STATIC_PUBLISH_BACKEND must be cloudflare_workers_static_assets".into());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
 pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainError> {
     let public = ReleasePathBuf::from(std::env::var("SEO_STATIC_OUTPUT_DIR")
         .unwrap_or_else(|_| "app/rust/dist/static-site".to_string()));
@@ -351,6 +390,8 @@ struct PublicationActivation {
     previous: Option<ReleasePathBuf>,
     #[cfg(unix)]
     journal_path: ReleasePathBuf,
+    #[cfg(unix)]
+    remote_activated: bool,
     armed: bool,
 }
 
@@ -375,6 +416,19 @@ impl PublicationActivation {
 impl Drop for PublicationActivation {
     fn drop(&mut self) {
         if self.armed {
+            if self.remote_activated {
+                if let Some(previous) = self.previous.as_deref() {
+                    if let Err(err) = deploy_cloudflare_static_release(previous, None) {
+                        tracing::error!(reason = %err, "remote rollback failed; journal retained for recovery");
+                        return;
+                    }
+                } else {
+                    // A first release has no remote predecessor; do not clear
+                    // its journal or declare a successful rollback.
+                    tracing::error!("first Cloudflare publication has no prior release; manual recovery required");
+                    return;
+                }
+            }
             match restore_public_release(&self.public_path, self.previous.as_deref()) {
                 Ok(()) => {
                     if let Err(err) = std::fs::remove_file(&self.journal_path) {
@@ -449,12 +503,18 @@ async fn promote_and_verify_public_release(
     }
     // Construct the rollback guard before the HTTPS await. The journal also
     // survives a worker/process crash until startup reconciliation.
-    let activation = PublicationActivation {
+    let mut activation = PublicationActivation {
         public_path: public,
         previous,
         journal_path,
+        remote_activated: false,
         armed: true,
     };
+    // Only the explicitly configured native Cloudflare deployment may
+    // promote files to the public origin. A local symlink is not deployment.
+    require_cloudflare_publication_backend()?;
+    activation.remote_activated = true;
+    deploy_cloudflare_static_release(&release, activation.previous.as_deref())?;
     verify_live_release(&origin, &files).await?;
     Ok(activation)
 }
@@ -562,6 +622,7 @@ mod publication_release_tests {
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),
+                remote_activated: false,
                 armed: true,
             };
             assert_eq!(std::fs::read(live.join("index.html")).unwrap(), b"new");
@@ -594,6 +655,7 @@ mod publication_release_tests {
                 public_path: live.clone(),
                 previous: None,
                 journal_path: journal.clone(),
+                remote_activated: false,
                 armed: true,
             };
             activation.confirm();
@@ -628,6 +690,7 @@ mod publication_release_tests {
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),
+                remote_activated: false,
                 armed: true,
             };
             // A cancelled/dropped COMMIT future has an unknown DB result.
