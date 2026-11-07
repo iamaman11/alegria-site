@@ -53,14 +53,25 @@ def main() -> int:
         failures += require(adapter_mod, "pub mod sqlx_static_site_adapter;", "adapter registration")
         failures += require(cargo, "pulldown-cmark", "markdown rendering dependency")
         failures += require(cli, "BuildStaticSite", "CLI command")
-        failures += require(cli, "build_static_artifacts", "static artifact builder")
-        failures += require(cli, "sitemap.xml", "sitemap artifact")
-        failures += require(cli, "robots.txt", "robots artifact")
-        failures += require(cli, "render_breadcrumbs", "breadcrumb renderer")
-        failures += require(cli, "BreadcrumbList", "breadcrumb JSON-LD")
-        failures += require(cli, "FAQPage", "FAQ JSON-LD")
-        failures += require(cli, "alegria-static-manifest.json", "build manifest")
-        failures += require(cli, "no approved or published CMS pages", "empty publish guard")
+        cli_static = ROOT / "app/rust/services/cli_tools/src/cli/static_site.rs"
+        failures += require(
+            cli_static,
+            "static_site_builder_adapter::build_static_site(",
+            "CLI delegates to canonical builder",
+        )
+        failures += forbid(cli_static, "fn build_static_artifacts(", "duplicate CLI builder")
+        failures += forbid(cli_static, "fn render_page(", "duplicate CLI HTML renderer")
+        for needle, label in [
+            ("build_static_artifacts", "static artifact builder"),
+            ("sitemap.xml", "sitemap artifact"),
+            ("robots.txt", "robots artifact"),
+            ("render_breadcrumbs", "breadcrumb renderer"),
+            ("BreadcrumbList", "breadcrumb JSON-LD"),
+            ("FAQPage", "FAQ JSON-LD"),
+            ("alegria-static-manifest.json", "build manifest"),
+            ("no approved or published CMS pages", "empty publish guard"),
+        ]:
+            failures += require(builder, needle, label)
 
         adapter_text = adapter.read_text(encoding="utf-8")
         public_marker = "pub async fn load_static_site_snapshot"
