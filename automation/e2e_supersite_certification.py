@@ -218,7 +218,9 @@ def scenario_payload(
         "gate_results": gate_results,
     }
 
-    md_name = f"supersite_e2e_{scenario_id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.md"
+    # Never overwrite immutable per-run evidence when scenarios rerun the same day.
+    md_name = f"supersite_e2e_{scenario_id}_{run_id}.md"
+    payload["report_path"] = f"docs/runs/{md_name}"
     write_markdown(RUNS_DIR / md_name, title, payload)
     return payload
 
@@ -240,10 +242,19 @@ def main() -> int:
         print("- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
         return 0
 
+    # Certification is not allowed to consume live provider calls and later
+    # report success for draft-only work, or for a placeholder origin.
+    from check_public_static_output import validate_origin
+
     required = {
         "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
         "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
         "production_llm_provider": provider_live is not None,
+        "publication_explicitly_requested": os.environ.get("ALEGRIA_CERT_PUBLISH") == "1",
+        "real_https_origin": not validate_origin(
+            os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com")
+        ),
+        "public_output_dir_configured": bool(os.environ.get("ALEGRIA_CERT_PUBLIC_OUTPUT_DIR")),
     }
     if not all(required.values()):
         manifest = {
@@ -251,7 +262,7 @@ def main() -> int:
             "step": "R5.Step4",
             "evidence_status": "PENDING_CREDENTIALS",
             "failure_class": "credential_issue",
-            "status_reason": "Live certification requires DataForSEO credentials and one configured production LLM provider.",
+            "status_reason": "Live certification requires credentials, explicit publication, a real HTTPS origin, and public output configuration.",
             "provider_kind": provider_kind,
             "required": required,
             "updated_at": utc_now(),
@@ -362,7 +373,7 @@ def main() -> int:
                 "failure_class": payload["failure_class"],
                 "run_id": payload["run_id"],
                 "workflow_id": payload["workflow_id"],
-                "report_path": f"docs/runs/supersite_e2e_{scenario_id}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.md",
+                "report_path": payload["report_path"],
             }
         )
         if payload["evidence_status"] != "PASS":
