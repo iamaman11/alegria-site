@@ -14,12 +14,18 @@ MIGRATION = ROOT / "app" / "db" / "migrations" / "20260515_0004_rebuild_dependen
 
 def load_env() -> dict[str, str]:
     env = os.environ.copy()
-    for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key] = value
+    # A disposable CI database is only for this smoke. Never override the
+    # legacy replay evidence probe's configured DATABASE_URL globally.
+    if env.get("REBUILD_SMOKE_DATABASE_URL"):
+        env["DATABASE_URL"] = env["REBUILD_SMOKE_DATABASE_URL"]
+    # Developers can use their own environment or untracked local config.
+    if not env.get("DATABASE_URL") and LOCAL_ENV.is_file():
+        for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env[key] = value
     return env
 
 

@@ -3,11 +3,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY_DOC = ROOT / "docs" / "V6_Truth_Governance_Policy.md"
-WORKING_PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
-OWNER_DOC = ROOT / "docs" / "V6_Expert_Truth_Graph_Runtime.md"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
 POLICY_ENGINE = ROOT / "app" / "rust" / "crates" / "policies" / "src" / "truth_governance.rs"
+
+# Keep the runtime gate independent of docs/ and the GitHub Issues API.
+# Separate documentation parity remains mandatory until M2 certification.
 RAW_CRAWL = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter.rs"
 RAW_CRAWL_SPLIT_DIR = (
     ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter"
@@ -33,27 +33,6 @@ def read_module_surface(facade: Path, split_dir: Path) -> str:
 
 def main() -> int:
     failures: list[str] = []
-    if not POLICY_DOC.exists():
-        failures.append("missing V6_Truth_Governance_Policy.md")
-    else:
-        policy = read(POLICY_DOC)
-        for needle in [
-            "source independence",
-            "authority override",
-            "freshness",
-            "Regex is not allowed as final authority",
-        ]:
-            if needle not in policy:
-                failures.append(f"policy doc missing marker: {needle}")
-
-    working_plan = read(WORKING_PLAN)
-    if "V6_Truth_Governance_Policy.md" not in working_plan:
-        failures.append("working plan does not reference truth governance policy")
-
-    owner_doc = read(OWNER_DOC)
-    if "V6_Truth_Governance_Policy.md" not in owner_doc:
-        failures.append("owner doc does not reference truth governance policy")
-
     schema = read(SCHEMA)
     for needle in [
         "authority_class",
@@ -78,6 +57,17 @@ def main() -> int:
             if needle not in engine:
                 failures.append(f"policy engine missing marker: {needle}")
 
+        for test_name in [
+            "independent_sources_verify",
+            "non_independent_same_group_needs_hitl",
+            "authoritative_single_source_override_verifies",
+            "weak_source_corroboration_does_not_verify",
+            "stale_candidate_is_blocked_before_verification",
+            "override_is_denied_for_non_authoritative_source_class",
+        ]:
+            if f"fn {test_name}(" not in engine:
+                failures.append(f"policy engine missing behavioral regression: {test_name}")
+
     for text, label in [
         (read_module_surface(RAW_CRAWL, RAW_CRAWL_SPLIT_DIR), "raw crawl adapter"),
         (
@@ -91,6 +81,9 @@ def main() -> int:
     ci_verify = read(CI_VERIFY)
     if "python3 automation/check_truth_governance_policy.py" not in ci_verify:
         failures.append("ci_verify.sh does not include truth governance policy check")
+
+    if "python3 automation/check_truth_governance_documentation.py" not in ci_verify:
+        failures.append("ci_verify.sh does not include legacy documentation parity check")
 
     if failures:
         print("TRUTH_GOVERNANCE_POLICY: FAILED")
