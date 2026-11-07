@@ -235,6 +235,11 @@ fn missing_required_contract_flags(flags: &[(&'static str, bool)]) -> Vec<&'stat
         .collect()
 }
 
+/// The last graph projection is generated during draft_assemble, not IA.
+fn graph_projection_due_at_gate(name: &str, require_page_brief_projection: bool) -> bool {
+    name != "page_brief" || require_page_brief_projection
+}
+
 pub(crate) async fn seo_preflight_impl(
     acts: &AlegriaActivities,
     input: &SeoPreflightInput,
@@ -306,7 +311,9 @@ pub(crate) async fn seo_preflight_impl(
     // per-page post-draft gate before editorial/publish.
     let applicable_graph_projections = required_graph_projection_statuses
         .iter()
-        .filter(|status| input.require_page_brief_projection || status.projection_name != "page_brief");
+        .filter(|status| {
+            graph_projection_due_at_gate(&status.projection_name, input.require_page_brief_projection)
+        });
     let graph_projection_contract_ready = applicable_graph_projections
         .clone()
         .all(|status| status.exists && status.projection_complete);
@@ -574,7 +581,7 @@ pub(crate) async fn seo_preflight_impl(
 
 #[cfg(test)]
 mod canonical_production_contract_tests {
-    use super::missing_required_contract_flags;
+    use super::{graph_projection_due_at_gate, missing_required_contract_flags};
 
     #[test]
     fn required_capabilities_must_be_explicit() {
@@ -592,5 +599,13 @@ mod canonical_production_contract_tests {
             ("RETRIEVAL_CAPABILITY_REQUIRED", true),
         ])
         .is_empty());
+    }
+
+    #[test]
+    fn future_brief_is_not_due_at_ia_gate_but_is_due_after_draft_assembly() {
+        assert!(graph_projection_due_at_gate("page_node", false));
+        assert!(graph_projection_due_at_gate("link_recommendation", false));
+        assert!(!graph_projection_due_at_gate("page_brief", false));
+        assert!(graph_projection_due_at_gate("page_brief", true));
     }
 }
