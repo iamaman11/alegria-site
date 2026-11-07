@@ -314,6 +314,11 @@ pub(crate) async fn seo_preflight_impl(
             )
             .await
         };
+    let completed_producers = if input.require_materialized_projections {
+        sqlx_seo_adapter::read_completed_seo_producers(&acts.pool, &input.run_id).await?
+    } else {
+        Vec::new()
+    };
     let collection_statuses =
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
@@ -325,9 +330,21 @@ pub(crate) async fn seo_preflight_impl(
             let current_run_count = scoped_point_counts.get(&status.collection_name).copied();
             let point_count = effective_collection_point_count(status.point_count, current_run_count);
             let current_run_verified = current_run_count.is_some();
+            // Empty collection != missing collection. This narrow exception
+            // requires a real provider readback and a completed run producer;
+            // it never substitutes fake points for mandatory factual evidence.
+            let valid_empty = input.require_materialized_projections
+                && point_count == 0
+                && qdrant_collection_presence
+                    .get(&status.collection_name)
+                    .copied()
+                    .unwrap_or(false)
+                && optional_retrieval_valid_empty(&status.collection_name, &completed_producers);
             SeoPreflightCollectionStatus {
-                exists: point_count > 0,
-                fresh: if current_run_verified {
+                exists: point_count > 0 || valid_empty,
+                fresh: if valid_empty {
+                    true
+                } else if current_run_verified {
                     // These points carry this run's identity in Qdrant.
                     point_count > 0
                 } else {
@@ -336,7 +353,7 @@ pub(crate) async fn seo_preflight_impl(
                         .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
                         .unwrap_or(false)
                 },
-                projection_complete: point_count > 0,
+                projection_complete: point_count > 0 || valid_empty,
                 collection_name: status.collection_name,
                 point_count,
                 // A Qdrant count does not expose a materialization timestamp.
@@ -372,11 +389,6 @@ pub(crate) async fn seo_preflight_impl(
         read_neo4j_scope_projection_counts(&scope.scope_signature, &graph_readback_names).await?
     } else {
         Default::default()
-    };
-    let completed_producers = if input.require_materialized_projections {
-        sqlx_seo_adapter::read_completed_seo_producers(&acts.pool, &input.run_id).await?
-    } else {
-        Vec::new()
     };
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
