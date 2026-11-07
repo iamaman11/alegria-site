@@ -26,6 +26,17 @@ cargo build --manifest-path app/rust/Cargo.toml \
   -p outbox_worker \
   --bin outbox_worker
 
+# Prove both Qdrant transports on a real container before running the
+# multi-fixture truth certification. A gRPC-only harness cannot validate the
+# HTTP REST endpoint used by projection_materialize_adapter.
+cargo test --manifest-path app/rust/Cargo.toml \
+  --target-dir "$SUITE_TARGET_DIR" \
+  -p integration_harness \
+  --features e2e \
+  --lib \
+  qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval \
+  -- --nocapture
+
 run_suite() {
   rm -f "$LOG_PATH"
   INTEGRATION_TEMPORAL_WORKER_BIN="$TEMPORAL_BIN" \
