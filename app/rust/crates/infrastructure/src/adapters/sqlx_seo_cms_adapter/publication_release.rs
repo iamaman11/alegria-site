@@ -234,12 +234,41 @@ async fn verify_live_release(
     Ok(())
 }
 
+// The activation guard restores the prior release if DB finalization fails.
+// Only a committed DB transaction may disarm it.
+struct PublicationActivation {
+    #[cfg(unix)]
+    public_path: ReleasePathBuf,
+    #[cfg(unix)]
+    previous: Option<ReleasePathBuf>,
+    armed: bool,
+}
+
+impl PublicationActivation {
+    fn confirm(&mut self) {
+        self.armed = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for PublicationActivation {
+    fn drop(&mut self) {
+        if self.armed {
+            if let Err(err) =
+                restore_public_release(&self.public_path, self.previous.as_deref())
+            {
+                tracing::error!(reason = %err, "failed to restore prior release after DB failure");
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 async fn promote_and_verify_public_release(
     artifact: &PublishArtifact,
     page_node_key: &str,
     revision_id: &str,
-) -> Result<(), String> {
+) -> Result<PublicationActivation, String> {
     let meta: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
         .map_err(|err| format!("persisted candidate metadata: {err}"))?;
     let candidate_raw = meta.get("candidate_output_dir")
@@ -276,7 +305,11 @@ async fn promote_and_verify_public_release(
         restore_public_release(&public, previous.as_deref())?;
         return Err(err);
     }
-    Ok(())
+    Ok(PublicationActivation {
+        public_path: public,
+        previous,
+        armed: true,
+    })
 }
 
 #[cfg(not(unix))]
@@ -284,7 +317,7 @@ async fn promote_and_verify_public_release(
     _artifact: &PublishArtifact,
     _page_node_key: &str,
     _revision_id: &str,
-) -> Result<(), String> {
+) -> Result<PublicationActivation, String> {
     Err("atomic static deployment requires a Unix filesystem".into())
 }
 
