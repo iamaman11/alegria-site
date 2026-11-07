@@ -37,5 +37,6 @@ seo_application = { path = "../seo_application" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 serial_test = "3.2.0"
+prost = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }
