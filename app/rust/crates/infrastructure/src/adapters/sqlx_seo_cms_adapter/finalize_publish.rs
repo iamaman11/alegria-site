@@ -14,6 +14,19 @@ pub async fn persist_finalize_publish_output(
     let mut is_published = planned.verdict == "published"
         && render_validation.verdict == "render_ready"
         && blocking_reasons.is_empty();
+    // Lock all publication effects for this public site, across workers and
+    // processes. The transaction owns the lock until the outbox commits.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    if is_published {
+        let public_dir = std::env::var("SEO_STATIC_OUTPUT_DIR")
+            .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
+        sqlx::query("SELECT pg_advisory_xact_lock(21917, hashtext($1))")
+            .bind(&public_dir)
+            .execute(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?;
+    }
+
     let mut activation: Option<PublicationActivation> = None;
     if is_published {
         // Render readiness is NOT publication. Activate an immutable,
@@ -42,10 +55,8 @@ pub async fn persist_finalize_publish_output(
     blocking_reasons.dedup();
     let final_verdict = if is_published { "published" } else { "blocked" };
 
-    // Database status, artifacts, events and HITL must commit together.
+    // Database status, artifact, event, HITL, and outbox commit together.
     // On any SQL error the activation guard restores the prior public release.
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-
     sqlx::query(
         r#"
         UPDATE site.cms_page_revisions
@@ -68,6 +79,13 @@ pub async fn persist_finalize_publish_output(
         SET current_status = CASE
                 WHEN $1 = 'blocked' AND published_at IS NOT NULL THEN 'published'
                 ELSE $1 END,
+            current_revision_id = CASE
+                WHEN $1 = 'published' THEN $3
+                ELSE current_revision_id END,
+            rollback_revision_id = CASE
+                WHEN $1 = 'published' AND current_status = 'published'
+                     AND current_revision_id IS DISTINCT FROM $3
+                THEN current_revision_id ELSE rollback_revision_id END,
             published_at = CASE WHEN $1 = 'published' THEN COALESCE(published_at, now()) ELSE published_at END,
             updated_at = now()
         WHERE page_node_key = $2
@@ -75,6 +93,7 @@ pub async fn persist_finalize_publish_output(
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.page_node_key)
+    .bind(&input.revision_id)
     .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
@@ -205,13 +224,15 @@ pub async fn persist_finalize_publish_output(
         }
     }
 
+    let _ = outbox_emit_many_in_tx(
+        &mut tx,
+        &[cms_event_outbox(&cms_event, &input.run_id)],
+    )
+    .await?;
     tx.commit().await.map_err(classify_sqlx)?;
     if let Some(receipt) = activation.as_mut() {
         receipt.confirm();
     }
-    // The release is already publicly verified and the DB committed.
-    // Outbox retries remain idempotent, even if the worker crashes here.
-    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
 
     Ok(FinalizePublishOutputPayload {
         verdict: final_verdict.to_string(),
