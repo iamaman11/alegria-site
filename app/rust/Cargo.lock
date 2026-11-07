@@ -2528,6 +2528,7 @@ dependencies = [
  "contracts",
  "infrastructure",
  "neo4rs",
+ "prost",
  "qdrant-client",
  "reqwest 0.13.5",
  "seo_application",
