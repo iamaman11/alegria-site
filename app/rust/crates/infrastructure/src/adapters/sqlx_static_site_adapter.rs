@@ -97,9 +97,9 @@ async fn load_snapshot_links(
 
 /// Public serving/build snapshot.
 ///
-/// A page remains public from its latest published revision even while a newer
-/// revision is review_required/approved/blocked. `cms_pages.current_revision_id`
-/// is the working candidate pointer and therefore must not define public truth.
+/// A published page is served only from its explicitly committed current
+/// revision, never from timestamps of older revisions. A newer candidate
+/// remains separate from `cms_pages.current_revision_id` until HTTPS proof.
 pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapshot, DomainError> {
     let rows = sqlx::query(
         r#"
@@ -119,21 +119,10 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
             r.schema_markup_payload,
             r.updated_at::text AS updated_at
         FROM site.cms_pages p
-        JOIN LATERAL (
-            SELECT
-                revision_id,
-                title,
-                meta_description,
-                h1,
-                body_payload,
-                schema_markup_payload,
-                updated_at
-            FROM site.cms_page_revisions published_revision
-            WHERE published_revision.page_node_key = p.page_node_key
-              AND published_revision.revision_status = 'published'
-            ORDER BY published_revision.updated_at DESC, published_revision.revision_id DESC
-            LIMIT 1
-        ) r ON TRUE
+        JOIN site.cms_page_revisions r
+          ON r.page_node_key = p.page_node_key
+         AND r.revision_id = p.current_revision_id
+         AND r.revision_status = 'published'
         ORDER BY
             CASE WHEN p.canonical_url_path = '/' THEN 0 ELSE 1 END,
             p.canonical_url_path
@@ -155,7 +144,7 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
 /// Candidate build snapshot used before final publication.
 ///
 /// It contains exactly the requested approved revision for the target page plus
-/// the latest published revision for every other page. The target candidate is
+/// the committed published revision for every other page. The target candidate is
 /// therefore previewable without entering the public snapshot prematurely.
 pub async fn load_static_site_candidate_snapshot(
     pool: &PgPool,
@@ -211,21 +200,10 @@ pub async fn load_static_site_candidate_snapshot(
                 r.schema_markup_payload,
                 r.updated_at::text AS updated_at
             FROM site.cms_pages p
-            JOIN LATERAL (
-                SELECT
-                    revision_id,
-                    title,
-                    meta_description,
-                    h1,
-                    body_payload,
-                    schema_markup_payload,
-                    updated_at
-                FROM site.cms_page_revisions published_revision
-                WHERE published_revision.page_node_key = p.page_node_key
-                  AND published_revision.revision_status = 'published'
-                ORDER BY published_revision.updated_at DESC, published_revision.revision_id DESC
-                LIMIT 1
-            ) r ON TRUE
+            JOIN site.cms_page_revisions r
+              ON r.page_node_key = p.page_node_key
+             AND r.revision_id = p.current_revision_id
+             AND r.revision_status = 'published'
             WHERE p.page_node_key <> $1
               AND p.scope_signature = (
                   SELECT target.scope_signature
