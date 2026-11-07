@@ -35,3 +35,16 @@ jobs:
             automation/reports/consistency_report.json
             automation/reports/consistency_report.md
 
+  knowledge_m3_truth:
+    name: knowledge-m3-truth-contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify both independent truth-governance gates
+        run: |
+          python3 -m py_compile automation/check_truth_governance_policy.py automation/check_truth_governance_documentation.py
+          python3 automation/check_truth_governance_policy.py
+          python3 automation/check_truth_governance_documentation.py
+
