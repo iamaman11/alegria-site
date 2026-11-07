@@ -169,6 +169,9 @@ python3 automation/check_shadow_verification_surface.py
 echo "[35g2/58] Cutover convergence policy"
 python3 automation/check_cutover_convergence_policy.py
 
+echo "[35g3a/58] Truth certification fail-closed baseline migration policy"
+python3 automation/smoke_truth_certification_strict_projection_policy.py
+
 echo "[35g3/58] Truth certification regression gate"
 bash automation/run_truth_certification_gate.sh
 
