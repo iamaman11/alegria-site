@@ -131,10 +131,15 @@ impl QdrantHarness {
 
 impl Neo4jHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("neo4j", "5.26.0-community")
+        // Exercise the same Neo4j/GDS capability contract as docker-compose.
+        // The plugin is installed in this existing test container, not a
+        // separate synthetic graph service or a production-side bypass.
+        let image = GenericImage::new("neo4j", "2026.02.2")
             .with_exposed_port(7687.tcp())
-            .with_wait_for(WaitFor::seconds(45));
-        let image = image.with_env_var("NEO4J_AUTH", "neo4j/neo4j_password");
+            .with_wait_for(WaitFor::seconds(45))
+            .with_env_var("NEO4J_AUTH", "neo4j/neo4j_password")
+            .with_env_var("NEO4J_PLUGINS", r#"["apoc", "graph-data-science"]"#)
+            .with_env_var("NEO4J_dbms_security_procedures_unrestricted", "apoc.*,gds.*");
         let container = image
             .start()
             .await
