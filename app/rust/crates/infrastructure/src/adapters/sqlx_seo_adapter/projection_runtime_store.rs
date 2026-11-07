@@ -45,7 +45,8 @@ pub async fn projection_backlog_counts(
     let row = sqlx::query(
         r#"
         SELECT
-          COUNT(*) FILTER (WHERE status = 'pending') AS pending_events,
+          -- Processing leases are still outstanding, not materialized points.
+          COUNT(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending_events,
           COUNT(*) FILTER (WHERE status = 'failed') AS failed_events
         FROM system.sync_outbox
         WHERE run_id = $1
