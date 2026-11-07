@@ -236,6 +236,68 @@ def scenario_payload(
     return payload
 
 
+def clean_runtime_preflight() -> dict[str, Any]:
+    """Read-only launch readiness; never run fixture seeding or database restore.
+
+    The canonical workflow itself enforces live provider, facts, graph and
+    retrieval gates. This preliminary check only verifies that the already
+    running services are reachable and the worker's publish policy is strict.
+    """
+    checks = [
+        (
+            "postgres_readiness",
+            ["docker", "compose", "exec", "-T", "postgres",
+             "pg_isready", "-U", "postgres", "-d", "alegria"],
+        ),
+        (
+            "canonical_temporal_connectivity",
+            ["docker", "compose", "exec", "-T", "temporal-worker",
+             "temporal_starter", "--temporal-url", "http://temporal-server:7233",
+             "ping"],
+        ),
+        (
+            "canonical_worker_configuration",
+            ["docker", "compose", "exec", "-T", "-e",
+             f"ALEGRIA_EXPECTED_ORIGIN={os.environ['ALEGRIA_CERT_BASE_URL']}",
+             "temporal-worker", "sh", "-ec", """
+                set -eu
+                test "${SEO_STATIC_BASE_URL:-}" = "$ALEGRIA_EXPECTED_ORIGIN"
+                test "${SEO_STATIC_PUBLISH_BACKEND:-}" = cloudflare_workers_static_assets
+                test -n "${CLOUDFLARE_API_TOKEN:-}"
+                test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+                test -n "${DATAFORSEO_LOGIN:-}"
+                test -n "${DATAFORSEO_PASSWORD:-}"
+                test -n "${VOYAGE_API_KEY:-}"
+                for flag in RETRIEVAL_CAPABILITY_REQUIRED CANONICAL_VECTOR_RETRIEVAL_REQUIRED \
+                    CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED VOYAGE_RERANK_REQUIRED \
+                    GRAPH_CAPABILITY_REQUIRED NEO4J_SYNC_REQUIRED GRAPH_QUERY_REQUIRED \
+                    GRAPH_GDS_REQUIRED; do
+                    eval "value=\\${$flag:-}"
+                    test "$value" = true
+                done
+                case "${SEO_LLM_PROVIDER:-}" in
+                    openai) test -n "${OPENAI_API_KEY:-}" ;;
+                    anthropic) test -n "${ANTHROPIC_API_KEY:-}" ;;
+                    gemini) test -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ;;
+                    *) exit 1 ;;
+                esac
+             """],
+        ),
+    ]
+    evidence: dict[str, Any] = {}
+    for name, command in checks:
+        result = run_command(command)
+        evidence[name] = {
+            "exit_code": result.returncode,
+            # Intentionally do not persist command/env/stdout/stderr: the
+            # worker configuration contains account and credential context.
+            "status": "PASS" if result.returncode == 0 else "FAIL",
+        }
+        if result.returncode != 0:
+            break
+    return evidence
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
@@ -248,8 +310,8 @@ def main() -> int:
         print("R5 certification dry-run")
         print(f"- database_url={database_url}")
         print(f"- provider_kind={provider_kind}")
-        print("- gate: temporal_production_gate.sh")
-        print("- gate: infra/backups/restore_drill.sh")
+        print("- readiness: non-mutating docker compose checks")
+        print("- gate: the real canonical Temporal workflow (no fixture seeds, no restore)")
         print("- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
         return 0
 
@@ -294,49 +356,29 @@ def main() -> int:
         print(f"E2E_SUPERSITE_CERTIFICATION: {status}")
         return 2
 
-    gate_results: dict[str, Any] = {}
-
-    production_gate = run_command(["bash", "automation/temporal_production_gate.sh"], env=os.environ.copy())
-    gate_results["temporal_production_gate"] = {
-        "exit_code": production_gate.returncode,
-        "stdout_excerpt": production_gate.stdout.strip()[-4000:],
-        "stderr_excerpt": production_gate.stderr.strip()[-4000:],
-    }
-    if production_gate.returncode != 0:
+    # The old temporal_production_gate and restore_drill were *mutating smoke*
+    # tools: they seeded synthetic verified rules, auto-approved review pages,
+    # and even dropped/restored live PostgreSQL schemas. They MUST NOT run in a
+    # product certification using real sources and real editorial approval.
+    gate_results = clean_runtime_preflight()
+    if not gate_results or any(
+        check["status"] != "PASS" for check in gate_results.values()
+    ):
         manifest = {
             "artifact_id": "r5_supersite_certification_manifest",
             "step": "R5.Step4",
             "evidence_status": "FAIL",
-            "failure_class": "production_gate_failure",
-            "status_reason": "Temporal production gate failed before certification runs.",
+            "failure_class": "runtime_preflight_failure",
+            "status_reason": (
+                "Read-only service/configuration preflight failed; no workflow was started."
+            ),
             "provider_kind": provider_kind,
             "gate_results": gate_results,
             "updated_at": utc_now(),
         }
         write_json(MANIFEST, manifest)
         print("E2E_SUPERSITE_CERTIFICATION: FAILED")
-        return production_gate.returncode
-
-    restore_drill = run_command(["bash", "infra/backups/restore_drill.sh"], env=os.environ.copy())
-    gate_results["restore_drill"] = {
-        "exit_code": restore_drill.returncode,
-        "stdout_excerpt": restore_drill.stdout.strip()[-4000:],
-        "stderr_excerpt": restore_drill.stderr.strip()[-4000:],
-    }
-    if restore_drill.returncode != 0:
-        manifest = {
-            "artifact_id": "r5_supersite_certification_manifest",
-            "step": "R5.Step4",
-            "evidence_status": "FAIL",
-            "failure_class": "restore_drill_failure",
-            "status_reason": "Restore drill failed before certification runs.",
-            "provider_kind": provider_kind,
-            "gate_results": gate_results,
-            "updated_at": utc_now(),
-        }
-        write_json(MANIFEST, manifest)
-        print("E2E_SUPERSITE_CERTIFICATION: FAILED")
-        return restore_drill.returncode
+        return 1
 
     scenarios = [
         (

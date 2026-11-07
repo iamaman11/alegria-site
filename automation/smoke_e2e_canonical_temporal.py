@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import os
 from unittest import mock
+import subprocess
+import inspect
+import e2e_supersite_certification as cert
 from uuid import UUID
 
 from e2e_supersite_certification import canonical_temporal_command, parse_result
@@ -54,6 +57,34 @@ def main() -> int:
         "SEO_RUN_RESULT scenario=site_build_full mode=semi_auto_operator "
         "status=done page_total=3 published_pages=3 changed_truth_keys=3"
     ) == {}
+    # Read-only readiness must never call the synthetic producer or destructive
+    # restore drill; check the actual commands, not a documentary assertion.
+    called = []
+    def record(command, *, env=None):
+        called.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
+    with mock.patch.dict(os.environ, {
+        "ALEGRIA_CERT_BASE_URL": "https://seo-staging.alegria.by",
+    }), mock.patch.object(cert, "run_command", side_effect=record):
+        readiness = cert.clean_runtime_preflight()
+    assert len(readiness) == 3 and all(
+        check["status"] == "PASS" for check in readiness.values()
+    ), readiness
+    assert len(called) == 3
+    assert all(c[:3] == ["docker", "compose", "exec"] for c in called)
+    forbidden = ("temporal_production_gate.sh", "restore_drill.sh",
+                 "cms-approve-publish", "DROP SCHEMA", "seed_admissible")
+    assert not any(token in repr(called) for token in forbidden), called
+    main_source = inspect.getsource(cert.main)
+    assert "temporal_production_gate.sh" not in main_source
+    assert "restore_drill.sh" not in main_source
+    with mock.patch.dict(os.environ, {
+        "ALEGRIA_CERT_BASE_URL": "https://seo-staging.alegria.by",
+    }), mock.patch.object(cert, "run_command", return_value=subprocess.CompletedProcess(
+        ["docker", "compose", "exec"], 1, stdout="", stderr="error"
+    )):
+        readiness = cert.clean_runtime_preflight()
+    assert len(readiness) == 1 and readiness["postgres_readiness"]["status"] == "FAIL"
     print("E2E_CANONICAL_TEMPORAL_SMOKE: OK")
     return 0
 
