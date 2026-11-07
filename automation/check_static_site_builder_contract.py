@@ -51,7 +51,11 @@ def main() -> int:
 
     if not failures:
         failures += require(adapter_mod, "pub mod sqlx_static_site_adapter;", "adapter registration")
-        failures += require(cargo, "pulldown-cmark", "markdown rendering dependency")
+        renderer_cargo = ROOT / "app/rust/crates/infrastructure/Cargo.toml"
+        failures += require(
+            renderer_cargo, "pulldown-cmark", "canonical markdown rendering dependency"
+        )
+        failures += forbid(cargo, "pulldown-cmark", "duplicate CLI markdown dependency")
         failures += require(cli, "BuildStaticSite", "CLI command")
         cli_static = ROOT / "app/rust/services/cli_tools/src/cli/static_site.rs"
         failures += require(
