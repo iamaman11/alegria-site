@@ -101,8 +101,14 @@ pub async fn persist_cms_publish_output(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '[]'::jsonb, $9, $10, $11,
                 $12, $13, 'fresh', 'seo_editor', 'seo_publish_gate', $14)
         ON CONFLICT (revision_id) DO UPDATE
-        SET body_payload = EXCLUDED.body_payload,
-            revision_status = EXCLUDED.revision_status,
+        SET body_payload = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.body_payload
+                ELSE EXCLUDED.body_payload END,
+            revision_status = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.revision_status
+                ELSE EXCLUDED.revision_status END,
             updated_at = now()
         "#,
     )
