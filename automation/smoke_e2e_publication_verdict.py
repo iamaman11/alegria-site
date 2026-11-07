@@ -76,6 +76,24 @@ def main() -> int:
             "modified_existing_html_pages": 1,
         }
         assert not module.validate_scenario(payload)
+        # A one-scenario manifest cannot certify full R5 even if its only
+        # scenario contains genuine canonical publication evidence.
+        singleton_report = root / "singleton.md"
+        singleton_report.write_text(
+            "## Test\\n\\n```json\\n" + json.dumps(payload) + "\\n```\\n",
+            encoding="utf-8",
+        )
+        singleton_manifest = root / "singleton.json"
+        singleton_manifest.write_text(json.dumps({
+            "evidence_status": "PASS",
+            "scenarios": [{"scenario_id": "factual_change_rebuild",
+                           "report_path": str(singleton_report)}],
+        }), encoding="utf-8")
+        single = subprocess.run(
+            [sys.executable, str(CHECKER), str(singleton_manifest)],
+            capture_output=True, text=True, check=False,
+        )
+        assert single.returncode != 0 and "three distinct" in single.stdout, single.stdout
     print("E2E_PUBLICATION_VERDICT_SMOKE: OK")
     return 0
 

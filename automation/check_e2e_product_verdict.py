@@ -32,6 +32,8 @@ def validate_scenario(payload: dict[str, Any]) -> list[str]:
     page_total = int(result.get("page_total", 0) or 0)
     published_pages = int(result.get("published_pages", 0) or 0)
     publish_requested = bool(payload.get("publish_requested", False))
+    if not publish_requested:
+        failures.append(f"{scenario}: explicit real-HITL publication was not requested")
 
     if evidence_status != "PASS":
         failures.append(f"{scenario}: evidence_status={evidence_status!r}, expected PASS")
@@ -91,9 +93,24 @@ def main() -> int:
 
     scenarios = manifest.get("scenarios")
     published_scenarios = 0
+    required_scenarios = {
+        "fresh_scope", "scope_expansion", "factual_change_rebuild"
+    }
     if not isinstance(scenarios, list) or not scenarios:
         failures.append("manifest contains no certification scenarios")
     else:
+        recorded_scenarios = [
+            str(item.get("scenario_id", "")) for item in scenarios
+            if isinstance(item, dict)
+        ]
+        if (
+            len(recorded_scenarios) != len(required_scenarios)
+            or set(recorded_scenarios) != required_scenarios
+        ):
+            failures.append(
+                "R5 requires three distinct, complete certification scenarios: "
+                + ",".join(sorted(required_scenarios))
+            )
         for scenario in scenarios:
             if not isinstance(scenario, dict):
                 failures.append("manifest contains malformed scenario entry")
