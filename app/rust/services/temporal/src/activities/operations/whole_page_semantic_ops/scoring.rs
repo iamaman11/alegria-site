@@ -214,15 +214,15 @@ fn page_mode_scores(
             "guide",
         ],
     ) > 0;
-    let primary_has_functional_mode =
-        marker_hit_count(
-            &primary_content,
-            &["privacy", "cookie", "login", "terms", "policy"],
-        ) >= 2
-            || marker_hit_count(
-                &primary_content,
-                &["breadcrumb", "menu", "directory", "sitemap", "category", "sidebar"],
-            ) >= 2;
+    let utility_markers = marker_hit_count(
+        &primary_content,
+        &["privacy", "cookie", "login", "terms", "policy"],
+    );
+    let navigation_markers = marker_hit_count(
+        &primary_content,
+        &["breadcrumb", "menu", "directory", "sitemap", "category", "sidebar"],
+    );
+    let primary_has_functional_mode = utility_markers >= 2 || navigation_markers >= 2;
     let content_support = if !primary_has_substantive_content && primary_has_functional_mode {
         0.0
     } else {
