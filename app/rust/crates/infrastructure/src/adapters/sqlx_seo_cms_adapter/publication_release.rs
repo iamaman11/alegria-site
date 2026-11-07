@@ -194,6 +194,105 @@ fn swap_public_release(
 }
 
 #[cfg(unix)]
+#[cfg(unix)]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PendingPublication {
+    new_release: ReleasePathBuf,
+    previous: Option<ReleasePathBuf>,
+    page_node_key: String,
+    revision_id: String,
+    artifact_key: String,
+}
+
+#[cfg(unix)]
+fn pending_publication_path(public: &ReleasePath) -> Result<ReleasePathBuf, String> {
+    Ok(public.parent().ok_or("public output path has no parent")?
+        .join(".alegria-pending-publication.json"))
+}
+
+#[cfg(unix)]
+fn write_pending_publication(
+    path: &ReleasePath,
+    pending: &PendingPublication,
+) -> Result<(), String> {
+    use std::io::Write;
+    let content = serde_json::to_vec(pending)
+        .map_err(|err| format!("serialize pending publication: {err}"))?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|err| format!("pending publication must first be reconciled: {err}"))?;
+    file.write_all(&content)
+        .and_then(|_| file.sync_all())
+        .map_err(|err| format!("persist pending publication: {err}"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainError> {
+    let public = ReleasePathBuf::from(std::env::var("SEO_STATIC_OUTPUT_DIR")
+        .unwrap_or_else(|_| "app/rust/dist/static-site".to_string()));
+    let journal_path = pending_publication_path(&public).map_err(validation_failure)?;
+    if !journal_path.exists() {
+        return Ok(());
+    }
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(21917, hashtext($1))")
+        .bind(public.to_string_lossy().as_ref())
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    if !journal_path.exists() {
+        tx.commit().await.map_err(classify_sqlx)?;
+        return Ok(());
+    }
+    let journal: PendingPublication = serde_json::from_slice(
+        &std::fs::read(&journal_path)
+            .map_err(|err| validation_failure(format!("read pending publication: {err}")))?,
+    ).map_err(|err| validation_failure(format!("parse pending publication: {err}")))?;
+    // Both database state and the file pointer must agree. Never infer
+    // commitment from the presence of a ready-looking release directory.
+    let committed: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS(
+          SELECT 1 FROM site.cms_pages p
+          JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+          JOIN site.publish_artifacts a ON a.revision_id = r.revision_id
+          WHERE p.page_node_key = $1 AND p.current_revision_id = $2
+            AND p.current_status = 'published'
+            AND r.revision_status = 'published'
+            AND a.artifact_key = $3 AND a.status = 'ready'
+        )
+        "#,
+    )
+    .bind(&journal.page_node_key)
+    .bind(&journal.revision_id)
+    .bind(&journal.artifact_key)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let live = match std::fs::read_link(&public) {
+        Ok(target) => Some(target),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(validation_failure(format!("read live publication pointer: {err}"))),
+    };
+    if committed {
+        if live.as_deref() != Some(journal.new_release.as_path()) {
+            return Err(validation_failure("committed publication no longer matches live pointer"));
+        }
+    } else if live.as_deref() == Some(journal.new_release.as_path()) {
+        restore_public_release(&public, journal.previous.as_deref())
+            .map_err(validation_failure)?;
+    } else if live.as_deref() != journal.previous.as_deref() {
+        return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
+    }
+    std::fs::remove_file(&journal_path)
+        .map_err(|err| validation_failure(format!("clear reconciled publication journal: {err}")))?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(())
+}
+
 fn restore_public_release(
     public: &ReleasePath,
     previous: Option<&ReleasePath>,
@@ -250,12 +349,18 @@ struct PublicationActivation {
     public_path: ReleasePathBuf,
     #[cfg(unix)]
     previous: Option<ReleasePathBuf>,
+    #[cfg(unix)]
+    journal_path: ReleasePathBuf,
     armed: bool,
 }
 
 impl PublicationActivation {
     fn confirm(&mut self) {
         self.armed = false;
+        #[cfg(unix)]
+        if let Err(err) = std::fs::remove_file(&self.journal_path) {
+            tracing::error!(reason = %err, "committed publication journal awaits startup reconciliation");
+        }
     }
 }
 
@@ -263,10 +368,13 @@ impl PublicationActivation {
 impl Drop for PublicationActivation {
     fn drop(&mut self) {
         if self.armed {
-            if let Err(err) =
-                restore_public_release(&self.public_path, self.previous.as_deref())
-            {
-                tracing::error!(reason = %err, "failed to restore prior release after DB failure");
+            match restore_public_release(&self.public_path, self.previous.as_deref()) {
+                Ok(()) => {
+                    if let Err(err) = std::fs::remove_file(&self.journal_path) {
+                        tracing::error!(reason = %err, "failed to clear rolled-back publication journal");
+                    }
+                }
+                Err(err) => tracing::error!(reason = %err, "failed to restore prior release after DB failure"),
             }
         }
     }
@@ -299,6 +407,11 @@ async fn promote_and_verify_public_release(
         return Err("SEO_STATIC_BASE_URL must explicitly name the public HTTPS origin".into());
     }
     let public = ReleasePathBuf::from(public_raw);
+    let configured_public = std::env::var("SEO_STATIC_OUTPUT_DIR")
+        .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
+    if ReleasePath::new(&configured_public) != public {
+        return Err("candidate public output path must equal the configured worker path".into());
+    }
     if public.as_os_str().is_empty() {
         return Err("public output path is empty".into());
     }
@@ -309,12 +422,30 @@ async fn promote_and_verify_public_release(
     }
     let files = publication_files(&candidate, page_node_key, revision_id, origin_raw)?;
     let release = create_immutable_release(&candidate, &files)?;
-    let previous = swap_public_release(&public, &release)?;
-    // Construct the rollback guard immediately after the atomic switch.
-    // Cancellation during the next async HTTPS request must also roll back.
+    let journal_path = pending_publication_path(&public)?;
+    let previous = match std::fs::read_link(&public) {
+        Ok(link) => Some(link),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => return Err(format!("read current live release: {err}")),
+    };
+    let pending = PendingPublication {
+        new_release: release.clone(),
+        previous: previous.clone(),
+        page_node_key: page_node_key.to_string(),
+        revision_id: revision_id.to_string(),
+        artifact_key: artifact.artifact_key.clone(),
+    };
+    write_pending_publication(&journal_path, &pending)?;
+    if let Err(err) = swap_public_release(&public, &release) {
+        let _ = std::fs::remove_file(&journal_path);
+        return Err(err);
+    }
+    // Construct the rollback guard before the HTTPS await. The journal also
+    // survives a worker/process crash until startup reconciliation.
     let activation = PublicationActivation {
         public_path: public,
         previous,
+        journal_path,
         armed: true,
     };
     verify_live_release(&origin, &files).await?;
