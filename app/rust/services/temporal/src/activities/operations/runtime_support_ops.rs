@@ -320,6 +320,21 @@ pub(crate) async fn seo_preflight_impl(
         .iter()
         .all(|status| status.exists && status.projection_complete);
     let required_graph_projection_names = required_graph_projections();
+    let graph_readback_names = required_graph_projection_names
+        .iter()
+        .copied()
+        .filter(|name| {
+            graph_projection_due_at_gate(name, input.require_page_brief_projection)
+                && (!input.require_page_brief_projection || *name == "page_brief")
+        })
+        .collect::<Vec<_>>();
+    // The post-IA barrier validates all due graph projections. Each later
+    // page barrier only rechecks PageBrief; the prior full barrier already ran.
+    let actual_graph_counts = if input.require_materialized_projections {
+        read_neo4j_scope_projection_counts(&scope.scope_signature, &graph_readback_names).await?
+    } else {
+        Default::default()
+    };
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
@@ -328,18 +343,25 @@ pub(crate) async fn seo_preflight_impl(
     .await?;
     let required_graph_projection_statuses = graph_projection_statuses
         .into_iter()
-        .map(|status| SeoPreflightGraphProjectionStatus {
-            projection_name: status.artifact_name,
-            exists: status.point_count > 0,
-            fresh: status
-                .lag_seconds
-                .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                .unwrap_or(false),
-            projection_complete: status.point_count > 0,
-            point_count: status.point_count,
-            last_materialized_at: status.last_materialized_at,
-            last_source_change_at: None,
-            lag_seconds: status.lag_seconds,
+        .map(|status| {
+            let source_count = status.point_count;
+            let actual_count = actual_graph_counts
+                .get(&status.artifact_name)
+                .copied()
+                .unwrap_or(source_count);
+            SeoPreflightGraphProjectionStatus {
+                projection_name: status.artifact_name,
+                exists: source_count > 0 && actual_count > 0,
+                fresh: status
+                    .lag_seconds
+                    .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                    .unwrap_or(false),
+                projection_complete: source_count > 0 && actual_count >= source_count,
+                point_count: actual_count,
+                last_materialized_at: status.last_materialized_at,
+                last_source_change_at: None,
+                lag_seconds: status.lag_seconds,
+            }
         })
         .collect::<Vec<_>>();
     // A page brief is produced by draft_assemble, *after* IA planning.
