@@ -61,6 +61,17 @@ def main() -> int:
             failures.append("candidate release must include published dependencies")
     if "AND p.scope_signature = (" not in snapshot or "WHERE target.page_node_key = $1" not in snapshot:
         failures.append("candidate release includes published pages from foreign scopes")
+    # Replaying an older published revision can change its updated_at. The
+    # public snapshot and candidate dependencies must follow the committed
+    # CMS pointer, never choose the most recently touched revision.
+    if snapshot.count("r.revision_id = p.current_revision_id") != 2:
+        failures.append("public snapshot and candidate dependencies must use committed revision pointers")
+    if "ORDER BY published_revision.updated_at" in snapshot:
+        failures.append("public revision must not be selected by mutable updated_at")
+    if "r.revision_status = 'published'" not in snapshot:
+        failures.append("public snapshots must exclude non-published revisions")
+    if "outbox_emit_many_in_tx(" not in cms or "rollback_revision_id" not in cms:
+        failures.append("publishing must commit revision pointer and outbox in one transaction")
     for needle in [
         "CREATE TABLE IF NOT EXISTS site.publish_artifact_entries",
     ]:
