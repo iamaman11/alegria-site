@@ -45,6 +45,10 @@ def main() -> int:
 
     for needle in [
         "e2e_supersite_certification.sh",
+        "check_e2e_product_verdict.py",
+        "check_public_static_output.py",
+        "check_public_http_readback.py",
+        "ALEGRIA_CERT_PUBLIC_OUTPUT_DIR",
     ]:
         if needle not in nightly:
             failures.append(f"nightly wrapper missing `{needle}`")
