@@ -65,12 +65,14 @@ def main() -> int:
         return subprocess.CompletedProcess(command, 0, stdout="ok", stderr="")
     with mock.patch.dict(os.environ, {
         "ALEGRIA_CERT_BASE_URL": "https://seo-staging.alegria.by",
+        "ALEGRIA_CERT_PUBLIC_OUTPUT_DIR": "/app/app/rust/dist/static-site",
     }), mock.patch.object(cert, "run_command", side_effect=record):
         readiness = cert.clean_runtime_preflight()
     assert len(readiness) == 3 and all(
         check["status"] == "PASS" for check in readiness.values()
     ), readiness
     assert len(called) == 3
+    assert "ALEGRIA_EXPECTED_OUTPUT=/app/app/rust/dist/static-site" in called[2]
     assert all(c[:3] == ["docker", "compose", "exec"] for c in called)
     forbidden = ("temporal_production_gate.sh", "restore_drill.sh",
                  "cms-approve-publish", "DROP SCHEMA", "seed_admissible")
@@ -80,6 +82,7 @@ def main() -> int:
     assert "restore_drill.sh" not in main_source
     with mock.patch.dict(os.environ, {
         "ALEGRIA_CERT_BASE_URL": "https://seo-staging.alegria.by",
+        "ALEGRIA_CERT_PUBLIC_OUTPUT_DIR": "/app/app/rust/dist/static-site",
     }), mock.patch.object(cert, "run_command", return_value=subprocess.CompletedProcess(
         ["docker", "compose", "exec"], 1, stdout="", stderr="error"
     )):
