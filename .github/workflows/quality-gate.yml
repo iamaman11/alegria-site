@@ -48,6 +48,7 @@ jobs:
         run: |
           python3 automation/smoke_e2e_canonical_temporal.py
           python3 automation/smoke_e2e_publication_verdict.py
+          python3 automation/smoke_e2e_first_site.py
 
       - name: Rust workspace check
         working-directory: app/rust
