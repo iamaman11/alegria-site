@@ -159,10 +159,22 @@ pub async fn persist_cms_publish_output(
         VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8,
                 CASE WHEN $8 = 'published' THEN now() ELSE NULL END)
         ON CONFLICT (page_node_key) DO UPDATE
-        SET canonical_url_path = EXCLUDED.canonical_url_path,
-            locale_code = EXCLUDED.locale_code,
-            current_revision_id = EXCLUDED.current_revision_id,
-            current_status = EXCLUDED.current_status,
+        SET canonical_url_path = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.canonical_url_path
+                ELSE EXCLUDED.canonical_url_path END,
+            locale_code = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.locale_code
+                ELSE EXCLUDED.locale_code END,
+            -- The newly approved revision is a candidate, NOT yet the live one.
+            current_revision_id = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.current_revision_id
+                ELSE EXCLUDED.current_revision_id END,
+            current_status = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN 'published' ELSE EXCLUDED.current_status END,
             published_at = CASE
                 WHEN EXCLUDED.current_status = 'published'
                 THEN COALESCE(site.cms_pages.published_at, now())
@@ -187,7 +199,9 @@ pub async fn persist_cms_publish_output(
     sqlx::query(
         r#"
         UPDATE site.page_nodes
-        SET lifecycle_state = $1,
+        SET lifecycle_state = CASE
+                WHEN lifecycle_state = 'published' THEN 'published'
+                ELSE $1 END,
             updated_at = now()
         WHERE page_node_key = $2
         "#,
