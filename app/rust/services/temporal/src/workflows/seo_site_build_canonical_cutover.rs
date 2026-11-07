@@ -717,10 +717,14 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         // enforce the full projection contract before the first draft or publish.
         if enforce_required_contract {
             ctx.state_mut(|s| s.phase = "neo4j_sync_post_planning".to_string());
-            sync_target(ctx, &run_id, "neo4j_sync_post_planning", "neo4j").await?;
+            let graph_sync =
+                sync_target(ctx, &run_id, "neo4j_sync_post_planning", "neo4j").await?;
+            ensure_sync_drained(&graph_sync, "neo4j_sync_post_planning")?;
             ctx.wait_condition(|s| !s.paused).await;
             ctx.state_mut(|s| s.phase = "voyage_qdrant_sync_post_planning".to_string());
-            sync_target(ctx, &run_id, "voyage_qdrant_sync_post_planning", "qdrant").await?;
+            let retrieval_sync =
+                sync_target(ctx, &run_id, "voyage_qdrant_sync_post_planning", "qdrant").await?;
+            ensure_sync_drained(&retrieval_sync, "voyage_qdrant_sync_post_planning")?;
             ctx.wait_condition(|s| !s.paused).await;
 
             ctx.state_mut(|s| s.phase = "seo_materialization_gate".to_string());
