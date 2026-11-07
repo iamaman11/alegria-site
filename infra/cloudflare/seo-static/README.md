@@ -46,18 +46,26 @@ version if deployment/readback fails. A first publication with no previous
 release must be checked independently after any ambiguous failure. The script
 is *not* a replacement for CMS finalization.
 
-## Important integration boundary — remains NO-GO
+## Canonical Temporal integration — implemented, not physically certified
 
-The existing Rust finalizer in PR #26 currently switches a **local filesystem**
-symlink and checks public HTTPS. It does not yet call this Cloudflare deployment
-adapter or reconcile a remote Workers deployment on crash/retry.
+The Rust finalizer in PR #26 calls the **same** Cloudflare adapter under the
+PostgreSQL site-wide publish lock, after recording a durable journal and
+before independent HTTPS readback and atomic CMS/outbox commit. On rollback it
+attempts to re-deploy the previous version. After an ambiguous COMMIT or
+worker crash, worker startup reconciles **both** the Cloudflare deployment and
+the local journal against PostgreSQL. A first failed deployment with no prior
+release deliberately stops automatic recovery for human inspection.
 
-Therefore **do not** set `published` simply because `cf deploy` returned zero
-or because local files changed. The single canonical publish workflow must
-still enforce actual approved truth, independent public HTTPS readback, and
-replay-safe reconciliation between Workers deployment and PostgreSQL before
-production GO.
+The Temporal worker image contains Python 3 + the pinned native `cf` CLI as
+part of **the existing container**; no new daemon or runtime process.
+Environment/secrets are passed by `docker-compose.yml` with empty defaults.
+Missing credentials fail closed before changing the live symlink.
 
-The native Cloudflare deployment path must be connected to the finalizer and
-physically tested with both a first publication and a replacement/rollback.
+**Production decision remains NO-GO.** This code has not been deployed and
+physically tested. The system may not report a successful first published site
+until the full CI passes and a true expert-approved, non-empty release is
+served on `seo-staging.alegria.by` and verified. First-publication failures
+have no remote predecessor: the journal intentionally requires manual
+reconciliation rather than claiming a safe rollback.
+
 Tracking: Issue #3 (hosting), #6 (E2E), #10 (master NO-GO), #19 (evidence).
