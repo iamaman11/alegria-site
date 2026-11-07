@@ -282,8 +282,11 @@ pub(crate) async fn seo_preflight_impl(
     let qdrant_collection_contract_ready = required_collection_statuses
         .iter()
         .all(|status| status.exists && status.projection_complete);
-    let (qdrant_ready, qdrant_collection_presence) =
-        probe_qdrant_required_collections(&required_collections).await;
+    let (qdrant_ready, qdrant_collection_presence) = if input.skip_provider_probes {
+        (false, Default::default())
+    } else {
+        probe_qdrant_required_collections(&required_collections).await
+    };
     let required_graph_projection_names = required_graph_projections();
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
@@ -331,8 +334,16 @@ pub(crate) async fn seo_preflight_impl(
                 || (status.open_event_count() > 0
                     && status.max_open_lag_ms > input.projection_max_lag_ms))
     });
-    let capability_probe = probe_voyage_capabilities().await;
-    let neo4j_probe = probe_neo4j_capabilities().await;
+    let capability_probe = if input.skip_provider_probes {
+        VoyageCapabilityProbe::default()
+    } else {
+        probe_voyage_capabilities().await
+    };
+    let neo4j_probe = if input.skip_provider_probes {
+        Neo4jCapabilityProbe::default()
+    } else {
+        probe_neo4j_capabilities().await
+    };
     let voyage_embeddings_ready = capability_probe.embeddings_ready;
     let voyage_contextualized_ready = capability_probe.contextualized_ready;
     let voyage_rerank_ready = capability_probe.rerank_ready;
@@ -411,16 +422,18 @@ pub(crate) async fn seo_preflight_impl(
         .collect::<Vec<_>>();
 
     let retrieval_contract_status = if retrieval_capability_required {
-        if !voyage_embeddings_ready
-            || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
-            || (voyage_rerank_required && !voyage_rerank_ready)
-            || (canonical_vector_retrieval_required && !voyage_embeddings_ready)
+        if !input.skip_provider_probes
+            && (!voyage_embeddings_ready
+                || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
+                || (voyage_rerank_required && !voyage_rerank_ready)
+                || (canonical_vector_retrieval_required && !voyage_embeddings_ready))
         {
             "blocked_provider_capability".to_string()
-        } else if !qdrant_ready {
+        } else if !input.skip_provider_probes && !qdrant_ready {
             "blocked_retrieval_contract".to_string()
         } else if input.require_materialized_projections
-            && (!missing_qdrant_collections.is_empty() || !missing_collections.is_empty())
+            && ((!input.skip_provider_probes && !missing_qdrant_collections.is_empty())
+                || !missing_collections.is_empty())
         {
             "blocked_missing_collection".to_string()
         } else if input.require_materialized_projections && !stale_collections.is_empty() {
@@ -468,9 +481,10 @@ pub(crate) async fn seo_preflight_impl(
         _ => None,
     };
     let graph_contract_status = if graph_capability_required {
-        if (neo4j_sync_required && !neo4j_ready)
-            || (graph_query_required && !graph_query_ready)
-            || (graph_gds_required && !graph_gds_ready)
+        if !input.skip_provider_probes
+            && ((neo4j_sync_required && !neo4j_ready)
+                || (graph_query_required && !graph_query_ready)
+                || (graph_gds_required && !graph_gds_ready))
         {
             "blocked_provider_capability".to_string()
         } else if input.require_materialized_projections && !missing_graph_projections.is_empty() {
@@ -543,6 +557,7 @@ pub(crate) async fn seo_preflight_impl(
         voyage_rerank_ready,
         qdrant_ready,
         qdrant_collection_contract_ready,
+        provider_probes_skipped: input.skip_provider_probes,
         neo4j_ready,
         graph_query_ready,
         graph_gds_ready,
