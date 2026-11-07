@@ -260,33 +260,67 @@ pub(crate) async fn seo_preflight_impl(
         });
     }
     let required_collections = required_retrieval_collections();
+    // The initial gate probes capabilities only. Materialization gates also
+    // read actual Qdrant points for THIS scope and run, including per-page
+    // gates; skip_provider_probes skips costly Voyage/Neo4j probes, not truth.
+    let (qdrant_ready, qdrant_collection_presence, scoped_point_counts) =
+        if input.skip_provider_probes && !input.require_materialized_projections {
+            (false, Default::default(), Default::default())
+        } else {
+            probe_qdrant_required_collections(
+                &required_collections,
+                &scope.scope_signature,
+                &input.run_id,
+                input.require_materialized_projections,
+                !input.skip_provider_probes,
+            )
+            .await
+        };
     let collection_statuses =
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
     let required_collection_statuses = collection_statuses
         .into_iter()
-        .map(|status| SeoPreflightCollectionStatus {
-            exists: status.point_count > 0,
-            fresh: status
-                .lag_seconds
-                .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                .unwrap_or(false),
-            projection_complete: status.point_count > 0,
-            collection_name: status.collection_name,
-            point_count: status.point_count,
-            last_materialized_at: status.last_materialized_at,
-            last_source_change_at: None,
-            lag_seconds: status.lag_seconds,
+        .map(|status| {
+            // Scope-dependent SEO collections are certified by the Qdrant
+            // provider, NOT by the global kb.qdrant_points SQL ledger.
+            let current_run_count = scoped_point_counts.get(&status.collection_name).copied();
+            let point_count = current_run_count
+                .map(|count| i64::try_from(count).unwrap_or(i64::MAX))
+                .unwrap_or(status.point_count);
+            let current_run_verified = current_run_count.is_some();
+            SeoPreflightCollectionStatus {
+                exists: point_count > 0,
+                fresh: if current_run_verified {
+                    // These points carry this run's identity in Qdrant.
+                    point_count > 0
+                } else {
+                    status
+                        .lag_seconds
+                        .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                        .unwrap_or(false)
+                },
+                projection_complete: point_count > 0,
+                collection_name: status.collection_name,
+                point_count,
+                // A Qdrant count does not expose a materialization timestamp.
+                last_materialized_at: if current_run_verified {
+                    None
+                } else {
+                    status.last_materialized_at
+                },
+                last_source_change_at: None,
+                lag_seconds: if current_run_verified {
+                    None
+                } else {
+                    status.lag_seconds
+                },
+            }
         })
         .collect::<Vec<_>>();
     let qdrant_collection_contract_ready = required_collection_statuses
         .iter()
         .all(|status| status.exists && status.projection_complete);
-    let (qdrant_ready, qdrant_collection_presence) = if input.skip_provider_probes {
-        (false, Default::default())
-    } else {
-        probe_qdrant_required_collections(&required_collections).await
-    };
     let required_graph_projection_names = required_graph_projections();
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
