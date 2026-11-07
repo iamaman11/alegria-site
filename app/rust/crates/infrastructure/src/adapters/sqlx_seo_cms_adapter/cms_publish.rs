@@ -109,7 +109,10 @@ pub async fn persist_cms_publish_output(
                 WHEN site.cms_page_revisions.revision_status = 'published'
                 THEN site.cms_page_revisions.revision_status
                 ELSE EXCLUDED.revision_status END,
-            updated_at = now()
+            updated_at = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.updated_at
+                ELSE now() END
         "#,
     )
     .bind(&revision_id)
