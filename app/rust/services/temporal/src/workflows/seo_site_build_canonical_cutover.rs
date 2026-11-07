@@ -17,7 +17,8 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 use seo_application::execution::{
     blocked_interaction_status, blocked_publish_gate_status, build_execution_plan,
     final_phase_keys, normalize_run_mode, page_phase_keys, phase_label, policy_for_run_mode,
-    scenario_kind_for_run_mode, RunInteractionPolicy, SeoExecutionPlan, SeoPhaseKey,
+    scenario_kind_for_run_mode, RunInteractionPolicy, RunProjectionPolicy, SeoExecutionPlan,
+    SeoPhaseKey,
 };
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioRequest};
 use seo_ports::VerifiedSupportBundleRequest;
@@ -87,6 +88,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             site_input: site_input.clone(),
         };
         let plan = build_execution_plan(&request);
+        let enforce_required_contract =
+            plan.policy.projection != RunProjectionPolicy::WarnOnly;
 
         ctx.state_mut(|s| s.phase = "seo_preflight".to_string());
         let preflight = ctx
@@ -97,6 +100,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     context_key: site_input.context_key.clone(),
                     scope: scope.clone(),
                     projection_max_lag_ms: 300_000,
+                    require_materialized_projections: false,
+                    enforce_required_contract,
                 },
                 db_opts(30),
             )
@@ -703,6 +708,34 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 .await?;
             ctx.state_mut(|s| s.phase = "done:no_pages".to_string());
             return Ok(run_id);
+        }
+
+        // Planning creates page/link/brief projections which cannot exist at the
+        // initial preflight of a new scope. Drain their outbox events first, then
+        // enforce the full projection contract before the first draft or publish.
+        if enforce_required_contract {
+            ctx.state_mut(|s| s.phase = "neo4j_sync_post_planning".to_string());
+            sync_target(ctx, &run_id, "neo4j_sync_post_planning", "neo4j").await?;
+            ctx.wait_condition(|s| !s.paused).await;
+            ctx.state_mut(|s| s.phase = "voyage_qdrant_sync_post_planning".to_string());
+            sync_target(ctx, &run_id, "voyage_qdrant_sync_post_planning", "qdrant").await?;
+            ctx.wait_condition(|s| !s.paused).await;
+
+            ctx.state_mut(|s| s.phase = "seo_materialization_gate".to_string());
+            ctx.start_activity(
+                AlegriaActivities::run_seo_preflight_step,
+                SeoPreflightInput {
+                    run_id: run_id.clone(),
+                    context_key: site_input.context_key.clone(),
+                    scope: scope.clone(),
+                    projection_max_lag_ms: 300_000,
+                    require_materialized_projections: true,
+                    enforce_required_contract: true,
+                },
+                db_opts(30),
+            )
+            .await?;
+            ctx.wait_condition(|s| !s.paused).await;
         }
 
         let factual_fragments = support_bundle
