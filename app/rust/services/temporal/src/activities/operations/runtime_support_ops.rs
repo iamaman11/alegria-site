@@ -226,6 +226,15 @@ pub(crate) async fn load_semantic_section_sample_impl(
     })
 }
 
+/// Keep the canonical production contract explicit: an absent flag is not an
+/// implicit permission to skip graph/retrieval gates.
+fn missing_required_contract_flags(flags: &[(&'static str, bool)]) -> Vec<&'static str> {
+    flags
+        .iter()
+        .filter_map(|(name, enabled)| (!enabled).then_some(*name))
+        .collect()
+}
+
 pub(crate) async fn seo_preflight_impl(
     acts: &AlegriaActivities,
     input: &SeoPreflightInput,
@@ -326,6 +335,27 @@ pub(crate) async fn seo_preflight_impl(
     let graph_query_required = env_flag("GRAPH_QUERY_REQUIRED");
     let graph_gds_required = env_flag("GRAPH_GDS_REQUIRED");
 
+    if input.enforce_required_contract {
+        let missing = missing_required_contract_flags(&[
+            ("RETRIEVAL_CAPABILITY_REQUIRED", retrieval_capability_required),
+            ("CANONICAL_VECTOR_RETRIEVAL_REQUIRED", canonical_vector_retrieval_required),
+            ("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED", contextual_raw_chunk_retrieval_required),
+            ("VOYAGE_RERANK_REQUIRED", voyage_rerank_required),
+            ("GRAPH_CAPABILITY_REQUIRED", graph_capability_required),
+            ("NEO4J_SYNC_REQUIRED", neo4j_sync_required),
+            ("GRAPH_QUERY_REQUIRED", graph_query_required),
+            ("GRAPH_GDS_REQUIRED", graph_gds_required),
+        ]);
+        if !missing.is_empty() {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "canonical production preflight requires enabled flags: {}",
+                    missing.join(", ")
+                ),
+            });
+        }
+    }
+
     let missing_collections = required_collection_statuses
         .iter()
         .filter(|status| !status.exists)
@@ -376,11 +406,15 @@ pub(crate) async fn seo_preflight_impl(
             "blocked_provider_capability".to_string()
         } else if !qdrant_ready {
             "blocked_retrieval_contract".to_string()
-        } else if !missing_qdrant_collections.is_empty() || !missing_collections.is_empty() {
+        } else if input.require_materialized_projections
+            && (!missing_qdrant_collections.is_empty() || !missing_collections.is_empty())
+        {
             "blocked_missing_collection".to_string()
-        } else if !stale_collections.is_empty() {
+        } else if input.require_materialized_projections && !stale_collections.is_empty() {
             "blocked_stale_collection".to_string()
-        } else if projection_blocked || !incomplete_collections.is_empty() {
+        } else if input.require_materialized_projections
+            && (projection_blocked || !incomplete_collections.is_empty())
+        {
             "blocked_projection_incomplete".to_string()
         } else {
             "pass".to_string()
@@ -426,11 +460,13 @@ pub(crate) async fn seo_preflight_impl(
             || (graph_gds_required && !graph_gds_ready)
         {
             "blocked_provider_capability".to_string()
-        } else if !missing_graph_projections.is_empty() {
+        } else if input.require_materialized_projections && !missing_graph_projections.is_empty() {
             "blocked_missing_projection".to_string()
-        } else if !stale_graph_projections.is_empty() {
+        } else if input.require_materialized_projections && !stale_graph_projections.is_empty() {
             "blocked_stale_projection".to_string()
-        } else if graph_projection_blocked || !incomplete_graph_projections.is_empty() {
+        } else if input.require_materialized_projections
+            && (graph_projection_blocked || !incomplete_graph_projections.is_empty())
+        {
             "blocked_projection_incomplete".to_string()
         } else {
             "pass".to_string()
@@ -529,4 +565,27 @@ pub(crate) async fn seo_preflight_impl(
             }
         },
     })
+}
+
+#[cfg(test)]
+mod canonical_production_contract_tests {
+    use super::missing_required_contract_flags;
+
+    #[test]
+    fn required_capabilities_must_be_explicit() {
+        let missing = missing_required_contract_flags(&[
+            ("GRAPH_CAPABILITY_REQUIRED", true),
+            ("RETRIEVAL_CAPABILITY_REQUIRED", false),
+            ("GRAPH_GDS_REQUIRED", false),
+        ]);
+        assert_eq!(
+            missing,
+            vec!["RETRIEVAL_CAPABILITY_REQUIRED", "GRAPH_GDS_REQUIRED"]
+        );
+        assert!(missing_required_contract_flags(&[
+            ("GRAPH_CAPABILITY_REQUIRED", true),
+            ("RETRIEVAL_CAPABILITY_REQUIRED", true),
+        ])
+        .is_empty());
+    }
 }
