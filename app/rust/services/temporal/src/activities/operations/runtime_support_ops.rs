@@ -301,8 +301,14 @@ pub(crate) async fn seo_preflight_impl(
             lag_seconds: status.lag_seconds,
         })
         .collect::<Vec<_>>();
-    let graph_projection_contract_ready = required_graph_projection_statuses
+    // A page brief is produced by draft_assemble, *after* IA planning.
+    // Do not demand it at the post-planning gate; require it at the
+    // per-page post-draft gate before editorial/publish.
+    let applicable_graph_projections = required_graph_projection_statuses
         .iter()
+        .filter(|status| input.require_page_brief_projection || status.projection_name != "page_brief");
+    let graph_projection_contract_ready = applicable_graph_projections
+        .clone()
         .all(|status| status.exists && status.projection_complete);
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
@@ -381,18 +387,17 @@ pub(crate) async fn seo_preflight_impl(
         })
         .map(|collection| (*collection).to_string())
         .collect::<Vec<_>>();
-    let missing_graph_projections = required_graph_projection_statuses
-        .iter()
+    let missing_graph_projections = applicable_graph_projections
+        .clone()
         .filter(|status| !status.exists)
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
-    let stale_graph_projections = required_graph_projection_statuses
-        .iter()
+    let stale_graph_projections = applicable_graph_projections
+        .clone()
         .filter(|status| status.exists && !status.fresh)
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
-    let incomplete_graph_projections = required_graph_projection_statuses
-        .iter()
+    let incomplete_graph_projections = applicable_graph_projections
         .filter(|status| status.exists && !status.projection_complete)
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
