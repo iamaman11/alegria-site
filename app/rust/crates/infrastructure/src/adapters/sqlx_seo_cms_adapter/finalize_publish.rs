@@ -229,6 +229,13 @@ pub async fn persist_finalize_publish_output(
         &[cms_event_outbox(&cms_event, &input.run_id)],
     )
     .await?;
+    // The COMMIT acknowledgement can be lost even when PostgreSQL committed.
+    // Do not roll back a publicly verified release based on an ambiguous
+    // connection error or cancellation. Recovery reads the durable journal
+    // and the authoritative DB state on the next worker startup.
+    if let Some(receipt) = activation.as_mut() {
+        receipt.defer_to_recovery();
+    }
     tx.commit().await.map_err(classify_sqlx)?;
     if let Some(receipt) = activation.as_mut() {
         receipt.confirm();
