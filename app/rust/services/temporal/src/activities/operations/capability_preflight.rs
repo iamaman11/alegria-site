@@ -46,6 +46,27 @@ fn scope_materialized_collection(collection: &str) -> bool {
     matches!(collection, "seo_keyword_clusters_4" | "editorial_topics_4")
 }
 
+fn effective_collection_point_count(sql_count: i64, current_run_count: Option<u64>) -> i64 {
+    current_run_count
+        .map(|count| i64::try_from(count).unwrap_or(i64::MAX))
+        .unwrap_or(sql_count)
+}
+
+#[cfg(test)]
+mod scope_materialization_tests {
+    use super::{effective_collection_point_count, scope_materialized_collection};
+
+    #[test]
+    fn another_site_or_run_cannot_certify_scoped_collection() {
+        assert!(scope_materialized_collection("seo_keyword_clusters_4"));
+        assert!(scope_materialized_collection("editorial_topics_4"));
+        assert!(!scope_materialized_collection("kb_canonical_4"));
+        assert_eq!(effective_collection_point_count(250, Some(0)), 0);
+        assert_eq!(effective_collection_point_count(0, Some(2)), 2);
+        assert_eq!(effective_collection_point_count(250, None), 250);
+    }
+}
+
 async fn probe_qdrant_required_collections(
     required_collections: &[&str],
     scope_signature: &str,
