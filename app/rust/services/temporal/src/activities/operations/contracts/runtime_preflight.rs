@@ -68,6 +68,12 @@ pub struct SeoPreflightInput {
     /// Production/canonical paths must explicitly enable all mandatory provider gates.
     #[serde(default)]
     pub enforce_required_contract: bool,
+    /// The page_brief projection is produced by draft_assemble, not IA planning.
+    #[serde(default)]
+    pub require_page_brief_projection: bool,
+    /// Distinct per-page durable identity for checks after each draft_assemble.
+    #[serde(default)]
+    pub gate_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
