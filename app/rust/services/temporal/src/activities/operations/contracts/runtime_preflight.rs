@@ -135,6 +135,10 @@ pub struct SeoPreflightCollectionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeoPreflightGraphProjectionStatus {
     pub projection_name: String,
+    /// materialized | valid_empty | missing | incomplete. Defaults for
+    /// backwards-compatible deserialization of persisted activity outputs.
+    #[serde(default)]
+    pub materialization_outcome: String,
     pub exists: bool,
     pub fresh: bool,
     pub projection_complete: bool,
