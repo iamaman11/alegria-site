@@ -222,6 +222,88 @@ async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
     probe
 }
 
+// Verify materialized Neo4j state, not just SQL source rows. Shared
+// blueprints and briefs are attributed through the scope's PageNode edges.
+fn neo4j_projection_count_query(name: &str) -> Option<&'static str> {
+    match name {
+        "keyword_cluster" => Some(
+            "MATCH (n:KeywordCluster {scope_signature: $scope_signature}) RETURN count(n) AS projection_count",
+        ),
+        "serp_pattern" => Some(
+            "MATCH (n:SERPPattern {scope_signature: $scope_signature}) RETURN count(n) AS projection_count",
+        ),
+        "page_blueprint" => Some(
+            "MATCH (pn:PageNode {scope_signature: $scope_signature})-[:USES_BLUEPRINT]->(n:PageBlueprint) RETURN count(DISTINCT n) AS projection_count",
+        ),
+        "page_node" => Some(
+            "MATCH (n:PageNode {scope_signature: $scope_signature}) RETURN count(n) AS projection_count",
+        ),
+        "content_gap" => Some(
+            "MATCH (n:ContentGap {scope_signature: $scope_signature}) RETURN count(n) AS projection_count",
+        ),
+        "link_recommendation" => Some(
+            "MATCH (a:PageNode {scope_signature: $scope_signature})-[r:RECOMMENDS_LINK_TO]->(b:PageNode {scope_signature: $scope_signature}) RETURN count(r) AS projection_count",
+        ),
+        "page_brief" => Some(
+            "MATCH (pn:PageNode {scope_signature: $scope_signature})-[:HAS_BRIEF]->(n:PageBrief) RETURN count(DISTINCT n) AS projection_count",
+        ),
+        _ => None,
+    }
+}
+
+async fn read_neo4j_scope_projection_counts(
+    scope_signature: &str,
+    names: &[&str],
+) -> Result<BTreeMap<String, i64>, DomainError> {
+    let uri = std::env::var("NEO4J_URI").unwrap_or_else(|_| "127.0.0.1:7687".to_string());
+    let user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
+    let password = std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
+    let readback = async {
+        let graph = neo4rs_adapter::connect_neo4j(&uri, &user, &password).await?;
+        let mut counts = BTreeMap::new();
+        for name in names {
+            let cypher = neo4j_projection_count_query(name)
+                .ok_or_else(|| anyhow::anyhow!("unsupported Neo4j projection: {name}"))?;
+            let mut rows = graph
+                .execute(
+                    neo4rs_adapter::query(cypher)
+                        .param("scope_signature", scope_signature.to_string()),
+                )
+                .await?;
+            let row = rows
+                .next()
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("Neo4j count missing: {name}"))?;
+            let count: i64 = row.get("projection_count")?;
+            counts.insert((*name).to_string(), count);
+        }
+        Ok::<_, anyhow::Error>(counts)
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(20), readback).await {
+        Ok(Ok(counts)) => Ok(counts),
+        Ok(Err(error)) => Err(DomainError::InfraUnavailable {
+            message: format!("Neo4j scope projection readback failed: {error}"),
+        }),
+        Err(_) => Err(DomainError::InfraUnavailable {
+            message: "Neo4j scope projection readback timed out".to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod neo4j_projection_readback_tests {
+    use super::{neo4j_projection_count_query, required_graph_projections};
+
+    #[test]
+    fn every_required_projection_has_scope_bound_readback() {
+        for name in required_graph_projections() {
+            let cypher = neo4j_projection_count_query(name).expect("required projection query");
+            assert!(cypher.contains("$scope_signature"), "{name}");
+        }
+        assert!(neo4j_projection_count_query("unknown").is_none());
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct VoyageCapabilityProbe {
     embeddings_ready: bool,
