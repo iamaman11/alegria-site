@@ -280,6 +280,7 @@ pub async fn persist_serp_normalize_output(
             &pattern.scope_signature,
         ));
         projection_events.push(seo_qdrant_projection_event(
+            &input.run_id,
             "seo_serp_patterns",
             "serp_pattern",
             &pattern.serp_pattern_key,
@@ -376,6 +377,7 @@ pub async fn persist_opportunity_build_output(
             cluster_scope,
         ));
         projection_events.push(seo_qdrant_projection_event(
+            &input.run_id,
             "seo_keyword_clusters_4",
             "keyword_cluster",
             &cluster.cluster_key,
@@ -475,6 +477,7 @@ pub async fn persist_opportunity_build_output(
             &gap.scope_signature,
         ));
         projection_events.push(seo_qdrant_projection_event(
+            &input.run_id,
             "seo_content_gaps",
             "content_gap",
             &gap.content_gap_key,
@@ -538,6 +541,7 @@ pub async fn persist_ia_build_output(
             "",
         ));
         projection_events.push(seo_qdrant_projection_event(
+            &input.run_id,
             "seo_page_blueprints",
             "page_blueprint",
             &blueprint.blueprint_key,
@@ -736,6 +740,7 @@ pub async fn persist_ia_build_output(
             &page.scope_signature,
         ));
         projection_events.push(seo_qdrant_projection_event(
+            &input.run_id,
             "editorial_topics_4",
             "page_node",
             &page.page_node_key,
