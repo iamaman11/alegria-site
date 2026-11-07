@@ -268,6 +268,9 @@ python3 automation/smoke_support_bundle_required.py
 echo "[52b/53] Incremental publish path smoke"
 python3 automation/smoke_incremental_publish_path.py
 
+echo "[52b1/53] Public static output completeness regression"
+python3 automation/smoke_public_static_output_completeness.py
+
 echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
