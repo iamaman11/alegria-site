@@ -2,8 +2,10 @@
   "name": "alegria-seo-static-deployment",
   "private": true,
   "type": "module",
-  "description": "Explicit isolated Cloudflare Workers Static Assets deployment configuration for Alegria SEO",
+  "description": "Native Cloudflare CLI assets-only staging deploy for approved Alegria sites",
   "devDependencies": {
-    "cf": "1.0.0-beta.13"
+    "cf": "1.0.0-beta.13",
+    "@cloudflare/vite-plugin": "beta",
+    "vite": "^7.0.0"
   }
 }

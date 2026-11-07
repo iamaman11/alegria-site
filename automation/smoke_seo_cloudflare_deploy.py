@@ -6,8 +6,12 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
+import subprocess
 
-from deploy_seo_static_cloudflare import EXPECTED_ORIGIN, preflight, validate_release
+from deploy_seo_static_cloudflare import (
+    EXPECTED_ORIGIN, preflight, prepare_public_assets, run_cf_deploy, validate_release,
+)
 
 
 class CloudflareStaticDeploymentSmoke(unittest.TestCase):
@@ -80,6 +84,50 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
         (self.release / ".alegria_static_site").unlink()
         with self.assertRaisesRegex(ValueError, "marker"):
             validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN)
+
+    def test_upload_excludes_internal_release_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            public = prepare_public_assets(self.release, Path(directory) / "public")
+            self.assertTrue((public / "index.html").exists())
+            self.assertTrue((public / "robots.txt").exists())
+            self.assertFalse((public / "alegria-static-manifest.json").exists())
+            self.assertFalse((public / ".alegria_static_site").exists())
+
+    def test_native_cf_build_prebuilt_deploy_only(self) -> None:
+        commands = []
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "cf"
+            config.mkdir()
+
+            def invoke(argv, **kwargs):
+                commands.append(list(argv))
+                source = Path(kwargs["env"]["ALEGRIA_CF_PUBLIC_DIR"])
+                self.assertTrue((source / "index.html").is_file())
+                self.assertFalse((source / "alegria-static-manifest.json").exists())
+                if argv[1] == "build":
+                    output = config / ".cloudflare/output/v0"
+                    output.mkdir(parents=True)
+                    (output / "config.json").write_text("{}", encoding="utf-8")
+                return subprocess.CompletedProcess(argv, 0)
+
+            with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):
+                with mock.patch("deploy_seo_static_cloudflare.subprocess.run", side_effect=invoke):
+                    self.assertTrue(run_cf_deploy(Path("/usr/bin/cf"), self.release))
+        self.assertEqual(
+            [argv[1:] for argv in commands],
+            [["build"], ["deploy", "--prebuilt", "--mode", "production"]],
+        )
+
+    def test_failed_cf_build_never_uploads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+            with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):
+                with mock.patch(
+                    "deploy_seo_static_cloudflare.subprocess.run",
+                    return_value=subprocess.CompletedProcess(["cf", "build"], 1),
+                ) as runner:
+                    self.assertFalse(run_cf_deploy(Path("/usr/bin/cf"), self.release))
+                    runner.assert_called_once()
 
 
 if __name__ == "__main__":

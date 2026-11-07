@@ -17,13 +17,19 @@ a replacement for the canonical Temporal SEO workflow.
 
 ## Native CLI / explicit deployment
 
-The supported provider is **Cloudflare Workers Static Assets** with the `cf`
-CLI pinned in `package.json`. The deployment command uses the existing
+The supported provider is **Cloudflare Workers Static Assets** using the
+native `cf` CLI plus the Cloudflare Vite plugin (cf Build Output). The deployment command uses the existing
 canonical public static-output validator and the existing independent HTTPS
 byte-for-byte readback. A synthetic fixture can only run in offline CI; it is
 **not** production evidence.
 
-Install CLI dependencies once under this directory; do not commit any credentials.
+Install CLI dependencies once under this directory (Node.js 24; `npm install`);
+do not commit any credentials. The deployment adapter prepares an ephemeral
+public-only directory, omitting `.alegria_static_site` and
+`alegria-static-manifest.json`. `cf build` runs against those assets,
+then `cf deploy --prebuilt --mode production` publishes the exact build.
+There is no raw directory argument to `cf deploy` and no unsupported
+`--no-provision` option. CI performs a real CLI dry run without uploading.
 Set `CLOUDFLARE_ACCOUNT_ID` to the account ID from `cloudflare.config.ts`.
 Provide a scoped `CLOUDFLARE_API_TOKEN` via runtime secrets. The script
 has two explicit modes:

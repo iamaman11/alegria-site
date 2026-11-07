@@ -85,3 +85,28 @@ jobs:
           cargo tree --locked -e features -i ringbuf
           cargo tree --locked -e features -i rsa
           cargo tree --locked -e features -i sqlx-mysql
+
+  cloudflare-static-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install native cf static build dependencies
+        run: npm install --prefix infra/cloudflare/seo-static --no-audit --no-fund
+      - name: Offline Cloudflare publication boundary tests
+        run: python3 automation/smoke_seo_cloudflare_deploy.py
+      - name: Actual cf CLI build and asset preservation (no deployment)
+        shell: bash
+        working-directory: infra/cloudflare/seo-static
+        run: |
+          set -euo pipefail
+          public="$(mktemp -d)"
+          printf '<!doctype html><html><body><h1>Test</h1></body></html>\\n' > "$public/index.html"
+          printf 'User-agent: *\\nDisallow: /\\n' > "$public/robots.txt"
+          ALEGRIA_CF_PUBLIC_DIR="$public" ./node_modules/.bin/cf deploy --dry-run
+          built="$(find dist -type f -name index.html -print -quit)"
+          test -n "$built"
+          cmp "$public/index.html" "$built"

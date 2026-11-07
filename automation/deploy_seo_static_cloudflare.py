@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import shutil
 
 from check_public_http_readback import verify
 from check_public_static_output import validate_origin
@@ -59,17 +61,50 @@ def preflight(release: Path) -> None:
         raise ValueError("canonical public static output validation failed")
 
 
+def prepare_public_assets(release: Path, destination: Path) -> Path:
+    """Copy only website assets: release ledger/marker are never public."""
+    destination.mkdir(parents=True, exist_ok=False)
+    for item in release.rglob("*"):
+        relative = item.relative_to(release)
+        if relative.name == "alegria-static-manifest.json" or any(
+            part.startswith(".") for part in relative.parts
+        ):
+            continue
+        target = destination / relative
+        if item.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif item.is_file() and not item.is_symlink():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(item, target)
+        else:
+            raise ValueError(f"unsupported asset in immutable release: {relative}")
+    if not (destination / "index.html").is_file():
+        raise ValueError("static release must contain a public homepage")
+    return destination
+
+
 def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
-    # No interactive provisioning, new resources or implicit extra services.
-    env = os.environ.copy()
-    env["CI"] = "1"
-    proc = subprocess.run(
-        [str(cf_binary), "deploy", str(release), "--no-provision"],
-        cwd=CLOUD_CONFIG,
-        env=env,
-        check=False,
-    )
-    return proc.returncode == 0
+    """Native cf build + prebuilt deploy; never deploy a raw directory argument."""
+    with tempfile.TemporaryDirectory(prefix="alegria-cloudflare-assets-") as directory:
+        public = prepare_public_assets(release, Path(directory) / "public")
+        env = os.environ.copy()
+        env["CI"] = "1"
+        env["ALEGRIA_CF_PUBLIC_DIR"] = str(public)
+        built = subprocess.run(
+            [str(cf_binary), "build"], cwd=CLOUD_CONFIG, env=env, check=False
+        )
+        if built.returncode != 0:
+            return False
+        # cf --prebuilt must use a real validated Build Output, not stale artifacts.
+        if not (CLOUD_CONFIG / ".cloudflare/output/v0/config.json").is_file():
+            return False
+        uploaded = subprocess.run(
+            [str(cf_binary), "deploy", "--prebuilt", "--mode", "production"],
+            cwd=CLOUD_CONFIG,
+            env=env,
+            check=False,
+        )
+        return uploaded.returncode == 0
 
 
 def main(argv: list[str] | None = None) -> int:
