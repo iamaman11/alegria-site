@@ -14,7 +14,13 @@ pub async fn read_completed_seo_producers(
         "#,
     )
     .bind(run_id)
-    .bind(&["opportunity_build", "link_recommend", "global_site_reconcile"])
+    .bind(&[
+        "opportunity_build",
+        "link_recommend",
+        "global_site_reconcile",
+        "canonical_mapping",
+        "whole_page_semantic_pass",
+    ])
     .fetch_all(pool)
     .await
     .map_err(classify_sqlx)
