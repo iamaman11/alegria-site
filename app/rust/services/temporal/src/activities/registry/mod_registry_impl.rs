@@ -355,12 +355,14 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         // Separate durable step identities prevent the final materialization check from
         // reusing the cached capability-only preflight result.
-        let step_name = if input.require_materialized_projections {
-            "seo_materialization_gate"
+        let step_name = if !input.gate_key.is_empty() {
+            format!("seo_materialization_gate:{}", input.gate_key)
+        } else if input.require_materialized_projections {
+            "seo_materialization_gate".to_string()
         } else {
-            "seo_preflight"
+            "seo_preflight".to_string()
         };
-        self.execute_step(&run_id, step_name, 1, &input, || async {
+        self.execute_step(&run_id, &step_name, 1, &input, || async {
             operations::seo_preflight_impl(self.as_ref(), &input).await
         })
         .await
