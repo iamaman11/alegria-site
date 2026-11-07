@@ -1,8 +1,8 @@
 use anyhow::{bail, Context, Result};
 pub use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
-    PointStruct, PointsIdsList,
-    ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+    PointStruct, PointsIdsList, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder,
 };
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
