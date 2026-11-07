@@ -12,26 +12,37 @@ pub async fn persist_finalize_publish_output(
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
     let mut is_published = planned.verdict == "published";
+    let mut activation: Option<PublicationActivation> = None;
     if is_published {
-        // Render readiness is NOT publication. Only promote an immutable,
-        // human-approved release and verify its bytes over public HTTPS first.
-        if let Err(reason) =
-            promote_and_verify_public_release(&artifact, &input.page_node_key, &input.revision_id)
-                .await
+        // Render readiness is NOT publication. Activate an immutable,
+        // approved release and prove real HTTPS bytes before DB commit.
+        match promote_and_verify_public_release(
+            &artifact,
+            &input.page_node_key,
+            &input.revision_id,
+        )
+        .await
         {
-            tracing::warn!(
-                page_node_key = %input.page_node_key,
-                revision_id = %input.revision_id,
-                reason = %reason,
-                "public release promotion/readback failed; refusing published state"
-            );
-            blocking_reasons.push("public_deployment_unverified".to_string());
-            is_published = false;
+            Ok(receipt) => activation = Some(receipt),
+            Err(reason) => {
+                tracing::warn!(
+                    page_node_key = %input.page_node_key,
+                    revision_id = %input.revision_id,
+                    reason = %reason,
+                    "public release promotion/readback failed; refusing published state"
+                );
+                blocking_reasons.push("public_deployment_unverified".to_string());
+                is_published = false;
+            }
         }
     }
     blocking_reasons.sort();
     blocking_reasons.dedup();
     let final_verdict = if is_published { "published" } else { "blocked" };
+
+    // Database status, artifacts, events and HITL must commit together.
+    // On any SQL error the activation guard restores the prior public release.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
@@ -45,7 +56,7 @@ pub async fn persist_finalize_publish_output(
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.revision_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -62,7 +73,7 @@ pub async fn persist_finalize_publish_output(
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -81,7 +92,7 @@ pub async fn persist_finalize_publish_output(
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -96,7 +107,7 @@ pub async fn persist_finalize_publish_output(
         )
         .bind(if is_published { "ready" } else { "blocked" })
         .bind(&artifact.artifact_key)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
@@ -136,7 +147,7 @@ pub async fn persist_finalize_publish_output(
         "blocking_reasons": blocking_reasons,
     })))
     .bind(&input.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -152,8 +163,6 @@ pub async fn persist_finalize_publish_output(
         payload_version: "seo_cms_event@1".to_string(),
         metadata: HashMap::from([("verdict".to_string(), final_verdict.to_string())]),
     };
-    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
-
     if !is_published {
         for blocker_reason in &blocking_reasons {
             let task_key = primitives::seo::seo_artifact_key(
@@ -188,11 +197,19 @@ pub async fn persist_finalize_publish_output(
                 json!([{ "event": "publish_blocked", "blocker": blocker_reason }]),
             ))
             .bind(&input.page_node_key)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
         }
     }
+
+    tx.commit().await.map_err(classify_sqlx)?;
+    if let Some(receipt) = activation.as_mut() {
+        receipt.confirm();
+    }
+    // The release is already publicly verified and the DB committed.
+    // Outbox retries remain idempotent, even if the worker crashes here.
+    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
 
     Ok(FinalizePublishOutputPayload {
         verdict: final_verdict.to_string(),
