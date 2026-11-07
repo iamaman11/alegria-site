@@ -92,7 +92,8 @@ fn publication_files(
     if target_count != 1 {
         return Err("candidate manifest must contain exactly one approved target revision".into());
     }
-    if manifest.get("page_count").and_then(|v| v.as_u64()) != Some(pages.len() as u64) {
+    let actual_page_count = pages.len() as u64;
+    if manifest.get("page_count").and_then(|v| v.as_u64()) != Some(actual_page_count) {
         return Err("candidate manifest page_count mismatch".into());
     }
     for (rel, route) in [("sitemap.xml", "/sitemap.xml"), ("robots.txt", "/robots.txt")] {
