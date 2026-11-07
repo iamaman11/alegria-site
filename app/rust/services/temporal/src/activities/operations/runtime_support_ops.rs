@@ -285,9 +285,10 @@ pub(crate) async fn seo_preflight_impl(
     let (qdrant_ready, qdrant_collection_presence) =
         probe_qdrant_required_collections(&required_collections).await;
     let required_graph_projection_names = required_graph_projections();
-    let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses(
+    let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
+        &scope.scope_signature,
     )
     .await?;
     let required_graph_projection_statuses = graph_projection_statuses
