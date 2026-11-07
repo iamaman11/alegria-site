@@ -271,6 +271,12 @@ python3 automation/smoke_incremental_publish_path.py
 echo "[52b1/53] Public static output completeness regression"
 python3 automation/smoke_public_static_output_completeness.py
 
+echo "[52b2/53] R5 publication verdict regression"
+python3 automation/smoke_e2e_publication_verdict.py
+
+echo "[52b3/53] HTTPS readback behavioral regression"
+python3 automation/smoke_public_http_readback.py
+
 echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
