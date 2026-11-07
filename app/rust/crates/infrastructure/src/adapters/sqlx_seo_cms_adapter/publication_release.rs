@@ -310,15 +310,15 @@ async fn promote_and_verify_public_release(
     let files = publication_files(&candidate, page_node_key, revision_id, origin_raw)?;
     let release = create_immutable_release(&candidate, &files)?;
     let previous = swap_public_release(&public, &release)?;
-    if let Err(err) = verify_live_release(&origin, &files).await {
-        restore_public_release(&public, previous.as_deref())?;
-        return Err(err);
-    }
-    Ok(PublicationActivation {
+    // Construct the rollback guard immediately after the atomic switch.
+    // Cancellation during the next async HTTPS request must also roll back.
+    let activation = PublicationActivation {
         public_path: public,
         previous,
         armed: true,
-    })
+    };
+    verify_live_release(&origin, &files).await?;
+    Ok(activation)
 }
 
 #[cfg(not(unix))]
