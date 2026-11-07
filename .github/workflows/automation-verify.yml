@@ -17,6 +17,22 @@ jobs:
     timeout-minutes: 60
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.64.0"
+      # Disposable integration database, never a production credential.
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,6 +50,11 @@ jobs:
 
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
+
+      - name: Initialize disposable integration schema
+        run: |
+          sudo apt-get install -y postgresql-client
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Run full automation audit
         run: bash automation/audit.sh full
