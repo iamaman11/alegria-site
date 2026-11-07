@@ -265,6 +265,22 @@ fn require_cloudflare_publication_backend() -> Result<(), String> {
     {
         return Err("SEO_STATIC_PUBLISH_BACKEND must be cloudflare_workers_static_assets".into());
     }
+    // Reject missing deployment prerequisites *before* switching a live link,
+    // especially for a first site with no previously deployed version.
+    for name in [
+        "CLOUDFLARE_ACCOUNT_ID",
+        "CLOUDFLARE_API_TOKEN",
+        "SEO_STATIC_RELEASE_ROOT",
+    ] {
+        if std::env::var(name).is_err_or(|value| value.trim().is_empty()) {
+            return Err(format!("required Cloudflare publication setting missing: {name}"));
+        }
+    }
+    let script = std::env::var("SEO_STATIC_DEPLOY_SCRIPT")
+        .unwrap_or_else(|_| "/app/automation/deploy_seo_static_cloudflare.py".into());
+    if !ReleasePath::new(&script).is_file() {
+        return Err("native Cloudflare deployment adapter is unavailable".into());
+    }
     Ok(())
 }
 
@@ -485,6 +501,8 @@ async fn promote_and_verify_public_release(
     if std::env::var("SEO_STATIC_BASE_URL").ok().as_deref() != Some(origin_raw) {
         return Err("SEO_STATIC_BASE_URL must explicitly name the public HTTPS origin".into());
     }
+    // Fail before writing a pending journal when deployment is not configured.
+    require_cloudflare_publication_backend()?;
     let public = ReleasePathBuf::from(public_raw);
     let configured_public = std::env::var("SEO_STATIC_OUTPUT_DIR")
         .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
@@ -530,7 +548,6 @@ async fn promote_and_verify_public_release(
     };
     // Only the explicitly configured native Cloudflare deployment may
     // promote files to the public origin. A local symlink is not deployment.
-    require_cloudflare_publication_backend()?;
     activation.remote_activated = true;
     deploy_cloudflare_static_release(&release, activation.previous.as_deref())?;
     verify_live_release(&origin, &files).await?;
