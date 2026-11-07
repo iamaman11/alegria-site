@@ -353,7 +353,14 @@ impl AlegriaActivities {
         input: operations::SeoPreflightInput,
     ) -> Result<operations::SeoPreflightOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "seo_preflight", 1, &input, || async {
+        // Separate durable step identities prevent the final materialization check from
+        // reusing the cached capability-only preflight result.
+        let step_name = if input.require_materialized_projections {
+            "seo_materialization_gate"
+        } else {
+            "seo_preflight"
+        };
+        self.execute_step(&run_id, step_name, 1, &input, || async {
             operations::seo_preflight_impl(self.as_ref(), &input).await
         })
         .await
