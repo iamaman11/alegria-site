@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -159,6 +160,88 @@ def parse_result(output: str) -> dict[str, Any]:
     }
 
 
+def snapshot_verified_facts() -> dict[str, dict[str, Any]]:
+    """Read structured admissible facts, without seeding or mutating a scope."""
+    scope = [
+        os.environ.get("ALEGRIA_CERT_COUNTRY_CODE", "ES"),
+        os.environ.get("ALEGRIA_CERT_VISA_TYPE", "tourist"),
+        os.environ.get("ALEGRIA_CERT_CITIZENSHIP_CODE", "BY"),
+    ]
+    if any(re.fullmatch(r"[A-Za-z0-9_-]{2,32}", part) is None for part in scope):
+        raise ValueError("invalid country/visa/citizenship scope for certified truth readback")
+    country, visa_type, citizenship = scope
+    statement = f"""
+    SELECT coalesce(jsonb_object_agg(
+        r.rule_instance_id,
+        jsonb_build_object(
+            'params', r.params,
+            'evidence_quote', r.evidence_quote,
+            'source_snapshot_hash', r.source_snapshot_hash,
+            'source_key', r.source_key
+        )
+    ), '{{}}'::jsonb)
+    FROM verified.rule_instances r
+    WHERE r.status='verified' AND r.publish_admissibility='admissible'
+      AND r.context_key IN (
+        SELECT context_key FROM kb.visa_contexts
+        WHERE upper(country_code)=upper('{country}')
+          AND lower(visa_family)=lower('{visa_type}')
+          AND upper(citizenship_code)=upper('{citizenship}')
+          AND (visa_subtype IS NULL OR visa_subtype='')
+          AND status='active'
+      )
+    """
+    result = run_command([
+        "docker", "compose", "exec", "-T", "postgres",
+        "sh", "-ec",
+        'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -A -t -U postgres -d alegria -c "$1"',
+        "sh", statement,
+    ])
+    if result.returncode != 0:
+        raise RuntimeError("read-only verified fact snapshot failed")
+    rows = json.loads(result.stdout.strip())
+    if not isinstance(rows, dict):
+        raise ValueError("verified fact snapshot must be a keyed JSON object")
+    return rows
+
+
+def snapshot_published_html() -> dict[str, str]:
+    output = Path(os.environ["ALEGRIA_CERT_PUBLIC_OUTPUT_DIR"])
+    if not output.is_dir():
+        raise ValueError("certified public output directory is missing")
+    return {
+        str(path.relative_to(output)): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in output.rglob("*.html")
+        if path.is_file()
+    }
+
+
+def factual_change_proof(
+    before_facts: dict[str, dict[str, Any]],
+    after_facts: dict[str, dict[str, Any]],
+    before_html: dict[str, str],
+    after_html: dict[str, str],
+) -> dict[str, Any]:
+    """An added rule or changed query alone cannot prove factual correction."""
+    changed_rules = sorted(
+        key for key in before_facts.keys() & after_facts.keys()
+        if before_facts[key].get("params") != after_facts[key].get("params")
+        and before_facts[key].get("source_snapshot_hash")
+            != after_facts[key].get("source_snapshot_hash")
+        and after_facts[key].get("source_key")
+    )
+    changed_pages = sorted(
+        key for key in before_html.keys() & after_html.keys()
+        if before_html[key] != after_html[key]
+    )
+    return {
+        "verified_existing_rule_changes": len(changed_rules),
+        "modified_existing_html_pages": len(changed_pages),
+        "modified_page_paths": changed_pages,
+        "status": "PASS" if changed_rules and changed_pages else "FAIL",
+    }
+
+
 def scenario_payload(
     *,
     scenario_id: str,
@@ -177,7 +260,22 @@ def scenario_payload(
         query_batch_key=query_batch_key,
         publish=publish,
     )
+    before_facts = before_html = None
+    if scenario_id == "factual_change_rebuild":
+        # Read both sides of the real change from the same running staging
+        # database and the actual published output. Never inject a synthetic
+        # changed rule into a product acceptance run.
+        before_facts = snapshot_verified_facts()
+        before_html = snapshot_published_html()
     proc = run_command(command)
+    factual_proof = None
+    if scenario_id == "factual_change_rebuild" and proc.returncode == 0:
+        factual_proof = factual_change_proof(
+            before_facts,
+            snapshot_verified_facts(),
+            before_html,
+            snapshot_published_html(),
+        )
     combined = "\n".join(chunk for chunk in [proc.stdout.strip(), proc.stderr.strip()] if chunk.strip())
     result = parse_result(proc.stdout)
     phase_lines = [
@@ -189,6 +287,10 @@ def scenario_payload(
         bool(result)
         and result.get("status") == "published"
         and result.get("workflow_id") == run_id
+        and (
+            scenario_id != "factual_change_rebuild"
+            or (factual_proof is not None and factual_proof["status"] == "PASS")
+        )
     )
     evidence_status = "PASS" if proc.returncode == 0 and valid_canonical_result else "FAIL"
     failure_class = "none" if evidence_status == "PASS" else "certification_run_failed"
@@ -212,7 +314,7 @@ def scenario_payload(
         "step": "R5.Step4",
         "evidence_status": evidence_status,
         "failure_class": failure_class,
-        "status_reason": "Live certification scenario completed." if proc.returncode == 0 else "Live certification scenario failed.",
+        "status_reason": "Canonical real-source scenario certified." if evidence_status == "PASS" else "Canonical execution or independently observed factual-change proof failed.",
         "provider_kind": provider_kind,
         "publish_requested": publish,
         "run_id": run_id,
@@ -222,6 +324,7 @@ def scenario_payload(
         "command": " ".join(command),
         "exit_code": proc.returncode,
         "result": result,
+        "factual_change_evidence": factual_proof,
         "phase_lines": phase_lines,
         "stdout_excerpt": proc.stdout.strip()[-4000:],
         "stderr_excerpt": proc.stderr.strip()[-4000:],

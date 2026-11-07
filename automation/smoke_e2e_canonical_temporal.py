@@ -85,6 +85,26 @@ def main() -> int:
     )):
         readiness = cert.clean_runtime_preflight()
     assert len(readiness) == 1 and readiness["postgres_readiness"]["status"] == "FAIL"
+    old = {
+        "rule-a": {"params": {"amount": 35}, "source_snapshot_hash": "hash-1",
+                   "source_key": "official"},
+    }
+    new = {
+        "rule-a": {"params": {"amount": 40}, "source_snapshot_hash": "hash-2",
+                   "source_key": "official"},
+    }
+    assert cert.factual_change_proof(
+        old, new, {"visa/index.html": "old"}, {"visa/index.html": "new"}
+    )["status"] == "PASS"
+    assert cert.factual_change_proof(
+        old, old, {"visa/index.html": "old"}, {"visa/index.html": "new"}
+    )["status"] == "FAIL"
+    assert cert.factual_change_proof(
+        old, new, {"visa/index.html": "same"}, {"visa/index.html": "same"}
+    )["status"] == "FAIL"
+    assert cert.factual_change_proof(
+        {}, new, {"visa/index.html": "old"}, {"visa/index.html": "new"}
+    )["status"] == "FAIL"
     print("E2E_CANONICAL_TEMPORAL_SMOKE: OK")
     return 0
 

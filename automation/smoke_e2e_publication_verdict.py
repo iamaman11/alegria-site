@@ -54,6 +54,28 @@ def main() -> int:
         check(root, publish=True, published_pages=0, expected_success=False)
         check(root, publish=True, published_pages=2, mode="semi_auto_operator", expected_success=False)
         check(root, publish=True, published_pages=2, expected_success=True)
+        # A scenario label alone is not sufficient to claim a factual rebuild.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("e2e_verdict", CHECKER)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        payload = {
+            "scenario_id": "factual_change_rebuild",
+            "evidence_status": "PASS",
+            "publish_requested": True,
+            "workflow_id": "id-1",
+            "result": {"mode": "temporal_durable", "workflow_id": "id-1",
+                       "workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
+                       "truth_verified": 3, "status": "published",
+                       "page_total": 2, "published_pages": 2},
+        }
+        assert module.validate_scenario(payload)
+        payload["factual_change_evidence"] = {
+            "status": "PASS", "verified_existing_rule_changes": 1,
+            "modified_existing_html_pages": 1,
+        }
+        assert not module.validate_scenario(payload)
     print("E2E_PUBLICATION_VERDICT_SMOKE: OK")
     return 0
 

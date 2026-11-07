@@ -55,6 +55,17 @@ def validate_scenario(payload: dict[str, Any]) -> list[str]:
         failures.append(
             f"{scenario}: publish was requested but published_pages={published_pages}"
         )
+    if scenario == "factual_change_rebuild":
+        evidence = payload.get("factual_change_evidence")
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("status") != "PASS"
+            or int(evidence.get("verified_existing_rule_changes", 0) or 0) <= 0
+            or int(evidence.get("modified_existing_html_pages", 0) or 0) <= 0
+        ):
+            failures.append(
+                f"{scenario}: no independently observed updated verified fact and changed HTML"
+            )
     return failures
 
 
