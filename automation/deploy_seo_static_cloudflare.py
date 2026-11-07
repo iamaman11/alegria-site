@@ -60,9 +60,13 @@ def preflight(release: Path) -> None:
 
 
 def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
+    # No interactive provisioning, new resources or implicit extra services.
+    env = os.environ.copy()
+    env["CI"] = "1"
     proc = subprocess.run(
-        [str(cf_binary), "deploy", str(release)],
+        [str(cf_binary), "deploy", str(release), "--no-provision"],
         cwd=CLOUD_CONFIG,
+        env=env,
         check=False,
     )
     return proc.returncode == 0
@@ -120,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
             args.report.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         print(f"SEO_CLOUDFLARE_DEPLOY: HTTPS_VERIFIED pages={report['published_page_count']}")
         return 0
-    except (OSError, ValueError, RuntimeError, json.JSONDecodeError, Exception) as exc:
+    except Exception as exc:  # Fail closed on unexpected provider/validation errors.
         print(f"SEO_CLOUDFLARE_DEPLOY: FAILED - {exc}", file=sys.stderr)
         return 1
 
