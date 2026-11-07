@@ -88,8 +88,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             site_input: site_input.clone(),
         };
         let plan = build_execution_plan(&request);
-        let enforce_required_contract =
-            plan.policy.projection != RunProjectionPolicy::WarnOnly;
+        let enforce_required_contract = plan.policy.projection != RunProjectionPolicy::WarnOnly;
 
         ctx.state_mut(|s| s.phase = "seo_preflight".to_string());
         let preflight = ctx
