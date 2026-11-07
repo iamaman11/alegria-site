@@ -118,6 +118,16 @@ pub async fn rerank_records(
     }
 }
 
+// Synthetic readiness probes and untyped payloads cannot become semantic
+// evidence or canonical mapping candidates, even if old collections still
+// contain them. Bootstrap also deletes legacy probes on the next run.
+fn admissible_retrieval_payload(payload: &BTreeMap<String, String>) -> bool {
+    payload.get("entity_key").is_some_and(|key| !key.trim().is_empty())
+        && payload
+            .get("entity_type")
+            .is_some_and(|kind| !kind.trim().is_empty() && kind != "retrieval_contract_probe")
+}
+
 pub async fn search_by_text(
     query: &str,
     collection: &str,
@@ -178,6 +188,9 @@ pub async fn search_by_text_with_surface(
     let mut out = Vec::with_capacity(points.len());
     for p in points {
         let payload = qdrant::scored_point_payload_map(&p);
+        if !admissible_retrieval_payload(&payload) {
+            continue;
+        }
         let entity_key = payload.get("entity_key").cloned().unwrap_or_default();
         out.push(SearchResultRecord {
             entity_key,
@@ -186,4 +199,33 @@ pub async fn search_by_text_with_surface(
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod retrieval_payload_policy_tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_probe_or_missing_identity_never_becomes_search_evidence() {
+        let actual = BTreeMap::from([
+            ("entity_type".to_string(), "raw_section".to_string()),
+            ("entity_key".to_string(), "raw_section:42".to_string()),
+        ]);
+        assert!(admissible_retrieval_payload(&actual));
+
+        let mut synthetic = actual.clone();
+        synthetic.insert(
+            "entity_type".to_string(),
+            "retrieval_contract_probe".to_string(),
+        );
+        assert!(!admissible_retrieval_payload(&synthetic));
+
+        let mut no_key = actual.clone();
+        no_key.remove("entity_key");
+        assert!(!admissible_retrieval_payload(&no_key));
+
+        let mut no_type = actual;
+        no_type.remove("entity_type");
+        assert!(!admissible_retrieval_payload(&no_type));
+    }
 }
