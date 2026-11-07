@@ -166,6 +166,7 @@ fn fingerprint_vector(text: &str) -> Vec<f32> {
 }
 
 fn seo_qdrant_projection_event(
+    run_id: &str,
     collection_name: &str,
     artifact_type: &str,
     artifact_key: &str,
@@ -176,6 +177,8 @@ fn seo_qdrant_projection_event(
     metadata.insert("artifact_type".to_string(), artifact_type.to_string());
     metadata.insert("artifact_key".to_string(), artifact_key.to_string());
     metadata.insert("scope_signature".to_string(), scope_signature.to_string());
+    // A current-run readback must not be satisfied by last run's Qdrant points.
+    metadata.insert("run_id".to_string(), run_id.to_string());
     metadata.insert("retrieval_text".to_string(), embedding_text.to_string());
     metadata.insert(
         "embedding_model".to_string(),
