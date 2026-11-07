@@ -42,9 +42,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify both independent truth-governance gates
+      - name: Verify code gate works without legacy docs, then verify prose parity
+        shell: bash
         run: |
+          set -euo pipefail
           python3 -m py_compile automation/check_truth_governance_policy.py automation/check_truth_governance_documentation.py
+          test -d docs
+          mv docs docs.knowledge-m3-hidden
+          trap 'if [ -d docs.knowledge-m3-hidden ]; then mv docs.knowledge-m3-hidden docs; fi' EXIT
           python3 automation/check_truth_governance_policy.py
+          mv docs.knowledge-m3-hidden docs
+          trap - EXIT
           python3 automation/check_truth_governance_documentation.py
 
