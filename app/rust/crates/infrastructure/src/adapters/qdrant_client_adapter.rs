@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 pub use qdrant_client::qdrant::{
-    CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct, PointsIdsList,
+    Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
+    PointStruct, PointsIdsList,
     ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
 };
 pub use qdrant_client::{Payload, Qdrant};
