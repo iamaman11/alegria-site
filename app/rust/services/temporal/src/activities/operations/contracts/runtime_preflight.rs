@@ -62,6 +62,12 @@ pub struct SeoPreflightInput {
     pub context_key: String,
     pub scope: SeoScopePayload,
     pub projection_max_lag_ms: i64,
+    /// Only check materialization after the run has produced its derived data.
+    #[serde(default)]
+    pub require_materialized_projections: bool,
+    /// Production/canonical paths must explicitly enable all mandatory provider gates.
+    #[serde(default)]
+    pub enforce_required_contract: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
