@@ -165,3 +165,79 @@ pub async fn spawn_text_stub(
         task,
     })
 }
+
+//// Native Voyage HTTP contract stub for integration tests. Its embeddings
+//// are deterministic test vectors, never production semantic evidence.
+async fn serve_voyage_embeddings(Json(body): Json<Value>) -> Json<Value> {
+    let input_count = body
+        .get("input")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let data = (0..input_count)
+        .map(|_| serde_json::json!({"embedding": vec![0.01_f32; 1024]}))
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({"data": data}))
+}
+
+async fn serve_voyage_contextualized(Json(body): Json<Value>) -> Json<Value> {
+    let results = body
+        .get("inputs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+        .map(|(index, chunks)| {
+            let count = chunks.as_array().map(Vec::len).unwrap_or(0);
+            serde_json::json!({
+                "index": index,
+                "embeddings": vec![vec![0.01_f32; 1024]; count],
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({"results": results}))
+}
+
+async fn serve_voyage_rerank(Json(body): Json<Value>) -> Json<Value> {
+    let count = body
+        .get("documents")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    let limit = body
+        .get("top_k")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(count)
+        .min(count);
+    let data = (0..limit)
+        .map(|index| serde_json::json!({
+            "index": index,
+            "relevance_score": 1.0_f32 / (index + 1) as f32,
+        }))
+        .collect::<Vec<_>>();
+    Json(serde_json::json!({"data": data}))
+}
+
+pub async fn spawn_voyage_contract_stub() -> Result<StubServerHandle> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("bind Voyage contract stub listener failed")?;
+    let addr = listener.local_addr()?;
+    let app = Router::new()
+        .route("/v1/embeddings", any(serve_voyage_embeddings))
+        .route("/v1/contextualizedembeddings", any(serve_voyage_contextualized))
+        .route("/v1/rerank", any(serve_voyage_rerank));
+    let (tx, rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = rx.await;
+        });
+        let _ = server.await;
+    });
+    Ok(StubServerHandle {
+        base_url: format!("http://{}", addr),
+        shutdown: Some(tx),
+        task,
+    })
+}
