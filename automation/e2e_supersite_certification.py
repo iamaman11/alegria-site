@@ -10,6 +10,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from local_env import resolve_database_url
 
@@ -81,71 +82,85 @@ def classify_provider() -> tuple[str | None, str]:
     return None, "unconfigured"
 
 
-def seo_run_command(
+def canonical_temporal_command(
     *,
-    scenario: str,
     queries: list[str],
     run_id: str,
     query_batch_key: str,
-    output_dir: Path,
     publish: bool,
 ) -> list[str]:
+    if not publish:
+        raise ValueError("canonical launch certification requires real HITL publication")
     cmd = [
-        "cargo",
-        "run",
-        "-q",
-        "-p",
-        "cli_tools",
+        "cargo", "run", "-q",
+        "--manifest-path", "app/rust/Cargo.toml",
+        "-p", "temporal_worker",
+        "--bin", "temporal_starter",
         "--",
-        "seo-run",
-        "--database-url",
-        resolve_database_url(),
-        "--run-id",
-        run_id,
-        "--market",
-        os.environ.get("ALEGRIA_CERT_MARKET", "alegria-site"),
-        "--locale",
-        os.environ.get("ALEGRIA_CERT_LOCALE", "ru-RU"),
-        "--country-code",
-        os.environ.get("ALEGRIA_CERT_COUNTRY_CODE", "ES"),
-        "--visa-type",
-        os.environ.get("ALEGRIA_CERT_VISA_TYPE", "tourist"),
-        "--citizenship-code",
-        os.environ.get("ALEGRIA_CERT_CITIZENSHIP_CODE", "BY"),
+        "--temporal-url",
+        os.environ.get(
+            "ALEGRIA_CERT_TEMPORAL_URL",
+            os.environ.get("TEMPORAL_URL", "http://localhost:7233"),
+        ),
+        "start",
+        "--workflow", "seo-site-build-canonical-cutover",
+        "--workflow-id", run_id,
+        "--database-url", resolve_database_url(),
+        "--market", os.environ.get("ALEGRIA_CERT_MARKET", "alegria-site"),
+        "--locale", os.environ.get("ALEGRIA_CERT_LOCALE", "ru-RU"),
+        "--country-code", os.environ.get("ALEGRIA_CERT_COUNTRY_CODE", "ES"),
+        "--visa-type", os.environ.get("ALEGRIA_CERT_VISA_TYPE", "tourist"),
+        "--citizenship-code", os.environ.get("ALEGRIA_CERT_CITIZENSHIP_CODE", "BY"),
         "--applicant-profile",
         os.environ.get("ALEGRIA_CERT_APPLICANT_PROFILE", "standard"),
-        "--query-batch-key",
-        query_batch_key,
-        "--output-dir",
-        str(output_dir),
-        "--base-url",
-        os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com"),
+        "--query-batch-key", query_batch_key,
+        "--run-mode", "publish_with_hitl",
+        "--wait",
     ]
     for query in queries:
         cmd.extend(["--query", query])
-    if publish:
-        cmd.append("--publish")
-    cmd.append(scenario)
     return cmd
 
 
 def parse_result(output: str) -> dict[str, Any]:
+    # This is the canonical Temporal completion report, never semi-auto SEO_RUN_RESULT.
     match = re.search(
-        r"SEO_RUN_RESULT scenario=(?P<scenario>\S+) mode=(?P<mode>\S+) status=(?P<status>\S+) "
-        r"page_total=(?P<page_total>\d+) published_pages=(?P<published_pages>\d+) "
-        r"changed_truth_keys=(?P<changed_truth_keys>\d+)",
+        r"^WORKFLOW_RESULT workflow_type=SeoSiteBuildCanonicalCutoverWorkflow "
+        r"workflow_id=(?P<workflow_id>\\S+) result=(?P<body>.+)$",
         output,
+        flags=re.MULTILINE,
     )
-    if not match:
+    if match is None:
         return {}
-    data = match.groupdict()
+    body = match.group("body")
+    if not body.startswith("seo_site_build_canonical_cutover_ok "):
+        return {}
+    fields = dict(re.findall(r"([a-z][a-z_]+)=([^\\s]+)", body))
+    required = ("ia_pages", "published_pages", "truth_verified", "run_id")
+    if any(name not in fields for name in required):
+        return {}
+    try:
+        page_total = int(fields["ia_pages"])
+        published_pages = int(fields["published_pages"])
+        truth_verified = int(fields["truth_verified"])
+    except ValueError:
+        return {}
+    workflow_id = match.group("workflow_id")
+    if fields["run_id"] != workflow_id:
+        return {}
     return {
-        "scenario": data["scenario"],
-        "mode": data["mode"],
-        "status": data["status"],
-        "page_total": int(data["page_total"]),
-        "published_pages": int(data["published_pages"]),
-        "changed_truth_keys": int(data["changed_truth_keys"]),
+        "workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
+        "workflow_id": workflow_id,
+        "scenario": "site_build_full",
+        "mode": "temporal_durable",
+        "status": (
+            "published"
+            if page_total > 0 and published_pages > 0 and truth_verified > 0
+            else "blocked:incomplete_canonical_result"
+        ),
+        "page_total": page_total,
+        "published_pages": published_pages,
+        "truth_verified": truth_verified,
     }
 
 
@@ -159,16 +174,12 @@ def scenario_payload(
     provider_kind: str,
     gate_results: dict[str, Any],
 ) -> dict[str, Any]:
-    run_id = str(datetime.now(timezone.utc).timestamp()).replace(".", "")
+    run_id = str(uuid4())
     query_batch_key = f"r5-{scenario_id}-{run_id}"
-    output_dir = ROOT / "tmp" / f"r5-{scenario_id}-{run_id}"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    command = seo_run_command(
-        scenario=seo_scenario,
+    command = canonical_temporal_command(
         queries=queries,
         run_id=run_id,
         query_batch_key=query_batch_key,
-        output_dir=output_dir,
         publish=publish,
     )
     proc = run_command(command)
@@ -179,8 +190,13 @@ def scenario_payload(
         for line in proc.stdout.splitlines()
         if line.startswith("SEO_RUN_PHASE ")
     ]
-    evidence_status = "PASS" if proc.returncode == 0 else "FAIL"
-    failure_class = "none" if proc.returncode == 0 else "certification_run_failed"
+    valid_canonical_result = (
+        bool(result)
+        and result.get("status") == "published"
+        and result.get("workflow_id") == run_id
+    )
+    evidence_status = "PASS" if proc.returncode == 0 and valid_canonical_result else "FAIL"
+    failure_class = "none" if evidence_status == "PASS" else "certification_run_failed"
     if proc.returncode != 0:
         lower = combined.lower()
         if any(token in lower for token in ["401", "403", "unauthorized", "authentication failed"]):
@@ -255,6 +271,11 @@ def main() -> int:
             os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com")
         ),
         "public_output_dir_configured": bool(os.environ.get("ALEGRIA_CERT_PUBLIC_OUTPUT_DIR")),
+        "worker_origin_matches_certification": (
+            os.environ.get("SEO_STATIC_BASE_URL") ==
+            os.environ.get("ALEGRIA_CERT_BASE_URL")
+            and bool(os.environ.get("SEO_STATIC_BASE_URL"))
+        ),
     }
     if not all(required.values()):
         missing = [key for key, present in required.items() if not present]

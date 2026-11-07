@@ -95,6 +95,7 @@ async fn main() -> Result<()> {
             queries,
             query_batch_key,
             run_mode,
+            wait,
         } => {
             if workflow == WorkflowKind::ContentGeneration {
                 anyhow::bail!(
@@ -165,6 +166,35 @@ async fn main() -> Result<()> {
                 handle.info().workflow_id,
                 handle.info().run_id
             );
+            if wait {
+                let result_raw = handle
+                    .get_result(WorkflowGetResultOptions::default())
+                    .await
+                    .context("canonical workflow did not complete successfully")?;
+                let first = result_raw
+                    .payloads
+                    .first()
+                    .context("workflow completed without a result payload")?;
+                let result: String = serde_json::from_slice(&first.data)
+                    .context("workflow result was not a JSON string")?;
+                println!(
+                    "WORKFLOW_RESULT workflow_type={} workflow_id={} result={}",
+                    workflow.workflow_type(), wf_id, result
+                );
+                if workflow == WorkflowKind::SeoSiteBuildCanonicalCutover {
+                    if !result.starts_with("seo_site_build_canonical_cutover_ok ") {
+                        anyhow::bail!("canonical workflow did not produce a successful site: {result}");
+                    }
+                    let published_pages = result
+                        .split_whitespace()
+                        .find_map(|part| part.strip_prefix("published_pages="))
+                        .and_then(|count| count.parse::<u32>().ok())
+                        .unwrap_or_default();
+                    if published_pages == 0 {
+                        anyhow::bail!("canonical workflow completed without a published page");
+                    }
+                }
+            }
         }
         Command::SeoPreflight { .. } => {
             unreachable!("SeoPreflight is handled before Temporal connect")

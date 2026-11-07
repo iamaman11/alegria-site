@@ -12,14 +12,22 @@ ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "automation/check_e2e_product_verdict.py"
 
 
-def check(temp: Path, *, publish: bool, published_pages: int, expected_success: bool) -> None:
+def check(
+    temp: Path, *, publish: bool, published_pages: int,
+    mode: str = "temporal_durable", expected_success: bool,
+) -> None:
     report = temp / "scenario.md"
     payload = {
         "scenario_id": "fresh_scope",
         "evidence_status": "PASS",
         "publish_requested": publish,
+        "workflow_id": "9c337079-ae0b-4cb4-b052-bb3a0ca623c1",
         "result": {
-            "status": "completed",
+            "workflow_id": "9c337079-ae0b-4cb4-b052-bb3a0ca623c1",
+            "workflow_type": "SeoSiteBuildCanonicalCutoverWorkflow",
+            "mode": mode,
+            "truth_verified": 3,
+            "status": "published",
             "page_total": 2,
             "published_pages": published_pages,
         },
@@ -44,6 +52,7 @@ def main() -> int:
         root = Path(temp)
         check(root, publish=False, published_pages=0, expected_success=False)
         check(root, publish=True, published_pages=0, expected_success=False)
+        check(root, publish=True, published_pages=2, mode="semi_auto_operator", expected_success=False)
         check(root, publish=True, published_pages=2, expected_success=True)
     print("E2E_PUBLICATION_VERDICT_SMOKE: OK")
     return 0

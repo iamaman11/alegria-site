@@ -38,8 +38,17 @@ def validate_scenario(payload: dict[str, Any]) -> list[str]:
     if not result:
         failures.append(f"{scenario}: missing parsed SEO_RUN_RESULT")
         return failures
-    if not result_status or result_status.startswith("empty:"):
-        failures.append(f"{scenario}: product result is not usable: status={result_status!r}")
+    if (
+        result.get("mode") != "temporal_durable"
+        or result.get("workflow_type") != "SeoSiteBuildCanonicalCutoverWorkflow"
+    ):
+        failures.append(f"{scenario}: not the canonical Temporal workflow")
+    if result.get("workflow_id") != payload.get("workflow_id"):
+        failures.append(f"{scenario}: workflow ID does not match the recorded run")
+    if result_status != "published":
+        failures.append(f"{scenario}: canonical product status={result_status!r}, expected published")
+    if int(result.get("truth_verified", 0) or 0) <= 0:
+        failures.append(f"{scenario}: no admissible verified truth proved by workflow")
     if page_total <= 0:
         failures.append(f"{scenario}: page_total={page_total}, expected > 0")
     if publish_requested and published_pages <= 0:
