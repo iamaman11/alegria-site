@@ -272,7 +272,7 @@ fn require_cloudflare_publication_backend() -> Result<(), String> {
         "CLOUDFLARE_API_TOKEN",
         "SEO_STATIC_RELEASE_ROOT",
     ] {
-        if std::env::var(name).is_err_or(|value| value.trim().is_empty()) {
+        if std::env::var(name).ok().is_none_or(|value| value.trim().is_empty()) {
             return Err(format!("required Cloudflare publication setting missing: {name}"));
         }
     }
