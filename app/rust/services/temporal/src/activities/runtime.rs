@@ -6,8 +6,7 @@ use futures::Future;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
     self as pipeline_storage, RuntimeProtoPayload,
 };
-use infrastructure::adapters::temporalio_sdk_adapter::ActivityError;
-use temporalio_sdk::ApplicationFailure;
+use infrastructure::adapters::temporalio_sdk_adapter::{ActivityError, ApplicationFailure};
 use primitives::errors::{DomainError, ErrorClass};
 use primitives::hash::blake3_hex;
 
@@ -333,7 +332,11 @@ mod sdk11_activity_error_policy_tests {
 
     #[test]
     fn terminal_validation_and_conflict_errors_are_non_retryable() {
-        for message in ["contract violation", "validation failure", "violates foreign key constraint"] {
+        for message in [
+            "contract violation",
+            "validation failure",
+            "violates foreign key constraint",
+        ] {
             match AlegriaActivities::into_activity_error(message) {
                 ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
                 other => panic!("expected application failure, got {other:?}"),
@@ -350,7 +353,12 @@ mod sdk11_activity_error_policy_tests {
 
     #[test]
     fn transient_transport_and_provider_failures_remain_retryable() {
-        for message in ["timeout", "rate limit", "connection refused", "unexpected transient"] {
+        for message in [
+            "timeout",
+            "rate limit",
+            "connection refused",
+            "unexpected transient",
+        ] {
             match AlegriaActivities::into_activity_error(message) {
                 ActivityError::Application(failure) => assert!(!failure.is_non_retryable()),
                 other => panic!("expected application failure, got {other:?}"),
