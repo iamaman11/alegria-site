@@ -39,13 +39,49 @@ def check(text: str) -> tuple[int, list[str]]:
     return checked, failures
 
 
+
+def check_temporal_graph_route(text: str) -> list[str]:
+    """The Temporal worker must reach the Compose Neo4j service, not itself."""
+    match = re.search(
+        r"(?ms)^  temporal-worker:\n(.*?)(?=^  [a-z][a-z0-9_-]*:|\Z)",
+        text,
+    )
+    if not match:
+        return ["missing temporal-worker service"]
+    worker = match.group(1)
+    lines = worker.splitlines()
+    missing = [
+        setting
+        for setting in (
+            "      NEO4J_URI: neo4j:7687",
+            "      NEO4J_USER: neo4j",
+            "      NEO4J_PASSWORD: neo4j_password",
+        )
+        if setting not in lines
+    ]
+    dependencies = worker.split("    depends_on:\n", 1)
+    if len(dependencies) != 2 or "      neo4j:" not in dependencies[1].split("    restart:", 1)[0]:
+        missing.append("healthy Neo4j dependency")
+    return [f"temporal-worker missing Compose Neo4j contract: {value.strip()}" for value in missing]
+
+
 def main() -> int:
     example = 'services:\n  example:\n    ports:\n      - "127.0.0.1:5433:5432"\n'
     bad = 'services:\n  example:\n    ports:\n      - "5433:5432"\n'
+    sample_graph_route = ("services:\n  temporal-worker:\n    environment:\n"
+                          "      NEO4J_URI: neo4j:7687\n      NEO4J_USER: neo4j\n"
+                          "      NEO4J_PASSWORD: neo4j_password\n    depends_on:\n"
+                          "      neo4j:\n        condition: service_healthy\n")
+    if (check_temporal_graph_route(sample_graph_route)
+            or not check_temporal_graph_route(sample_graph_route.replace("neo4j:7687", "127.0.0.1:7687"))):
+        print("COMPOSE_LOOPBACK_PORTS: FAILED Neo4j route self-test", file=sys.stderr)
+        return 1
     if check(example) != (1, []) or not check(bad)[1]:
         print("COMPOSE_LOOPBACK_PORTS: FAILED self-test", file=sys.stderr)
         return 1
-    count, errors = check((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    count, errors = check(compose_text)
+    errors.extend(check_temporal_graph_route(compose_text))
     if not count:
         errors.append("no explicit loopback port mappings found")
     if errors:

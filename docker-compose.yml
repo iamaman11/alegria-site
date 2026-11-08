@@ -218,6 +218,9 @@ services:
       METRICS_PORT: "9464"
       WORKER_BUILD_ID: ${WORKER_BUILD_ID:-docker-dev}
       QDRANT_URL: http://qdrant:6334
+      NEO4J_URI: neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j_password
       # Canonical production capabilities are mandatory; missing providers fail closed.
       RETRIEVAL_CAPABILITY_REQUIRED: ${RETRIEVAL_CAPABILITY_REQUIRED:-true}
       CANONICAL_VECTOR_RETRIEVAL_REQUIRED: ${CANONICAL_VECTOR_RETRIEVAL_REQUIRED:-true}
@@ -262,6 +265,8 @@ services:
       pgbouncer:
         condition: service_started
       qdrant:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
     restart: on-failure:3
     ports:
