@@ -3,31 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 pub(crate) fn fast_opts(timeout_secs: u64) -> ActivityOptions {
-    ActivityOptions {
-        start_to_close_timeout: Some(Duration::from_secs(timeout_secs)),
-        ..Default::default()
-    }
+    ActivityOptions::start_to_close_timeout(Duration::from_secs(timeout_secs))
 }
 
 pub(crate) fn db_opts(timeout_secs: u64) -> ActivityOptions {
-    ActivityOptions {
-        start_to_close_timeout: Some(Duration::from_secs(timeout_secs)),
-        ..Default::default()
-    }
+    ActivityOptions::start_to_close_timeout(Duration::from_secs(timeout_secs))
 }
 
 pub(crate) fn llm_opts(timeout_secs: u64) -> ActivityOptions {
-    ActivityOptions {
-        start_to_close_timeout: Some(Duration::from_secs(timeout_secs)),
-        ..Default::default()
-    }
+    ActivityOptions::start_to_close_timeout(Duration::from_secs(timeout_secs))
 }
 
 pub(crate) fn test_opts(timeout_secs: u64) -> ActivityOptions {
-    ActivityOptions {
-        start_to_close_timeout: Some(Duration::from_secs(timeout_secs)),
-        ..Default::default()
-    }
+    ActivityOptions::start_to_close_timeout(Duration::from_secs(timeout_secs))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
