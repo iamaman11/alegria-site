@@ -166,3 +166,29 @@ jobs:
           docker compose ps -a || true
           docker compose logs --tail=100 temporal-schema temporal-server temporal-namespace || true
           docker compose down -v --remove-orphans
+
+  stack-storage-graph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate upgraded persistent services as actual containers
+        run: |
+          set -euo pipefail
+          docker compose config --quiet
+          docker compose up -d --wait postgres pgbouncer neo4j qdrant
+          docker compose exec -T postgres pg_isready -U postgres -d alegria
+          test "$(docker compose exec -T -e PGPASSWORD=postgres_password postgres \
+            psql -h pgbouncer -p 6432 -U postgres -d alegria -Atqc 'SELECT 1' | tr -d '\r')" = "1"
+          docker compose exec -T neo4j cypher-shell -u neo4j -p neo4j_password \
+            'RETURN 1 AS healthy'
+          docker compose exec -T neo4j cypher-shell -u neo4j -p neo4j_password \
+            'CALL gds.version() YIELD version RETURN version'
+          curl --retry 12 --retry-delay 3 --retry-connrefused -fsS \
+            http://127.0.0.1:6333/collections
+      - name: Print version and errors, remove only disposable CI volumes
+        if: always()
+        run: |
+          docker compose ps -a || true
+          docker compose logs --tail=100 postgres pgbouncer neo4j qdrant || true
+          docker compose down -v --remove-orphans
