@@ -39,8 +39,9 @@ struct SeoSiteBuildWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<SeoSiteBuildWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<SeoSiteBuildWorkflow>()?;
+    Ok(())
 }
 
 fn phase_with_ordinal(key: SeoPhaseKey, page_index: usize, page_total: usize) -> String {
@@ -65,7 +66,7 @@ impl SeoSiteBuildWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let normalized_run_mode = normalize_run_mode(&site_input.run_mode);
         let scenario = scenario_kind_for_run_mode(normalized_run_mode);
@@ -176,7 +177,7 @@ impl SeoSiteBuildWorkflow {
                         }
                         _ => unreachable!("invalid initial phase"),
                     }
-                    ctx.wait_condition(|s| !s.paused).await;
+                    ctx.wait_condition(|s| !s.paused).await?;
                 }
             }
             advance_cursor(&mut cursor);
@@ -298,7 +299,7 @@ impl SeoSiteBuildWorkflow {
                         }
                         _ => unreachable!("invalid planning phase"),
                     }
-                    ctx.wait_condition(|s| !s.paused).await;
+                    ctx.wait_condition(|s| !s.paused).await?;
                 }
             }
             advance_cursor(&mut cursor);
@@ -519,7 +520,7 @@ impl SeoSiteBuildWorkflow {
                                         });
                                         loop {
                                             ctx.wait_condition(|s| !s.paused && s.resume_requested)
-                                                .await;
+                                                .await?;
                                             let approval_decision: CmsApprovalDecision = ctx
                                                 .start_activity(
                                                     AlegriaActivities::load_cms_approval_decision,
@@ -755,7 +756,7 @@ impl SeoSiteBuildWorkflow {
                             }
                             _ => unreachable!("invalid page phase"),
                         }
-                        ctx.wait_condition(|s| !s.paused).await;
+                        ctx.wait_condition(|s| !s.paused).await?;
                     }
                 }
                 advance_cursor(&mut cursor);
@@ -792,7 +793,7 @@ impl SeoSiteBuildWorkflow {
                         }
                         _ => unreachable!("invalid final phase"),
                     }
-                    ctx.wait_condition(|s| !s.paused).await;
+                    ctx.wait_condition(|s| !s.paused).await?;
                 }
             }
             advance_cursor(&mut cursor);
