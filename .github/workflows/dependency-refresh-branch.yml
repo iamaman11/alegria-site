@@ -35,6 +35,9 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_REF_NAME}"
           git checkout -B "${GITHUB_REF_NAME}" FETCH_HEAD
 
+      - name: Install protocol buffers compiler for generated Rust contracts
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
       - name: Update resolved Rust dependencies
         working-directory: app/rust
         run: |
