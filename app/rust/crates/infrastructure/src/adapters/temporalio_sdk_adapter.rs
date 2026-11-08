@@ -21,7 +21,7 @@ pub use temporalio_sdk::ApplicationFailure;
 pub use temporalio_sdk::Runtime;
 pub use temporalio_sdk::{
     ActivityOptions, SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
+    WorkflowContextView, WorkflowResult, WorkflowTermination,
 };
 pub use temporalio_sdk_core::Url;
 
