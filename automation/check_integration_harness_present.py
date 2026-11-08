@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 import sys
 
 
@@ -42,12 +43,43 @@ CONTAINERS_REQUIRED_SNIPPETS = [
     "pub struct InfraHarness",
     "pub fn runtime_env(&self) -> BTreeMap<String, String>",
     "pub fn apply_runtime_env(&self) -> EnvOverrideGuard",
-    "GenericImage::new(\"postgres\", \"16-alpine\")",
-    "GenericImage::new(\"qdrant/qdrant\", \"v1.13.2\")",
-    "GenericImage::new(\"neo4j\", \"5.26.0-community\")",
-    "GenericImage::new(\"temporalio/auto-setup\", \"1.28\")",
     "\"TEMPORAL_URL\".to_string()",
 ]
+
+
+# The harness must use exactly the same real container images as staging.
+# Never require stale string literals (e.g. a retired Neo4j 5.26 tag).
+IMAGE_CONTRACT = {
+    "postgres": ("postgres", "postgres"),
+    "qdrant": ("qdrant/qdrant", "qdrant"),
+    "neo4j": ("neo4j", "neo4j"),
+    "temporal-server": ("temporalio/server", "temporal"),
+}
+
+
+def image_contract_failures(containers: str, compose: str) -> list[str]:
+    failures: list[str] = []
+    for service, (image_name, _) in IMAGE_CONTRACT.items():
+        block = re.search(
+            rf"(?ms)^  {re.escape(service)}:\\n(.*?)(?=^  [a-zA-Z][\\w-]*:|\\Z)",
+            compose,
+        )
+        if block is None:
+            failures.append(f"compose service missing: {service}")
+            continue
+        image = re.search(r"(?m)^    image: ([^\\s#]+)", block.group(1))
+        if image is None:
+            failures.append(f"compose image missing: {service}")
+            continue
+        expected_image = image.group(1)
+        if not expected_image.startswith(image_name + ":"):
+            failures.append(f"compose image family differs: {service} {expected_image}")
+            continue
+        expected_tag = expected_image[len(image_name) + 1:]
+        snippet = f'GenericImage::new("{image_name}", "{expected_tag}")'
+        if snippet not in containers:
+            failures.append(f"harness image mismatch: {service} expected {expected_image}")
+    return failures
 
 
 def read_with_includes(path: Path) -> str:
@@ -90,6 +122,12 @@ def main() -> int:
             "FAIL integration_harness containers_missing="
             + ",".join(missing_containers)
         )
+        return 1
+
+    compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    image_failures = image_contract_failures(containers_text, compose_text)
+    if image_failures:
+        print("FAIL integration_harness images=" + ",".join(image_failures))
         return 1
 
     ci_text = (ROOT / "automation/ci_verify.sh").read_text()
