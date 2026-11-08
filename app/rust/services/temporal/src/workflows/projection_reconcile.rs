@@ -17,8 +17,9 @@ struct ProjectionReconcileWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<ProjectionReconcileWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<ProjectionReconcileWorkflow>()?;
+    Ok(())
 }
 
 async fn reconcile_target(
@@ -55,11 +56,11 @@ impl ProjectionReconcileWorkflow {
         let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "projection_reconcile.neo4j".to_string());
         let neo4j = reconcile_target(ctx, &run_id, "neo4j").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "projection_reconcile.qdrant".to_string());
         let qdrant = reconcile_target(ctx, &run_id, "qdrant").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "done:projection_reconcile".to_string());
         metrics::global()
