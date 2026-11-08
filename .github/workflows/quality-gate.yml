@@ -183,7 +183,7 @@ jobs:
           docker compose exec -T neo4j cypher-shell -u neo4j -p neo4j_password \
             'RETURN 1 AS healthy'
           docker compose exec -T neo4j cypher-shell -u neo4j -p neo4j_password \
-            'CALL gds.version() YIELD version RETURN version'
+            'CALL gds.version() YIELD gdsVersion RETURN gdsVersion'
           curl --retry 12 --retry-delay 3 --retry-connrefused -fsS \
             http://127.0.0.1:6333/collections
       - name: Print version and errors, remove only disposable CI volumes
