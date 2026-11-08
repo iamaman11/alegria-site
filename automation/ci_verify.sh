@@ -14,7 +14,9 @@ echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
 
 echo "[2/50] Python lint check"
-python3 -m ruff check automation infra/analytics_lab/src
+# Preserve Ruff's existing E4/E7/E9/F baseline explicitly across engine upgrades.
+# The newly surfaced optional rule families have not been accepted as policy.
+python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
 
 echo "[3/50] Python scope check (no forbidden imports)"
 python3 automation/check_python_scope.py
