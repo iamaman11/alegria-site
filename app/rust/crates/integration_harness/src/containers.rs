@@ -42,6 +42,8 @@ pub struct TemporalHarness {
     pub namespace: String,
     _postgres_container: ContainerAsync<GenericImage>,
     _temporal_container: ContainerAsync<GenericImage>,
+    _schema_container: ContainerAsync<GenericImage>,
+    _namespace_container: ContainerAsync<GenericImage>,
 }
 
 pub struct InfraHarness {
@@ -256,7 +258,32 @@ impl TemporalHarness {
             .await
             .context("resolve temporal postgres bridge ip failed")?;
 
-        let temporal_image = GenericImage::new("temporalio/auto-setup", "1.28")
+        // Same vendor schema initialization as the supported Compose server.
+        // Test-only one-shot initialization container is kept alive while
+        // assertions run, so Testcontainers can verify its startup output.
+        let schema_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_entrypoint("/bin/sh")
+            .with_cmd(["-ec", "/scripts/setup_schema.sh && sleep 3600"])
+            .with_copy_to(
+                "/scripts/setup_schema.sh",
+                include_str!("../../../../../infra/temporal/setup_schema.sh")
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_SCHEMAS: OK"))
+            .with_env_var("DB", "postgres12")
+            .with_env_var("DB_PORT", "5432")
+            .with_env_var("POSTGRES_USER", "temporal")
+            .with_env_var("POSTGRES_PWD", "temporal_password")
+            .with_env_var("SQL_PASSWORD", "temporal_password")
+            .with_env_var("POSTGRES_SEEDS", postgres_ip.to_string())
+            .with_network(&network);
+        let schema_container = schema_image
+            .start()
+            .await
+            .context("initialize current Temporal schema in test Postgres")?;
+
+        let temporal_image = GenericImage::new("temporalio/server", "1.32.2")
             .with_exposed_port(7233.tcp())
             .with_wait_for(WaitFor::seconds(15))
             .with_env_var("DB", "postgres12")
@@ -265,6 +292,10 @@ impl TemporalHarness {
             .with_env_var("POSTGRES_PWD", "temporal_password")
             .with_env_var("POSTGRES_SEEDS", postgres_ip.to_string())
             .with_env_var("BIND_ON_IP", "0.0.0.0")
+            .with_env_var(
+                "DYNAMIC_CONFIG_FILE_PATH",
+                "config/dynamicconfig/development-sql.yaml",
+            )
             .with_network(&network);
         let temporal_container = temporal_image
             .start()
@@ -276,12 +307,27 @@ impl TemporalHarness {
             .context("resolve temporal mapped port failed")?;
         let temporal_url = format!("http://127.0.0.1:{port}");
         let namespace = "default".to_string();
+        let namespace_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_entrypoint("/bin/sh")
+            .with_cmd([
+                "-ec",
+                "temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1 || temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
+            ])
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_NAMESPACE_READY"))
+            .with_env_var("TEMPORAL_ADDRESS", format!("{}:7233", temporal_container.get_bridge_ip_address().await?))
+            .with_network(&network);
+        let namespace_container = namespace_image
+            .start()
+            .await
+            .context("ensure default Temporal namespace in test server")?;
         probe_temporal(&temporal_url, &namespace).await?;
         Ok(Self {
             temporal_url,
             namespace,
             _postgres_container: postgres_container,
             _temporal_container: temporal_container,
+            _schema_container: schema_container,
+            _namespace_container: namespace_container,
         })
     }
 }
