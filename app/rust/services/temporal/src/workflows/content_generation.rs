@@ -27,7 +27,7 @@ impl ContentGenerationWorkflow {
             .workflow_starts_total
             .with_label_values(&["ContentGenerationWorkflow"])
             .inc();
-        let run_id: String = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id: String = ctx.info().workflow_id().to_string();
 
         ctx.state_mut(|s| s.phase = "generate_content".to_string());
         let run_id: String = ctx
