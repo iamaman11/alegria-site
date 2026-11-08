@@ -65,6 +65,24 @@ def check_temporal_graph_route(text: str) -> list[str]:
     return [f"temporal-worker missing Compose Neo4j contract: {value.strip()}" for value in missing]
 
 
+def check_outbox_voyage_route(text: str) -> list[str]:
+    """The existing materializer needs the Voyage settings used by Qdrant."""
+    match = re.search(
+        r"(?ms)^  outbox-worker:\n(.*?)(?=^  [a-z][a-z0-9_-]*:|\Z)",
+        text,
+    )
+    if not match:
+        return ["missing outbox-worker service"]
+    lines = match.group(1).splitlines()
+    return [
+        f"outbox-worker missing provider configuration: {value.strip()}"
+        for value in (
+            "      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}",
+            "      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4-large}",
+        )
+        if value not in lines
+    ]
+
 def main() -> int:
     example = 'services:\n  example:\n    ports:\n      - "127.0.0.1:5433:5432"\n'
     bad = 'services:\n  example:\n    ports:\n      - "5433:5432"\n'
@@ -76,12 +94,20 @@ def main() -> int:
             or not check_temporal_graph_route(sample_graph_route.replace("neo4j:7687", "127.0.0.1:7687"))):
         print("COMPOSE_LOOPBACK_PORTS: FAILED Neo4j route self-test", file=sys.stderr)
         return 1
+    voyage_example = ('services:\n  outbox-worker:\n    environment:\n'
+                      '      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}\n'
+                      '      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4-large}\n')
+    if (check_outbox_voyage_route(voyage_example)
+            or not check_outbox_voyage_route(voyage_example.replace('VOYAGE_API_KEY', 'MISSING_API_KEY'))):
+        print("COMPOSE_LOOPBACK_PORTS: FAILED Voyage config self-test", file=sys.stderr)
+        return 1
     if check(example) != (1, []) or not check(bad)[1]:
         print("COMPOSE_LOOPBACK_PORTS: FAILED self-test", file=sys.stderr)
         return 1
     compose_text = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     count, errors = check(compose_text)
     errors.extend(check_temporal_graph_route(compose_text))
+    errors.extend(check_outbox_voyage_route(compose_text))
     if not count:
         errors.append("no explicit loopback port mappings found")
     if errors:

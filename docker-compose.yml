@@ -287,6 +287,8 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: neo4j_password
       QDRANT_URL: http://qdrant:6334
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4-large}
     depends_on:
       pgbouncer:
         condition: service_started
