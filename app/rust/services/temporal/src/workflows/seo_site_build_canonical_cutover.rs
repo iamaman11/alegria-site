@@ -77,7 +77,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         let scope = site_input
             .scope
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("SeoSiteBuildInputPayload.scope is required"))?;
+            .ok_or_else(|| super::runtime::workflow_contract_failure("SeoSiteBuildInputPayload.scope is required"))?;
         let normalized_run_mode = normalize_run_mode(&site_input.run_mode);
         let request = SeoScenarioRequest {
             scenario: scenario_kind_for_run_mode(normalized_run_mode),
