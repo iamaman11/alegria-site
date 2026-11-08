@@ -84,7 +84,7 @@ services:
       - "6333:6333" # REST API
       - "6334:6334" # gRPC
     volumes:
-      - qdrant_data:/qdrant/storage
+      - qdrant20_data:/qdrant/storage
     healthcheck:
       test: ["CMD", "bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/6333"]
       interval: 10s
@@ -318,4 +318,6 @@ volumes:
   postgres18_data:
   postgres_temporal18_data:
   neo4j_data:
-  qdrant_data:
+  # v1.9 storage cannot be jumped directly to v1.20. Rebuild a new index
+  # from verified SQL/outbox sources, or use vendor sequential upgrades.
+  qdrant20_data:
