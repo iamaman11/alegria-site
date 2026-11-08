@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
     let acts = activities::AlegriaActivities { pool };
 
     // WorkerOptions built inside workflows module to keep workflow types private
-    let worker_opts = workflows::build_worker_options("alegria-pipeline", acts);
+    let worker_opts = workflows::build_worker_options("alegria-pipeline", acts)?;
 
     // Worker::new returns Result<_, Box<dyn Error>> — not anyhow-compatible directly
     Worker::new(&runtime, client, worker_opts)
