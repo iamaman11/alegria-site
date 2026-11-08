@@ -54,10 +54,10 @@ def main() -> int:
     for workflow_path in sorted(WORKFLOWS_MOD.parent.rglob("*.rs")):
         source = workflow_path.read_text(encoding="utf-8")
         for match in re.finditer(
-            r"ctx\\.wait_condition\\([^;]*\\)\\s*\\.await\\s*;",
+            r"ctx\.wait_condition\([^;]*\)\s*\.await\s*;",
             source,
         ):
-            line = source.count("\\n", 0, match.start()) + 1
+            line = source.count("\n", 0, match.start()) + 1
             failures.append(
                 f"{workflow_path.relative_to(ROOT)}:{line}: "
                 "wait_condition must propagate Temporal cancellation with ?"
