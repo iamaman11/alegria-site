@@ -67,7 +67,10 @@ fn env_flag(name: &str) -> bool {
 }
 
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
-pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) -> anyhow::Result<WorkerOptions> {
+pub(crate) fn build_worker_options(
+    task_queue: &str,
+    acts: AlegriaActivities,
+) -> anyhow::Result<WorkerOptions> {
     let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
     let profile = WorkerProfile::from_env();
     tracing::info!(task_queue, build_id = %build_id, worker_profile = ?profile, "building temporal worker options");
