@@ -51,7 +51,7 @@ impl ExpertExtractionWorkflow {
             .with_label_values(&["ExpertExtractionWorkflow"])
             .inc();
 
-        let run_id = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "load_seo_site_build_input".to_string());
         let site_input: SeoSiteBuildInputPayload = ctx
             .start_activity(
