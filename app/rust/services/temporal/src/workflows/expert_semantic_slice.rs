@@ -40,7 +40,7 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
             .map(|value| value.applicant_profile.clone())
             .unwrap_or_default(),
     })
-    .map_err(anyhow::Error::from)?)
+    .map_err(|err| super::runtime::workflow_contract_failure(err.to_string()))?)
 }
 
 #[workflow_methods]
