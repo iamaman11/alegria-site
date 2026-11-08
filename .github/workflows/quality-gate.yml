@@ -90,9 +90,10 @@ jobs:
         if: failure()
         working-directory: app/rust
         run: |
-          cargo tree --locked -e features -i ringbuf
-          cargo tree --locked -e features -i rsa
-          cargo tree --locked -e features -i sqlx-mysql
+          cargo tree --locked --target all -e features -i ringbuf || true
+          cargo tree --locked --target all -e features -i rsa || true
+          cargo tree --locked --target all -e features -i sqlx-mysql@0.8.6 || true
+          cargo tree --locked --target all -e features -i sqlx-mysql@0.9.0 || true
 
   cloudflare-static-build:
     runs-on: ubuntu-latest
