@@ -67,22 +67,22 @@ def main() -> int:
         "mod expert_semantic_slice;",
         "mod projection_reconcile;",
         "mod seo_site_build_canonical_cutover;",
-        "expert_extraction::register(&mut opts);",
-        "expert_decomposed_extraction::register(&mut opts);",
-        "expert_projection::register(&mut opts);",
-        "expert_semantic_slice::register(&mut opts);",
-        "projection_reconcile::register(&mut opts);",
-        "seo_site_build_canonical_cutover::register(&mut opts);",
+        "expert_extraction::register(&mut opts)?;",
+        "expert_decomposed_extraction::register(&mut opts)?;",
+        "expert_projection::register(&mut opts)?;",
+        "expert_semantic_slice::register(&mut opts)?;",
+        "projection_reconcile::register(&mut opts)?;",
+        "seo_site_build_canonical_cutover::register(&mut opts)?;",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflow registry missing `{needle}`")
 
     for needle in [
         "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
-        "expert_decomposed_extraction::register(&mut opts);",
-        "expert_extraction::register(&mut opts);",
-        "expert_projection::register(&mut opts);",
-        "expert_semantic_slice::register(&mut opts);",
+        "expert_decomposed_extraction::register(&mut opts)?;",
+        "expert_extraction::register(&mut opts)?;",
+        "expert_projection::register(&mut opts)?;",
+        "expert_semantic_slice::register(&mut opts)?;",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflow registry missing expert quarantine guard `{needle}`")
