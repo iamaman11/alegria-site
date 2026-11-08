@@ -56,7 +56,7 @@ impl SeoSiteBuildWorkflow {
             .with_label_values(&["SeoSiteBuildWorkflow"])
             .inc();
 
-        let run_id: String = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id: String = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "load_seo_site_build_input".to_string());
         let site_input: SeoSiteBuildInputPayload = ctx
             .start_activity(
