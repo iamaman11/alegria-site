@@ -18,8 +18,9 @@ TEST_ENV = {
     "SEO_LLM_PROVIDER": "openai",
     "OPENAI_API_KEY": "fixture",
     "ALEGRIA_CERT_PUBLISH": "1",
-    "ALEGRIA_CERT_BASE_URL": "https://seo-staging.alegria.by",
-    "SEO_STATIC_BASE_URL": "https://seo-staging.alegria.by",
+    "CLOUDFLARE_ACCOUNT_ID": "78e5fcb3762c1473113d51838556da74",
+    "ALEGRIA_CERT_BASE_URL": "https://alegria-seo-staging.alegria-site.workers.dev",
+    "SEO_STATIC_BASE_URL": "https://alegria-seo-staging.alegria-site.workers.dev",
     "ALEGRIA_CERT_PUBLIC_OUTPUT_DIR": "/tmp/fixture-approved-release",
 }
 
@@ -42,6 +43,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
     def run_case(
         self, *, first_site: bool, codes: tuple[int, ...] = (0, 0, 0),
         scenario_failure: bool = False,
+        env_overrides: dict[str, str] | None = None,
     ) -> tuple[int, dict, object, object]:
         reports: list[tuple[Path, dict]] = []
 
@@ -57,7 +59,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
 
         argv = ["certification", "--first-site"] if first_site else ["certification"]
         with (
-            mock.patch.dict("os.environ", TEST_ENV, clear=True),
+            mock.patch.dict("os.environ", {**TEST_ENV, **(env_overrides or {})}, clear=True),
             mock.patch.object(sys, "argv", argv),
             mock.patch.object(cert, "classify_provider", return_value=("openai", "openai")),
             mock.patch.object(cert, "clean_runtime_preflight", return_value={
@@ -124,6 +126,29 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
             [call.kwargs["scenario_id"] for call in runner.call_args_list],
             ["fresh_scope", "scope_expansion", "factual_change_rebuild"],
         )
+        command.assert_not_called()
+
+    def test_wrong_cloudflare_account_blocks_before_launch(self) -> None:
+        code, manifest, runner, command = self.run_case(
+            first_site=True, env_overrides={"CLOUDFLARE_ACCOUNT_ID": "foreign-account"}
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("dedicated_cloudflare_account", manifest["missing"])
+        runner.assert_not_called()
+        command.assert_not_called()
+
+    def test_previous_technical_origin_blocks_before_launch(self) -> None:
+        previous_origin = "https://seo-staging.alegria.by"
+        code, manifest, runner, command = self.run_case(
+            first_site=True,
+            env_overrides={
+                "ALEGRIA_CERT_BASE_URL": previous_origin,
+                "SEO_STATIC_BASE_URL": previous_origin,
+            },
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("dedicated_workers_dev_origin", manifest["missing"])
+        runner.assert_not_called()
         command.assert_not_called()
 
     def test_dry_run_does_not_print_database_credentials(self) -> None:
