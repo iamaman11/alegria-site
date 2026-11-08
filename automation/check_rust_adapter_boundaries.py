@@ -97,7 +97,6 @@ REQUIRED_ADAPTERS = {
     "hyper_adapter.rs",
     "tower_adapter.rs",
     "playwright_rs_adapter.rs",
-    "graph_flow_adapter.rs",
     "rig_core_adapter.rs",
     "rig_vertexai_adapter.rs",
     "qdrant_client_adapter.rs",
