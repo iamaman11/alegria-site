@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.15.2-slim-trixie
 WORKDIR /app
 
 COPY infra/analytics_lab/requirements.txt ./requirements.txt
