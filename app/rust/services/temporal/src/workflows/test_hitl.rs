@@ -29,7 +29,7 @@ impl TestHitlWorkflow {
             .workflow_starts_total
             .with_label_values(&["TestHitlWorkflow"])
             .inc();
-        let workflow_id: String = ctx.workflow_initial_info().workflow_id.clone();
+        let workflow_id: String = ctx.info().workflow_id().to_string();
 
         ctx.state_mut(|s| s.phase = "test_step_prepare".to_string());
         let prepared: String = ctx
