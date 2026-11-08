@@ -148,11 +148,14 @@ services:
         condition: service_healthy
     environment:
       TEMPORAL_ADDRESS: temporal-server:7233
+    # The shell program must be one argv element (Compose plain scalar
+    # command would split on whitespace and pass only "!" to sh -c).
     entrypoint: ["/bin/sh", "-ec"]
-    command: |
-      if ! temporal operator namespace describe --namespace default --address "$$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
-        temporal operator namespace create --namespace default --address "$$TEMPORAL_ADDRESS"
-      fi
+    command:
+      - |
+        if ! temporal operator namespace describe --namespace default --address "$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
+          temporal operator namespace create --namespace default --address "$TEMPORAL_ADDRESS"
+        fi
     restart: "no"
 
   # 6. Production Analytics Service (Rust runtime)
