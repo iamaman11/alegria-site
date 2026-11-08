@@ -7,6 +7,7 @@ use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
     self as pipeline_storage, RuntimeProtoPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::ActivityError;
+use temporalio_sdk::ApplicationFailure;
 use primitives::errors::{DomainError, ErrorClass};
 use primitives::hash::blake3_hex;
 
@@ -99,43 +100,41 @@ impl AlegriaActivities {
         Self::classify_error_message(&err.to_string())
     }
 
+    // Temporal SDK 1.1 represents retry policy through ApplicationFailure,
+    // rather than the removed Retryable/NonRetryable ActivityError variants.
+    // Preserve the existing contract: validation/conflict errors must never
+    // be retried; transient provider/infrastructure errors remain retryable.
+    fn activity_error_with_policy(message: String, non_retryable: bool) -> ActivityError {
+        let source = Self::boxed_error(message);
+        let failure = if non_retryable {
+            ApplicationFailure::non_retryable(source)
+        } else {
+            ApplicationFailure::new(source)
+        };
+        ActivityError::application(failure)
+    }
+
     pub(crate) fn into_activity_error<E: std::fmt::Display>(err: E) -> ActivityError {
         let message = err.to_string();
-        let classified = Self::classify_error_message(&message);
-        match classified {
+        let non_retryable = matches!(
+            Self::classify_error_message(&message),
             DomainError::ContractViolation { .. }
-            | DomainError::ValidationFailure { .. }
-            | DomainError::ForeignKeyViolation { .. }
-            | DomainError::ConflictViolation { .. } => {
-                ActivityError::NonRetryable(Self::boxed_error(message))
-            }
-            DomainError::TransportTimeout { .. }
-            | DomainError::RemoteRateLimit { .. }
-            | DomainError::Remote5xx { .. }
-            | DomainError::InfraUnavailable { .. }
-            | DomainError::UnexpectedBug { .. } => ActivityError::Retryable {
-                source: Self::boxed_error(message),
-                explicit_delay: None,
-            },
-        }
+                | DomainError::ValidationFailure { .. }
+                | DomainError::ForeignKeyViolation { .. }
+                | DomainError::ConflictViolation { .. }
+        );
+        Self::activity_error_with_policy(message, non_retryable)
     }
 
     pub(crate) fn activity_error_from_domain(err: &DomainError) -> ActivityError {
-        let boxed = Self::boxed_error(err.to_string());
-        match err {
+        let non_retryable = matches!(
+            err,
             DomainError::ContractViolation { .. }
-            | DomainError::ValidationFailure { .. }
-            | DomainError::ForeignKeyViolation { .. }
-            | DomainError::ConflictViolation { .. } => ActivityError::NonRetryable(boxed),
-            DomainError::TransportTimeout { .. }
-            | DomainError::RemoteRateLimit { .. }
-            | DomainError::Remote5xx { .. }
-            | DomainError::InfraUnavailable { .. }
-            | DomainError::UnexpectedBug { .. } => ActivityError::Retryable {
-                source: boxed,
-                explicit_delay: None,
-            },
-        }
+                | DomainError::ValidationFailure { .. }
+                | DomainError::ForeignKeyViolation { .. }
+                | DomainError::ConflictViolation { .. }
+        );
+        Self::activity_error_with_policy(err.to_string(), non_retryable)
     }
 
     pub(crate) fn extract_block_htmls(
