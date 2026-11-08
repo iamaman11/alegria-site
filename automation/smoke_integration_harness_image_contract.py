@@ -17,7 +17,7 @@ class IntegrationImageParityTests(unittest.TestCase):
 
     def test_stale_neo4j_harness_cannot_pass(self):
         wrong = self.harness.replace(
-            'GenericImage::new("neo4j", "2026.10.2")',
+            'GenericImage::new("neo4j", "2026.10.1")',
             'GenericImage::new("neo4j", "5.26.0-community")',
         )
         self.assertIn("harness image mismatch: neo4j", " ".join(
