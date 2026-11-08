@@ -33,7 +33,6 @@ tower = { workspace = true }
 playwright-rs = { workspace = true }
 rig-core = { workspace = true }
 rig-vertexai = { workspace = true }
-graph-flow = { workspace = true }
 temporalio-sdk = { workspace = true }
 temporalio-sdk-core = { workspace = true }
 temporalio-client = { workspace = true }
