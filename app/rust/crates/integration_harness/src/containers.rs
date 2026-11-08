@@ -262,6 +262,7 @@ impl TemporalHarness {
         // Test-only one-shot initialization container is kept alive while
         // assertions run, so Testcontainers can verify its startup output.
         let schema_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_SCHEMAS: OK"))
             .with_entrypoint("/bin/sh")
             .with_cmd(["-ec", "/scripts/setup_schema.sh && sleep 3600"])
             .with_copy_to(
@@ -270,7 +271,6 @@ impl TemporalHarness {
                     .as_bytes()
                     .to_vec(),
             )
-            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_SCHEMAS: OK"))
             .with_env_var("DB", "postgres12")
             .with_env_var("DB_PORT", "5432")
             .with_env_var("POSTGRES_USER", "temporal")
@@ -314,12 +314,12 @@ impl TemporalHarness {
         let temporal_url = format!("http://127.0.0.1:{port}");
         let namespace = "default".to_string();
         let namespace_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_NAMESPACE_READY"))
             .with_entrypoint("/bin/sh")
             .with_cmd([
                 "-ec",
                 "set -eu; if ! temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1; then temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; fi; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
             ])
-            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_NAMESPACE_READY"))
             .with_env_var("TEMPORAL_ADDRESS", format!("{}:7233", temporal_container.get_bridge_ip_address().await?))
             .with_network(&network);
         let namespace_container = namespace_image

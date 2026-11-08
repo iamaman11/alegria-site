@@ -1,27 +1,27 @@
 async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str) {
-    let site_tables = sqlx::query_scalar::<_, String>(
+    // PostgreSQL owns identifier quoting: tablenames originate from pg_catalog
+    // and are never interpolated into client-side SQL. The statement text
+    // remains a compile-time literal under SQLx 0.9's SqlSafeStr contract.
+    sqlx::query(
         r#"
-        SELECT tablename
-        FROM pg_tables
-        WHERE schemaname = 'site'
-          AND tablename NOT IN ('section_templates', 'page_blueprints')
-        ORDER BY tablename
+        DO $site_cleanup$
+        DECLARE site_table_list TEXT;
+        BEGIN
+            SELECT string_agg(format('site.%I', tablename), ', ' ORDER BY tablename)
+              INTO site_table_list
+            FROM pg_tables
+            WHERE schemaname = 'site'
+              AND tablename NOT IN ('section_templates', 'page_blueprints');
+            IF site_table_list IS NOT NULL THEN
+                EXECUTE 'TRUNCATE TABLE ' || site_table_list || ' RESTART IDENTITY CASCADE';
+            END IF;
+        END;
+        $site_cleanup$;
         "#,
     )
-    .fetch_all(pool)
+    .execute(pool)
     .await
     .unwrap();
-    if !site_tables.is_empty() {
-        let statement = format!(
-            "TRUNCATE TABLE {} RESTART IDENTITY CASCADE",
-            site_tables
-                .iter()
-                .map(|table| format!("site.{table}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        sqlx::query(&statement).execute(pool).await.unwrap();
-    }
 
     sqlx::query("TRUNCATE TABLE monitoring.seo_rebuild_backlog RESTART IDENTITY")
         .execute(pool)
