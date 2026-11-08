@@ -18,11 +18,11 @@ pub use temporalio_macros::{
 pub use temporalio_sdk::activities::{ActivityContext, ActivityError};
 pub use temporalio_sdk::runtime::RuntimeOptions;
 pub use temporalio_sdk::ApplicationFailure;
+pub use temporalio_sdk::Runtime;
 pub use temporalio_sdk::{
     ActivityOptions, SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext,
     WorkflowContextView, WorkflowResult,
 };
-pub use temporalio_sdk::Runtime;
 pub use temporalio_sdk_core::Url;
 
 pub fn build_runtime() -> Result<Runtime> {
