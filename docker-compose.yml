@@ -58,7 +58,7 @@ services:
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
-    image: neo4j:2026.10.2
+    image: neo4j:2026.10.1
     container_name: alegria_neo4j
     environment:
       NEO4J_AUTH: neo4j/neo4j_password
