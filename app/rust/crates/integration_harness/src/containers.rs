@@ -296,6 +296,12 @@ impl TemporalHarness {
                 "DYNAMIC_CONFIG_FILE_PATH",
                 "config/dynamicconfig/development-sql.yaml",
             )
+            .with_copy_to(
+                "/etc/temporal/config/dynamicconfig/development-sql.yaml",
+                include_str!("../../../../../infra/temporal/dynamicconfig.yaml")
+                    .as_bytes()
+                    .to_vec(),
+            )
             .with_network(&network);
         let temporal_container = temporal_image
             .start()
@@ -311,7 +317,7 @@ impl TemporalHarness {
             .with_entrypoint("/bin/sh")
             .with_cmd([
                 "-ec",
-                "temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1 || temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
+                "set -eu; if ! temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1; then temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; fi; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
             ])
             .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_NAMESPACE_READY"))
             .with_env_var("TEMPORAL_ADDRESS", format!("{}:7233", temporal_container.get_bridge_ip_address().await?))
