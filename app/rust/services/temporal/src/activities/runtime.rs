@@ -325,3 +325,36 @@ impl AlegriaActivities {
         }
     }
 }
+
+#[cfg(test)]
+mod sdk11_activity_error_policy_tests {
+    use super::{ActivityError, AlegriaActivities};
+    use primitives::errors::DomainError;
+
+    #[test]
+    fn terminal_validation_and_conflict_errors_are_non_retryable() {
+        for message in ["contract violation", "validation failure", "violates foreign key constraint"] {
+            match AlegriaActivities::into_activity_error(message) {
+                ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+                other => panic!("expected application failure, got {other:?}"),
+            }
+        }
+        let err = DomainError::ConflictViolation {
+            message: "duplicate immutable revision".to_string(),
+        };
+        match AlegriaActivities::activity_error_from_domain(&err) {
+            ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+            other => panic!("expected application failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn transient_transport_and_provider_failures_remain_retryable() {
+        for message in ["timeout", "rate limit", "connection refused", "unexpected transient"] {
+            match AlegriaActivities::into_activity_error(message) {
+                ActivityError::Application(failure) => assert!(!failure.is_non_retryable()),
+                other => panic!("expected application failure, got {other:?}"),
+            }
+        }
+    }
+}
