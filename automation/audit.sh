@@ -13,6 +13,7 @@ run_fast() {
   python3 automation/check_docs_layout.py
   python3 automation/check_python_scope.py
   python3 automation/check_end_to_end_invariants.py
+  python3 automation/check_compose_loopback_ports.py
   bash automation/check_python_rust_boundary.sh
   python3 automation/check_rust_adapter_boundaries.py
   python3 automation/check_rust_layer_isolation.py

@@ -13,6 +13,9 @@ echo "== Alegria Expert Verification =="
 echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
 
+echo "[1a/50] Docker Compose host bindings must be loopback-only"
+python3 automation/check_compose_loopback_ports.py
+
 echo "[2/50] Python lint check"
 # Preserve Ruff's existing E4/E7/E9/F baseline explicitly across engine upgrades.
 # The newly surfaced optional rule families have not been accepted as policy.
