@@ -259,12 +259,14 @@ impl TemporalHarness {
             .context("resolve temporal postgres bridge ip failed")?;
 
         // Same vendor schema initialization as the supported Compose server.
-        // Test-only one-shot initialization container is kept alive while
-        // assertions run, so Testcontainers can verify its startup output.
+        // Execute the copied script through the shell, exactly as Compose does.
+        // Testcontainers copies bytes without guaranteeing an executable bit;
+        // direct invocation can exit before emitting the readiness marker.
+        // Keep this test-only one-shot container alive for startup readback.
         let schema_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
             .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_SCHEMAS: OK"))
             .with_entrypoint("/bin/sh")
-            .with_cmd(["-ec", "/scripts/setup_schema.sh && sleep 3600"])
+            .with_cmd(["-ec", "/bin/sh /scripts/setup_schema.sh && sleep 3600"])
             .with_copy_to(
                 "/scripts/setup_schema.sh",
                 include_str!("../../../../../infra/temporal/setup_schema.sh")
