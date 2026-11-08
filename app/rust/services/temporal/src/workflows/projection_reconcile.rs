@@ -52,7 +52,7 @@ impl ProjectionReconcileWorkflow {
             .with_label_values(&["ProjectionReconcileWorkflow"])
             .inc();
 
-        let run_id = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "projection_reconcile.neo4j".to_string());
         let neo4j = reconcile_target(ctx, &run_id, "neo4j").await?;
         ctx.wait_condition(|s| !s.paused).await;
