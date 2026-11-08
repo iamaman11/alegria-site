@@ -61,13 +61,13 @@ def image_contract_failures(containers: str, compose: str) -> list[str]:
     failures: list[str] = []
     for service, (image_name, _) in IMAGE_CONTRACT.items():
         block = re.search(
-            rf"(?ms)^  {re.escape(service)}:\\n(.*?)(?=^  [a-zA-Z][\\w-]*:|\\Z)",
+            rf"(?ms)^  {re.escape(service)}:\n(.*?)(?=^  [a-zA-Z][\w-]*:|\Z)",
             compose,
         )
         if block is None:
             failures.append(f"compose service missing: {service}")
             continue
-        image = re.search(r"(?m)^    image: ([^\\s#]+)", block.group(1))
+        image = re.search(r"(?m)^    image: ([^\s#]+)", block.group(1))
         if image is None:
             failures.append(f"compose image missing: {service}")
             continue
