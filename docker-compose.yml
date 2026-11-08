@@ -1,7 +1,7 @@
 services:
   # 1. Слой данных (PostgreSQL для бизнес-данных Alegria)
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.6-alpine
     container_name: alegria_postgres
     environment:
       POSTGRES_USER: postgres
@@ -10,7 +10,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres18_data:/var/lib/postgresql
       - ./app/db/schema.sql:/docker-entrypoint-initdb.d/init.sql # Авто-накат схемы при старте
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -20,7 +20,7 @@ services:
 
   # 1b. Отдельная БД для Temporal (service persistence)
   postgres-temporal:
-    image: postgres:16-alpine
+    image: postgres:18.6-alpine
     container_name: alegria_postgres_temporal
     environment:
       POSTGRES_USER: temporal
@@ -29,7 +29,7 @@ services:
     ports:
       - "5434:5432"
     volumes:
-      - postgres_temporal_data:/var/lib/postgresql/data
+      - postgres_temporal18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal"]
       interval: 10s
@@ -58,7 +58,7 @@ services:
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
-    image: neo4j:2026.02.2
+    image: neo4j:2026.10.2
     container_name: alegria_neo4j
     environment:
       NEO4J_AUTH: neo4j/neo4j_password
@@ -78,7 +78,7 @@ services:
 
   # 3. Слой векторного поиска (Qdrant)
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    image: qdrant/qdrant:v1.20.0
     container_name: alegria_qdrant
     ports:
       - "6333:6333" # REST API
@@ -93,30 +93,67 @@ services:
 
   # 4. Слой оркестрации (Prefect Server)
 
-  # 5. Temporal Server (заменяет Prefect)
-  temporal-server:
-    image: temporalio/auto-setup:1.28
-    container_name: alegria_temporal
+
+  # 5. Temporal Server — current supported images, not retired auto-setup.
+  # The official admin-tools one-shot initializes Postgres schemas first.
+  temporal-schema:
+    image: temporalio/admin-tools:1.32.2
+    container_name: alegria_temporal_schema
     depends_on:
       postgres-temporal:
-        condition: service_healthy   # ждём healthcheck postgres
+        condition: service_healthy
     environment:
-      - DB=postgres12
-      - DB_PORT=5432
-      - POSTGRES_USER=temporal
-      - POSTGRES_PWD=temporal_password
-      - POSTGRES_SEEDS=postgres-temporal      # имя сервиса в compose-сети
-      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig.yaml
-      - BIND_ON_IP=0.0.0.0
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal_password
+      POSTGRES_SEEDS: postgres-temporal
+      SQL_PASSWORD: temporal_password
     volumes:
-      - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/dynamicconfig.yaml:ro
+      - ./infra/temporal/setup_schema.sh:/scripts/setup_schema.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/setup_schema.sh"]
+    restart: "no"
+
+  temporal-server:
+    image: temporalio/server:1.32.2
+    container_name: alegria_temporal
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal_password
+      POSTGRES_SEEDS: postgres-temporal
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
     ports:
       - "7233:7233"
     healthcheck:
-      test: ["CMD", "tctl", "--address", "localhost:7233", "cluster", "health"]
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
       interval: 15s
       timeout: 10s
-      retries: 10
+      start_period: 30s
+      retries: 15
+
+  # Namespace creation uses the vendor CLI, once per fresh cluster.
+  temporal-namespace:
+    image: temporalio/admin-tools:1.32.2
+    container_name: alegria_temporal_namespace
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal-server:7233
+    entrypoint: ["/bin/sh", "-ec"]
+    command: |
+      if ! temporal operator namespace describe --namespace default --address "$$TEMPORAL_ADDRESS" >/dev/null 2>&1; then
+        temporal operator namespace create --namespace default --address "$$TEMPORAL_ADDRESS"
+      fi
+    restart: "no"
 
   # 6. Production Analytics Service (Rust runtime)
   analytics-service:
@@ -157,7 +194,7 @@ services:
 
   # 8. Temporal UI
   temporal-ui:
-    image: temporalio/ui:2.48.1
+    image: temporalio/ui:2.58.1
     container_name: alegria_temporal_ui
     depends_on:
       temporal-server:
@@ -254,7 +291,7 @@ services:
     restart: on-failure:3
 
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.16.0
     container_name: alegria_prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -267,7 +304,7 @@ services:
         condition: service_started
 
   grafana:
-    image: grafana/grafana:12.1.1
+    image: grafana/grafana:13.3.0
     container_name: alegria_grafana
     ports:
       - "3000:3000"
@@ -276,7 +313,9 @@ services:
         condition: service_started
 
 volumes:
-  postgres_data:
-  postgres_temporal_data:
+  # New PG18 volumes are intentionally disjoint from PG16: no implicit
+  # in-place major upgrade or silent reuse of an incompatible data directory.
+  postgres18_data:
+  postgres_temporal18_data:
   neo4j_data:
   qdrant_data:
