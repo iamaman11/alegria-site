@@ -286,7 +286,7 @@ fn neo4j_projection_count_query(name: &str) -> Option<&'static str> {
             "MATCH (n:ContentGap {scope_signature: $scope_signature}) RETURN count(n) AS projection_count",
         ),
         "link_recommendation" => Some(
-            "MATCH (a:PageNode {scope_signature: $scope_signature})-[r:RECOMMENDS_LINK_TO]->(b:PageNode {scope_signature: $scope_signature}) RETURN count(r) AS projection_count",
+            "MATCH (a:PageNode {scope_signature: $scope_signature})-[r:RECOMMENDS_LINK_TO]->(b:PageNode) WHERE b.scope_signature IS NOT NULL RETURN count(DISTINCT r.link_recommendation_key) AS projection_count",
         ),
         "page_brief" => Some(
             "MATCH (pn:PageNode {scope_signature: $scope_signature})-[:HAS_BRIEF]->(n:PageBrief) RETURN count(DISTINCT n) AS projection_count",
@@ -344,6 +344,15 @@ mod neo4j_projection_readback_tests {
             let cypher = neo4j_projection_count_query(name).expect("required projection query");
             assert!(cypher.contains("$scope_signature"), "{name}");
         }
+        // Contextual links may intentionally cross site scopes. The producer
+        // attributes them to the source scope; the target must still be a
+        // materialized PageNode rather than an out-of-order bare placeholder.
+        let link_query = neo4j_projection_count_query("link_recommendation").unwrap();
+        assert!(link_query.contains("(a:PageNode {scope_signature: $scope_signature})"));
+        assert!(link_query.contains("(b:PageNode)"));
+        assert!(link_query.contains("b.scope_signature IS NOT NULL"));
+        assert!(link_query.contains("DISTINCT r.link_recommendation_key"));
+        assert!(!link_query.contains("(b:PageNode {scope_signature: $scope_signature})"));
         assert!(neo4j_projection_count_query("unknown").is_none());
     }
 }

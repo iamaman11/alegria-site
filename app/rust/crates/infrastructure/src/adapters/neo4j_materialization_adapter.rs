@@ -407,10 +407,19 @@ async fn materialize_link_recommendation(
         bail!("link_recommendation not found: {link_recommendation_key}");
     };
 
+    // A link outbox event can be claimed before the PageNode events. Materialize
+    // both endpoints from their authoritative SQL rows before creating the
+    // relationship; otherwise MERGE makes bare Neo4j nodes without scope and
+    // the strict post-planning graph readback correctly rejects the link.
+    let source_page_key: String = row.get("source_page_key");
+    let target_page_key: String = row.get("target_page_key");
+    materialize_page_node(graph, pg, &source_page_key).await?;
+    materialize_page_node(graph, pg, &target_page_key).await?;
+
     let q = query(
         r#"
-        MERGE (source:PageNode {page_node_key: $source_page_key})
-        MERGE (target:PageNode {page_node_key: $target_page_key})
+        MATCH (source:PageNode {page_node_key: $source_page_key})
+        MATCH (target:PageNode {page_node_key: $target_page_key})
         MERGE (source)-[r:RECOMMENDS_LINK_TO {link_recommendation_key: $link_recommendation_key}]->(target)
         SET r.link_role = $link_role,
             r.anchor_strategy = $anchor_strategy,
