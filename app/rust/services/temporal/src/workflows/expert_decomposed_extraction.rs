@@ -21,8 +21,9 @@ struct ExpertDecomposedExtractionWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<ExpertDecomposedExtractionWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<ExpertDecomposedExtractionWorkflow>()?;
+    Ok(())
 }
 
 fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> WorkflowResult<String> {
@@ -61,7 +62,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let support_bundle_request = support_request(&run_id, &site_input)?;
         ctx.state_mut(|s| s.phase = "load_verified_support_bundle.initial".to_string());
@@ -72,7 +73,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "serp_ingest".to_string());
         let ingest = ctx
@@ -87,7 +88,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
         let crawled = ctx
@@ -102,7 +103,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(120),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "load_semantic_section_sample".to_string());
         let section = ctx
@@ -115,7 +116,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "page_utility_classifier".to_string());
         let page_utility = ctx
@@ -129,7 +130,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "dom_block_relevance_filter".to_string());
         let dom = ctx
@@ -143,7 +144,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let mut semantic_skipped = false;
         let mut semantic_summary = "semantic_skipped".to_string();
@@ -164,7 +165,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "entity_span_detection".to_string());
             let spans = ctx
@@ -177,7 +178,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "canonical_mapping".to_string());
             let mapping = ctx
@@ -199,7 +200,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "procedural_extraction".to_string());
             let procedural = ctx
@@ -213,7 +214,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "operational_extraction".to_string());
             let operational = ctx
@@ -226,7 +227,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "editorial_extraction".to_string());
             let editorial = ctx
@@ -239,7 +240,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "completeness_judge".to_string());
             let completeness = ctx
@@ -268,7 +269,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "triple_builder".to_string());
             let triples = ctx
@@ -310,7 +311,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "contradiction_gate".to_string());
             let contradiction = ctx
@@ -337,7 +338,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             ctx.state_mut(|s| s.phase = "hitl_decision".to_string());
             let hitl = ctx
@@ -360,7 +361,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
 
             semantic_summary = format!(
                 "semantic_ok section={} layer={} mentions={} mapped={} rules={} triples={} completeness={:.2} hitl={}",
@@ -391,7 +392,7 @@ impl ExpertDecomposedExtractionWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         if !raw_knowledge.changed_truth_keys.is_empty() {
             ctx.state_mut(|s| s.phase = "load_verified_support_bundle.refresh".to_string());
@@ -402,7 +403,7 @@ impl ExpertDecomposedExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         ctx.state_mut(|s| s.phase = "done:expert_decomposed_extraction".to_string());
