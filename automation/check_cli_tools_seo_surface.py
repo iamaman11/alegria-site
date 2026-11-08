@@ -30,10 +30,10 @@ def main() -> int:
     adapter = CMS_DECISION.read_text(encoding="utf-8")
     resolver = adapter.find("let workflow_id = resolve_seo_workflow_id(")
     begin = adapter.find("let mut tx = pool.begin()")
-    write = adapter.find("INSERT INTO site.cms_approval_decisions")
     commit = adapter.find("tx.commit().await")
-    if not (0 <= resolver < begin < write < commit):
-        errors.append("CMS review must resolve canonical workflow before atomic DB writes")
+    writes = adapter.count(".execute(&mut *tx)")
+    if not (0 <= resolver < begin < commit and writes == 2):
+        errors.append("CMS review must resolve canonical workflow before two atomic DB writes")
     if errors:
         print("CLI_TOOLS_SEO_SURFACE: FAILED")
         for needle in errors:
