@@ -67,7 +67,7 @@ fn env_flag(name: &str) -> bool {
 }
 
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
-pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) -> WorkerOptions {
+pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) -> anyhow::Result<WorkerOptions> {
     let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
     let profile = WorkerProfile::from_env();
     tracing::info!(task_queue, build_id = %build_id, worker_profile = ?profile, "building temporal worker options");
@@ -75,22 +75,22 @@ pub(crate) fn build_worker_options(task_queue: &str, acts: AlegriaActivities) ->
         .register_activities(acts)
         .build();
     if env_flag("ALLOW_LEGACY_CONTENT_WORKFLOW") || profile.allows_all() {
-        content_generation::register(&mut opts);
+        content_generation::register(&mut opts)?;
     }
     if env_flag("ALLOW_EXPERT_MIGRATION_WORKFLOWS") || profile.allows_all() {
-        expert_decomposed_extraction::register(&mut opts);
-        expert_extraction::register(&mut opts);
-        expert_projection::register(&mut opts);
-        expert_semantic_slice::register(&mut opts);
+        expert_decomposed_extraction::register(&mut opts)?;
+        expert_extraction::register(&mut opts)?;
+        expert_projection::register(&mut opts)?;
+        expert_semantic_slice::register(&mut opts)?;
     }
-    freshness::register(&mut opts);
-    projection_reconcile::register(&mut opts);
-    seo_site_build_canonical_cutover::register(&mut opts);
+    freshness::register(&mut opts)?;
+    projection_reconcile::register(&mut opts)?;
+    seo_site_build_canonical_cutover::register(&mut opts)?;
     if env_flag("ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW") || profile.allows_compat() {
-        seo_site_build::register(&mut opts);
+        seo_site_build::register(&mut opts)?;
     }
     if env_flag("ALLOW_TEST_HITL_WORKFLOW") || profile.allows_test() {
-        test_hitl::register(&mut opts);
+        test_hitl::register(&mut opts)?;
     }
-    opts
+    Ok(opts)
 }
