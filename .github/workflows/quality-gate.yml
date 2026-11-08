@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      PLAYWRIGHT_DRIVER_VERSION: "1.64.0"
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
@@ -29,7 +29,7 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install Python quality tooling
-        run: python3 -m pip install --disable-pip-version-check ruff==0.15.22
+        run: python3 -m pip install --disable-pip-version-check ruff==0.17.4
 
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
@@ -98,8 +98,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
       - name: Install native cf static build dependencies
@@ -123,7 +123,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build the actual canonical Temporal worker image
         run: |
           docker build --progress=plain \
@@ -148,7 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate all Compose services and current image syntax
         run: docker compose config --quiet
       - name: Boot supported PostgreSQL 18 + Temporal 1.32 and initialize namespace
