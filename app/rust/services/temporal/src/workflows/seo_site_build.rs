@@ -93,7 +93,7 @@ impl SeoSiteBuildWorkflow {
                     .map(|value| value.applicant_profile.clone())
                     .unwrap_or_default(),
             })
-            .map_err(anyhow::Error::from)?;
+            .map_err(|err| super::runtime::workflow_contract_failure(err.to_string()))?;
 
         let mut verified_support = Vec::new();
         let mut ingest: Option<SerpIngestOutputPayload> = None;
