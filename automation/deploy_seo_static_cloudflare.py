@@ -21,8 +21,8 @@ from check_public_static_output import validate_origin
 
 ROOT = Path(__file__).resolve().parents[1]
 CLOUD_CONFIG = ROOT / "infra" / "cloudflare" / "seo-static"
-EXPECTED_ACCOUNT = "4426df1449e417511bc7697d60b7f62f"
-EXPECTED_ORIGIN = "https://seo-staging.alegria.by"
+EXPECTED_ACCOUNT = "78e5fcb3762c1473113d51838556da74"
+EXPECTED_ORIGIN = "https://alegria-seo-staging.alegria-site.workers.dev"
 
 
 def validate_release(directory: Path, *, root: Path, expected_origin: str) -> Path:
@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if os.environ.get("CLOUDFLARE_ACCOUNT_ID") != EXPECTED_ACCOUNT:
-            raise ValueError("CLOUDFLARE_ACCOUNT_ID must match the Alegria zone account")
+            raise ValueError("CLOUDFLARE_ACCOUNT_ID must match the dedicated Alegria account")
         if not os.environ.get("CLOUDFLARE_API_TOKEN"):
             raise ValueError("CLOUDFLARE_API_TOKEN is required; never put it in the repository")
         cf = CLOUD_CONFIG / "node_modules" / ".bin" / "cf"

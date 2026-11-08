@@ -11,7 +11,8 @@ from unittest import mock
 import subprocess
 
 from deploy_seo_static_cloudflare import (
-    EXPECTED_ORIGIN, preflight, prepare_public_assets, run_cf_deploy, validate_release,
+    CLOUD_CONFIG, EXPECTED_ACCOUNT, EXPECTED_ORIGIN, preflight,
+    prepare_public_assets, run_cf_deploy, validate_release,
 )
 
 
@@ -68,6 +69,25 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
 
     def test_incorrect_or_placeholder_origin_is_rejected(self) -> None:
         self.manifest["base_url"] = "https://example.com"
+        self.persist_manifest()
+        with self.assertRaisesRegex(ValueError, "origin"):
+            validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN)
+
+    def test_technical_domain_isolated_from_existing_accounts(self) -> None:
+        self.assertEqual(EXPECTED_ACCOUNT, "78e5fcb3762c1473113d51838556da74")
+        self.assertEqual(
+            EXPECTED_ORIGIN,
+            "https://alegria-seo-staging.alegria-site.workers.dev",
+        )
+        config = (CLOUD_CONFIG / "cloudflare.config.ts").read_text(encoding="utf-8")
+        self.assertIn(f'accountId: "{EXPECTED_ACCOUNT}"', config)
+        self.assertIn('name: "alegria-seo-staging"', config)
+        self.assertIn("workersDev: true", config)
+        self.assertNotIn("domains:", config)
+        self.assertNotIn("seo-staging.alegria.by", config)
+
+    def test_previous_account_origin_is_rejected(self) -> None:
+        self.manifest["base_url"] = "https://seo-staging.alegria.by"
         self.persist_manifest()
         with self.assertRaisesRegex(ValueError, "origin"):
             validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN)

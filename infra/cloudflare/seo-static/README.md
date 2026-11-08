@@ -1,17 +1,18 @@
 # Alegria SEO staging — native Cloudflare Static Assets
 
-**Canonical source:** `iamaman11/alegria-site`, Draft PR #26. This is only the
+**Canonical source:** `iamaman11/alegria-site`, Draft PR #28. This is only the
 isolated *deployment adapter* for the generated site, not a new site builder or
 a replacement for the canonical Temporal SEO workflow.
 
 ## Isolation
 
-- Cloudflare account: `Pvisakp@gmail.com's Account` (the account owning the
-  `alegria.by` zone).
+- Dedicated Cloudflare account: `site-alegria` (`78e5fcb3762c1473113d51838556da74`).
 - Dedicated Worker: `alegria-seo-staging`.
-- Dedicated hostname: `https://seo-staging.alegria.by`.
-- Never modify `staging.alegria.by` (CRM), `mish.alegria.by`, `www.alegria.by`,
-  or the zone apex. No Pages project, nginx, R2, or extra container is required.
+- Technical staging hostname: `https://alegria-seo-staging.alegria-site.workers.dev`.
+- The account subdomain is `alegria-site.workers.dev`; `workersDev: true` is
+  the only Worker route. No custom domain or DNS zone is required.
+- Never modify the `alegria.by` zone or the CRM, OKX, sing-box accounts.
+  No Pages project, nginx, R2, or extra container is required.
 - The only deployed input is the complete immutable `*-published` directory
   produced by the canonical Rust renderer **after real human approval**.
 
@@ -23,7 +24,7 @@ canonical public static-output validator and the existing independent HTTPS
 byte-for-byte readback. A synthetic fixture can only run in offline CI; it is
 **not** production evidence.
 
-Install CLI dependencies once under this directory (Node.js 24; `npm install`);
+Install CLI dependencies once under this directory (Node.js 26; `npm install`);
 do not commit any credentials. The deployment adapter prepares an ephemeral
 public-only directory, omitting `.alegria_static_site` and
 `alegria-static-manifest.json`. `cf build` runs against those assets,
@@ -54,7 +55,7 @@ is *not* a replacement for CMS finalization.
 
 ## Canonical Temporal integration — implemented, not physically certified
 
-The Rust finalizer in PR #26 calls the **same** Cloudflare adapter under the
+The Rust finalizer in PR #28 calls the **same** Cloudflare adapter under the
 PostgreSQL site-wide publish lock, after recording a durable journal and
 before independent HTTPS readback and atomic CMS/outbox commit. On rollback it
 attempts to re-deploy the previous version. After an ambiguous COMMIT or
@@ -70,7 +71,7 @@ Missing credentials fail closed before changing the live symlink.
 **Production decision remains NO-GO.** This code has not been deployed and
 physically tested. The system may not report a successful first published site
 until the full CI passes and a true expert-approved, non-empty release is
-served on `seo-staging.alegria.by` and verified. First-publication failures
+served on `alegria-seo-staging.alegria-site.workers.dev` and verified. First-publication failures
 have no remote predecessor: the journal intentionally requires manual
 reconciliation rather than claiming a safe rollback.
 

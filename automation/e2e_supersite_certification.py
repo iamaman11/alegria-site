@@ -14,6 +14,7 @@ from typing import Any
 from uuid import uuid4
 
 from local_env import resolve_database_url
+from deploy_seo_static_cloudflare import EXPECTED_ACCOUNT, EXPECTED_ORIGIN
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -329,13 +330,14 @@ def clean_runtime_preflight() -> dict[str, Any]:
             ["docker", "compose", "exec", "-T", "-e",
              f"ALEGRIA_EXPECTED_ORIGIN={os.environ['ALEGRIA_CERT_BASE_URL']}",
              "-e", f"ALEGRIA_EXPECTED_OUTPUT={os.environ['ALEGRIA_CERT_PUBLIC_OUTPUT_DIR']}",
+             "-e", f"ALEGRIA_EXPECTED_ACCOUNT={EXPECTED_ACCOUNT}",
              "temporal-worker", "sh", "-ec", """
                 set -eu
                 test "${SEO_STATIC_BASE_URL:-}" = "$ALEGRIA_EXPECTED_ORIGIN"
                 test "${SEO_STATIC_OUTPUT_DIR:-}" = "$ALEGRIA_EXPECTED_OUTPUT"
                 test "${SEO_STATIC_PUBLISH_BACKEND:-}" = cloudflare_workers_static_assets
                 test -n "${CLOUDFLARE_API_TOKEN:-}"
-                test -n "${CLOUDFLARE_ACCOUNT_ID:-}"
+                test "${CLOUDFLARE_ACCOUNT_ID:-}" = "$ALEGRIA_EXPECTED_ACCOUNT"
                 test -n "${DATAFORSEO_LOGIN:-}"
                 test -n "${DATAFORSEO_PASSWORD:-}"
                 test -n "${VOYAGE_API_KEY:-}"
@@ -406,6 +408,8 @@ def main() -> int:
         "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
         "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
         "production_llm_provider": provider_live is not None,
+        "dedicated_cloudflare_account": os.environ.get("CLOUDFLARE_ACCOUNT_ID") == EXPECTED_ACCOUNT,
+        "dedicated_workers_dev_origin": os.environ.get("ALEGRIA_CERT_BASE_URL") == EXPECTED_ORIGIN,
         "publication_explicitly_requested": os.environ.get("ALEGRIA_CERT_PUBLISH") == "1",
         "real_https_origin": not validate_origin(
             os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com")
