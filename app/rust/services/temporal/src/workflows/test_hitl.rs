@@ -17,8 +17,9 @@ struct TestHitlWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<TestHitlWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<TestHitlWorkflow>()?;
+    Ok(())
 }
 
 #[workflow_methods]
@@ -50,7 +51,7 @@ impl TestHitlWorkflow {
                 s.phase = "hitl_wait".to_string();
             }
         });
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| {
             s.waiting_hitl = false;
