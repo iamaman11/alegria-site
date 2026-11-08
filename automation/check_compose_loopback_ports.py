@@ -83,6 +83,18 @@ def check_outbox_voyage_route(text: str) -> list[str]:
         if value not in lines
     ]
 
+def check_release_volume(text: str) -> list[str]:
+    """Keep immutable releases in Docker storage, not a Windows bind mount."""
+    required_mount = "      - static_site_releases:/app/app/rust/dist"
+    volume_definition = "  static_site_releases:"
+    worker = re.search(r"(?ms)^  temporal-worker:\n(.*?)(?=^  [a-z][a-z0-9_-]*:|\Z)", text)
+    failures = []
+    if not worker or required_mount not in worker.group(1).splitlines():
+        failures.append("temporal-worker must persist dist using static_site_releases named volume")
+    if volume_definition not in text.splitlines():
+        failures.append("static_site_releases top-level volume must be declared")
+    return failures
+
 def main() -> int:
     example = 'services:\n  example:\n    ports:\n      - "127.0.0.1:5433:5432"\n'
     bad = 'services:\n  example:\n    ports:\n      - "5433:5432"\n'
@@ -101,6 +113,13 @@ def main() -> int:
             or not check_outbox_voyage_route(voyage_example.replace('VOYAGE_API_KEY', 'MISSING_API_KEY'))):
         print("COMPOSE_LOOPBACK_PORTS: FAILED Voyage config self-test", file=sys.stderr)
         return 1
+    release_example = ('services:\n  temporal-worker:\n    volumes:\n'
+                       '      - static_site_releases:/app/app/rust/dist\n'
+                       'volumes:\n  static_site_releases:\n')
+    if (check_release_volume(release_example)
+            or not check_release_volume(release_example.replace('static_site_releases:/app', './app/rust/dist:/app'))):
+        print("COMPOSE_LOOPBACK_PORTS: FAILED release volume self-test", file=sys.stderr)
+        return 1
     if check(example) != (1, []) or not check(bad)[1]:
         print("COMPOSE_LOOPBACK_PORTS: FAILED self-test", file=sys.stderr)
         return 1
@@ -108,6 +127,7 @@ def main() -> int:
     count, errors = check(compose_text)
     errors.extend(check_temporal_graph_route(compose_text))
     errors.extend(check_outbox_voyage_route(compose_text))
+    errors.extend(check_release_volume(compose_text))
     if not count:
         errors.append("no explicit loopback port mappings found")
     if errors:

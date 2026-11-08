@@ -256,9 +256,10 @@ services:
       CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
     volumes:
-      # Journal + immutable releases survive worker restarts; public HTTP is
-      # served by Cloudflare, not by the container's local live symlink.
-      - ./app/rust/dist:/app/app/rust/dist
+      # Persistent Linux-native Docker volume (on the B: Hyper-V Docker disk).
+      # Journal + immutable releases survive restarts and checkout upgrades.
+      # No Windows host-directory sharing is needed for publication state.
+      - static_site_releases:/app/app/rust/dist
     depends_on:
       temporal-server:
         condition: service_healthy
@@ -329,3 +330,5 @@ volumes:
   # v1.9 storage cannot be jumped directly to v1.20. Rebuild a new index
   # from verified SQL/outbox sources, or use vendor sequential upgrades.
   qdrant20_data:
+  # Persist static releases across Worker replacement and Git checkout changes.
+  static_site_releases:
