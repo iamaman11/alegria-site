@@ -43,7 +43,11 @@ impl IntegrationCtx {
         )
         .await
         .context("start truth extraction stub failed")?;
-        Ok(Self { dataforseo, openai, truth })
+        Ok(Self {
+            dataforseo,
+            openai,
+            truth,
+        })
     }
 
     pub fn dataforseo_env(&self) -> BTreeMap<String, String> {
