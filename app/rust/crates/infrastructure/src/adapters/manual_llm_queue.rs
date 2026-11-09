@@ -240,7 +240,7 @@ pub async fn submit_editorial(
         "UPDATE pipeline.manual_llm_jobs
          SET response_json = $2, output_json = $3, model_key = $4,
              job_status = 'completed', updated_at = now()
-         WHERE task_id = $1 AND state = 'pending'",
+         WHERE task_id = $1 AND job_status = 'pending'",
     )
     .bind(&submission.task_id)
     .bind(Json(&submission.response))
