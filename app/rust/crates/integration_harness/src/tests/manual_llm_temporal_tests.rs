@@ -49,7 +49,10 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         &format!("{}/v1/chat/completions", editorial_stub.base_url),
     ));
     worker_env.insert("SEO_LLM_PROVIDER".to_string(), "chat_manual".to_string());
-    worker_env.insert("SEO_TRUTH_LLM_PROVIDER".to_string(), "chat_manual".to_string());
+    worker_env.insert(
+        "SEO_TRUTH_LLM_PROVIDER".to_string(),
+        "chat_manual".to_string(),
+    );
     // The restarted process must retain the same Temporal Worker build identity.
     worker_env.insert(
         "WORKER_BUILD_ID".to_string(),
@@ -115,7 +118,10 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                     return count;
                 }
                 assert_eq!(job.operation, "truth_candidates");
-                assert_eq!(job.payload["context_key"].as_str().unwrap().is_empty(), false);
+                assert_eq!(
+                    job.payload["context_key"].as_str().unwrap().is_empty(),
+                    false
+                );
                 let submission: manual_llm_queue::ManualTruthSubmission =
                     serde_json::from_value(serde_json::json!({
                         "task_id": job.task_id,
