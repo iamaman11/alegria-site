@@ -13,6 +13,7 @@ def main() -> int:
     # Then exercise the actual canonical Temporal workflow, not a mock runner.
     for test_name in (
         "manual_llm_queue_persists_validates_replays_and_recovers",
+        "manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically",
         "canonical_temporal_manual_editorial_resumes_after_worker_restart",
     ):
         result = subprocess.run(
