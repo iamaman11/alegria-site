@@ -557,6 +557,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     raw_page_ids: crawled.raw_page_ids.clone(),
                     procedural: procedural.clone(),
+                    candidate_validation: candidate_validation.clone(),
                 },
                 db_opts(60),
             )
