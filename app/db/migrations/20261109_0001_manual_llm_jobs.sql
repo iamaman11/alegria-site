@@ -1,0 +1,25 @@
+-- Durable, provider-independent typed manual LLM inbox.
+-- Manual LLM responses never imply verified truth or publication approval.
+CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
+    task_id TEXT PRIMARY KEY,
+    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    run_id TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK (operation = 'editorial_draft'),
+    input_sha256 TEXT NOT NULL CHECK (input_sha256 ~ '^[a-f0-9]{64}$'),
+    input_json JSONB NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'completed')),
+    response_json JSONB,
+    output_json JSONB,
+    model_key TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (run_id, operation, input_sha256),
+    CHECK (
+        (state = 'pending' AND response_json IS NULL AND output_json IS NULL)
+        OR
+        (state = 'completed' AND response_json IS NOT NULL AND output_json IS NOT NULL
+         AND model_key IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_manual_llm_jobs_pending
+    ON pipeline.manual_llm_jobs (created_at, task_id) WHERE state = 'pending';
