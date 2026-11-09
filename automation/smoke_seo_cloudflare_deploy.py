@@ -140,6 +140,56 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
             [["build"], ["deploy", "--prebuilt", "--mode", "production"]],
         )
 
+    def test_vite_empty_entry_is_removed_before_upload(self) -> None:
+        commands = []
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+
+            def invoke(argv, **kwargs):
+                commands.append(list(argv))
+                source = Path(kwargs["env"]["ALEGRIA_CF_PUBLIC_DIR"])
+                if argv[1] == "build":
+                    output = config / ".cloudflare/output/v0"
+                    output.mkdir(parents=True)
+                    (output / "config.json").write_text("{}", encoding="utf-8")
+                    assets = output / "workers/default/assets"
+                    shutil.copytree(source, assets)
+                    synthetic = assets / "assets/build-entry-abc123.js"
+                    synthetic.parent.mkdir(parents=True)
+                    synthetic.write_bytes(b"\\n")
+                elif argv[1] == "deploy":
+                    assets = config / ".cloudflare/output/v0/workers/default/assets"
+                    self.assertFalse((assets / "assets/build-entry-abc123.js").exists())
+                return subprocess.CompletedProcess(argv, 0)
+
+            with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):
+                with mock.patch("deploy_seo_static_cloudflare.subprocess.run", side_effect=invoke):
+                    self.assertTrue(run_cf_deploy(Path("/usr/bin/cf"), self.release))
+        self.assertEqual([argv[1] for argv in commands], ["build", "deploy"])
+
+    def test_nonempty_vite_entry_blocks_upload(self) -> None:
+        commands = []
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+
+            def invoke(argv, **kwargs):
+                commands.append(list(argv))
+                source = Path(kwargs["env"]["ALEGRIA_CF_PUBLIC_DIR"])
+                output = config / ".cloudflare/output/v0"
+                output.mkdir(parents=True)
+                (output / "config.json").write_text("{}", encoding="utf-8")
+                assets = output / "workers/default/assets"
+                shutil.copytree(source, assets)
+                synthetic = assets / "assets/build-entry-abc123.js"
+                synthetic.parent.mkdir(parents=True)
+                synthetic.write_bytes(b"alert(1)")
+                return subprocess.CompletedProcess(argv, 0)
+
+            with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):
+                with mock.patch("deploy_seo_static_cloudflare.subprocess.run", side_effect=invoke):
+                    self.assertFalse(run_cf_deploy(Path("/usr/bin/cf"), self.release))
+        self.assertEqual(len(commands), 1)
+
     def test_stale_build_asset_blocks_public_deployment(self) -> None:
         commands = []
         with tempfile.TemporaryDirectory() as directory:
