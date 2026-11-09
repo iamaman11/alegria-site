@@ -71,7 +71,9 @@ def classify_provider() -> tuple[str | None, str]:
             "gemini": bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")),
         }[provider]
         return (provider if key_present else None, provider)
-    if provider == "local_compatible":
+    if provider in {"local_compatible", "chat_manual"}:
+        # Manual ChatGPT tasks can complete the canonical Temporal workflow,
+        # but they are not an unattended API-provider credential.
         return (None, provider)
     if os.environ.get("OPENAI_API_KEY"):
         return "openai", "openai"
@@ -82,6 +84,33 @@ def classify_provider() -> tuple[str | None, str]:
     if os.environ.get("SEO_LLM_LOCAL_ENDPOINT"):
         return None, "local_compatible"
     return None, "unconfigured"
+
+
+def certification_requirements(provider_live: str | None) -> dict[str, bool]:
+    """One non-mutating policy shared by preview and launch.
+
+    Only configuration presence is checked here. Actual provider capability,
+    evidence, approval and public bytes are certified by the live gates.
+    """
+    from check_public_static_output import validate_origin
+
+    return {
+        "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
+        "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
+        "production_llm_provider": provider_live is not None,
+        "dedicated_cloudflare_account": os.environ.get("CLOUDFLARE_ACCOUNT_ID") == EXPECTED_ACCOUNT,
+        "dedicated_workers_dev_origin": os.environ.get("ALEGRIA_CERT_BASE_URL") == EXPECTED_ORIGIN,
+        "publication_explicitly_requested": os.environ.get("ALEGRIA_CERT_PUBLISH") == "1",
+        "real_https_origin": not validate_origin(
+            os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com")
+        ),
+        "public_output_dir_configured": bool(os.environ.get("ALEGRIA_CERT_PUBLIC_OUTPUT_DIR")),
+        "worker_origin_matches_certification": (
+            os.environ.get("SEO_STATIC_BASE_URL") ==
+            os.environ.get("ALEGRIA_CERT_BASE_URL")
+            and bool(os.environ.get("SEO_STATIC_BASE_URL"))
+        ),
+    }
 
 
 def canonical_temporal_command(
@@ -387,42 +416,26 @@ def main() -> int:
     provider_live, provider_kind = classify_provider()
     database_url = resolve_database_url()
 
+    # A single configuration preflight is used for preview AND execution:
+    # dry-run cannot report "ready" under weaker requirements.
+    required = certification_requirements(provider_live)
+    missing = [key for key, present in required.items() if not present]
     if args.dry_run:
-        print("R5 certification dry-run")
+        print("First-site configuration preview" if args.first_site else "R5 configuration preview")
         print(f"- database_configured={bool(database_url)}")
         print(f"- provider_kind={provider_kind}")
-        print("- readiness: non-mutating docker compose checks")
-        print("- gate: the real canonical Temporal workflow (no fixture seeds, no restore)")
-        print(
-            "- scenarios: fresh_scope"
-            if args.first_site else
-            "- scenarios: fresh_scope, scope_expansion, factual_change_rebuild"
-        )
-        return 0
+        print(f"- configuration={'BLOCKED' if missing else 'READY'}")
+        print(f"- missing={','.join(missing) if missing else 'none'}")
+        if provider_kind == "chat_manual":
+            print("- manual_mode=requires llm-next/llm-submit and separate CMS approval; "
+                  "not eligible for unattended live certification")
+        print("- gate: real canonical Temporal workflow, no fixture seeds or restore")
+        print("- scenarios: fresh_scope" if args.first_site else
+              "- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
+        return 2 if missing else 0
 
-    # Certification is not allowed to consume live provider calls and later
-    # report success for draft-only work, or for a placeholder origin.
-    from check_public_static_output import validate_origin
-
-    required = {
-        "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
-        "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
-        "production_llm_provider": provider_live is not None,
-        "dedicated_cloudflare_account": os.environ.get("CLOUDFLARE_ACCOUNT_ID") == EXPECTED_ACCOUNT,
-        "dedicated_workers_dev_origin": os.environ.get("ALEGRIA_CERT_BASE_URL") == EXPECTED_ORIGIN,
-        "publication_explicitly_requested": os.environ.get("ALEGRIA_CERT_PUBLISH") == "1",
-        "real_https_origin": not validate_origin(
-            os.environ.get("ALEGRIA_CERT_BASE_URL", "https://example.com")
-        ),
-        "public_output_dir_configured": bool(os.environ.get("ALEGRIA_CERT_PUBLIC_OUTPUT_DIR")),
-        "worker_origin_matches_certification": (
-            os.environ.get("SEO_STATIC_BASE_URL") ==
-            os.environ.get("ALEGRIA_CERT_BASE_URL")
-            and bool(os.environ.get("SEO_STATIC_BASE_URL"))
-        ),
-    }
-    if not all(required.values()):
-        missing = [key for key, present in required.items() if not present]
+    # The same readiness gate blocks live provider calls before any mutations.
+    if missing:
         credentials_missing = any(
             key in {"DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD", "production_llm_provider"}
             for key in missing

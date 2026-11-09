@@ -163,6 +163,53 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
             self.assertEqual(cert.main(), 0)
         self.assertNotIn("topsecret", output.getvalue())
         self.assertIn("fresh_scope", output.getvalue())
+        self.assertIn("- configuration=READY", output.getvalue())
+        self.assertIn("- missing=none", output.getvalue())
+
+    def test_dry_run_reports_missing_configuration_without_actions_or_secrets(self) -> None:
+        env = dict(TEST_ENV)
+        env.pop("DATAFORSEO_PASSWORD")
+        env["DATABASE_URL"] = "postgres://user:hidden-password@host/db"
+        output = StringIO()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(sys, "argv", ["certification", "--first-site", "--dry-run"]),
+            mock.patch("sys.stdout", output),
+            mock.patch.object(cert, "run_command") as run_command,
+            mock.patch.object(cert, "write_json") as write_json,
+        ):
+            self.assertEqual(cert.main(), 2)
+        self.assertIn("- configuration=BLOCKED", output.getvalue())
+        self.assertIn("DATAFORSEO_PASSWORD", output.getvalue())
+        self.assertNotIn("hidden-password", output.getvalue())
+        self.assertNotIn("fixture", output.getvalue())
+        run_command.assert_not_called()
+        write_json.assert_not_called()
+
+    def test_chat_manual_with_stray_api_key_cannot_pass_unattended_gate(self) -> None:
+        env = dict(TEST_ENV, SEO_LLM_PROVIDER="chat_manual")
+        output = StringIO()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(sys, "argv", ["certification", "--first-site", "--dry-run"]),
+            mock.patch("sys.stdout", output),
+        ):
+            self.assertEqual(cert.main(), 2)
+        self.assertIn("- provider_kind=chat_manual", output.getvalue())
+        self.assertIn("production_llm_provider", output.getvalue())
+        self.assertIn("requires llm-next/llm-submit", output.getvalue())
+
+    def test_preview_requirements_equal_real_launch_requirements(self) -> None:
+        env = dict(TEST_ENV)
+        env.pop("DATAFORSEO_LOGIN")
+        with mock.patch.dict("os.environ", env, clear=True):
+            live, kind = cert.classify_provider()
+            self.assertEqual(kind, "openai")
+            missing = [
+                key for key, present in cert.certification_requirements(live).items()
+                if not present
+            ]
+        self.assertEqual(missing, ["DATAFORSEO_LOGIN"])
 
 
 if __name__ == "__main__":
