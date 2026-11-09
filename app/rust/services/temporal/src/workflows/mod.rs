@@ -1,6 +1,8 @@
 //! Workflows registry and factory for Temporal worker.
 
-use infrastructure::adapters::temporalio_sdk_adapter::WorkerOptions;
+use infrastructure::adapters::temporalio_sdk_adapter::{
+    VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion, WorkerOptions,
+};
 
 // Required for proc-macro expansions.
 use futures_util as _;
@@ -74,7 +76,36 @@ pub(crate) fn build_worker_options(
     let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
     let profile = WorkerProfile::from_env();
     tracing::info!(task_queue, build_id = %build_id, worker_profile = ?profile, "building temporal worker options");
+    // Native Temporal Worker Deployment Versioning pins the entire workflow
+    // history to the code version that started it, rather than treating
+    // WORKER_BUILD_ID as a logging-only variable.
+    let deployment_options = if env_flag("TEMPORAL_WORKER_VERSIONING") {
+        if matches!(build_id.trim(), "" | "dev-local" | "docker-dev") {
+            anyhow::bail!(
+                "TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID"
+            );
+        }
+        let deployment_name = std::env::var("TEMPORAL_DEPLOYMENT_NAME")
+            .unwrap_or_else(|_| "alegria-site".to_string());
+        if deployment_name.trim().is_empty() {
+            anyhow::bail!("TEMPORAL_DEPLOYMENT_NAME must not be empty");
+        }
+        Some(
+            WorkerDeploymentOptions::new(
+                WorkerDeploymentVersion::builder()
+                    .deployment_name(deployment_name)
+                    .build_id(build_id.clone())
+                    .build(),
+            )
+            .use_worker_versioning(true)
+            .default_versioning_behavior(VersioningBehavior::Pinned)
+            .build(),
+        )
+    } else {
+        None
+    };
     let mut opts = WorkerOptions::new(task_queue)
+        .maybe_deployment_options(deployment_options)
         .register_activities(acts)
         .build();
     if env_flag("ALLOW_LEGACY_CONTENT_WORKFLOW") || profile.allows_all() {

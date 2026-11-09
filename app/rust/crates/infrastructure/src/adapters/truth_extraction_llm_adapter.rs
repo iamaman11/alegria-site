@@ -474,7 +474,7 @@ fn provider_clients() -> Vec<Box<dyn TruthExtractionClient + Send + Sync>> {
 }
 
 fn extraction_system_prompt() -> &'static str {
-    "You are an evidence-grade visa procedural extractor. Return JSON only. Do not invent facts. Extract only explicit procedural claims from the provided source section. Every claim must include exact evidence_quote plus span_start/span_end in the provided raw_text. If unsure, omit the claim."
+    "You are an evidence-grounded procedural knowledge extractor. Return JSON only. Do not invent facts. Extract only explicit procedural claims from the provided source section. Every claim must include exact evidence_quote plus span_start/span_end in the provided raw_text. If unsure, omit the claim."
 }
 
 fn extraction_prompt(input: &TruthExtractionInput) -> String {
@@ -772,6 +772,25 @@ mod tests {
             response.is_err(),
             "invalid candidate must fail the whole extraction"
         );
+    }
+
+    #[test]
+    fn extractor_prompt_does_not_assume_a_visa_niche() {
+        let prompt = extraction_system_prompt();
+        assert!(prompt.contains("evidence-grounded"));
+        assert!(!prompt.to_ascii_lowercase().contains("visa"));
+        let general_input = TruthExtractionInput {
+            context_key: "agriculture:seed-licensing".to_string(),
+            raw_section_id: 8,
+            source_url: "https://example.gov/seed-licensing".to_string(),
+            source_domain: "example.gov".to_string(),
+            heading_path: "Requirements".to_string(),
+            raw_text: "A registration certificate is required.".to_string(),
+            source_snapshot_hash: "abc".to_string(),
+        };
+        let rendered = extraction_prompt(&general_input);
+        assert!(rendered.contains("agriculture:seed-licensing"));
+        assert!(rendered.contains("A registration certificate is required."));
     }
 
     #[test]

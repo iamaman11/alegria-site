@@ -154,3 +154,24 @@ persisted legacy candidate reader enforce this fail-closed behavior.
 Different scoped values must not be silently treated as global facts.
 A separate end-to-end scope-aware publication and second-niche
 certification remains required before claiming universal launch readiness.
+
+### Native Temporal pinned Worker versions
+
+The canonical Worker supports Temporal Rust SDK's built-in Worker Deployment
+Versioning (no second workflow or service). To enable a **new** pinned
+version after the initial migration, configure
+`TEMPORAL_WORKER_VERSIONING=true`, `TEMPORAL_DEPLOYMENT_NAME=alegria-site`,
+and `WORKER_BUILD_ID=<unique-immutable-build-sha>`. Placeholder Build IDs
+(`docker-dev`, `dev-local`) are rejected by the Worker. Its default
+workflow behavior is `Pinned`, so executions started on that deployment
+version stay assigned to compatible code. Activate/ramp the new deployment
+version with **the standard Temporal Worker Deployment API/CLI**; starting a
+new poller does *not* by itself certify or switch the current version.
+Keep previous pinned workers available until their runs complete or are
+migrated through a separately validated Temporal mechanism.
+
+This option does not retroactively pin historical **unversioned** workflow
+histories. Before first activation inspect and drain those executions using
+Temporal's real workflow list/history; do not infer quiescence merely from
+PostgreSQL counts. Development without the versioning flag keeps the existing
+unversioned behavior for backward-compatible tests.

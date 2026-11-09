@@ -11,7 +11,7 @@ pub use temporalio_common;
 pub use temporalio_common::data_converters::RawValue;
 pub use temporalio_common::protos::coresdk::AsJsonPayloadExt;
 pub use temporalio_common::protos::temporal::api::enums::v1::WorkflowExecutionStatus;
-pub use temporalio_common::worker::{WorkerDeploymentOptions, WorkerDeploymentVersion};
+pub use temporalio_common::worker::{VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion};
 pub use temporalio_macros::{
     activities, query, run, signal, update, update_validator, workflow, workflow_methods,
 };
