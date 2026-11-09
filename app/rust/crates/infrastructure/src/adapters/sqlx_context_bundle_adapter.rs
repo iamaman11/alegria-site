@@ -101,6 +101,8 @@ pub async fn load_context_bundle_rules(
               OR EXISTS (
                   SELECT 1 FROM extracted.rule_candidates c
                   WHERE c.rule_candidate_id = r.rule_candidate_id
+                    AND COALESCE(c.params->>'conditions_key', '') = ''
+                    AND COALESCE(r.params->>'conditions_key', '') = ''
                     AND c.scope = '{}'::jsonb
                     AND c.applies_to_profiles = '[]'::jsonb
                     AND btrim(c.conditions_raw) = ''

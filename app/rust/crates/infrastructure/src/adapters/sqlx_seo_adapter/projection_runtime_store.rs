@@ -308,6 +308,19 @@ pub async fn upsert_verified_rule_instance(
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
     // Validate the precise scope BEFORE any SQL mutation.
+    if rule
+        .params
+        .get("conditions_key")
+        .is_some_and(|condition| match condition {
+            Value::Null => false,
+            Value::String(key) => !key.trim().is_empty(),
+            _ => true,
+        })
+    {
+        return Err(validation_failure(
+            "unresolved verified conditions_key requires explicit condition evaluation",
+        ));
+    }
     let target = verified_scope_target(&rule.scope).ok_or_else(|| {
         validation_failure("verified rule scope is not a supported exact applicant_profile")
     })?;

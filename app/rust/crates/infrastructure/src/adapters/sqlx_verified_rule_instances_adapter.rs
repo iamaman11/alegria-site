@@ -45,6 +45,8 @@ pub async fn read_verified_rules(pool: &PgPool, context_key: &str) -> Result<Vec
               OR EXISTS (
                   SELECT 1 FROM extracted.rule_candidates c
                   WHERE c.rule_candidate_id = r.rule_candidate_id
+                    AND COALESCE(c.params->>'conditions_key', '') = ''
+                    AND COALESCE(r.params->>'conditions_key', '') = ''
                     AND c.scope = '{}'::jsonb
                     AND c.applies_to_profiles = '[]'::jsonb
                     AND btrim(c.exceptions_raw) = ''

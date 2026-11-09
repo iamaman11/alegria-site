@@ -408,6 +408,22 @@ pub fn validate_truth_candidate(
             "profile, exception, condition or alternative hints require explicit scope review",
         );
     }
+    if candidate
+        .params
+        .as_object()
+        .and_then(|params| params.get("conditions_key"))
+        .is_some_and(|condition| match condition {
+            TruthParamValue::Null => false,
+            TruthParamValue::Text(key) => !key.trim().is_empty(),
+            _ => true,
+        })
+    {
+        needs_hitl(
+            &mut issues,
+            "unresolved_param_condition",
+            "conditions_key cannot be auto-applied without a verified condition expression",
+        );
+    }
 
     if candidate.severity.trim().is_empty() || candidate.severity == "unknown" {
         needs_hitl(
@@ -834,6 +850,22 @@ mod tests {
                 .iter()
                 .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
         }
+    }
+
+    #[test]
+    fn conditional_params_are_never_automatically_verified() {
+        let mut candidate = base_candidate();
+        candidate.params = obj(vec![
+            ("amount", TruthParamValue::Integer(35)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+            ("conditions_key", TruthParamValue::Text("student-status".to_string())),
+        ]);
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "unresolved_param_condition"));
     }
 
     #[test]

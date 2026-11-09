@@ -167,6 +167,7 @@ async fn resolve_verified_fact_support(
           AND (r.effective_to IS NULL OR r.effective_to >= CURRENT_DATE)
           AND COALESCE(r.freshness_class, 'unknown') = 'fresh'
           AND COALESCE(r.completeness_class, 'unknown') = 'complete'
+          AND COALESCE(r.params->>'conditions_key', '') = ''
           AND s.source_key IS NOT NULL
           AND s.status = 'active'
           AND r.source_key IS NOT NULL
@@ -184,6 +185,7 @@ async fn resolve_verified_fact_support(
                   WHERE c.rule_candidate_id = r.rule_candidate_id
                     AND c.applies_to_profiles = '[]'::jsonb
                     AND c.epistemic_status IN ('verified', 'structured')
+                    AND COALESCE(c.params->>'conditions_key', '') = ''
                     AND btrim(c.conditions_raw) = ''
                     AND btrim(c.exceptions_raw) = ''
                     AND c.alternatives = '[]'::jsonb

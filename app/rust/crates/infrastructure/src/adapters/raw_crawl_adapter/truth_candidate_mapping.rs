@@ -15,7 +15,9 @@ async fn load_persisted_candidates_for_adjudication(
                 (c.applies_to_profiles <> '[]'::jsonb
                  OR btrim(c.conditions_raw) <> ''
                  OR btrim(c.exceptions_raw) <> ''
-                 OR c.alternatives <> '[]'::jsonb) AS unresolved_applicability,
+                 OR c.alternatives <> '[]'::jsonb
+                 OR COALESCE(c.params->>'conditions_key', '') <> '')
+                AS unresolved_applicability,
                 c.source_key,
                 coalesce(src.source_type, '') AS source_tier,
                 c.confidence::float8 AS confidence,
