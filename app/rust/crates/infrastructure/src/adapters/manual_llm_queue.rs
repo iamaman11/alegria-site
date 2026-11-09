@@ -6,9 +6,9 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use serde_json::Value;
 use sqlx::{types::Json, PgPool, Row};
+use std::collections::BTreeMap;
 
 const MANUAL_SCHEMA_VERSION: i32 = 1;
 const MANUAL_OPERATION: &str = "editorial_draft";
