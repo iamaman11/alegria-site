@@ -156,7 +156,7 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
                     shutil.copytree(source, assets)
                     synthetic = assets / "assets/build-entry-abc123.js"
                     synthetic.parent.mkdir(parents=True)
-                    synthetic.write_bytes(b"\\n")
+                    synthetic.write_bytes(bytes([10]))
                 elif argv[1] == "deploy":
                     assets = config / ".cloudflare/output/v0/workers/default/assets"
                     self.assertFalse((assets / "assets/build-entry-abc123.js").exists())
