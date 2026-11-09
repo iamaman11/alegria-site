@@ -109,6 +109,9 @@ pub struct TruthCandidateRuntime {
     pub params: TruthParamValue,
     #[serde(default)]
     pub scope: TruthParamValue,
+    // Additional source conditions must never be silently discarded.
+    #[serde(default)]
+    pub unresolved_applicability: bool,
     #[serde(default)]
     pub severity: String,
     #[serde(default)]
@@ -369,6 +372,14 @@ pub fn validate_truth_candidate(
             &mut issues,
             "scoped_applicability_requires_hitl",
             "scoped rule cannot be verified until applicability is enforced downstream",
+        );
+    }
+
+    if candidate.unresolved_applicability {
+        needs_hitl(
+            &mut issues,
+            "additional_applicability_requires_hitl",
+            "profile, exception, condition or alternative hints require explicit scope review",
         );
     }
 
@@ -725,6 +736,7 @@ mod tests {
                 ("currency", TruthParamValue::Text("EUR".to_string())),
             ]),
             scope: obj(Vec::new()),
+            unresolved_applicability: false,
             severity: "mandatory".to_string(),
             derivation_type: "direct".to_string(),
             confidence: 0.91,
@@ -763,6 +775,18 @@ mod tests {
             .issues
             .iter()
             .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
+    }
+
+    #[test]
+    fn unmodeled_profile_conditions_and_exceptions_require_review() {
+        let mut candidate = base_candidate();
+        candidate.unresolved_applicability = true;
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "additional_applicability_requires_hitl"));
     }
 
     #[test]
