@@ -31,6 +31,7 @@ async fn persist_extracted_rule_candidates(
                 raw_mention: rule.raw_mention.clone(),
                 params: truth_param_value_from_json(&rule.params),
                 scope: truth_param_value_from_json(&rule.scope),
+                unresolved_applicability: rule.has_unmodeled_applicability(),
                 severity: rule.severity.clone(),
                 derivation_type: rule.derivation_type.clone(),
                 confidence: rule.confidence,
