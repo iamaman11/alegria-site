@@ -409,10 +409,8 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     // Hold the semantic slot when ANY section is unresolved, critically
     // contradictory or schema-blocked. Blocked sections have no decisions,
     // which is why the source sections must be consulted here as well.
-    let held_identities = held_semantic_identities(
-        &input.candidate_validation.sections,
-        &decisions,
-    );
+    let held_identities =
+        held_semantic_identities(&input.candidate_validation.sections, &decisions);
     for ((role, concept), group) in grouped_candidates {
         let mut structured = group
             .iter()
@@ -678,9 +676,10 @@ mod manual_candidate_contradiction_tests {
         let result = adjudicate_truth_candidates_with_governance(&siblings, &BTreeMap::new());
         assert_eq!(result.verified_count, 0);
         assert_eq!(result.needs_hitl_count, 2);
-        assert!(result.decisions.iter().all(|decision| {
-            decision.publish_admissibility != "admissible"
-        }));
+        assert!(result
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility != "admissible" }));
     }
 
     #[test]
