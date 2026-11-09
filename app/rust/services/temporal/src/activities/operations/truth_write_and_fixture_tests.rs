@@ -1,6 +1,7 @@
 // Adjudication is per source candidate; verified.rule_instances is keyed per
 // semantic slot. Derive ONE durable outcome per slot, independent of the
 // order in which independent sources or rejected proposals are returned.
+#[derive(Debug)]
 enum SemanticTruthWriteOutcome<'a> {
     Verified(&'a TruthAdjudicationCandidateDecision),
     Disputed,
@@ -76,6 +77,19 @@ pub(crate) async fn verified_truth_write_impl(
     let mut demoted_rule_count = 0usize;
     let mut semantic_candidates =
         BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
+    for decision in &input.truth_adjudication.decisions {
+        let slot_id = semantic_rule_instance_id_local(
+            &input.context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+        );
+        semantic_candidates.entry(slot_id).or_default().push(decision);
+    }
+    let mut semantic_outcomes = BTreeMap::new();
+    for (slot_id, candidates) in &semantic_candidates {
+        semantic_outcomes.insert(slot_id.clone(), semantic_truth_write_outcome(candidates)?);
+    }
+
     let source_section_ids = input
         .truth_adjudication
         .decisions
@@ -95,6 +109,14 @@ pub(crate) async fn verified_truth_write_impl(
         // Reject a forged/stale verification verdict before any SQL mutation.
         // The existing verified-support consumer cannot apply arbitrary scope
         // predicates. Scoped evidence remains available as needs_hitl only.
+        if decision.decision == "verified" && decision.evidence_quote.trim().is_empty() {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "verified candidate {} has no exact source evidence quote",
+                    decision.rule_candidate_id,
+                ),
+            });
+        }
         if decision.decision == "verified"
             && !decision
                 .scope
@@ -147,6 +169,23 @@ pub(crate) async fn verified_truth_write_impl(
                     || params.contains_key("duration_days")
             })
             .unwrap_or(false);
+        let semantic_slot = semantic_rule_instance_id_local(
+            &input.context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+        );
+        let slot_outcome = semantic_outcomes.get(&semantic_slot).ok_or_else(|| {
+            DomainError::ValidationFailure {
+                message: format!("missing write verdict for semantic identity {semantic_slot}"),
+            }
+        })?;
+        let candidate_status = match slot_outcome {
+            SemanticTruthWriteOutcome::Disputed if decision.decision == "verified" => {
+                "needs_hitl"
+            }
+            SemanticTruthWriteOutcome::Rejected(_) => "rejected",
+            _ => decision.decision.as_str(),
+        };
         sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
             &acts.pool,
             &sqlx_seo_adapter::VerifiedTruthCandidateWrite {
@@ -166,26 +205,18 @@ pub(crate) async fn verified_truth_write_impl(
                 span_end,
                 source_key: decision.source_key.clone(),
                 source_snapshot_hash: decision.source_snapshot_hash.clone(),
-                epistemic_status: decision.decision.clone(),
+                epistemic_status: candidate_status.to_string(),
             },
         )
         .await?;
-        let rule_instance_id = semantic_rule_instance_id_local(
-            &input.context_key,
-            &decision.role,
-            &decision.concept_canonical_key,
-        );
-        semantic_candidates
-            .entry(rule_instance_id)
-            .or_default()
-            .push(decision);
+
     }
 
     // Exactly one verdict and one outbox event per semantic slot. A rejected
     // source cannot demote a verified fact backed by independent sources.
-    for (rule_instance_id, candidates) in semantic_candidates {
+    for (rule_instance_id, outcome) in semantic_outcomes {
         let changed_key = format!("verified.rule_instance:{rule_instance_id}");
-        match semantic_truth_write_outcome(&candidates)? {
+        match outcome {
             SemanticTruthWriteOutcome::Verified(decision) => {
                 let role_type = decision.role.to_ascii_lowercase();
                 sqlx_seo_adapter::upsert_verified_rule_instance(
@@ -297,9 +328,7 @@ mod tests {
             rule_candidate_id: id.to_string(),
             role: "FEE_ITEM".to_string(),
             concept_canonical_key: "consular_fee".to_string(),
-            params: TruthParamValue::object([
-                ("amount", TruthParamValue::Integer(amount)),
-            ]),
+            params: TruthParamValue::object([("amount", TruthParamValue::Integer(amount))]),
             scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
             source_key: format!("https://example.gov/{id}"),
             source_tier: "government".to_string(),
