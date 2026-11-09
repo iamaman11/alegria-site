@@ -1858,6 +1858,25 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     run_id TEXT NOT NULL,
     operation TEXT NOT NULL CHECK (operation = 'editorial_draft'),
     input_sha256 TEXT NOT NULL CHECK (input_sha256 ~ '^[a-f0-9]{64}
+    input_json JSONB NOT NULL,
+    job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed')),
+    response_json JSONB,
+    output_json JSONB,
+    model_key TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (run_id, operation, input_sha256),
+    CHECK (
+        (job_status = 'pending' AND response_json IS NULL AND output_json IS NULL)
+        OR
+        (job_status = 'completed' AND response_json IS NOT NULL AND output_json IS NOT NULL
+         AND model_key IS NOT NULL)
+    )
+);
+CREATE INDEX IF NOT EXISTS idx_manual_llm_jobs_pending
+    ON pipeline.manual_llm_jobs (created_at, task_id) WHERE job_status = 'pending';
+
+COMMIT;
 ),
     input_json JSONB NOT NULL,
     job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed')),
