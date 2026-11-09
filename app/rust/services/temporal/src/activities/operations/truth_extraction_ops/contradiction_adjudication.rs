@@ -1,3 +1,27 @@
+// The canonical contradiction gate must examine proposals from both
+// deterministic extraction and ChatGPT. The typed params are a BTreeMap-backed
+// value: Debug representation is stable for equal structured values.
+// No evidence/source attributes are accepted from the LLM here.
+fn validated_candidate_assertions(
+    state: &CandidateValidationSectionState,
+) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
+    state
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.epistemic_status != "rejected")
+        .map(|candidate| seo_steps::contradiction_gate_step::FactAssertion {
+            subject_key: format!(
+                "section:{}:{}:{}",
+                state.section_id, candidate.role, candidate.concept_canonical_key
+            ),
+            predicate_key: "structured_params".to_string(),
+            value_normalized: format!("{:?}", candidate.params),
+            source_key: Some(candidate.source_key.clone()),
+            confidence: candidate.confidence as f32,
+        })
+        .collect()
+}
+
 pub(crate) async fn contradiction_gate_sweep_impl(
     acts: &AlegriaActivities,
     input: &ContradictionGateSweepInput,
@@ -9,10 +33,24 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         .iter()
         .map(|section| (section.id, section))
         .collect();
+    let candidates_by_section: BTreeMap<i64, &CandidateValidationSectionState> = input
+        .candidate_validation
+        .sections
+        .iter()
+        .map(|state| (state.section_id, state))
+        .collect();
     let mut sections = Vec::with_capacity(input.procedural.sections.len());
     for section in &input.procedural.sections {
         let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-        let facts = section
+        let candidate_state = candidates_by_section.get(&section.section_id).ok_or_else(|| {
+            DomainError::ValidationFailure {
+                message: format!(
+                    "missing validated candidates at contradiction gate: {}",
+                    section.section_id
+                ),
+            }
+        })?;
+        let mut facts = section
             .rules
             .iter()
             .map(|rule| {
@@ -35,6 +73,9 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 }
             })
             .collect::<Vec<_>>();
+        // Preserve procedural conflict checks and add every validated
+        // structured proposition before the independent adjudication step.
+        facts.extend(validated_candidate_assertions(candidate_state));
         let output = seo_steps::contradiction_gate_step::execute(
             &seo_steps::contradiction_gate_step::ContradictionGateInput {
                 run_id: input.run_id.clone(),
@@ -268,7 +309,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             continue;
         }
 
-        if resolution.needs_hitl || resolution.decision == "pause_for_hitl" {
+        if resolution.needs_hitl
+            || resolution.decision == "pause_for_hitl"
+            || contradiction.output.needs_hitl
+        {
             for candidate in &section.candidates {
                 decisions.push(TruthAdjudicationCandidateDecision {
                     section_id: section.section_id,
@@ -289,7 +333,12 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     decision: "needs_hitl".to_string(),
                     publish_admissibility: "needs_hitl".to_string(),
                     verification_method: "truth_adjudication@1".to_string(),
-                    adjudication_reason: "resolution_loop_requires_hitl".to_string(),
+                    adjudication_reason: if contradiction.output.needs_hitl {
+                        "contradiction_gate_requires_hitl"
+                    } else {
+                        "resolution_loop_requires_hitl"
+                    }
+                    .to_string(),
                 });
             }
             fixed_states.insert(
