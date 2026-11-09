@@ -400,6 +400,40 @@ mod tests {
     }
 
     #[test]
+    fn two_independent_authoritative_sources_cannot_verify_conflicting_fees() {
+        let registry = BTreeMap::from([
+            (
+                "a".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    independence_group_key: "gov-a".to_string(),
+                    override_eligible: true,
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "delegated_authority".to_string(),
+                    independence_group_key: "gov-b".to_string(),
+                    override_eligible: true,
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+        ]);
+        let verdict = adjudicate_truth_candidates_with_governance(
+            &[candidate("1", "a", 80), candidate("2", "b", 120)],
+            &registry,
+        );
+        assert_eq!(verdict.overall_status, "needs_hitl");
+        assert_eq!(verdict.verified_count, 0);
+        assert_eq!(verdict.contradiction_count, 1);
+        assert!(verdict.decisions.iter().all(|decision| {
+            decision.publish_admissibility != "admissible"
+        }));
+    }
+
+    #[test]
     fn non_independent_same_group_needs_hitl() {
         let registry = BTreeMap::from([
             (

@@ -357,6 +357,21 @@ pub fn validate_truth_candidate(
         };
     }
 
+    // Verification and public-serving records do not yet carry structured
+    // applicability predicates. Never silently publish a scoped rule as
+    // globally applicable; keep its source and scope for explicit review.
+    if candidate
+        .scope
+        .as_object()
+        .is_some_and(|scope| !scope.is_empty())
+    {
+        needs_hitl(
+            &mut issues,
+            "scoped_applicability_requires_hitl",
+            "scoped rule cannot be verified until applicability is enforced downstream",
+        );
+    }
+
     if candidate.severity.trim().is_empty() || candidate.severity == "unknown" {
         needs_hitl(
             &mut issues,
@@ -733,6 +748,20 @@ mod tests {
         let result = validate_truth_candidate(&base_candidate(), raw_text);
         assert_eq!(result.epistemic_status, "structured");
         assert!(result.issues.is_empty());
+    }
+
+    #[test]
+    fn scoped_candidate_cannot_be_promoted_as_globally_applicable() {
+        let mut candidate = base_candidate();
+        candidate.scope = obj(vec![(
+            "applicant_type",
+            TruthParamValue::Text("student".to_string()),
+        )]);
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result.issues.iter().any(|issue| {
+            issue.code == "scoped_applicability_requires_hitl"
+        }));
     }
 
     #[test]

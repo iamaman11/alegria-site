@@ -132,3 +132,25 @@ gates remain mandatory. The Temporal `llm_result_ready` signal is a
 - Older in-flight workflow histories are not claimed replay-safe when the
   canonical command history changes. Drain/version workers using the
   existing release controls before deployment.
+
+## Required deployment compatibility checks
+
+Do not upgrade the canonical Temporal worker with pre-existing in-flight
+`SeoSiteBuildCanonicalCutoverWorkflow` histories unless workflow-history
+compatibility has been demonstrated against the candidate worker version.
+The CLI acceptance test proves a **process restart of the same build**,
+not a replay across different workflow command histories. First quiesce
+and inspect existing runs, confirm no waiting/manual or HITL executions
+remain, then deploy the updated worker and apply the existing migration.
+Changing `WORKER_BUILD_ID` alone is not proof of safe versioning.
+
+## Scoped fact safety boundary
+
+The current public verified-rule model does not yet enforce structured
+`scope` (applicant/profile applicability). Until this is implemented
+end-to-end, nonempty scope is **needs_hitl**, never `verified` or
+publication-admissible. Both the canonical candidate validator and the
+persisted legacy candidate reader enforce this fail-closed behavior.
+Different scoped values must not be silently treated as global facts.
+A separate end-to-end scope-aware publication and second-niche
+certification remains required before claiming universal launch readiness.
