@@ -106,7 +106,7 @@ def main() -> int:
         # The immutable marker is intentionally private and is permitted only
         # as release metadata; other hidden files are not.
         (output / ".alegria_static_site").write_text(
-            "alegria_immutable_release@1\\n", encoding="utf-8"
+            "alegria_immutable_release@1" + chr(10), encoding="utf-8"
         )
         check(output, should_pass=True)
         (output / ".alegria_static_site").unlink()
