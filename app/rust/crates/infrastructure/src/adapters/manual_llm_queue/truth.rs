@@ -1,6 +1,6 @@
 // The same durable inbox serves editorial and untrusted truth-candidate work.
 // Truth results are proposals only; this module never writes verified truth.
-use super::super::truth_extraction_llm_adapter::{
+use super::truth_extraction_llm_adapter::{
     self, TruthExtractionInput, TruthExtractionResponse, TruthRuleCandidate,
 };
 
