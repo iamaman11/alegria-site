@@ -56,7 +56,9 @@ async fn job_fingerprint(
     input: &EditorialDraftGenerateInputPayload,
 ) -> Result<(String, String, Value), DomainError> {
     if input.run_id.trim().is_empty() || input.request.is_none() {
-        return Err(validation("manual LLM job requires run_id and LlmDraftRequest"));
+        return Err(validation(
+            "manual LLM job requires run_id and LlmDraftRequest",
+        ));
     }
     let value = serde_json::to_value(input)
         .map_err(|err| validation(format!("encode manual editorial input: {err}")))?;
@@ -156,14 +158,13 @@ pub async fn read_editorial_result(
     }
     let output: Option<Value> = row.get("output_json");
     let output = output.ok_or_else(|| validation("completed manual LLM job has no output"))?;
-    let output: EditorialDraftGenerateOutputPayload =
-        serde_json::from_value(output).map_err(|err| {
-            validation(format!("manual LLM stored output failed to decode: {err}"))
-        })?;
-    if output.provider_key != "chat_manual" || output.candidate.is_none()
-        || output.status != "done"
+    let output: EditorialDraftGenerateOutputPayload = serde_json::from_value(output)
+        .map_err(|err| validation(format!("manual LLM stored output failed to decode: {err}")))?;
+    if output.provider_key != "chat_manual" || output.candidate.is_none() || output.status != "done"
     {
-        return Err(validation("manual LLM result has invalid completion envelope"));
+        return Err(validation(
+            "manual LLM result has invalid completion envelope",
+        ));
     }
     Ok(output)
 }
@@ -202,11 +203,15 @@ pub async fn submit_editorial(
     if state == "completed" {
         let previous: Option<Value> = row.get("response_json");
         if previous.as_ref() != Some(&submission.response) {
-            return Err(validation("duplicate manual LLM submission changed the answer"));
+            return Err(validation(
+                "duplicate manual LLM submission changed the answer",
+            ));
         }
         let previous_model: Option<String> = row.get("model_key");
         if previous_model.as_deref() != Some(model_key) {
-            return Err(validation("duplicate manual LLM submission changed model_key"));
+            return Err(validation(
+                "duplicate manual LLM submission changed model_key",
+            ));
         }
         tx.commit().await.map_err(db_error)?;
         return Ok(run_id); // Caller re-sends the Temporal signal after a crash.
@@ -215,15 +220,13 @@ pub async fn submit_editorial(
         return Err(validation("manual LLM task is not pending"));
     }
     let input: EditorialDraftGenerateInputPayload =
-        serde_json::from_value(row.get("input_json")).map_err(|err| {
-            validation(format!("stored editorial input is invalid: {err}"))
-        })?;
+        serde_json::from_value(row.get("input_json"))
+            .map_err(|err| validation(format!("stored editorial input is invalid: {err}")))?;
     if input.run_id != run_id {
         return Err(validation("manual LLM task run_id mismatch"));
     }
-    let raw = serde_json::to_string(&submission.response).map_err(|err| {
-        validation(format!("serialize manual LLM response: {err}"))
-    })?;
+    let raw = serde_json::to_string(&submission.response)
+        .map_err(|err| validation(format!("serialize manual LLM response: {err}")))?;
     let candidate = super::editorial_llm_adapter::manual_candidate_from_generated_text(
         &input, model_key, &raw,
     )?;
@@ -233,9 +236,8 @@ pub async fn submit_editorial(
         model_key: model_key.to_string(),
         status: "done".to_string(),
     };
-    let output_json = serde_json::to_value(output).map_err(|err| {
-        validation(format!("encode validated manual LLM output: {err}"))
-    })?;
+    let output_json = serde_json::to_value(output)
+        .map_err(|err| validation(format!("encode validated manual LLM output: {err}")))?;
     sqlx::query(
         "UPDATE pipeline.manual_llm_jobs
          SET response_json = $2, output_json = $3, model_key = $4,
