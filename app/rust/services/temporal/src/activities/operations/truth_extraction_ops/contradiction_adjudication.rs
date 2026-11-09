@@ -9,16 +9,18 @@ fn validated_candidate_assertions(
         .candidates
         .iter()
         .filter(|candidate| candidate.epistemic_status != "rejected")
-        .map(|candidate| seo_steps::contradiction_gate_step::FactAssertion {
-            subject_key: format!(
-                "section:{}:{}:{}",
-                state.section_id, candidate.role, candidate.concept_canonical_key
-            ),
-            predicate_key: "structured_params".to_string(),
-            value_normalized: format!("{:?}", candidate.params),
-            source_key: Some(candidate.source_key.clone()),
-            confidence: candidate.confidence as f32,
-        })
+        .map(
+            |candidate| seo_steps::contradiction_gate_step::FactAssertion {
+                subject_key: format!(
+                    "section:{}:{}:{}",
+                    state.section_id, candidate.role, candidate.concept_canonical_key
+                ),
+                predicate_key: "structured_params".to_string(),
+                value_normalized: format!("{:?}", candidate.params),
+                source_key: Some(candidate.source_key.clone()),
+                confidence: candidate.confidence as f32,
+            },
+        )
         .collect()
 }
 
@@ -42,14 +44,14 @@ pub(crate) async fn contradiction_gate_sweep_impl(
     let mut sections = Vec::with_capacity(input.procedural.sections.len());
     for section in &input.procedural.sections {
         let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-        let candidate_state = candidates_by_section.get(&section.section_id).ok_or_else(|| {
-            DomainError::ValidationFailure {
+        let candidate_state = candidates_by_section
+            .get(&section.section_id)
+            .ok_or_else(|| DomainError::ValidationFailure {
                 message: format!(
                     "missing validated candidates at contradiction gate: {}",
                     section.section_id
                 ),
-            }
-        })?;
+            })?;
         let mut facts = section
             .rules
             .iter()
@@ -489,7 +491,11 @@ pub(crate) async fn truth_adjudication_sweep_impl(
 mod manual_candidate_contradiction_tests {
     use super::*;
 
-    fn manual_candidate(amount: i64, confidence: f64, status: &str) -> ValidatedTruthCandidateRecord {
+    fn manual_candidate(
+        amount: i64,
+        confidence: f64,
+        status: &str,
+    ) -> ValidatedTruthCandidateRecord {
         ValidatedTruthCandidateRecord {
             section_id: 41,
             page_id: 11,
@@ -497,9 +503,7 @@ mod manual_candidate_contradiction_tests {
             role: "FEE_ITEM".to_string(),
             concept_canonical_key: "consular_fee".to_string(),
             raw_mention: "consular fee".to_string(),
-            params: TruthParamValue::object([(
-                "amount", TruthParamValue::Integer(amount),
-            )]),
+            params: TruthParamValue::object([("amount", TruthParamValue::Integer(amount))]),
             source_key: "https://example.gov/fees".to_string(),
             source_tier: "government".to_string(),
             confidence,
@@ -527,7 +531,9 @@ mod manual_candidate_contradiction_tests {
         }
     }
 
-    fn gate(state: &CandidateValidationSectionState) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+    fn gate(
+        state: &CandidateValidationSectionState,
+    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
         seo_steps::contradiction_gate_step::execute(
             &seo_steps::contradiction_gate_step::ContradictionGateInput {
                 run_id: "manual-contradiction-test".to_string(),
