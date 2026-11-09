@@ -46,6 +46,7 @@ struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
     waiting_hitl: bool,
     resume_requested: bool,
+    llm_result_ready: bool,
     phase: String,
 }
 
@@ -900,6 +901,13 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             self.paused = false;
             self.phase = "resumed".to_string();
         }
+    }
+
+    // Dedicated wake-up for a persisted LLM submission. This never approves
+    // content, and it cannot resume a separate human-review HITL wait.
+    #[signal(name = "llm_result_ready")]
+    fn llm_result_ready(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        self.llm_result_ready = true;
     }
 
     #[query(name = "status")]
