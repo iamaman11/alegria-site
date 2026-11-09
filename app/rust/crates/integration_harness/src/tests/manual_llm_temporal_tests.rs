@@ -49,6 +49,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         &format!("{}/v1/chat/completions", editorial_stub.base_url),
     ));
     worker_env.insert("SEO_LLM_PROVIDER".to_string(), "chat_manual".to_string());
+    worker_env.insert("SEO_TRUTH_LLM_PROVIDER".to_string(), "chat_manual".to_string());
     // The restarted process must retain the same Temporal Worker build identity.
     worker_env.insert(
         "WORKER_BUILD_ID".to_string(),
@@ -94,6 +95,44 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         .await
         .unwrap();
 
+    // Before editorial generation, prove that the same Temporal run waits
+    // for every raw-section truth proposal in the same durable inbox.
+    // An explicit empty candidate array is valid but cannot create verified truth.
+    let truth_pool = infra.postgres.pool.clone();
+    let truth_run = run_id.clone();
+    let truth_temporal = infra.temporal.temporal_url.clone();
+    let truth_namespace = infra.temporal.namespace.clone();
+    let truth_driver = tokio::spawn(async move {
+        let control = TemporalSeoWorkflowControlAdapter::new(
+            truth_temporal,
+            format!("manual-truth-fixture-{truth_run}"),
+            truth_namespace,
+        );
+        let mut count = 0usize;
+        loop {
+            if let Some(job) = manual_llm_queue::next_job(&truth_pool).await.unwrap() {
+                if job.operation == "editorial_draft" {
+                    return count;
+                }
+                assert_eq!(job.operation, "truth_candidates");
+                assert_eq!(job.payload["context_key"].as_str().unwrap().is_empty(), false);
+                let submission: manual_llm_queue::ManualTruthSubmission =
+                    serde_json::from_value(serde_json::json!({
+                        "task_id": job.task_id,
+                        "schema_version": job.schema_version,
+                        "input_sha256": job.input_sha256,
+                        "response": {"candidates": []},
+                    }))
+                    .unwrap();
+                manual_llm_queue::submit_truth(&truth_pool, &submission, "gpt-6")
+                    .await
+                    .unwrap();
+                control.signal_llm_result_ready(&truth_run).await.unwrap();
+                count += 1;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    });
     let first: ManualLlmJob<EditorialDraftGenerateInputPayload> =
         timeout(Duration::from_secs(180), async {
             loop {
@@ -110,6 +149,16 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         .expect("canonical Temporal workflow did not enqueue a manual editorial job");
     assert_eq!(first.payload.run_id, run_id);
     assert_eq!(first.operation, "editorial_draft");
+    assert!(
+        truth_driver.await.unwrap() > 0,
+        "canonical workflow skipped manual source-proposal stage"
+    );
+    assert_eq!(
+        manual_llm_queue::truth_run_status(&infra.postgres.pool, &run_id)
+            .await
+            .unwrap(),
+        "done"
+    );
     let pending = manual_llm_queue::read_editorial_result(&infra.postgres.pool, &first.payload)
         .await
         .unwrap();
