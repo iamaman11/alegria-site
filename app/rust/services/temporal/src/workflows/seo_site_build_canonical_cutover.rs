@@ -754,6 +754,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             global_site_reconcile.link_recommendations.clone()
         };
         if page_nodes.is_empty() {
+            // A strict run cannot be completed without any publishable pages.
+            // Preserve the existing explicit blocked outcome; only dry-run
+            // diagnostics may finish successfully with zero planned pages.
+            if enforce_required_contract {
+                return Ok(block_execution_plan_invariant(
+                    ctx,
+                    &run_id,
+                    "no_page_nodes_after_reconcile",
+                ));
+            }
             ctx.start_activity(AlegriaActivities::finalize_run, run_id.clone(), db_opts(10))
                 .await?;
             ctx.state_mut(|s| s.phase = "done:no_pages".to_string());
