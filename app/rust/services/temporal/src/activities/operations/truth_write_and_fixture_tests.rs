@@ -73,6 +73,7 @@ pub(crate) async fn verified_truth_write_impl(
     let mut changed_truth_keys = Vec::new();
     let mut verified_rule_projections = Vec::new();
     let mut demoted_rule_projection_ids = Vec::new();
+    let mut suppressed_scoped_projection_ids = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
     let mut semantic_candidates =
@@ -247,13 +248,24 @@ pub(crate) async fn verified_truth_write_impl(
                 )
                 .await?;
                 verified_rule_count += 1;
-                verified_rule_projections.push(VerifiedRuleProjectionCandidate {
-                    rule_instance_id: rule_instance_id.clone(),
-                    role_type,
-                    concept_key: decision.concept_canonical_key.clone(),
-                    source_key: decision.source_key.clone(),
-                    evidence_quote: decision.evidence_quote.clone(),
-                });
+                // verified_rules_4 is currently a context-wide index without
+                // an applicant-profile filter. Never emit a scoped rule into
+                // global retrieval; its validated support flows through the
+                // existing SQL profile resolver instead.
+                if matches!(
+                    primitives::truth_candidates::truth_scope_target(&decision.scope),
+                    Some(primitives::truth_candidates::TruthScopeTarget::Global)
+                ) {
+                    verified_rule_projections.push(VerifiedRuleProjectionCandidate {
+                        rule_instance_id: rule_instance_id.clone(),
+                        role_type,
+                        concept_key: decision.concept_canonical_key.clone(),
+                        source_key: decision.source_key.clone(),
+                        evidence_quote: decision.evidence_quote.clone(),
+                    });
+                } else {
+                    suppressed_scoped_projection_ids.push(rule_instance_id.clone());
+                }
             }
             SemanticTruthWriteOutcome::Disputed => {
                 sqlx_seo_adapter::demote_verified_rule_instance(
@@ -285,6 +297,10 @@ pub(crate) async fn verified_truth_write_impl(
         changed_truth_keys.push(changed_key);
     }
 
+    // Purge any stale scoped point left by a prior unfiltered projection.
+    demoted_rule_projection_ids.extend(suppressed_scoped_projection_ids);
+    demoted_rule_projection_ids.sort();
+    demoted_rule_projection_ids.dedup();
     delete_verified_rules_4_projection(acts, &demoted_rule_projection_ids).await?;
     emit_verified_rules_4_projection(
         acts,
