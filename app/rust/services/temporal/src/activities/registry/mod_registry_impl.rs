@@ -962,6 +962,19 @@ impl AlegriaActivities {
         .await
     }
 
+    // Read-only, independently retryable after a Temporal LLM-ready signal.
+    // Do not cache pending as a completed step in the execution ledger.
+    #[activity]
+    pub async fn load_manual_editorial_result(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: EditorialDraftGenerateInputPayload,
+    ) -> Result<EditorialDraftGenerateOutputPayload, ActivityError> {
+        infrastructure::adapters::manual_llm_queue::read_editorial_result(&self.pool, &input)
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))
+    }
+
     #[allow(dead_code)]
     #[activity]
     pub async fn run_content_contract_validate_step(
