@@ -68,6 +68,38 @@ pub(crate) async fn candidate_validation_impl(
         .iter()
         .map(|section| (section.section_id, section))
         .collect();
+    // Manual ChatGPT text is never trusted as a truth decision. Load it only
+    // after every durable job is committed and bind it to current raw evidence.
+    let manual_enabled = infrastructure::adapters::manual_llm_queue::truth_manual_selected();
+    let mut manual_by_section = BTreeMap::new();
+    if manual_enabled {
+        let results = infrastructure::adapters::manual_llm_queue::read_truth_results(
+            &acts.pool, &input.run_id,
+        )
+        .await?;
+        let allowed = input
+            .procedural
+            .sections
+            .iter()
+            .filter(|section| !section.blocked_by_gate && !section.skipped)
+            .map(|section| section.section_id)
+            .collect::<BTreeSet<_>>();
+        if results.len() != allowed.len() {
+            return Err(DomainError::ValidationFailure {
+                message: "manual truth response count does not match eligible raw sections"
+                    .to_string(),
+            });
+        }
+        for (source, output) in results {
+            if !allowed.contains(&source.raw_section_id)
+                || manual_by_section.insert(source.raw_section_id, (source, output)).is_some()
+            {
+                return Err(DomainError::ValidationFailure {
+                    message: "manual truth source was not eligible or was duplicated".to_string(),
+                });
+            }
+        }
+    }
     let mut section_states = Vec::new();
     for section in &input.procedural.sections {
         let raw = raw_by_section.get(&section.section_id).ok_or_else(|| {
@@ -171,6 +203,105 @@ pub(crate) async fn candidate_validation_impl(
                     .map(|issue| format!("{}:{}", issue.code, issue.message))
                     .collect(),
             });
+        }
+        if manual_enabled && !section.blocked_by_gate && !section.skipped {
+            let (source, response) = manual_by_section
+                .remove(&raw.id)
+                .ok_or_else(|| DomainError::ValidationFailure {
+                    message: format!("manual truth source missing: {}", raw.id),
+                })?;
+            let current_snapshot_hash = if raw.content_hash.trim().is_empty() {
+                content_hash_v1(&raw.content_md)
+            } else {
+                raw.content_hash.clone()
+            };
+            if source.context_key != input.context_key
+                || source.raw_section_id != raw.id
+                || source.raw_text != raw.content_md
+                || source.source_url != raw.source_url
+                || source.source_domain != raw.source_domain
+                || source.source_snapshot_hash != current_snapshot_hash
+            {
+                return Err(DomainError::ValidationFailure {
+                    message: format!("manual truth evidence snapshot changed: {}", raw.id),
+                });
+            }
+            for (ordinal, rule) in response.candidates.into_iter().enumerate() {
+                let params: TruthParamValue = serde_json::from_value(rule.params.clone())
+                    .map_err(|err| DomainError::ValidationFailure {
+                        message: format!("manual truth params malformed: {err}"),
+                    })?;
+                let scope: TruthParamValue = serde_json::from_value(rule.scope.clone())
+                    .map_err(|err| DomainError::ValidationFailure {
+                        message: format!("manual truth scope malformed: {err}"),
+                    })?;
+                let uncertainty_flags = section_uncertainty_flags(&raw.content_md)
+                    .into_iter()
+                    .chain(rule.uncertainty_flags)
+                    .collect::<Vec<_>>();
+                let runtime = TruthCandidateRuntime {
+                    rule_candidate_id: blake3_hex(
+                        format!(
+                            "chat_manual|{}|{}|{}|{}|{}|{}",
+                            input.run_id, raw.id, ordinal, rule.role,
+                            rule.concept_canonical_key, rule.evidence_quote,
+                        )
+                        .as_bytes(),
+                    ),
+                    context_key: input.context_key.clone(),
+                    role: rule.role,
+                    concept_canonical_key: rule.concept_canonical_key,
+                    raw_mention: rule.raw_mention,
+                    params,
+                    scope,
+                    severity: rule.severity,
+                    derivation_type: "manual_llm_candidate".to_string(),
+                    confidence: rule.confidence,
+                    evidence_section_id: raw.id,
+                    evidence_quote: rule.evidence_quote,
+                    span_start: rule.span_start,
+                    span_end: rule.span_end,
+                    source_key: raw.source_url.clone(),
+                    source_tier: section_source_tier(raw),
+                    source_snapshot_hash: current_snapshot_hash.clone(),
+                    is_numeric: rule.is_numeric,
+                    is_range: rule.is_range,
+                    is_incomplete: rule.is_incomplete,
+                    uncertainty_flags: uncertainty_flags.clone(),
+                };
+                let validation = validate_truth_candidate(&runtime, &raw.content_md);
+                let mut epistemic_status = validation.epistemic_status.clone();
+                if ontology.needs_hitl && epistemic_status != "rejected" {
+                    epistemic_status = "needs_hitl".to_string();
+                }
+                if schema.status == "invalid" && epistemic_status != "rejected" {
+                    epistemic_status = "rejected".to_string();
+                }
+                candidates.push(ValidatedTruthCandidateRecord {
+                    section_id: section.section_id,
+                    page_id: section.page_id,
+                    rule_candidate_id: runtime.rule_candidate_id,
+                    role: runtime.role,
+                    concept_canonical_key: runtime.concept_canonical_key,
+                    raw_mention: runtime.raw_mention,
+                    params: runtime.params,
+                    source_key: runtime.source_key,
+                    source_tier: runtime.source_tier,
+                    confidence: runtime.confidence,
+                    evidence_quote: runtime.evidence_quote,
+                    span_start: runtime.span_start,
+                    span_end: runtime.span_end,
+                    source_snapshot_hash: runtime.source_snapshot_hash,
+                    freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
+                    completeness_class: classify_candidate_completeness_local(&validation),
+                    epistemic_status,
+                    issues: validation
+                        .issues
+                        .iter()
+                        .map(|issue| format!("{}:{}", issue.code, issue.message))
+                        .collect(),
+                });
+            }
         }
         let accepted_count = candidates
             .iter()
