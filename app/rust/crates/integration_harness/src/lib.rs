@@ -124,4 +124,5 @@ mod tests {
     include!("tests/provider_runtime_surface_tests.rs");
     include!("tests/truth_runtime_tests.rs");
     include!("tests/scenario_parity_tests.rs");
+    include!("tests/manual_llm_temporal_tests.rs");
 }
