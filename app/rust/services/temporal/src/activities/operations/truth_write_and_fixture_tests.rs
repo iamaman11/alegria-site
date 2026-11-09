@@ -23,6 +23,19 @@ pub(crate) async fn verified_truth_write_impl(
         .collect();
 
     for decision in &input.truth_adjudication.decisions {
+        // Reject a forged/stale verification verdict before any SQL mutation.
+        // The existing verified-support consumer cannot apply arbitrary scope
+        // predicates. Scoped evidence remains available as needs_hitl only.
+        if decision.decision == "verified"
+            && !decision.scope.as_object().is_some_and(|fields| fields.is_empty())
+        {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "scoped candidate {} cannot be globally verified",
+                    decision.rule_candidate_id,
+                ),
+            });
+        }
         let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
             DomainError::ValidationFailure {
                 message: format!(
@@ -93,14 +106,6 @@ pub(crate) async fn verified_truth_write_impl(
         let changed_key = format!("verified.rule_instance:{rule_instance_id}");
         match decision.decision.as_str() {
             "verified" => {
-                if !decision.scope.as_object().is_some_and(|fields| fields.is_empty()) {
-                    return Err(DomainError::ValidationFailure {
-                        message: format!(
-                            "scoped candidate {} must not be persisted as globally verified",
-                            decision.rule_candidate_id,
-                        ),
-                    });
-                }
                 let role_type = decision.role.to_ascii_lowercase();
                 sqlx_seo_adapter::upsert_verified_rule_instance(
                     &acts.pool,

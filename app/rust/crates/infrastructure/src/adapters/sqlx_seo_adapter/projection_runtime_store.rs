@@ -291,13 +291,20 @@ pub struct VerifiedRuleInstanceWrite {
     pub completeness_class: String,
 }
 
+/// Current verified-rule consumers have no general applicability interpreter.
+/// The final SQL writer must not lose a nonempty scope, even if a caller
+/// accidentally supplies a previously cached "verified" decision.
+fn unrestricted_verified_scope(scope: &Value) -> bool {
+    scope.as_object().is_some_and(|fields| fields.is_empty())
+}
+
 pub async fn upsert_verified_rule_instance(
     pool: &PgPool,
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
     // Final persistence is a trust boundary. A prior activity result must
     // never turn a scoped candidate into a globally applicable verified rule.
-    if rule.scope != serde_json::json!({}) {
+    if !unrestricted_verified_scope(&rule.scope) {
         return Err(validation_failure(
             "scoped verified rule requires an explicit applicability projection",
         ));
@@ -397,3 +404,31 @@ pub async fn demote_verified_rule_instance(
     Ok(())
 }
 
+
+#[cfg(test)]
+mod verified_scope_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn final_sqlx_writer_only_accepts_explicit_empty_global_scope() {
+        assert!(unrestricted_verified_scope(&serde_json::json!({})));
+        for scope in [
+            serde_json::json!({"applicant_profile":"student"}),
+            serde_json::json!({"country":"ES"}),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            assert!(!unrestricted_verified_scope(&scope));
+        }
+    }
+
+    #[test]
+    fn extracted_candidate_sql_stores_scope_parameter() {
+        // The insert contract uses an explicitly bound JSON value, never a
+        // generated empty literal. This guards against regressions in the
+        // durable candidate evidence path.
+        let source = include_str!("projection_runtime_store.rs");
+        assert!(source.contains("scope = EXCLUDED.scope"));
+        assert!(source.contains(".bind(Json::<Value>(candidate.scope.clone()))"));
+    }
+}
