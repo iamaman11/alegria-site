@@ -155,6 +155,7 @@ pub(crate) async fn candidate_validation_impl(
                 raw_mention: evidence_quote.clone(),
                 params: params_for_rule(rule),
                 scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
+                unresolved_applicability: false,
                 severity: "mandatory".to_string(),
                 derivation_type: "deterministic_procedural_extraction".to_string(),
                 confidence: rule.confidence as f64,
@@ -233,6 +234,7 @@ pub(crate) async fn candidate_validation_impl(
             for (ordinal, rule) in response.candidates.into_iter().enumerate() {
                 let (params, scope) =
                     infrastructure::adapters::manual_llm_queue::validated_candidate_values(&rule)?;
+                let unresolved_applicability = rule.has_unmodeled_applicability();
                 let uncertainty_flags = section_uncertainty_flags(&raw.content_md)
                     .into_iter()
                     .chain(rule.uncertainty_flags)
@@ -256,6 +258,7 @@ pub(crate) async fn candidate_validation_impl(
                     raw_mention: rule.raw_mention,
                     params,
                     scope,
+                    unresolved_applicability,
                     severity: rule.severity,
                     derivation_type: "manual_llm_candidate".to_string(),
                     confidence: rule.confidence,
