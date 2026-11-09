@@ -422,13 +422,36 @@ mod verified_scope_persistence_tests {
         }
     }
 
-    #[test]
-    fn extracted_candidate_sql_stores_scope_parameter() {
-        // The insert contract uses an explicitly bound JSON value, never a
-        // generated empty literal. This guards against regressions in the
-        // durable candidate evidence path.
-        let source = include_str!("projection_runtime_store.rs");
-        assert!(source.contains("scope = EXCLUDED.scope"));
-        assert!(source.contains(".bind(Json::<Value>(candidate.scope.clone()))"));
+    #[tokio::test]
+    async fn scoped_verified_writer_fails_before_attempting_sql() {
+        // An intentionally unreachable database proves rejection belongs
+        // to the SQLx write boundary rather than the orchestration layer.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:unused@127.0.0.1:65534/unused")
+            .expect("lazy pool");
+        let rule = VerifiedRuleInstanceWrite {
+            scope: serde_json::json!({"applicant_profile": "student"}),
+            rule_instance_id: "rule:scoped".to_string(),
+            context_key: "ctx".to_string(),
+            rule_type_key: "fee_item".to_string(),
+            concept_key: "fee".to_string(),
+            role_type: "fee_item".to_string(),
+            params: serde_json::json!({"amount": 35}),
+            source_key: "https://example.gov/fees".to_string(),
+            confidence: 0.95,
+            rule_candidate_id: "candidate:1".to_string(),
+            evidence_section_id: 7,
+            evidence_quote: "Fee: 35 EUR".to_string(),
+            span_start: 0,
+            span_end: 11,
+            source_snapshot_hash: "source-sha".to_string(),
+            verification_method: "test".to_string(),
+            adjudication_reason: "test".to_string(),
+            publish_admissibility: "admissible".to_string(),
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+        };
+        let result = upsert_verified_rule_instance(&pool, &rule).await;
+        assert!(matches!(result, Err(DomainError::ValidationFailure { .. })));
     }
 }
