@@ -74,7 +74,8 @@ pub(crate) async fn candidate_validation_impl(
     let mut manual_by_section = BTreeMap::new();
     if manual_enabled {
         let results = infrastructure::adapters::manual_llm_queue::read_truth_results(
-            &acts.pool, &input.run_id,
+            &acts.pool,
+            &input.run_id,
         )
         .await?;
         let allowed = input
@@ -92,7 +93,9 @@ pub(crate) async fn candidate_validation_impl(
         }
         for (source, output) in results {
             if !allowed.contains(&source.raw_section_id)
-                || manual_by_section.insert(source.raw_section_id, (source, output)).is_some()
+                || manual_by_section
+                    .insert(source.raw_section_id, (source, output))
+                    .is_some()
             {
                 return Err(DomainError::ValidationFailure {
                     message: "manual truth source was not eligible or was duplicated".to_string(),
@@ -205,11 +208,11 @@ pub(crate) async fn candidate_validation_impl(
             });
         }
         if manual_enabled && !section.blocked_by_gate && !section.skipped {
-            let (source, response) = manual_by_section
-                .remove(&raw.id)
-                .ok_or_else(|| DomainError::ValidationFailure {
+            let (source, response) = manual_by_section.remove(&raw.id).ok_or_else(|| {
+                DomainError::ValidationFailure {
                     message: format!("manual truth source missing: {}", raw.id),
-                })?;
+                }
+            })?;
             let current_snapshot_hash = if raw.content_hash.trim().is_empty() {
                 content_hash_v1(&raw.content_md)
             } else {
@@ -237,8 +240,12 @@ pub(crate) async fn candidate_validation_impl(
                     rule_candidate_id: blake3_hex(
                         format!(
                             "chat_manual|{}|{}|{}|{}|{}|{}",
-                            input.run_id, raw.id, ordinal, rule.role,
-                            rule.concept_canonical_key, rule.evidence_quote,
+                            input.run_id,
+                            raw.id,
+                            ordinal,
+                            rule.role,
+                            rule.concept_canonical_key,
+                            rule.evidence_quote,
                         )
                         .as_bytes(),
                     ),
@@ -350,4 +357,3 @@ pub(crate) async fn candidate_validation_impl(
         sections: section_states,
     })
 }
-
