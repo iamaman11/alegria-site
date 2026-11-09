@@ -259,6 +259,165 @@
             diagnostics["unresolved_rule_count"].as_i64().unwrap_or_default() > 0,
             "conditional applicability must be visible in diagnostics"
         );
+
+        // A verified global exception with an unevaluated condition cannot
+        // silently waive or modify the fact for every applicant.
+        sqlx::query(
+            "UPDATE verified.rule_instance_profiles
+             SET condition_json = NULL
+             WHERE rule_instance_id = $1 AND profile_key = 'student'",
+        )
+        .bind(&rule_instance_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let exception_id = format!("ci_exception_{marker}");
+        sqlx::query(
+            "INSERT INTO verified.rule_exceptions
+             (exception_id, rule_instance_id, exception_key, condition_json,
+              override_kind, override_payload, status)
+             VALUES ($1, $2, 'conditional_waiver', '{}'::jsonb,
+                     'waive', '{}'::jsonb, 'verified')",
+        )
+        .bind(&exception_id)
+        .bind(&rule_instance_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let exception_run = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO pipeline.execution_runs
+             (run_id, workflow_run_id, workflow_type, context_key)
+             VALUES ($1, $2, 'seo_site_build', $3)",
+        )
+        .bind(exception_run)
+        .bind(format!("ci-exception-{exception_run}"))
+        .bind(&context_key)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let exception_support =
+            infrastructure::adapters::sqlx_seo_adapter::load_verified_support_bundle(
+                &pool,
+                &exception_run.to_string(),
+                &context_key,
+                "ci-profile-scope",
+                "student",
+            )
+            .await
+            .unwrap();
+        assert!(exception_support.is_empty());
+        let exception_blob: Vec<u8> = sqlx::query_scalar(
+            "SELECT payload_bytes FROM pipeline.execution_run_blobs
+             WHERE run_id = $1 AND field_name = 'verified_support_bundle'",
+        )
+        .bind(exception_run)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let exception_diagnostics: serde_json::Value =
+            serde_json::from_slice(&exception_blob).unwrap();
+        assert!(exception_diagnostics["unresolved_rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["reason_code"] == "unresolved_exception_condition"));
+        sqlx::query("DELETE FROM verified.rule_exceptions WHERE exception_id = $1")
+            .bind(&exception_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // A global and a student-only value for the same semantic concept
+        // must not be jointly served as two independent "verified" facts.
+        let global_raw_text = "Consular fee is 60 EUR";
+        let global_section_id: i64 = sqlx::query_scalar(
+            "INSERT INTO raw.sections (page_id, content_md)
+             VALUES ($1, $2) RETURNING id",
+        )
+        .bind(page_id)
+        .bind(global_raw_text)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let global_candidate_id = format!("ci_global_candidate_{marker}");
+        let global_rule_id = format!("ci_global_rule_{marker}");
+        let mut global_candidate = write_candidate.clone();
+        global_candidate.rule_candidate_id = global_candidate_id.clone();
+        global_candidate.section_id = global_section_id;
+        global_candidate.scope = serde_json::json!({});
+        global_candidate.params = serde_json::json!({"amount": 60, "currency": "EUR"});
+        global_candidate.evidence_quote = global_raw_text.to_string();
+        global_candidate.span_end = global_raw_text.len() as i32;
+        infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+            &pool,
+            &global_candidate,
+        )
+        .await
+        .unwrap();
+        let mut global_rule = write_rule.clone();
+        global_rule.rule_instance_id = global_rule_id.clone();
+        global_rule.rule_candidate_id = global_candidate_id;
+        global_rule.scope = serde_json::json!({});
+        global_rule.params = serde_json::json!({"amount": 60, "currency": "EUR"});
+        global_rule.evidence_section_id = global_section_id;
+        global_rule.evidence_quote = global_raw_text.to_string();
+        global_rule.span_end = global_raw_text.len() as i32;
+        infrastructure::adapters::sqlx_seo_adapter::upsert_verified_rule_instance(
+            &pool,
+            &global_rule,
+        )
+        .await
+        .unwrap();
+        for profile in ["student", "minor"] {
+            let run = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO pipeline.execution_runs
+                 (run_id, workflow_run_id, workflow_type, context_key)
+                 VALUES ($1, $2, 'seo_site_build', $3)",
+            )
+            .bind(run)
+            .bind(format!("ci-overlap-{run}"))
+            .bind(&context_key)
+            .execute(&pool)
+            .await
+            .unwrap();
+            let supports =
+                infrastructure::adapters::sqlx_seo_adapter::load_verified_support_bundle(
+                    &pool,
+                    &run.to_string(),
+                    &context_key,
+                    "ci-profile-scope",
+                    profile,
+                )
+                .await
+                .unwrap();
+            if profile == "student" {
+                assert!(
+                    supports.is_empty(),
+                    "overlapping global/profile fee values require review"
+                );
+                let blob: Vec<u8> = sqlx::query_scalar(
+                    "SELECT payload_bytes FROM pipeline.execution_run_blobs
+                     WHERE run_id = $1 AND field_name = 'verified_support_bundle'",
+                )
+                .bind(run)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                let report: serde_json::Value = serde_json::from_slice(&blob).unwrap();
+                assert!(report["unresolved_rules"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| {
+                        entry["reason_code"] == "overlapping_profile_and_global_truth"
+                    }));
+            } else {
+                assert_eq!(supports.len(), 1);
+                assert_eq!(supports[0].support_ref, global_rule_id);
+            }
+        }
     }
 
     // Regression: the strict graph probe must send every Cypher parameter
