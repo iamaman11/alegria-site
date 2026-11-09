@@ -43,6 +43,24 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Retrieve the next pending typed LLM request for manual execution.
+    LlmNext {
+        #[arg(long)]
+        database_url: Option<String>,
+    },
+    /// Validate and persist a ChatGPT response, then wake the Temporal run.
+    LlmSubmit {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        response_file: String,
+        #[arg(long)]
+        model_key: String,
+        #[arg(long)]
+        temporal_url: Option<String>,
+        #[arg(long, default_value = "default")]
+        temporal_namespace: String,
+    },
     CheckRustMigrationContract {
         #[arg(long, default_value = ".")]
         root: String,
