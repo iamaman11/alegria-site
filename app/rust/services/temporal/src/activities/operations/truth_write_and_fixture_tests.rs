@@ -78,10 +78,11 @@ pub(crate) async fn verified_truth_write_impl(
     let mut semantic_candidates =
         BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
     for decision in &input.truth_adjudication.decisions {
-        let slot_id = semantic_rule_instance_id_local(
+        let slot_id = semantic_rule_instance_id_for_scope_local(
             &input.context_key,
             &decision.role,
             &decision.concept_canonical_key,
+            &decision.scope,
         );
         semantic_candidates
             .entry(slot_id)
@@ -109,9 +110,8 @@ pub(crate) async fn verified_truth_write_impl(
         .collect();
 
     for decision in &input.truth_adjudication.decisions {
-        // Reject a forged/stale verification verdict before any SQL mutation.
-        // The existing verified-support consumer cannot apply arbitrary scope
-        // predicates. Scoped evidence remains available as needs_hitl only.
+        // Reject forged or unsupported scoped verification before SQL writes.
+        // Only exact applicant_profile can be represented downstream.
         if decision.decision == "verified" && decision.evidence_quote.trim().is_empty() {
             return Err(DomainError::ValidationFailure {
                 message: format!(
@@ -121,14 +121,11 @@ pub(crate) async fn verified_truth_write_impl(
             });
         }
         if decision.decision == "verified"
-            && !decision
-                .scope
-                .as_object()
-                .is_some_and(|fields| fields.is_empty())
+            && primitives::truth_candidates::truth_scope_target(&decision.scope).is_none()
         {
             return Err(DomainError::ValidationFailure {
                 message: format!(
-                    "scoped candidate {} cannot be globally verified",
+                    "candidate {} uses an unsupported scoped predicate",
                     decision.rule_candidate_id,
                 ),
             });
@@ -172,10 +169,11 @@ pub(crate) async fn verified_truth_write_impl(
                     || params.contains_key("duration_days")
             })
             .unwrap_or(false);
-        let semantic_slot = semantic_rule_instance_id_local(
+        let semantic_slot = semantic_rule_instance_id_for_scope_local(
             &input.context_key,
             &decision.role,
             &decision.concept_canonical_key,
+            &decision.scope,
         );
         let slot_outcome = semantic_outcomes.get(&semantic_slot).ok_or_else(|| {
             DomainError::ValidationFailure {

@@ -93,6 +93,34 @@ fn stable_escape(value: &str) -> String {
         .replace(']', "\\]")
 }
 
+/// The only automatically verifiable scoped predicate is an exact active
+/// applicant-profile match. Other predicates remain human-review only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TruthScopeTarget {
+    Global,
+    ApplicantProfile(String),
+}
+
+pub fn truth_scope_target(scope: &TruthParamValue) -> Option<TruthScopeTarget> {
+    let object = scope.as_object()?;
+    if object.is_empty() {
+        return Some(TruthScopeTarget::Global);
+    }
+    if object.len() != 1 {
+        return None;
+    }
+    let TruthParamValue::Text(profile) = object.get("applicant_profile")? else {
+        return None;
+    };
+    if profile.is_empty()
+        || profile.len() > 64
+        || !profile.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return None;
+    }
+    Some(TruthScopeTarget::ApplicantProfile(profile.clone()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TruthCandidateRuntime {
     #[serde(default)]
@@ -360,18 +388,14 @@ pub fn validate_truth_candidate(
         };
     }
 
-    // Verification and public-serving records do not yet carry structured
-    // applicability predicates. Never silently publish a scoped rule as
-    // globally applicable; keep its source and scope for explicit review.
-    if candidate
-        .scope
-        .as_object()
-        .is_some_and(|scope| !scope.is_empty())
-    {
+    // Only the exact applicant_profile predicate is representable by the
+    // existing verified.rule_instance_profiles and SEO support resolver.
+    // Unknown keys, extra dimensions and malformed values fail closed.
+    if truth_scope_target(&candidate.scope).is_none() {
         needs_hitl(
             &mut issues,
             "scoped_applicability_requires_hitl",
-            "scoped rule cannot be verified until applicability is enforced downstream",
+            "unsupported applicability predicate requires explicit review",
         );
     }
 
@@ -763,18 +787,35 @@ mod tests {
     }
 
     #[test]
-    fn scoped_candidate_cannot_be_promoted_as_globally_applicable() {
+    fn scoped_candidate_only_allows_exact_applicant_profile() {
         let mut candidate = base_candidate();
         candidate.scope = obj(vec![(
-            "applicant_type",
+            "applicant_profile",
             TruthParamValue::Text("student".to_string()),
         )]);
         let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
-        assert_eq!(result.epistemic_status, "needs_hitl");
-        assert!(result
-            .issues
-            .iter()
-            .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
+        assert_eq!(result.epistemic_status, "structured");
+        assert_eq!(
+            truth_scope_target(&candidate.scope),
+            Some(TruthScopeTarget::ApplicantProfile("student".to_string()))
+        );
+        for invalid_scope in [
+            obj(vec![("applicant_type", TruthParamValue::Text("student".to_string()))]),
+            obj(vec![("applicant_profile", TruthParamValue::Text("Student".to_string()))]),
+            obj(vec![("applicant_profile", TruthParamValue::Text("".to_string()))]),
+            obj(vec![
+                ("applicant_profile", TruthParamValue::Text("student".to_string())),
+                ("age", TruthParamValue::Integer(17)),
+            ]),
+            obj(vec![("applicant_profile", TruthParamValue::List(Vec::new()))]),
+        ] {
+            candidate.scope = invalid_scope;
+            let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+            assert_eq!(result.epistemic_status, "needs_hitl");
+            assert!(result.issues.iter().any(|issue| {
+                issue.code == "scoped_applicability_requires_hitl"
+            }));
+        }
     }
 
     #[test]

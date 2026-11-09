@@ -232,6 +232,53 @@ fn semantic_rule_instance_id_local(
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
 
+fn semantic_rule_instance_id_for_scope_local(
+    context_key: &str,
+    role: &str,
+    concept_canonical_key: &str,
+    scope: &TruthParamValue,
+) -> String {
+    if matches!(
+        primitives::truth_candidates::truth_scope_target(scope),
+        Some(primitives::truth_candidates::TruthScopeTarget::Global)
+    ) {
+        // Preserve the old global ID for historical data and projections.
+        return semantic_rule_instance_id_local(context_key, role, concept_canonical_key);
+    }
+    blake3_hex(
+        format!(
+            "{context_key}|{role}|{concept_canonical_key}|scope:{}",
+            scope.stable_signature()
+        )
+        .as_bytes(),
+    )
+}
+
+#[cfg(test)]
+mod truth_scope_semantic_id_tests {
+    use super::*;
+
+    #[test]
+    fn scoped_semantic_identity_does_not_collide_with_global_or_other_profiles() {
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        let student = TruthParamValue::object([(
+            "applicant_profile",
+            TruthParamValue::Text("student".to_string()),
+        )]);
+        let minor = TruthParamValue::object([(
+            "applicant_profile",
+            TruthParamValue::Text("minor".to_string()),
+        )]);
+        let global_id = semantic_rule_instance_id_for_scope_local("ES|tourist||BY", "FEE_ITEM", "fee", &global);
+        assert_eq!(global_id, semantic_rule_instance_id_local("ES|tourist||BY", "FEE_ITEM", "fee"));
+        let student_id = semantic_rule_instance_id_for_scope_local("ES|tourist||BY", "FEE_ITEM", "fee", &student);
+        let minor_id = semantic_rule_instance_id_for_scope_local("ES|tourist||BY", "FEE_ITEM", "fee", &minor);
+        assert_ne!(student_id, global_id);
+        assert_ne!(student_id, minor_id);
+        assert_ne!(minor_id, global_id);
+    }
+}
+
 const VERIFIED_RULES_COLLECTION: &str = "verified_rules_4";
 
 #[derive(Debug, Clone)]

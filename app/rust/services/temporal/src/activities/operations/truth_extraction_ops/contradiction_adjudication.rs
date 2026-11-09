@@ -204,8 +204,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     let mut decisions = Vec::new();
     let mut candidate_bindings =
         BTreeMap::<String, (&ValidatedTruthCandidateRecord, i64, i64)>::new();
+    // Scope is part of the identity: student and minor corroboration may not
+    // verify each other's assertions.
     let mut grouped_candidates =
-        BTreeMap::<(String, String), Vec<&ValidatedTruthCandidateRecord>>::new();
+        BTreeMap::<(String, String, String), Vec<&ValidatedTruthCandidateRecord>>::new();
     let mut fixed_states = BTreeMap::<i64, TruthAdjudicationSectionState>::new();
     let source_registry = load_source_registry_entries(&acts.pool)
         .await?
@@ -400,6 +402,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 .entry((
                     candidate.role.clone(),
                     candidate.concept_canonical_key.clone(),
+                    candidate.scope.stable_signature(),
                 ))
                 .or_default()
                 .push(candidate);
@@ -411,7 +414,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     // which is why the source sections must be consulted here as well.
     let held_identities =
         held_semantic_identities(&input.candidate_validation.sections, &decisions);
-    for ((role, concept), group) in grouped_candidates {
+    for ((role, concept, _scope), group) in grouped_candidates {
         let mut structured = group
             .iter()
             .map(|candidate| TruthStructuredCandidate {
