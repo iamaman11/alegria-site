@@ -77,6 +77,64 @@ pub struct TruthRuleCandidate {
     pub uncertainty_flags: Vec<String>,
 }
 
+impl TruthRuleCandidate {
+    /// The current verified/public models do not yet evaluate these extra
+    /// source-level predicates. Even when `scope` is {}, they require review.
+    pub fn has_unmodeled_applicability(&self) -> bool {
+        !self.applies_to_profiles.is_empty()
+            || self
+                .conditions_raw
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .exceptions_raw
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .alternatives
+                .as_array()
+                .is_some_and(|values| !values.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod source_scope_hint_tests {
+    use super::*;
+
+    fn candidate() -> TruthRuleCandidate {
+        TruthRuleCandidate {
+            params: json!({}),
+            scope: json!({}),
+            alternatives: json!([]),
+            ..TruthRuleCandidate::default()
+        }
+    }
+
+    #[test]
+    fn no_unmodeled_hints_for_unconditional_rule() {
+        assert!(!candidate().has_unmodeled_applicability());
+    }
+
+    #[test]
+    fn profile_target_conditions_exceptions_and_alternatives_need_review() {
+        let mut with_profile = candidate();
+        with_profile.applies_to_profiles = vec!["student".to_string()];
+        assert!(with_profile.has_unmodeled_applicability());
+
+        let mut with_condition = candidate();
+        with_condition.conditions_raw = Some("only for minors".to_string());
+        assert!(with_condition.has_unmodeled_applicability());
+
+        let mut with_exception = candidate();
+        with_exception.exceptions_raw = Some("except children".to_string());
+        assert!(with_exception.has_unmodeled_applicability());
+
+        let mut with_alternative = candidate();
+        with_alternative.alternatives = json!([{"document": "parental consent"}]);
+        assert!(with_alternative.has_unmodeled_applicability());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct TruthExtractionResponse {
