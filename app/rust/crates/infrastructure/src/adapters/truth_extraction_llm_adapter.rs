@@ -496,9 +496,8 @@ fn response_from_generated_text(
     // An empty result is valid only when the model explicitly returned
     // {"candidates":[]}. Invalid JSON, missing keys and malformed candidates
     // must never masquerade as an evidence-free successful extraction.
-    let value: Value = serde_json::from_str(text).map_err(|err| {
-        extraction_contract_error(&format!("invalid response JSON: {err}"))
-    })?;
+    let value: Value = serde_json::from_str(text)
+        .map_err(|err| extraction_contract_error(&format!("invalid response JSON: {err}")))?;
     let object = value
         .as_object()
         .ok_or_else(|| extraction_contract_error("expected a JSON object"))?;
@@ -515,13 +514,10 @@ fn response_from_generated_text(
     for (ordinal, raw_candidate) in raw_candidates.iter().enumerate() {
         let candidate: TruthRuleCandidate =
             serde_json::from_value(raw_candidate.clone()).map_err(|err| {
-                extraction_contract_error(&format!(
-                    "candidate {ordinal} has invalid fields: {err}"
-                ))
+                extraction_contract_error(&format!("candidate {ordinal} has invalid fields: {err}"))
             })?;
-        let validated = validate_candidate(input, candidate).map_err(|err| {
-            extraction_contract_error(&format!("candidate {ordinal}: {err}"))
-        })?;
+        let validated = validate_candidate(input, candidate)
+            .map_err(|err| extraction_contract_error(&format!("candidate {ordinal}: {err}")))?;
         candidates.push(validated);
     }
     Ok(TruthExtractionResponse {
@@ -760,15 +756,17 @@ mod tests {
 
         let response =
             response_from_generated_text(&input, "local_compatible", "stub-truth-model", &text);
-        assert!(response.is_err(), "invalid candidate must fail the whole extraction");
+        assert!(
+            response.is_err(),
+            "invalid candidate must fail the whole extraction"
+        );
     }
 
     #[test]
     fn explicit_empty_is_valid_but_malformed_json_is_not() {
         let input = sample_input();
-        let parse = |body: &str| {
-            response_from_generated_text(&input, "chat_manual", "chatgpt", body)
-        };
+        let parse =
+            |body: &str| response_from_generated_text(&input, "chat_manual", "chatgpt", body);
         assert!(parse(r#"{"candidates":[]}"#).unwrap().candidates.is_empty());
         assert!(parse("not JSON").is_err());
         assert!(parse("{}").is_err());
@@ -815,5 +813,4 @@ mod tests {
         bad_extra["verified"] = serde_json::json!(true);
         assert!(parse(bad_extra).is_err());
     }
-
 }
