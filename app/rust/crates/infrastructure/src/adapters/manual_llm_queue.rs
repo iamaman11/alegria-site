@@ -104,7 +104,7 @@ pub async fn next_editorial(
     let row = sqlx::query(
         "SELECT task_id, schema_version, input_sha256, operation, input_json
          FROM pipeline.manual_llm_jobs
-         WHERE state = 'pending' AND operation = $1
+         WHERE job_status = 'pending' AND operation = $1
          ORDER BY created_at, task_id LIMIT 1",
     )
     .bind(MANUAL_OPERATION)
@@ -132,7 +132,7 @@ pub async fn read_editorial_result(
 ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
     let (task_id, sha256, _) = job_fingerprint(pool, input).await?;
     let row = sqlx::query(
-        "SELECT input_sha256, state, output_json
+        "SELECT input_sha256, job_status, output_json
          FROM pipeline.manual_llm_jobs
          WHERE task_id = $1 AND run_id = $2 AND operation = $3",
     )
@@ -147,7 +147,7 @@ pub async fn read_editorial_result(
     if actual_hash != sha256 {
         return Err(validation("manual LLM task input hash changed"));
     }
-    let state: String = row.get("state");
+    let state: String = row.get("job_status");
     if state == "pending" {
         return Ok(pending_output());
     }
@@ -182,7 +182,7 @@ pub async fn submit_editorial(
     }
     let mut tx = pool.begin().await.map_err(db_error)?;
     let row = sqlx::query(
-        "SELECT run_id, input_sha256, input_json, state, response_json, model_key
+        "SELECT run_id, input_sha256, input_json, job_status, response_json, model_key
          FROM pipeline.manual_llm_jobs
          WHERE task_id = $1 AND operation = $2 AND schema_version = $3 FOR UPDATE",
     )
@@ -198,7 +198,7 @@ pub async fn submit_editorial(
         return Err(validation("manual LLM response input_sha256 mismatch"));
     }
     let run_id: String = row.get("run_id");
-    let state: String = row.get("state");
+    let state: String = row.get("job_status");
     if state == "completed" {
         let previous: Option<Value> = row.get("response_json");
         if previous.as_ref() != Some(&submission.response) {
@@ -239,7 +239,7 @@ pub async fn submit_editorial(
     sqlx::query(
         "UPDATE pipeline.manual_llm_jobs
          SET response_json = $2, output_json = $3, model_key = $4,
-             state = 'completed', updated_at = now()
+             job_status = 'completed', updated_at = now()
          WHERE task_id = $1 AND state = 'pending'",
     )
     .bind(&submission.task_id)
