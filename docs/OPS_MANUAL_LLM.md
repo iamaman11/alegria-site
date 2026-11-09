@@ -152,7 +152,9 @@ Independent source governance and evidence validation remain mandatory.
 When verified, the rule is saved under a distinct semantic identity and
 bound through the existing `verified.rule_instance_profiles` table. SEO
 support is returned only for the exact requested profile; unscoped read APIs
-exclude such rules. Unresolved profile conditions or exceptions block use.
+exclude such rules. Until the global `verified_rules_4` vector index has
+a certified applicant-profile filter, scoped rules are withheld from that
+unfiltered index. Unresolved profile conditions or exceptions block use.
 
 Any extra `scope` key or malformed profile, plus nonempty
 `applies_to_profiles`, `conditions_raw`, `exceptions_raw` or `alternatives`,
