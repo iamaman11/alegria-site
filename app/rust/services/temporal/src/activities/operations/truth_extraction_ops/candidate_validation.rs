@@ -227,14 +227,8 @@ pub(crate) async fn candidate_validation_impl(
                 });
             }
             for (ordinal, rule) in response.candidates.into_iter().enumerate() {
-                let params: TruthParamValue = serde_json::from_value(rule.params.clone())
-                    .map_err(|err| DomainError::ValidationFailure {
-                        message: format!("manual truth params malformed: {err}"),
-                    })?;
-                let scope: TruthParamValue = serde_json::from_value(rule.scope.clone())
-                    .map_err(|err| DomainError::ValidationFailure {
-                        message: format!("manual truth scope malformed: {err}"),
-                    })?;
+                let (params, scope) =
+                    infrastructure::adapters::manual_llm_queue::validated_candidate_values(&rule)?;
                 let uncertainty_flags = section_uncertainty_flags(&raw.content_md)
                     .into_iter()
                     .chain(rule.uncertainty_flags)
