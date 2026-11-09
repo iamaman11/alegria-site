@@ -68,6 +68,57 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name).ok().as_deref() == Some("true")
 }
 
+fn pinned_deployment_options(
+    enabled: bool,
+    build_id: &str,
+    deployment_name: &str,
+) -> anyhow::Result<Option<WorkerDeploymentOptions>> {
+    if !enabled {
+        return Ok(None);
+    }
+    if matches!(build_id.trim(), "" | "dev-local" | "docker-dev") {
+        anyhow::bail!("TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID");
+    }
+    if deployment_name.trim().is_empty() {
+        anyhow::bail!("TEMPORAL_DEPLOYMENT_NAME must not be empty");
+    }
+    Ok(Some(
+        WorkerDeploymentOptions::new(
+            WorkerDeploymentVersion::builder()
+                .deployment_name(deployment_name.to_owned())
+                .build_id(build_id.to_owned())
+                .build(),
+        )
+        .use_worker_versioning(true)
+        .default_versioning_behavior(VersioningBehavior::Pinned)
+        .build(),
+    ))
+}
+
+#[cfg(test)]
+mod deployment_version_tests {
+    use super::pinned_deployment_options;
+
+    #[test]
+    fn native_pin_requires_real_immutable_build_identity() {
+        for build_id in ["", "docker-dev", "dev-local", " "] {
+            assert!(pinned_deployment_options(true, build_id, "alegria-site").is_err());
+        }
+        assert!(pinned_deployment_options(true, "f00dead", "").is_err());
+        assert!(pinned_deployment_options(true, "f00dead", "alegria-site")
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn unversioned_legacy_workers_remain_explicitly_opt_out() {
+        assert!(pinned_deployment_options(false, "docker-dev", "")
+            .unwrap()
+            .is_none());
+    }
+}
+
+
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
 pub(crate) fn build_worker_options(
     task_queue: &str,
@@ -76,32 +127,15 @@ pub(crate) fn build_worker_options(
     let build_id = std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string());
     let profile = WorkerProfile::from_env();
     tracing::info!(task_queue, build_id = %build_id, worker_profile = ?profile, "building temporal worker options");
-    // Native Temporal Worker Deployment Versioning pins the entire workflow
-    // history to the code version that started it, rather than treating
-    // WORKER_BUILD_ID as a logging-only variable.
-    let deployment_options = if env_flag("TEMPORAL_WORKER_VERSIONING") {
-        if matches!(build_id.trim(), "" | "dev-local" | "docker-dev") {
-            anyhow::bail!("TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID");
-        }
-        let deployment_name = std::env::var("TEMPORAL_DEPLOYMENT_NAME")
-            .unwrap_or_else(|_| "alegria-site".to_string());
-        if deployment_name.trim().is_empty() {
-            anyhow::bail!("TEMPORAL_DEPLOYMENT_NAME must not be empty");
-        }
-        Some(
-            WorkerDeploymentOptions::new(
-                WorkerDeploymentVersion::builder()
-                    .deployment_name(deployment_name)
-                    .build_id(build_id.clone())
-                    .build(),
-            )
-            .use_worker_versioning(true)
-            .default_versioning_behavior(VersioningBehavior::Pinned)
-            .build(),
-        )
-    } else {
-        None
-    };
+    // Native Temporal pinning prevents new workflow histories being replayed
+    // by a different build. Legacy unversioned histories require a drain.
+    let deployment_name = std::env::var("TEMPORAL_DEPLOYMENT_NAME")
+        .unwrap_or_else(|_| "alegria-site".to_string());
+    let deployment_options = pinned_deployment_options(
+        env_flag("TEMPORAL_WORKER_VERSIONING"),
+        &build_id,
+        &deployment_name,
+    )?;
     let mut opts = WorkerOptions::new(task_queue)
         .maybe_deployment_options(deployment_options)
         .register_activities(acts)
