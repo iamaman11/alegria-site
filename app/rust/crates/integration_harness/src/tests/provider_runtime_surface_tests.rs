@@ -91,6 +91,29 @@
             .await
             .unwrap();
         assert_eq!(completion["choices"][0]["message"]["role"], "assistant");
+
+        // The two LLM operations must use distinct stubs with distinct JSON
+        // contracts: sections for editorial, candidates for truth extraction.
+        let truth_completion = reqwest::Client::new()
+            .post(format!("{}/v1/chat/completions", ctx.truth.base_url))
+            .send()
+            .await
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let truth_body = truth_completion["choices"][0]["message"]["content"]
+            .as_str()
+            .expect("truth stub text response");
+        assert_eq!(
+            serde_json::from_str::<Value>(truth_body).unwrap(),
+            serde_json::json!({"candidates": []})
+        );
+        let provider_env = ctx.provider_env();
+        assert_ne!(
+            provider_env["SEO_TRUTH_LLM_LOCAL_ENDPOINT"],
+            provider_env["SEO_LLM_LOCAL_ENDPOINT"]
+        );
     }
 
     fn sample_editorial_input() -> EditorialDraftGenerateInputPayload {
