@@ -122,11 +122,29 @@ fn release_file(
     relative_path: &str,
     route: &str,
 ) -> Result<ReleaseArtifact, String> {
-    let file = candidate.join(relative_path);
-    let meta = std::fs::symlink_metadata(&file)
-        .map_err(|err| format!("missing candidate artifact {relative_path}: {err}"))?;
-    if !meta.is_file() || meta.file_type().is_symlink() {
-        return Err(format!("candidate artifact is not a regular file: {relative_path}"));
+    // A regular leaf can still be reached through a symlinked parent.
+    // Walk the actual candidate tree so no approved artifact can read
+    // outside its immutable snapshot through an ancestor symlink.
+    let root_meta = std::fs::symlink_metadata(candidate)
+        .map_err(|err| format!("candidate release directory: {err}"))?;
+    if !root_meta.is_dir() || root_meta.file_type().is_symlink() {
+        return Err("candidate release root must be a real directory".into());
+    }
+    let mut file = candidate.to_path_buf();
+    let mut parts = ReleasePath::new(relative_path).components().peekable();
+    while let Some(part) = parts.next() {
+        let std::path::Component::Normal(name) = part else {
+            return Err("candidate artifact path is not relative and normalized".into());
+        };
+        file.push(name);
+        let meta = std::fs::symlink_metadata(&file)
+            .map_err(|err| format!("missing candidate artifact {relative_path}: {err}"))?;
+        if meta.file_type().is_symlink()
+            || (parts.peek().is_some() && !meta.is_dir())
+            || (parts.peek().is_none() && !meta.is_file())
+        {
+            return Err(format!("candidate artifact path is not a regular tree: {relative_path}"));
+        }
     }
     Ok(ReleaseArtifact {
         relative_path: relative_path.to_string(),
@@ -694,6 +712,24 @@ mod publication_release_tests {
         wrong["pages"][0]["canonical_url_path"] = serde_json::json!("/missing");
         std::fs::write(root.join("alegria-static-manifest.json"), wrong.to_string()).unwrap();
         assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_artifact_rejects_symlinked_parent_directory() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "alegria-candidate-parent-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let candidate = root.join("candidate");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&candidate).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("index.html"), b"external").unwrap();
+        symlink(&outside, candidate.join("topic")).unwrap();
+        assert!(release_file(&candidate, "topic/index.html", "/topic").is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
