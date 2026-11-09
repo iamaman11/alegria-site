@@ -84,6 +84,9 @@ python3 automation/check_allowed_boundary_points.py
 echo "[17/50] JSON boundary policy (deny-by-default)"
 python3 automation/check_json_boundary_policy.py
 
+echo "[17a/50] SQLite lockfile advisory must be unreachable in Rust feature graph"
+python3 automation/check_optional_sqlite_audit_scope.py
+
 echo "[18/50] Services/temporal boundary"
 python3 automation/check_services_temporal_boundary.py
 

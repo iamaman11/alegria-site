@@ -18,6 +18,7 @@ run_fast() {
   python3 automation/check_rust_adapter_boundaries.py
   python3 automation/check_rust_layer_isolation.py
   python3 automation/check_json_boundary_policy.py
+  python3 automation/check_optional_sqlite_audit_scope.py
 }
 
 run_full() {

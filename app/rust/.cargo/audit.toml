@@ -1,0 +1,8 @@
+# This is a lockfile-only false positive, NOT a runtime-vulnerability waiver.
+# A mandatory gate in BOTH automation/audit.sh fast and ci_verify.sh verifies:
+# - PostgreSQL-only workspace
+# - no SQLite in any normal/build/dev platform feature graph
+# - exact vulnerable locked version and exactly this single exception.
+# Remove this exception as soon as upstream SQLx allows libsqlite3-sys >=0.39.
+[advisories]
+ignore = ["RUSTSEC-2026-0459"]
