@@ -17,12 +17,7 @@ def main() -> int:
         "--features",
         "e2e",
         "manual_llm_queue_persists_validates_replays_and_recovers",
-        "--",
-        "--exact",
     ]
-    # The harness test is defined in the tests module (not a crate-root test).
-    command.pop()
-    command.pop()
     result = subprocess.run(
         command,
         cwd=ROOT / "app" / "rust",
