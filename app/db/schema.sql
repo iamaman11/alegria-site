@@ -1856,7 +1856,7 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     task_id TEXT PRIMARY KEY,
     schema_version INTEGER NOT NULL CHECK (schema_version = 1),
     run_id TEXT NOT NULL,
-    operation TEXT NOT NULL CHECK (operation = 'editorial_draft'),
+    operation TEXT NOT NULL CHECK (operation IN ('editorial_draft', 'truth_candidates')),
     input_sha256 TEXT NOT NULL CHECK (input_sha256 ~ '^[a-f0-9]{64}$'),
     input_json JSONB NOT NULL,
     job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed')),
