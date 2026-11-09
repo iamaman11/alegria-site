@@ -158,4 +158,3 @@ pub struct ResolutionLoopOutput {
     pub rejected_count: usize,
     pub sections: Vec<ResolutionLoopSectionState>,
 }
-
