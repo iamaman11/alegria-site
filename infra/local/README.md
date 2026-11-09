@@ -73,3 +73,14 @@ prints each container's actual source checkout; different historical SHAs
 may coexist for unchanged infrastructure services without a second project.
 An old source SHA whose full CI was cancelled is **not** considered green;
 it cannot be redeployed using this guarded process until properly certified.
+
+### Restore testing without risking existing data
+
+`infra/backups/restore_drill.sh` restores real business and Temporal backups
+to **temporary databases in the same existing PostgreSQL containers**.
+It compares table inventories and selected row counts, then drops only
+those temporary databases. It never drops schemas in the running
+`alegria` or `temporal` databases, never starts a second Docker project,
+and does not run fixture-seeding production gates. Separate
+`restore_business_pg.sh` and `restore_temporal_pg.sh` remain destructive
+recovery tools and are **not** a routine staging diagnostic.
