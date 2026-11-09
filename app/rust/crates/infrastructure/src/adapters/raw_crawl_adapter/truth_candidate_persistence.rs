@@ -219,7 +219,12 @@ async fn adjudicate_persisted_rule_candidates(
         // corroboration. Rejected proposals remain rejected.
         let structured: Vec<TruthStructuredCandidate> = group_candidates
             .iter()
-            .filter(|candidate| candidate.epistemic_status != "rejected")
+            .filter(|candidate| {
+                matches!(
+                    candidate.epistemic_status.as_str(),
+                    "structured" | "needs_hitl"
+                )
+            })
             .map(to_truth_structured_candidate)
             .collect();
         let needs_hitl_ids: Vec<String> = group_candidates
