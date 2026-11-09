@@ -113,18 +113,56 @@ async fn run_page_publish_phases(
                             "draft_assemble_required",
                         )));
                     };
-                    editorial_candidate = Some(
-                        ctx.start_activity(
+                    let request = EditorialDraftGenerateInputPayload {
+                        run_id: run_id.to_string(),
+                        request: draft_plan_ref.llm_request.clone(),
+                        provider_policy: "multi_provider:first_available".to_string(),
+                    };
+                    let mut generated: EditorialDraftGenerateOutputPayload = ctx
+                        .start_activity(
                             AlegriaActivities::run_editorial_draft_generate,
-                            EditorialDraftGenerateInputPayload {
-                                run_id: run_id.to_string(),
-                                request: draft_plan_ref.llm_request.clone(),
-                                provider_policy: "multi_provider:first_available".to_string(),
-                            },
+                            request.clone(),
                             db_opts(60),
                         )
-                        .await?,
-                    );
+                        .await?;
+                    if generated.status == "awaiting_manual" {
+                        // The activity has committed the manual task in PostgreSQL.
+                        // A signal only wakes us; a separate activity reads and
+                        // revalidates that this precise request is completed.
+                        ctx.state_mut(|s| {
+                            s.phase = format!("llm_wait:page:{}/{}", page_index + 1, page_total);
+                        });
+                        loop {
+                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready).await?;
+                            ctx.state_mut(|s| s.llm_result_ready = false);
+                            generated = ctx
+                                .start_activity(
+                                    AlegriaActivities::load_manual_editorial_result,
+                                    request.clone(),
+                                    db_opts(30),
+                                )
+                                .await?;
+                            if generated.status == "done" {
+                                break;
+                            }
+                            if generated.status != "awaiting_manual" {
+                                return Ok(PagePublishLoopOutcome::Blocked(
+                                    block_execution_plan_invariant(
+                                        ctx, run_id, "manual_llm_result_invalid",
+                                    ),
+                                ));
+                            }
+                        }
+                        ctx.state_mut(|s| {
+                            s.phase = phase_with_ordinal(key, page_index, page_total)
+                        });
+                    }
+                    if generated.candidate.is_none() {
+                        return Ok(PagePublishLoopOutcome::Blocked(
+                            block_execution_plan_invariant(ctx, run_id, "editorial_llm_candidate_missing"),
+                        ));
+                    }
+                    editorial_candidate = Some(generated);
                 }
                 SeoPhaseKey::DraftNormalize => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
