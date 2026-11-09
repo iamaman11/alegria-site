@@ -86,7 +86,9 @@ def classify_provider() -> tuple[str | None, str]:
     return None, "unconfigured"
 
 
-def certification_requirements(provider_live: str | None) -> dict[str, bool]:
+def certification_requirements(
+    provider_live: str | None, *, supervised_manual: bool = False,
+) -> dict[str, bool]:
     """One non-mutating policy shared by preview and launch.
 
     Only configuration presence is checked here. Actual provider capability,
@@ -97,7 +99,11 @@ def certification_requirements(provider_live: str | None) -> dict[str, bool]:
     return {
         "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
         "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
-        "production_llm_provider": provider_live is not None,
+        "production_llm_provider": provider_live is not None or (
+            supervised_manual
+            and os.environ.get("SEO_LLM_PROVIDER") == "chat_manual"
+            and os.environ.get("SEO_TRUTH_LLM_PROVIDER") == "chat_manual"
+        ),
         "dedicated_cloudflare_account": os.environ.get("CLOUDFLARE_ACCOUNT_ID") == EXPECTED_ACCOUNT,
         "dedicated_workers_dev_origin": os.environ.get("ALEGRIA_CERT_BASE_URL") == EXPECTED_ORIGIN,
         "publication_explicitly_requested": os.environ.get("ALEGRIA_CERT_PUBLISH") == "1",
@@ -335,7 +341,7 @@ def scenario_payload(
     return payload
 
 
-def clean_runtime_preflight() -> dict[str, Any]:
+def clean_runtime_preflight(*, supervised_manual: bool = False) -> dict[str, Any]:
     """Read-only launch readiness; never run fixture seeding or database restore.
 
     The canonical workflow itself enforces live provider, facts, graph and
@@ -357,7 +363,8 @@ def clean_runtime_preflight() -> dict[str, Any]:
         (
             "canonical_worker_configuration",
             ["docker", "compose", "exec", "-T", "-e",
-             f"ALEGRIA_EXPECTED_ORIGIN={os.environ['ALEGRIA_CERT_BASE_URL']}",
+             f"ALEGRIA_SUPERVISED_MANUAL={'1' if supervised_manual else '0'}",
+             "-e", f"ALEGRIA_EXPECTED_ORIGIN={os.environ['ALEGRIA_CERT_BASE_URL']}",
              "-e", f"ALEGRIA_EXPECTED_OUTPUT={os.environ['ALEGRIA_CERT_PUBLIC_OUTPUT_DIR']}",
              "-e", f"ALEGRIA_EXPECTED_ACCOUNT={EXPECTED_ACCOUNT}",
              "temporal-worker", "sh", "-ec", """
@@ -381,6 +388,9 @@ def clean_runtime_preflight() -> dict[str, Any]:
                     openai) test -n "${OPENAI_API_KEY:-}" ;;
                     anthropic) test -n "${ANTHROPIC_API_KEY:-}" ;;
                     gemini) test -n "${GEMINI_API_KEY:-}${GOOGLE_API_KEY:-}" ;;
+                    chat_manual)
+                        test "${ALEGRIA_SUPERVISED_MANUAL:-0}" = 1
+                        test "${SEO_TRUTH_LLM_PROVIDER:-}" = chat_manual ;;
                     *) exit 1 ;;
                 esac
              """],
@@ -407,7 +417,18 @@ def main() -> int:
         "--first-site", action="store_true",
         help="certify only the first real published site; never claim full R5",
     )
+    parser.add_argument(
+        "--manual", action="store_true",
+        help="supervised chat_manual first-site run; still requires real HITL and HTTPS",
+    )
     args = parser.parse_args()
+    if args.manual and not args.first_site:
+        parser.error("--manual is permitted only with --first-site")
+    if args.manual and (
+        os.environ.get("SEO_LLM_PROVIDER") != "chat_manual"
+        or os.environ.get("SEO_TRUTH_LLM_PROVIDER") != "chat_manual"
+    ):
+        parser.error("--manual requires both editorial and truth providers to be chat_manual")
     report_path = (
         RUNS_DIR / f"first_site_certification_{uuid4()}.json"
         if args.first_site else MANIFEST
@@ -418,7 +439,7 @@ def main() -> int:
 
     # A single configuration preflight is used for preview AND execution:
     # dry-run cannot report "ready" under weaker requirements.
-    required = certification_requirements(provider_live)
+    required = certification_requirements(provider_live, supervised_manual=args.manual)
     missing = [key for key, present in required.items() if not present]
     if args.dry_run:
         print("First-site configuration preview" if args.first_site else "R5 configuration preview")
@@ -428,7 +449,8 @@ def main() -> int:
         print(f"- missing={','.join(missing) if missing else 'none'}")
         if provider_kind == "chat_manual":
             print("- manual_mode=requires llm-next/llm-submit and separate CMS approval; "
-                  "not eligible for unattended live certification")
+                  + ("supervised first-site certification" if args.manual else
+                     "not eligible for unattended live certification"))
         print("- gate: real canonical Temporal workflow, no synthetic seeding or restore")
         print("- scenarios: fresh_scope" if args.first_site else
               "- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
@@ -459,7 +481,7 @@ def main() -> int:
     # Previous mutating smoke gates seeded synthetic facts, auto-approved
     # pages and restored PostgreSQL schemas. Product certification MUST use
     # only read-only readiness checks and genuine external editorial approval.
-    gate_results = clean_runtime_preflight()
+    gate_results = clean_runtime_preflight(supervised_manual=args.manual)
     if not gate_results or any(
         check["status"] != "PASS" for check in gate_results.values()
     ):
@@ -516,6 +538,7 @@ def main() -> int:
         ),
         "step": "FIRST_SITE" if args.first_site else "R5.Step4",
         "certification_scope": "first_site_only" if args.first_site else "full_r5",
+        "supervised_manual": args.manual,
         "evidence_status": "PASS",
         "failure_class": "none",
         "status_reason": (

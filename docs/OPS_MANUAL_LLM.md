@@ -133,6 +133,34 @@ gates remain mandatory. The Temporal `llm_result_ready` signal is a
   canonical command history changes. Drain/version workers using the
   existing release controls before deployment.
 
+## Supervised first-site certification (not unattended R5)
+
+The automated three-scenario R5 certificate still **requires an API LLM provider**.
+For the **first actual site only**, the existing certification script accepts
+an explicitly supervised manual path:
+
+```bash
+python3 automation/e2e_supersite_certification.py --first-site --manual --dry-run
+python3 automation/e2e_supersite_certification.py --first-site --manual
+```
+
+Both `SEO_LLM_PROVIDER` and `SEO_TRUTH_LLM_PROVIDER` must be `chat_manual`
+on the operator host **and** in the canonical Temporal worker. Real DataForSEO
+and Voyage credentials, the dedicated Cloudflare account, HTTPS origin, public
+output path and explicit `ALEGRIA_CERT_PUBLISH=1` remain mandatory; never
+insert placeholder credentials. The second command **waits** for the original
+Temporal workflow to complete. Keep it in a separate operator terminal while
+processing `llm-next` / `llm-submit` tasks. The worker image includes the
+existing `cli_tools` binary. The real CMS HITL decision is a separate human action.
+
+A stopped operator terminal does not cancel durable Temporal jobs. Before
+starting again, inspect the original run and outstanding manual/HITL tasks;
+do not blindly start another first-site run. Only after that workflow has
+actually completed does the original certification script verify its immutable
+release, all declared HTML files and independently served HTTPS bytes.
+A supervised ChatGPT response is **not** a human approval, and no synthetic
+facts can satisfy the final public gate.
+
 ## Required deployment compatibility checks
 
 Do not upgrade the canonical Temporal worker with pre-existing in-flight

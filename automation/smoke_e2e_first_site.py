@@ -44,6 +44,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         self, *, first_site: bool, codes: tuple[int, ...] = (0, 0, 0),
         scenario_failure: bool = False,
         env_overrides: dict[str, str] | None = None,
+        manual: bool = False,
     ) -> tuple[int, dict, object, object]:
         reports: list[tuple[Path, dict]] = []
 
@@ -58,10 +59,15 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
             return result
 
         argv = ["certification", "--first-site"] if first_site else ["certification"]
+        if manual:
+            argv.append("--manual")
         with (
             mock.patch.dict("os.environ", {**TEST_ENV, **(env_overrides or {})}, clear=True),
             mock.patch.object(sys, "argv", argv),
-            mock.patch.object(cert, "classify_provider", return_value=("openai", "openai")),
+            mock.patch.object(
+                cert, "classify_provider",
+                return_value=(None, "chat_manual") if manual else ("openai", "openai"),
+            ),
             mock.patch.object(cert, "clean_runtime_preflight", return_value={
                 "worker": {"status": "PASS"},
             }),
@@ -211,6 +217,104 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
             ]
         self.assertEqual(missing, ["DATAFORSEO_LOGIN"])
 
+
+    def test_supervised_chat_manual_first_site_preserves_public_acceptance(self) -> None:
+        code, manifest, runner, command = self.run_case(
+            first_site=True,
+            manual=True,
+            env_overrides={
+                "SEO_LLM_PROVIDER": "chat_manual",
+                "SEO_TRUTH_LLM_PROVIDER": "chat_manual",
+                "OPENAI_API_KEY": "",
+            },
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(manifest["provider_kind"], "chat_manual")
+        self.assertTrue(manifest["supervised_manual"])
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(command.call_count, 3)
+        self.assertEqual(manifest["public_acceptance"]["independent_https_readback"], "PASS")
+
+    def test_supervised_manual_dry_run_needs_no_stray_api_key(self) -> None:
+        env = dict(
+            TEST_ENV,
+            SEO_LLM_PROVIDER="chat_manual",
+            SEO_TRUTH_LLM_PROVIDER="chat_manual",
+            OPENAI_API_KEY="",
+        )
+        output = StringIO()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(
+                sys, "argv", ["certification", "--first-site", "--manual", "--dry-run"]
+            ),
+            mock.patch("sys.stdout", output),
+        ):
+            self.assertEqual(cert.main(), 0)
+        self.assertIn("- configuration=READY", output.getvalue())
+        self.assertIn("supervised first-site certification", output.getvalue())
+
+    def test_supervised_manual_requires_both_canonical_provider_settings(self) -> None:
+        env = dict(TEST_ENV, SEO_LLM_PROVIDER="chat_manual")
+        env.pop("SEO_TRUTH_LLM_PROVIDER", None)
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(
+                sys, "argv", ["certification", "--first-site", "--manual", "--dry-run"]
+            ),
+            mock.patch("sys.stderr", StringIO()),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                cert.main()
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_supervised_manual_cannot_weaken_full_r5(self) -> None:
+        env = dict(
+            TEST_ENV, SEO_LLM_PROVIDER="chat_manual",
+            SEO_TRUTH_LLM_PROVIDER="chat_manual",
+        )
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(sys, "argv", ["certification", "--manual", "--dry-run"]),
+            mock.patch("sys.stderr", StringIO()),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                cert.main()
+        self.assertEqual(raised.exception.code, 2)
+
+    def test_supervised_manual_still_rejects_wrong_cloudflare_account(self) -> None:
+        env = dict(
+            TEST_ENV, SEO_LLM_PROVIDER="chat_manual",
+            SEO_TRUTH_LLM_PROVIDER="chat_manual",
+            CLOUDFLARE_ACCOUNT_ID="foreign-account",
+        )
+        output = StringIO()
+        with (
+            mock.patch.dict("os.environ", env, clear=True),
+            mock.patch.object(
+                sys, "argv", ["certification", "--first-site", "--manual", "--dry-run"]
+            ),
+            mock.patch("sys.stdout", output),
+        ):
+            self.assertEqual(cert.main(), 2)
+        self.assertIn("dedicated_cloudflare_account", output.getvalue())
+
+    def test_supervised_manual_runtime_worker_preflight_is_explicit(self) -> None:
+        with (
+            mock.patch.dict("os.environ", TEST_ENV, clear=True),
+            mock.patch.object(
+                cert, "run_command",
+                return_value=subprocess.CompletedProcess(["check"], 0),
+            ) as run_command,
+        ):
+            checks = cert.clean_runtime_preflight(supervised_manual=True)
+        self.assertEqual(len(checks), 3)
+        self.assertTrue(all(v["status"] == "PASS" for v in checks.values()))
+        worker_command = run_command.call_args.args[0]
+        self.assertIn("ALEGRIA_SUPERVISED_MANUAL=1", worker_command)
+        shell_check = worker_command[-1]
+        self.assertIn("SEO_TRUTH_LLM_PROVIDER", shell_check)
+        self.assertIn("ALEGRIA_SUPERVISED_MANUAL", shell_check)
 
 if __name__ == "__main__":
     unittest.main()
