@@ -9,6 +9,7 @@ business_db="alegria_restore_drill_$stamp"
 temporal_db="temporal_restore_drill_$stamp"
 business_created=0
 temporal_created=0
+verified=0
 
 cleanup() {
   status=$?
@@ -16,11 +17,23 @@ cleanup() {
   set +e
   if [ "$temporal_created" = 1 ]; then
     docker exec alegria_postgres_temporal dropdb -U temporal --if-exists --force "$temporal_db" >/dev/null
-    [ $? -eq 0 ] || echo "[restore_drill][WARN] failed to remove temporary Temporal DB $temporal_db" >&2
+    if [ $? -ne 0 ]; then
+      echo "[restore_drill][FAIL] could not clean temporary Temporal DB $temporal_db" >&2
+      status=1
+    fi
   fi
   if [ "$business_created" = 1 ]; then
     docker exec alegria_postgres dropdb -U postgres --if-exists --force "$business_db" >/dev/null
-    [ $? -eq 0 ] || echo "[restore_drill][WARN] failed to remove temporary business DB $business_db" >&2
+    if [ $? -ne 0 ]; then
+      echo "[restore_drill][FAIL] could not clean temporary business DB $business_db" >&2
+      status=1
+    fi
+  fi
+  if [ "$status" -eq 0 ] && [ "$verified" -eq 1 ]; then
+    echo "[restore_drill] PASS: both isolated restores validated and temporary databases removed"
+  else
+    echo "[restore_drill][FAIL] incomplete isolated restore or cleanup" >&2
+    status=1
   fi
   exit "$status"
 }
@@ -72,4 +85,4 @@ compare "temporal_row_counts" \
   "$(read_sql alegria_postgres_temporal temporal temporal "$temporal_rows_sql")" \
   "$(read_sql alegria_postgres_temporal temporal "$temporal_db" "$temporal_rows_sql")"
 
-echo "[restore_drill] PASS: two isolated restores; live databases untouched"
+verified=1
