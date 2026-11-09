@@ -40,11 +40,11 @@ fn publication_files(
 ) -> Result<Vec<ReleaseArtifact>, String> {
     uuid::Uuid::parse_str(run_id)
         .map_err(|_| "publication run_id must be a valid canonical UUID".to_string())?;
-    let manifest_path = candidate.join("alegria-static-manifest.json");
-    let mut manifest: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(&manifest_path).map_err(|err| format!("candidate manifest: {err}"))?,
-    )
-    .map_err(|err| format!("candidate manifest JSON: {err}"))?;
+    // The manifest is an approved candidate artifact, so it must satisfy
+    // the same regular-file/no-symlink path rule as each HTML page.
+    let candidate_manifest = release_file(candidate, "alegria-static-manifest.json", "")?;
+    let mut manifest: serde_json::Value = serde_json::from_slice(&candidate_manifest.bytes)
+        .map_err(|err| format!("candidate manifest JSON: {err}"))?;
     if manifest.get("base_url").and_then(|v| v.as_str()) != Some(expected_origin) {
         return Err("candidate manifest origin differs from configured origin".into());
     }
@@ -712,6 +712,44 @@ mod publication_release_tests {
         wrong["pages"][0]["canonical_url_path"] = serde_json::json!("/missing");
         std::fs::write(root.join("alegria-static-manifest.json"), wrong.to_string()).unwrap();
         assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn candidate_manifest_cannot_be_an_external_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = std::env::temp_dir().join(format!(
+            "alegria-candidate-manifest-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let candidate = root.join("candidate");
+        std::fs::create_dir_all(&candidate).unwrap();
+        let outside = root.join("outside.json");
+        std::fs::write(
+            &outside,
+            serde_json::json!({
+                "base_url":"https://staging.alegria.by",
+                "page_count":1,
+                "pages":[{
+                    "page_node_key":"page",
+                    "revision_id":"revision",
+                    "status":"approved",
+                    "canonical_url_path":"/"
+                }]
+            }).to_string(),
+        ).unwrap();
+        std::fs::write(candidate.join("index.html"), b"page").unwrap();
+        std::fs::write(candidate.join("sitemap.xml"), b"sitemap").unwrap();
+        std::fs::write(candidate.join("robots.txt"), b"robots").unwrap();
+        symlink(&outside, candidate.join("alegria-static-manifest.json")).unwrap();
+        assert!(publication_files(
+            &candidate,
+            "page",
+            "revision",
+            "https://staging.alegria.by",
+            "9c337079-ae0b-4cb4-b052-bb3a0ca623c1",
+        ).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
