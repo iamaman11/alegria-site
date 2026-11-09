@@ -291,23 +291,41 @@ pub struct VerifiedRuleInstanceWrite {
     pub completeness_class: String,
 }
 
-/// Current verified-rule consumers have no general applicability interpreter.
-/// The final SQL writer must not lose a nonempty scope, even if a caller
-/// accidentally supplies a previously cached "verified" decision.
-fn unrestricted_verified_scope(scope: &Value) -> bool {
-    scope.as_object().is_some_and(|fields| fields.is_empty())
+/// One parser is shared by extraction validation and final SQL persistence.
+/// Unsupported scopes are never accepted as global facts.
+fn verified_scope_target(
+    scope: &Value,
+) -> Option<primitives::truth_candidates::TruthScopeTarget> {
+    let typed = serde_json::from_value::<primitives::truth_candidates::TruthParamValue>(
+        scope.clone(),
+    )
+    .ok()?;
+    primitives::truth_candidates::truth_scope_target(&typed)
 }
 
 pub async fn upsert_verified_rule_instance(
     pool: &PgPool,
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
-    // Final persistence is a trust boundary. A prior activity result must
-    // never turn a scoped candidate into a globally applicable verified rule.
-    if !unrestricted_verified_scope(&rule.scope) {
-        return Err(validation_failure(
-            "scoped verified rule requires an explicit applicability projection",
-        ));
+    // Validate the precise scope BEFORE any SQL mutation.
+    let target = verified_scope_target(&rule.scope).ok_or_else(|| {
+        validation_failure("verified rule scope is not a supported exact applicant_profile")
+    })?;
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
+        let registered: Option<String> = sqlx::query_scalar(
+            "SELECT profile_key FROM kb.applicant_profiles
+             WHERE profile_key = $1 AND status = 'active' FOR SHARE",
+        )
+        .bind(profile)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if registered.is_none() {
+            return Err(validation_failure(format!(
+                "unregistered or inactive verified applicant_profile: {profile}"
+            )));
+        }
     }
     sqlx::query(
         "INSERT INTO verified.rule_instances (
@@ -370,9 +388,30 @@ pub async fn upsert_verified_rule_instance(
     .bind("cutover@1")
     .bind("deterministic")
     .bind("truth_adjudication_runtime@1")
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
+
+    // Profiles are the existing canonical applicability projection.
+    // Reset stale bindings and write the exact verified target atomically.
+    sqlx::query("DELETE FROM verified.rule_instance_profiles WHERE rule_instance_id = $1")
+        .bind(&rule.rule_instance_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
+        sqlx::query(
+            "INSERT INTO verified.rule_instance_profiles
+             (rule_instance_id, profile_key, applicability, condition_json)
+             VALUES ($1, $2, 'applies', NULL)",
+        )
+        .bind(&rule.rule_instance_id)
+        .bind(profile)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -409,27 +448,36 @@ mod verified_scope_persistence_tests {
     use super::*;
 
     #[test]
-    fn final_sqlx_writer_only_accepts_explicit_empty_global_scope() {
-        assert!(unrestricted_verified_scope(&serde_json::json!({})));
+    fn final_sqlx_writer_accepts_only_exact_profile_or_global_scope() {
+        assert!(matches!(
+            verified_scope_target(&serde_json::json!({})),
+            Some(primitives::truth_candidates::TruthScopeTarget::Global)
+        ));
+        assert!(matches!(
+            verified_scope_target(&serde_json::json!({"applicant_profile":"student"})),
+            Some(primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(p))
+                if p == "student"
+        ));
         for scope in [
-            serde_json::json!({"applicant_profile":"student"}),
             serde_json::json!({"country":"ES"}),
+            serde_json::json!({"applicant_profile":"Student"}),
+            serde_json::json!({"applicant_profile":"student","age":17}),
             serde_json::json!(null),
             serde_json::json!([]),
         ] {
-            assert!(!unrestricted_verified_scope(&scope));
+            assert!(verified_scope_target(&scope).is_none());
         }
     }
 
     #[tokio::test]
-    async fn scoped_verified_writer_fails_before_attempting_sql() {
+    async fn unsupported_scoped_verified_writer_fails_before_attempting_sql() {
         // An intentionally unreachable database proves rejection belongs
         // to the SQLx write boundary rather than the orchestration layer.
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://postgres:unused@127.0.0.1:65534/unused")
             .expect("lazy pool");
         let rule = VerifiedRuleInstanceWrite {
-            scope: serde_json::json!({"applicant_profile": "student"}),
+            scope: serde_json::json!({"applicant_type": "student"}),
             rule_instance_id: "rule:scoped".to_string(),
             context_key: "ctx".to_string(),
             rule_type_key: "fee_item".to_string(),
