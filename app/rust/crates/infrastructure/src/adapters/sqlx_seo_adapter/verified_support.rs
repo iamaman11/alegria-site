@@ -201,8 +201,10 @@ async fn resolve_verified_fact_support(
                                 FROM verified.rule_instance_profiles rp_scope
                                 WHERE rp_scope.rule_instance_id = r.rule_instance_id
                                   AND rp_scope.profile_key = $2
-                                  AND rp_scope.applicability = 'applies'
-                                  AND rp_scope.condition_json IS NULL
+                                  -- Include non-applying/conditional bindings
+                                  -- for the resolver to report explicit
+                                  -- exclusion/HITL diagnostics, never to
+                                  -- publish them as applicable.
                             )
                         )
                     )
