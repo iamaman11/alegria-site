@@ -138,9 +138,25 @@ def main() -> int:
     if "User-agent:" not in robots:
         failures.append("robots.txt is malformed")
 
-    actual_html = {path.relative_to(output_dir) for path in output_dir.rglob("*.html")}
-    for unexpected in sorted(actual_html - set(expected_html)):
-        failures.append(f"unlisted HTML artifact in public output: {unexpected}")
+    # The canonical renderer currently emits only HTML routes, robots,
+    # sitemap and one private manifest. Do not allow an arbitrary extra
+    # JSON/TXT/JS file to hitchhike into a Cloudflare public deployment.
+    expected_files = set(expected_html) | {
+        Path("alegria-static-manifest.json"),
+        Path("sitemap.xml"),
+        Path("robots.txt"),
+    }
+    # Added only when a candidate is promoted to an immutable release.
+    private_marker = Path(".alegria_static_site")
+    for artifact in output_dir.rglob("*"):
+        relative = artifact.relative_to(output_dir)
+        if artifact.is_symlink():
+            failures.append(f"symlink in public artifact tree: {relative}")
+        elif artifact.is_file() and relative not in expected_files and relative != private_marker:
+            if artifact.suffix == ".html":
+                failures.append(f"unlisted HTML artifact in public output: {relative}")
+            else:
+                failures.append(f"unlisted file in public output: {relative}")
 
     for html_path in output_dir.rglob("*.html"):
         text = html_path.read_text(encoding="utf-8")
