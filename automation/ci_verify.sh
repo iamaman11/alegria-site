@@ -354,6 +354,9 @@ python3 automation/check_run_report_completeness.py
 echo "[42d/53] Run report completeness smoke"
 python3 automation/smoke_run_report_completeness.py
 
+echo "[42d1/53] Manual LLM PostgreSQL inbox lifecycle E2E"
+python3 automation/smoke_manual_llm_queue.py
+
 echo "[42e/53] Metrics contract"
 python3 automation/check_metrics_contract.py
 
