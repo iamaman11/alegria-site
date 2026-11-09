@@ -42,6 +42,8 @@ pub struct TruthAdjudicationCandidateDecision {
     pub role: String,
     pub concept_canonical_key: String,
     pub params: TruthParamValue,
+    #[serde(default)]
+    pub scope: TruthParamValue,
     pub source_key: String,
     pub source_tier: String,
     pub confidence: f64,
