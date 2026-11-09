@@ -93,6 +93,27 @@ def main() -> int:
         check(output, should_pass=False, reason="unlisted HTML artifact")
         (output / "extra/index.html").unlink()
 
+        # Non-HTML files were previously accepted and could be uploaded to
+        # public Cloudflare Static Assets without appearing in the manifest.
+        (output / "export.json").write_text('{"private":"must-not-publish"}', encoding="utf-8")
+        check(output, should_pass=False, reason="unlisted file in public output")
+        (output / "export.json").unlink()
+
+        (output / "extra/data.txt").write_text("unapproved", encoding="utf-8")
+        check(output, should_pass=False, reason="unlisted file in public output")
+        (output / "extra/data.txt").unlink()
+
+        # The immutable marker is intentionally private and is permitted only
+        # as release metadata; other hidden files are not.
+        (output / ".alegria_static_site").write_text(
+            "alegria_immutable_release@1\\n", encoding="utf-8"
+        )
+        check(output, should_pass=True)
+        (output / ".alegria_static_site").unlink()
+        (output / ".private").write_text("do not publish", encoding="utf-8")
+        check(output, should_pass=False, reason="unlisted file in public output")
+        (output / ".private").unlink()
+
         manifest_file = output / "alegria-static-manifest.json"
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
         manifest["page_count"] = 1
