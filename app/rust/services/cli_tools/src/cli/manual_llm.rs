@@ -35,8 +35,8 @@ async fn llm_submit(
         .context("typed manual LLM response object is required")?;
     let pool = llm_pool(database_url).await?;
     let (run_id, task_id) = if response.contains_key("sections") {
-        let submission: ManualLlmSubmission = serde_json::from_value(envelope)
-            .context("invalid strict editorial LLM response")?;
+        let submission: ManualLlmSubmission =
+            serde_json::from_value(envelope).context("invalid strict editorial LLM response")?;
         let run_id = manual_llm_queue::submit_editorial(&pool, &submission, model_key).await?;
         (run_id, submission.task_id)
     } else if response.contains_key("candidates") {
