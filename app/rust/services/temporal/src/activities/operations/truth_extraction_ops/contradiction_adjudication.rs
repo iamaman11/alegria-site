@@ -372,8 +372,18 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         }
     }
 
-    for ((_role, _concept), group) in grouped_candidates {
-        let structured = group
+    // A prior section may already be waiting for HITL. Its scoped claim
+    // must hold *all* global candidates with the same role/concept, even
+    // when those other candidates come from different raw sections.
+    let unresolved_identities = decisions
+        .iter()
+        .filter(|decision| decision.decision == "needs_hitl")
+        .map(|decision| {
+            (decision.role.clone(), decision.concept_canonical_key.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    for ((role, concept), group) in grouped_candidates {
+        let mut structured = group
             .iter()
             .map(|candidate| TruthStructuredCandidate {
                 rule_candidate_id: candidate.rule_candidate_id.clone(),
@@ -390,6 +400,13 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 epistemic_status: candidate.epistemic_status.clone(),
             })
             .collect::<Vec<_>>();
+        if unresolved_identities.contains(&(role, concept)) {
+            for candidate in &mut structured {
+                if candidate.epistemic_status == "structured" {
+                    candidate.epistemic_status = "needs_hitl".to_string();
+                }
+            }
+        }
         let adjudication =
             adjudicate_truth_candidates_with_governance(&structured, &source_registry);
         for decision in adjudication.decisions {
