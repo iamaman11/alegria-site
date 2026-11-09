@@ -1,6 +1,6 @@
 // The canonical contradiction gate must examine proposals from both
-// deterministic extraction and ChatGPT. The typed params are a BTreeMap-backed
-// value: Debug representation is stable for equal structured values.
+// deterministic extraction and ChatGPT. The typed params use the existing
+// canonical stable signature, never Rust Debug formatting.
 // No evidence/source attributes are accepted from the LLM here.
 fn validated_candidate_assertions(
     state: &CandidateValidationSectionState,
@@ -22,6 +22,40 @@ fn validated_candidate_assertions(
             },
         )
         .collect()
+}
+
+// A blocked source section does not produce adjudication decisions. Still,
+// its non-rejected claims are evidence about the same semantic identity:
+// a sibling section must not globally verify that fact behind the block.
+// Critical contradiction decisions are similarly a source-level veto.
+fn held_semantic_identities(
+    sections: &[CandidateValidationSectionState],
+    decisions: &[TruthAdjudicationCandidateDecision],
+) -> BTreeSet<(String, String)> {
+    let mut held = decisions
+        .iter()
+        .filter(|decision| {
+            decision.decision == "needs_hitl"
+                || decision.adjudication_reason == "contradiction_block"
+        })
+        .map(|decision| {
+            (
+                decision.role.clone(),
+                decision.concept_canonical_key.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for section in sections.iter().filter(|section| section.blocked_by_gate) {
+        for candidate in &section.candidates {
+            if candidate.epistemic_status != "rejected" {
+                held.insert((
+                    candidate.role.clone(),
+                    candidate.concept_canonical_key.clone(),
+                ));
+            }
+        }
+    }
+    held
 }
 
 pub(crate) async fn contradiction_gate_sweep_impl(
@@ -372,19 +406,13 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         }
     }
 
-    // A prior section may already be waiting for HITL. Its scoped claim
-    // must hold *all* global candidates with the same role/concept, even
-    // when those other candidates come from different raw sections.
-    let unresolved_identities = decisions
-        .iter()
-        .filter(|decision| decision.decision == "needs_hitl")
-        .map(|decision| {
-            (
-                decision.role.clone(),
-                decision.concept_canonical_key.clone(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
+    // Hold the semantic slot when ANY section is unresolved, critically
+    // contradictory or schema-blocked. Blocked sections have no decisions,
+    // which is why the source sections must be consulted here as well.
+    let held_identities = held_semantic_identities(
+        &input.candidate_validation.sections,
+        &decisions,
+    );
     for ((role, concept), group) in grouped_candidates {
         let mut structured = group
             .iter()
@@ -403,7 +431,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 epistemic_status: candidate.epistemic_status.clone(),
             })
             .collect::<Vec<_>>();
-        if unresolved_identities.contains(&(role, concept)) {
+        if held_identities.contains(&(role, concept)) {
             for candidate in &mut structured {
                 if candidate.epistemic_status == "structured" {
                     candidate.epistemic_status = "needs_hitl".to_string();
@@ -599,6 +627,60 @@ mod manual_candidate_contradiction_tests {
         assert!(!result.is_blocked);
         assert!(!result.needs_hitl);
         assert_eq!(result.conflict_count, 0);
+    }
+
+    #[test]
+    fn blocked_section_holds_sibling_semantic_identity_without_a_decision() {
+        let mut blocked = section(vec![manual_candidate(80, 0.95, "structured")]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[]);
+        assert!(held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())));
+        assert!(!held.contains(&("FEE_ITEM".to_string(), "other_fee".to_string())));
+    }
+
+    #[test]
+    fn rejected_candidate_in_blocked_section_does_not_poison_sibling() {
+        let mut blocked = section(vec![manual_candidate(80, 0.95, "rejected")]);
+        blocked.blocked_by_gate = true;
+        assert!(held_semantic_identities(&[blocked], &[]).is_empty());
+    }
+
+    #[test]
+    fn held_semantic_identity_stops_independent_global_corroboration() {
+        let mut blocked = section(vec![manual_candidate(120, 0.96, "structured")]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[]);
+        let mut siblings = vec![
+            TruthStructuredCandidate {
+                rule_candidate_id: "official-1".to_string(),
+                role: "FEE_ITEM".to_string(),
+                concept_canonical_key: "consular_fee".to_string(),
+                params: TruthParamValue::object([("amount", TruthParamValue::Integer(80))]),
+                epistemic_status: "structured".to_string(),
+                ..TruthStructuredCandidate::default()
+            },
+            TruthStructuredCandidate {
+                rule_candidate_id: "official-2".to_string(),
+                role: "FEE_ITEM".to_string(),
+                concept_canonical_key: "consular_fee".to_string(),
+                params: TruthParamValue::object([("amount", TruthParamValue::Integer(80))]),
+                epistemic_status: "structured".to_string(),
+                ..TruthStructuredCandidate::default()
+            },
+        ];
+        if held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())) {
+            for candidate in &mut siblings {
+                if candidate.epistemic_status == "structured" {
+                    candidate.epistemic_status = "needs_hitl".to_string();
+                }
+            }
+        }
+        let result = adjudicate_truth_candidates_with_governance(&siblings, &BTreeMap::new());
+        assert_eq!(result.verified_count, 0);
+        assert_eq!(result.needs_hitl_count, 2);
+        assert!(result.decisions.iter().all(|decision| {
+            decision.publish_admissibility != "admissible"
+        }));
     }
 
     #[test]
