@@ -380,3 +380,125 @@
             .await
             .is_err());
     }
+
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    #[serial]
+    async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically() {
+        use infrastructure::adapters::{
+            manual_llm_queue::{self, ManualTruthSubmission},
+            truth_extraction_llm_adapter::TruthExtractionInput,
+        };
+        let pg = PostgresHarness::start().await.unwrap();
+        let run_id = Uuid::new_v4().to_string();
+        let source = TruthExtractionInput {
+            context_key: "test:visa:by".to_string(),
+            raw_section_id: 42,
+            source_url: "https://example.gov/requirements".to_string(),
+            source_domain: "example.gov".to_string(),
+            heading_path: "Documents".to_string(),
+            raw_text: "Passport is required.".to_string(),
+            source_snapshot_hash: "confirmed-source-snapshot".to_string(),
+        };
+        manual_llm_queue::enqueue_truth(&pg.pool, &run_id, &source)
+            .await
+            .unwrap();
+        assert_eq!(
+            manual_llm_queue::truth_run_status(&pg.pool, &run_id)
+                .await
+                .unwrap(),
+            "awaiting_manual"
+        );
+        let job = manual_llm_queue::next_job(&pg.pool)
+            .await
+            .unwrap()
+            .expect("pending truth job");
+        assert_eq!(job.operation, "truth_candidates");
+        assert_eq!(job.payload["raw_section_id"], 42);
+        let candidate = serde_json::json!({
+            "role": "DOCUMENT_REQUIRED",
+            "concept_canonical_key": "passport",
+            "raw_mention": "Passport",
+            "params": {"subtype": "passport", "severity": "mandatory"},
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "alternatives": [],
+            "derivation_type": "direct",
+            "is_numeric": false,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 42,
+            "evidence_quote": "Passport is required.",
+            "span_start": 0,
+            "span_end": source.raw_text.len(),
+            "uncertainty_flags": []
+        });
+        let good = serde_json::json!({
+            "task_id": job.task_id,
+            "schema_version": 1,
+            "input_sha256": job.input_sha256,
+            "response": {"candidates": [candidate]}
+        });
+        let mut invented = good.clone();
+        invented["response"]["candidates"][0]["evidence_quote"] =
+            serde_json::json!("Fabricated government rule");
+        let wrong: ManualTruthSubmission = serde_json::from_value(invented).unwrap();
+        assert!(manual_llm_queue::submit_truth(&pg.pool, &wrong, "gpt-6")
+            .await
+            .is_err());
+        let mut wrong_id = good.clone();
+        wrong_id["input_sha256"] = serde_json::json!("invalid");
+        let wrong: ManualTruthSubmission = serde_json::from_value(wrong_id).unwrap();
+        assert!(manual_llm_queue::submit_truth(&pg.pool, &wrong, "gpt-6")
+            .await
+            .is_err());
+        let mut fake_approval = good.clone();
+        fake_approval["response"]["verified"] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<ManualTruthSubmission>(fake_approval).is_err()
+        );
+        assert_eq!(
+            manual_llm_queue::truth_run_status(&pg.pool, &run_id)
+                .await
+                .unwrap(),
+            "awaiting_manual"
+        );
+        let submitted: ManualTruthSubmission = serde_json::from_value(good.clone()).unwrap();
+        assert_eq!(
+            manual_llm_queue::submit_truth(&pg.pool, &submitted, "gpt-6")
+                .await
+                .unwrap(),
+            run_id
+        );
+        let reopened = sqlx::PgPool::connect(&pg.database_url).await.unwrap();
+        assert_eq!(
+            manual_llm_queue::truth_run_status(&reopened, &run_id)
+                .await
+                .unwrap(),
+            "done"
+        );
+        let results = manual_llm_queue::read_truth_results(&reopened, &run_id)
+            .await
+            .unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.candidates.len(), 1);
+        assert_eq!(results[0].1.provider_key, "chat_manual");
+        assert_eq!(results[0].0.raw_text, source.raw_text);
+        assert_eq!(
+            manual_llm_queue::submit_truth(&reopened, &submitted, "gpt-6")
+                .await
+                .unwrap(),
+            run_id
+        );
+        assert!(manual_llm_queue::submit_truth(&reopened, &submitted, "other-model")
+            .await
+            .is_err());
+        let mut changed = good;
+        changed["response"]["candidates"][0]["confidence"] = serde_json::json!(0.84);
+        let changed: ManualTruthSubmission = serde_json::from_value(changed).unwrap();
+        assert!(manual_llm_queue::submit_truth(&reopened, &changed, "gpt-6")
+            .await
+            .is_err());
+    }
