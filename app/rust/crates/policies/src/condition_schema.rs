@@ -10,13 +10,14 @@ pub fn validate_condition(condition: &ConditionExprV1) -> Result<()> {
             if condition.field.trim().is_empty() {
                 bail!("comparison condition requires a field");
             }
-            let value = condition.value.as_ref().and_then(|scalar| scalar.value.as_ref());
+            let value = condition
+                .value
+                .as_ref()
+                .and_then(|scalar| scalar.value.as_ref());
             if value.is_none() || !condition.args.is_empty() {
                 bail!("comparison condition requires a scalar value and no child expressions");
             }
-            if condition.op == "lt"
-                && !matches!(value, Some(scalar_value::Value::IntValue(_)))
-            {
+            if condition.op == "lt" && !matches!(value, Some(scalar_value::Value::IntValue(_))) {
                 bail!("lt condition requires an integer value");
             }
         }
