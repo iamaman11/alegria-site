@@ -16,7 +16,7 @@ fn validated_candidate_assertions(
                     state.section_id, candidate.role, candidate.concept_canonical_key
                 ),
                 predicate_key: "structured_params".to_string(),
-                value_normalized: format!("{:?}", candidate.params),
+                value_normalized: candidate.params.stable_signature(),
                 source_key: Some(candidate.source_key.clone()),
                 confidence: candidate.confidence as f32,
             },
