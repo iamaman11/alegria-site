@@ -27,7 +27,10 @@ pub(crate) async fn verified_truth_write_impl(
         // The existing verified-support consumer cannot apply arbitrary scope
         // predicates. Scoped evidence remains available as needs_hitl only.
         if decision.decision == "verified"
-            && !decision.scope.as_object().is_some_and(|fields| fields.is_empty())
+            && !decision
+                .scope
+                .as_object()
+                .is_some_and(|fields| fields.is_empty())
         {
             return Err(DomainError::ValidationFailure {
                 message: format!(

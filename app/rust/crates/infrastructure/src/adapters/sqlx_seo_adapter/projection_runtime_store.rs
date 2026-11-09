@@ -404,7 +404,6 @@ pub async fn demote_verified_rule_instance(
     Ok(())
 }
 
-
 #[cfg(test)]
 mod verified_scope_persistence_tests {
     use super::*;

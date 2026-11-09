@@ -81,9 +81,7 @@ pub(crate) fn build_worker_options(
     // WORKER_BUILD_ID as a logging-only variable.
     let deployment_options = if env_flag("TEMPORAL_WORKER_VERSIONING") {
         if matches!(build_id.trim(), "" | "dev-local" | "docker-dev") {
-            anyhow::bail!(
-                "TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID"
-            );
+            anyhow::bail!("TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID");
         }
         let deployment_name = std::env::var("TEMPORAL_DEPLOYMENT_NAME")
             .unwrap_or_else(|_| "alegria-site".to_string());
