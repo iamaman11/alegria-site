@@ -49,6 +49,11 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         &format!("{}/v1/chat/completions", editorial_stub.base_url),
     ));
     worker_env.insert("SEO_LLM_PROVIDER".to_string(), "chat_manual".to_string());
+    // The restarted process must retain the same Temporal Worker build identity.
+    worker_env.insert(
+        "WORKER_BUILD_ID".to_string(),
+        format!("manual-acceptance-{}", Uuid::new_v4()),
+    );
     worker_env.insert("VOYAGE_API_KEY".to_string(), "truth-cert-stub".to_string());
     worker_env.insert(
         "VOYAGE_API_BASE_URL".to_string(),
@@ -119,7 +124,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
 
     // Temporal history + PostgreSQL queue survive losing the worker process.
     drop(worker);
-    let worker = spawn_temporal_worker(&worker_env);
+    let mut worker = spawn_temporal_worker(&worker_env);
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert!(
         worker.child.try_wait().unwrap().is_none(),
@@ -145,11 +150,19 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             .expect("at least one required editorial section")
             .section_role
             .clone();
+        let supported_text = brief
+            .verified_support
+            .first()
+            .expect("manual editorial requires verified evidence")
+            .fragment_text
+            .clone();
+        let mut sections = serde_json::Map::new();
+        sections.insert(role, serde_json::json!(supported_text));
         let response = serde_json::json!({
             "task_id": job.task_id,
             "schema_version": job.schema_version,
             "input_sha256": job.input_sha256,
-            "response": {"sections": {role: "Evidence-grounded editorial text for human review."}}
+            "response": {"sections": sections}
         });
         serde_json::from_value::<ManualLlmSubmission>(response).unwrap()
     };
