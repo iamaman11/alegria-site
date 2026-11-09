@@ -485,3 +485,97 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     })
 }
 
+#[cfg(test)]
+mod manual_candidate_contradiction_tests {
+    use super::*;
+
+    fn manual_candidate(amount: i64, confidence: f64, status: &str) -> ValidatedTruthCandidateRecord {
+        ValidatedTruthCandidateRecord {
+            section_id: 41,
+            page_id: 11,
+            rule_candidate_id: format!("manual-proposal-{amount}"),
+            role: "FEE_ITEM".to_string(),
+            concept_canonical_key: "consular_fee".to_string(),
+            raw_mention: "consular fee".to_string(),
+            params: TruthParamValue::object([(
+                "amount", TruthParamValue::Integer(amount),
+            )]),
+            source_key: "https://example.gov/fees".to_string(),
+            source_tier: "government".to_string(),
+            confidence,
+            evidence_quote: "consular fee".to_string(),
+            span_start: 0,
+            span_end: 12,
+            source_snapshot_hash: "source-sha".to_string(),
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+            epistemic_status: status.to_string(),
+            issues: Vec::new(),
+        }
+    }
+
+    fn section(candidates: Vec<ValidatedTruthCandidateRecord>) -> CandidateValidationSectionState {
+        CandidateValidationSectionState {
+            section_id: 41,
+            page_id: 11,
+            candidates,
+            accepted_count: 0,
+            needs_hitl_count: 0,
+            rejected_count: 0,
+            blocked_by_gate: false,
+            status: "accepted".to_string(),
+        }
+    }
+
+    fn gate(state: &CandidateValidationSectionState) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+        seo_steps::contradiction_gate_step::execute(
+            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+                run_id: "manual-contradiction-test".to_string(),
+                facts: validated_candidate_assertions(state),
+            },
+        )
+    }
+
+    #[test]
+    fn conflicting_manual_candidates_cannot_bypass_critical_gate() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(120, 0.92, "structured"),
+        ]));
+        assert!(result.is_blocked);
+        assert!(result.needs_hitl);
+        assert_eq!(result.conflict_count, 1);
+        assert_eq!(result.conflicts[0].severity, "critical");
+    }
+
+    #[test]
+    fn noncritical_manual_conflicts_still_require_hitl() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.78, "structured"),
+            manual_candidate(120, 0.70, "structured"),
+        ]));
+        assert!(!result.is_blocked);
+        assert!(result.needs_hitl);
+        assert_eq!(result.conflict_count, 1);
+    }
+
+    #[test]
+    fn matching_manual_claims_do_not_create_conflict() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(80, 0.82, "structured"),
+        ]));
+        assert!(!result.is_blocked);
+        assert!(!result.needs_hitl);
+        assert_eq!(result.conflict_count, 0);
+    }
+
+    #[test]
+    fn rejected_candidate_is_not_allowed_to_manufacture_a_conflict() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(120, 0.99, "rejected"),
+        ]));
+        assert_eq!(result.conflict_count, 0);
+    }
+}
