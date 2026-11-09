@@ -126,7 +126,7 @@
 
         // Temporal history + PostgreSQL queue survive losing the worker process.
         drop(worker);
-        let worker = spawn_temporal_worker(&worker_env);
+        let mut worker = spawn_temporal_worker(&worker_env);
         tokio::time::sleep(Duration::from_secs(3)).await;
         assert!(
             worker.child.try_wait().unwrap().is_none(),
@@ -150,11 +150,16 @@
                 .find(|section| section.required)
                 .expect("at least one required editorial section")
                 .section_role.clone();
+            let mut sections = serde_json::Map::new();
+            sections.insert(
+                role,
+                serde_json::json!("Evidence-grounded editorial text for human review."),
+            );
             let response = serde_json::json!({
                 "task_id": job.task_id,
                 "schema_version": job.schema_version,
                 "input_sha256": job.input_sha256,
-                "response": {"sections": {role: "Evidence-grounded editorial text for human review."}}
+                "response": {"sections": sections}
             });
             serde_json::from_value::<ManualLlmSubmission>(response).unwrap()
         };
