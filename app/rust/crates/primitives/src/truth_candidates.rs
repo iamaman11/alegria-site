@@ -51,7 +51,7 @@ impl TruthParamValue {
         }
     }
 
-    fn stable_signature(&self) -> String {
+    pub fn stable_signature(&self) -> String {
         match self {
             Self::Null => "null".to_string(),
             Self::Bool(value) => format!("bool:{value}"),
