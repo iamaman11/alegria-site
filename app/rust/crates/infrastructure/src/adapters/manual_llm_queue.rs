@@ -6,6 +6,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use serde_json::Value;
 use sqlx::{types::Json, PgPool, Row};
 
@@ -21,13 +22,20 @@ pub struct ManualLlmJob<T> {
     pub payload: T,
 }
 
+/// Strict transport contract; neither this type nor its contents grant truth or publication status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ManualEditorialResponse {
+    pub sections: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ManualLlmSubmission {
     pub task_id: String,
     pub schema_version: i32,
     pub input_sha256: String,
-    pub response: Value,
+    pub response: ManualEditorialResponse,
 }
 
 fn db_error(err: sqlx::Error) -> DomainError {
@@ -202,7 +210,9 @@ pub async fn submit_editorial(
     let state: String = row.get("job_status");
     if state == "completed" {
         let previous: Option<Value> = row.get("response_json");
-        if previous.as_ref() != Some(&submission.response) {
+        let exact_response = serde_json::to_value(&submission.response)
+            .map_err(|err| validation(format!("encode manual response: {err}")))?;
+        if previous.as_ref() != Some(&exact_response) {
             return Err(validation(
                 "duplicate manual LLM submission changed the answer",
             ));
@@ -269,6 +279,12 @@ mod tests {
         let mut extra = good.clone();
         extra["verified"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ManualLlmSubmission>(extra).is_err());
+        let mut extra_response = good.clone();
+        extra_response["response"]["approved"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ManualLlmSubmission>(extra_response).is_err());
+        let mut bad_section = good.clone();
+        bad_section["response"]["sections"]["intro"] = serde_json::json!(123);
+        assert!(serde_json::from_value::<ManualLlmSubmission>(bad_section).is_err());
         let mut missing = good;
         missing.as_object_mut().unwrap().remove("input_sha256");
         assert!(serde_json::from_value::<ManualLlmSubmission>(missing).is_err());
