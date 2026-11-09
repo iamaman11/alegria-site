@@ -858,7 +858,10 @@ mod tests {
         candidate.params = obj(vec![
             ("amount", TruthParamValue::Integer(35)),
             ("currency", TruthParamValue::Text("EUR".to_string())),
-            ("conditions_key", TruthParamValue::Text("student-status".to_string())),
+            (
+                "conditions_key",
+                TruthParamValue::Text("student-status".to_string()),
+            ),
         ]);
         let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
         assert_eq!(result.epistemic_status, "needs_hitl");
