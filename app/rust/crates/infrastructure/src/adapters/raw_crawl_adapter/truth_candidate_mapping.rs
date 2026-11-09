@@ -10,6 +10,12 @@ async fn load_persisted_candidates_for_adjudication(
                 c.concept_canonical_key,
                 c.params,
                 c.scope,
+                -- Older persisted LLM proposals may carry limiting conditions
+                -- outside scope. Do not let them become universal facts.
+                (c.applies_to_profiles <> '[]'::jsonb
+                 OR btrim(c.conditions_raw) <> ''
+                 OR btrim(c.exceptions_raw) <> ''
+                 OR c.alternatives <> '[]'::jsonb) AS unresolved_applicability,
                 c.source_key,
                 coalesce(src.source_type, '') AS source_tier,
                 c.confidence::float8 AS confidence,
@@ -54,7 +60,10 @@ async fn load_persisted_candidates_for_adjudication(
             .try_get::<Json<Value>, _>("scope")
             .map(|value| value.0)
             .unwrap_or(Value::Null);
-        if !is_unrestricted_scope(&scope) && epistemic_status != "rejected" {
+        let unresolved_applicability: bool = row.get("unresolved_applicability");
+        if (!is_unrestricted_scope(&scope) || unresolved_applicability)
+            && epistemic_status != "rejected"
+        {
             epistemic_status = "needs_hitl".to_string();
             let candidate_id: String = row.get("rule_candidate_id");
             update_candidate_epistemic_status(pool, &candidate_id, &epistemic_status).await?;
