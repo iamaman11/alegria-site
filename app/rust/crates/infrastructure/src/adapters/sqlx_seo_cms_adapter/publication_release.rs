@@ -135,6 +135,78 @@ fn release_file(
     })
 }
 
+// Retrying publication must never reuse a modified or contaminated release.
+// The immutable directory is a complete approved file set, not merely a
+// directory where the expected files happen to exist.
+fn verify_existing_immutable_release(
+    release: &ReleasePath,
+    files: &[ReleaseArtifact],
+) -> Result<(), String> {
+    let root_meta = std::fs::symlink_metadata(release)
+        .map_err(|err| format!("inspect immutable release: {err}"))?;
+    if !root_meta.is_dir() || root_meta.file_type().is_symlink() {
+        return Err("immutable release must be a real directory".into());
+    }
+    let marker = release.join(".alegria_static_site");
+    let marker_meta = std::fs::symlink_metadata(&marker)
+        .map_err(|err| format!("immutable release marker: {err}"))?;
+    if !marker_meta.is_file()
+        || marker_meta.file_type().is_symlink()
+        || std::fs::read(marker).ok().as_deref() != Some(b"alegria_immutable_release@1\\n")
+    {
+        return Err("existing immutable release marker is invalid".into());
+    }
+    let mut expected = std::collections::HashSet::from([
+        std::path::PathBuf::from(".alegria_static_site"),
+    ]);
+    for file in files {
+        let relative = std::path::PathBuf::from(&file.relative_path);
+        if !expected.insert(relative.clone()) {
+            return Err("duplicate immutable release artifact".into());
+        }
+        let path = release.join(&relative);
+        let meta = std::fs::symlink_metadata(&path)
+            .map_err(|err| format!("immutable release artifact missing: {err}"))?;
+        if !meta.is_file()
+            || meta.file_type().is_symlink()
+            || std::fs::read(path).ok().as_deref() != Some(file.bytes.as_slice())
+        {
+            return Err("existing immutable release differs from approved candidate".into());
+        }
+    }
+    let mut stack = vec![release.to_path_buf()];
+    let mut actual = std::collections::HashSet::new();
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir)
+            .map_err(|err| format!("inspect immutable release tree: {err}"))?
+        {
+            let entry = entry.map_err(|err| format!("read immutable release entry: {err}"))?;
+            let meta = std::fs::symlink_metadata(entry.path())
+                .map_err(|err| format!("inspect immutable release entry: {err}"))?;
+            if meta.file_type().is_symlink() {
+                return Err("immutable release contains symlink".into());
+            }
+            if meta.is_dir() {
+                stack.push(entry.path());
+            } else if meta.is_file() {
+                actual.insert(
+                    entry
+                        .path()
+                        .strip_prefix(release)
+                        .map_err(|_| "immutable release path escaped root")?
+                        .to_path_buf(),
+                );
+            } else {
+                return Err("immutable release contains non-file artifact".into());
+            }
+        }
+    }
+    if actual != expected {
+        return Err("existing immutable release contains missing or unapproved files".into());
+    }
+    Ok(())
+}
+
 fn create_immutable_release(
     candidate: &ReleasePath,
     files: &[ReleaseArtifact],
@@ -146,13 +218,7 @@ fn create_immutable_release(
     );
     let release = base.join(&release_name);
     if release.exists() {
-        for file in files {
-            if std::fs::read(release.join(&file.relative_path)).ok().as_deref()
-                != Some(file.bytes.as_slice())
-            {
-                return Err("existing immutable release differs from approved candidate".into());
-            }
-        }
+        verify_existing_immutable_release(&release, files)?;
         return Ok(release);
     }
     let stage = base.join(format!(".{release_name}-{}", uuid::Uuid::new_v4()));
@@ -628,6 +694,33 @@ mod publication_release_tests {
         wrong["pages"][0]["canonical_url_path"] = serde_json::json!("/missing");
         std::fs::write(root.join("alegria-static-manifest.json"), wrong.to_string()).unwrap();
         assert!(publication_files(&root, "page", "revision", "https://staging.alegria.by", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1").is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn immutable_release_replay_rejects_extra_files_and_tampered_marker() {
+        let root = std::env::temp_dir().join(format!(
+            "alegria-release-replay-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let candidate = root.join("candidate");
+        std::fs::create_dir(&candidate).unwrap();
+        let files = vec![ReleaseArtifact {
+            relative_path: "index.html".into(),
+            public_route: "/".into(),
+            bytes: b"approved".to_vec(),
+        }];
+        let release = create_immutable_release(&candidate, &files).unwrap();
+        assert_eq!(create_immutable_release(&candidate, &files).unwrap(), release);
+
+        std::fs::write(release.join("obsolete.html"), b"not approved").unwrap();
+        assert!(create_immutable_release(&candidate, &files).is_err());
+        std::fs::remove_file(release.join("obsolete.html")).unwrap();
+
+        std::fs::write(release.join(".alegria_static_site"), b"tampered").unwrap();
+        assert!(create_immutable_release(&candidate, &files).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }
 
