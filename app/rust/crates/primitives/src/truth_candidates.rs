@@ -114,7 +114,9 @@ pub fn truth_scope_target(scope: &TruthParamValue) -> Option<TruthScopeTarget> {
     };
     if profile.is_empty()
         || profile.len() > 64
-        || !profile.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        || !profile
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
     {
         return None;
     }
@@ -800,21 +802,37 @@ mod tests {
             Some(TruthScopeTarget::ApplicantProfile("student".to_string()))
         );
         for invalid_scope in [
-            obj(vec![("applicant_type", TruthParamValue::Text("student".to_string()))]),
-            obj(vec![("applicant_profile", TruthParamValue::Text("Student".to_string()))]),
-            obj(vec![("applicant_profile", TruthParamValue::Text("".to_string()))]),
+            obj(vec![(
+                "applicant_type",
+                TruthParamValue::Text("student".to_string()),
+            )]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::Text("Student".to_string()),
+            )]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::Text("".to_string()),
+            )]),
             obj(vec![
-                ("applicant_profile", TruthParamValue::Text("student".to_string())),
+                (
+                    "applicant_profile",
+                    TruthParamValue::Text("student".to_string()),
+                ),
                 ("age", TruthParamValue::Integer(17)),
             ]),
-            obj(vec![("applicant_profile", TruthParamValue::List(Vec::new()))]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::List(Vec::new()),
+            )]),
         ] {
             candidate.scope = invalid_scope;
             let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
             assert_eq!(result.epistemic_status, "needs_hitl");
-            assert!(result.issues.iter().any(|issue| {
-                issue.code == "scoped_applicability_requires_hitl"
-            }));
+            assert!(result
+                .issues
+                .iter()
+                .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
         }
     }
 
