@@ -3,6 +3,7 @@ pub struct ContradictionGateSweepInput {
     pub run_id: String,
     pub raw_page_ids: Vec<i64>,
     pub procedural: ProceduralExtractionSweepOutput,
+    pub candidate_validation: CandidateValidationOutput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
