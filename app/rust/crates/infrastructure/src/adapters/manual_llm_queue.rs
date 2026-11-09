@@ -182,7 +182,7 @@ pub async fn submit_editorial(
     }
     let mut tx = pool.begin().await.map_err(db_error)?;
     let row = sqlx::query(
-        "SELECT run_id, input_sha256, input_json, state, response_json
+        "SELECT run_id, input_sha256, input_json, state, response_json, model_key
          FROM pipeline.manual_llm_jobs
          WHERE task_id = $1 AND operation = $2 AND schema_version = $3 FOR UPDATE",
     )
@@ -203,6 +203,10 @@ pub async fn submit_editorial(
         let previous: Option<Value> = row.get("response_json");
         if previous.as_ref() != Some(&submission.response) {
             return Err(validation("duplicate manual LLM submission changed the answer"));
+        }
+        let previous_model: Option<String> = row.get("model_key");
+        if previous_model.as_deref() != Some(model_key) {
+            return Err(validation("duplicate manual LLM submission changed model_key"));
         }
         tx.commit().await.map_err(db_error)?;
         return Ok(run_id); // Caller re-sends the Temporal signal after a crash.
