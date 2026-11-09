@@ -72,6 +72,7 @@ pub(crate) async fn verified_truth_write_impl(
                 concept_canonical_key: decision.concept_canonical_key.clone(),
                 evidence_quote: evidence_quote.clone(),
                 params: truth_param_value_to_json_local(&decision.params),
+                scope: truth_param_value_to_json_local(&decision.scope),
                 severity: severity.to_string(),
                 is_numeric,
                 is_incomplete: decision.completeness_class != "complete",
@@ -92,6 +93,14 @@ pub(crate) async fn verified_truth_write_impl(
         let changed_key = format!("verified.rule_instance:{rule_instance_id}");
         match decision.decision.as_str() {
             "verified" => {
+                if !decision.scope.as_object().is_some_and(|fields| fields.is_empty()) {
+                    return Err(DomainError::ValidationFailure {
+                        message: format!(
+                            "scoped candidate {} must not be persisted as globally verified",
+                            decision.rule_candidate_id,
+                        ),
+                    });
+                }
                 let role_type = decision.role.to_ascii_lowercase();
                 sqlx_seo_adapter::upsert_verified_rule_instance(
                     &acts.pool,
@@ -102,6 +111,7 @@ pub(crate) async fn verified_truth_write_impl(
                         concept_key: decision.concept_canonical_key.clone(),
                         role_type: role_type.clone(),
                         params: truth_param_value_to_json_local(&decision.params),
+                        scope: truth_param_value_to_json_local(&decision.scope),
                         source_key: decision.source_key.clone(),
                         confidence: decision.confidence,
                         rule_candidate_id: decision.rule_candidate_id.clone(),

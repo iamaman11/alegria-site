@@ -190,6 +190,7 @@ pub struct VerifiedTruthCandidateWrite {
     pub concept_canonical_key: String,
     pub evidence_quote: String,
     pub params: Value,
+    pub scope: Value,
     pub severity: String,
     pub is_numeric: bool,
     pub is_incomplete: bool,
@@ -215,7 +216,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
              epistemic_status, uncertainty_flags
          )
          VALUES (
-             $1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8, '[]'::jsonb,
+             $1, $2, $3, $4, $5, $6, $7, $19, $8, '[]'::jsonb,
              '', '', '[]'::jsonb, '', 'direct', $9, false, $10, $11, $12,
              $13, $14, $15, $16, $17, 'deterministic', 'cutover-runtime', 'cutover@1', $18, '[]'::jsonb
          )
@@ -224,6 +225,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
              concept_canonical_key = EXCLUDED.concept_canonical_key,
              raw_mention = EXCLUDED.raw_mention,
              params = EXCLUDED.params,
+             scope = EXCLUDED.scope,
              severity = EXCLUDED.severity,
              is_numeric = EXCLUDED.is_numeric,
              is_incomplete = EXCLUDED.is_incomplete,
@@ -258,6 +260,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.source_key)
     .bind(&candidate.source_snapshot_hash)
     .bind(&candidate.epistemic_status)
+    .bind(Json::<Value>(candidate.scope.clone()))
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -266,6 +269,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
 
 #[derive(Debug, Clone)]
 pub struct VerifiedRuleInstanceWrite {
+    pub scope: Value,
     pub rule_instance_id: String,
     pub context_key: String,
     pub rule_type_key: String,
@@ -291,6 +295,13 @@ pub async fn upsert_verified_rule_instance(
     pool: &PgPool,
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
+    // Final persistence is a trust boundary. A prior activity result must
+    // never turn a scoped candidate into a globally applicable verified rule.
+    if rule.scope != serde_json::json!({}) {
+        return Err(validation_failure(
+            "scoped verified rule requires an explicit applicability projection",
+        ));
+    }
     sqlx::query(
         "INSERT INTO verified.rule_instances (
              rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status,
