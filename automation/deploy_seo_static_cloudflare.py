@@ -101,12 +101,27 @@ def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
         output_assets = CLOUD_CONFIG / ".cloudflare/output/v0/workers/default/assets"
         if not output_assets.is_dir():
             return False
-        # Vite/Cloudflare must preserve the exact approved bytes, not rewrite HTML.
-        for source in public.rglob("*"):
-            if source.is_file():
-                built_file = output_assets / source.relative_to(public)
-                if not built_file.is_file() or built_file.read_bytes() != source.read_bytes():
-                    return False
+        # Only the exact approved asset set may be published. A stale build
+        # output can contain extra routes even when every expected file matches.
+        # Reject symlinks as well as missing, altered or unexpected assets.
+        source_files = {
+            source.relative_to(public)
+            for source in public.rglob("*")
+            if source.is_file()
+        }
+        built_entries = list(output_assets.rglob("*"))
+        if any(entry.is_symlink() for entry in built_entries):
+            return False
+        built_files = {
+            entry.relative_to(output_assets)
+            for entry in built_entries
+            if entry.is_file()
+        }
+        if source_files != built_files:
+            return False
+        for relative in source_files:
+            if (output_assets / relative).read_bytes() != (public / relative).read_bytes():
+                return False
         if (output_assets / "alegria-static-manifest.json").exists() or (
             output_assets / ".alegria_static_site"
         ).exists():
