@@ -269,3 +269,114 @@
         assert!(env.contains_key("TEMPORAL_URL"));
         assert!(env.contains_key("TEMPORAL_NAMESPACE"));
     }
+
+
+    // One real PostgreSQL inbox, no second workflow or mock approval path.
+    // The ChatGPT output is typed draft text, never a truth/publication decision.
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    #[serial]
+    async fn manual_llm_queue_persists_validates_replays_and_recovers() {
+        use infrastructure::adapters::manual_llm_queue::{
+            self, ManualLlmSubmission,
+        };
+
+        let pg = PostgresHarness::start().await.unwrap();
+        let mut input = sample_editorial_input();
+        input.run_id = Uuid::new_v4().to_string();
+        input.request.as_mut().unwrap().run_id = input.run_id.clone();
+        input.provider_policy = "chat_manual".to_string();
+
+        let pending = manual_llm_queue::enqueue_editorial(&pg.pool, &input)
+            .await
+            .unwrap();
+        assert_eq!(pending.status, "awaiting_manual");
+        assert!(pending.candidate.is_none());
+        let job = manual_llm_queue::next_editorial(&pg.pool)
+            .await
+            .unwrap()
+            .expect("pending manual job");
+        assert_eq!(job.operation, "editorial_draft");
+        assert_eq!(job.payload.run_id, input.run_id);
+        assert_eq!(job.input_sha256.len(), 64);
+
+        let payload = serde_json::json!({
+            "task_id": job.task_id,
+            "schema_version": job.schema_version,
+            "input_sha256": job.input_sha256,
+            "response": {
+                "sections": {
+                    "overview": "A passport is required according to verified source material."
+                }
+            }
+        });
+        let mut bad_hash = payload.clone();
+        bad_hash["input_sha256"] = serde_json::json!("wrong-hash");
+        let reject: ManualLlmSubmission = serde_json::from_value(bad_hash).unwrap();
+        assert!(manual_llm_queue::submit_editorial(&pg.pool, &reject, "gpt-6")
+            .await
+            .is_err());
+
+        let mut bad_role = payload.clone();
+        bad_role["response"]["sections"] = serde_json::json!({
+            "human_approval": "approved"
+        });
+        let reject: ManualLlmSubmission = serde_json::from_value(bad_role).unwrap();
+        assert!(manual_llm_queue::submit_editorial(&pg.pool, &reject, "gpt-6")
+            .await
+            .is_err());
+
+        let mut bad_envelope = payload.clone();
+        bad_envelope["response"]["publish_approved"] = serde_json::json!(true);
+        assert!(
+            serde_json::from_value::<ManualLlmSubmission>(bad_envelope).is_err(),
+            "LLM must not be able to approve publication"
+        );
+        assert_eq!(
+            manual_llm_queue::read_editorial_result(&pg.pool, &input)
+                .await
+                .unwrap()
+                .status,
+            "awaiting_manual"
+        );
+
+        let good: ManualLlmSubmission = serde_json::from_value(payload.clone()).unwrap();
+        let run_id = manual_llm_queue::submit_editorial(&pg.pool, &good, "gpt-6")
+            .await
+            .unwrap();
+        assert_eq!(run_id, input.run_id);
+
+        // Simulate a CLI restart: read through a new physical DB connection.
+        let reopened = sqlx::PgPool::connect(&pg.database_url).await.unwrap();
+        let completed = manual_llm_queue::read_editorial_result(&reopened, &input)
+            .await
+            .unwrap();
+        assert_eq!(completed.status, "done");
+        assert_eq!(completed.provider_key, "chat_manual");
+        assert_eq!(completed.model_key, "gpt-6");
+        assert!(completed.candidate.unwrap().sections.iter().any(|section| {
+            section.section_role == "overview"
+                && section.body_markdown.contains("A passport is required")
+        }));
+        assert!(manual_llm_queue::next_editorial(&reopened)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Retrying after a DB commit but before Temporal signaling is safe.
+        assert_eq!(
+            manual_llm_queue::submit_editorial(&reopened, &good, "gpt-6")
+                .await
+                .unwrap(),
+            input.run_id
+        );
+        assert!(manual_llm_queue::submit_editorial(&reopened, &good, "other-model")
+            .await
+            .is_err());
+        let mut altered = payload;
+        altered["response"]["sections"]["overview"] = serde_json::json!("Changed answer");
+        let altered: ManualLlmSubmission = serde_json::from_value(altered).unwrap();
+        assert!(manual_llm_queue::submit_editorial(&reopened, &altered, "gpt-6")
+            .await
+            .is_err());
+    }
