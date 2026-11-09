@@ -67,18 +67,68 @@ A different answer or model for a completed task is rejected.
 The signal **never** approves publication. The existing editorial normalization,
 content validation, draft QA, CMS review and distinct human approval path remain.
 
+## Manual truth proposals — the same PostgreSQL inbox
+
+For supervised candidate extraction set `SEO_TRUTH_LLM_PROVIDER=chat_manual`
+on the canonical Temporal worker. This setting is independent of
+`SEO_LLM_PROVIDER=chat_manual` for editorial generation; either or both
+operations may use manual mode. There is no new server or workflow.
+
+The existing canonical workflow prepares one `truth_candidates` task for
+each admissible persisted raw section **after** semantic/sectioning gates and
+**before** candidate validation. `llm-next` returns the oldest pending task
+across both operations. For truth tasks the `payload` includes exact
+`raw_text`, `raw_section_id`, source URL, context and source snapshot hash.
+The ChatGPT response must refer to this exact source, not to memory.
+
+Submit using the same `llm-submit` CLI, envelope and model key. A truth
+response has this strictly typed shape:
+
+```json
+{
+  "task_id": "<unchanged task_id>",
+  "schema_version": 1,
+  "input_sha256": "<unchanged input_sha256>",
+  "response": {
+    "candidates": []
+  }
+}
+```
+
+The empty array is only valid when no supported claim can be extracted.
+When claims exist, each entry must use the existing
+`TruthRuleCandidate` contract: `role`, `concept_canonical_key`,
+`raw_mention`, `params`, `scope`, `severity`,
+`applies_to_profiles`, `alternatives`, `derivation_type`,
+`is_numeric`, `is_range`, `is_incomplete`, `confidence`,
+`evidence_section_id`, `evidence_quote`, `span_start`,
+`span_end`, `uncertainty_flags` (plus optional
+`conditions_raw`, `exceptions_raw` and `modality_raw`).
+All spans are **UTF-8 byte offsets** into the provided `raw_text`, not
+Unicode character positions. `evidence_quote` must match the exact
+substring; `evidence_section_id` must match the original section. Unknown
+keys such as `verified` or `approved` are rejected.
+
+Only complete, validated results become candidates in the original
+`candidate_validation` stage. The actual source URL/tier and snapshot are
+read back from the application's persisted raw evidence and are **never**
+taken from ChatGPT. The existing ontology/schema, uncertainty, governance,
+corroboration, contradiction/adjudication, verified truth write and release
+gates remain mandatory. The Temporal `llm_result_ready` signal is a
+**wake-up only**, not an approval.
+
 ## Acceptance status and limitations
 
-- The current manual adapter handles **canonical editorial generation**.
-- Existing provider-independent truth extraction JSON parsing is hardened to
-  reject malformed evidence instead of silently producing an empty successful
-  result. The compatibility `raw_knowledge_ingestion` is **not** the canonical
-  truth ingestion path, so a manual truth extraction adapter is **not yet wired
-  into canonical knowledge verification**. Do not claim full two-operation
-  implementation or real first-site acceptance from this PR.
-- CI must compile this branch, test invalid hashes/schema versions, duplicate
-  responses and replay, and run an exact Temporal + PostgreSQL E2E before merging.
-  No production workflow-history replay safety is asserted: adding activities
-  and commands requires standard worker versioning/drain for in-flight histories.
-- A working DataForSEO/Voyage pipeline, independently verified source claims
-  and human approval remain required for the first real published site.
+- PostgreSQL queue semantics (identity, exact evidence, duplicates, wrong
+  hash, unknown approval fields, restart/reconnect) and actual Temporal
+  restart are tested in the existing integration harness. Do not claim
+  current HEAD passes until its exact CI runs finish.
+- This is **candidate extraction**, not independent confirmation of facts.
+  Empty answers, withheld source claims and unavailable required external
+  providers cannot be promoted to verified knowledge.
+- Live DataForSEO / Voyage, scope-specific real provenance, completeness of
+  actual graph/retrieval projections, human CMS approval, production origin
+  and independent HTTPS readback are still required for first-site GO.
+- Older in-flight workflow histories are not claimed replay-safe when the
+  canonical command history changes. Drain/version workers using the
+  existing release controls before deployment.
