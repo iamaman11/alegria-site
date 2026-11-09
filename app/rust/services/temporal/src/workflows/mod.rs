@@ -118,7 +118,6 @@ mod deployment_version_tests {
     }
 }
 
-
 /// Собирает WorkerOptions со всеми зарегистрированными workflows и activities.
 pub(crate) fn build_worker_options(
     task_queue: &str,
@@ -129,8 +128,8 @@ pub(crate) fn build_worker_options(
     tracing::info!(task_queue, build_id = %build_id, worker_profile = ?profile, "building temporal worker options");
     // Native Temporal pinning prevents new workflow histories being replayed
     // by a different build. Legacy unversioned histories require a drain.
-    let deployment_name = std::env::var("TEMPORAL_DEPLOYMENT_NAME")
-        .unwrap_or_else(|_| "alegria-site".to_string());
+    let deployment_name =
+        std::env::var("TEMPORAL_DEPLOYMENT_NAME").unwrap_or_else(|_| "alegria-site".to_string());
     let deployment_options = pinned_deployment_options(
         env_flag("TEMPORAL_WORKER_VERSIONING"),
         &build_id,
