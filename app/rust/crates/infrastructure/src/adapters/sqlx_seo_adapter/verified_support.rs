@@ -189,15 +189,19 @@ async fn resolve_verified_fact_support(
                     AND c.alternatives = '[]'::jsonb
                     AND (
                         c.scope = '{}'::jsonb
-                        OR EXISTS (
-                            SELECT 1
-                            FROM verified.rule_instance_profiles rp_scope
-                            WHERE rp_scope.rule_instance_id = r.rule_instance_id
-                              AND rp_scope.applicability = 'applies'
-                              AND rp_scope.condition_json IS NULL
-                              AND c.scope = jsonb_build_object(
-                                  'applicant_profile', rp_scope.profile_key
-                              )
+                        OR (
+                            -- The requested profile itself must match the
+                            -- original verified source scope, not merely
+                            -- some other profile binding on the same rule.
+                            c.scope = jsonb_build_object('applicant_profile', $2)
+                            AND EXISTS (
+                                SELECT 1
+                                FROM verified.rule_instance_profiles rp_scope
+                                WHERE rp_scope.rule_instance_id = r.rule_instance_id
+                                  AND rp_scope.profile_key = $2
+                                  AND rp_scope.applicability = 'applies'
+                                  AND rp_scope.condition_json IS NULL
+                            )
                         )
                     )
               )
