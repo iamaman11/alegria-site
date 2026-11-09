@@ -84,3 +84,9 @@ those temporary databases. It never drops schemas in the running
 and does not run fixture-seeding production gates. Separate
 `restore_business_pg.sh` and `restore_temporal_pg.sh` remain destructive
 recovery tools and are **not** a routine staging diagnostic.
+
+**Destructive disaster recovery** is deliberately separate from the isolated
+drill. The two `restore_*_pg.sh` commands reject invocation without
+`ALEGRIA_ALLOW_DESTRUCTIVE_RESTORE=YES` and a nonempty dump file.
+Only use that explicit confirmation in a supervised maintenance/incident
+procedure with a separate verified backup, never in a routine chat health check.

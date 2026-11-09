@@ -41,6 +41,11 @@ def main() -> int:
     if "restore_business_pg.sh" in drill or "restore_temporal_pg.sh" in drill:
         failures.append("restore drill must never call destructive live-schema restoration")
 
+    for name in ("restore_business_pg.sh", "restore_temporal_pg.sh"):
+        content = (ROOT / "infra" / "backups" / name).read_text(encoding="utf-8")
+        if 'ALEGRIA_ALLOW_DESTRUCTIVE_RESTORE' not in content:
+            failures.append(f"live-schema restoration lacks explicit operator confirmation: {name}")
+
     if failures:
         print("BACKUP_RESTORE_LAYOUT: FAILED")
         for failure in failures:
