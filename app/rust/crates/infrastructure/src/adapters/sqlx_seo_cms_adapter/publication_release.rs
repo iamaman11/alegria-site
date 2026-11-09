@@ -152,7 +152,7 @@ fn verify_existing_immutable_release(
         .map_err(|err| format!("immutable release marker: {err}"))?;
     if !marker_meta.is_file()
         || marker_meta.file_type().is_symlink()
-        || std::fs::read(marker).ok().as_deref() != Some(b"alegria_immutable_release@1\\n")
+        || std::fs::read(marker).ok().as_deref() != Some(b"alegria_immutable_release@1\n")
     {
         return Err("existing immutable release marker is invalid".into());
     }
