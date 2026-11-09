@@ -392,18 +392,32 @@ pub async fn upsert_verified_rule_instance(
     .await
     .map_err(classify_sqlx)?;
 
-    // Profiles are the existing canonical applicability projection.
-    // Reset stale bindings and write the exact verified target atomically.
-    sqlx::query("DELETE FROM verified.rule_instance_profiles WHERE rule_instance_id = $1")
+    // Never erase curated profile restrictions while refreshing a verified
+    // rule. A global rule may already have explicit human-defined overrides.
+    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
+        let has_conflicting_binding: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM verified.rule_instance_profiles
+                 WHERE rule_instance_id = $1
+                   AND (profile_key <> $2 OR applicability <> 'applies'
+                        OR condition_json IS NOT NULL)
+             )",
+        )
         .bind(&rule.rule_instance_id)
-        .execute(&mut *tx)
+        .bind(&profile)
+        .fetch_one(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
-    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
+        if has_conflicting_binding {
+            return Err(validation_failure(
+                "existing curated profile binding conflicts with verified scope",
+            ));
+        }
         sqlx::query(
             "INSERT INTO verified.rule_instance_profiles
              (rule_instance_id, profile_key, applicability, condition_json)
-             VALUES ($1, $2, 'applies', NULL)",
+             VALUES ($1, $2, 'applies', NULL)
+             ON CONFLICT (rule_instance_id, profile_key) DO NOTHING",
         )
         .bind(&rule.rule_instance_id)
         .bind(profile)
