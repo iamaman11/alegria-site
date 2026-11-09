@@ -109,6 +109,13 @@ def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
             for source in public.rglob("*")
             if source.is_file()
         }
+        # Vite emits an unreferenced empty JS entry for build-entry.js.
+        # Remove only this provably empty synthetic chunk; never deploy it
+        # or exempt arbitrary additional files from the approved asset set.
+        for entry in output_assets.glob("assets/build-entry-*.js"):
+            if not entry.is_file() or entry.is_symlink() or entry.read_bytes().strip():
+                return False
+            entry.unlink()
         built_entries = list(output_assets.rglob("*"))
         if any(entry.is_symlink() for entry in built_entries):
             return False
