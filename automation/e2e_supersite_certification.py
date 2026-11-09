@@ -429,7 +429,7 @@ def main() -> int:
         if provider_kind == "chat_manual":
             print("- manual_mode=requires llm-next/llm-submit and separate CMS approval; "
                   "not eligible for unattended live certification")
-        print("- gate: real canonical Temporal workflow, no fixture seeds or restore")
+        print("- gate: real canonical Temporal workflow, no synthetic seeding or restore")
         print("- scenarios: fresh_scope" if args.first_site else
               "- scenarios: fresh_scope, scope_expansion, factual_change_rebuild")
         return 2 if missing else 0
