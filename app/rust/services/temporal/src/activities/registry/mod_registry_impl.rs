@@ -625,6 +625,70 @@ impl AlegriaActivities {
         .await
     }
 
+    // This activity only creates pending jobs from persisted raw evidence.
+    // It must not be cached in the step ledger: completion is external HITL.
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn prepare_manual_truth_candidates(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        input: operations::CandidateValidationInput,
+    ) -> Result<String, ActivityError> {
+        if !infrastructure::adapters::manual_llm_queue::truth_manual_selected() {
+            return Ok("done".to_string());
+        }
+        let sections = infrastructure::adapters::raw_crawl_adapter::load_raw_sections_by_page_ids(
+            &self.pool,
+            &input.raw_page_ids,
+        )
+        .await
+        .map_err(|err| Self::activity_error_from_domain(&err))?;
+        let allowed = input
+            .procedural
+            .sections
+            .iter()
+            .filter(|state| !state.blocked_by_gate && !state.skipped)
+            .map(|state| state.section_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        for section in sections.iter().filter(|s| allowed.contains(&s.id)) {
+            let extraction_input = infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionInput {
+                context_key: input.context_key.clone(),
+                raw_section_id: section.id,
+                source_url: section.source_url.clone(),
+                source_domain: section.source_domain.clone(),
+                heading_path: section.heading_path.clone(),
+                raw_text: section.content_md.clone(),
+                source_snapshot_hash: if section.content_hash.trim().is_empty() {
+                    primitives::hash::content_hash_v1(&section.content_md)
+                } else {
+                    section.content_hash.clone()
+                },
+            };
+            infrastructure::adapters::manual_llm_queue::enqueue_truth(
+                &self.pool, &input.run_id, &extraction_input,
+            )
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))?;
+        }
+        infrastructure::adapters::manual_llm_queue::truth_run_status(&self.pool, &input.run_id)
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))
+    }
+
+    // Pure database read after an explicit signal. Never cache pending in the
+    // execution journal, and never interpret the signal as approval.
+    #[allow(dead_code)]
+    #[activity]
+    pub async fn load_manual_truth_status(
+        self: Arc<Self>,
+        _ctx: ActivityContext,
+        run_id: String,
+    ) -> Result<String, ActivityError> {
+        infrastructure::adapters::manual_llm_queue::truth_run_status(&self.pool, &run_id)
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))
+    }
+
     #[allow(dead_code)]
     #[activity]
     pub async fn run_candidate_validation_step(
