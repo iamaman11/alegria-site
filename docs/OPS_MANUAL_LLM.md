@@ -146,14 +146,21 @@ Changing `WORKER_BUILD_ID` alone is not proof of safe versioning.
 
 ## Scoped fact safety boundary
 
-The current public verified-rule model does not yet enforce structured
-`scope` (applicant/profile applicability). Until this is implemented
-end-to-end, nonempty scope is **needs_hitl**, never `verified` or
-publication-admissible. Both the canonical candidate validator and the
-persisted legacy candidate reader enforce this fail-closed behavior.
-Different scoped values must not be silently treated as global facts.
-A separate end-to-end scope-aware publication and second-niche
-certification remains required before claiming universal launch readiness.
+The canonical truth workflow supports one explicitly typed scoped predicate:
+`{"applicant_profile":"student"}` (or another active registered profile key).
+Independent source governance and evidence validation remain mandatory.
+When verified, the rule is saved under a distinct semantic identity and
+bound through the existing `verified.rule_instance_profiles` table. SEO
+support is returned only for the exact requested profile; unscoped read APIs
+exclude such rules. Unresolved profile conditions or exceptions block use.
+
+Any extra `scope` key or malformed profile, plus nonempty
+`applies_to_profiles`, `conditions_raw`, `exceptions_raw` or `alternatives`,
+remains **needs_hitl**. The persisted legacy extraction path still
+conservatively blocks nonempty `scope` until its separate semantics are
+migrated. General conditional DSL evaluation, overlapping global/profile
+truth, independent second-niche certification and physical production
+readback remain outstanding; this is not full launch approval.
 
 ### Native Temporal pinned Worker versions
 

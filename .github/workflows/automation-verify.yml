@@ -19,6 +19,8 @@ jobs:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       # Disposable integration database, never a production credential.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      # Only this disposable CI database may run scoped truth SQL smoke tests.
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
     services:
       postgres:
         image: postgres:16-alpine
