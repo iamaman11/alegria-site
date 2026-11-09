@@ -122,12 +122,37 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                     job.payload["context_key"].as_str().unwrap().is_empty(),
                     false
                 );
+                // One real, byte-anchored source claim must pass the
+                // *canonical* validator, not just the JSON inbox parser.
+                let raw_text = job.payload["raw_text"].as_str().unwrap();
+                let section_id = job.payload["raw_section_id"].as_i64().unwrap();
+                let quote = "Passport is required for the visa application.";
+                let candidates = raw_text
+                    .find(quote)
+                    .map(|start| {
+                        vec![serde_json::json!({
+                            "role": "DOCUMENT_REQUIRED",
+                            "concept_canonical_key": "passport",
+                            "raw_mention": quote,
+                            "params": {"severity": "mandatory", "subtype": "passport"},
+                            "scope": {},
+                            "severity": "mandatory",
+                            "alternatives": [],
+                            "derivation_type": "direct",
+                            "confidence": 0.95,
+                            "evidence_section_id": section_id,
+                            "evidence_quote": quote,
+                            "span_start": start,
+                            "span_end": start + quote.len(),
+                        })]
+                    })
+                    .unwrap_or_default();
                 let submission: manual_llm_queue::ManualTruthSubmission =
                     serde_json::from_value(serde_json::json!({
                         "task_id": job.task_id,
                         "schema_version": job.schema_version,
                         "input_sha256": job.input_sha256,
-                        "response": {"candidates": []},
+                        "response": {"candidates": candidates},
                     }))
                     .unwrap();
                 manual_llm_queue::submit_truth(&truth_pool, &submission, "gpt-6")
@@ -164,6 +189,15 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             .await
             .unwrap(),
         "done"
+    );
+    let truth_results = manual_llm_queue::read_truth_results(&infra.postgres.pool, &run_id)
+        .await
+        .unwrap();
+    assert!(
+        truth_results
+            .iter()
+            .any(|(_, result)| !result.candidates.is_empty()),
+        "canonical test must exercise at least one positive manual candidate"
     );
     let pending = manual_llm_queue::read_editorial_result(&infra.postgres.pool, &first.payload)
         .await
