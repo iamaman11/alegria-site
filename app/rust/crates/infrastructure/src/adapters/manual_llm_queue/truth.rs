@@ -25,7 +25,13 @@ pub struct ManualTruthSubmission {
 /// not to Temporal orchestration or SEO application logic.
 pub fn validated_candidate_values(
     candidate: &TruthRuleCandidate,
-) -> Result<(primitives::truth_candidates::TruthParamValue, primitives::truth_candidates::TruthParamValue), DomainError> {
+) -> Result<
+    (
+        primitives::truth_candidates::TruthParamValue,
+        primitives::truth_candidates::TruthParamValue,
+    ),
+    DomainError,
+> {
     let params = serde_json::from_value(candidate.params.clone())
         .map_err(|err| validation(format!("manual truth params malformed: {err}")))?;
     let scope = serde_json::from_value(candidate.scope.clone())
@@ -45,7 +51,9 @@ async fn truth_fingerprint(
     input: &TruthExtractionInput,
 ) -> Result<(String, String, Value), DomainError> {
     if run_id.trim().is_empty() || input.raw_section_id <= 0 || input.raw_text.is_empty() {
-        return Err(validation("manual truth job requires run_id and persisted source section"));
+        return Err(validation(
+            "manual truth job requires run_id and persisted source section",
+        ));
     }
     let value = serde_json::to_value(input)
         .map_err(|err| validation(format!("encode manual truth input: {err}")))?;
@@ -118,7 +126,12 @@ pub async fn truth_run_status(pool: &PgPool, run_id: &str) -> Result<String, Dom
     .fetch_one(pool)
     .await
     .map_err(db_error)?;
-    Ok(if pending == 0 { "done" } else { "awaiting_manual" }.to_string())
+    Ok(if pending == 0 {
+        "done"
+    } else {
+        "awaiting_manual"
+    }
+    .to_string())
 }
 
 /// Atomic validation/commit. Rejects changed answers, cross-operation IDs,
@@ -169,14 +182,12 @@ pub async fn submit_truth(
     if status != "pending" {
         return Err(validation("manual truth task is not pending"));
     }
-    let input: TruthExtractionInput =
-        serde_json::from_value(row.get("input_json"))
-            .map_err(|err| validation(format!("manual truth source input corrupted: {err}")))?;
+    let input: TruthExtractionInput = serde_json::from_value(row.get("input_json"))
+        .map_err(|err| validation(format!("manual truth source input corrupted: {err}")))?;
     let raw = serde_json::to_string(&submission.response)
         .map_err(|err| validation(format!("serialize manual truth response: {err}")))?;
-    let output = truth_extraction_llm_adapter::validate_manual_truth_response(
-        &input, model_key, &raw,
-    )?;
+    let output =
+        truth_extraction_llm_adapter::validate_manual_truth_response(&input, model_key, &raw)?;
     let output_value = serde_json::to_value(output)
         .map_err(|err| validation(format!("encode manual truth output: {err}")))?;
     sqlx::query(
@@ -215,7 +226,9 @@ pub async fn read_truth_results(
     for row in rows {
         let status: String = row.get("job_status");
         if status != "completed" {
-            return Err(validation("manual truth results requested before every job completed"));
+            return Err(validation(
+                "manual truth results requested before every job completed",
+            ));
         }
         let input: TruthExtractionInput = serde_json::from_value(row.get("input_json"))
             .map_err(|err| validation(format!("decode stored truth source: {err}")))?;
