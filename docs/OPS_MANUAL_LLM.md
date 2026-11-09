@@ -157,8 +157,8 @@ a certified applicant-profile filter, scoped rules are withheld from that
 unfiltered index. Unresolved profile conditions or exceptions block use.
 
 Any extra `scope` key or malformed profile, plus nonempty
-`applies_to_profiles`, `conditions_raw`, `exceptions_raw` or `alternatives`,
-remains **needs_hitl**. The persisted legacy extraction path still
+`applies_to_profiles`, `conditions_raw`, `exceptions_raw`, `alternatives`
+or a nonempty `params.conditions_key`, remains **needs_hitl**. The persisted legacy extraction path still
 conservatively blocks nonempty `scope` until its separate semantics are
 migrated. General conditional DSL evaluation, overlapping global/profile
 truth, independent second-niche certification and physical production
