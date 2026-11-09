@@ -83,7 +83,10 @@ pub(crate) async fn verified_truth_write_impl(
             &decision.role,
             &decision.concept_canonical_key,
         );
-        semantic_candidates.entry(slot_id).or_default().push(decision);
+        semantic_candidates
+            .entry(slot_id)
+            .or_default()
+            .push(decision);
     }
     let mut semantic_outcomes = BTreeMap::new();
     for (slot_id, candidates) in &semantic_candidates {
@@ -180,9 +183,7 @@ pub(crate) async fn verified_truth_write_impl(
             }
         })?;
         let candidate_status = match slot_outcome {
-            SemanticTruthWriteOutcome::Disputed if decision.decision == "verified" => {
-                "needs_hitl"
-            }
+            SemanticTruthWriteOutcome::Disputed if decision.decision == "verified" => "needs_hitl",
             SemanticTruthWriteOutcome::Rejected(_) => "rejected",
             _ => decision.decision.as_str(),
         };
@@ -209,7 +210,6 @@ pub(crate) async fn verified_truth_write_impl(
             },
         )
         .await?;
-
     }
 
     // Exactly one verdict and one outbox event per semantic slot. A rejected
