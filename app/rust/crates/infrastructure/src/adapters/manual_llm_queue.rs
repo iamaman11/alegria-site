@@ -290,3 +290,5 @@ mod tests {
         assert!(serde_json::from_value::<ManualLlmSubmission>(missing).is_err());
     }
 }
+
+include!("manual_llm_queue/truth.rs");
