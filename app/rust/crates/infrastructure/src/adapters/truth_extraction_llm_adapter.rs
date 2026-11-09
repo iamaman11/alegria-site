@@ -18,7 +18,8 @@ const DEFAULT_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_MAX_RETRIES: usize = 2;
 pub const EXTRACTION_PROMPT_VERSION: &str = "truth_extraction_prompt@1";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TruthExtractionInput {
     pub context_key: String,
     pub raw_section_id: i64,
@@ -76,7 +77,8 @@ pub struct TruthRuleCandidate {
     pub uncertainty_flags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TruthExtractionResponse {
     pub provider_key: String,
     pub model_key: String,
@@ -526,6 +528,16 @@ fn response_from_generated_text(
         prompt_version: EXTRACTION_PROMPT_VERSION.to_string(),
         candidates,
     })
+}
+
+/// Chat-origin candidate suggestions use the exact same strict JSON and
+/// evidence-span validator as API-backed providers, never a verification API.
+pub fn validate_manual_truth_response(
+    input: &TruthExtractionInput,
+    model_key: &str,
+    response_json: &str,
+) -> Result<TruthExtractionResponse, DomainError> {
+    response_from_generated_text(input, "chat_manual", model_key, response_json)
 }
 
 fn extraction_contract_error(message: &str) -> DomainError {
