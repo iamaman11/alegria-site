@@ -541,6 +541,7 @@ mod tests {
             has_remove_exception: false,
             has_replace_exception: false,
             has_add_requirement_exception: false,
+            has_unresolved_exception_conditions: false,
         }
     }
 
