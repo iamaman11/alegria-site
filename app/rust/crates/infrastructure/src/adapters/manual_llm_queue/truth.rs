@@ -21,6 +21,18 @@ pub struct ManualTruthSubmission {
     pub response: ManualTruthResponse,
 }
 
+/// JSON-to-typed-value conversion belongs to the infrastructure boundary,
+/// not to Temporal orchestration or SEO application logic.
+pub fn validated_candidate_values(
+    candidate: &TruthRuleCandidate,
+) -> Result<(primitives::truth_candidates::TruthParamValue, primitives::truth_candidates::TruthParamValue), DomainError> {
+    let params = serde_json::from_value(candidate.params.clone())
+        .map_err(|err| validation(format!("manual truth params malformed: {err}")))?;
+    let scope = serde_json::from_value(candidate.scope.clone())
+        .map_err(|err| validation(format!("manual truth scope malformed: {err}")))?;
+    Ok((params, scope))
+}
+
 pub fn truth_manual_selected() -> bool {
     std::env::var("SEO_TRUTH_LLM_PROVIDER")
         .map(|provider| provider.trim().eq_ignore_ascii_case("chat_manual"))
