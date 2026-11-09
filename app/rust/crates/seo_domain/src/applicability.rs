@@ -164,6 +164,28 @@ mod tests {
     }
 
     #[test]
+    fn profile_binding_does_not_leak_between_applicants() {
+        let mut student = candidate("rule:student");
+        student.has_profile_overrides = true;
+        student.has_apply_profile = true;
+        let mut irrelevant = candidate("rule:minor");
+        irrelevant.has_profile_overrides = true;
+        let resolution = resolve_support_candidates(
+            "student",
+            vec![
+                (student, "student-only".to_string()),
+                (irrelevant, "minor-only".to_string()),
+            ],
+        );
+        assert_eq!(resolution.included, vec!["student-only".to_string()]);
+        assert_eq!(resolution.excluded_rules.len(), 1);
+        assert_eq!(
+            resolution.excluded_rules[0].reason_code,
+            "profile_not_applicable"
+        );
+    }
+
+    #[test]
     fn conditional_rules_do_not_auto_support() {
         let mut conditional = candidate("rule:1");
         conditional.has_profile_overrides = true;
