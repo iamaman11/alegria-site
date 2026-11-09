@@ -12,6 +12,15 @@ fn selected_provider_policy(requested_policy: &str) -> String {
     }
 }
 
+pub fn chat_manual_selected(input: &EditorialDraftGenerateInputPayload) -> bool {
+    let policy = if input.provider_policy.trim().is_empty() {
+        input.request.as_ref().map(|r| r.provider_policy.as_str()).unwrap_or("multi_provider:first_available")
+    } else {
+        input.provider_policy.as_str()
+    };
+    selected_provider_policy(policy) == "chat_manual"
+}
+
 pub async fn generate_editorial_draft(
     input: &EditorialDraftGenerateInputPayload,
 ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
