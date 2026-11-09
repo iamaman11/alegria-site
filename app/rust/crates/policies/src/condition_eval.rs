@@ -71,13 +71,15 @@ fn evaluate_valid_condition(
             &condition.value,
             context.get(&condition.field),
         )),
-        "lt" => Ok(match (
-            context_i64(context, &condition.field),
-            scalar_i64(&condition.value),
-        ) {
-            (Some(actual), Some(bound)) => actual < bound,
-            _ => false,
-        }),
+        "lt" => Ok(
+            match (
+                context_i64(context, &condition.field),
+                scalar_i64(&condition.value),
+            ) {
+                (Some(actual), Some(bound)) => actual < bound,
+                _ => false,
+            },
+        ),
         "and" => {
             for arg in &condition.args {
                 if !evaluate_valid_condition(arg, context)? {
