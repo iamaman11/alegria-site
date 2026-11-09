@@ -284,6 +284,91 @@ pub(crate) async fn verified_truth_write_impl(
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+
+    fn candidate_verdict(
+        id: &str,
+        decision: &str,
+        amount: i64,
+        confidence: f64,
+    ) -> TruthAdjudicationCandidateDecision {
+        TruthAdjudicationCandidateDecision {
+            section_id: 13,
+            page_id: 4,
+            rule_candidate_id: id.to_string(),
+            role: "FEE_ITEM".to_string(),
+            concept_canonical_key: "consular_fee".to_string(),
+            params: TruthParamValue::object([
+                ("amount", TruthParamValue::Integer(amount)),
+            ]),
+            scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
+            source_key: format!("https://example.gov/{id}"),
+            source_tier: "government".to_string(),
+            confidence,
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+            evidence_quote: "consular fee".to_string(),
+            span_start: 0,
+            span_end: 12,
+            source_snapshot_hash: "snapshot".to_string(),
+            decision: decision.to_string(),
+            publish_admissibility: match decision {
+                "verified" => "admissible",
+                "needs_hitl" => "needs_hitl",
+                _ => "not_admissible",
+            }
+            .to_string(),
+            verification_method: "test".to_string(),
+            adjudication_reason: "test_fixture".to_string(),
+        }
+    }
+
+    #[test]
+    fn rejected_source_never_demotes_independently_verified_semantic_slot() {
+        let official = candidate_verdict("official", "verified", 80, 0.95);
+        let corroborating = candidate_verdict("corroborating", "verified", 80, 0.90);
+        let fabricated = candidate_verdict("fabricated", "rejected", 120, 0.99);
+        for order in [
+            vec![&official, &corroborating, &fabricated],
+            vec![&fabricated, &corroborating, &official],
+        ] {
+            match semantic_truth_write_outcome(&order).unwrap() {
+                SemanticTruthWriteOutcome::Verified(candidate) => {
+                    assert_eq!(candidate.rule_candidate_id, "official");
+                }
+                _ => panic!("rejected proposals must not demote verified evidence"),
+            }
+        }
+    }
+
+    #[test]
+    fn unresolved_or_conflicting_verified_sources_hold_entire_semantic_slot() {
+        let official = candidate_verdict("official", "verified", 80, 0.95);
+        let corroborating = candidate_verdict("corroborating", "verified", 80, 0.90);
+        let unresolved = candidate_verdict("unresolved", "needs_hitl", 120, 0.91);
+        let inconsistent = candidate_verdict("inconsistent", "verified", 120, 0.98);
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&official, &corroborating, &unresolved]).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&official, &corroborating, &inconsistent]).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+    }
+
+    #[test]
+    fn all_rejected_identity_is_demoted_once_and_unknown_status_fails_closed() {
+        let rejected = candidate_verdict("rejected", "rejected", 80, 0.1);
+        match semantic_truth_write_outcome(&[&rejected]).unwrap() {
+            SemanticTruthWriteOutcome::Rejected(candidate) => {
+                assert_eq!(candidate.rule_candidate_id, "rejected");
+            }
+            _ => panic!("all rejected evidence must demote the slot"),
+        }
+        let unexpected = candidate_verdict("unknown", "approved", 80, 1.0);
+        assert!(semantic_truth_write_outcome(&[&unexpected]).is_err());
+    }
+
     use std::fs;
     use std::path::PathBuf;
 
