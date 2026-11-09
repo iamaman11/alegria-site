@@ -379,7 +379,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         .iter()
         .filter(|decision| decision.decision == "needs_hitl")
         .map(|decision| {
-            (decision.role.clone(), decision.concept_canonical_key.clone())
+            (
+                decision.role.clone(),
+                decision.concept_canonical_key.clone(),
+            )
         })
         .collect::<BTreeSet<_>>();
     for ((role, concept), group) in grouped_candidates {

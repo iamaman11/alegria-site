@@ -501,15 +501,20 @@ mod tests {
         let mut scoped = candidate("scoped", "a", 120);
         scoped.epistemic_status = "needs_hitl".to_string();
         let result = adjudicate_truth_candidates_with_governance(
-            &[candidate("global-a", "a", 80), candidate("global-b", "b", 80), scoped],
+            &[
+                candidate("global-a", "a", 80),
+                candidate("global-b", "b", 80),
+                scoped,
+            ],
             &registry,
         );
         assert_eq!(result.overall_status, "needs_hitl");
         assert_eq!(result.verified_count, 0);
         assert_eq!(result.needs_hitl_count, 3);
-        assert!(result.decisions.iter().all(|decision| {
-            decision.publish_admissibility == "needs_hitl"
-        }));
+        assert!(result
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility == "needs_hitl" }));
     }
 
     #[test]
@@ -526,8 +531,12 @@ mod tests {
         assert_eq!(result.needs_hitl_count, 2);
         assert_eq!(result.rejected_count, 1);
         assert_eq!(
-            result.decisions.iter().find(|d| d.rule_candidate_id == "fabricated")
-                .unwrap().publish_admissibility,
+            result
+                .decisions
+                .iter()
+                .find(|d| d.rule_candidate_id == "fabricated")
+                .unwrap()
+                .publish_admissibility,
             "not_admissible"
         );
     }

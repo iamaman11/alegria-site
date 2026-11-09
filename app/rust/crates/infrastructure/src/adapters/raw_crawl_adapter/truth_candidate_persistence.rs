@@ -358,4 +358,3 @@ async fn adjudicate_persisted_rule_candidates(
     report.changed_truth_keys.dedup();
     Ok(report)
 }
-
