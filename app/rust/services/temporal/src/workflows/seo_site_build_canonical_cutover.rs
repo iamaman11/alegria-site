@@ -450,18 +450,54 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
 
+        let validation_input = CandidateValidationInput {
+            run_id: run_id.clone(),
+            context_key: site_input.context_key.clone(),
+            raw_page_ids: crawled.raw_page_ids.clone(),
+            procedural: procedural.clone(),
+            ontology: ontology_intake.clone(),
+            schema_validate: schema_validate.clone(),
+        };
+        ctx.state_mut(|s| s.phase = "manual_truth_prepare".to_string());
+        let manual_state: String = ctx
+            .start_activity(
+                AlegriaActivities::prepare_manual_truth_candidates,
+                validation_input.clone(),
+                db_opts(60),
+            )
+            .await?;
+        if manual_state == "awaiting_manual" {
+            ctx.state_mut(|s| s.phase = "manual_truth_wait".to_string());
+            loop {
+                ctx.wait_condition(|s| !s.paused && s.llm_result_ready).await?;
+                ctx.state_mut(|s| s.llm_result_ready = false);
+                let status: String = ctx
+                    .start_activity(
+                        AlegriaActivities::load_manual_truth_status,
+                        run_id.clone(),
+                        db_opts(30),
+                    )
+                    .await?;
+                if status == "done" {
+                    break;
+                }
+                if status != "awaiting_manual" {
+                    return Err(super::runtime::workflow_contract_failure(
+                        "manual truth job status invalid",
+                    ));
+                }
+            }
+        } else if manual_state != "done" {
+            return Err(super::runtime::workflow_contract_failure(
+                "manual truth preparation status invalid",
+            ));
+        }
+        ctx.wait_condition(|s| !s.paused).await?;
         ctx.state_mut(|s| s.phase = "candidate_validation".to_string());
         let candidate_validation = ctx
             .start_activity(
                 AlegriaActivities::run_candidate_validation_step,
-                CandidateValidationInput {
-                    run_id: run_id.clone(),
-                    context_key: site_input.context_key.clone(),
-                    raw_page_ids: crawled.raw_page_ids.clone(),
-                    procedural: procedural.clone(),
-                    ontology: ontology_intake.clone(),
-                    schema_validate: schema_validate.clone(),
-                },
+                validation_input,
                 db_opts(60),
             )
             .await?;
