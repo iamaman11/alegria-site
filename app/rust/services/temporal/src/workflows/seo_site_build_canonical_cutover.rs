@@ -469,7 +469,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         if manual_state == "awaiting_manual" {
             ctx.state_mut(|s| s.phase = "manual_truth_wait".to_string());
             loop {
-                ctx.wait_condition(|s| !s.paused && s.llm_result_ready).await?;
+                ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
+                    .await?;
                 ctx.state_mut(|s| s.llm_result_ready = false);
                 let status: String = ctx
                     .start_activity(
