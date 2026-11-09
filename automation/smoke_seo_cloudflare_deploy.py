@@ -140,6 +140,30 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
             [["build"], ["deploy", "--prebuilt", "--mode", "production"]],
         )
 
+    def test_stale_build_asset_blocks_public_deployment(self) -> None:
+        commands = []
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory)
+
+            def invoke(argv, **kwargs):
+                commands.append(list(argv))
+                source = Path(kwargs["env"]["ALEGRIA_CF_PUBLIC_DIR"])
+                output = config / ".cloudflare/output/v0"
+                output.mkdir(parents=True)
+                (output / "config.json").write_text("{}", encoding="utf-8")
+                assets = output / "workers/default/assets"
+                shutil.copytree(source, assets)
+                stale = assets / "obsolete/index.html"
+                stale.parent.mkdir(parents=True)
+                stale.write_text("old unpublished page", encoding="utf-8")
+                return subprocess.CompletedProcess(argv, 0)
+
+            with mock.patch("deploy_seo_static_cloudflare.CLOUD_CONFIG", config):
+                with mock.patch("deploy_seo_static_cloudflare.subprocess.run", side_effect=invoke):
+                    self.assertFalse(run_cf_deploy(Path("/usr/bin/cf"), self.release))
+        self.assertEqual(len(commands), 1)
+        self.assertEqual(commands[0][1], "build")
+
     def test_failed_cf_build_never_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory)
