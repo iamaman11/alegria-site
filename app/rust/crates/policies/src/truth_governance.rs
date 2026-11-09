@@ -428,9 +428,10 @@ mod tests {
         assert_eq!(verdict.overall_status, "needs_hitl");
         assert_eq!(verdict.verified_count, 0);
         assert_eq!(verdict.contradiction_count, 1);
-        assert!(verdict.decisions.iter().all(|decision| {
-            decision.publish_admissibility != "admissible"
-        }));
+        assert!(verdict
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility != "admissible" }));
     }
 
     #[test]

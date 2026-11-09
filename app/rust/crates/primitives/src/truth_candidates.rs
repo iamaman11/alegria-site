@@ -759,9 +759,10 @@ mod tests {
         )]);
         let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
         assert_eq!(result.epistemic_status, "needs_hitl");
-        assert!(result.issues.iter().any(|issue| {
-            issue.code == "scoped_applicability_requires_hitl"
-        }));
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
     }
 
     #[test]

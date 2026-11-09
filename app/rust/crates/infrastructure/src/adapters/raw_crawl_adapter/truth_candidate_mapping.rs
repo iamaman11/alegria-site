@@ -427,4 +427,3 @@ async fn demote_verified_semantic_slot(
     .map_err(classify_sqlx)?;
     Ok(())
 }
-
