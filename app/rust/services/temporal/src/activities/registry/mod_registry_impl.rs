@@ -651,21 +651,24 @@ impl AlegriaActivities {
             .map(|state| state.section_id)
             .collect::<std::collections::BTreeSet<_>>();
         for section in sections.iter().filter(|s| allowed.contains(&s.id)) {
-            let extraction_input = infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionInput {
-                context_key: input.context_key.clone(),
-                raw_section_id: section.id,
-                source_url: section.source_url.clone(),
-                source_domain: section.source_domain.clone(),
-                heading_path: section.heading_path.clone(),
-                raw_text: section.content_md.clone(),
-                source_snapshot_hash: if section.content_hash.trim().is_empty() {
-                    primitives::hash::content_hash_v1(&section.content_md)
-                } else {
-                    section.content_hash.clone()
-                },
-            };
+            let extraction_input =
+                infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionInput {
+                    context_key: input.context_key.clone(),
+                    raw_section_id: section.id,
+                    source_url: section.source_url.clone(),
+                    source_domain: section.source_domain.clone(),
+                    heading_path: section.heading_path.clone(),
+                    raw_text: section.content_md.clone(),
+                    source_snapshot_hash: if section.content_hash.trim().is_empty() {
+                        primitives::hash::content_hash_v1(&section.content_md)
+                    } else {
+                        section.content_hash.clone()
+                    },
+                };
             infrastructure::adapters::manual_llm_queue::enqueue_truth(
-                &self.pool, &input.run_id, &extraction_input,
+                &self.pool,
+                &input.run_id,
+                &extraction_input,
             )
             .await
             .map_err(|err| Self::activity_error_from_domain(&err))?;
