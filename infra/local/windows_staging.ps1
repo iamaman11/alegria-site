@@ -199,8 +199,10 @@ Assert-Exit "build $Service"
 $latestTag = $project + '-' + $Service + ':latest'
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'inspect newly built image'
-if (-not $newImage -or $newImage -eq $oldImage) {
-    throw 'Candidate build did not produce a distinct, verifiable image'
+# An operator-only commit can legitimately rebuild to the SAME immutable image.
+# Checkout + WORKER_BUILD_ID must still match the requested commit at readback.
+if (-not $newImage) {
+    throw 'Candidate build has no verifiable image ID'
 }
 
 function Test-Docker-Engine-Ready {
