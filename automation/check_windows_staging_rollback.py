@@ -42,7 +42,7 @@ def check(script: str) -> None:
         "if ($decision -eq 'ENGINE_UNAVAILABLE')",
         "if ($decision -eq 'OLD_RUNNING')",
         "if ($null -ne $observed -and $observed.State -eq 'running')",
-        'throw "RECOVERY_REQUIRED: unverified running container',
+        "throw 'RECOVERY_REQUIRED: unverified running container",
         'throw "DEPLOY_REJECTED_ROLLED_BACK:',
         "if ($rollbackDecision -eq 'OLD_RUNNING')",
 
