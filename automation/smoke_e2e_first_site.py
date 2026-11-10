@@ -15,6 +15,7 @@ import e2e_supersite_certification as cert
 TEST_ENV = {
     "DATAFORSEO_LOGIN": "fixture",
     "DATAFORSEO_PASSWORD": "fixture",
+    "VOYAGE_API_KEY": "fixture",
     "SEO_LLM_PROVIDER": "openai",
     "OPENAI_API_KEY": "fixture",
     "ALEGRIA_CERT_PUBLISH": "1",
@@ -171,6 +172,34 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         self.assertIn("fresh_scope", output.getvalue())
         self.assertIn("- configuration=READY", output.getvalue())
         self.assertIn("- missing=none", output.getvalue())
+
+    def test_missing_voyage_is_reported_before_any_canonical_launch(self) -> None:
+        code, manifest, runner, command = self.run_case(
+            first_site=True, env_overrides={"VOYAGE_API_KEY": ""}
+        )
+        self.assertEqual(code, 2)
+        self.assertIn("VOYAGE_API_KEY", manifest["missing"])
+        runner.assert_not_called()
+        command.assert_not_called()
+
+        output = StringIO()
+        with (
+            mock.patch.dict(
+                "os.environ",
+                {**TEST_ENV, "VOYAGE_API_KEY": "", "SEO_LLM_PROVIDER": "chat_manual",
+                 "SEO_TRUTH_LLM_PROVIDER": "chat_manual"},
+                clear=True,
+            ),
+            mock.patch.object(
+                sys, "argv", ["certification", "--first-site", "--manual", "--dry-run"]
+            ),
+            mock.patch("sys.stdout", output),
+            mock.patch.object(cert, "run_command") as run_command,
+        ):
+            self.assertEqual(cert.main(), 2)
+        self.assertIn("- configuration=BLOCKED", output.getvalue())
+        self.assertIn("VOYAGE_API_KEY", output.getvalue())
+        run_command.assert_not_called()
 
     def test_dry_run_reports_missing_configuration_without_actions_or_secrets(self) -> None:
         env = dict(TEST_ENV)
