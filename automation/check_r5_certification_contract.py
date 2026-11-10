@@ -27,17 +27,31 @@ def main() -> int:
     nightly = NIGHTLY.read_text(encoding="utf-8")
     plan = PLAN.read_text(encoding="utf-8")
 
+    # The runner is read-only until actual real-source execution. Production
+    # and destructive restore drills are separately owned scripts, not
+    # prerequisites that the first-site operator must call by side effect.
     for needle in [
-        "temporal_production_gate.sh",
-        "restore_drill.sh",
         "fresh_scope",
         "scope_expansion",
         "factual_change_rebuild",
         "docs/runs",
         "PENDING_CREDENTIALS",
+        "clean_runtime_preflight",
+        "independent_https_readback",
+        "--resume-run-id",
     ]:
         if needle not in runner:
             failures.append(f"runner missing `{needle}`")
+
+    # There must not be a destructive restore path hidden in the
+    # first-site certification runner. The existing RESTORE/GATE existence
+    # checks above retain ownership of their separate operational paths.
+    for forbidden in [
+        'run_command(["bash", "infra/backups/restore_drill.sh"',
+        'run_command(["bash", "automation/temporal_production_gate.sh"',
+    ]:
+        if forbidden in runner:
+            failures.append("first-site runner invokes an unrelated mutating gate")
 
     for needle in ["python3 automation/e2e_supersite_certification.py"]:
         if needle not in shell_runner:
