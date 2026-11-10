@@ -161,6 +161,59 @@ release, all declared HTML files and independently served HTTPS bytes.
 A supervised ChatGPT response is **not** a human approval, and no synthetic
 facts can satisfy the final public gate.
 
+## Native Windows first-site operator — no WSL
+
+Use the existing Windows PowerShell, Python and Docker Desktop **Hyper-V** backend.
+No WSL shell, second Docker project, new server or extra workflow is required.
+Run from the exact GitHub checkout whose SHA passed both CI jobs and was
+deployed through `infra/local/windows_staging.ps1`.
+
+The certification script uses the current directory's `docker compose exec`,
+so it must address the **existing** Compose project rather than silently
+looking for another project named after the checkout directory. Resolve
+the project label from the running business PostgreSQL container:
+
+```powershell
+Set-Location 'B:\Alegria\runtime\alegria-site-<CI-green-full-SHA>'
+$env:COMPOSE_PROJECT_NAME = (
+  docker inspect alegria_postgres --format '{{index .Config.Labels "com.docker.compose.project"}}'
+).Trim()
+
+$env:SEO_LLM_PROVIDER = 'chat_manual'
+$env:SEO_TRUTH_LLM_PROVIDER = 'chat_manual'
+$env:CLOUDFLARE_ACCOUNT_ID = '78e5fcb3762c1473113d51838556da74'
+$env:ALEGRIA_CERT_BASE_URL = 'https://alegria-seo-staging.alegria-site.workers.dev'
+$env:SEO_STATIC_BASE_URL = $env:ALEGRIA_CERT_BASE_URL
+$env:ALEGRIA_CERT_PUBLIC_OUTPUT_DIR = '/app/app/rust/dist/static-site'
+$env:ALEGRIA_CERT_PUBLISH = '1'   # explicit supervised publication request
+
+python .\automation\e2e_supersite_certification.py --first-site --manual --dry-run
+```
+
+Use the *actual* installed checkout SHA; the angle-bracket placeholder above
+is not a runnable path. The preview is read-only and must report `BLOCKED`
+until the operator and running worker both have real DataForSEO credentials,
+Voyage credentials, and Cloudflare deployment capability. Provider secrets
+must be supplied privately outside GitHub; do not paste them in chat or
+write them to tracked source files. The dry-run verifies only configured
+presence, not provider authentication or completed publication.
+
+When every prerequisite and independent provider capability is confirmed,
+run the same command **without** `--dry-run` in one PowerShell terminal.
+In a second Windows PowerShell terminal handle pending typed tasks through
+the existing running container:
+
+```powershell
+docker exec alegria_temporal_worker cli_tools llm-next
+docker exec alegria_temporal_worker cli_tools llm-submit --help
+```
+
+Submit only real, validated response envelopes through the existing CLI.
+The first command can validly return `NO_PENDING_LLM_JOBS`. The original
+Temporal workflow must be kept running until the separate CMS human approval,
+immutable release check and independent public HTTPS readback complete.
+An empty manual queue or green CI is not proof that a site was published.
+
 ## Required deployment compatibility checks
 
 Do not upgrade the canonical Temporal worker with pre-existing in-flight
