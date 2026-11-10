@@ -61,4 +61,16 @@ $oldCheck.ExpectedCheckout = $oldRoot
 $oldCheck.ExpectedBuildId = 'b' * 40
 Assert-Equal (Test-Staging-Readback -Observed $readback @oldCheck) $false 'candidate is not rollback'
 
+# A source/ops-only commit may produce an identical immutable Docker image.
+# Different checkout and build identity still keep the old and new states apart.
+$sameImageOld = $readback.Clone()
+$sameImageOld.Checkout = $oldRoot
+$sameImageOld.BuildId = 'b' * 40
+$sameImageCheck = $check.Clone()
+$sameImageCheck.ExpectedCheckout = $oldRoot
+$sameImageCheck.ExpectedBuildId = 'b' * 40
+Assert-Equal (Test-Staging-Readback -Observed $sameImageOld @sameImageCheck) $true 'old image with same ID still verified by source'
+Assert-Equal (Test-Staging-Readback -Observed $sameImageOld @check) $false 'same binary does not impersonate new source'
+Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $false -OldVerified $true -StartExit -1) 'OLD_RUNNING' 'same image ID, old checkout survives'
+
 Write-Output 'WINDOWS_STAGING_ENGINE_RECONCILE=PASS'
