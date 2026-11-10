@@ -31,6 +31,21 @@ def check(script: str) -> None:
         "& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service",
         "& $docker image tag $rollbackTag $latestTag",
         "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
+        ". (Join-Path $PSScriptRoot 'windows_staging_reconcile.ps1')",
+        "function Test-Docker-Engine-Ready",
+        "function Read-Worker-Observed",
+        "function Wait-Worker-Reconciliation",
+        "Test-Staging-Readback -Observed $observed",
+        "Resolve-Staging-Decision -EngineReady $true",
+        "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
+        'Write-Output "DEPLOYED_RECOVERED=$Service',
+        "if ($decision -eq 'ENGINE_UNAVAILABLE')",
+        "if ($decision -eq 'OLD_RUNNING')",
+        "if ($null -ne $observed -and $observed.State -eq 'running')",
+        'throw "RECOVERY_REQUIRED: unverified running container',
+        'throw "DEPLOY_REJECTED_ROLLED_BACK:',
+        "if ($rollbackDecision -eq 'OLD_RUNNING')",
+
     ]
     for snippet in required:
         assert snippet in script, f"missing safety check: {snippet}"
@@ -41,6 +56,17 @@ def check(script: str) -> None:
     candidate_build = script.index("& $docker @newArgs build $Service")
     recreate = script.index("& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service")
     assert recovery < compare < preserve < guard < candidate_build < recreate
+    readback = script.index("$decision = Wait-Worker-Reconciliation -StartExit $startExit")
+    rollback_tag = script.index("& $docker image tag $rollbackTag $latestTag")
+    assert recreate < readback < rollback_tag, (
+        "inspect exact candidate after a Docker start error BEFORE changing rollback tags"
+    )
+    assert "Assert-Exit \"start $Service\"" not in script, (
+        "start exit status must be reconciled against real container identity"
+    )
+    assert "Assert-Exit 'restore previous worker'" not in script, (
+        "a failed rollback start must be read back, not assumed"
+    )
     assert "Remove-Item -LiteralPath $scratch -Force -Recurse" in script
     assert "& $docker rm $verifier" in script
     assert "RETRIEVAL_CAPABILITY_REQUIRED" not in script  # no bypass of publication gates
@@ -56,6 +82,9 @@ def main() -> None:
         "& $docker image inspect $rollbackTag --format '{{.Id}}'",
         "throw \"Rollback mismatch in $file; keep current worker running\"",
         "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
+        "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
+        "if ($decision -eq 'ENGINE_UNAVAILABLE')",
+        "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
     ):
         mutated = source.replace(fragment, "", 1)
         try:
