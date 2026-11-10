@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from local_env import resolve_database_url
 from deploy_seo_static_cloudflare import EXPECTED_ACCOUNT, EXPECTED_ORIGIN
 
 
@@ -436,7 +435,6 @@ def main() -> int:
     )
 
     provider_live, provider_kind = classify_provider()
-    database_url = resolve_database_url()
 
     # A single configuration preflight is used for preview AND execution:
     # dry-run cannot report "ready" under weaker requirements.
@@ -444,7 +442,7 @@ def main() -> int:
     missing = [key for key, present in required.items() if not present]
     if args.dry_run:
         print("First-site configuration preview" if args.first_site else "R5 configuration preview")
-        print(f"- database_configured={bool(database_url)}")
+        print("- database_connectivity=NOT_TESTED (checked in running PostgreSQL at launch)")
         print(f"- provider_kind={provider_kind}")
         print(f"- configuration={'BLOCKED' if missing else 'READY'}")
         print(f"- missing={','.join(missing) if missing else 'none'}")
@@ -460,7 +458,7 @@ def main() -> int:
     # The same readiness gate blocks live provider calls before any mutations.
     if missing:
         credentials_missing = any(
-            key in {"DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD", "production_llm_provider"}
+            key in {"DATAFORSEO_LOGIN", "DATAFORSEO_PASSWORD", "VOYAGE_API_KEY", "production_llm_provider"}
             for key in missing
         )
         status = "PENDING_CREDENTIALS" if credentials_missing else "PENDING_CONFIGURATION"
