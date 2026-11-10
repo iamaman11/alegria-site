@@ -3,6 +3,7 @@ services:
   postgres:
     image: postgres:18.6-alpine
     container_name: alegria_postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres_password
@@ -22,6 +23,7 @@ services:
   postgres-temporal:
     image: postgres:18.6-alpine
     container_name: alegria_postgres_temporal
+    restart: unless-stopped
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal_password
@@ -39,6 +41,7 @@ services:
   pgbouncer:
     image: edoburu/pgbouncer:v1.26.1-p0
     container_name: alegria_pgbouncer
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,6 +63,7 @@ services:
   neo4j:
     image: neo4j:2026.10.1
     container_name: alegria_neo4j
+    restart: unless-stopped
     environment:
       NEO4J_AUTH: neo4j/neo4j_password
       # Включаем APOC для apoc.periodic.iterate
@@ -80,6 +84,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.20.0
     container_name: alegria_qdrant
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6333:6333" # REST API
       - "127.0.0.1:6334:6334" # gRPC
@@ -117,6 +122,7 @@ services:
   temporal-server:
     image: temporalio/server:1.32.2
     container_name: alegria_temporal
+    restart: unless-stopped
     depends_on:
       temporal-schema:
         condition: service_completed_successfully
@@ -211,6 +217,7 @@ services:
       context: .
       dockerfile: ./app/rust/services/temporal/Dockerfile
     container_name: alegria_temporal_worker
+    restart: unless-stopped
     environment:
       TEMPORAL_URL: http://temporal-server:7233
       DATABASE_URL: postgres://postgres:postgres_password@pgbouncer:6432/alegria
@@ -284,6 +291,7 @@ services:
       context: .
       dockerfile: ./app/rust/services/outbox_worker/Dockerfile
     container_name: alegria_outbox_worker
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgres://postgres:postgres_password@pgbouncer:6432/alegria
       RUST_LOG: info
