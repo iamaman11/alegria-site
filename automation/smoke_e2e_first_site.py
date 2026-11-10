@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import StringIO
 from pathlib import Path
 import subprocess
+from tempfile import TemporaryDirectory
 import sys
 import unittest
 from unittest import mock
@@ -88,6 +89,78 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         else:
             self.assertEqual(report_path, cert.MANIFEST)
         return status, manifest, runner, command
+
+    def test_reconnect_is_read_only_and_uses_only_existing_run_id(self) -> None:
+        run_id = "9c337079-ae0b-4cb4-b052-bb3a0ca623c1"
+        command = cert.existing_canonical_temporal_command(run_id)
+        self.assertEqual(command[-3:], ["workflow-wait", "--workflow-id", run_id])
+        self.assertNotIn("start", command)
+        self.assertNotIn("--query-batch-key", command)
+
+        result_text = (
+            "WORKFLOW_RESULT workflow_type=SeoSiteBuildCanonicalCutoverWorkflow "
+            f"workflow_id={run_id} result=seo_site_build_canonical_cutover_ok "
+            f"run_id={run_id} ia_pages=1 published_pages=1 truth_verified=2"
+        )
+        commands = []
+
+        def existing_only(argv: list[str]) -> subprocess.CompletedProcess[str]:
+            commands.append(argv)
+            self.assertEqual(argv, command)
+            return subprocess.CompletedProcess(argv, 0, stdout=result_text, stderr="")
+
+        with (
+            TemporaryDirectory(prefix="alegria-reconnect-") as folder,
+            mock.patch.object(cert, "RUNS_DIR", Path(folder)),
+            mock.patch.object(cert, "run_command", side_effect=existing_only),
+        ):
+            payload = cert.scenario_payload(
+                scenario_id="fresh_scope", title="Fresh Scope", seo_scenario="full",
+                queries=["official query"], publish=True, provider_kind="chat_manual",
+                gate_results={}, resume_run_id=run_id, track_first_site_session=True,
+            )
+            receipt = cert.first_site_session(run_id)
+            self.assertEqual(
+                __import__("json").loads(receipt.read_text(encoding="utf-8"))["status"],
+                "RESULT_RECEIVED",
+            )
+        self.assertEqual(payload["evidence_status"], "PASS")
+        self.assertEqual(payload["workflow_id"], run_id)
+        self.assertEqual(len(commands), 1)
+
+    def test_unfinished_receipt_blocks_new_workflow_before_any_start(self) -> None:
+        run_id = "9c337079-ae0b-4cb4-b052-bb3a0ca623c1"
+        with (
+            TemporaryDirectory(prefix="alegria-receipt-") as folder,
+            mock.patch.object(cert, "RUNS_DIR", Path(folder)),
+        ):
+            cert.record_first_site_session(run_id, resume=False)
+            with self.assertRaisesRegex(RuntimeError, "reattach with --resume-run-id"):
+                cert.record_first_site_session(
+                    "8c6c81b0-c581-46d6-a763-c66b0d9f18ee", resume=False
+                )
+            cert.record_first_site_session(run_id, resume=True)
+
+    def test_invalid_resume_arguments_never_run_any_provider(self) -> None:
+        cases = [
+            ["--first-site", "--manual", "--resume-run-id", "not-a-uuid"],
+            ["--first-site", "--resume-run-id", "9c337079-ae0b-4cb4-b052-bb3a0ca623c1"],
+            ["--first-site", "--manual", "--dry-run", "--resume-run-id",
+             "9c337079-ae0b-4cb4-b052-bb3a0ca623c1"],
+        ]
+        for flags in cases:
+            with (
+                mock.patch.dict("os.environ", TEST_ENV, clear=True),
+                mock.patch.object(sys, "argv", ["certification", *flags]),
+                mock.patch("sys.stderr", StringIO()),
+                mock.patch.object(cert, "run_command") as command,
+                mock.patch.object(cert, "write_json") as write_json,
+            ):
+                with self.assertRaises(SystemExit) as raised:
+                    cert.main()
+            self.assertEqual(raised.exception.code, 2)
+            command.assert_not_called()
+            write_json.assert_not_called()
 
     def test_first_site_runs_only_canonical_first_scenario_and_https_check(self) -> None:
         code, manifest, runner, command = self.run_case(first_site=True)
