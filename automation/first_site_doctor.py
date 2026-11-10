@@ -82,7 +82,7 @@ def cloudflare_http() -> str:
 def http_code(url: str) -> str:
     try:
         request = urllib.request.Request(
-            url, method="HEAD", headers={"User-Agent": "Alegria-Operator-Doctor/1"}
+            url, method="GET", headers={"User-Agent": "Alegria-Operator-Doctor/1"}
         )
         with urllib.request.urlopen(request, timeout=7) as response:
             return str(response.status)
