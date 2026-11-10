@@ -69,3 +69,28 @@ jobs:
           path: |
             automation/reports/consistency_report.json
             automation/reports/consistency_report.md
+
+  windows-operator-smoke:
+    name: Native Windows first-site operator regression
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout canonical GitHub source
+        uses: actions/checkout@v7
+
+      - name: Setup native Windows Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Run credential-free first-site and publication regressions
+        shell: pwsh
+        run: |
+          python automation/check_windows_staging_rollback.py
+          python automation/smoke_e2e_first_site.py
+          python automation/smoke_e2e_canonical_temporal.py
+          python automation/smoke_first_site_release.py
+          python automation/smoke_e2e_publication_verdict.py
+          python automation/smoke_seo_cloudflare_deploy.py
+          python automation/smoke_public_static_output_completeness.py
+          python automation/smoke_public_http_readback.py
