@@ -24,8 +24,10 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
         self.root.mkdir()
         self.release = self.root / "approved-123-published"
         self.release.mkdir()
-        (self.release / ".alegria_static_site").write_text(
-            "alegria_immutable_release@1\n", encoding="utf-8"
+        # The immutable marker is a byte-level contract. Text writes on
+        # Windows silently translate LF to CRLF and mask the safety tests.
+        (self.release / ".alegria_static_site").write_bytes(
+            b"alegria_immutable_release@1\n"
         )
         (self.release / "index.html").write_text(
             '<!doctype html><html lang="ru"><head><link rel="canonical" '
@@ -100,6 +102,13 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
     def test_foreign_release_root_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "immediate immutable child"):
             validate_release(self.release, root=Path(self.temp.name), expected_origin=EXPECTED_ORIGIN)
+
+    def test_crlf_immutable_marker_is_rejected_even_on_windows(self) -> None:
+        (self.release / ".alegria_static_site").write_bytes(
+            b"alegria_immutable_release@1\r\n"
+        )
+        with self.assertRaisesRegex(ValueError, "immutable marker"):
+            validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN)
 
     def test_no_immutable_marker_is_rejected(self) -> None:
         (self.release / ".alegria_static_site").unlink()
