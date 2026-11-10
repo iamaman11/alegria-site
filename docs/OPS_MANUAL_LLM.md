@@ -198,8 +198,51 @@ must be supplied privately outside GitHub; do not paste them in chat or
 write them to tracked source files. The dry-run verifies only configured
 presence, not provider authentication or completed publication.
 
+The native read-only doctor can be run **before** credentials exist:
+
+```powershell
+python .\automation\first_site_doctor.py --json --expected-sha <installed-40-char-SHA>
+```
+
+Its `PROVIDER_CONFIG_BLOCKED` outcome is expected until real keys and the
+Cloudflare API token work. Provider presence is **not** proof of authentication,
+and even `CONFIG_PRESENT_UNVERIFIED` is never publication acceptance.
+The report includes only Boolean secret presence, safe HTTP status codes,
+real service state and counts; it does not print provider tokens.
+
 When every prerequisite and independent provider capability is confirmed,
-run the same command **without** `--dry-run` in one PowerShell terminal.
+choose one persistent **runtime receipt directory outside the checkout**
+(including when moving to a newer GitHub commit):
+
+```powershell
+$env:ALEGRIA_FIRST_SITE_SESSION_DIR = 'B:\Alegria\state\first-site-sessions'
+python .\automation\e2e_supersite_certification.py --first-site --manual
+```
+
+The first-site operator prints `FIRST_SITE_RUN_ID=<uuid>` **before** starting
+the long-running Temporal wait. A private receipt with status
+`WAITING_FOR_RESULT` survives terminal closure and new exact-commit checkouts.
+A second plain start from the same persistent receipt directory is
+**rejected**, rather than manufacturing a second site workflow.
+
+If the terminal closes while ChatGPT or the separate human CMS decision is
+pending, use the **same** environment and the previously printed run UUID:
+
+```powershell
+python .\automation\e2e_supersite_certification.py --first-site --manual --resume-run-id <existing-run-uuid>
+```
+
+This uses the existing `temporal_starter workflow-wait --workflow-id` CLI
+method to await the old workflow result. It never calls `start_workflow`,
+never re-registers a site scope and still runs independent public HTTPS
+checks. Do **not** use `start` to recover; validate the source
+`WORKER_BUILD_ID` and exact-head CI before deploying the new CLI.
+If the private receipt is unavailable, recover the exact workflow UUID
+from Temporal/PostgreSQL evidence; never invent or guess one. The default
+receipt directory (when the environment override is omitted) is
+`~/.alegria/first_site_sessions`; do not change it mid-run.
+
+
 In a second Windows PowerShell terminal handle pending typed tasks through
 the existing running container:
 
