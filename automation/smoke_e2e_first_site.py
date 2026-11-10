@@ -158,6 +158,21 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         runner.assert_not_called()
         command.assert_not_called()
 
+    def test_dry_run_does_not_claim_database_readiness_from_default_url(self) -> None:
+        output = StringIO()
+        with (
+            mock.patch.dict("os.environ", TEST_ENV, clear=True),
+            mock.patch.object(
+                sys, "argv", ["certification", "--first-site", "--dry-run"]
+            ),
+            mock.patch("sys.stdout", output),
+            mock.patch.object(cert, "run_command") as run_command,
+        ):
+            self.assertEqual(cert.main(), 0)
+        self.assertIn("database_connectivity=NOT_TESTED", output.getvalue())
+        self.assertNotIn("database_configured=True", output.getvalue())
+        run_command.assert_not_called()
+
     def test_dry_run_does_not_print_database_credentials(self) -> None:
         env = dict(TEST_ENV, DATABASE_URL="postgres://user:topsecret@host/db")
         output = StringIO()
@@ -179,6 +194,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         )
         self.assertEqual(code, 2)
         self.assertIn("VOYAGE_API_KEY", manifest["missing"])
+        self.assertEqual(manifest["evidence_status"], "PENDING_CREDENTIALS")
         runner.assert_not_called()
         command.assert_not_called()
 
