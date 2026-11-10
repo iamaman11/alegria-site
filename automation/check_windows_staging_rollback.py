@@ -33,9 +33,12 @@ def check(script: str) -> None:
         "-ExpectedImage $rollbackImage",
         "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
         "& $docker @newArgs build $Service",
-        "& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service",
+        "function Invoke-Compose-Recreate-Start",
+        "& $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service",
+        "& $docker start $target",
+        "$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs",
         "& $docker image tag $rollbackTag $latestTag",
-        "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
+        "$rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs",
         ". (Join-Path $PSScriptRoot 'windows_staging_reconcile.ps1')",
         "function Test-Docker-Engine-Ready",
         "function Read-Worker-Observed",
@@ -64,7 +67,7 @@ def check(script: str) -> None:
     preserve = script.index("& $docker image tag $recoveredImage $rollbackTag")
     guard = script.index("Assert-Exit 'rollback guard: verified image absent'")
     candidate_build = script.index("& $docker @newArgs build $Service")
-    recreate = script.index("& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service")
+    recreate = script.index("$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs")
     rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
     assert recovery < compare < preserve < rollback_image < guard < candidate_build < recreate
     readback = script.index("$decision = Wait-Worker-Reconciliation -StartExit $startExit")
@@ -74,7 +77,7 @@ def check(script: str) -> None:
     )
     restored_identity = script.index("$env:WORKER_BUILD_ID = $oldBuildId")
     checked_identity = script.index("Rollback build identity does not match previous container")
-    rollback_up = script.index("& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service")
+    rollback_up = script.index("$rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs")
     assert rollback_tag < restored_identity < checked_identity < rollback_up, (
         "restore old build identity and verify config before attempting rollback"
     )
@@ -84,7 +87,12 @@ def check(script: str) -> None:
     assert "Assert-Exit 'restore previous worker'" not in script, (
         "a failed rollback start must be read back, not assumed"
     )
-    assert "Candidate build did not produce a distinct" not in script, (
+    assert "up -d --no-deps --no-build --force-recreate" not in script, (
+        "Windows staging must not repeat Compose's observed Starting hang"
+    )
+    assert script.count("Invoke-Compose-Recreate-Start -ComposeArgs $newArgs") == 1
+    assert script.count("Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs") == 1
+    assert "Candidate build did not produce a distinct" not in script,
         "operator-only commits may legitimately rebuild to the same Docker image ID"
     )
     assert "Remove-Item -LiteralPath $scratch -Force -Recurse" in script
@@ -112,7 +120,7 @@ def main() -> None:
         "Get-FileHash $live -Algorithm SHA256",
         "& $docker image inspect $rollbackTag --format '{{.Id}}'",
         "throw \"Rollback mismatch in $file; keep current worker running\"",
-        "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
+        "$rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs",
         "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
         "if ($decision -eq 'ENGINE_UNAVAILABLE')",
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
