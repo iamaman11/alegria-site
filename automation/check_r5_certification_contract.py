@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sys
 
@@ -19,7 +20,7 @@ def main() -> int:
         if not path.exists():
             failures.append(f"missing file: {path.relative_to(ROOT)}")
         elif path.suffix in {".sh", ".py"} and path.name != "nightly_r5_production_gate.sh":
-            if path.suffix == ".sh" and not path.stat().st_mode & 0o111:
+            if os.name != "nt" and path.suffix == ".sh" and not path.stat().st_mode & 0o111:
                 failures.append(f"script is not executable: {path.relative_to(ROOT)}")
 
     runner = RUNNER.read_text(encoding="utf-8")
