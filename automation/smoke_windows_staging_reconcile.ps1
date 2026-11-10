@@ -73,4 +73,28 @@ Assert-Equal (Test-Staging-Readback -Observed $sameImageOld @sameImageCheck) $tr
 Assert-Equal (Test-Staging-Readback -Observed $sameImageOld @check) $false 'same binary does not impersonate new source'
 Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $false -OldVerified $true -StartExit -1) 'OLD_RUNNING' 'same image ID, old checkout survives'
 
+# Missing original image metadata: verified rebuild may have another immutable ID.
+$unavailableOriginal = 'sha256:missing-original'
+$verifiedRebuild = 'sha256:verified-rebuild'
+$recoveredRunning = $readback.Clone()
+$recoveredRunning.Image = $verifiedRebuild
+$recoveredRunning.Checkout = $oldRoot
+$recoveredRunning.BuildId = 'b' * 40
+$verifiedRollbackCheck = $check.Clone()
+$verifiedRollbackCheck.ExpectedImage = $verifiedRebuild
+$verifiedRollbackCheck.ExpectedCheckout = $oldRoot
+$verifiedRollbackCheck.ExpectedBuildId = 'b' * 40
+Assert-Equal (Test-Staging-Readback -Observed $recoveredRunning @verifiedRollbackCheck) $true 'rebuilt rollback matches verified tag'
+$staleImageCheck = $verifiedRollbackCheck.Clone()
+$staleImageCheck.ExpectedImage = $unavailableOriginal
+Assert-Equal (Test-Staging-Readback -Observed $recoveredRunning @staleImageCheck) $false 'old missing ID cannot identify rebuilt rollback'
+Assert-Equal (Test-Staging-Readback -Observed $recoveredRunning @check) $false 'rebuilt previous is not candidate'
+Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $false -OldVerified $true -StartExit -1) 'OLD_RUNNING' 'rebuilt old runs after rollback Compose error'
+$wrongRollbackProject = $recoveredRunning.Clone()
+$wrongRollbackProject.Project = 'foreign-project'
+Assert-Equal (Test-Staging-Readback -Observed $wrongRollbackProject @verifiedRollbackCheck) $false 'rebuilt previous foreign project'
+$unhealthyRollback = $verifiedRollbackCheck.Clone()
+$unhealthyRollback.MetricsOk = $false
+Assert-Equal (Test-Staging-Readback -Observed $recoveredRunning @unhealthyRollback) $false 'rebuilt previous missing metrics'
+
 Write-Output 'WINDOWS_STAGING_ENGINE_RECONCILE=PASS'
