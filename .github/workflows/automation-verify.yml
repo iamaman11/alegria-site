@@ -87,6 +87,7 @@ jobs:
         shell: pwsh
         run: |
           python automation/check_windows_staging_rollback.py
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           python automation/smoke_e2e_first_site.py
           python automation/smoke_first_site_doctor.py
           python automation/smoke_e2e_canonical_temporal.py

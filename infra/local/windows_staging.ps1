@@ -18,6 +18,7 @@ $docker = Join-Path $HomeOnB 'docker\app\resources\bin\docker.exe'
 $runtime = Join-Path $HomeOnB 'runtime'
 $downloads = Join-Path $HomeOnB 'downloads'
 $repo = 'iamaman11/alegria-site'
+. (Join-Path $PSScriptRoot 'windows_staging_reconcile.ps1')
 
 function Assert-Exit([string]$Stage) {
     if ($LASTEXITCODE -ne 0) { throw "$Stage failed: exit $LASTEXITCODE" }
@@ -130,6 +131,11 @@ if ($Service -eq 'temporal-worker') {
 }
 $oldImage = ((& $docker inspect $target --format '{{.Image}}') | Out-String).Trim()
 Assert-Exit 'inspect previous image'
+$oldEnv = ((& $docker inspect $target --format '{{json .Config.Env}}') | Out-String) | ConvertFrom-Json
+Assert-Exit 'inspect previous build identity'
+$oldBuildId = [string]($oldEnv | Where-Object { $_ -match '^WORKER_BUILD_ID=' } |
+    Select-Object -First 1)
+$oldBuildId = $oldBuildId -replace '^WORKER_BUILD_ID=', ''
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
@@ -185,34 +191,179 @@ if ($LASTEXITCODE -eq 0) {
     }
 }
 # The rollback tag is now immutable across the candidate :latest build.
-& $docker image inspect $rollbackTag --format '{{.Id}}' | Out-Null
+# The old container's .Image can be absent from the local image store; a verified
+# rebuild can have a different ID. Compare post-rollback state to this tag.
+$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'rollback guard: verified image absent'
+if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
 & $docker @newArgs build $Service
 Assert-Exit "build $Service"
-try {
-    & $docker @newArgs up -d --no-deps --no-build --force-recreate $Service
-    Assert-Exit "start $Service"
-    $ok = $false
-    for ($i = 0; $i -lt 45; $i++) {
-        if ((Container-State $target) -eq 'running') { $ok = $true; break }
-        Start-Sleep -Seconds 2
-    }
-    if (-not $ok) { throw "$target never became running" }
-    if ((Container-Label $target 'com.docker.compose.project') -ne $project) { throw 'Project changed' }
-    if ($Service -eq 'temporal-worker') {
-        $status = (Invoke-WebRequest 'http://127.0.0.1:9464/metrics' -UseBasicParsing -TimeoutSec 8).StatusCode
-        if ($status -ne 200) { throw 'Metrics check failed' }
-    }
-    Write-Output "DEPLOYED=$Service COMMIT=$Commit PROJECT=$project"
-} catch {
-    $message = $_.Exception.Message
-    Write-Warning "New deploy failed ($message); restoring prior image and config"
-    $latestTag = $project + '-' + $Service + ':latest'
-    & $docker image tag $rollbackTag $latestTag
-    Assert-Exit 'restore previous image'
-    & $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service
-    Assert-Exit 'restore previous worker'
-    if ((Container-State $target) -ne 'running') { throw 'Rollback worker did not start' }
-    throw "Deploy rejected; restored $oldSha"
+$latestTag = $project + '-' + $Service + ':latest'
+$newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
+Assert-Exit 'inspect newly built image'
+# An operator-only commit can legitimately rebuild to the SAME immutable image.
+# Checkout + WORKER_BUILD_ID must still match the requested commit at readback.
+if (-not $newImage) {
+    throw 'Candidate build has no verifiable image ID'
 }
+
+function Test-Docker-Engine-Ready {
+    try {
+        $version = ((& $docker version --format '{{.Server.Version}}' 2>$null) | Out-String).Trim()
+        return ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($version))
+    } catch { return $false }
+}
+function Read-Worker-Observed {
+    try {
+        $raw = ((& $docker inspect $target --format '{{json .}}' 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
+        $info = $raw | ConvertFrom-Json
+        $labels = $info.Config.Labels
+        $buildEntry = @($info.Config.Env | Where-Object { $_ -match '^WORKER_BUILD_ID=' } |
+            Select-Object -First 1)
+        $buildId = if ($buildEntry.Count -gt 0) {
+            ([string]$buildEntry[0]).Substring('WORKER_BUILD_ID='.Length)
+        } else { '' }
+        return @{
+            State = [string]$info.State.Status
+            Image = [string]$info.Image
+            Project = [string]$labels.PSObject.Properties['com.docker.compose.project'].Value
+            Checkout = [string]$labels.PSObject.Properties['com.docker.compose.project.working_dir'].Value
+            BuildId = $buildId
+        }
+    } catch { return $null }
+}
+function Test-Worker-Metrics {
+    if ($Service -ne 'temporal-worker') { return $true }
+    try {
+        $response = Invoke-WebRequest 'http://127.0.0.1:9464/metrics' -UseBasicParsing -TimeoutSec 8
+        return ($response.StatusCode -eq 200)
+    } catch { return $false }
+}
+function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
+    # Docker Desktop Hyper-V may restart while Compose is waiting. Command exit
+    # -1 is not proof of a failed container start or a successful rollback.
+    $lastReady = $false
+    for ($i = 0; $i -lt $Attempts; $i++) {
+        $lastReady = Test-Docker-Engine-Ready
+        if ($lastReady) {
+            $observed = Read-Worker-Observed
+            $metricsOk = $false
+            if ($null -ne $observed -and $observed.State -eq 'running' -and
+                ($observed.Image -eq $newImage -or $observed.Image -eq $rollbackImage)) {
+                $metricsOk = Test-Worker-Metrics
+            }
+            $newVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $newImage `
+                -ExpectedProject $project -ExpectedCheckout $root `
+                -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
+                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
+            $oldVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $rollbackImage `
+                -ExpectedProject $project -ExpectedCheckout $oldRoot `
+                -ExpectedBuildId ([string]$oldBuildId) `
+                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
+            $decision = Resolve-Staging-Decision -EngineReady $true -NewVerified $newVerified `
+                -OldVerified $oldVerified -StartExit $StartExit
+            if ($decision -ne 'UNVERIFIED') { return $decision }
+            # Never clobber an unknown RUNNING image, even if the Docker CLI
+            # returned a failure. It could be a concurrent or external deploy.
+            if ($null -ne $observed -and $observed.State -eq 'running' -and
+                $observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage) {
+                throw 'RECOVERY_REQUIRED: unexpected running image; refuse to overwrite'
+            }
+        }
+        if ($i -lt ($Attempts - 1)) { Start-Sleep -Seconds 2 }
+    }
+    if (-not $lastReady) { return 'ENGINE_UNAVAILABLE' }
+    return 'UNVERIFIED'
+}
+
+# Native Docker Desktop can hang indefinitely while Compose waits for its
+# own "Starting" progress. Let Compose own creation/configuration, and use
+# Docker's standard container start for the actual transition to running.
+# The same two-step lifecycle is used for both deploy and rollback.
+function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
+    $createExit = -1
+    try {
+        $null = & $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service
+        $createExit = [int]$LASTEXITCODE
+    } catch {
+        Write-Warning 'Compose create raised an exception; reconciling actual container state'
+    }
+    if ($createExit -ne 0) { return $createExit }
+    try {
+        $null = & $docker start $target
+        return [int]$LASTEXITCODE
+    } catch {
+        Write-Warning 'Native Docker start raised an exception; reconciling actual container state'
+        return -1
+    }
+}
+
+$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs
+if ($startExit -ne 0) {
+    Write-Warning "Worker create/start returned exit $startExit; checking Docker engine and exact deployed identity before rollback"
+}
+$decision = Wait-Worker-Reconciliation -StartExit $startExit
+if ($decision -eq 'DEPLOYED') {
+    Write-Output "DEPLOYED=$Service COMMIT=$Commit PROJECT=$project IMAGE=$newImage"
+    exit 0
+}
+if ($decision -eq 'DEPLOYED_AFTER_START_ERROR') {
+    # This is NOT a clean Compose success: preserve the anomaly in the audit
+    # and confirm exact image/build/source identity + real metrics first.
+    Write-Warning "DEPLOYED_RECOVERED: Compose start failed but identical candidate is running and verified"
+    Write-Output "DEPLOYED_RECOVERED=$Service COMMIT=$Commit PROJECT=$project IMAGE=$newImage COMPOSE_EXIT=$startExit"
+    exit 0
+}
+if ($decision -eq 'ENGINE_UNAVAILABLE') {
+    throw "RECOVERY_REQUIRED: Docker engine unreachable; preserved rollback image $rollbackTag. No destructive retry."
+}
+if ($decision -eq 'OLD_RUNNING') {
+    # The old container is already healthy. Restore only its :latest alias,
+    # not the container itself; a later --no-build must not pick the candidate.
+    & $docker image tag $rollbackTag $latestTag
+    Assert-Exit 'restore previous latest tag (no container recreate)'
+    throw "DEPLOY_REJECTED: previous worker $oldSha is running and verified; candidate not deployed"
+}
+
+# Docker is available, but the candidate is not verified. A recoverable
+# stopped/created container may be restored only from the immutable old image.
+$observed = Read-Worker-Observed
+if ($null -ne $observed -and $observed.State -eq 'running') {
+    throw 'RECOVERY_REQUIRED: unverified running container; refuse automatic destructive rollback'
+}
+Write-Warning "Candidate failed verification; restoring immutable old image $oldSha"
+& $docker image tag $rollbackTag $latestTag
+Assert-Exit 'retag preserved image for rollback'
+$rollbackExit = -1
+$previousBuildEnvironment = [Environment]::GetEnvironmentVariable('WORKER_BUILD_ID', 'Process')
+try {
+    # Rollback must not use the NEW commit's WORKER_BUILD_ID from -EnvFile.
+    # The original image and the worker identity must remain consistent.
+    if ($oldBuildId) {
+        $env:WORKER_BUILD_ID = $oldBuildId
+    } else {
+        Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
+    }
+    $rollbackConfig = ((& $docker @previousArgs config --format json) | Out-String) | ConvertFrom-Json
+    Assert-Exit 'rollback effective Compose config'
+    if ($oldBuildId -and $rollbackConfig.services.$Service.environment.WORKER_BUILD_ID -ne $oldBuildId) {
+        throw 'Rollback build identity does not match previous container; refuse recreate'
+    }
+    $rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs
+} finally {
+    if ($null -eq $previousBuildEnvironment) {
+        Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
+    } else {
+        $env:WORKER_BUILD_ID = $previousBuildEnvironment
+    }
+}
+$rollbackDecision = Wait-Worker-Reconciliation -StartExit $rollbackExit
+if ($rollbackDecision -eq 'OLD_RUNNING') {
+    throw "DEPLOY_REJECTED_ROLLED_BACK: old worker $oldSha is verified; candidate not deployed"
+}
+if ($rollbackDecision -eq 'ENGINE_UNAVAILABLE') {
+    throw "RECOVERY_REQUIRED: Docker engine unavailable after rollback request; preserved $rollbackTag"
+}
+throw "RECOVERY_REQUIRED: rollback not verified ($rollbackDecision); preserve $rollbackTag and inspect container before retry"
