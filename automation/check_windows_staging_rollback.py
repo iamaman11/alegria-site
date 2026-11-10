@@ -102,8 +102,10 @@ def main() -> None:
     for name in ('postgres', 'postgres-temporal', 'pgbouncer', 'neo4j',
                  'qdrant', 'temporal-server', 'temporal-worker', 'outbox-worker'):
         assert re.search(r'(?m)^    restart: unless-stopped\s*$', services[name]), name
+        assert services[name].count('\n    restart: ') == 1, f'duplicate restart in {name}'
     for name in ('temporal-schema', 'temporal-namespace'):
         assert re.search(r'(?m)^    restart: "no"\s*$', services[name]), name
+        assert services[name].count('\n    restart: ') == 1, f'duplicate restart in {name}'
 
     # Negative mutation cases must fail closed, not silently pass.
     for fragment in (
