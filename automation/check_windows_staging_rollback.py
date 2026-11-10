@@ -46,6 +46,10 @@ def check(script: str) -> None:
         "throw 'RECOVERY_REQUIRED: unverified running container",
         'throw "DEPLOY_REJECTED_ROLLED_BACK:',
         "if ($rollbackDecision -eq 'OLD_RUNNING')",
+        "Rollback build identity does not match previous container; refuse recreate",
+        "$env:WORKER_BUILD_ID = $oldBuildId",
+        "$rollbackConfig = ((& $docker @previousArgs config --format json)",
+        "$env:WORKER_BUILD_ID = $previousBuildEnvironment",
 
     ]
     for snippet in required:
@@ -61,6 +65,12 @@ def check(script: str) -> None:
     rollback_tag = script.index("& $docker image tag $rollbackTag $latestTag")
     assert recreate < readback < rollback_tag, (
         "inspect exact candidate after a Docker start error BEFORE changing rollback tags"
+    )
+    restored_identity = script.index("$env:WORKER_BUILD_ID = $oldBuildId")
+    checked_identity = script.index("Rollback build identity does not match previous container")
+    rollback_up = script.index("& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service")
+    assert rollback_tag < restored_identity < checked_identity < rollback_up, (
+        "restore old build identity and verify config before attempting rollback"
     )
     assert "Assert-Exit \"start $Service\"" not in script, (
         "start exit status must be reconciled against real container identity"
