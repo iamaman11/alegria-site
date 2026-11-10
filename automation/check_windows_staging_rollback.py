@@ -35,6 +35,7 @@ def check(script: str) -> None:
         "function Test-Docker-Engine-Ready",
         "function Read-Worker-Observed",
         "function Wait-Worker-Reconciliation",
+        "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
         "Test-Staging-Readback -Observed $observed",
         "Resolve-Staging-Decision -EngineReady $true",
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
