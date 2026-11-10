@@ -331,8 +331,12 @@ mod tests {
             "seo_site_build_canonical_cutover_ok run_id={id} ia_pages=1 published_pages=1 truth_verified=2"
         );
         assert!(report_workflow_completion(
-            "SeoSiteBuildCanonicalCutoverWorkflow", id, &good, true
-        ).is_ok());
+            "SeoSiteBuildCanonicalCutoverWorkflow",
+            id,
+            &good,
+            true
+        )
+        .is_ok());
         for result in [
             format!("seo_site_build_canonical_cutover_ok run_id=wrong ia_pages=1 published_pages=1 truth_verified=2"),
             format!("seo_site_build_canonical_cutover_ok run_id={id} ia_pages=1 published_pages=0 truth_verified=2"),
@@ -340,8 +344,12 @@ mod tests {
             "blocked:incomplete_verified_truth".to_string(),
         ] {
             assert!(report_workflow_completion(
-                "SeoSiteBuildCanonicalCutoverWorkflow", id, &result, true
-            ).is_err());
+                "SeoSiteBuildCanonicalCutoverWorkflow",
+                id,
+                &result,
+                true
+            )
+            .is_err());
         }
     }
 
