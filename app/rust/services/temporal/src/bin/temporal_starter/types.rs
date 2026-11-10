@@ -164,6 +164,11 @@ enum Command {
         #[arg(long)]
         workflow_id: String,
     },
+    /// Read-only reattach to an existing canonical site workflow. Never starts another run.
+    WorkflowWait {
+        #[arg(long)]
+        workflow_id: String,
+    },
 }
 
 #[derive(serde::Serialize)]
