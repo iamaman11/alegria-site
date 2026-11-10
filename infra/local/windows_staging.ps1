@@ -133,9 +133,9 @@ $oldImage = ((& $docker inspect $target --format '{{.Image}}') | Out-String).Tri
 Assert-Exit 'inspect previous image'
 $oldEnv = ((& $docker inspect $target --format '{{json .Config.Env}}') | Out-String) | ConvertFrom-Json
 Assert-Exit 'inspect previous build identity'
-$oldBuildId = @($oldEnv | Where-Object { $_ -match '^WORKER_BUILD_ID=' } |
-    Select-Object -First 1) -replace '^WORKER_BUILD_ID=', ''
-if ($oldBuildId -is [array]) { $oldBuildId = [string]($oldBuildId | Select-Object -First 1) }
+$oldBuildId = [string]($oldEnv | Where-Object { $_ -match '^WORKER_BUILD_ID=' } |
+    Select-Object -First 1)
+$oldBuildId = $oldBuildId -replace '^WORKER_BUILD_ID=', ''
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
@@ -312,11 +312,32 @@ Write-Warning "Candidate failed verification; restoring immutable old image $old
 & $docker image tag $rollbackTag $latestTag
 Assert-Exit 'retag preserved image for rollback'
 $rollbackExit = -1
+$previousBuildEnvironment = [Environment]::GetEnvironmentVariable('WORKER_BUILD_ID', 'Process')
 try {
-    & $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service
-    $rollbackExit = $LASTEXITCODE
-} catch {
-    Write-Warning 'Rollback Compose command failed; reconciling actual old image and state'
+    # Rollback must not use the NEW commit's WORKER_BUILD_ID from -EnvFile.
+    # The original image and the worker identity must remain consistent.
+    if ($oldBuildId) {
+        $env:WORKER_BUILD_ID = $oldBuildId
+    } else {
+        Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
+    }
+    $rollbackConfig = ((& $docker @previousArgs config --format json) | Out-String) | ConvertFrom-Json
+    Assert-Exit 'rollback effective Compose config'
+    if ($oldBuildId -and $rollbackConfig.services.$Service.environment.WORKER_BUILD_ID -ne $oldBuildId) {
+        throw 'Rollback build identity does not match previous container; refuse recreate'
+    }
+    try {
+        & $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service
+        $rollbackExit = $LASTEXITCODE
+    } catch {
+        Write-Warning 'Rollback Compose command failed; reconciling actual old image and state'
+    }
+} finally {
+    if ($null -eq $previousBuildEnvironment) {
+        Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
+    } else {
+        $env:WORKER_BUILD_ID = $previousBuildEnvironment
+    }
 }
 $rollbackDecision = Wait-Worker-Reconciliation -StartExit $rollbackExit
 if ($rollbackDecision -eq 'OLD_RUNNING') {
