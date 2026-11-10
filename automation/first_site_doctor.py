@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import urllib.error
@@ -26,10 +27,12 @@ ACCOUNT_ID = "78e5fcb3762c1473113d51838556da74"
 EXPECTED_ORIGIN = "https://alegria-seo-staging.alegria-site.workers.dev"
 
 
-def command(args: list[str], *, timeout: int = 10) -> tuple[bool, str]:
+def command(
+    args: list[str], *, timeout: int = 10, stdin: str | None = None,
+) -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            args, capture_output=True, text=True, timeout=timeout,
+            args, input=stdin, capture_output=True, text=True, timeout=timeout,
             check=False, encoding="utf-8", errors="replace",
         )
     except (OSError, subprocess.TimeoutExpired):
@@ -37,8 +40,10 @@ def command(args: list[str], *, timeout: int = 10) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout[:200_000] if result.returncode == 0 else ""
 
 
-def docker(args: list[str], *, timeout: int = 10) -> tuple[bool, str]:
-    return command(["docker", *args], timeout=timeout)
+def docker(
+    args: list[str], *, timeout: int = 10, stdin: str | None = None,
+) -> tuple[bool, str]:
+    return command(["docker", *args], timeout=timeout, stdin=stdin)
 
 
 def worker_env() -> tuple[dict[str, str], str]:
@@ -122,16 +127,11 @@ def run() -> dict:
         "exec", "alegria_postgres", "pg_isready", "-U", "postgres", "-d", "alegria",
     ])
     db_ready = db_ok and "accepting connections" in db_ping
-    query = (
-        "SELECT (SELECT count(*) FROM pipeline.execution_runs)::text || ',' || "
-        "(SELECT count(*) FROM pipeline.manual_llm_jobs WHERE job_status='pending')::text || ',' || "
-        "(SELECT count(*) FROM site.seo_hitl_tasks WHERE queue_state IN "
-        "('open','in_review','reopened'))::text"
-    )
+    read_only_sql = Path(__file__).with_suffix(".sql").read_text(encoding="utf-8")
     counts_ok, counts_raw = docker([
-        "exec", "alegria_postgres", "psql", "-X", "-U", "postgres", "-d", "alegria",
-        "-A", "-t", "-c", query,
-    ]) if db_ready else (False, "")
+        "exec", "-i", "alegria_postgres", "psql", "-X", "-U", "postgres",
+        "-d", "alegria", "-A", "-t", "-v", "ON_ERROR_STOP=1", "-f", "-",
+    ], stdin=read_only_sql) if db_ready else (False, "")
     counts = None
     if counts_ok:
         values = counts_raw.strip().split(",")
