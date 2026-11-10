@@ -18,6 +18,12 @@ from deploy_seo_static_cloudflare import EXPECTED_ACCOUNT, EXPECTED_ORIGIN
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNS_DIR = ROOT / "docs" / "runs"
+# Operator receipts must survive switching to a new exact-SHA GitHub checkout.
+# This is runtime evidence only, never a second canonical source for code.
+SESSION_DIR = Path(
+    os.environ.get("ALEGRIA_FIRST_SITE_SESSION_DIR")
+    or (Path.home() / ".alegria" / "first_site_sessions")
+)
 MANIFEST = RUNS_DIR / "r5_supersite_certification_manifest.json"
 
 
@@ -164,14 +170,16 @@ def existing_canonical_temporal_command(run_id: str) -> list[str]:
 
 
 def first_site_session(run_id: str) -> Path:
-    return RUNS_DIR / f"first_site_session_{run_id}.json"
+    if not SESSION_DIR.is_absolute():
+        raise RuntimeError("ALEGRIA_FIRST_SITE_SESSION_DIR must be an absolute path")
+    return SESSION_DIR / f"first_site_session_{run_id}.json"
 
 
 def record_first_site_session(run_id: str, *, resume: bool) -> None:
     """Durable operator receipt before subprocess.run(... --wait) may be killed."""
     path = first_site_session(run_id)
     if not resume:
-        for previous in RUNS_DIR.glob("first_site_session_*.json"):
+        for previous in SESSION_DIR.glob("first_site_session_*.json"):
             try:
                 payload = json.loads(previous.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
