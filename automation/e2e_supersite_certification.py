@@ -99,6 +99,7 @@ def certification_requirements(
     return {
         "DATAFORSEO_LOGIN": bool(os.environ.get("DATAFORSEO_LOGIN")),
         "DATAFORSEO_PASSWORD": bool(os.environ.get("DATAFORSEO_PASSWORD")),
+        "VOYAGE_API_KEY": bool(os.environ.get("VOYAGE_API_KEY")),
         "production_llm_provider": provider_live is not None or (
             supervised_manual
             and os.environ.get("SEO_LLM_PROVIDER") == "chat_manual"
