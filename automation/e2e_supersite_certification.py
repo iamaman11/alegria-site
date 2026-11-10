@@ -297,6 +297,7 @@ def scenario_payload(
     provider_kind: str,
     gate_results: dict[str, Any],
     resume_run_id: str | None = None,
+    track_first_site_session: bool = False,
 ) -> dict[str, Any]:
     run_id = resume_run_id or str(uuid4())
     query_batch_key = f"r5-{scenario_id}-{run_id}"
@@ -310,7 +311,7 @@ def scenario_payload(
             publish=publish,
         )
     )
-    if scenario_id == "fresh_scope" and publish:
+    if track_first_site_session and scenario_id == "fresh_scope" and publish:
         record_first_site_session(run_id, resume=resume_run_id is not None)
     before_facts = before_html = None
     if scenario_id == "factual_change_rebuild":
@@ -320,7 +321,7 @@ def scenario_payload(
         before_facts = snapshot_verified_facts()
         before_html = snapshot_published_html()
     proc = run_command(command)
-    if scenario_id == "fresh_scope" and publish:
+    if track_first_site_session and scenario_id == "fresh_scope" and publish:
         receipt = first_site_session(run_id)
         write_json(receipt, {
             "kind": "first_site_canonical_temporal_session",
@@ -634,6 +635,7 @@ def main() -> int:
             provider_kind=provider_kind,
             gate_results=gate_results,
             resume_run_id=args.resume_run_id,
+            track_first_site_session=args.first_site,
         )
         manifest["scenarios"].append(
             {
