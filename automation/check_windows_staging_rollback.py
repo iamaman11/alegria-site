@@ -27,6 +27,9 @@ def check(script: str) -> None:
         "& $docker image tag $recoveredImage $rollbackTag",
         "& $docker image inspect $rollbackTag --format '{{.Id}}'",
         "Assert-Exit 'rollback guard: verified image absent'",
+        "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
+        "-ExpectedImage $rollbackImage",
+        "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
         "& $docker @newArgs build $Service",
         "& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service",
         "& $docker image tag $rollbackTag $latestTag",
@@ -60,7 +63,8 @@ def check(script: str) -> None:
     guard = script.index("Assert-Exit 'rollback guard: verified image absent'")
     candidate_build = script.index("& $docker @newArgs build $Service")
     recreate = script.index("& $docker @newArgs up -d --no-deps --no-build --force-recreate $Service")
-    assert recovery < compare < preserve < guard < candidate_build < recreate
+    rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
+    assert recovery < compare < preserve < rollback_image < guard < candidate_build < recreate
     readback = script.index("$decision = Wait-Worker-Reconciliation -StartExit $startExit")
     rollback_tag = script.index("& $docker image tag $rollbackTag $latestTag")
     assert recreate < readback < rollback_tag, (
@@ -99,6 +103,7 @@ def main() -> None:
         "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
         "if ($decision -eq 'ENGINE_UNAVAILABLE')",
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
+        "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
     ):
         mutated = source.replace(fragment, "", 1)
         try:
