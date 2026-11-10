@@ -299,6 +299,10 @@ if ($decision -eq 'ENGINE_UNAVAILABLE') {
     throw "RECOVERY_REQUIRED: Docker engine unreachable; preserved rollback image $rollbackTag. No destructive retry."
 }
 if ($decision -eq 'OLD_RUNNING') {
+    # The old container is already healthy. Restore only its :latest alias,
+    # not the container itself; a later --no-build must not pick the candidate.
+    & $docker image tag $rollbackTag $latestTag
+    Assert-Exit 'restore previous latest tag (no container recreate)'
     throw "DEPLOY_REJECTED: previous worker $oldSha is running and verified; candidate not deployed"
 }
 
