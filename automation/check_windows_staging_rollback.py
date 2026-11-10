@@ -92,7 +92,7 @@ def check(script: str) -> None:
     )
     assert script.count("Invoke-Compose-Recreate-Start -ComposeArgs $newArgs") == 1
     assert script.count("Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs") == 1
-    assert "Candidate build did not produce a distinct" not in script,
+    assert "Candidate build did not produce a distinct" not in script, (
         "operator-only commits may legitimately rebuild to the same Docker image ID"
     )
     assert "Remove-Item -LiteralPath $scratch -Force -Recurse" in script
