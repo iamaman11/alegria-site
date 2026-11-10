@@ -36,6 +36,9 @@ python3 automation/check_support_surface_execution.py
 echo "[4c/50] Release/restore gate surface"
 python3 automation/check_release_restore_gate_surface.py
 
+echo "[4c1/50] Windows staging rollback safety"
+python3 automation/check_windows_staging_rollback.py
+
 echo "[4d/50] Voyage retrieval surface"
 python3 automation/check_voyage_retrieval_surface.py
 
