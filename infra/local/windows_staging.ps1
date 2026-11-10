@@ -191,8 +191,11 @@ if ($LASTEXITCODE -eq 0) {
     }
 }
 # The rollback tag is now immutable across the candidate :latest build.
-& $docker image inspect $rollbackTag --format '{{.Id}}' | Out-Null
+# The old container's .Image can be absent from the local image store; a verified
+# rebuild can have a different ID. Compare post-rollback state to this tag.
+$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'rollback guard: verified image absent'
+if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
 & $docker @newArgs build $Service
 Assert-Exit "build $Service"
@@ -248,14 +251,14 @@ function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
             $observed = Read-Worker-Observed
             $metricsOk = $false
             if ($null -ne $observed -and $observed.State -eq 'running' -and
-                ($observed.Image -eq $newImage -or $observed.Image -eq $oldImage)) {
+                ($observed.Image -eq $newImage -or $observed.Image -eq $rollbackImage)) {
                 $metricsOk = Test-Worker-Metrics
             }
             $newVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $newImage `
                 -ExpectedProject $project -ExpectedCheckout $root `
                 -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
                 -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
-            $oldVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $oldImage `
+            $oldVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $rollbackImage `
                 -ExpectedProject $project -ExpectedCheckout $oldRoot `
                 -ExpectedBuildId ([string]$oldBuildId) `
                 -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
@@ -265,7 +268,7 @@ function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
             # Never clobber an unknown RUNNING image, even if the Docker CLI
             # returned a failure. It could be a concurrent or external deploy.
             if ($null -ne $observed -and $observed.State -eq 'running' -and
-                $observed.Image -ne $newImage -and $observed.Image -ne $oldImage) {
+                $observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage) {
                 throw 'RECOVERY_REQUIRED: unexpected running image; refuse to overwrite'
             }
         }
