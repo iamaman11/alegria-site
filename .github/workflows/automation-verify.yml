@@ -88,6 +88,7 @@ jobs:
         run: |
           python automation/check_windows_staging_rollback.py
           python automation/smoke_e2e_first_site.py
+          python automation/smoke_first_site_doctor.py
           python automation/smoke_e2e_canonical_temporal.py
           python automation/smoke_first_site_release.py
           python automation/smoke_e2e_publication_verdict.py
