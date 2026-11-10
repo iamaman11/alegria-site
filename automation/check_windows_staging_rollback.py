@@ -95,88 +95,15 @@ def check(script: str) -> None:
 def main() -> None:
     source = SCRIPT.read_text(encoding="utf-8")
     check(source)
-    # Enforce native Docker restart policies for always-on Alegria services.
+    # Native restart on Docker Desktop boot; never restart one-shot jobs.
     compose = COMPOSE.read_text(encoding='utf-8')
-    parts = re.split(r'(?m)^  ([a-z][a-z0-9-]*):\s*
-    # Negative mutation cases must fail closed, not silently pass.
-    for fragment in (
-        "Get-FileHash $live -Algorithm SHA256",
-        "& $docker image inspect $rollbackTag --format '{{.Id}}'",
-        "throw \"Rollback mismatch in $file; keep current worker running\"",
-        "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
-        "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
-        "if ($decision -eq 'ENGINE_UNAVAILABLE')",
-        "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
-        "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
-    ):
-        mutated = source.replace(fragment, "", 1)
-        try:
-            check(mutated)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError(f"mutation did not fail: {fragment}")
-    print("WINDOWS_STAGING_ROLLBACK=PASS")
-
-
-if __name__ == "__main__":
-    main()
-, compose)
+    parts = re.split(r'(?m)^  ([a-z][a-z0-9-]*):\s*$', compose)
     services = dict(zip(parts[1::2], parts[2::2]))
     for name in ('postgres', 'postgres-temporal', 'pgbouncer', 'neo4j',
                  'qdrant', 'temporal-server', 'temporal-worker', 'outbox-worker'):
-        assert re.search(r'(?m)^    restart: unless-stopped\s*
-    # Negative mutation cases must fail closed, not silently pass.
-    for fragment in (
-        "Get-FileHash $live -Algorithm SHA256",
-        "& $docker image inspect $rollbackTag --format '{{.Id}}'",
-        "throw \"Rollback mismatch in $file; keep current worker running\"",
-        "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
-        "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
-        "if ($decision -eq 'ENGINE_UNAVAILABLE')",
-        "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
-        "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
-    ):
-        mutated = source.replace(fragment, "", 1)
-        try:
-            check(mutated)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError(f"mutation did not fail: {fragment}")
-    print("WINDOWS_STAGING_ROLLBACK=PASS")
-
-
-if __name__ == "__main__":
-    main()
-, services[name]), name
+        assert re.search(r'(?m)^    restart: unless-stopped\s*$', services[name]), name
     for name in ('temporal-schema', 'temporal-namespace'):
-        assert re.search(r'(?m)^    restart: "no"\s*
-    # Negative mutation cases must fail closed, not silently pass.
-    for fragment in (
-        "Get-FileHash $live -Algorithm SHA256",
-        "& $docker image inspect $rollbackTag --format '{{.Id}}'",
-        "throw \"Rollback mismatch in $file; keep current worker running\"",
-        "& $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service",
-        "$decision = Wait-Worker-Reconciliation -StartExit $startExit",
-        "if ($decision -eq 'ENGINE_UNAVAILABLE')",
-        "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
-        "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
-    ):
-        mutated = source.replace(fragment, "", 1)
-        try:
-            check(mutated)
-        except AssertionError:
-            pass
-        else:
-            raise AssertionError(f"mutation did not fail: {fragment}")
-    print("WINDOWS_STAGING_ROLLBACK=PASS")
-
-
-if __name__ == "__main__":
-    main()
-, services[name]), name
-
+        assert re.search(r'(?m)^    restart: "no"\s*$', services[name]), name
 
     # Negative mutation cases must fail closed, not silently pass.
     for fragment in (
