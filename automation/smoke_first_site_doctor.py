@@ -48,8 +48,9 @@ class FakeResponse:
 def simulate_docker(
     args: list[str], *, timeout: int = 10, cf_http: int = 200,
     broken_runtime: bool = False, worker: dict[str, str] | None = None,
+    stdin: str | None = None,
 ) -> tuple[bool, str]:
-    del timeout
+    del timeout, stdin
     worker = WORKER if worker is None else worker
     assert args[0] in {"inspect", "exec"}, "doctor must not mutate Docker"
     if args[0] == "inspect" and args[2] == "--format":
@@ -81,11 +82,13 @@ class DoctorTests(unittest.TestCase):
         operator = FLAGS if operator is None else operator
         observed: list[list[str]] = []
 
-        def fake(args: list[str], *, timeout: int = 10) -> tuple[bool, str]:
+        def fake(
+            args: list[str], *, timeout: int = 10, stdin: str | None = None,
+        ) -> tuple[bool, str]:
             observed.append(args)
             return simulate_docker(
                 args, timeout=timeout, cf_http=cf_http,
-                broken_runtime=broken_runtime, worker=worker,
+                broken_runtime=broken_runtime, worker=worker, stdin=stdin,
             )
 
         with (
