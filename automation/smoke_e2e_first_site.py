@@ -112,6 +112,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         with (
             TemporaryDirectory(prefix="alegria-reconnect-") as folder,
             mock.patch.object(cert, "RUNS_DIR", Path(folder)),
+            mock.patch.object(cert, "SESSION_DIR", Path(folder)),
             mock.patch.object(cert, "run_command", side_effect=existing_only),
         ):
             payload = cert.scenario_payload(
@@ -132,7 +133,7 @@ class FirstSiteAcceptanceTests(unittest.TestCase):
         run_id = "9c337079-ae0b-4cb4-b052-bb3a0ca623c1"
         with (
             TemporaryDirectory(prefix="alegria-receipt-") as folder,
-            mock.patch.object(cert, "RUNS_DIR", Path(folder)),
+            mock.patch.object(cert, "SESSION_DIR", Path(folder)),
         ):
             cert.record_first_site_session(run_id, resume=False)
             with self.assertRaisesRegex(RuntimeError, "reattach with --resume-run-id"):
