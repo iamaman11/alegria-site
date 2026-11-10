@@ -78,6 +78,9 @@ def check(script: str) -> None:
     assert "Assert-Exit 'restore previous worker'" not in script, (
         "a failed rollback start must be read back, not assumed"
     )
+    assert "Candidate build did not produce a distinct" not in script, (
+        "operator-only commits may legitimately rebuild to the same Docker image ID"
+    )
     assert "Remove-Item -LiteralPath $scratch -Force -Recurse" in script
     assert "& $docker rm $verifier" in script
     assert "RETRIEVAL_CAPABILITY_REQUIRED" not in script  # no bypass of publication gates
