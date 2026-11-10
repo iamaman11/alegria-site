@@ -278,15 +278,31 @@ function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
     return 'UNVERIFIED'
 }
 
-$startExit = -1
-try {
-    & $docker @newArgs up -d --no-deps --no-build --force-recreate $Service
-    $startExit = $LASTEXITCODE
-} catch {
-    Write-Warning "Compose start raised an exception; reconciling actual container image and state"
+# Native Docker Desktop can hang indefinitely while Compose waits for its
+# own "Starting" progress. Let Compose own creation/configuration, and use
+# Docker's standard container start for the actual transition to running.
+# The same two-step lifecycle is used for both deploy and rollback.
+function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
+    $createExit = -1
+    try {
+        $null = & $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service
+        $createExit = [int]$LASTEXITCODE
+    } catch {
+        Write-Warning 'Compose create raised an exception; reconciling actual container state'
+    }
+    if ($createExit -ne 0) { return $createExit }
+    try {
+        $null = & $docker start $target
+        return [int]$LASTEXITCODE
+    } catch {
+        Write-Warning 'Native Docker start raised an exception; reconciling actual container state'
+        return -1
+    }
 }
+
+$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs
 if ($startExit -ne 0) {
-    Write-Warning "Compose returned exit $startExit; checking Docker engine and exact deployed identity before rollback"
+    Write-Warning "Worker create/start returned exit $startExit; checking Docker engine and exact deployed identity before rollback"
 }
 $decision = Wait-Worker-Reconciliation -StartExit $startExit
 if ($decision -eq 'DEPLOYED') {
@@ -335,12 +351,7 @@ try {
     if ($oldBuildId -and $rollbackConfig.services.$Service.environment.WORKER_BUILD_ID -ne $oldBuildId) {
         throw 'Rollback build identity does not match previous container; refuse recreate'
     }
-    try {
-        & $docker @previousArgs up -d --no-deps --no-build --force-recreate $Service
-        $rollbackExit = $LASTEXITCODE
-    } catch {
-        Write-Warning 'Rollback Compose command failed; reconciling actual old image and state'
-    }
+    $rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs
 } finally {
     if ($null -eq $previousBuildEnvironment) {
         Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
