@@ -281,7 +281,6 @@ services:
         condition: service_healthy
       neo4j:
         condition: service_healthy
-    restart: on-failure:3
     ports:
       - "127.0.0.1:9464:9464"
 
@@ -310,7 +309,6 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_healthy
-    restart: on-failure:3
 
   prometheus:
     image: prom/prometheus:v3.16.0
