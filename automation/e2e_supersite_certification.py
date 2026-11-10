@@ -154,6 +154,49 @@ def canonical_temporal_command(
     return cmd
 
 
+def existing_canonical_temporal_command(run_id: str) -> list[str]:
+    """Reattach only; never re-register a context or start a new Temporal run."""
+    return [
+        "docker", "compose", "exec", "-T", "temporal-worker",
+        "temporal_starter", "--temporal-url", "http://temporal-server:7233",
+        "workflow-wait", "--workflow-id", run_id,
+    ]
+
+
+def first_site_session(run_id: str) -> Path:
+    return RUNS_DIR / f"first_site_session_{run_id}.json"
+
+
+def record_first_site_session(run_id: str, *, resume: bool) -> None:
+    """Durable operator receipt before subprocess.run(... --wait) may be killed."""
+    path = first_site_session(run_id)
+    if not resume:
+        for previous in RUNS_DIR.glob("first_site_session_*.json"):
+            try:
+                payload = json.loads(previous.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise RuntimeError(
+                    f"unreadable first-site session {previous.name}: inspect it before starting"
+                ) from exc
+            if payload.get("status") == "WAITING_FOR_RESULT":
+                raise RuntimeError(
+                    f"existing first-site run {payload.get('run_id')} may still be active; "
+                    "reattach with --resume-run-id instead of starting another workflow"
+                )
+    write_json(path, {
+        "kind": "first_site_canonical_temporal_session",
+        "run_id": run_id,
+        "workflow_id": run_id,
+        "status": "WAITING_FOR_RESULT",
+        "action": "REATTACH" if resume else "START_REQUESTED",
+        "updated_at": utc_now(),
+    })
+    print(
+        f"FIRST_SITE_RUN_ID={run_id} action={'REATTACH' if resume else 'START_REQUESTED'}",
+        flush=True,
+    )
+
+
 def parse_result(output: str) -> dict[str, Any]:
     # This is the canonical Temporal completion report, never semi-auto SEO_RUN_RESULT.
     match = re.search(
@@ -253,15 +296,22 @@ def scenario_payload(
     publish: bool,
     provider_kind: str,
     gate_results: dict[str, Any],
+    resume_run_id: str | None = None,
 ) -> dict[str, Any]:
-    run_id = str(uuid4())
+    run_id = resume_run_id or str(uuid4())
     query_batch_key = f"r5-{scenario_id}-{run_id}"
-    command = canonical_temporal_command(
-        queries=queries,
-        run_id=run_id,
-        query_batch_key=query_batch_key,
-        publish=publish,
+    command = (
+        existing_canonical_temporal_command(run_id)
+        if resume_run_id
+        else canonical_temporal_command(
+            queries=queries,
+            run_id=run_id,
+            query_batch_key=query_batch_key,
+            publish=publish,
+        )
     )
+    if scenario_id == "fresh_scope" and publish:
+        record_first_site_session(run_id, resume=resume_run_id is not None)
     before_facts = before_html = None
     if scenario_id == "factual_change_rebuild":
         # Read both sides of the real change from the same running staging
@@ -270,6 +320,16 @@ def scenario_payload(
         before_facts = snapshot_verified_facts()
         before_html = snapshot_published_html()
     proc = run_command(command)
+    if scenario_id == "fresh_scope" and publish:
+        receipt = first_site_session(run_id)
+        write_json(receipt, {
+            "kind": "first_site_canonical_temporal_session",
+            "run_id": run_id,
+            "workflow_id": run_id,
+            "status": "RESULT_RECEIVED" if proc.returncode == 0 else "WAITING_FOR_RESULT",
+            "action": "REATTACH" if resume_run_id else "START_REQUESTED",
+            "updated_at": utc_now(),
+        })
     factual_proof = None
     if scenario_id == "factual_change_rebuild" and proc.returncode == 0:
         factual_proof = factual_change_proof(
@@ -421,7 +481,20 @@ def main() -> int:
         "--manual", action="store_true",
         help="supervised chat_manual first-site run; still requires real HITL and HTTPS",
     )
+    parser.add_argument(
+        "--resume-run-id", type=str,
+        help="reattach to this existing canonical first-site UUID; never starts a workflow",
+    )
     args = parser.parse_args()
+    if args.resume_run_id:
+        try:
+            from uuid import UUID
+            if str(UUID(args.resume_run_id)) != args.resume_run_id:
+                raise ValueError("noncanonical UUID")
+        except ValueError:
+            parser.error("--resume-run-id requires a canonical UUID")
+        if not args.first_site or not args.manual or args.dry_run:
+            parser.error("--resume-run-id requires --first-site --manual, without --dry-run")
     if args.manual and not args.first_site:
         parser.error("--manual is permitted only with --first-site")
     if args.manual and (
@@ -560,6 +633,7 @@ def main() -> int:
             publish=os.environ.get("ALEGRIA_CERT_PUBLISH", "0") == "1",
             provider_kind=provider_kind,
             gate_results=gate_results,
+            resume_run_id=args.resume_run_id,
         )
         manifest["scenarios"].append(
             {
