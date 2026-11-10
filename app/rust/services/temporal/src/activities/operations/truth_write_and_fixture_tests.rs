@@ -1,3 +1,71 @@
+// Adjudication is per source candidate; verified.rule_instances is keyed per
+// semantic slot. Derive ONE durable outcome per slot, independent of the
+// order in which independent sources or rejected proposals are returned.
+#[derive(Debug)]
+enum SemanticTruthWriteOutcome<'a> {
+    Verified(&'a TruthAdjudicationCandidateDecision),
+    Disputed,
+    Rejected(&'a TruthAdjudicationCandidateDecision),
+}
+
+fn semantic_truth_write_outcome<'a>(
+    candidates: &[&'a TruthAdjudicationCandidateDecision],
+) -> Result<SemanticTruthWriteOutcome<'a>, DomainError> {
+    if candidates.is_empty() {
+        return Err(DomainError::ValidationFailure {
+            message: "cannot write an empty semantic truth identity".to_string(),
+        });
+    }
+    let mut verified = Vec::new();
+    let mut unresolved = false;
+    for candidate in candidates {
+        match candidate.decision.as_str() {
+            "verified" if candidate.publish_admissibility == "admissible" => {
+                verified.push(*candidate);
+            }
+            "verified" | "needs_hitl" => unresolved = true,
+            "rejected" => (),
+            other => {
+                return Err(DomainError::ValidationFailure {
+                    message: format!("unsupported candidate decision: {other}"),
+                });
+            }
+        }
+    }
+
+    // The policy should not produce mixed verified/HITL verdicts, but the
+    // write boundary must fail closed even against stale/forged activity data.
+    if unresolved {
+        return Ok(SemanticTruthWriteOutcome::Disputed);
+    }
+
+    if !verified.is_empty() {
+        let signatures = verified
+            .iter()
+            .map(|candidate| candidate.params.stable_signature())
+            .collect::<BTreeSet<_>>();
+        if signatures.len() != 1 {
+            return Ok(SemanticTruthWriteOutcome::Disputed);
+        }
+        verified.sort_by(|left, right| {
+            right
+                .confidence
+                .total_cmp(&left.confidence)
+                .then_with(|| left.rule_candidate_id.cmp(&right.rule_candidate_id))
+        });
+        return Ok(SemanticTruthWriteOutcome::Verified(verified[0]));
+    }
+
+    let rejected = candidates
+        .iter()
+        .copied()
+        .min_by_key(|candidate| candidate.rule_candidate_id.as_str())
+        .ok_or_else(|| DomainError::ValidationFailure {
+            message: "semantic slot has no admissible candidate".to_string(),
+        })?;
+    Ok(SemanticTruthWriteOutcome::Rejected(rejected))
+}
+
 pub(crate) async fn verified_truth_write_impl(
     acts: &AlegriaActivities,
     input: &VerifiedTruthWriteInput,
@@ -5,8 +73,28 @@ pub(crate) async fn verified_truth_write_impl(
     let mut changed_truth_keys = Vec::new();
     let mut verified_rule_projections = Vec::new();
     let mut demoted_rule_projection_ids = Vec::new();
+    let mut suppressed_scoped_projection_ids = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
+    let mut semantic_candidates =
+        BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
+    for decision in &input.truth_adjudication.decisions {
+        let slot_id = semantic_rule_instance_id_for_scope_local(
+            &input.context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+            &decision.scope,
+        );
+        semantic_candidates
+            .entry(slot_id)
+            .or_default()
+            .push(decision);
+    }
+    let mut semantic_outcomes = BTreeMap::new();
+    for (slot_id, candidates) in &semantic_candidates {
+        semantic_outcomes.insert(slot_id.clone(), semantic_truth_write_outcome(candidates)?);
+    }
+
     let source_section_ids = input
         .truth_adjudication
         .decisions
@@ -23,6 +111,26 @@ pub(crate) async fn verified_truth_write_impl(
         .collect();
 
     for decision in &input.truth_adjudication.decisions {
+        // Reject forged or unsupported scoped verification before SQL writes.
+        // Only exact applicant_profile can be represented downstream.
+        if decision.decision == "verified" && decision.evidence_quote.trim().is_empty() {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "verified candidate {} has no exact source evidence quote",
+                    decision.rule_candidate_id,
+                ),
+            });
+        }
+        if decision.decision == "verified"
+            && primitives::truth_candidates::truth_scope_target(&decision.scope).is_none()
+        {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "candidate {} uses an unsupported scoped predicate",
+                    decision.rule_candidate_id,
+                ),
+            });
+        }
         let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
             DomainError::ValidationFailure {
                 message: format!(
@@ -62,6 +170,22 @@ pub(crate) async fn verified_truth_write_impl(
                     || params.contains_key("duration_days")
             })
             .unwrap_or(false);
+        let semantic_slot = semantic_rule_instance_id_for_scope_local(
+            &input.context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+            &decision.scope,
+        );
+        let slot_outcome = semantic_outcomes.get(&semantic_slot).ok_or_else(|| {
+            DomainError::ValidationFailure {
+                message: format!("missing write verdict for semantic identity {semantic_slot}"),
+            }
+        })?;
+        let candidate_status = match slot_outcome {
+            SemanticTruthWriteOutcome::Disputed if decision.decision == "verified" => "needs_hitl",
+            SemanticTruthWriteOutcome::Rejected(_) => "rejected",
+            _ => decision.decision.as_str(),
+        };
         sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
             &acts.pool,
             &sqlx_seo_adapter::VerifiedTruthCandidateWrite {
@@ -72,6 +196,7 @@ pub(crate) async fn verified_truth_write_impl(
                 concept_canonical_key: decision.concept_canonical_key.clone(),
                 evidence_quote: evidence_quote.clone(),
                 params: truth_param_value_to_json_local(&decision.params),
+                scope: truth_param_value_to_json_local(&decision.scope),
                 severity: severity.to_string(),
                 is_numeric,
                 is_incomplete: decision.completeness_class != "complete",
@@ -80,18 +205,18 @@ pub(crate) async fn verified_truth_write_impl(
                 span_end,
                 source_key: decision.source_key.clone(),
                 source_snapshot_hash: decision.source_snapshot_hash.clone(),
-                epistemic_status: decision.decision.clone(),
+                epistemic_status: candidate_status.to_string(),
             },
         )
         .await?;
-        let rule_instance_id = semantic_rule_instance_id_local(
-            &input.context_key,
-            &decision.role,
-            &decision.concept_canonical_key,
-        );
+    }
+
+    // Exactly one verdict and one outbox event per semantic slot. A rejected
+    // source cannot demote a verified fact backed by independent sources.
+    for (rule_instance_id, outcome) in semantic_outcomes {
         let changed_key = format!("verified.rule_instance:{rule_instance_id}");
-        match decision.decision.as_str() {
-            "verified" => {
+        match outcome {
+            SemanticTruthWriteOutcome::Verified(decision) => {
                 let role_type = decision.role.to_ascii_lowercase();
                 sqlx_seo_adapter::upsert_verified_rule_instance(
                     &acts.pool,
@@ -102,13 +227,17 @@ pub(crate) async fn verified_truth_write_impl(
                         concept_key: decision.concept_canonical_key.clone(),
                         role_type: role_type.clone(),
                         params: truth_param_value_to_json_local(&decision.params),
+                        scope: truth_param_value_to_json_local(&decision.scope),
                         source_key: decision.source_key.clone(),
                         confidence: decision.confidence,
                         rule_candidate_id: decision.rule_candidate_id.clone(),
                         evidence_section_id: decision.section_id,
-                        evidence_quote: evidence_quote.clone(),
-                        span_start,
-                        span_end,
+                        evidence_quote: decision.evidence_quote.clone(),
+                        span_start: decision.span_start.max(0) as i32,
+                        span_end: std::cmp::max(
+                            decision.span_end as i32,
+                            decision.span_start.max(0) as i32 + 1,
+                        ),
                         source_snapshot_hash: decision.source_snapshot_hash.clone(),
                         verification_method: decision.verification_method.clone(),
                         adjudication_reason: decision.adjudication_reason.clone(),
@@ -119,38 +248,59 @@ pub(crate) async fn verified_truth_write_impl(
                 )
                 .await?;
                 verified_rule_count += 1;
-                verified_rule_projections.push(VerifiedRuleProjectionCandidate {
-                    rule_instance_id: rule_instance_id.clone(),
-                    role_type: decision.role.to_ascii_lowercase(),
-                    concept_key: decision.concept_canonical_key.clone(),
-                    source_key: decision.source_key.clone(),
-                    evidence_quote: evidence_quote.clone(),
-                });
-                changed_truth_keys.push(changed_key);
-            }
-            "needs_hitl" | "rejected" => {
-                let status = if decision.decision == "needs_hitl" {
-                    "disputed"
+                // verified_rules_4 is currently a context-wide index without
+                // an applicant-profile filter. Never emit a scoped rule into
+                // global retrieval; its validated support flows through the
+                // existing SQL profile resolver instead.
+                if matches!(
+                    primitives::truth_candidates::truth_scope_target(&decision.scope),
+                    Some(primitives::truth_candidates::TruthScopeTarget::Global)
+                ) {
+                    verified_rule_projections.push(VerifiedRuleProjectionCandidate {
+                        rule_instance_id: rule_instance_id.clone(),
+                        role_type,
+                        concept_key: decision.concept_canonical_key.clone(),
+                        source_key: decision.source_key.clone(),
+                        evidence_quote: decision.evidence_quote.clone(),
+                    });
                 } else {
-                    "deprecated"
-                };
+                    suppressed_scoped_projection_ids.push(rule_instance_id.clone());
+                }
+            }
+            SemanticTruthWriteOutcome::Disputed => {
                 sqlx_seo_adapter::demote_verified_rule_instance(
                     &acts.pool,
                     &rule_instance_id,
-                    status,
-                    &decision.publish_admissibility,
+                    "disputed",
+                    "needs_hitl",
+                    "truth_write_semantic_guard@1",
+                    "mixed_or_conflicting_semantic_adjudication",
+                )
+                .await?;
+                demoted_rule_count += 1;
+                demoted_rule_projection_ids.push(rule_instance_id.clone());
+            }
+            SemanticTruthWriteOutcome::Rejected(decision) => {
+                sqlx_seo_adapter::demote_verified_rule_instance(
+                    &acts.pool,
+                    &rule_instance_id,
+                    "deprecated",
+                    "not_admissible",
                     &decision.verification_method,
                     &decision.adjudication_reason,
                 )
                 .await?;
                 demoted_rule_count += 1;
                 demoted_rule_projection_ids.push(rule_instance_id.clone());
-                changed_truth_keys.push(changed_key);
             }
-            _ => {}
         }
+        changed_truth_keys.push(changed_key);
     }
 
+    // Purge any stale scoped point left by a prior unfiltered projection.
+    demoted_rule_projection_ids.extend(suppressed_scoped_projection_ids);
+    demoted_rule_projection_ids.sort();
+    demoted_rule_projection_ids.dedup();
     delete_verified_rules_4_projection(acts, &demoted_rule_projection_ids).await?;
     emit_verified_rules_4_projection(
         acts,
@@ -179,6 +329,89 @@ pub(crate) async fn verified_truth_write_impl(
 mod tests {
     use super::*;
     use serde::{Deserialize, Serialize};
+
+    fn candidate_verdict(
+        id: &str,
+        decision: &str,
+        amount: i64,
+        confidence: f64,
+    ) -> TruthAdjudicationCandidateDecision {
+        TruthAdjudicationCandidateDecision {
+            section_id: 13,
+            page_id: 4,
+            rule_candidate_id: id.to_string(),
+            role: "FEE_ITEM".to_string(),
+            concept_canonical_key: "consular_fee".to_string(),
+            params: TruthParamValue::object([("amount", TruthParamValue::Integer(amount))]),
+            scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
+            source_key: format!("https://example.gov/{id}"),
+            source_tier: "government".to_string(),
+            confidence,
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+            evidence_quote: "consular fee".to_string(),
+            span_start: 0,
+            span_end: 12,
+            source_snapshot_hash: "snapshot".to_string(),
+            decision: decision.to_string(),
+            publish_admissibility: match decision {
+                "verified" => "admissible",
+                "needs_hitl" => "needs_hitl",
+                _ => "not_admissible",
+            }
+            .to_string(),
+            verification_method: "test".to_string(),
+            adjudication_reason: "test_fixture".to_string(),
+        }
+    }
+
+    #[test]
+    fn rejected_source_never_demotes_independently_verified_semantic_slot() {
+        let official = candidate_verdict("official", "verified", 80, 0.95);
+        let corroborating = candidate_verdict("corroborating", "verified", 80, 0.90);
+        let fabricated = candidate_verdict("fabricated", "rejected", 120, 0.99);
+        for order in [
+            vec![&official, &corroborating, &fabricated],
+            vec![&fabricated, &corroborating, &official],
+        ] {
+            match semantic_truth_write_outcome(&order).unwrap() {
+                SemanticTruthWriteOutcome::Verified(candidate) => {
+                    assert_eq!(candidate.rule_candidate_id, "official");
+                }
+                _ => panic!("rejected proposals must not demote verified evidence"),
+            }
+        }
+    }
+
+    #[test]
+    fn unresolved_or_conflicting_verified_sources_hold_entire_semantic_slot() {
+        let official = candidate_verdict("official", "verified", 80, 0.95);
+        let corroborating = candidate_verdict("corroborating", "verified", 80, 0.90);
+        let unresolved = candidate_verdict("unresolved", "needs_hitl", 120, 0.91);
+        let inconsistent = candidate_verdict("inconsistent", "verified", 120, 0.98);
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&official, &corroborating, &unresolved]).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&official, &corroborating, &inconsistent]).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+    }
+
+    #[test]
+    fn all_rejected_identity_is_demoted_once_and_unknown_status_fails_closed() {
+        let rejected = candidate_verdict("rejected", "rejected", 80, 0.1);
+        match semantic_truth_write_outcome(&[&rejected]).unwrap() {
+            SemanticTruthWriteOutcome::Rejected(candidate) => {
+                assert_eq!(candidate.rule_candidate_id, "rejected");
+            }
+            _ => panic!("all rejected evidence must demote the slot"),
+        }
+        let unexpected = candidate_verdict("unknown", "approved", 80, 1.0);
+        assert!(semantic_truth_write_outcome(&[&unexpected]).is_err());
+    }
+
     use std::fs;
     use std::path::PathBuf;
 

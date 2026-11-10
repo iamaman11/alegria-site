@@ -17,8 +17,9 @@ struct TestHitlWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<TestHitlWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<TestHitlWorkflow>()?;
+    Ok(())
 }
 
 #[workflow_methods]
@@ -29,7 +30,7 @@ impl TestHitlWorkflow {
             .workflow_starts_total
             .with_label_values(&["TestHitlWorkflow"])
             .inc();
-        let workflow_id: String = ctx.workflow_initial_info().workflow_id.clone();
+        let workflow_id: String = ctx.info().workflow_id().to_string();
 
         ctx.state_mut(|s| s.phase = "test_step_prepare".to_string());
         let prepared: String = ctx
@@ -50,7 +51,7 @@ impl TestHitlWorkflow {
                 s.phase = "hitl_wait".to_string();
             }
         });
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| {
             s.waiting_hitl = false;

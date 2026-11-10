@@ -13,8 +13,13 @@ echo "== Alegria Expert Verification =="
 echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
 
+echo "[1a/50] Docker Compose host bindings must be loopback-only"
+python3 automation/check_compose_loopback_ports.py
+
 echo "[2/50] Python lint check"
-python3 -m ruff check automation infra/analytics_lab/src
+# Preserve Ruff's existing E4/E7/E9/F baseline explicitly across engine upgrades.
+# The newly surfaced optional rule families have not been accepted as policy.
+python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
 
 echo "[3/50] Python scope check (no forbidden imports)"
 python3 automation/check_python_scope.py
@@ -31,11 +36,17 @@ python3 automation/check_support_surface_execution.py
 echo "[4c/50] Release/restore gate surface"
 python3 automation/check_release_restore_gate_surface.py
 
+echo "[4c1/50] Windows staging rollback safety"
+python3 automation/check_windows_staging_rollback.py
+
 echo "[4d/50] Voyage retrieval surface"
 python3 automation/check_voyage_retrieval_surface.py
 
 echo "[4d1/50] Voyage evaluation bundle"
 python3 automation/check_voyage_evaluation_bundle.py
+
+echo "[4d2/50] Retrieval bootstrap must never seed synthetic truth"
+python3 automation/smoke_retrieval_bootstrap_no_synthetic_truth.py
 
 echo "[5/50] R5-R8 boundary check (no Python hot-path violations)"
 bash automation/check_python_rust_boundary.sh
@@ -75,6 +86,9 @@ python3 automation/check_allowed_boundary_points.py
 
 echo "[17/50] JSON boundary policy (deny-by-default)"
 python3 automation/check_json_boundary_policy.py
+
+echo "[17a/50] SQLite lockfile advisory must be unreachable in Rust feature graph"
+python3 automation/check_optional_sqlite_audit_scope.py
 
 echo "[18/50] Services/temporal boundary"
 python3 automation/check_services_temporal_boundary.py
@@ -165,6 +179,9 @@ python3 automation/check_shadow_verification_surface.py
 
 echo "[35g2/58] Cutover convergence policy"
 python3 automation/check_cutover_convergence_policy.py
+
+echo "[35g3a/58] Truth certification fail-closed baseline migration policy"
+python3 automation/smoke_truth_certification_strict_projection_policy.py
 
 echo "[35g3/58] Truth certification regression gate"
 bash automation/run_truth_certification_gate.sh
@@ -262,6 +279,22 @@ python3 automation/smoke_support_bundle_required.py
 echo "[52b/53] Incremental publish path smoke"
 python3 automation/smoke_incremental_publish_path.py
 
+echo "[52b1/53] Public static output completeness regression"
+python3 automation/smoke_public_static_output_completeness.py
+
+echo "[52b2/53] R5 publication verdict regression"
+python3 automation/smoke_e2e_publication_verdict.py
+python3 automation/smoke_e2e_canonical_temporal.py
+python3 automation/smoke_e2e_first_site.py
+python3 automation/smoke_first_site_doctor.py
+python3 automation/smoke_first_site_release.py
+
+echo "[52b3/53] HTTPS readback behavioral regression"
+python3 automation/smoke_public_http_readback.py
+
+echo "[52b4/53] Cloudflare SEO immutable deployment boundary (offline only)"
+python3 automation/smoke_seo_cloudflare_deploy.py
+
 echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
@@ -307,6 +340,9 @@ python3 automation/check_seo_legacy_replay_inventory_contract.py
 echo "[52p/53] Legacy replay environment probe"
 python3 automation/check_seo_legacy_replay_environment_probe.py
 
+echo "[52p1/53] Legacy replay environment probe regression"
+python3 automation/smoke_seo_legacy_replay_environment_probe.py
+
 echo "[52q/53] Local operational evidence schema"
 python3 automation/check_local_operational_evidence_schema.py
 
@@ -324,6 +360,9 @@ python3 automation/check_run_report_completeness.py
 
 echo "[42d/53] Run report completeness smoke"
 python3 automation/smoke_run_report_completeness.py
+
+echo "[42d1/53] Manual LLM PostgreSQL inbox lifecycle E2E"
+python3 automation/smoke_manual_llm_queue.py
 
 echo "[42e/53] Metrics contract"
 python3 automation/check_metrics_contract.py

@@ -20,6 +20,24 @@ fn canonical_candidate_text(payload: &BTreeMap<String, String>) -> String {
     .join(" ")
 }
 
+// A successful search with zero matches is an admissible *negative* retrieval
+// observation for a fresh scope, not a provider outage. Preserve the strict
+// unresolved/HITL gate; never turn an absent canonical concept into truth.
+fn unresolved_canonical_vector_mapping(
+    mapping: &seo_steps::canonical_mapping_step::MappingResult,
+) -> seo_steps::canonical_mapping_step::MappingResult {
+    seo_steps::canonical_mapping_step::MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key: None,
+        mapping_type: "new_candidate".to_string(),
+        match_method: "qdrant_no_candidates".to_string(),
+        matching_stage: seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant,
+        qdrant_score: None,
+        confidence: 0.0,
+        needs_hitl: true,
+    }
+}
+
 async fn resolve_canonical_vector_mappings(
     mappings: Vec<seo_steps::canonical_mapping_step::MappingResult>,
 ) -> Result<Vec<seo_steps::canonical_mapping_step::MappingResult>, DomainError> {
@@ -67,14 +85,9 @@ async fn resolve_single_canonical_vector_mapping(
     .await
     {
         Ok(found) if !found.is_empty() => found,
-        Ok(_) if canonical_required => {
-            return Err(DomainError::InfraUnavailable {
-                message: format!(
-                    "canonical vector retrieval is required, but `{primary_collection}` returned no candidates"
-                ),
-            });
-        }
-        Ok(_) => return Ok(None),
+        // No match in a reachable, real collection means unresolved concept.
+        // The original symbolic candidate is never promoted to verified truth.
+        Ok(_) => return Ok(Some(unresolved_canonical_vector_mapping(mapping))),
         Err(err) if canonical_required => {
             return Err(DomainError::InfraUnavailable {
                 message: format!(
@@ -138,3 +151,33 @@ async fn resolve_single_canonical_vector_mapping(
     }))
 }
 
+
+#[cfg(test)]
+mod empty_canonical_retrieval_tests {
+    use super::*;
+
+    #[test]
+    fn empty_canonical_search_requires_hitl_and_cannot_promote_candidate() {
+        let symbolic = seo_steps::canonical_mapping_step::MappingResult {
+            raw_text: "unknown authority term".to_string(),
+            canonical_key: Some("candidate:unknown_authority_term".to_string()),
+            mapping_type: "vector_required".to_string(),
+            match_method: "vector_qdrant_required".to_string(),
+            matching_stage: seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant,
+            qdrant_score: None,
+            confidence: 0.0,
+            needs_hitl: true,
+        };
+        let unresolved = unresolved_canonical_vector_mapping(&symbolic);
+        assert_eq!(unresolved.raw_text, symbolic.raw_text);
+        assert!(unresolved.needs_hitl);
+        assert!(unresolved.canonical_key.is_none());
+        assert_eq!(unresolved.mapping_type, "new_candidate");
+        assert_eq!(unresolved.match_method, "qdrant_no_candidates");
+        assert_eq!(unresolved.confidence, 0.0);
+        assert_eq!(
+            unresolved.matching_stage,
+            seo_steps::canonical_mapping_step::MatchingStage::VectorQdrant
+        );
+    }
+}

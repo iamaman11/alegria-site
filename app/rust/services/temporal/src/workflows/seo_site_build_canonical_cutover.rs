@@ -7,8 +7,8 @@ use contracts::generated::alegria::temporal::v1::{
     LinkRecommendInputPayload, LinkRecommendationState, OpportunityBuildInputPayload,
     PageBlueprintState, PageNodeState, ProjectionBarrierAuditInputPayload,
     PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RebuildDetectInputPayload,
-    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpNormalizeInputPayload,
+    RenderPreviewValidateInputPayload, SeoScopePayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 use infrastructure::adapters::temporalio_sdk_adapter::{
     workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
@@ -17,7 +17,8 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
 use seo_application::execution::{
     blocked_interaction_status, blocked_publish_gate_status, build_execution_plan,
     final_phase_keys, normalize_run_mode, page_phase_keys, phase_label, policy_for_run_mode,
-    scenario_kind_for_run_mode, RunInteractionPolicy, SeoExecutionPlan, SeoPhaseKey,
+    scenario_kind_for_run_mode, RunInteractionPolicy, RunProjectionPolicy, SeoExecutionPlan,
+    SeoPhaseKey,
 };
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioRequest};
 use seo_ports::VerifiedSupportBundleRequest;
@@ -45,11 +46,13 @@ struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
     waiting_hitl: bool,
     resume_requested: bool,
+    llm_result_ready: bool,
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()?;
+    Ok(())
 }
 include!("seo_site_build_canonical_cutover/helpers.rs");
 include!("seo_site_build_canonical_cutover/page_publish.rs");
@@ -63,7 +66,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .with_label_values(&["SeoSiteBuildCanonicalCutoverWorkflow"])
             .inc();
 
-        let run_id = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "load_seo_site_build_input".to_string());
         let site_input: SeoSiteBuildInputPayload = ctx
             .start_activity(
@@ -72,11 +75,10 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
-        let scope = site_input
-            .scope
-            .clone()
-            .ok_or_else(|| anyhow::anyhow!("SeoSiteBuildInputPayload.scope is required"))?;
+        ctx.wait_condition(|s| !s.paused).await?;
+        let scope = site_input.scope.clone().ok_or_else(|| {
+            super::runtime::workflow_contract_failure("SeoSiteBuildInputPayload.scope is required")
+        })?;
         let normalized_run_mode = normalize_run_mode(&site_input.run_mode);
         let request = SeoScenarioRequest {
             scenario: scenario_kind_for_run_mode(normalized_run_mode),
@@ -87,6 +89,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             site_input: site_input.clone(),
         };
         let plan = build_execution_plan(&request);
+        let enforce_required_contract = plan.policy.projection != RunProjectionPolicy::WarnOnly;
 
         ctx.state_mut(|s| s.phase = "seo_preflight".to_string());
         let preflight = ctx
@@ -97,11 +100,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     context_key: site_input.context_key.clone(),
                     scope: scope.clone(),
                     projection_max_lag_ms: 300_000,
+                    require_materialized_projections: false,
+                    enforce_required_contract,
+                    require_page_brief_projection: false,
+                    gate_key: String::new(),
+                    skip_provider_probes: false,
                 },
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let support_bundle_request = support_request(&run_id, &site_input)?;
         ctx.state_mut(|s| s.phase = "load_verified_support_bundle.initial".to_string());
@@ -112,7 +120,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "serp_ingest".to_string());
         let ingest = ctx
@@ -127,7 +135,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
         let crawled = ctx
@@ -142,7 +150,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(120),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "whole_page_semantic_pass".to_string());
         let semantic = ctx
@@ -155,7 +163,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "page_utility_classifier".to_string());
         let page_utility = ctx
@@ -168,7 +176,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "dom_block_relevance_filter".to_string());
         let dom = ctx
@@ -181,7 +189,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "sectioning".to_string());
         let sectioning = ctx
@@ -194,7 +202,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "sectioning_contract_gate".to_string());
         let sectioning_contract = ctx
@@ -207,7 +215,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "cas_gate".to_string());
         let cas_gate = ctx
@@ -220,7 +228,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "raw_evidence_register".to_string());
         let raw_evidence = ctx
@@ -234,7 +242,16 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        // raw_chunks_4/raw_chunks_ctx are emitted during crawl. Their outbox
+        // events must be physically materialized before canonical mapping and
+        // completeness_judge query contextual neighbors. An audit alone only
+        // reports lag and does not drain the outbox.
+        ctx.state_mut(|s| s.phase = "raw_chunk_qdrant_sync".to_string());
+        let raw_chunk_sync = sync_target(ctx, &run_id, "raw_chunk_qdrant_sync", "qdrant").await?;
+        ensure_sync_drained(&raw_chunk_sync, "raw_chunk_qdrant_sync")?;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "projection_barrier(raw_evidence)".to_string());
         let raw_evidence_barrier = ctx
@@ -247,7 +264,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let semantic_gates = SectionSemanticGateBundle {
             page_utility: page_utility.clone(),
@@ -268,7 +285,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "subspan_layer_router".to_string());
         let subspan_layer_router = ctx
@@ -281,7 +298,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "entity_span_detection".to_string());
         let entity_spans = ctx
@@ -295,7 +312,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "canonical_mapping".to_string());
         let canonical_mapping = ctx
@@ -308,7 +325,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "ontology_intake_gate".to_string());
         let ontology_intake = ctx
@@ -321,7 +338,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "procedural_extraction".to_string());
         let procedural = ctx
@@ -342,7 +359,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "operational_extraction".to_string());
         let operational = ctx
@@ -361,7 +378,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "editorial_extraction".to_string());
         let editorial = ctx
@@ -380,7 +397,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "seo_signal_extraction".to_string());
         let seo_signals = ctx
@@ -399,7 +416,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "commercial_signal_extraction".to_string());
         let commercial_signals = ctx
@@ -418,7 +435,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "extraction_schema_validate".to_string());
         let schema_validate = ctx
@@ -431,24 +448,61 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
+        let validation_input = CandidateValidationInput {
+            run_id: run_id.clone(),
+            context_key: site_input.context_key.clone(),
+            raw_page_ids: crawled.raw_page_ids.clone(),
+            procedural: procedural.clone(),
+            ontology: ontology_intake.clone(),
+            schema_validate: schema_validate.clone(),
+        };
+        ctx.state_mut(|s| s.phase = "manual_truth_prepare".to_string());
+        let manual_state: String = ctx
+            .start_activity(
+                AlegriaActivities::prepare_manual_truth_candidates,
+                validation_input.clone(),
+                db_opts(60),
+            )
+            .await?;
+        if manual_state == "awaiting_manual" {
+            ctx.state_mut(|s| s.phase = "manual_truth_wait".to_string());
+            loop {
+                ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
+                    .await?;
+                ctx.state_mut(|s| s.llm_result_ready = false);
+                let status: String = ctx
+                    .start_activity(
+                        AlegriaActivities::load_manual_truth_status,
+                        run_id.clone(),
+                        db_opts(30),
+                    )
+                    .await?;
+                if status == "done" {
+                    break;
+                }
+                if status != "awaiting_manual" {
+                    return Err(super::runtime::workflow_contract_failure(
+                        "manual truth job status invalid",
+                    ));
+                }
+            }
+        } else if manual_state != "done" {
+            return Err(super::runtime::workflow_contract_failure(
+                "manual truth preparation status invalid",
+            ));
+        }
+        ctx.wait_condition(|s| !s.paused).await?;
         ctx.state_mut(|s| s.phase = "candidate_validation".to_string());
         let candidate_validation = ctx
             .start_activity(
                 AlegriaActivities::run_candidate_validation_step,
-                CandidateValidationInput {
-                    run_id: run_id.clone(),
-                    context_key: site_input.context_key.clone(),
-                    raw_page_ids: crawled.raw_page_ids.clone(),
-                    procedural: procedural.clone(),
-                    ontology: ontology_intake.clone(),
-                    schema_validate: schema_validate.clone(),
-                },
+                validation_input,
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "triple_builder".to_string());
         let triples = ctx
@@ -463,7 +517,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "completeness_judge".to_string());
         let completeness = ctx
@@ -478,7 +532,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "resolution_loop".to_string());
         let resolution = ctx
@@ -493,7 +547,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "contradiction_gate".to_string());
         let contradiction = ctx
@@ -503,11 +557,12 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     raw_page_ids: crawled.raw_page_ids.clone(),
                     procedural: procedural.clone(),
+                    candidate_validation: candidate_validation.clone(),
                 },
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "truth_adjudication".to_string());
         let truth_adjudication = ctx
@@ -523,7 +578,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "verified_truth_write".to_string());
         let verified_truth_write = ctx
@@ -537,7 +592,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         if !verified_truth_write.changed_truth_keys.is_empty() {
             ctx.state_mut(|s| s.phase = "load_verified_support_bundle.refresh".to_string());
@@ -548,7 +603,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         ctx.state_mut(|s| s.phase = "graph_admissibility_gate".to_string());
@@ -562,7 +617,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "retrieval_admissibility_gate".to_string());
         let retrieval_gate = ctx
@@ -575,15 +630,15 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "neo4j_sync".to_string());
         let neo4j = sync_target(ctx, &run_id, "neo4j_sync", "neo4j").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "voyage_qdrant_sync".to_string());
         let qdrant = sync_target(ctx, &run_id, "voyage_qdrant_sync", "qdrant").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "projection_barrier(semantic_projection)".to_string());
         let semantic_projection_barrier = ctx
@@ -596,7 +651,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "serp_normalize".to_string());
         let serp_normalize = ctx
@@ -611,7 +666,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "opportunity_build".to_string());
         let opportunity_build = ctx
@@ -626,7 +681,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "ia_build".to_string());
         let ia_build = ctx
@@ -641,7 +696,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "link_recommend".to_string());
         let link_recommend = ctx
@@ -656,7 +711,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
         let global_site_reconcile = ctx
@@ -673,7 +728,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "projection_barrier(global_site_reconcile)".to_string());
         let planning_projection_barrier = ctx
@@ -686,7 +741,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let page_nodes = if global_site_reconcile.page_nodes.is_empty() {
             ia_build.page_nodes.clone()
@@ -699,10 +754,54 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             global_site_reconcile.link_recommendations.clone()
         };
         if page_nodes.is_empty() {
+            // A strict run cannot be completed without any publishable pages.
+            // Preserve the existing explicit blocked outcome; only dry-run
+            // diagnostics may finish successfully with zero planned pages.
+            if enforce_required_contract {
+                return Ok(block_execution_plan_invariant(
+                    ctx,
+                    &run_id,
+                    "no_page_nodes_after_reconcile",
+                ));
+            }
             ctx.start_activity(AlegriaActivities::finalize_run, run_id.clone(), db_opts(10))
                 .await?;
             ctx.state_mut(|s| s.phase = "done:no_pages".to_string());
             return Ok(run_id);
+        }
+
+        // Planning creates page/link/brief projections which cannot exist at the
+        // initial preflight of a new scope. Drain their outbox events first, then
+        // enforce the full projection contract before the first draft or publish.
+        if enforce_required_contract {
+            ctx.state_mut(|s| s.phase = "neo4j_sync_post_planning".to_string());
+            let graph_sync = sync_target(ctx, &run_id, "neo4j_sync_post_planning", "neo4j").await?;
+            ensure_sync_drained(&graph_sync, "neo4j_sync_post_planning")?;
+            ctx.wait_condition(|s| !s.paused).await?;
+            ctx.state_mut(|s| s.phase = "voyage_qdrant_sync_post_planning".to_string());
+            let retrieval_sync =
+                sync_target(ctx, &run_id, "voyage_qdrant_sync_post_planning", "qdrant").await?;
+            ensure_sync_drained(&retrieval_sync, "voyage_qdrant_sync_post_planning")?;
+            ctx.wait_condition(|s| !s.paused).await?;
+
+            ctx.state_mut(|s| s.phase = "seo_materialization_gate".to_string());
+            ctx.start_activity(
+                AlegriaActivities::run_seo_preflight_step,
+                SeoPreflightInput {
+                    run_id: run_id.clone(),
+                    context_key: site_input.context_key.clone(),
+                    scope: scope.clone(),
+                    projection_max_lag_ms: 300_000,
+                    require_materialized_projections: true,
+                    enforce_required_contract: true,
+                    require_page_brief_projection: false,
+                    gate_key: String::new(),
+                    skip_provider_probes: false,
+                },
+                db_opts(30),
+            )
+            .await?;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         let factual_fragments = support_bundle
@@ -722,6 +821,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             &factual_fragments,
             &site_input.context_key,
             &scope.applicant_profile,
+            &scope,
         )
         .await?
         {
@@ -742,7 +842,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 )
                 .await?,
             );
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         let mut rebuild = None;
@@ -765,7 +865,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 }
                 _ => {}
             }
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         ctx.start_activity(AlegriaActivities::finalize_run, run_id.clone(), db_opts(10))
@@ -849,6 +949,13 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             self.paused = false;
             self.phase = "resumed".to_string();
         }
+    }
+
+    // Dedicated wake-up for a persisted LLM submission. This never approves
+    // content, and it cannot resume a separate human-review HITL wait.
+    #[signal(name = "llm_result_ready")]
+    fn llm_result_ready(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        self.llm_result_ready = true;
     }
 
     #[query(name = "status")]

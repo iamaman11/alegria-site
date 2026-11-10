@@ -3,6 +3,7 @@ pub struct ContradictionGateSweepInput {
     pub run_id: String,
     pub raw_page_ids: Vec<i64>,
     pub procedural: ProceduralExtractionSweepOutput,
+    pub candidate_validation: CandidateValidationOutput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,8 @@ pub struct TruthAdjudicationCandidateDecision {
     pub role: String,
     pub concept_canonical_key: String,
     pub params: TruthParamValue,
+    #[serde(default)]
+    pub scope: TruthParamValue,
     pub source_key: String,
     pub source_tier: String,
     pub confidence: f64,

@@ -246,6 +246,7 @@ pub async fn persist_draft_assemble_output(
         }
 
         projection_events.push(seo_qdrant_projection_event(
+            run_id,
             "editorial_topics_4",
             "page_draft",
             &draft.page_draft_key,
@@ -377,6 +378,7 @@ pub async fn persist_draft_qa_output(
         pool,
         &input.run_id,
         vec![seo_qdrant_projection_event(
+            &input.run_id,
             "editorial_topics_4",
             "page_draft",
             &draft.page_draft_key,
@@ -539,6 +541,7 @@ mod tests {
             has_remove_exception: false,
             has_replace_exception: false,
             has_add_requirement_exception: false,
+            has_unresolved_exception_conditions: false,
         }
     }
 

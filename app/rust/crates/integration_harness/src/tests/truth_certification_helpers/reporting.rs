@@ -400,5 +400,9 @@ fn expected_workflow_failure_allowed(
     fixture.expected_outcomes.draft_verdict == "blocked"
         && report.draft_verdict == "blocked"
         && report.publish_verdict == fixture.expected_outcomes.publish_verdict
-        && diagnostics.contains("truth_admissibility_gate:failed:")
+        && (diagnostics.contains("truth_admissibility_gate:failed:")
+            || (report.verified_rule_set.is_empty()
+                && fixture.expected_outcomes.projection_verdict == "blocked"
+                && report.projection_verdict == "blocked"
+                && diagnostics.contains("graph_admissibility_gate:failed:")))
 }

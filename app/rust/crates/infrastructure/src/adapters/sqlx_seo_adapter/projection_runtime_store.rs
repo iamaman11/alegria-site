@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use contracts::generated::alegria::sync::v1::{QdrantUpsertCommand, SeoGraphProjectionPayload};
 use contracts::generated::alegria::temporal::v1::{
@@ -45,7 +45,8 @@ pub async fn projection_backlog_counts(
     let row = sqlx::query(
         r#"
         SELECT
-          COUNT(*) FILTER (WHERE status = 'pending') AS pending_events,
+          -- Processing leases are still outstanding, not materialized points.
+          COUNT(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending_events,
           COUNT(*) FILTER (WHERE status = 'failed') AS failed_events
         FROM system.sync_outbox
         WHERE run_id = $1
@@ -189,6 +190,7 @@ pub struct VerifiedTruthCandidateWrite {
     pub concept_canonical_key: String,
     pub evidence_quote: String,
     pub params: Value,
+    pub scope: Value,
     pub severity: String,
     pub is_numeric: bool,
     pub is_incomplete: bool,
@@ -214,7 +216,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
              epistemic_status, uncertainty_flags
          )
          VALUES (
-             $1, $2, $3, $4, $5, $6, $7, '{}'::jsonb, $8, '[]'::jsonb,
+             $1, $2, $3, $4, $5, $6, $7, $19, $8, '[]'::jsonb,
              '', '', '[]'::jsonb, '', 'direct', $9, false, $10, $11, $12,
              $13, $14, $15, $16, $17, 'deterministic', 'cutover-runtime', 'cutover@1', $18, '[]'::jsonb
          )
@@ -223,6 +225,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
              concept_canonical_key = EXCLUDED.concept_canonical_key,
              raw_mention = EXCLUDED.raw_mention,
              params = EXCLUDED.params,
+             scope = EXCLUDED.scope,
              severity = EXCLUDED.severity,
              is_numeric = EXCLUDED.is_numeric,
              is_incomplete = EXCLUDED.is_incomplete,
@@ -257,6 +260,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.source_key)
     .bind(&candidate.source_snapshot_hash)
     .bind(&candidate.epistemic_status)
+    .bind(Json::<Value>(candidate.scope.clone()))
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -265,6 +269,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
 
 #[derive(Debug, Clone)]
 pub struct VerifiedRuleInstanceWrite {
+    pub scope: Value,
     pub rule_instance_id: String,
     pub context_key: String,
     pub rule_type_key: String,
@@ -286,10 +291,55 @@ pub struct VerifiedRuleInstanceWrite {
     pub completeness_class: String,
 }
 
+/// One parser is shared by extraction validation and final SQL persistence.
+/// Unsupported scopes are never accepted as global facts.
+fn verified_scope_target(
+    scope: &Value,
+) -> Option<primitives::truth_candidates::TruthScopeTarget> {
+    let typed = serde_json::from_value::<primitives::truth_candidates::TruthParamValue>(
+        scope.clone(),
+    )
+    .ok()?;
+    primitives::truth_candidates::truth_scope_target(&typed)
+}
+
 pub async fn upsert_verified_rule_instance(
     pool: &PgPool,
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
+    // Validate the precise scope BEFORE any SQL mutation.
+    if rule
+        .params
+        .get("conditions_key")
+        .is_some_and(|condition| match condition {
+            Value::Null => false,
+            Value::String(key) => !key.trim().is_empty(),
+            _ => true,
+        })
+    {
+        return Err(validation_failure(
+            "unresolved verified conditions_key requires explicit condition evaluation",
+        ));
+    }
+    let target = verified_scope_target(&rule.scope).ok_or_else(|| {
+        validation_failure("verified rule scope is not a supported exact applicant_profile")
+    })?;
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
+        let registered: Option<String> = sqlx::query_scalar(
+            "SELECT profile_key FROM kb.applicant_profiles
+             WHERE profile_key = $1 AND status = 'active' FOR SHARE",
+        )
+        .bind(profile)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if registered.is_none() {
+            return Err(validation_failure(format!(
+                "unregistered or inactive verified applicant_profile: {profile}"
+            )));
+        }
+    }
     sqlx::query(
         "INSERT INTO verified.rule_instances (
              rule_instance_id, context_key, rule_type_key, concept_key, role_type, params, status,
@@ -351,9 +401,44 @@ pub async fn upsert_verified_rule_instance(
     .bind("cutover@1")
     .bind("deterministic")
     .bind("truth_adjudication_runtime@1")
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
+
+    // Never erase curated profile restrictions while refreshing a verified
+    // rule. A global rule may already have explicit human-defined overrides.
+    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
+        let has_conflicting_binding: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1 FROM verified.rule_instance_profiles
+                 WHERE rule_instance_id = $1
+                   AND (profile_key <> $2 OR applicability <> 'applies'
+                        OR condition_json IS NOT NULL)
+             )",
+        )
+        .bind(&rule.rule_instance_id)
+        .bind(&profile)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if has_conflicting_binding {
+            return Err(validation_failure(
+                "existing curated profile binding conflicts with verified scope",
+            ));
+        }
+        sqlx::query(
+            "INSERT INTO verified.rule_instance_profiles
+             (rule_instance_id, profile_key, applicability, condition_json)
+             VALUES ($1, $2, 'applies', NULL)
+             ON CONFLICT (rule_instance_id, profile_key) DO NOTHING",
+        )
+        .bind(&rule.rule_instance_id)
+        .bind(profile)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -385,3 +470,62 @@ pub async fn demote_verified_rule_instance(
     Ok(())
 }
 
+#[cfg(test)]
+mod verified_scope_persistence_tests {
+    use super::*;
+
+    #[test]
+    fn final_sqlx_writer_accepts_only_exact_profile_or_global_scope() {
+        assert!(matches!(
+            verified_scope_target(&serde_json::json!({})),
+            Some(primitives::truth_candidates::TruthScopeTarget::Global)
+        ));
+        assert!(matches!(
+            verified_scope_target(&serde_json::json!({"applicant_profile":"student"})),
+            Some(primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(p))
+                if p == "student"
+        ));
+        for scope in [
+            serde_json::json!({"country":"ES"}),
+            serde_json::json!({"applicant_profile":"Student"}),
+            serde_json::json!({"applicant_profile":"student","age":17}),
+            serde_json::json!(null),
+            serde_json::json!([]),
+        ] {
+            assert!(verified_scope_target(&scope).is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_scoped_verified_writer_fails_before_attempting_sql() {
+        // An intentionally unreachable database proves rejection belongs
+        // to the SQLx write boundary rather than the orchestration layer.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://postgres:unused@127.0.0.1:65534/unused")
+            .expect("lazy pool");
+        let rule = VerifiedRuleInstanceWrite {
+            scope: serde_json::json!({"applicant_type": "student"}),
+            rule_instance_id: "rule:scoped".to_string(),
+            context_key: "ctx".to_string(),
+            rule_type_key: "fee_item".to_string(),
+            concept_key: "fee".to_string(),
+            role_type: "fee_item".to_string(),
+            params: serde_json::json!({"amount": 35}),
+            source_key: "https://example.gov/fees".to_string(),
+            confidence: 0.95,
+            rule_candidate_id: "candidate:1".to_string(),
+            evidence_section_id: 7,
+            evidence_quote: "Fee: 35 EUR".to_string(),
+            span_start: 0,
+            span_end: 11,
+            source_snapshot_hash: "source-sha".to_string(),
+            verification_method: "test".to_string(),
+            adjudication_reason: "test".to_string(),
+            publish_admissibility: "admissible".to_string(),
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+        };
+        let result = upsert_verified_rule_instance(&pool, &rule).await;
+        assert!(matches!(result, Err(DomainError::ValidationFailure { .. })));
+    }
+}

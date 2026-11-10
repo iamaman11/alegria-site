@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 pub use qdrant_client::qdrant::{
-    CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter, PointStruct, PointsIdsList,
-    ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder, VectorParamsBuilder,
+    Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
+    PointStruct, PointsIdsList, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
+    VectorParamsBuilder,
 };
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
@@ -151,7 +152,8 @@ fn qdrant_rest_url_from_env() -> String {
         .ok()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            let url = env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
+            let url =
+                env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6333".to_string());
             if url.contains(":6334") {
                 url.replace(":6334", ":6333")
             } else {
@@ -249,7 +251,9 @@ pub async fn search_dense(
     if vector.is_empty() {
         bail!("search vector is empty");
     }
-    let mut builder = SearchPointsBuilder::new(collection, vector, limit);
+    // Callers consume entity_key/retrieval_text to map neighbors and rerank;
+    // Qdrant omits point payloads unless they are explicitly requested.
+    let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
     if let Some(f) = filter {
         builder = builder.filter(f);
     }

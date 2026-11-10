@@ -11,6 +11,7 @@ pub mod stub_servers;
 pub struct IntegrationCtx {
     pub dataforseo: stub_servers::StubServerHandle,
     pub openai: stub_servers::StubServerHandle,
+    pub truth: stub_servers::StubServerHandle,
 }
 
 impl IntegrationCtx {
@@ -24,7 +25,29 @@ impl IntegrationCtx {
         let openai = stub_servers::spawn_json_stub("/v1/chat/completions", openai_payload)
             .await
             .context("start openai stub failed")?;
-        Ok(Self { dataforseo, openai })
+        // Truth extraction and editorial generation require different response
+        // contracts. Do not hide an invalid truth payload as an empty success.
+        // This synthetic scenario pre-seeds independently checked support,
+        // so the truth stub explicitly reports no additional candidates.
+        let truth = stub_servers::spawn_json_stub(
+            "/v1/chat/completions",
+            serde_json::json!({
+                "id": "chatcmpl-truth-empty-test",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": "{\"candidates\":[]}"
+                    }
+                }]
+            }),
+        )
+        .await
+        .context("start truth extraction stub failed")?;
+        Ok(Self {
+            dataforseo,
+            openai,
+            truth,
+        })
     }
 
     pub fn dataforseo_env(&self) -> BTreeMap<String, String> {
@@ -64,9 +87,23 @@ impl IntegrationCtx {
         ])
     }
 
+    pub fn local_truth_env(&self) -> BTreeMap<String, String> {
+        env_overrides::btree_env([
+            (
+                "SEO_TRUTH_LLM_LOCAL_ENDPOINT".to_string(),
+                format!("{}/v1/chat/completions", self.truth.base_url),
+            ),
+            (
+                "SEO_TRUTH_LLM_LOCAL_MODEL".to_string(),
+                "stub-truth-model".to_string(),
+            ),
+        ])
+    }
+
     pub fn provider_env(&self) -> BTreeMap<String, String> {
         let mut vars = self.dataforseo_env();
         vars.extend(self.local_editorial_env());
+        vars.extend(self.local_truth_env());
         vars
     }
 
@@ -87,4 +124,5 @@ mod tests {
     include!("tests/provider_runtime_surface_tests.rs");
     include!("tests/truth_runtime_tests.rs");
     include!("tests/scenario_parity_tests.rs");
+    include!("tests/manual_llm_temporal_tests.rs");
 }

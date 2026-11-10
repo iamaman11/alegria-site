@@ -6,4 +6,5 @@ include!("cli/static_site.rs");
 include!("cli/cms_inspect.rs");
 include!("cli/release_cutover.rs");
 include!("cli/cms_decision.rs");
+include!("cli/manual_llm.rs");
 include!("cli/main_entry.rs");

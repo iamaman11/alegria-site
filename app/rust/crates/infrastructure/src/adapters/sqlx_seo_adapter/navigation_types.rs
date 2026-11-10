@@ -156,6 +156,23 @@ pub async fn read_graph_projection_statuses(
     pg: &PgPool,
     expected_artifacts: &[&str],
 ) -> Result<Vec<GraphProjectionStatus>, DomainError> {
+    read_graph_projection_statuses_filtered(pg, expected_artifacts, None).await
+}
+
+/// Scope-specific source readiness cannot be satisfied by a different site's rows.
+pub async fn read_graph_projection_statuses_for_scope(
+    pg: &PgPool,
+    expected_artifacts: &[&str],
+    scope_signature: &str,
+) -> Result<Vec<GraphProjectionStatus>, DomainError> {
+    read_graph_projection_statuses_filtered(pg, expected_artifacts, Some(scope_signature)).await
+}
+
+async fn read_graph_projection_statuses_filtered(
+    pg: &PgPool,
+    expected_artifacts: &[&str],
+    scope_signature: Option<&str>,
+) -> Result<Vec<GraphProjectionStatus>, DomainError> {
     let rows = sqlx::query(
         r#"
         WITH expected(artifact_name) AS (
@@ -164,24 +181,37 @@ pub async fn read_graph_projection_statuses(
         aggregated AS (
             SELECT 'keyword_cluster'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
               FROM site.keyword_clusters
+             WHERE ($2::text IS NULL OR scope_signature = $2)
             UNION ALL
             SELECT 'serp_pattern'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
               FROM serp.serp_patterns
+             WHERE ($2::text IS NULL OR scope_signature = $2)
             UNION ALL
             SELECT 'page_blueprint'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
-              FROM site.page_blueprints
+              FROM site.page_blueprints bp
+             WHERE ($2::text IS NULL OR EXISTS (
+                 SELECT 1 FROM site.page_nodes pn
+                  WHERE pn.blueprint_key = bp.blueprint_key AND pn.scope_signature = $2
+             ))
             UNION ALL
             SELECT 'page_node'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
               FROM site.page_nodes
+             WHERE ($2::text IS NULL OR scope_signature = $2)
             UNION ALL
             SELECT 'content_gap'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
               FROM site.content_gaps
+             WHERE ($2::text IS NULL OR scope_signature = $2)
             UNION ALL
             SELECT 'link_recommendation'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
               FROM site.link_recommendations
+             WHERE ($2::text IS NULL OR scope_signature = $2)
             UNION ALL
             SELECT 'page_brief'::text AS artifact_name, count(*)::bigint AS point_count, max(updated_at) AS last_materialized_at
-              FROM site.page_briefs
+              FROM site.page_briefs pb
+             WHERE ($2::text IS NULL OR EXISTS (
+                 SELECT 1 FROM site.page_nodes pn
+                  WHERE pn.page_node_key = pb.page_node_key AND pn.scope_signature = $2
+             ))
         )
         SELECT
             expected.artifact_name,
@@ -198,6 +228,7 @@ pub async fn read_graph_projection_statuses(
         "#,
     )
     .bind(expected_artifacts)
+    .bind(scope_signature)
     .fetch_all(pg)
     .await
     .map_err(classify_sqlx)?;

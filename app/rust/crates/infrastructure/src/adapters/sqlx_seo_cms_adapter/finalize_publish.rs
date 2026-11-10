@@ -11,28 +11,81 @@ pub async fn persist_finalize_publish_output(
         .unwrap_or_default();
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
+    let mut is_published = planned.verdict == "published"
+        && render_validation.verdict == "render_ready"
+        && blocking_reasons.is_empty();
+    // Lock all publication effects for this public site, across workers and
+    // processes. The transaction owns the lock until the outbox commits.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    if is_published {
+        let public_dir = std::env::var("SEO_STATIC_OUTPUT_DIR")
+            .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
+        sqlx::query("SELECT pg_advisory_xact_lock(21917, hashtext($1))")
+            .bind(&public_dir)
+            .execute(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?;
+    }
+
+    let mut activation: Option<PublicationActivation> = None;
+    if is_published {
+        // Render readiness is NOT publication. Activate an immutable,
+        // approved release and prove real HTTPS bytes before DB commit.
+        match promote_and_verify_public_release(
+            &artifact,
+            &input.page_node_key,
+            &input.revision_id,
+        )
+        .await
+        {
+            Ok(receipt) => activation = Some(receipt),
+            Err(reason) => {
+                tracing::warn!(
+                    page_node_key = %input.page_node_key,
+                    revision_id = %input.revision_id,
+                    reason = %reason,
+                    "public release promotion/readback failed; refusing published state"
+                );
+                blocking_reasons.push("public_deployment_unverified".to_string());
+                is_published = false;
+            }
+        }
+    }
     blocking_reasons.sort();
     blocking_reasons.dedup();
-    let is_published = planned.verdict == "published";
+    let final_verdict = if is_published { "published" } else { "blocked" };
 
+    // Database status, artifact, event, HITL, and outbox commit together.
+    // On any SQL error the activation guard restores the prior public release.
     sqlx::query(
         r#"
         UPDATE site.cms_page_revisions
-        SET revision_status = $1,
+        SET revision_status = CASE
+                WHEN revision_status = 'published' AND $1 = 'blocked'
+                THEN revision_status ELSE $1 END,
             updated_at = now()
         WHERE revision_id = $2
         "#,
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.revision_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
         UPDATE site.cms_pages
-        SET current_status = $1,
+        SET current_status = CASE
+                WHEN $1 = 'blocked' AND published_at IS NOT NULL THEN 'published'
+                ELSE $1 END,
+            current_revision_id = CASE
+                WHEN $1 = 'published' THEN $3
+                ELSE current_revision_id END,
+            rollback_revision_id = CASE
+                WHEN $1 = 'published' AND current_status = 'published'
+                     AND current_revision_id IS DISTINCT FROM $3
+                THEN current_revision_id ELSE rollback_revision_id END,
             published_at = CASE WHEN $1 = 'published' THEN COALESCE(published_at, now()) ELSE published_at END,
             updated_at = now()
         WHERE page_node_key = $2
@@ -40,21 +93,27 @@ pub async fn persist_finalize_publish_output(
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.page_node_key)
-    .execute(pool)
+    .bind(&input.revision_id)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
         UPDATE site.page_nodes
-        SET lifecycle_state = $1,
+        SET lifecycle_state = CASE
+                WHEN $1 = 'blocked' AND EXISTS (
+                    SELECT 1 FROM site.cms_pages cp
+                    WHERE cp.page_node_key = $2 AND cp.published_at IS NOT NULL
+                ) THEN 'published'
+                ELSE $1 END,
             updated_at = now()
         WHERE page_node_key = $2
         "#,
     )
     .bind(if is_published { "published" } else { "blocked" })
     .bind(&input.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -69,7 +128,7 @@ pub async fn persist_finalize_publish_output(
         )
         .bind(if is_published { "ready" } else { "blocked" })
         .bind(&artifact.artifact_key)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
@@ -105,11 +164,11 @@ pub async fn persist_finalize_publish_output(
     .bind(event_type)
     .bind(&input.revision_id)
     .bind(Json(json!({
-        "verdict": planned.verdict,
+        "verdict": final_verdict,
         "blocking_reasons": blocking_reasons,
     })))
     .bind(&input.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -123,10 +182,8 @@ pub async fn persist_finalize_publish_output(
         causal_step: "publish_materialize".to_string(),
         occurred_at: chrono::Utc::now().to_rfc3339(),
         payload_version: "seo_cms_event@1".to_string(),
-        metadata: HashMap::from([("verdict".to_string(), planned.verdict.clone())]),
+        metadata: HashMap::from([("verdict".to_string(), final_verdict.to_string())]),
     };
-    let _ = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
-
     if !is_published {
         for blocker_reason in &blocking_reasons {
             let task_key = primitives::seo::seo_artifact_key(
@@ -161,14 +218,31 @@ pub async fn persist_finalize_publish_output(
                 json!([{ "event": "publish_blocked", "blocker": blocker_reason }]),
             ))
             .bind(&input.page_node_key)
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
         }
     }
 
+    let _ = outbox_emit_many_in_tx(
+        &mut tx,
+        &[cms_event_outbox(&cms_event, &input.run_id)],
+    )
+    .await?;
+    // The COMMIT acknowledgement can be lost even when PostgreSQL committed.
+    // Do not roll back a publicly verified release based on an ambiguous
+    // connection error or cancellation. Recovery reads the durable journal
+    // and the authoritative DB state on the next worker startup.
+    if let Some(receipt) = activation.as_mut() {
+        receipt.defer_to_recovery();
+    }
+    tx.commit().await.map_err(classify_sqlx)?;
+    if let Some(receipt) = activation.as_mut() {
+        receipt.confirm();
+    }
+
     Ok(FinalizePublishOutputPayload {
-        verdict: planned.verdict.clone(),
+        verdict: final_verdict.to_string(),
         current_status: if is_published {
             "published".to_string()
         } else {

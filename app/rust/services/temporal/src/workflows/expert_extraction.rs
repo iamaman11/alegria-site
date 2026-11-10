@@ -20,8 +20,9 @@ struct ExpertExtractionWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<ExpertExtractionWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<ExpertExtractionWorkflow>()?;
+    Ok(())
 }
 
 fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> WorkflowResult<String> {
@@ -39,7 +40,7 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
             .map(|value| value.applicant_profile.clone())
             .unwrap_or_default(),
     })
-    .map_err(anyhow::Error::from)?)
+    .map_err(|err| super::runtime::workflow_contract_failure(err.to_string()))?)
 }
 
 #[workflow_methods]
@@ -51,7 +52,7 @@ impl ExpertExtractionWorkflow {
             .with_label_values(&["ExpertExtractionWorkflow"])
             .inc();
 
-        let run_id = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "load_seo_site_build_input".to_string());
         let site_input: SeoSiteBuildInputPayload = ctx
             .start_activity(
@@ -60,7 +61,7 @@ impl ExpertExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let support_bundle_request = support_request(&run_id, &site_input)?;
         ctx.state_mut(|s| s.phase = "load_verified_support_bundle.initial".to_string());
@@ -71,7 +72,7 @@ impl ExpertExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "serp_ingest".to_string());
         let ingest = ctx
@@ -86,7 +87,7 @@ impl ExpertExtractionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
         let crawled = ctx
@@ -101,7 +102,7 @@ impl ExpertExtractionWorkflow {
                 db_opts(120),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "raw_knowledge_ingestion".to_string());
         let raw_knowledge = ctx
@@ -117,7 +118,7 @@ impl ExpertExtractionWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         if !raw_knowledge.changed_truth_keys.is_empty() {
             ctx.state_mut(|s| s.phase = "load_verified_support_bundle.refresh".to_string());
@@ -128,7 +129,7 @@ impl ExpertExtractionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         ctx.state_mut(|s| s.phase = "done:expert_extraction".to_string());

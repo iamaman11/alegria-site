@@ -2,14 +2,14 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
     let scope = site_input
         .scope
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("SeoSiteBuildInputPayload.scope is required"))?;
+        .ok_or_else(|| super::runtime::workflow_contract_failure("SeoSiteBuildInputPayload.scope is required"))?;
     Ok(serde_json::to_string(&VerifiedSupportBundleRequest {
         run_id: run_id.to_string(),
         context_key: site_input.context_key.clone(),
         scope_signature: scope.scope_signature.clone(),
         applicant_profile: scope.applicant_profile.clone(),
     })
-    .map_err(anyhow::Error::from)?)
+    .map_err(|err| super::runtime::workflow_contract_failure(err.to_string()))?)
 }
 
 fn phase_with_ordinal(key: SeoPhaseKey, page_index: usize, page_total: usize) -> String {
@@ -49,4 +49,16 @@ async fn sync_target(
             db_opts(120),
         )
         .await?)
+}
+
+fn ensure_sync_drained(output: &ProjectionSyncOutput, stage: &str) -> WorkflowResult<()> {
+    if output.status != "done" || output.remaining_pending != 0 || output.remaining_failed != 0 {
+        return Err(super::runtime::workflow_contract_failure(format!(
+            "{stage} projection sync not drained: status={} pending={} failed={}",
+            output.status,
+            output.remaining_pending,
+            output.remaining_failed
+        )));
+    }
+    Ok(())
 }

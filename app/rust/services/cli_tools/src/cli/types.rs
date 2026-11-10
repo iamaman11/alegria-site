@@ -12,12 +12,10 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
 use infrastructure::adapters::{
     reqwest_adapter::new_default_client,
     sqlx_adapter::connect_pg,
-    sqlx_static_site_adapter::{load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow},
     tonic_adapter::AnalyticsClient,
 };
 use primitives::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
-use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
 use seo_application::crawl_ingest::run_crawl_sources;
 use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
@@ -45,6 +43,24 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Retrieve the next pending typed LLM request for manual execution.
+    LlmNext {
+        #[arg(long)]
+        database_url: Option<String>,
+    },
+    /// Validate and persist a ChatGPT response, then wake the Temporal run.
+    LlmSubmit {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        response_file: String,
+        #[arg(long)]
+        model_key: String,
+        #[arg(long)]
+        temporal_url: Option<String>,
+        #[arg(long, default_value = "default")]
+        temporal_namespace: String,
+    },
     CheckRustMigrationContract {
         #[arg(long, default_value = ".")]
         root: String,

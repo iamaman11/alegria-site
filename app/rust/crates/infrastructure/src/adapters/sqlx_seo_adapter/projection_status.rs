@@ -1,3 +1,31 @@
+/// The step journal is durable producer evidence: an empty optional graph
+/// output is valid only when the producer finished for this exact run.
+pub async fn read_completed_seo_producers(
+    pool: &PgPool,
+    run_id: &str,
+) -> Result<Vec<String>, DomainError> {
+    sqlx::query_scalar::<_, String>(
+        r#"
+        SELECT DISTINCT step_name
+        FROM pipeline.step_executions
+        WHERE run_id = $1::uuid
+          AND status = 'done'
+          AND step_name = ANY($2::text[])
+        "#,
+    )
+    .bind(run_id)
+    .bind(&[
+        "opportunity_build",
+        "link_recommend",
+        "global_site_reconcile",
+        "canonical_mapping",
+        "whole_page_semantic_pass",
+    ])
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)
+}
+
 async fn emit_projection_events_for_run(
     pool: &PgPool,
     run_id: &str,

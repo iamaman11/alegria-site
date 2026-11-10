@@ -1,4 +1,4 @@
-FROM rust:1.88-slim AS builder
+FROM rust:1.99.1-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY app ./app
 
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release \
+RUN cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \
     -p outbox_worker
 

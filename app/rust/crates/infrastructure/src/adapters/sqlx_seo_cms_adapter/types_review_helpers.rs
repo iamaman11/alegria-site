@@ -15,7 +15,7 @@ use std::path::Path;
 
 use super::proto_runtime_payload_store::{classify_sqlx, validation_failure};
 use super::sqlx_outbox_adapter::OutboxEnvelope;
-use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
+use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
 use super::static_site_builder_adapter;
 
 #[derive(Debug, Clone)]
@@ -31,6 +31,7 @@ struct PublishDraftRow {
     meta_description: String,
     blueprint_key: String,
     scope_signature: String,
+    locale_code: String,
     canonical_url_path: String,
     canonical_slug: String,
     page_type_key: String,
@@ -42,7 +43,6 @@ struct PublishDraftRow {
 struct SeoPublishRuntimeConfig {
     output_dir: String,
     base_url: String,
-    allow_full_rebuild_fallback: bool,
 }
 
 fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
@@ -90,13 +90,9 @@ fn seo_publish_runtime_config(input: &PublishMaterializeInputPayload) -> SeoPubl
     } else {
         input.base_url.clone()
     };
-    let allow_full_rebuild_fallback = std::env::var("SEO_PUBLISH_ALLOW_FULL_REBUILD_FALLBACK")
-        .map(|value| value != "0" && !value.eq_ignore_ascii_case("false"))
-        .unwrap_or(true);
     SeoPublishRuntimeConfig {
         output_dir,
         base_url,
-        allow_full_rebuild_fallback,
     }
 }
 
@@ -118,6 +114,7 @@ async fn load_publish_draft(
             b.meta_description,
             b.blueprint_key,
             p.scope_signature,
+            COALESCE(NULLIF(scope.locale, ''), 'und') AS locale_code,
             p.canonical_url_path,
             p.canonical_slug,
             p.page_type_key,
@@ -126,6 +123,7 @@ async fn load_publish_draft(
         FROM site.page_drafts d
         JOIN site.page_briefs b ON b.page_brief_key = d.page_brief_key
         JOIN site.page_nodes p ON p.page_node_key = d.page_node_key
+        LEFT JOIN site.site_scopes scope ON scope.scope_signature = p.scope_signature
         WHERE d.page_draft_key = $1
         "#,
     )
@@ -148,6 +146,7 @@ async fn load_publish_draft(
             meta_description: r.get("meta_description"),
             blueprint_key: r.get("blueprint_key"),
             scope_signature: r.get("scope_signature"),
+            locale_code: r.get("locale_code"),
             canonical_url_path: r.get("canonical_url_path"),
             canonical_slug: r.get("canonical_slug"),
             page_type_key: r.get("page_type_key"),

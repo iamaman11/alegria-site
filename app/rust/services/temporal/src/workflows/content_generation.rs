@@ -15,8 +15,9 @@ struct ContentGenerationWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<ContentGenerationWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<ContentGenerationWorkflow>()?;
+    Ok(())
 }
 
 #[workflow_methods]
@@ -27,19 +28,19 @@ impl ContentGenerationWorkflow {
             .workflow_starts_total
             .with_label_values(&["ContentGenerationWorkflow"])
             .inc();
-        let run_id: String = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id: String = ctx.info().workflow_id().to_string();
 
         ctx.state_mut(|s| s.phase = "generate_content".to_string());
         let run_id: String = ctx
             .start_activity(AlegriaActivities::generate_content, run_id, llm_opts(120))
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "validate_blocks".to_string());
         let run_id: String = ctx
             .start_activity(AlegriaActivities::validate_blocks, run_id, fast_opts(30))
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "finalize_run".to_string());
         let run_id: String = ctx

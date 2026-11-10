@@ -65,11 +65,6 @@ def sql_literal(value: str) -> str:
     return value.replace("'", "''")
 
 
-def probe_vector(collection: str) -> list[float]:
-    seed = uuid.uuid5(uuid.NAMESPACE_URL, f"alegria-retrieval-contract:{collection}").int
-    return [(((seed >> (idx % 64)) & 1023) + 1) / 1024.0 for idx in range(VECTOR_SIZE)]
-
-
 def main() -> int:
     bootstrapped = []
     for collection in REQUIRED_COLLECTIONS:
@@ -84,43 +79,30 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 1
+        # Historical bootstraps inserted synthetic points into real search
+        # collections. Such points must never be eligible as evidence or
+        # canonical mappings, particularly when a new scope has no facts.
+        # Remove only the well-known legacy probe identity, preserving all
+        # real source and verified vectors.
         point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"alegria-retrieval-contract:{collection}:point"))
         status, body = request(
-            "PUT",
-            f"/collections/{collection}/points?wait=true",
-            {
-                "points": [
-                    {
-                        "id": point_id,
-                        "vector": probe_vector(collection),
-                        "payload": {
-                            "entity_type": "retrieval_contract_probe",
-                            "entity_key": f"retrieval_contract_probe:{collection}",
-                            "collection_name": collection,
-                        },
-                    }
-                ]
-            },
+            "POST",
+            f"/collections/{collection}/points/delete?wait=true",
+            {"points": [point_id]},
         )
         if status not in {200, 201}:
             print(
-                f"BOOTSTRAP_RETRIEVAL_COLLECTIONS: FAILED upsert collection={collection} status={status} body={body}",
+                f"BOOTSTRAP_RETRIEVAL_COLLECTIONS: FAILED clean legacy probe collection={collection} status={status} body={body}",
                 file=sys.stderr,
             )
             return 1
         entity_key = f"retrieval_contract_probe:{collection}"
         psql(
             f"""
-            INSERT INTO kb.qdrant_points
-                (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version)
-            VALUES
-                ('{point_id}', 'retrieval_contract_probe', '{sql_literal(entity_key)}',
-                 '{sql_literal(collection)}', 'deterministic-probe', 'retrieval_contract_probe@1')
-            ON CONFLICT (entity_type, entity_key, collection_name) DO UPDATE
-            SET point_id = EXCLUDED.point_id,
-                embedding_model = EXCLUDED.embedding_model,
-                embedding_version = EXCLUDED.embedding_version,
-                updated_at = now()
+            DELETE FROM kb.qdrant_points
+            WHERE collection_name = '{sql_literal(collection)}'
+              AND entity_type = 'retrieval_contract_probe'
+              AND entity_key = '{sql_literal(entity_key)}'
             """
         )
         bootstrapped.append(collection)

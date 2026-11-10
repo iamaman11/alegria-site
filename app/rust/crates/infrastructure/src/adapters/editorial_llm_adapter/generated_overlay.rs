@@ -68,6 +68,13 @@ fn candidate_from_generated_text(
         })?;
     let deterministic = build_deterministic_candidate(input, provider_key, model_key)?;
     let generated = parse_generated_sections(text)?;
+    for role in generated.sections.keys() {
+        if !deterministic.sections.iter().any(|section| section.section_role == *role) {
+            return Err(DomainError::ValidationFailure {
+                message: format!("unknown editorial section role from LLM: {role}"),
+            });
+        }
+    }
     Ok(overlay_generated_sections(
         deterministic,
         request,

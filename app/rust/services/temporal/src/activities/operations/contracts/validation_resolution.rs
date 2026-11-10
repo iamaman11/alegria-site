@@ -40,6 +40,8 @@ pub struct ValidatedTruthCandidateRecord {
     pub concept_canonical_key: String,
     pub raw_mention: String,
     pub params: TruthParamValue,
+    #[serde(default)]
+    pub scope: TruthParamValue,
     pub source_key: String,
     pub source_tier: String,
     pub confidence: f64,
@@ -156,4 +158,3 @@ pub struct ResolutionLoopOutput {
     pub rejected_count: usize,
     pub sections: Vec<ResolutionLoopSectionState>,
 }
-

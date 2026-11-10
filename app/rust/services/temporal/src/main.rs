@@ -41,11 +41,18 @@ async fn main() -> Result<()> {
     let client = connect_client(&temporal_url, worker_identity, "default").await?;
 
     let pool = connect_pg(&db_url).await?;
+    // Reconcile any interrupted public release before consuming more publish
+    // activities. A crash cannot silently turn an uncommitted release into
+    // an accepted site after the worker restarts.
+    #[cfg(unix)]
+    infrastructure::adapters::sqlx_seo_cms_adapter::recover_pending_publication(&pool)
+        .await
+        .context("restore or verify interrupted static publication")?;
     let pool = Arc::new(pool);
     let acts = activities::AlegriaActivities { pool };
 
     // WorkerOptions built inside workflows module to keep workflow types private
-    let worker_opts = workflows::build_worker_options("alegria-pipeline", acts);
+    let worker_opts = workflows::build_worker_options("alegria-pipeline", acts)?;
 
     // Worker::new returns Result<_, Box<dyn Error>> — not anyhow-compatible directly
     Worker::new(&runtime, client, worker_opts)

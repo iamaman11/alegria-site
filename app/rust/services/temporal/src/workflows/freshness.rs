@@ -15,8 +15,9 @@ struct FreshnessCheckWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<FreshnessCheckWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<FreshnessCheckWorkflow>()?;
+    Ok(())
 }
 
 #[workflow_methods]
@@ -36,7 +37,7 @@ impl FreshnessCheckWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
         ctx.state_mut(|s| s.phase = "done".to_string());
         metrics::global()
             .workflow_completions_total

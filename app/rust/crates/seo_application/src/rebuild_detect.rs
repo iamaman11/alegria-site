@@ -132,7 +132,7 @@ fn execute_rebuild_detect(input: &RebuildDetectInputPayload) -> RebuildDetectOut
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use seo_ports::{RebuildDependencyEvidence, GraphCapabilityPort};
+    use seo_ports::{GraphCapabilityPort, RebuildDependencyEvidence};
     use serde_json::json;
 
     struct FakeRepo;

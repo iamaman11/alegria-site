@@ -30,6 +30,25 @@ def fixture_index(report: dict) -> dict[str, dict]:
     return {fixture["fixture_id"]: fixture for fixture in report.get("fixtures", [])}
 
 
+def monotonic_no_truth_projection_block(baseline: dict, current: dict) -> bool:
+    """Only accept a stricter fail-closed projection policy, never a weaker one.
+
+    Old immutable certification evidence may record graph projections as
+    permitted even when truth was empty. The current canonical flow prevents
+    graph/planning without admissible truth. This is an *allowed tightening*,
+    not an approval to edit the historical report or change facts/HITL/drafts.
+    """
+    return (
+        baseline.get("projection_verdict") == "allow"
+        and current.get("projection_verdict") == "blocked"
+        and baseline.get("verified_rule_set") == []
+        and current.get("verified_rule_set") == []
+        and current.get("draft_verdict") == "blocked"
+        and current.get("publish_verdict") == "not_attempted"
+        and current.get("rebuild_impact_emitted") is False
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: check_truth_certification_regression.py <current-report-path>")
@@ -59,9 +78,19 @@ def main() -> int:
         baseline_fixture = baseline_by_id[fixture_id]
         if not current_fixture.get("pass", False):
             failures.append(f"{fixture_id}: current certification report is not passing")
+        if (
+            not current_fixture.get("verified_rule_set")
+            and current_fixture.get("projection_verdict") != "blocked"
+        ):
+            failures.append(f"{fixture_id}: zero admissible truth must block projection")
         for field in COMPARE_FIELDS:
-            if current_fixture.get(field) != baseline_fixture.get(field):
-                failures.append(f"{fixture_id}: {field} drifted from accepted baseline")
+            if current_fixture.get(field) == baseline_fixture.get(field):
+                continue
+            if field == "projection_verdict" and monotonic_no_truth_projection_block(
+                baseline_fixture, current_fixture
+            ):
+                continue
+            failures.append(f"{fixture_id}: {field} drifted from accepted baseline")
 
     if failures:
         print("TRUTH_CERTIFICATION_REGRESSION: FAILED")

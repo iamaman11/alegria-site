@@ -22,8 +22,9 @@ struct ExpertProjectionWorkflow {
     phase: String,
 }
 
-pub(crate) fn register(opts: &mut WorkerOptions) {
-    opts.register_workflow::<ExpertProjectionWorkflow>();
+pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<ExpertProjectionWorkflow>()?;
+    Ok(())
 }
 
 fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> WorkflowResult<String> {
@@ -41,7 +42,7 @@ fn support_request(run_id: &str, site_input: &SeoSiteBuildInputPayload) -> Workf
             .map(|value| value.applicant_profile.clone())
             .unwrap_or_default(),
     })
-    .map_err(anyhow::Error::from)?)
+    .map_err(|err| super::runtime::workflow_contract_failure(err.to_string()))?)
 }
 
 async fn reconcile_target(
@@ -75,7 +76,7 @@ impl ExpertProjectionWorkflow {
             .with_label_values(&["ExpertProjectionWorkflow"])
             .inc();
 
-        let run_id = ctx.workflow_initial_info().workflow_id.clone();
+        let run_id = ctx.info().workflow_id().to_string();
         ctx.state_mut(|s| s.phase = "load_seo_site_build_input".to_string());
         let site_input: SeoSiteBuildInputPayload = ctx
             .start_activity(
@@ -84,7 +85,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         let support_bundle_request = support_request(&run_id, &site_input)?;
         ctx.state_mut(|s| s.phase = "load_verified_support_bundle.initial".to_string());
@@ -95,7 +96,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "serp_ingest".to_string());
         let ingest = ctx
@@ -110,7 +111,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
         let crawled = ctx
@@ -125,7 +126,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(120),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "raw_knowledge_ingestion".to_string());
         let raw_knowledge = ctx
@@ -141,7 +142,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(60),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "graph_admissibility_gate".to_string());
         let graph_gate = ctx
@@ -154,11 +155,11 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "neo4j_sync".to_string());
         let neo4j = reconcile_target(ctx, &run_id, "neo4j").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "retrieval_admissibility_gate".to_string());
         let retrieval_gate = ctx
@@ -171,11 +172,11 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "voyage_qdrant_sync".to_string());
         let qdrant = reconcile_target(ctx, &run_id, "qdrant").await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "projection_barrier.post_projection".to_string());
         let post_projection = ctx
@@ -188,7 +189,7 @@ impl ExpertProjectionWorkflow {
                 db_opts(30),
             )
             .await?;
-        ctx.wait_condition(|s| !s.paused).await;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         if !raw_knowledge.changed_truth_keys.is_empty() {
             ctx.state_mut(|s| s.phase = "load_verified_support_bundle.refresh".to_string());
@@ -199,7 +200,7 @@ impl ExpertProjectionWorkflow {
                     db_opts(30),
                 )
                 .await?;
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         ctx.state_mut(|s| s.phase = "done:expert_projection".to_string());

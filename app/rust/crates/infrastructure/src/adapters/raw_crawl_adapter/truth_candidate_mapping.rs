@@ -9,6 +9,15 @@ async fn load_persisted_candidates_for_adjudication(
                 c.role,
                 c.concept_canonical_key,
                 c.params,
+                c.scope,
+                -- Older persisted LLM proposals may carry limiting conditions
+                -- outside scope. Do not let them become universal facts.
+                (c.applies_to_profiles <> '[]'::jsonb
+                 OR btrim(c.conditions_raw) <> ''
+                 OR btrim(c.exceptions_raw) <> ''
+                 OR c.alternatives <> '[]'::jsonb
+                 OR COALESCE(c.params->>'conditions_key', '') <> '')
+                AS unresolved_applicability,
                 c.source_key,
                 coalesce(src.source_type, '') AS source_tier,
                 c.confidence::float8 AS confidence,
@@ -46,6 +55,21 @@ async fn load_persisted_candidates_for_adjudication(
             .map(|json| json.0)
             .unwrap_or_default();
         let mut epistemic_status: String = row.get("epistemic_status");
+        // Legacy candidates may predate the scoped applicability validator.
+        // A nonempty/malformed scope must never be promoted by historical
+        // extraction or by a previously persisted "structured" verdict.
+        let scope = row
+            .try_get::<Json<Value>, _>("scope")
+            .map(|value| value.0)
+            .unwrap_or(Value::Null);
+        let unresolved_applicability: bool = row.get("unresolved_applicability");
+        if (!is_unrestricted_scope(&scope) || unresolved_applicability)
+            && epistemic_status != "rejected"
+        {
+            epistemic_status = "needs_hitl".to_string();
+            let candidate_id: String = row.get("rule_candidate_id");
+            update_candidate_epistemic_status(pool, &candidate_id, &epistemic_status).await?;
+        }
         let concept_exists: bool = row.get("concept_exists");
         if epistemic_status != "rejected" && !concept_exists {
             epistemic_status = "needs_hitl".to_string();
@@ -91,6 +115,25 @@ async fn load_persisted_candidates_for_adjudication(
         });
     }
     Ok(candidates)
+}
+
+fn is_unrestricted_scope(scope: &Value) -> bool {
+    scope.as_object().is_some_and(|fields| fields.is_empty())
+}
+
+#[cfg(test)]
+mod persisted_scope_guard_tests {
+    use super::*;
+
+    #[test]
+    fn scoped_and_malformed_candidates_never_count_as_global_facts() {
+        assert!(is_unrestricted_scope(&serde_json::json!({})));
+        assert!(!is_unrestricted_scope(&serde_json::json!({
+            "applicant_type": "student"
+        })));
+        assert!(!is_unrestricted_scope(&Value::Null));
+        assert!(!is_unrestricted_scope(&serde_json::json!(["student"])));
+    }
 }
 
 fn to_truth_structured_candidate(
@@ -395,4 +438,3 @@ async fn demote_verified_semantic_slot(
     .map_err(classify_sqlx)?;
     Ok(())
 }
-

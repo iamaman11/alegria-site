@@ -51,7 +51,7 @@ impl TruthParamValue {
         }
     }
 
-    fn stable_signature(&self) -> String {
+    pub fn stable_signature(&self) -> String {
         match self {
             Self::Null => "null".to_string(),
             Self::Bool(value) => format!("bool:{value}"),
@@ -93,6 +93,36 @@ fn stable_escape(value: &str) -> String {
         .replace(']', "\\]")
 }
 
+/// The only automatically verifiable scoped predicate is an exact active
+/// applicant-profile match. Other predicates remain human-review only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TruthScopeTarget {
+    Global,
+    ApplicantProfile(String),
+}
+
+pub fn truth_scope_target(scope: &TruthParamValue) -> Option<TruthScopeTarget> {
+    let object = scope.as_object()?;
+    if object.is_empty() {
+        return Some(TruthScopeTarget::Global);
+    }
+    if object.len() != 1 {
+        return None;
+    }
+    let TruthParamValue::Text(profile) = object.get("applicant_profile")? else {
+        return None;
+    };
+    if profile.is_empty()
+        || profile.len() > 64
+        || !profile
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+    {
+        return None;
+    }
+    Some(TruthScopeTarget::ApplicantProfile(profile.clone()))
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TruthCandidateRuntime {
     #[serde(default)]
@@ -109,6 +139,9 @@ pub struct TruthCandidateRuntime {
     pub params: TruthParamValue,
     #[serde(default)]
     pub scope: TruthParamValue,
+    // Additional source conditions must never be silently discarded.
+    #[serde(default)]
+    pub unresolved_applicability: bool,
     #[serde(default)]
     pub severity: String,
     #[serde(default)]
@@ -355,6 +388,41 @@ pub fn validate_truth_candidate(
             epistemic_status: "rejected".to_string(),
             issues,
         };
+    }
+
+    // Only the exact applicant_profile predicate is representable by the
+    // existing verified.rule_instance_profiles and SEO support resolver.
+    // Unknown keys, extra dimensions and malformed values fail closed.
+    if truth_scope_target(&candidate.scope).is_none() {
+        needs_hitl(
+            &mut issues,
+            "scoped_applicability_requires_hitl",
+            "unsupported applicability predicate requires explicit review",
+        );
+    }
+
+    if candidate.unresolved_applicability {
+        needs_hitl(
+            &mut issues,
+            "additional_applicability_requires_hitl",
+            "profile, exception, condition or alternative hints require explicit scope review",
+        );
+    }
+    if candidate
+        .params
+        .as_object()
+        .and_then(|params| params.get("conditions_key"))
+        .is_some_and(|condition| match condition {
+            TruthParamValue::Null => false,
+            TruthParamValue::Text(key) => !key.trim().is_empty(),
+            _ => true,
+        })
+    {
+        needs_hitl(
+            &mut issues,
+            "unresolved_param_condition",
+            "conditions_key cannot be auto-applied without a verified condition expression",
+        );
     }
 
     if candidate.severity.trim().is_empty() || candidate.severity == "unknown" {
@@ -710,6 +778,7 @@ mod tests {
                 ("currency", TruthParamValue::Text("EUR".to_string())),
             ]),
             scope: obj(Vec::new()),
+            unresolved_applicability: false,
             severity: "mandatory".to_string(),
             derivation_type: "direct".to_string(),
             confidence: 0.91,
@@ -733,6 +802,85 @@ mod tests {
         let result = validate_truth_candidate(&base_candidate(), raw_text);
         assert_eq!(result.epistemic_status, "structured");
         assert!(result.issues.is_empty());
+    }
+
+    #[test]
+    fn scoped_candidate_only_allows_exact_applicant_profile() {
+        let mut candidate = base_candidate();
+        candidate.scope = obj(vec![(
+            "applicant_profile",
+            TruthParamValue::Text("student".to_string()),
+        )]);
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "structured");
+        assert_eq!(
+            truth_scope_target(&candidate.scope),
+            Some(TruthScopeTarget::ApplicantProfile("student".to_string()))
+        );
+        for invalid_scope in [
+            obj(vec![(
+                "applicant_type",
+                TruthParamValue::Text("student".to_string()),
+            )]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::Text("Student".to_string()),
+            )]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::Text("".to_string()),
+            )]),
+            obj(vec![
+                (
+                    "applicant_profile",
+                    TruthParamValue::Text("student".to_string()),
+                ),
+                ("age", TruthParamValue::Integer(17)),
+            ]),
+            obj(vec![(
+                "applicant_profile",
+                TruthParamValue::List(Vec::new()),
+            )]),
+        ] {
+            candidate.scope = invalid_scope;
+            let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+            assert_eq!(result.epistemic_status, "needs_hitl");
+            assert!(result
+                .issues
+                .iter()
+                .any(|issue| { issue.code == "scoped_applicability_requires_hitl" }));
+        }
+    }
+
+    #[test]
+    fn conditional_params_are_never_automatically_verified() {
+        let mut candidate = base_candidate();
+        candidate.params = obj(vec![
+            ("amount", TruthParamValue::Integer(35)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+            (
+                "conditions_key",
+                TruthParamValue::Text("student-status".to_string()),
+            ),
+        ]);
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "unresolved_param_condition"));
+    }
+
+    #[test]
+    fn unmodeled_profile_conditions_and_exceptions_require_review() {
+        let mut candidate = base_candidate();
+        candidate.unresolved_applicability = true;
+        let result = validate_truth_candidate(&candidate, "Consular fee is 35 EUR");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "additional_applicability_requires_hitl"));
     }
 
     #[test]

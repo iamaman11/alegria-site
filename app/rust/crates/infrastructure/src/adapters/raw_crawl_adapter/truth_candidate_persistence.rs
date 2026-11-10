@@ -31,6 +31,7 @@ async fn persist_extracted_rule_candidates(
                 raw_mention: rule.raw_mention.clone(),
                 params: truth_param_value_from_json(&rule.params),
                 scope: truth_param_value_from_json(&rule.scope),
+                unresolved_applicability: rule.has_unmodeled_applicability(),
                 severity: rule.severity.clone(),
                 derivation_type: rule.derivation_type.clone(),
                 confidence: rule.confidence,
@@ -214,9 +215,17 @@ async fn adjudicate_persisted_rule_candidates(
     for ((group_context_key, group_role, group_concept), group_candidates) in groups {
         let semantic_slot_id =
             semantic_rule_instance_id(&group_context_key, &group_role, &group_concept);
+        // Include unresolved proposals in the existing governance decision,
+        // rather than silently filtering them out before independent
+        // corroboration. Rejected proposals remain rejected.
         let structured: Vec<TruthStructuredCandidate> = group_candidates
             .iter()
-            .filter(|candidate| candidate.epistemic_status == "structured")
+            .filter(|candidate| {
+                matches!(
+                    candidate.epistemic_status.as_str(),
+                    "structured" | "needs_hitl"
+                )
+            })
             .map(to_truth_structured_candidate)
             .collect();
         let needs_hitl_ids: Vec<String> = group_candidates
@@ -355,4 +364,3 @@ async fn adjudicate_persisted_rule_candidates(
     report.changed_truth_keys.dedup();
     Ok(report)
 }
-

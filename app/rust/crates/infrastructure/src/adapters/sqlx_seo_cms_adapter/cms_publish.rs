@@ -22,6 +22,9 @@ pub async fn persist_cms_publish_output(
     if row.truth_snapshot_ref.trim().is_empty() {
         blockers.push("missing_traceability_manifest".to_string());
     }
+    if row.locale_code.trim().is_empty() || row.locale_code == "und" {
+        blockers.push("missing_scope_locale".to_string());
+    }
     if count_active_cannibalization(pool, &row.page_node_key).await? > 0 {
         blockers.push("active_cannibalization_conflict".to_string());
     }
@@ -98,9 +101,18 @@ pub async fn persist_cms_publish_output(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '[]'::jsonb, $9, $10, $11,
                 $12, $13, 'fresh', 'seo_editor', 'seo_publish_gate', $14)
         ON CONFLICT (revision_id) DO UPDATE
-        SET body_payload = EXCLUDED.body_payload,
-            revision_status = EXCLUDED.revision_status,
-            updated_at = now()
+        SET body_payload = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.body_payload
+                ELSE EXCLUDED.body_payload END,
+            revision_status = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.revision_status
+                ELSE EXCLUDED.revision_status END,
+            updated_at = CASE
+                WHEN site.cms_page_revisions.revision_status = 'published'
+                THEN site.cms_page_revisions.updated_at
+                ELSE now() END
         "#,
     )
     .bind(&revision_id)
@@ -153,12 +165,25 @@ pub async fn persist_cms_publish_output(
             (page_node_key, scope_signature, canonical_url_path, locale_code,
              page_type_key, dominant_intent_key, cms_document_id,
              current_revision_id, current_status, published_at)
-        VALUES ($1, $2, $3, 'und', $4, $5, $6, $7, $8,
+        VALUES ($1, $2, $3, $9, $4, $5, $6, $7, $8,
                 CASE WHEN $8 = 'published' THEN now() ELSE NULL END)
         ON CONFLICT (page_node_key) DO UPDATE
-        SET canonical_url_path = EXCLUDED.canonical_url_path,
-            current_revision_id = EXCLUDED.current_revision_id,
-            current_status = EXCLUDED.current_status,
+        SET canonical_url_path = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.canonical_url_path
+                ELSE EXCLUDED.canonical_url_path END,
+            locale_code = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.locale_code
+                ELSE EXCLUDED.locale_code END,
+            -- The newly approved revision is a candidate, NOT yet the live one.
+            current_revision_id = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN site.cms_pages.current_revision_id
+                ELSE EXCLUDED.current_revision_id END,
+            current_status = CASE
+                WHEN site.cms_pages.current_status = 'published'
+                THEN 'published' ELSE EXCLUDED.current_status END,
             published_at = CASE
                 WHEN EXCLUDED.current_status = 'published'
                 THEN COALESCE(site.cms_pages.published_at, now())
@@ -175,6 +200,7 @@ pub async fn persist_cms_publish_output(
     .bind(&cms_document_id)
     .bind(&revision_id)
     .bind(current_status)
+    .bind(&row.locale_code)
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -182,7 +208,9 @@ pub async fn persist_cms_publish_output(
     sqlx::query(
         r#"
         UPDATE site.page_nodes
-        SET lifecycle_state = $1,
+        SET lifecycle_state = CASE
+                WHEN lifecycle_state = 'published' THEN 'published'
+                ELSE $1 END,
             updated_at = now()
         WHERE page_node_key = $2
         "#,

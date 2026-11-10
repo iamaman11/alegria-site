@@ -32,21 +32,21 @@ def main() -> int:
         'env_flag("ALLOW_EXPERT_MIGRATION_WORKFLOWS")',
         'env_flag("ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW")',
         'env_flag("ALLOW_TEST_HITL_WORKFLOW")',
-        "content_generation::register(&mut opts);",
-        "expert_decomposed_extraction::register(&mut opts);",
-        "expert_extraction::register(&mut opts);",
-        "expert_projection::register(&mut opts);",
-        "expert_semantic_slice::register(&mut opts);",
-        "seo_site_build::register(&mut opts);",
-        "test_hitl::register(&mut opts);",
+        "content_generation::register(&mut opts)?;",
+        "expert_decomposed_extraction::register(&mut opts)?;",
+        "expert_extraction::register(&mut opts)?;",
+        "expert_projection::register(&mut opts)?;",
+        "expert_semantic_slice::register(&mut opts)?;",
+        "seo_site_build::register(&mut opts)?;",
+        "test_hitl::register(&mut opts)?;",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflows/mod.rs missing `{needle}`")
 
     for forbidden in [
-        "\n    seo_site_build::register(&mut opts);\n    test_hitl::register(&mut opts);",
-        "\n    seo_site_build::register(&mut opts);\n    opts",
-        "\n    test_hitl::register(&mut opts);\n    opts",
+        "\n    seo_site_build::register(&mut opts)?;\n    test_hitl::register(&mut opts)?;",
+        "\n    seo_site_build::register(&mut opts)?;\n    Ok(opts)",
+        "\n    test_hitl::register(&mut opts)?;\n    Ok(opts)",
     ]:
         if forbidden in workflows_mod:
             failures.append(

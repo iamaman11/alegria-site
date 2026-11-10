@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
 
 
@@ -47,6 +48,22 @@ def read(path: Path) -> str:
 def main() -> int:
     failures: list[str] = []
 
+    # Temporal SDK wait_condition returns a WorkflowResult. Check included
+    # workflow source modules too: a dropped cancellation must not continue
+    # the real page-publication or human-approval path.
+    for workflow_path in sorted(WORKFLOWS_MOD.parent.rglob("*.rs")):
+        source = workflow_path.read_text(encoding="utf-8")
+        for match in re.finditer(
+            r"ctx\.wait_condition\([^;]*\)\s*\.await\s*;",
+            source,
+        ):
+            line = source.count("\n", 0, match.start()) + 1
+            failures.append(
+                f"{workflow_path.relative_to(ROOT)}:{line}: "
+                "wait_condition must propagate Temporal cancellation with ?"
+            )
+
+
     workflows_mod = read(WORKFLOWS_MOD)
     expert = read(EXPERT_WORKFLOW)
     expert_decomposed = read(EXPERT_DECOMPOSED_WORKFLOW)
@@ -67,22 +84,22 @@ def main() -> int:
         "mod expert_semantic_slice;",
         "mod projection_reconcile;",
         "mod seo_site_build_canonical_cutover;",
-        "expert_extraction::register(&mut opts);",
-        "expert_decomposed_extraction::register(&mut opts);",
-        "expert_projection::register(&mut opts);",
-        "expert_semantic_slice::register(&mut opts);",
-        "projection_reconcile::register(&mut opts);",
-        "seo_site_build_canonical_cutover::register(&mut opts);",
+        "expert_extraction::register(&mut opts)?;",
+        "expert_decomposed_extraction::register(&mut opts)?;",
+        "expert_projection::register(&mut opts)?;",
+        "expert_semantic_slice::register(&mut opts)?;",
+        "projection_reconcile::register(&mut opts)?;",
+        "seo_site_build_canonical_cutover::register(&mut opts)?;",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflow registry missing `{needle}`")
 
     for needle in [
         "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
-        "expert_decomposed_extraction::register(&mut opts);",
-        "expert_extraction::register(&mut opts);",
-        "expert_projection::register(&mut opts);",
-        "expert_semantic_slice::register(&mut opts);",
+        "expert_decomposed_extraction::register(&mut opts)?;",
+        "expert_extraction::register(&mut opts)?;",
+        "expert_projection::register(&mut opts)?;",
+        "expert_semantic_slice::register(&mut opts)?;",
     ]:
         if needle not in workflows_mod:
             failures.append(f"workflow registry missing expert quarantine guard `{needle}`")

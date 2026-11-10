@@ -75,6 +75,7 @@ async fn resolve_verified_fact_support(
         r#"
         SELECT
             r.rule_instance_id,
+            r.concept_key,
             r.role_type,
             r.params,
             r.effective_from::text AS effective_from,
@@ -95,13 +96,17 @@ async fn resolve_verified_fact_support(
                 WHERE rp_apply.rule_instance_id = r.rule_instance_id
                   AND rp_apply.profile_key = $2
                   AND rp_apply.applicability = 'applies'
+                  AND rp_apply.condition_json IS NULL
             ) AS has_apply_profile,
             EXISTS (
                 SELECT 1
                 FROM verified.rule_instance_profiles rp_conditional
                 WHERE rp_conditional.rule_instance_id = r.rule_instance_id
                   AND rp_conditional.profile_key = $2
-                  AND rp_conditional.applicability = 'conditional'
+                  AND (
+                    rp_conditional.applicability = 'conditional'
+                    OR rp_conditional.condition_json IS NOT NULL
+                  )
             ) AS has_conditional_profile,
             EXISTS (
                 SELECT 1
@@ -141,18 +146,70 @@ async fn resolve_verified_fact_support(
                   AND re.status = 'verified'
                   AND re.profile_key = $2
                   AND re.override_kind = 'add_requirement'
-            ) AS has_add_requirement_exception
+            ) AS has_add_requirement_exception,
+            EXISTS (
+                SELECT 1
+                FROM verified.rule_exceptions re_conditions
+                WHERE re_conditions.rule_instance_id = r.rule_instance_id
+                  AND re_conditions.status = 'verified'
+                  AND (
+                    re_conditions.profile_key = $2
+                    OR re_conditions.profile_key IS NULL
+                  )
+            ) AS has_unresolved_exception_conditions
         FROM verified.rule_instances r
         LEFT JOIN kb.concepts c ON c.concept_key = r.concept_key
         LEFT JOIN kb.sources s ON s.source_key = r.source_key
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'
+          AND (r.effective_from IS NULL OR r.effective_from <= CURRENT_DATE)
+          AND (r.effective_to IS NULL OR r.effective_to >= CURRENT_DATE)
+          AND COALESCE(r.freshness_class, 'unknown') = 'fresh'
+          AND COALESCE(r.completeness_class, 'unknown') = 'complete'
+          AND COALESCE(r.params->>'conditions_key', '') = ''
+          AND s.source_key IS NOT NULL
+          AND s.status = 'active'
           AND r.source_key IS NOT NULL
           AND r.source_key <> ''
           AND r.evidence_section_id IS NOT NULL
           AND COALESCE(r.evidence_quote, '') <> ''
           AND COALESCE(r.source_snapshot_hash, '') <> ''
+          -- A legacy verified row must not bypass its original candidate
+          -- applicability by simply lacking a profile binding.
+          AND (
+              r.rule_candidate_id IS NULL
+              OR EXISTS (
+                  SELECT 1
+                  FROM extracted.rule_candidates c
+                  WHERE c.rule_candidate_id = r.rule_candidate_id
+                    AND c.applies_to_profiles = '[]'::jsonb
+                    AND c.epistemic_status IN ('verified', 'structured')
+                    AND COALESCE(c.params->>'conditions_key', '') = ''
+                    AND btrim(c.conditions_raw) = ''
+                    AND btrim(c.exceptions_raw) = ''
+                    AND c.alternatives = '[]'::jsonb
+                    AND (
+                        c.scope = '{}'::jsonb
+                        OR (
+                            -- The requested profile itself must match the
+                            -- original verified source scope, not merely
+                            -- some other profile binding on the same rule.
+                            c.scope = jsonb_build_object('applicant_profile', $2)
+                            AND EXISTS (
+                                SELECT 1
+                                FROM verified.rule_instance_profiles rp_scope
+                                WHERE rp_scope.rule_instance_id = r.rule_instance_id
+                                  AND rp_scope.profile_key = $2
+                                  -- Include non-applying/conditional bindings
+                                  -- for the resolver to report explicit
+                                  -- exclusion/HITL diagnostics, never to
+                                  -- publish them as applicable.
+                            )
+                        )
+                    )
+              )
+          )
         ORDER BY r.role_type, r.rule_instance_id
         "#,
     )
@@ -163,6 +220,7 @@ async fn resolve_verified_fact_support(
     .map_err(classify_sqlx)?;
 
     let mut candidates = Vec::new();
+    let mut semantic_key_by_id = BTreeMap::<String, (String, String)>::new();
     for row in rows {
         let rule_instance_id: String = row.get("rule_instance_id");
         let has_profile_overrides: bool = row.get("has_profile_overrides");
@@ -173,8 +231,15 @@ async fn resolve_verified_fact_support(
         let has_remove_exception: bool = row.get("has_remove_exception");
         let has_replace_exception: bool = row.get("has_replace_exception");
         let has_add_requirement_exception: bool = row.get("has_add_requirement_exception");
+        let has_unresolved_exception_conditions: bool =
+            row.get("has_unresolved_exception_conditions");
         let params: Json<serde_json::Value> = row.get("params");
         let role_type: String = row.get("role_type");
+        let concept_key: String = row.get("concept_key");
+        semantic_key_by_id.insert(
+            rule_instance_id.clone(),
+            (role_type.clone(), concept_key),
+        );
         let concept_label: String = row.get("concept_label");
         let source_type: String = row.get("source_type");
         let trust_level: i32 = row.get("trust_level");
@@ -212,14 +277,43 @@ async fn resolve_verified_fact_support(
                 has_remove_exception,
                 has_replace_exception,
                 has_add_requirement_exception,
+                has_unresolved_exception_conditions,
             },
             support,
         ));
     }
-    Ok(applicability::resolve_support_candidates(
+    let mut resolution = applicability::resolve_support_candidates(
         applicant_profile,
         candidates,
-    ))
+    );
+    // The public page has one value per semantic rule. A global and a
+    // profile-scoped rule for the same concept cannot both be silently
+    // presented as independent universal facts.
+    let mut ids_by_semantic = BTreeMap::<(String, String), Vec<String>>::new();
+    for support in &resolution.included {
+        if let Some(key) = semantic_key_by_id.get(&support.support_ref) {
+            ids_by_semantic
+                .entry(key.clone())
+                .or_default()
+                .push(support.support_ref.clone());
+        }
+    }
+    let overlaps = ids_by_semantic
+        .into_iter()
+        .filter(|(_, ids)| ids.len() > 1)
+        .flat_map(|(_, ids)| ids)
+        .collect::<BTreeSet<_>>();
+    if !overlaps.is_empty() {
+        resolution.included.retain(|support| !overlaps.contains(&support.support_ref));
+        for rule_instance_id in overlaps {
+            resolution.unresolved_rules.push(applicability::SupportResolutionDiagnostic {
+                rule_instance_id,
+                reason_code: "overlapping_profile_and_global_truth".to_string(),
+                detail: json!({"applicant_profile": applicant_profile}),
+            });
+        }
+    }
+    Ok(resolution)
 }
 
 pub async fn load_verified_support_bundle(
@@ -233,11 +327,6 @@ pub async fn load_verified_support_bundle(
     non_empty(scope_signature, "scope_signature")?;
     let normalized_profile = validate_applicant_profile_reference(pool, applicant_profile).await?;
     let resolution = resolve_verified_fact_support(pool, context_key, &normalized_profile).await?;
-    if resolution.included.is_empty() {
-        return Err(validation_failure(format!(
-            "verified support bundle is empty for context_key `{context_key}` and applicant_profile `{normalized_profile}`"
-        )));
-    }
     let support_count = resolution.included.len();
     let supports = resolution.included;
     let excluded_rule_count = resolution.excluded_rules.len();
@@ -286,6 +375,7 @@ pub async fn load_verified_support_bundle(
             "scope_signature": scope_signature,
             "applicant_profile": normalized_profile,
             "support_count": support_count,
+            "bundle_state": if support_count == 0 { "empty_bootstrap_candidate" } else { "ready" },
             "supports": supports.clone(),
             "excluded_rule_count": excluded_rule_count,
             "excluded_rules": excluded_rules,
@@ -434,4 +524,3 @@ pub async fn resolve_rebuild_impacts(
     }
     Ok(impacted)
 }
-

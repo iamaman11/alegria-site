@@ -33,7 +33,7 @@
     "completeness_failures": [],
     "draft_verdict": "blocked",
     "publish_verdict": "not_attempted",
-    "projection_verdict": "allow",
+    "projection_verdict": "blocked",
     "rebuild_impact_emitted": false
   },
   "invariants": {

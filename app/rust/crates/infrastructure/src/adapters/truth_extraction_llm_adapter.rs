@@ -18,7 +18,8 @@ const DEFAULT_TIMEOUT_SECS: u64 = 45;
 const DEFAULT_MAX_RETRIES: usize = 2;
 pub const EXTRACTION_PROMPT_VERSION: &str = "truth_extraction_prompt@1";
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TruthExtractionInput {
     pub context_key: String,
     pub raw_section_id: i64,
@@ -30,6 +31,7 @@ pub struct TruthExtractionInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TruthRuleCandidate {
     #[serde(default)]
     pub role: String,
@@ -75,7 +77,66 @@ pub struct TruthRuleCandidate {
     pub uncertainty_flags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+impl TruthRuleCandidate {
+    /// The current verified/public models do not yet evaluate these extra
+    /// source-level predicates. Even when `scope` is {}, they require review.
+    pub fn has_unmodeled_applicability(&self) -> bool {
+        !self.applies_to_profiles.is_empty()
+            || self
+                .conditions_raw
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .exceptions_raw
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+            || self
+                .alternatives
+                .as_array()
+                .is_some_and(|values| !values.is_empty())
+    }
+}
+
+#[cfg(test)]
+mod source_scope_hint_tests {
+    use super::*;
+
+    fn candidate() -> TruthRuleCandidate {
+        TruthRuleCandidate {
+            params: json!({}),
+            scope: json!({}),
+            alternatives: json!([]),
+            ..TruthRuleCandidate::default()
+        }
+    }
+
+    #[test]
+    fn no_unmodeled_hints_for_unconditional_rule() {
+        assert!(!candidate().has_unmodeled_applicability());
+    }
+
+    #[test]
+    fn profile_target_conditions_exceptions_and_alternatives_need_review() {
+        let mut with_profile = candidate();
+        with_profile.applies_to_profiles = vec!["student".to_string()];
+        assert!(with_profile.has_unmodeled_applicability());
+
+        let mut with_condition = candidate();
+        with_condition.conditions_raw = Some("only for minors".to_string());
+        assert!(with_condition.has_unmodeled_applicability());
+
+        let mut with_exception = candidate();
+        with_exception.exceptions_raw = Some("except children".to_string());
+        assert!(with_exception.has_unmodeled_applicability());
+
+        let mut with_alternative = candidate();
+        with_alternative.alternatives = json!([{"document": "parental consent"}]);
+        assert!(with_alternative.has_unmodeled_applicability());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct TruthExtractionResponse {
     pub provider_key: String,
     pub model_key: String,
@@ -148,7 +209,9 @@ impl TruthExtractionClient for OpenAiTruthExtractionClient {
                 .and_then(|choice| choice.get("message"))
                 .and_then(|message| message.get("content"))
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: "truth extraction provider returned no text content".to_string(),
+                })?;
             response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
         })
     }
@@ -201,7 +264,9 @@ impl TruthExtractionClient for AnthropicTruthExtractionClient {
                 .and_then(|content| content.first())
                 .and_then(|item| item.get("text"))
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: "truth extraction provider returned no text content".to_string(),
+                })?;
             response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
         })
     }
@@ -276,7 +341,9 @@ impl TruthExtractionClient for VertexGeminiTruthExtractionClient {
                 .and_then(|parts| parts.first())
                 .and_then(|part| part.get("text"))
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: "truth extraction provider returned no text content".to_string(),
+                })?;
             response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
         })
     }
@@ -344,7 +411,9 @@ impl TruthExtractionClient for GeminiTruthExtractionClient {
                 .and_then(|parts| parts.first())
                 .and_then(|part| part.get("text"))
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: "truth extraction provider returned no text content".to_string(),
+                })?;
             response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
         })
     }
@@ -417,7 +486,9 @@ impl TruthExtractionClient for LocalCompatibleTruthExtractionClient {
                 .and_then(|choice| choice.get("message"))
                 .and_then(|message| message.get("content"))
                 .and_then(Value::as_str)
-                .unwrap_or("{}");
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: "truth extraction provider returned no text content".to_string(),
+                })?;
             response_from_generated_text(input, self.provider_key(), &self.model_key(), text)
         })
     }
@@ -461,7 +532,7 @@ fn provider_clients() -> Vec<Box<dyn TruthExtractionClient + Send + Sync>> {
 }
 
 fn extraction_system_prompt() -> &'static str {
-    "You are an evidence-grade visa procedural extractor. Return JSON only. Do not invent facts. Extract only explicit procedural claims from the provided source section. Every claim must include exact evidence_quote plus span_start/span_end in the provided raw_text. If unsure, omit the claim."
+    "You are an evidence-grounded procedural knowledge extractor. Return JSON only. Do not invent facts. Extract only explicit procedural claims from the provided source section. Every claim must include exact evidence_quote plus span_start/span_end in the provided raw_text. If unsure, omit the claim."
 }
 
 fn extraction_prompt(input: &TruthExtractionInput) -> String {
@@ -482,21 +553,32 @@ fn response_from_generated_text(
     model_key: &str,
     text: &str,
 ) -> Result<TruthExtractionResponse, DomainError> {
-    let value = serde_json::from_str::<Value>(text).unwrap_or_else(|_| json!({}));
+    // An empty result is valid only when the model explicitly returned
+    // {"candidates":[]}. Invalid JSON, missing keys and malformed candidates
+    // must never masquerade as an evidence-free successful extraction.
+    let value: Value = serde_json::from_str(text)
+        .map_err(|err| extraction_contract_error(&format!("invalid response JSON: {err}")))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| extraction_contract_error("expected a JSON object"))?;
+    if object.len() != 1 || !object.contains_key("candidates") {
+        return Err(extraction_contract_error(
+            "response must contain exactly one key: candidates",
+        ));
+    }
     let raw_candidates = value
         .get("candidates")
-        .or_else(|| value.get("claims"))
-        .or_else(|| value.get("extracted_rules"))
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut candidates = Vec::new();
-    for raw_candidate in raw_candidates {
-        if let Ok(candidate) = serde_json::from_value::<TruthRuleCandidate>(raw_candidate) {
-            if let Some(validated) = validate_candidate(input, candidate) {
-                candidates.push(validated);
-            }
-        }
+        .ok_or_else(|| extraction_contract_error("candidates must be a JSON array"))?;
+    let mut candidates = Vec::with_capacity(raw_candidates.len());
+    for (ordinal, raw_candidate) in raw_candidates.iter().enumerate() {
+        let candidate: TruthRuleCandidate =
+            serde_json::from_value(raw_candidate.clone()).map_err(|err| {
+                extraction_contract_error(&format!("candidate {ordinal} has invalid fields: {err}"))
+            })?;
+        let validated = validate_candidate(input, candidate)
+            .map_err(|err| extraction_contract_error(&format!("candidate {ordinal}: {err}")))?;
+        candidates.push(validated);
     }
     Ok(TruthExtractionResponse {
         provider_key: provider_key.to_string(),
@@ -506,60 +588,69 @@ fn response_from_generated_text(
     })
 }
 
+/// Chat-origin candidate suggestions use the exact same strict JSON and
+/// evidence-span validator as API-backed providers, never a verification API.
+pub fn validate_manual_truth_response(
+    input: &TruthExtractionInput,
+    model_key: &str,
+    response_json: &str,
+) -> Result<TruthExtractionResponse, DomainError> {
+    response_from_generated_text(input, "chat_manual", model_key, response_json)
+}
+
+fn extraction_contract_error(message: &str) -> DomainError {
+    DomainError::InfraUnavailable {
+        message: format!("truth extraction contract: {message}"),
+    }
+}
+
 fn validate_candidate(
     input: &TruthExtractionInput,
     mut candidate: TruthRuleCandidate,
-) -> Option<TruthRuleCandidate> {
-    candidate.role = normalize_role(&candidate.role)?;
+) -> Result<TruthRuleCandidate, &'static str> {
+    candidate.role = normalize_role(&candidate.role).ok_or("unsupported candidate role")?;
     if candidate.concept_canonical_key.trim().is_empty() {
-        return None;
+        return Err("concept_canonical_key is required");
     }
     if candidate.evidence_quote.trim().is_empty() {
-        return None;
+        return Err("evidence_quote is required");
     }
-    if candidate.evidence_section_id.unwrap_or_default() != input.raw_section_id {
-        candidate.evidence_section_id = Some(input.raw_section_id);
+    if candidate.evidence_section_id != Some(input.raw_section_id) {
+        return Err("evidence_section_id does not match source section");
     }
     if candidate.span_start >= candidate.span_end {
-        return None;
+        return Err("evidence span must be nonempty");
     }
-    if candidate.span_end > input.raw_text.len() {
-        return None;
-    }
-    if !input.raw_text.is_char_boundary(candidate.span_start)
+    if candidate.span_end > input.raw_text.len()
+        || !input.raw_text.is_char_boundary(candidate.span_start)
         || !input.raw_text.is_char_boundary(candidate.span_end)
     {
-        return None;
+        return Err("evidence span is outside source text or not UTF-8 aligned");
     }
     let snippet = input
         .raw_text
         .get(candidate.span_start..candidate.span_end)
-        .unwrap_or_default()
-        .trim()
-        .to_string();
-    if snippet.is_empty() {
-        return None;
+        .ok_or("evidence span is invalid")?;
+    if snippet.trim().is_empty() || candidate.evidence_quote != snippet {
+        return Err("evidence_quote must match the exact source bytes");
     }
     if candidate.raw_mention.trim().is_empty() {
-        candidate.raw_mention = snippet.clone();
-    }
-    if candidate.evidence_quote.trim() != snippet {
-        candidate.evidence_quote = snippet;
+        candidate.raw_mention = snippet.to_string();
     }
     if !candidate.confidence.is_finite()
         || candidate.confidence <= 0.0
         || candidate.confidence > 1.0
     {
-        return None;
+        return Err("confidence must be in (0, 1]");
     }
-    if !matches!(candidate.params, Value::Object(_)) {
-        candidate.params = json!({});
+    if !candidate.params.is_object() {
+        return Err("params must be an object");
     }
-    if !matches!(candidate.scope, Value::Object(_)) {
-        candidate.scope = json!({});
+    if !candidate.scope.is_object() {
+        return Err("scope must be an object");
     }
-    if !matches!(candidate.alternatives, Value::Array(_)) {
-        candidate.alternatives = json!([]);
+    if !candidate.alternatives.is_array() {
+        return Err("alternatives must be an array");
     }
     if candidate.severity.trim().is_empty() {
         candidate.severity = "unknown".to_string();
@@ -567,7 +658,7 @@ fn validate_candidate(
     if candidate.derivation_type.trim().is_empty() {
         candidate.derivation_type = "direct".to_string();
     }
-    Some(candidate)
+    Ok(candidate)
 }
 
 fn normalize_role(role: &str) -> Option<String> {
@@ -734,8 +825,81 @@ mod tests {
         .to_string();
 
         let response =
-            response_from_generated_text(&input, "local_compatible", "stub-truth-model", &text)
-                .expect("response");
-        assert!(response.candidates.is_empty());
+            response_from_generated_text(&input, "local_compatible", "stub-truth-model", &text);
+        assert!(
+            response.is_err(),
+            "invalid candidate must fail the whole extraction"
+        );
+    }
+
+    #[test]
+    fn extractor_prompt_does_not_assume_a_visa_niche() {
+        let prompt = extraction_system_prompt();
+        assert!(prompt.contains("evidence-grounded"));
+        assert!(!prompt.to_ascii_lowercase().contains("visa"));
+        let general_input = TruthExtractionInput {
+            context_key: "agriculture:seed-licensing".to_string(),
+            raw_section_id: 8,
+            source_url: "https://example.gov/seed-licensing".to_string(),
+            source_domain: "example.gov".to_string(),
+            heading_path: "Requirements".to_string(),
+            raw_text: "A registration certificate is required.".to_string(),
+            source_snapshot_hash: "abc".to_string(),
+        };
+        let rendered = extraction_prompt(&general_input);
+        assert!(rendered.contains("agriculture:seed-licensing"));
+        assert!(rendered.contains("A registration certificate is required."));
+    }
+
+    #[test]
+    fn explicit_empty_is_valid_but_malformed_json_is_not() {
+        let input = sample_input();
+        let parse =
+            |body: &str| response_from_generated_text(&input, "chat_manual", "chatgpt", body);
+        assert!(parse(r#"{"candidates":[]}"#).unwrap().candidates.is_empty());
+        assert!(parse("not JSON").is_err());
+        assert!(parse("{}").is_err());
+        assert!(parse(r#"{"claims":[]}"#).is_err());
+        assert!(parse(r#"{"candidates":null}"#).is_err());
+        assert!(parse(r#"{"candidates":[],"status":"ok"}"#).is_err());
+    }
+
+    #[test]
+    fn exact_evidence_is_mandatory_and_no_unknown_fields_are_accepted() {
+        let input = sample_input();
+        let valid = serde_json::json!({
+            "role":"FEE_ITEM",
+            "concept_canonical_key":"consular_fee",
+            "raw_mention":"Consular fee is 35 EUR",
+            "params":{},
+            "scope":{},
+            "alternatives":[],
+            "confidence":0.95,
+            "evidence_section_id":42,
+            "evidence_quote":"Consular fee is 35 EUR",
+            "span_start":0,
+            "span_end":22
+        });
+        let parse = |candidate: Value| {
+            response_from_generated_text(
+                &input,
+                "chat_manual",
+                "chatgpt",
+                &serde_json::json!({"candidates":[candidate]}).to_string(),
+            )
+        };
+        assert_eq!(parse(valid.clone()).unwrap().candidates.len(), 1);
+        let mut bad_quote = valid.clone();
+        bad_quote["evidence_quote"] = serde_json::json!("inferred from source");
+        assert!(parse(bad_quote).is_err());
+        let mut bad_section = valid.clone();
+        bad_section["evidence_section_id"] = serde_json::json!(41);
+        assert!(parse(bad_section).is_err());
+        let mut bad_type = valid.clone();
+        bad_type["params"] = serde_json::json!("incorrect shape");
+        assert!(parse(bad_type).is_err());
+        let mut bad_extra = valid;
+        bad_extra["verified"] = serde_json::json!(true);
+        assert!(parse(bad_extra).is_err());
     }
 }

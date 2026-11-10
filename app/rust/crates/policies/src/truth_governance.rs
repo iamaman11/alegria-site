@@ -33,6 +33,50 @@ pub fn adjudicate_truth_candidates_with_governance(
         };
     }
 
+    // A scoped or otherwise unresolved claim for the same semantic fact
+    // cannot be ignored while independent sources verify a global variant.
+    // The caller groups one role/concept identity before calling this policy.
+    // Preserve rejected claims as rejected; all other claims need review.
+    if candidates
+        .iter()
+        .any(|candidate| candidate.epistemic_status == "needs_hitl")
+    {
+        let decisions = candidates
+            .iter()
+            .map(|candidate| {
+                let rejected = !matches!(
+                    candidate.epistemic_status.as_str(),
+                    "structured" | "needs_hitl"
+                );
+                TruthAdjudicationDecision {
+                    rule_candidate_id: candidate.rule_candidate_id.clone(),
+                    decision: if rejected { "rejected" } else { "needs_hitl" }.to_string(),
+                    publish_admissibility: if rejected {
+                        "not_admissible"
+                    } else {
+                        "needs_hitl"
+                    }
+                    .to_string(),
+                    verification_method: "truth_governance@1".to_string(),
+                    adjudication_reason: "unresolved_semantic_identity_requires_hitl".to_string(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let needs_hitl_count = decisions
+            .iter()
+            .filter(|decision| decision.decision == "needs_hitl")
+            .count();
+        let rejected_count = decisions.len() - needs_hitl_count;
+        return TruthAdjudicationResult {
+            overall_status: "needs_hitl".to_string(),
+            verified_count: 0,
+            needs_hitl_count,
+            rejected_count,
+            contradiction_count: 0,
+            decisions,
+        };
+    }
+
     let mut decisions = Vec::new();
     let mut structured = Vec::new();
     let mut rejected_count = 0usize;
@@ -397,6 +441,104 @@ mod tests {
             &registry,
         );
         assert_eq!(result.overall_status, "verified");
+    }
+
+    #[test]
+    fn two_independent_authoritative_sources_cannot_verify_conflicting_fees() {
+        let registry = BTreeMap::from([
+            (
+                "a".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    independence_group_key: "gov-a".to_string(),
+                    override_eligible: true,
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "delegated_authority".to_string(),
+                    independence_group_key: "gov-b".to_string(),
+                    override_eligible: true,
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+        ]);
+        let verdict = adjudicate_truth_candidates_with_governance(
+            &[candidate("1", "a", 80), candidate("2", "b", 120)],
+            &registry,
+        );
+        assert_eq!(verdict.overall_status, "needs_hitl");
+        assert_eq!(verdict.verified_count, 0);
+        assert_eq!(verdict.contradiction_count, 1);
+        assert!(verdict
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility != "admissible" }));
+    }
+
+    #[test]
+    fn unresolved_scope_prevents_independent_officials_from_verifying_global_fact() {
+        let registry = BTreeMap::from([
+            (
+                "a".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    independence_group_key: "official-a".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "delegated_authority".to_string(),
+                    independence_group_key: "official-b".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+        ]);
+        let mut scoped = candidate("scoped", "a", 120);
+        scoped.epistemic_status = "needs_hitl".to_string();
+        let result = adjudicate_truth_candidates_with_governance(
+            &[
+                candidate("global-a", "a", 80),
+                candidate("global-b", "b", 80),
+                scoped,
+            ],
+            &registry,
+        );
+        assert_eq!(result.overall_status, "needs_hitl");
+        assert_eq!(result.verified_count, 0);
+        assert_eq!(result.needs_hitl_count, 3);
+        assert!(result
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility == "needs_hitl" }));
+    }
+
+    #[test]
+    fn unresolved_semantic_identity_preserves_rejected_decision() {
+        let mut scoped = candidate("scoped", "a", 120);
+        scoped.epistemic_status = "needs_hitl".to_string();
+        let mut fabricated = candidate("fabricated", "b", 80);
+        fabricated.epistemic_status = "rejected".to_string();
+        let result = adjudicate_truth_candidates_with_governance(
+            &[candidate("global", "a", 80), scoped, fabricated],
+            &BTreeMap::new(),
+        );
+        assert_eq!(result.verified_count, 0);
+        assert_eq!(result.needs_hitl_count, 2);
+        assert_eq!(result.rejected_count, 1);
+        assert_eq!(
+            result
+                .decisions
+                .iter()
+                .find(|d| d.rule_candidate_id == "fabricated")
+                .unwrap()
+                .publish_admissibility,
+            "not_admissible"
+        );
     }
 
     #[test]

@@ -159,13 +159,14 @@ async fn gcloud_adc_access_token() -> Result<String, DomainError> {
 }
 
 pub(crate) fn vertex_datastore_resource() -> Option<String> {
-    std::env::var("VERTEX_GEMINI_DATASTORE_PATH").ok().and_then(|val| {
-        let trimmed = val.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
+    std::env::var("VERTEX_GEMINI_DATASTORE_PATH")
+        .ok()
+        .and_then(|val| {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
 }
-

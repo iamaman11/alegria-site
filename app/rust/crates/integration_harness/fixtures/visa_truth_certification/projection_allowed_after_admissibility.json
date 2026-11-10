@@ -111,6 +111,120 @@
     ]
   },
   "model_stub_inputs": {
+    "extraction_responses": [
+      {
+        "candidates": [
+          {
+            "role": "DOCUMENT_REQUIRED",
+            "concept_canonical_key": "passport",
+            "raw_mention": "Passport is required.",
+            "params": {
+              "severity": "mandatory",
+              "subtype": "passport"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": false,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Passport is required.",
+            "span_start": 0,
+            "span_end": 21,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Consular fee is 80 EUR.",
+            "params": {
+              "amount": 80,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Consular fee is 80 EUR.",
+            "span_start": 0,
+            "span_end": 23,
+            "uncertainty_flags": []
+          }
+        ]
+      },
+      {
+        "candidates": [
+          {
+            "role": "DOCUMENT_REQUIRED",
+            "concept_canonical_key": "passport",
+            "raw_mention": "Passport is required for the visa application.",
+            "params": {
+              "severity": "mandatory",
+              "subtype": "passport"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": false,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Passport is required for the visa application.",
+            "span_start": 0,
+            "span_end": 46,
+            "uncertainty_flags": []
+          },
+          {
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Consular fee is 80 EUR.",
+            "params": {
+              "amount": 80,
+              "currency": "EUR"
+            },
+            "scope": {},
+            "severity": "mandatory",
+            "applies_to_profiles": [],
+            "exceptions_raw": "",
+            "conditions_raw": "",
+            "alternatives": [],
+            "modality_raw": "",
+            "derivation_type": "direct",
+            "is_numeric": true,
+            "is_range": false,
+            "is_incomplete": false,
+            "confidence": 0.95,
+            "evidence_section_id": 0,
+            "evidence_quote": "Consular fee is 80 EUR.",
+            "span_start": 0,
+            "span_end": 23,
+            "uncertainty_flags": []
+          }
+        ]
+      }
+    ],
     "editorial_response": {
       "sections": {
         "overview": "Passport is required and the consular fee is 80 EUR."

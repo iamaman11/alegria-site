@@ -137,5 +137,20 @@ fn truth_certification_env(
         "QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(),
         "true".to_string(),
     );
+    // The production gate must remain mandatory even under synthetic
+    // integration inputs: our real Qdrant/Neo4j and Voyage HTTP-contract
+    // test provider either satisfy the capabilities or the test fails.
+    for required in [
+        "RETRIEVAL_CAPABILITY_REQUIRED",
+        "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
+        "CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED",
+        "VOYAGE_RERANK_REQUIRED",
+        "GRAPH_CAPABILITY_REQUIRED",
+        "NEO4J_SYNC_REQUIRED",
+        "GRAPH_QUERY_REQUIRED",
+        "GRAPH_GDS_REQUIRED",
+    ] {
+        envs.insert(required.to_string(), "true".to_string());
+    }
     envs
 }

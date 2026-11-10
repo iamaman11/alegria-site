@@ -14,6 +14,7 @@ async fn run_page_publish_phases(
     factual_fragments: &[String],
     context_key: &str,
     applicant_profile: &str,
+    scope: &SeoScopePayload,
 ) -> WorkflowResult<PagePublishLoopOutcome> {
     let page_total = page_nodes.len();
     let page_keys = page_phase_keys(plan);
@@ -73,6 +74,36 @@ async fn run_page_publish_phases(
                         )
                         .await?,
                     );
+                    // page_brief is created and queued by draft_assemble, not by
+                    // site IA. Materialize and check it before editorial work or
+                    // approval/publishing; use a unique durable step per page.
+                    if plan.policy.projection != RunProjectionPolicy::WarnOnly {
+                        let sync_step = format!("neo4j_sync_post_brief_{}", page_index + 1);
+                        ctx.state_mut(|s| s.phase = sync_step.clone());
+                        let brief_sync = sync_target(ctx, run_id, &sync_step, "neo4j").await?;
+                        ensure_sync_drained(&brief_sync, &sync_step)?;
+                        ctx.wait_condition(|s| !s.paused).await?;
+                        ctx.state_mut(|s| {
+                            s.phase = format!("seo_materialization_gate:page:{}", page_index + 1)
+                        });
+                        ctx.start_activity(
+                            AlegriaActivities::run_seo_preflight_step,
+                            SeoPreflightInput {
+                                run_id: run_id.to_string(),
+                                context_key: context_key.to_string(),
+                                scope: scope.clone(),
+                                projection_max_lag_ms: 300_000,
+                                require_materialized_projections: true,
+                                enforce_required_contract: true,
+                                require_page_brief_projection: true,
+                                gate_key: format!("page:{}", page_index + 1),
+                                skip_provider_probes: true,
+                            },
+                            db_opts(30),
+                        )
+                        .await?;
+                        ctx.wait_condition(|s| !s.paused).await?;
+                    }
                 }
                 SeoPhaseKey::EditorialDraftGenerate => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
@@ -82,18 +113,56 @@ async fn run_page_publish_phases(
                             "draft_assemble_required",
                         )));
                     };
-                    editorial_candidate = Some(
-                        ctx.start_activity(
+                    let request = EditorialDraftGenerateInputPayload {
+                        run_id: run_id.to_string(),
+                        request: draft_plan_ref.llm_request.clone(),
+                        provider_policy: "multi_provider:first_available".to_string(),
+                    };
+                    let mut generated: EditorialDraftGenerateOutputPayload = ctx
+                        .start_activity(
                             AlegriaActivities::run_editorial_draft_generate,
-                            EditorialDraftGenerateInputPayload {
-                                run_id: run_id.to_string(),
-                                request: draft_plan_ref.llm_request.clone(),
-                                provider_policy: "multi_provider:first_available".to_string(),
-                            },
+                            request.clone(),
                             db_opts(60),
                         )
-                        .await?,
-                    );
+                        .await?;
+                    if generated.status == "awaiting_manual" {
+                        // The activity has committed the manual task in PostgreSQL.
+                        // A signal only wakes us; a separate activity reads and
+                        // revalidates that this precise request is completed.
+                        ctx.state_mut(|s| {
+                            s.phase = format!("llm_wait:page:{}/{}", page_index + 1, page_total);
+                        });
+                        loop {
+                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready).await?;
+                            ctx.state_mut(|s| s.llm_result_ready = false);
+                            generated = ctx
+                                .start_activity(
+                                    AlegriaActivities::load_manual_editorial_result,
+                                    request.clone(),
+                                    db_opts(30),
+                                )
+                                .await?;
+                            if generated.status == "done" {
+                                break;
+                            }
+                            if generated.status != "awaiting_manual" {
+                                return Ok(PagePublishLoopOutcome::Blocked(
+                                    block_execution_plan_invariant(
+                                        ctx, run_id, "manual_llm_result_invalid",
+                                    ),
+                                ));
+                            }
+                        }
+                        ctx.state_mut(|s| {
+                            s.phase = phase_with_ordinal(key, page_index, page_total)
+                        });
+                    }
+                    if generated.candidate.is_none() {
+                        return Ok(PagePublishLoopOutcome::Blocked(
+                            block_execution_plan_invariant(ctx, run_id, "editorial_llm_candidate_missing"),
+                        ));
+                    }
+                    editorial_candidate = Some(generated);
                 }
                 SeoPhaseKey::DraftNormalize => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
@@ -243,7 +312,7 @@ async fn run_page_publish_phases(
                                 s.phase = phase_with_ordinal(key, page_index, page_total);
                             });
                             loop {
-                                ctx.wait_condition(|s| !s.paused && s.resume_requested).await;
+                                ctx.wait_condition(|s| !s.paused && s.resume_requested).await?;
                                 let approval_decision: CmsApprovalDecision = ctx
                                     .start_activity(
                                         AlegriaActivities::run_human_approval_wait_step,
@@ -505,11 +574,16 @@ async fn run_page_publish_phases(
                 }
                 _ => {}
             }
-            ctx.wait_condition(|s| !s.paused).await;
+            ctx.wait_condition(|s| !s.paused).await?;
         }
 
         if page_blocked {
-            continue;
+            return Ok(PagePublishLoopOutcome::Blocked(format!(
+                "{}:page_node_key={}:published_before_block={}",
+                blocked_publish_gate_status(),
+                page_node.page_node_key,
+                published_pages
+            )));
         }
     }
 

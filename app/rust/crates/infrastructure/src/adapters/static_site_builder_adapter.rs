@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
-use pulldown_cmark::{html, Options as MarkdownOptions, Parser as MarkdownParser};
+use pulldown_cmark::{
+    html, CowStr, Event, Options as MarkdownOptions, Parser as MarkdownParser, Tag,
+};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
@@ -7,7 +9,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::sqlx_static_site_adapter::{
-    load_static_site_snapshot, StaticCmsLinkRow, StaticCmsPageRow,
+    load_static_site_candidate_snapshot, load_static_site_snapshot, StaticCmsLinkRow,
+    StaticCmsPageRow, StaticSiteSnapshot,
 };
 
 #[derive(Debug, Clone)]
@@ -82,8 +85,68 @@ fn absolute_url(base_url: &str, url_path: &str) -> Result<String> {
     ))
 }
 
+fn safe_markdown_destination(raw: &str) -> bool {
+    let destination = raw.trim();
+    if destination.is_empty() {
+        return false;
+    }
+    let lowered = destination.to_ascii_lowercase();
+    if lowered.starts_with("//") {
+        return false;
+    }
+    if lowered.starts_with("https://")
+        || lowered.starts_with("http://")
+        || lowered.starts_with("mailto:")
+        || lowered.starts_with('/')
+        || lowered.starts_with('#')
+        || lowered.starts_with("./")
+        || lowered.starts_with("../")
+    {
+        return true;
+    }
+    !lowered.contains(':')
+}
+
+fn safe_destination<'a>(destination: CowStr<'a>) -> CowStr<'a> {
+    if safe_markdown_destination(destination.as_ref()) {
+        destination
+    } else {
+        CowStr::Borrowed("#")
+    }
+}
+
+fn sanitize_markdown_event(event: Event<'_>) -> Option<Event<'_>> {
+    match event {
+        Event::Html(_) | Event::InlineHtml(_) => None,
+        Event::Start(Tag::Link {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Some(Event::Start(Tag::Link {
+            link_type,
+            dest_url: safe_destination(dest_url),
+            title,
+            id,
+        })),
+        Event::Start(Tag::Image {
+            link_type,
+            dest_url,
+            title,
+            id,
+        }) => Some(Event::Start(Tag::Image {
+            link_type,
+            dest_url: safe_destination(dest_url),
+            title,
+            id,
+        })),
+        other => Some(other),
+    }
+}
+
 fn markdown_to_html(markdown: &str) -> String {
-    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all());
+    let parser = MarkdownParser::new_ext(markdown, MarkdownOptions::all())
+        .filter_map(sanitize_markdown_event);
     let mut rendered = String::new();
     html::push_html(&mut rendered, parser);
     rendered
@@ -232,14 +295,80 @@ fn breadcrumb_list_json(page: &StaticCmsPageRow, base_url: &str) -> Result<Value
     }))
 }
 
+fn push_faq_item(items: &mut Vec<Value>, question: &Option<String>, answer_lines: &[String]) {
+    let Some(question_text) = question.as_ref() else {
+        return;
+    };
+    let answer = answer_lines
+        .iter()
+        .map(|line| line.trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if answer.is_empty() {
+        return;
+    }
+    items.push(json!({
+        "@type": "Question",
+        "name": question_text,
+        "acceptedAnswer": {
+            "@type": "Answer",
+            "text": answer,
+        }
+    }));
+}
+
+fn faq_entities(markdown: &str) -> Vec<Value> {
+    let mut items = Vec::new();
+    let mut in_faq = false;
+    let mut question: Option<String> = None;
+    let mut answer_lines: Vec<String> = Vec::new();
+
+    for line in markdown.lines() {
+        let trimmed = line.trim();
+        if let Some(heading) = trimmed.strip_prefix("## ") {
+            let heading_key = heading.trim().to_ascii_lowercase();
+            if in_faq {
+                push_faq_item(&mut items, &question, &answer_lines);
+                question = None;
+                answer_lines.clear();
+            }
+            in_faq = heading_key == "faq"
+                || heading_key == "frequently asked questions"
+                || heading_key == "вопросы и ответы";
+            continue;
+        }
+        if !in_faq {
+            continue;
+        }
+        if let Some(next_question) = trimmed.strip_prefix("### ") {
+            push_faq_item(&mut items, &question, &answer_lines);
+            question = Some(next_question.trim().to_string());
+            answer_lines.clear();
+        } else if question.is_some() {
+            answer_lines.push(trimmed.to_string());
+        }
+    }
+    if in_faq {
+        push_faq_item(&mut items, &question, &answer_lines);
+    }
+    items
+}
+
 fn fallback_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
-    Ok(json!({
-        "@context": "https://schema.org",
-        "@graph": [
-            { "@type": "Article", "headline": page.title, "url": canonical },
-            breadcrumb_list_json(page, base_url)?
-        ]
-    }))
+    let mut graph = vec![
+        json!({ "@type": "Article", "headline": page.title, "url": canonical }),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    append_faq_schema(&mut graph, page);
+    Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
+}
+
+fn append_faq_schema(graph: &mut Vec<Value>, page: &StaticCmsPageRow) {
+    let faq_items = faq_entities(page_markdown(page));
+    if !faq_items.is_empty() {
+        graph.push(json!({ "@type": "FAQPage", "mainEntity": faq_items }));
+    }
 }
 
 fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
@@ -252,13 +381,19 @@ fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) ->
     if !custom_schema {
         return fallback_schema_json(page, canonical, base_url);
     }
-    Ok(json!({
-        "@context": "https://schema.org",
-        "@graph": [
-            page.schema_markup_payload.clone(),
-            breadcrumb_list_json(page, base_url)?
-        ]
-    }))
+    let mut graph = vec![
+        page.schema_markup_payload.clone(),
+        breadcrumb_list_json(page, base_url)?,
+    ];
+    append_faq_schema(&mut graph, page);
+    Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
+}
+
+fn json_for_script(value: &Value) -> Result<String> {
+    Ok(serde_json::to_string_pretty(value)?
+        .replace('&', "\\u0026")
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e"))
 }
 
 fn render_related_links(
@@ -321,7 +456,7 @@ fn render_page(
     let breadcrumbs = render_breadcrumbs(page, base_url)?;
     let (related, required_link_count, rendered_link_count) =
         render_related_links(page, pages_by_key, links_by_source)?;
-    let schema_json = serde_json::to_string_pretty(&page_schema_json(page, &canonical, base_url)?)?;
+    let schema_json = json_for_script(&page_schema_json(page, &canonical, base_url)?)?;
 
     let html = format!(
         r#"<!doctype html>
@@ -333,6 +468,31 @@ fn render_page(
   <meta name="description" content="{description}">
   <link rel="canonical" href="{canonical}">
   <script type="application/ld+json">{schema_json}</script>
+  <style>
+    :root {{ color-scheme: light; --ink: #182026; --muted: #5a6872; --line: #d9e0e5; --accent: #176b5d; --bg: #fbfcfc; }}
+    body {{ margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); line-height: 1.62; }}
+    header {{ border-bottom: 1px solid var(--line); background: #ffffff; }}
+    nav {{ max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; gap: 16px; overflow-x: auto; }}
+    nav a {{ color: var(--ink); text-decoration: none; white-space: nowrap; font-size: 14px; }}
+    nav a[data-depth="0"] {{ font-weight: 700; }}
+    nav a[data-depth="1"] {{ font-weight: 600; }}
+    nav a[data-depth="2"] {{ color: var(--muted); }}
+    main {{ max-width: 820px; margin: 0 auto; padding: 48px 24px 72px; }}
+    .breadcrumbs {{ max-width: 820px; padding: 0; margin: 0 0 28px; display: block; overflow: visible; }}
+    .breadcrumbs ol {{ display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0; color: var(--muted); font-size: 13px; }}
+    .breadcrumbs li:not(:last-child)::after {{ content: "/"; margin-left: 8px; color: var(--muted); }}
+    .breadcrumbs a {{ color: var(--muted); font-size: 13px; }}
+    article h1 {{ font-size: clamp(32px, 5vw, 48px); line-height: 1.08; margin: 0 0 14px; }}
+    .meta {{ color: var(--muted); font-size: 14px; margin-bottom: 34px; }}
+    article h2 {{ margin-top: 38px; font-size: 26px; line-height: 1.2; }}
+    article a {{ color: var(--accent); }}
+    article code {{ background: #eef3f2; padding: 2px 5px; border-radius: 4px; }}
+    .related {{ margin-top: 52px; border-top: 1px solid var(--line); padding-top: 26px; }}
+    .related ul {{ padding: 0; margin: 0; list-style: none; display: grid; gap: 10px; }}
+    .related li {{ display: flex; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }}
+    .related span {{ color: var(--muted); font-size: 13px; }}
+    footer {{ border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; padding: 22px 24px; text-align: center; }}
+  </style>
 </head>
 <body>
   <header><nav>{nav}</nav></header>
@@ -520,16 +680,12 @@ pub async fn build_static_site(
     })
 }
 
-pub async fn build_static_site_incremental(
-    pool: &PgPool,
+fn build_incremental_from_snapshot(
+    snapshot: StaticSiteSnapshot,
     output_dir: &Path,
     base_url: &str,
     target_page_keys: &[String],
 ) -> Result<StaticBuildResult> {
-    if target_page_keys.is_empty() {
-        anyhow::bail!("incremental build requires at least one target page key");
-    }
-    let snapshot = load_static_site_snapshot(pool).await?;
     let target_set = target_page_keys
         .iter()
         .filter(|key| !key.trim().is_empty())
@@ -544,7 +700,7 @@ pub async fn build_static_site_incremental(
         .map(|page| output_path_for_url(&page.canonical_url_path))
         .collect::<Result<std::collections::HashSet<_>>>()?;
     if page_paths.is_empty() {
-        anyhow::bail!("incremental build target pages are not approved/published");
+        anyhow::bail!("incremental build target pages are not present in the selected snapshot");
     }
     let artifacts = all_artifacts
         .into_iter()
@@ -566,4 +722,145 @@ pub async fn build_static_site_incremental(
         previews,
         output_dir: output_dir.to_path_buf(),
     })
+}
+
+pub async fn build_static_site_incremental(
+    pool: &PgPool,
+    output_dir: &Path,
+    base_url: &str,
+    target_page_keys: &[String],
+) -> Result<StaticBuildResult> {
+    if target_page_keys.is_empty() {
+        anyhow::bail!("incremental build requires at least one target page key");
+    }
+    let snapshot = load_static_site_snapshot(pool).await?;
+    build_incremental_from_snapshot(snapshot, output_dir, base_url, target_page_keys)
+}
+
+pub async fn build_static_site_candidate_incremental(
+    pool: &PgPool,
+    output_dir: &Path,
+    base_url: &str,
+    target_page_node_key: &str,
+    target_revision_id: &str,
+) -> Result<StaticBuildResult> {
+    let snapshot =
+        load_static_site_candidate_snapshot(pool, target_page_node_key, target_revision_id).await?;
+    // Each candidate release gets a separate directory, not an existing public
+    // tree to patch. Emit every published dependency along with the approved
+    // target revision; otherwise the sitemap/manifest would list missing pages.
+    // Only the target needs a preview for its per-page editorial gate.
+    let (artifacts, all_previews) =
+        build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+    write_static_artifacts(output_dir, &artifacts)?;
+    let previews = all_previews
+        .into_iter()
+        .filter(|preview| preview.page_node_key == target_page_node_key)
+        .collect();
+    Ok(StaticBuildResult {
+        artifacts,
+        previews,
+        output_dir: output_dir.to_path_buf(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_release_contains_all_manifest_pages_and_html() {
+        let target = StaticCmsPageRow {
+            page_node_key: "target".to_string(),
+            canonical_url_path: "/".to_string(),
+            locale_code: "ru".to_string(),
+            page_type_key: "home".to_string(),
+            dominant_intent_key: "informational".to_string(),
+            current_status: "approved".to_string(),
+            cms_document_id: "cms-target".to_string(),
+            revision_id: "target-approved".to_string(),
+            title: "Home".to_string(),
+            meta_description: "Home description".to_string(),
+            h1: "Home".to_string(),
+            body_payload: json!({"markdown": "Useful home content"}),
+            schema_markup_payload: json!({}),
+            updated_at: "2026-11-07".to_string(),
+        };
+        let published_dependency = StaticCmsPageRow {
+            page_node_key: "guide".to_string(),
+            canonical_url_path: "/guide".to_string(),
+            current_status: "published".to_string(),
+            cms_document_id: "cms-guide".to_string(),
+            revision_id: "guide-published".to_string(),
+            title: "Guide".to_string(),
+            h1: "Guide".to_string(),
+            ..target.clone()
+        };
+        let (artifacts, previews) = build_static_artifacts(
+            &[target, published_dependency],
+            &[],
+            "https://staging.alegria.by",
+        )
+        .expect("build complete isolated candidate release");
+        assert_eq!(previews.len(), 2);
+
+        let output_dir = std::env::temp_dir().join(format!(
+            "alegria-candidate-release-{}",
+            uuid::Uuid::new_v4()
+        ));
+        write_static_artifacts(&output_dir, &artifacts).expect("write complete candidate release");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &fs::read(output_dir.join("alegria-static-manifest.json")).expect("manifest exists"),
+        )
+        .expect("valid JSON manifest");
+        assert_eq!(manifest["page_count"], 2);
+        assert!(output_dir.join("index.html").exists());
+        assert!(output_dir.join("guide/index.html").exists());
+        let sitemap = fs::read_to_string(output_dir.join("sitemap.xml")).expect("sitemap exists");
+        assert!(sitemap.contains("https://staging.alegria.by/guide"));
+        assert!(output_dir.join("robots.txt").exists());
+        fs::remove_dir_all(&output_dir).expect("remove test release");
+    }
+
+    #[test]
+    fn public_paths_keep_directory_indexes_and_reject_traversal() {
+        assert_eq!(output_path_for_url("/").unwrap(), "index.html");
+        assert_eq!(
+            output_path_for_url("/guides/poland-visa/").unwrap(),
+            "guides/poland-visa/index.html"
+        );
+        assert!(output_path_for_url("/../secret").is_err());
+        assert!(output_path_for_url("/safe?x=1").is_err());
+    }
+
+    #[test]
+    fn canonical_renderer_keeps_faq_structured_data() {
+        let faq = faq_entities("## FAQ\n\n### Is this reviewed?\n\nYes, before publish.");
+        assert_eq!(faq.len(), 1);
+        assert_eq!(faq[0]["@type"], "Question");
+        assert_eq!(faq[0]["name"], "Is this reviewed?");
+        let rendered = markdown_to_html("# Title\n\nBody with **strong** text.");
+        assert!(rendered.contains("<h1>Title</h1>"));
+        assert!(rendered.contains("<strong>strong</strong>"));
+    }
+
+    #[test]
+    fn markdown_renderer_drops_raw_html_and_neutralizes_dangerous_urls() {
+        let rendered = markdown_to_html(
+            "before <script>alert(1)</script> [bad](javascript:alert(1)) ![x](data:text/html,boom) after",
+        );
+        assert!(!rendered.to_ascii_lowercase().contains("<script"));
+        assert!(!rendered.to_ascii_lowercase().contains("javascript:"));
+        assert!(!rendered.to_ascii_lowercase().contains("data:text/html"));
+        assert!(rendered.contains("href=\"#\""));
+        assert!(rendered.contains("src=\"#\""));
+    }
+
+    #[test]
+    fn json_ld_serialization_cannot_close_script_element() {
+        let encoded = json_for_script(&json!({"value": "</script><script>alert(1)</script>"}))
+            .expect("json serialization should succeed");
+        assert!(!encoded.to_ascii_lowercase().contains("</script>"));
+        assert!(encoded.contains("\\u003c/script\\u003e"));
+    }
 }

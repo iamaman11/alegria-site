@@ -15,6 +15,7 @@ temporalio-sdk-core = { workspace = true }
 temporalio-client = { workspace = true }
 temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
 infrastructure = { path = "../../crates/infrastructure" }
 policies = { path = "../../crates/policies" }
 seo_steps = { path = "../../crates/seo_steps" }
@@ -36,4 +37,4 @@ sqlx = { workspace = true }
 url = { workspace = true }
 futures = "0.3"
 futures-util = "0.3"
-prometheus = "0.13"
+prometheus = "0.14"

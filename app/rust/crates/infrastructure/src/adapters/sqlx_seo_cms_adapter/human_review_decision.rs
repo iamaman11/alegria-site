@@ -19,6 +19,13 @@ pub async fn apply_human_review_decision(
     .await
     .map_err(classify_sqlx)?;
     let revision_id: String = row.get("revision_id");
+    // Reject reviews not associated with a real canonical Temporal workflow
+    // before changing any CMS decision or HITL row.
+    let workflow_id = resolve_seo_workflow_id(pool, &request.page_node_key, &revision_id)
+        .await?
+        .ok_or_else(|| {
+            validation_failure("seo workflow run_id not found for current review revision")
+        })?;
     let decision_key = primitives::seo::seo_artifact_key(
         "cms_approval_decision",
         &[
@@ -28,6 +35,7 @@ pub async fn apply_human_review_decision(
             &request.decision,
         ],
     );
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     sqlx::query(
         r#"
         INSERT INTO site.cms_approval_decisions
@@ -50,7 +58,7 @@ pub async fn apply_human_review_decision(
         "reason": request.reason.clone(),
         "source": request.source.clone(),
     })))
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -73,15 +81,12 @@ pub async fn apply_human_review_decision(
     .bind(queue_state)
     .bind(&request.page_node_key)
     .bind(&revision_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
-    let workflow_id = resolve_seo_workflow_id(pool, &request.page_node_key, &revision_id)
-        .await?
-        .ok_or_else(|| {
-            validation_failure("seo workflow run_id not found for current review revision")
-        })?;
+
+    tx.commit().await.map_err(classify_sqlx)?;
 
     Ok(CmsReviewDecisionOutcome {
         decision_key,

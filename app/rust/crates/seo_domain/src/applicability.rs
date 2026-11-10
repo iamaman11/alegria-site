@@ -11,6 +11,7 @@ pub struct ApplicabilityRuleCandidate {
     pub has_remove_exception: bool,
     pub has_replace_exception: bool,
     pub has_add_requirement_exception: bool,
+    pub has_unresolved_exception_conditions: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,12 +57,16 @@ fn candidate_flags(candidate: &ApplicabilityRuleCandidate) -> Value {
         "has_remove_exception": candidate.has_remove_exception,
         "has_replace_exception": candidate.has_replace_exception,
         "has_add_requirement_exception": candidate.has_add_requirement_exception,
+        "has_unresolved_exception_conditions": candidate.has_unresolved_exception_conditions,
     })
 }
 
 pub fn decide_support_resolution(
     candidate: &ApplicabilityRuleCandidate,
 ) -> SupportResolutionDecision {
+    if candidate.has_unresolved_exception_conditions {
+        return SupportResolutionDecision::Unresolved("unresolved_exception_condition");
+    }
     if candidate.has_exclude_profile {
         return SupportResolutionDecision::Excluded("profile_excluded");
     }
@@ -137,7 +142,47 @@ mod tests {
             has_remove_exception: false,
             has_replace_exception: false,
             has_add_requirement_exception: false,
+            has_unresolved_exception_conditions: false,
         }
+    }
+
+    #[test]
+    fn verified_exception_without_evaluated_predicate_never_supports_a_page() {
+        let mut candidate = candidate("rule:with_exception");
+        candidate.has_unresolved_exception_conditions = true;
+        candidate.has_waive_exception = true;
+        let resolved = resolve_support_candidates(
+            "student",
+            vec![(candidate, "must provide document".to_string())],
+        );
+        assert!(resolved.included.is_empty());
+        assert_eq!(resolved.unresolved_rules.len(), 1);
+        assert_eq!(
+            resolved.unresolved_rules[0].reason_code,
+            "unresolved_exception_condition"
+        );
+    }
+
+    #[test]
+    fn profile_binding_does_not_leak_between_applicants() {
+        let mut student = candidate("rule:student");
+        student.has_profile_overrides = true;
+        student.has_apply_profile = true;
+        let mut irrelevant = candidate("rule:minor");
+        irrelevant.has_profile_overrides = true;
+        let resolution = resolve_support_candidates(
+            "student",
+            vec![
+                (student, "student-only".to_string()),
+                (irrelevant, "minor-only".to_string()),
+            ],
+        );
+        assert_eq!(resolution.included, vec!["student-only".to_string()]);
+        assert_eq!(resolution.excluded_rules.len(), 1);
+        assert_eq!(
+            resolution.excluded_rules[0].reason_code,
+            "profile_not_applicable"
+        );
     }
 
     #[test]

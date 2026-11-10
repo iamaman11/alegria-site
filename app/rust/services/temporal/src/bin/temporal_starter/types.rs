@@ -85,6 +85,9 @@ enum Command {
         query_batch_key: Option<String>,
         #[arg(long, default_value = "publish_with_hitl")]
         run_mode: String,
+        /// Await workflow completion, including genuine external HITL decision.
+        #[arg(long, default_value_t = false)]
+        wait: bool,
     },
     /// Validate and optionally bootstrap a SEO site-build scope without starting Temporal.
     SeoPreflight {
@@ -158,6 +161,11 @@ enum Command {
     },
     /// Send a resume signal to a paused workflow.
     WorkflowResume {
+        #[arg(long)]
+        workflow_id: String,
+    },
+    /// Read-only reattach to an existing canonical site workflow. Never starts another run.
+    WorkflowWait {
         #[arg(long)]
         workflow_id: String,
     },
@@ -301,4 +309,3 @@ impl RebuildDispatchWorkflowKind {
         }
     }
 }
-

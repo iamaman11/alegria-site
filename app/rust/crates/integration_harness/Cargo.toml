@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 e2e = [
+  "dep:infrastructure",
   "dep:neo4rs",
   "dep:qdrant-client",
   "dep:sqlx",
@@ -23,9 +24,10 @@ tokio = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
 axum = { version = "0.8.8", features = ["json"] }
 sqlx = { workspace = true, optional = true }
-testcontainers = { version = "0.23.3", optional = true }
+testcontainers = { version = "0.28.0", optional = true }
 qdrant-client = { workspace = true, optional = true }
 neo4rs = { workspace = true, optional = true }
+infrastructure = { path = "../infrastructure", optional = true }
 temporalio-client = { workspace = true, optional = true }
 temporalio-sdk-core = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
@@ -37,5 +39,6 @@ seo_application = { path = "../seo_application" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 serial_test = "3.2.0"
+prost = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }

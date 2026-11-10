@@ -25,6 +25,7 @@ pub struct PostgresHarness {
 
 pub struct QdrantHarness {
     pub qdrant_url: String,
+    pub qdrant_rest_url: String,
     pub client: Qdrant,
     _container: ContainerAsync<GenericImage>,
 }
@@ -41,6 +42,8 @@ pub struct TemporalHarness {
     pub namespace: String,
     _postgres_container: ContainerAsync<GenericImage>,
     _temporal_container: ContainerAsync<GenericImage>,
+    _schema_container: ContainerAsync<GenericImage>,
+    _namespace_container: ContainerAsync<GenericImage>,
 }
 
 pub struct InfraHarness {
@@ -52,7 +55,7 @@ pub struct InfraHarness {
 
 impl PostgresHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("postgres", "16-alpine")
+        let image = GenericImage::new("postgres", "18.6-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
@@ -69,8 +72,9 @@ impl PostgresHarness {
             .await
             .context("resolve postgres mapped port failed")?;
         sleep(Duration::from_secs(10)).await;
-        let database_url =
-            format!("postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable");
+        let database_url = format!(
+            "postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable"
+        );
         let mut pool = None;
         for i in 0..10 {
             match PgPoolOptions::new()
@@ -84,7 +88,8 @@ impl PostgresHarness {
                 }
                 Err(e) => {
                     if i == 9 {
-                        return Err(anyhow::anyhow!(e).context("connect postgres harness failed after 10 retries"));
+                        return Err(anyhow::anyhow!(e)
+                            .context("connect postgres harness failed after 10 retries"));
                     }
                     sleep(Duration::from_millis(2000)).await;
                 }
@@ -102,8 +107,9 @@ impl PostgresHarness {
 
 impl QdrantHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("qdrant/qdrant", "v1.13.2")
+        let image = GenericImage::new("qdrant/qdrant", "v1.20.0")
             .with_exposed_port(6334.tcp())
+            .with_exposed_port(6333.tcp())
             .with_wait_for(WaitFor::message_on_stdout("Qdrant HTTP listening on 6333"));
         let container = image
             .start()
@@ -114,13 +120,38 @@ impl QdrantHarness {
             .await
             .context("resolve qdrant mapped port failed")?;
         let qdrant_url = format!("http://127.0.0.1:{port}");
+        let rest_port = container
+            .get_host_port_ipv4(6333.tcp())
+            .await
+            .context("resolve qdrant REST mapped port failed")?;
+        let qdrant_rest_url = format!("http://127.0.0.1:{rest_port}");
         let client = Qdrant::from_url(&qdrant_url)
             .skip_compatibility_check()
             .build()
             .context("build qdrant harness client failed")?;
         probe_qdrant(&client).await?;
+        // Match the real bootstrap_retrieval_contract_collections.py inventory.
+        // A fresh scope starts with *empty* collections, not seeded fake
+        // neighbors or verified facts. Collection absence must never disguise
+        // itself as a semantic/transport error in downstream strict searches.
+        for collection in [
+            "raw_chunks_4",
+            "raw_chunks_ctx",
+            "kb_canonical_4",
+            "verified_rules_4",
+            "editorial_topics_4",
+            "seo_keyword_clusters_4",
+            "whole_page_advisory_prototypes",
+        ] {
+            infrastructure::adapters::qdrant_client_adapter::ensure_default_dense_collection(
+                &client, collection, 1024,
+            )
+            .await
+            .with_context(|| format!("bootstrap real Qdrant collection {collection}"))?;
+        }
         Ok(Self {
             qdrant_url,
+            qdrant_rest_url,
             client,
             _container: container,
         })
@@ -129,10 +160,18 @@ impl QdrantHarness {
 
 impl Neo4jHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("neo4j", "5.26.0-community")
+        // Exercise the same Neo4j/GDS capability contract as docker-compose.
+        // The plugin is installed in this existing test container, not a
+        // separate synthetic graph service or a production-side bypass.
+        let image = GenericImage::new("neo4j", "2026.10.1")
             .with_exposed_port(7687.tcp())
-            .with_wait_for(WaitFor::seconds(45));
-        let image = image.with_env_var("NEO4J_AUTH", "neo4j/neo4j_password");
+            .with_wait_for(WaitFor::seconds(45))
+            .with_env_var("NEO4J_AUTH", "neo4j/neo4j_password")
+            .with_env_var("NEO4J_PLUGINS", r#"["apoc", "graph-data-science"]"#)
+            .with_env_var(
+                "NEO4J_dbms_security_procedures_unrestricted",
+                "apoc.*,gds.*",
+            );
         let container = image
             .start()
             .await
@@ -175,6 +214,10 @@ impl InfraHarness {
                 self.postgres.database_url.clone(),
             ),
             ("QDRANT_URL".to_string(), self.qdrant.qdrant_url.clone()),
+            (
+                "QDRANT_REST_URL".to_string(),
+                self.qdrant.qdrant_rest_url.clone(),
+            ),
             ("NEO4J_URI".to_string(), self.neo4j.uri.clone()),
             ("NEO4J_USER".to_string(), self.neo4j.user.clone()),
             ("NEO4J_PASSWORD".to_string(), self.neo4j.password.clone()),
@@ -197,7 +240,7 @@ impl InfraHarness {
 impl TemporalHarness {
     pub async fn start() -> Result<Self> {
         let network = format!("integration-harness-temporal-{}", Uuid::new_v4());
-        let postgres_image = GenericImage::new("postgres", "16-alpine")
+        let postgres_image = GenericImage::new("postgres", "18.6-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
@@ -215,7 +258,34 @@ impl TemporalHarness {
             .await
             .context("resolve temporal postgres bridge ip failed")?;
 
-        let temporal_image = GenericImage::new("temporalio/auto-setup", "1.28")
+        // Same vendor schema initialization as the supported Compose server.
+        // Execute the copied script through the shell, exactly as Compose does.
+        // Testcontainers copies bytes without guaranteeing an executable bit;
+        // direct invocation can exit before emitting the readiness marker.
+        // Keep this test-only one-shot container alive for startup readback.
+        let schema_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_SCHEMAS: OK"))
+            .with_entrypoint("/bin/sh")
+            .with_cmd(["-ec", "/bin/sh /scripts/setup_schema.sh && sleep 3600"])
+            .with_copy_to(
+                "/scripts/setup_schema.sh",
+                include_str!("../../../../../infra/temporal/setup_schema.sh")
+                    .as_bytes()
+                    .to_vec(),
+            )
+            .with_env_var("DB", "postgres12")
+            .with_env_var("DB_PORT", "5432")
+            .with_env_var("POSTGRES_USER", "temporal")
+            .with_env_var("POSTGRES_PWD", "temporal_password")
+            .with_env_var("SQL_PASSWORD", "temporal_password")
+            .with_env_var("POSTGRES_SEEDS", postgres_ip.to_string())
+            .with_network(&network);
+        let schema_container = schema_image
+            .start()
+            .await
+            .context("initialize current Temporal schema in test Postgres")?;
+
+        let temporal_image = GenericImage::new("temporalio/server", "1.32.2")
             .with_exposed_port(7233.tcp())
             .with_wait_for(WaitFor::seconds(15))
             .with_env_var("DB", "postgres12")
@@ -224,6 +294,16 @@ impl TemporalHarness {
             .with_env_var("POSTGRES_PWD", "temporal_password")
             .with_env_var("POSTGRES_SEEDS", postgres_ip.to_string())
             .with_env_var("BIND_ON_IP", "0.0.0.0")
+            .with_env_var(
+                "DYNAMIC_CONFIG_FILE_PATH",
+                "config/dynamicconfig/development-sql.yaml",
+            )
+            .with_copy_to(
+                "/etc/temporal/config/dynamicconfig/development-sql.yaml",
+                include_str!("../../../../../infra/temporal/dynamicconfig.yaml")
+                    .as_bytes()
+                    .to_vec(),
+            )
             .with_network(&network);
         let temporal_container = temporal_image
             .start()
@@ -235,12 +315,27 @@ impl TemporalHarness {
             .context("resolve temporal mapped port failed")?;
         let temporal_url = format!("http://127.0.0.1:{port}");
         let namespace = "default".to_string();
+        let namespace_image = GenericImage::new("temporalio/admin-tools", "1.32.2")
+            .with_wait_for(WaitFor::message_on_stdout("TEMPORAL_NAMESPACE_READY"))
+            .with_entrypoint("/bin/sh")
+            .with_cmd([
+                "-ec",
+                "set -eu; if ! temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1; then temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; fi; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
+            ])
+            .with_env_var("TEMPORAL_ADDRESS", format!("{}:7233", temporal_container.get_bridge_ip_address().await?))
+            .with_network(&network);
+        let namespace_container = namespace_image
+            .start()
+            .await
+            .context("ensure default Temporal namespace in test server")?;
         probe_temporal(&temporal_url, &namespace).await?;
         Ok(Self {
             temporal_url,
             namespace,
             _postgres_container: postgres_container,
             _temporal_container: temporal_container,
+            _schema_container: schema_container,
+            _namespace_container: namespace_container,
         })
     }
 }

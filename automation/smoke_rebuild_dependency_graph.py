@@ -14,12 +14,15 @@ MIGRATION = ROOT / "app" / "db" / "migrations" / "20260515_0004_rebuild_dependen
 
 def load_env() -> dict[str, str]:
     env = os.environ.copy()
-    for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        env[key] = value
+    # CI provides a dedicated ephemeral PostgreSQL service through DATABASE_URL.
+    # Local developer configuration is optional and never committed to Git.
+    if LOCAL_ENV.is_file():
+        for line in LOCAL_ENV.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            env.setdefault(key, value)
     return env
 
 
@@ -28,7 +31,7 @@ def main() -> int:
     database_url = env.get("DATABASE_URL")
     if not database_url:
         print("REBUILD_DEPENDENCY_GRAPH_SMOKE: FAILED")
-        print("- DATABASE_URL missing in local env")
+        print("- DATABASE_URL required; provision a disposable PostgreSQL for this smoke")
         return 1
 
     migrate = subprocess.run(

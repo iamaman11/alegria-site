@@ -17,6 +17,5 @@ serde_json = { workspace = true }
 sqlx = { workspace = true }
 prost = { workspace = true }
 uuid = { workspace = true }
-pulldown-cmark = "0.13.3"
 
 hex = "0.4"

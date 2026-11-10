@@ -33,7 +33,8 @@ tower = { workspace = true }
 playwright-rs = { workspace = true }
 rig-core = { workspace = true }
 rig-vertexai = { workspace = true }
-graph-flow = { workspace = true }
+# Production graph/retrieval adapters use Neo4j and Qdrant directly.
+# Do not reintroduce dormant GraphFlow (old SQLx/MySQL/RSA lockfile chain).
 temporalio-sdk = { workspace = true }
 temporalio-sdk-core = { workspace = true }
 temporalio-client = { workspace = true }

@@ -1,16 +1,16 @@
 services:
   # 1. Слой данных (PostgreSQL для бизнес-данных Alegria)
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18.6-alpine
     container_name: alegria_postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres_password
       POSTGRES_DB: alegria
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres18_data:/var/lib/postgresql
       - ./app/db/schema.sql:/docker-entrypoint-initdb.d/init.sql # Авто-накат схемы при старте
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -20,16 +20,16 @@ services:
 
   # 1b. Отдельная БД для Temporal (service persistence)
   postgres-temporal:
-    image: postgres:16-alpine
+    image: postgres:18.6-alpine
     container_name: alegria_postgres_temporal
     environment:
       POSTGRES_USER: temporal
       POSTGRES_PASSWORD: temporal_password
       POSTGRES_DB: temporal
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
-      - postgres_temporal_data:/var/lib/postgresql/data
+      - postgres_temporal18_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U temporal"]
       interval: 10s
@@ -37,13 +37,13 @@ services:
       retries: 5
 
   pgbouncer:
-    image: edoburu/pgbouncer:latest
+    image: edoburu/pgbouncer:v1.26.1-p0
     container_name: alegria_pgbouncer
     depends_on:
       postgres:
         condition: service_healthy
     ports:
-      - "6432:6432"
+      - "127.0.0.1:6432:6432"
     volumes:
       - ./infra/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
       - ./infra/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
@@ -58,7 +58,7 @@ services:
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
-    image: neo4j:2026.02.2
+    image: neo4j:2026.10.1
     container_name: alegria_neo4j
     environment:
       NEO4J_AUTH: neo4j/neo4j_password
@@ -66,8 +66,8 @@ services:
       NEO4J_PLUGINS: '["apoc", "graph-data-science"]'
       NEO4J_dbms_security_procedures_unrestricted: apoc.*,gds.*
     ports:
-      - "7474:7474" # HTTP UI
-      - "7687:7687" # Bolt протокол
+      - "127.0.0.1:7474:7474" # HTTP UI
+      - "127.0.0.1:7687:7687" # Bolt протокол
     volumes:
       - neo4j_data:/data
     healthcheck:
@@ -78,13 +78,13 @@ services:
 
   # 3. Слой векторного поиска (Qdrant)
   qdrant:
-    image: qdrant/qdrant:v1.9.0
+    image: qdrant/qdrant:v1.20.0
     container_name: alegria_qdrant
     ports:
-      - "6333:6333" # REST API
-      - "6334:6334" # gRPC
+      - "127.0.0.1:6333:6333" # REST API
+      - "127.0.0.1:6334:6334" # gRPC
     volumes:
-      - qdrant_data:/qdrant/storage
+      - qdrant20_data:/qdrant/storage
     healthcheck:
       test: ["CMD", "bash", "-ec", "exec 3<>/dev/tcp/127.0.0.1/6333"]
       interval: 10s
@@ -93,30 +93,68 @@ services:
 
   # 4. Слой оркестрации (Prefect Server)
 
-  # 5. Temporal Server (заменяет Prefect)
-  temporal-server:
-    image: temporalio/auto-setup:1.28
-    container_name: alegria_temporal
+
+  # 5. Temporal Server — current supported images, not retired auto-setup.
+  # The official admin-tools one-shot initializes Postgres schemas first.
+  temporal-schema:
+    image: temporalio/admin-tools:1.32.2
+    container_name: alegria_temporal_schema
     depends_on:
       postgres-temporal:
-        condition: service_healthy   # ждём healthcheck postgres
+        condition: service_healthy
     environment:
-      - DB=postgres12
-      - DB_PORT=5432
-      - POSTGRES_USER=temporal
-      - POSTGRES_PWD=temporal_password
-      - POSTGRES_SEEDS=postgres-temporal      # имя сервиса в compose-сети
-      - DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig.yaml
-      - BIND_ON_IP=0.0.0.0
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal_password
+      POSTGRES_SEEDS: postgres-temporal
+      SQL_PASSWORD: temporal_password
     volumes:
-      - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/dynamicconfig.yaml:ro
+      - ./infra/temporal/setup_schema.sh:/scripts/setup_schema.sh:ro
+    entrypoint: ["/bin/sh", "/scripts/setup_schema.sh"]
+    restart: "no"
+
+  temporal-server:
+    image: temporalio/server:1.32.2
+    container_name: alegria_temporal
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal_password
+      POSTGRES_SEEDS: postgres-temporal
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./infra/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/development-sql.yaml:ro
     ports:
-      - "7233:7233"
+      - "127.0.0.1:7233:7233"
     healthcheck:
-      test: ["CMD", "tctl", "--address", "localhost:7233", "cluster", "health"]
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
       interval: 15s
       timeout: 10s
-      retries: 10
+      start_period: 30s
+      retries: 15
+
+  # Namespace creation uses the vendor CLI, once per fresh cluster.
+  temporal-namespace:
+    image: temporalio/admin-tools:1.32.2
+    container_name: alegria_temporal_namespace
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+    # The shell program must be one argv element (Compose plain scalar
+    # command would split on whitespace and pass only "!" to sh -c).
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        if ! temporal operator namespace describe --namespace default --address temporal-server:7233 >/dev/null 2>&1; then
+          temporal operator namespace create --namespace default --address temporal-server:7233
+        fi
+    restart: "no"
 
   # 6. Production Analytics Service (Rust runtime)
   analytics-service:
@@ -125,7 +163,7 @@ services:
       dockerfile: ./app/rust/services/analytics_svc/Dockerfile
     container_name: alegria_analytics
     ports:
-      - "50051:50051"   # gRPC runtime endpoint
+      - "127.0.0.1:50051:50051"   # gRPC runtime endpoint
     environment:
       NEO4J_URI:      neo4j:7687
       NEO4J_USER:     neo4j
@@ -144,7 +182,7 @@ services:
     container_name: alegria_analytics_lab
     profiles: ["lab"]
     ports:
-      - "50061:50051"
+      - "127.0.0.1:50061:50051"
     environment:
       NEO4J_URI:      bolt://neo4j:7687
       NEO4J_USER:     neo4j
@@ -157,7 +195,7 @@ services:
 
   # 8. Temporal UI
   temporal-ui:
-    image: temporalio/ui:2.48.1
+    image: temporalio/ui:2.58.1
     container_name: alegria_temporal_ui
     depends_on:
       temporal-server:
@@ -165,7 +203,7 @@ services:
     environment:
       - TEMPORAL_ADDRESS=temporal-server:7233
     ports:
-      - "8233:8233"
+      - "127.0.0.1:8233:8233"
 
   # 9. Rust Temporal Worker (executes workflows/activities)
   temporal-worker:
@@ -179,7 +217,23 @@ services:
       RUST_LOG: info
       METRICS_PORT: "9464"
       WORKER_BUILD_ID: ${WORKER_BUILD_ID:-docker-dev}
+      # Native Temporal pinned deployment versioning is explicitly enabled only
+      # after existing unversioned executions have been drained/reconciled.
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      TEMPORAL_DEPLOYMENT_NAME: ${TEMPORAL_DEPLOYMENT_NAME:-alegria-site}
       QDRANT_URL: http://qdrant:6334
+      NEO4J_URI: neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: neo4j_password
+      # Canonical production capabilities are mandatory; missing providers fail closed.
+      RETRIEVAL_CAPABILITY_REQUIRED: ${RETRIEVAL_CAPABILITY_REQUIRED:-true}
+      CANONICAL_VECTOR_RETRIEVAL_REQUIRED: ${CANONICAL_VECTOR_RETRIEVAL_REQUIRED:-true}
+      CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED: ${CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED:-true}
+      VOYAGE_RERANK_REQUIRED: ${VOYAGE_RERANK_REQUIRED:-true}
+      GRAPH_CAPABILITY_REQUIRED: ${GRAPH_CAPABILITY_REQUIRED:-true}
+      NEO4J_SYNC_REQUIRED: ${NEO4J_SYNC_REQUIRED:-true}
+      GRAPH_QUERY_REQUIRED: ${GRAPH_QUERY_REQUIRED:-true}
+      GRAPH_GDS_REQUIRED: ${GRAPH_GDS_REQUIRED:-true}
       DATAFORSEO_LOGIN: ${DATAFORSEO_LOGIN:-}
       DATAFORSEO_PASSWORD: ${DATAFORSEO_PASSWORD:-}
       DATAFORSEO_ENDPOINT: ${DATAFORSEO_ENDPOINT:-}
@@ -191,11 +245,26 @@ services:
       VOYAGE_CONTEXT_MODEL: ${VOYAGE_CONTEXT_MODEL:-voyage-context-3}
       VOYAGE_RERANK_MODEL: ${VOYAGE_RERANK_MODEL:-rerank-2.5}
       SEO_LLM_PROVIDER: ${SEO_LLM_PROVIDER:-}
+      SEO_TRUTH_LLM_PROVIDER: ${SEO_TRUTH_LLM_PROVIDER:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_SEO_MODEL: ${OPENAI_SEO_MODEL:-gpt-5.2}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Native Workers Static Assets deployment, not a fake local-only publish.
+      # The staging site has a dedicated hostname (never CRM's staging URL).
+      SEO_STATIC_BASE_URL: ${SEO_STATIC_BASE_URL:-}
+      SEO_STATIC_PUBLISH_BACKEND: cloudflare_workers_static_assets
+      SEO_STATIC_OUTPUT_DIR: /app/app/rust/dist/static-site
+      SEO_STATIC_RELEASE_ROOT: /app/app/rust/dist/.alegria-static-releases
+      SEO_STATIC_DEPLOY_SCRIPT: /app/automation/deploy_seo_static_cloudflare.py
+      CLOUDFLARE_ACCOUNT_ID: ${CLOUDFLARE_ACCOUNT_ID:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+    volumes:
+      # Persistent Linux-native Docker volume (on the B: Hyper-V Docker disk).
+      # Journal + immutable releases survive restarts and checkout upgrades.
+      # No Windows host-directory sharing is needed for publication state.
+      - static_site_releases:/app/app/rust/dist
     depends_on:
       temporal-server:
         condition: service_healthy
@@ -203,9 +272,11 @@ services:
         condition: service_started
       qdrant:
         condition: service_healthy
+      neo4j:
+        condition: service_healthy
     restart: on-failure:3
     ports:
-      - "9464:9464"
+      - "127.0.0.1:9464:9464"
 
   # 10. Runtime outbox materializer (PostgreSQL -> Neo4j/Qdrant projections)
   outbox-worker:
@@ -222,6 +293,8 @@ services:
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: neo4j_password
       QDRANT_URL: http://qdrant:6334
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY:-}
+      VOYAGE_MODEL: ${VOYAGE_MODEL:-voyage-4-large}
     depends_on:
       pgbouncer:
         condition: service_started
@@ -232,29 +305,35 @@ services:
     restart: on-failure:3
 
   prometheus:
-    image: prom/prometheus:v3.5.0
+    image: prom/prometheus:v3.16.0
     container_name: alegria_prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
     volumes:
       - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     depends_on:
       temporal-worker:
         condition: service_started
 
   grafana:
-    image: grafana/grafana:12.1.1
+    image: grafana/grafana:13.3.0
     container_name: alegria_grafana
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       prometheus:
         condition: service_started
 
 volumes:
-  postgres_data:
-  postgres_temporal_data:
+  # New PG18 volumes are intentionally disjoint from PG16: no implicit
+  # in-place major upgrade or silent reuse of an incompatible data directory.
+  postgres18_data:
+  postgres_temporal18_data:
   neo4j_data:
-  qdrant_data:
+  # v1.9 storage cannot be jumped directly to v1.20. Rebuild a new index
+  # from verified SQL/outbox sources, or use vendor sequential upgrades.
+  qdrant20_data:
+  # Persist static releases across Worker replacement and Git checkout changes.
+  static_site_releases:

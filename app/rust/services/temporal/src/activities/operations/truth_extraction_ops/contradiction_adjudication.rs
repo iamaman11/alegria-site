@@ -1,3 +1,63 @@
+// The canonical contradiction gate must examine proposals from both
+// deterministic extraction and ChatGPT. The typed params use the existing
+// canonical stable signature, never Rust Debug formatting.
+// No evidence/source attributes are accepted from the LLM here.
+fn validated_candidate_assertions(
+    state: &CandidateValidationSectionState,
+) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
+    state
+        .candidates
+        .iter()
+        .filter(|candidate| candidate.epistemic_status != "rejected")
+        .map(
+            |candidate| seo_steps::contradiction_gate_step::FactAssertion {
+                subject_key: format!(
+                    "section:{}:{}:{}",
+                    state.section_id, candidate.role, candidate.concept_canonical_key
+                ),
+                predicate_key: "structured_params".to_string(),
+                value_normalized: candidate.params.stable_signature(),
+                source_key: Some(candidate.source_key.clone()),
+                confidence: candidate.confidence as f32,
+            },
+        )
+        .collect()
+}
+
+// A blocked source section does not produce adjudication decisions. Still,
+// its non-rejected claims are evidence about the same semantic identity:
+// a sibling section must not globally verify that fact behind the block.
+// Critical contradiction decisions are similarly a source-level veto.
+fn held_semantic_identities(
+    sections: &[CandidateValidationSectionState],
+    decisions: &[TruthAdjudicationCandidateDecision],
+) -> BTreeSet<(String, String)> {
+    let mut held = decisions
+        .iter()
+        .filter(|decision| {
+            decision.decision == "needs_hitl"
+                || decision.adjudication_reason == "contradiction_block"
+        })
+        .map(|decision| {
+            (
+                decision.role.clone(),
+                decision.concept_canonical_key.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    for section in sections.iter().filter(|section| section.blocked_by_gate) {
+        for candidate in &section.candidates {
+            if candidate.epistemic_status != "rejected" {
+                held.insert((
+                    candidate.role.clone(),
+                    candidate.concept_canonical_key.clone(),
+                ));
+            }
+        }
+    }
+    held
+}
+
 pub(crate) async fn contradiction_gate_sweep_impl(
     acts: &AlegriaActivities,
     input: &ContradictionGateSweepInput,
@@ -9,10 +69,24 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         .iter()
         .map(|section| (section.id, section))
         .collect();
+    let candidates_by_section: BTreeMap<i64, &CandidateValidationSectionState> = input
+        .candidate_validation
+        .sections
+        .iter()
+        .map(|state| (state.section_id, state))
+        .collect();
     let mut sections = Vec::with_capacity(input.procedural.sections.len());
     for section in &input.procedural.sections {
         let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-        let facts = section
+        let candidate_state = candidates_by_section
+            .get(&section.section_id)
+            .ok_or_else(|| DomainError::ValidationFailure {
+                message: format!(
+                    "missing validated candidates at contradiction gate: {}",
+                    section.section_id
+                ),
+            })?;
+        let mut facts = section
             .rules
             .iter()
             .map(|rule| {
@@ -35,6 +109,9 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 }
             })
             .collect::<Vec<_>>();
+        // Preserve procedural conflict checks and add every validated
+        // structured proposition before the independent adjudication step.
+        facts.extend(validated_candidate_assertions(candidate_state));
         let output = seo_steps::contradiction_gate_step::execute(
             &seo_steps::contradiction_gate_step::ContradictionGateInput {
                 run_id: input.run_id.clone(),
@@ -127,8 +204,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     let mut decisions = Vec::new();
     let mut candidate_bindings =
         BTreeMap::<String, (&ValidatedTruthCandidateRecord, i64, i64)>::new();
+    // Scope is part of the identity: student and minor corroboration may not
+    // verify each other's assertions.
     let mut grouped_candidates =
-        BTreeMap::<(String, String), Vec<&ValidatedTruthCandidateRecord>>::new();
+        BTreeMap::<(String, String, String), Vec<&ValidatedTruthCandidateRecord>>::new();
     let mut fixed_states = BTreeMap::<i64, TruthAdjudicationSectionState>::new();
     let source_registry = load_source_registry_entries(&acts.pool)
         .await?
@@ -199,6 +278,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     role: candidate.role.clone(),
                     concept_canonical_key: candidate.concept_canonical_key.clone(),
                     params: candidate.params.clone(),
+                    scope: candidate.scope.clone(),
                     source_key: candidate.source_key.clone(),
                     source_tier: candidate.source_tier.clone(),
                     confidence: candidate.confidence,
@@ -238,6 +318,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     role: candidate.role.clone(),
                     concept_canonical_key: candidate.concept_canonical_key.clone(),
                     params: candidate.params.clone(),
+                    scope: candidate.scope.clone(),
                     source_key: candidate.source_key.clone(),
                     source_tier: candidate.source_tier.clone(),
                     confidence: candidate.confidence,
@@ -268,7 +349,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             continue;
         }
 
-        if resolution.needs_hitl || resolution.decision == "pause_for_hitl" {
+        if resolution.needs_hitl
+            || resolution.decision == "pause_for_hitl"
+            || contradiction.output.needs_hitl
+        {
             for candidate in &section.candidates {
                 decisions.push(TruthAdjudicationCandidateDecision {
                     section_id: section.section_id,
@@ -277,6 +361,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     role: candidate.role.clone(),
                     concept_canonical_key: candidate.concept_canonical_key.clone(),
                     params: candidate.params.clone(),
+                    scope: candidate.scope.clone(),
                     source_key: candidate.source_key.clone(),
                     source_tier: candidate.source_tier.clone(),
                     confidence: candidate.confidence,
@@ -289,7 +374,12 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     decision: "needs_hitl".to_string(),
                     publish_admissibility: "needs_hitl".to_string(),
                     verification_method: "truth_adjudication@1".to_string(),
-                    adjudication_reason: "resolution_loop_requires_hitl".to_string(),
+                    adjudication_reason: if contradiction.output.needs_hitl {
+                        "contradiction_gate_requires_hitl"
+                    } else {
+                        "resolution_loop_requires_hitl"
+                    }
+                    .to_string(),
                 });
             }
             fixed_states.insert(
@@ -312,14 +402,20 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 .entry((
                     candidate.role.clone(),
                     candidate.concept_canonical_key.clone(),
+                    candidate.scope.stable_signature(),
                 ))
                 .or_default()
                 .push(candidate);
         }
     }
 
-    for ((_role, _concept), group) in grouped_candidates {
-        let structured = group
+    // Hold the semantic slot when ANY section is unresolved, critically
+    // contradictory or schema-blocked. Blocked sections have no decisions,
+    // which is why the source sections must be consulted here as well.
+    let held_identities =
+        held_semantic_identities(&input.candidate_validation.sections, &decisions);
+    for ((role, concept, _scope), group) in grouped_candidates {
+        let mut structured = group
             .iter()
             .map(|candidate| TruthStructuredCandidate {
                 rule_candidate_id: candidate.rule_candidate_id.clone(),
@@ -336,6 +432,13 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 epistemic_status: candidate.epistemic_status.clone(),
             })
             .collect::<Vec<_>>();
+        if held_identities.contains(&(role, concept)) {
+            for candidate in &mut structured {
+                if candidate.epistemic_status == "structured" {
+                    candidate.epistemic_status = "needs_hitl".to_string();
+                }
+            }
+        }
         let adjudication =
             adjudicate_truth_candidates_with_governance(&structured, &source_registry);
         for decision in adjudication.decisions {
@@ -355,6 +458,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 role: candidate.role.clone(),
                 concept_canonical_key: candidate.concept_canonical_key.clone(),
                 params: candidate.params.clone(),
+                scope: candidate.scope.clone(),
                 source_key: candidate.source_key.clone(),
                 source_tier: candidate.source_tier.clone(),
                 confidence: candidate.confidence,
@@ -436,3 +540,157 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     })
 }
 
+#[cfg(test)]
+mod manual_candidate_contradiction_tests {
+    use super::*;
+
+    fn manual_candidate(
+        amount: i64,
+        confidence: f64,
+        status: &str,
+    ) -> ValidatedTruthCandidateRecord {
+        ValidatedTruthCandidateRecord {
+            section_id: 41,
+            page_id: 11,
+            rule_candidate_id: format!("manual-proposal-{amount}"),
+            role: "FEE_ITEM".to_string(),
+            concept_canonical_key: "consular_fee".to_string(),
+            raw_mention: "consular fee".to_string(),
+            params: TruthParamValue::object([("amount", TruthParamValue::Integer(amount))]),
+            scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
+            source_key: "https://example.gov/fees".to_string(),
+            source_tier: "government".to_string(),
+            confidence,
+            evidence_quote: "consular fee".to_string(),
+            span_start: 0,
+            span_end: 12,
+            source_snapshot_hash: "source-sha".to_string(),
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+            epistemic_status: status.to_string(),
+            issues: Vec::new(),
+        }
+    }
+
+    fn section(candidates: Vec<ValidatedTruthCandidateRecord>) -> CandidateValidationSectionState {
+        CandidateValidationSectionState {
+            section_id: 41,
+            page_id: 11,
+            candidates,
+            accepted_count: 0,
+            needs_hitl_count: 0,
+            rejected_count: 0,
+            blocked_by_gate: false,
+            status: "accepted".to_string(),
+        }
+    }
+
+    fn gate(
+        state: &CandidateValidationSectionState,
+    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+        seo_steps::contradiction_gate_step::execute(
+            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+                run_id: "manual-contradiction-test".to_string(),
+                facts: validated_candidate_assertions(state),
+            },
+        )
+    }
+
+    #[test]
+    fn conflicting_manual_candidates_cannot_bypass_critical_gate() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(120, 0.92, "structured"),
+        ]));
+        assert!(result.is_blocked);
+        assert!(result.needs_hitl);
+        assert_eq!(result.conflict_count, 1);
+        assert_eq!(result.conflicts[0].severity, "critical");
+    }
+
+    #[test]
+    fn noncritical_manual_conflicts_still_require_hitl() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.78, "structured"),
+            manual_candidate(120, 0.70, "structured"),
+        ]));
+        assert!(!result.is_blocked);
+        assert!(result.needs_hitl);
+        assert_eq!(result.conflict_count, 1);
+    }
+
+    #[test]
+    fn matching_manual_claims_do_not_create_conflict() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(80, 0.82, "structured"),
+        ]));
+        assert!(!result.is_blocked);
+        assert!(!result.needs_hitl);
+        assert_eq!(result.conflict_count, 0);
+    }
+
+    #[test]
+    fn blocked_section_holds_sibling_semantic_identity_without_a_decision() {
+        let mut blocked = section(vec![manual_candidate(80, 0.95, "structured")]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[]);
+        assert!(held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())));
+        assert!(!held.contains(&("FEE_ITEM".to_string(), "other_fee".to_string())));
+    }
+
+    #[test]
+    fn rejected_candidate_in_blocked_section_does_not_poison_sibling() {
+        let mut blocked = section(vec![manual_candidate(80, 0.95, "rejected")]);
+        blocked.blocked_by_gate = true;
+        assert!(held_semantic_identities(&[blocked], &[]).is_empty());
+    }
+
+    #[test]
+    fn held_semantic_identity_stops_independent_global_corroboration() {
+        let mut blocked = section(vec![manual_candidate(120, 0.96, "structured")]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[]);
+        let mut siblings = vec![
+            TruthStructuredCandidate {
+                rule_candidate_id: "official-1".to_string(),
+                role: "FEE_ITEM".to_string(),
+                concept_canonical_key: "consular_fee".to_string(),
+                params: TruthParamValue::object([("amount", TruthParamValue::Integer(80))]),
+                epistemic_status: "structured".to_string(),
+                ..TruthStructuredCandidate::default()
+            },
+            TruthStructuredCandidate {
+                rule_candidate_id: "official-2".to_string(),
+                role: "FEE_ITEM".to_string(),
+                concept_canonical_key: "consular_fee".to_string(),
+                params: TruthParamValue::object([("amount", TruthParamValue::Integer(80))]),
+                epistemic_status: "structured".to_string(),
+                ..TruthStructuredCandidate::default()
+            },
+        ];
+        if held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())) {
+            for candidate in &mut siblings {
+                if candidate.epistemic_status == "structured" {
+                    candidate.epistemic_status = "needs_hitl".to_string();
+                }
+            }
+        }
+        let result = adjudicate_truth_candidates_with_governance(&siblings, &BTreeMap::new());
+        assert_eq!(result.verified_count, 0);
+        assert_eq!(result.needs_hitl_count, 2);
+        assert!(result
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility != "admissible" }));
+    }
+
+    #[test]
+    fn rejected_candidate_is_not_allowed_to_manufacture_a_conflict() {
+        let result = gate(&section(vec![
+            manual_candidate(80, 0.95, "structured"),
+            manual_candidate(120, 0.99, "rejected"),
+        ]));
+        assert_eq!(result.conflict_count, 0);
+    }
+}

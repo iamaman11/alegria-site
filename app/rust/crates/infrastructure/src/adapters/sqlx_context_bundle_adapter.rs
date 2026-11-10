@@ -90,6 +90,27 @@ pub async fn load_context_bundle_rules(
         FROM verified.rule_instances r
         LEFT JOIN kb.sources s ON r.source_key = s.source_key
         WHERE r.context_key = $1
+          AND r.status = 'verified'
+          AND r.publish_admissibility = 'admissible'
+          AND NOT EXISTS (
+              SELECT 1 FROM verified.rule_instance_profiles rp
+              WHERE rp.rule_instance_id = r.rule_instance_id
+          )
+          AND (
+              r.rule_candidate_id IS NULL
+              OR EXISTS (
+                  SELECT 1 FROM extracted.rule_candidates c
+                  WHERE c.rule_candidate_id = r.rule_candidate_id
+                    AND COALESCE(c.params->>'conditions_key', '') = ''
+                    AND COALESCE(r.params->>'conditions_key', '') = ''
+                    AND c.scope = '{}'::jsonb
+                    AND c.applies_to_profiles = '[]'::jsonb
+                    AND btrim(c.conditions_raw) = ''
+                    AND btrim(c.exceptions_raw) = ''
+                    AND c.alternatives = '[]'::jsonb
+                    AND c.epistemic_status IN ('verified', 'structured')
+              )
+          )
         "#,
     )
     .bind(context_key)

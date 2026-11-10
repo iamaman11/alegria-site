@@ -11,20 +11,25 @@ pub use temporalio_common;
 pub use temporalio_common::data_converters::RawValue;
 pub use temporalio_common::protos::coresdk::AsJsonPayloadExt;
 pub use temporalio_common::protos::temporal::api::enums::v1::WorkflowExecutionStatus;
-pub use temporalio_common::worker::{WorkerDeploymentOptions, WorkerDeploymentVersion};
+pub use temporalio_common::worker::{
+    VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
+};
 pub use temporalio_macros::{
     activities, query, run, signal, update, update_validator, workflow, workflow_methods,
 };
 pub use temporalio_sdk::activities::{ActivityContext, ActivityError};
+pub use temporalio_sdk::runtime::RuntimeOptions;
+pub use temporalio_sdk::ApplicationFailure;
+pub use temporalio_sdk::Runtime;
 pub use temporalio_sdk::{
     ActivityOptions, SyncWorkflowContext, Worker, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
+    WorkflowContextView, WorkflowResult, WorkflowTermination,
 };
-pub use temporalio_sdk_core::{CoreRuntime, RuntimeOptions, Url};
+pub use temporalio_sdk_core::Url;
 
-pub fn build_runtime() -> Result<CoreRuntime> {
+pub fn build_runtime() -> Result<Runtime> {
     let opts = RuntimeOptions::builder().build().map_err(|e| anyhow!(e))?;
-    Ok(CoreRuntime::new_assume_tokio(opts)?)
+    Ok(Runtime::from_current_tokio(opts)?)
 }
 
 pub async fn connect_client(

@@ -21,7 +21,7 @@ use seo_ports::{
 };
 
 use super::{
-    dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, neo4rs_adapter,
+    dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, manual_llm_queue, neo4rs_adapter,
     raw_crawl_adapter, semantic_search_adapter,
     sqlx_adapter::AlegriaPgPool,
     sqlx_context_bundle_adapter, sqlx_hitl_adapter, sqlx_seo_adapter, sqlx_seo_cms_adapter,

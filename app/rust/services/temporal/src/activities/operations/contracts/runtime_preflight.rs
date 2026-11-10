@@ -62,6 +62,22 @@ pub struct SeoPreflightInput {
     pub context_key: String,
     pub scope: SeoScopePayload,
     pub projection_max_lag_ms: i64,
+    /// Only check materialization after the run has produced its derived data.
+    #[serde(default)]
+    pub require_materialized_projections: bool,
+    /// Production/canonical paths must explicitly enable all mandatory provider gates.
+    #[serde(default)]
+    pub enforce_required_contract: bool,
+    /// The page_brief projection is produced by draft_assemble, not IA planning.
+    #[serde(default)]
+    pub require_page_brief_projection: bool,
+    /// Distinct per-page durable identity for checks after each draft_assemble.
+    #[serde(default)]
+    pub gate_key: String,
+    /// Per-page materialization checks reuse the provider capability gate
+    /// already completed by this run, avoiding repeated external API probes.
+    #[serde(default)]
+    pub skip_provider_probes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +96,9 @@ pub struct SeoPreflightOutput {
     pub qdrant_ready: bool,
     pub qdrant_collection_contract_ready: bool,
     pub neo4j_ready: bool,
+    /// True only for the lightweight post-draft check, not capability readiness.
+    #[serde(default)]
+    pub provider_probes_skipped: bool,
     pub graph_query_ready: bool,
     pub graph_gds_ready: bool,
     pub graph_projection_contract_ready: bool,
@@ -116,6 +135,10 @@ pub struct SeoPreflightCollectionStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SeoPreflightGraphProjectionStatus {
     pub projection_name: String,
+    /// materialized | valid_empty | missing | incomplete. Defaults for
+    /// backwards-compatible deserialization of persisted activity outputs.
+    #[serde(default)]
+    pub materialization_outcome: String,
     pub exists: bool,
     pub fresh: bool,
     pub projection_complete: bool,

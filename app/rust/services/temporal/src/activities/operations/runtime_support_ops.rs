@@ -173,12 +173,29 @@ pub(crate) async fn projection_sync_impl(
         }
     }
 
-    let backlog = sqlx_seo_adapter::projection_backlog_counts(
+    // The main outbox worker may have claimed an event concurrently. Its
+    // processing lease is NOT an already materialized point. Wait for actual
+    // durable completion rather than failing a healthy run on that race.
+    // The bounded drain never treats a failed or stalled event as success.
+    let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut backlog = sqlx_seo_adapter::projection_backlog_counts(
         &acts.pool,
         &input.run_id,
         &input.target_system,
     )
     .await?;
+    while backlog.pending_events > 0
+        && backlog.failed_events == 0
+        && tokio::time::Instant::now() < drain_deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        backlog = sqlx_seo_adapter::projection_backlog_counts(
+            &acts.pool,
+            &input.run_id,
+            &input.target_system,
+        )
+        .await?;
+    }
     let remaining_pending = backlog.pending_events;
     let remaining_failed = backlog.failed_events;
 
@@ -226,6 +243,41 @@ pub(crate) async fn load_semantic_section_sample_impl(
     })
 }
 
+/// Keep the canonical production contract explicit: an absent flag is not an
+/// implicit permission to skip graph/retrieval gates.
+fn missing_required_contract_flags(flags: &[(&'static str, bool)]) -> Vec<&'static str> {
+    flags
+        .iter()
+        .filter_map(|(name, enabled)| (!enabled).then_some(*name))
+        .collect()
+}
+
+/// A zero-point result is admissible for these two optional outputs only
+/// after the exact run has durably completed their producing activities.
+fn optional_projection_valid_empty(
+    name: &str,
+    source_count: i64,
+    provider_count: i64,
+    completed_steps: &[String],
+) -> bool {
+    if source_count != 0 || provider_count != 0 {
+        return false;
+    }
+    let completed = |step: &str| completed_steps.iter().any(|name| name == step);
+    match name {
+        "content_gap" => completed("opportunity_build") && completed("global_site_reconcile"),
+        "link_recommendation" => {
+            completed("link_recommend") && completed("global_site_reconcile")
+        }
+        _ => false,
+    }
+}
+
+/// The last graph projection is generated during draft_assemble, not IA.
+fn graph_projection_due_at_gate(name: &str, require_page_brief_projection: bool) -> bool {
+    name != "page_brief" || require_page_brief_projection
+}
+
 pub(crate) async fn seo_preflight_impl(
     acts: &AlegriaActivities,
     input: &SeoPreflightInput,
@@ -246,55 +298,160 @@ pub(crate) async fn seo_preflight_impl(
         });
     }
     let required_collections = required_retrieval_collections();
+    // The initial gate probes capabilities only. Materialization gates also
+    // read actual Qdrant points for THIS scope and run, including per-page
+    // gates; skip_provider_probes skips costly Voyage/Neo4j probes, not truth.
+    let (qdrant_ready, qdrant_collection_presence, scoped_point_counts) =
+        if input.skip_provider_probes && !input.require_materialized_projections {
+            (false, Default::default(), Default::default())
+        } else {
+            probe_qdrant_required_collections(
+                &required_collections,
+                &scope.scope_signature,
+                &input.run_id,
+                input.require_materialized_projections,
+                !input.skip_provider_probes,
+            )
+            .await
+        };
+    let completed_producers = if input.require_materialized_projections {
+        sqlx_seo_adapter::read_completed_seo_producers(&acts.pool, &input.run_id).await?
+    } else {
+        Vec::new()
+    };
     let collection_statuses =
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
     let required_collection_statuses = collection_statuses
         .into_iter()
-        .map(|status| SeoPreflightCollectionStatus {
-            exists: status.point_count > 0,
-            fresh: status
-                .lag_seconds
-                .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                .unwrap_or(false),
-            projection_complete: status.point_count > 0,
-            collection_name: status.collection_name,
-            point_count: status.point_count,
-            last_materialized_at: status.last_materialized_at,
-            last_source_change_at: None,
-            lag_seconds: status.lag_seconds,
+        .map(|status| {
+            // Scope-dependent SEO collections are certified by the Qdrant
+            // provider, NOT by the global kb.qdrant_points SQL ledger.
+            let current_run_count = scoped_point_counts.get(&status.collection_name).copied();
+            let point_count = effective_collection_point_count(status.point_count, current_run_count);
+            let current_run_verified = current_run_count.is_some();
+            // Empty collection != missing collection. This narrow exception
+            // requires a real provider readback and a completed run producer;
+            // it never substitutes fake points for mandatory factual evidence.
+            let valid_empty = input.require_materialized_projections
+                && point_count == 0
+                && qdrant_collection_presence
+                    .get(&status.collection_name)
+                    .copied()
+                    .unwrap_or(false)
+                && optional_retrieval_valid_empty(&status.collection_name, &completed_producers);
+            SeoPreflightCollectionStatus {
+                exists: point_count > 0 || valid_empty,
+                fresh: if valid_empty {
+                    true
+                } else if current_run_verified {
+                    // These points carry this run's identity in Qdrant.
+                    point_count > 0
+                } else {
+                    status
+                        .lag_seconds
+                        .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                        .unwrap_or(false)
+                },
+                projection_complete: point_count > 0 || valid_empty,
+                collection_name: status.collection_name,
+                point_count,
+                // A Qdrant count does not expose a materialization timestamp.
+                last_materialized_at: if current_run_verified {
+                    None
+                } else {
+                    status.last_materialized_at
+                },
+                last_source_change_at: None,
+                lag_seconds: if current_run_verified {
+                    None
+                } else {
+                    status.lag_seconds
+                },
+            }
         })
         .collect::<Vec<_>>();
     let qdrant_collection_contract_ready = required_collection_statuses
         .iter()
         .all(|status| status.exists && status.projection_complete);
-    let (qdrant_ready, qdrant_collection_presence) =
-        probe_qdrant_required_collections(&required_collections).await;
     let required_graph_projection_names = required_graph_projections();
-    let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses(
+    let graph_readback_names = required_graph_projection_names
+        .iter()
+        .copied()
+        .filter(|name| {
+            graph_projection_due_at_gate(name, input.require_page_brief_projection)
+                && (!input.require_page_brief_projection || *name == "page_brief")
+        })
+        .collect::<Vec<_>>();
+    // The post-IA barrier validates all due graph projections. Each later
+    // page barrier only rechecks PageBrief; the prior full barrier already ran.
+    let actual_graph_counts = if input.require_materialized_projections {
+        read_neo4j_scope_projection_counts(&scope.scope_signature, &graph_readback_names).await?
+    } else {
+        Default::default()
+    };
+    let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
+        &scope.scope_signature,
     )
     .await?;
     let required_graph_projection_statuses = graph_projection_statuses
         .into_iter()
-        .map(|status| SeoPreflightGraphProjectionStatus {
-            projection_name: status.artifact_name,
-            exists: status.point_count > 0,
-            fresh: status
-                .lag_seconds
-                .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                .unwrap_or(false),
-            projection_complete: status.point_count > 0,
-            point_count: status.point_count,
-            last_materialized_at: status.last_materialized_at,
-            last_source_change_at: None,
-            lag_seconds: status.lag_seconds,
+        .map(|status| {
+            let source_count = status.point_count;
+            let actual_count = actual_graph_counts
+                .get(&status.artifact_name)
+                .copied()
+                .unwrap_or(source_count);
+            let valid_empty = input.require_materialized_projections
+                && optional_projection_valid_empty(
+                    &status.artifact_name,
+                    source_count,
+                    actual_count,
+                    &completed_producers,
+                );
+            let complete = source_count > 0 && actual_count >= source_count;
+            let materialization_outcome = if valid_empty {
+                "valid_empty"
+            } else if source_count <= 0 || actual_count <= 0 {
+                "missing"
+            } else if !complete {
+                "incomplete"
+            } else {
+                "materialized"
+            };
+            SeoPreflightGraphProjectionStatus {
+                projection_name: status.artifact_name,
+                materialization_outcome: materialization_outcome.to_string(),
+                exists: source_count > 0 && actual_count > 0,
+                fresh: valid_empty
+                    || status
+                        .lag_seconds
+                        .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                        .unwrap_or(false),
+                projection_complete: valid_empty || complete,
+                point_count: actual_count,
+                last_materialized_at: status.last_materialized_at,
+                last_source_change_at: None,
+                lag_seconds: status.lag_seconds,
+            }
         })
         .collect::<Vec<_>>();
-    let graph_projection_contract_ready = required_graph_projection_statuses
+    // A page brief is produced by draft_assemble, *after* IA planning.
+    // Do not demand it at the post-planning gate; require it at the
+    // per-page post-draft gate before editorial/publish.
+    let applicable_graph_projections = required_graph_projection_statuses
         .iter()
-        .all(|status| status.exists && status.projection_complete);
+        .filter(|status| {
+            graph_projection_due_at_gate(&status.projection_name, input.require_page_brief_projection)
+        });
+    let graph_projection_contract_ready = applicable_graph_projections
+        .clone()
+        .all(|status| {
+            status.projection_complete
+                && (status.exists || status.materialization_outcome == "valid_empty")
+        });
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
     let projection_blocked = projection_statuses.iter().any(|status| {
@@ -308,8 +465,16 @@ pub(crate) async fn seo_preflight_impl(
                 || (status.open_event_count() > 0
                     && status.max_open_lag_ms > input.projection_max_lag_ms))
     });
-    let capability_probe = probe_voyage_capabilities().await;
-    let neo4j_probe = probe_neo4j_capabilities().await;
+    let capability_probe = if input.skip_provider_probes {
+        VoyageCapabilityProbe::default()
+    } else {
+        probe_voyage_capabilities().await
+    };
+    let neo4j_probe = if input.skip_provider_probes {
+        Neo4jCapabilityProbe::default()
+    } else {
+        probe_neo4j_capabilities().await
+    };
     let voyage_embeddings_ready = capability_probe.embeddings_ready;
     let voyage_contextualized_ready = capability_probe.contextualized_ready;
     let voyage_rerank_ready = capability_probe.rerank_ready;
@@ -325,6 +490,27 @@ pub(crate) async fn seo_preflight_impl(
     let neo4j_sync_required = env_flag("NEO4J_SYNC_REQUIRED");
     let graph_query_required = env_flag("GRAPH_QUERY_REQUIRED");
     let graph_gds_required = env_flag("GRAPH_GDS_REQUIRED");
+
+    if input.enforce_required_contract {
+        let missing = missing_required_contract_flags(&[
+            ("RETRIEVAL_CAPABILITY_REQUIRED", retrieval_capability_required),
+            ("CANONICAL_VECTOR_RETRIEVAL_REQUIRED", canonical_vector_retrieval_required),
+            ("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED", contextual_raw_chunk_retrieval_required),
+            ("VOYAGE_RERANK_REQUIRED", voyage_rerank_required),
+            ("GRAPH_CAPABILITY_REQUIRED", graph_capability_required),
+            ("NEO4J_SYNC_REQUIRED", neo4j_sync_required),
+            ("GRAPH_QUERY_REQUIRED", graph_query_required),
+            ("GRAPH_GDS_REQUIRED", graph_gds_required),
+        ]);
+        if !missing.is_empty() {
+            return Err(DomainError::ValidationFailure {
+                message: format!(
+                    "canonical production preflight requires enabled flags: {}",
+                    missing.join(", ")
+                ),
+            });
+        }
+    }
 
     let missing_collections = required_collection_statuses
         .iter()
@@ -351,36 +537,41 @@ pub(crate) async fn seo_preflight_impl(
         })
         .map(|collection| (*collection).to_string())
         .collect::<Vec<_>>();
-    let missing_graph_projections = required_graph_projection_statuses
-        .iter()
-        .filter(|status| !status.exists)
+    let missing_graph_projections = applicable_graph_projections
+        .clone()
+        .filter(|status| !status.exists && status.materialization_outcome != "valid_empty")
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
-    let stale_graph_projections = required_graph_projection_statuses
-        .iter()
+    let stale_graph_projections = applicable_graph_projections
+        .clone()
         .filter(|status| status.exists && !status.fresh)
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
-    let incomplete_graph_projections = required_graph_projection_statuses
-        .iter()
+    let incomplete_graph_projections = applicable_graph_projections
         .filter(|status| status.exists && !status.projection_complete)
         .map(|status| status.projection_name.clone())
         .collect::<Vec<_>>();
 
     let retrieval_contract_status = if retrieval_capability_required {
-        if !voyage_embeddings_ready
-            || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
-            || (voyage_rerank_required && !voyage_rerank_ready)
-            || (canonical_vector_retrieval_required && !voyage_embeddings_ready)
+        if !input.skip_provider_probes
+            && (!voyage_embeddings_ready
+                || (contextual_raw_chunk_retrieval_required && !voyage_contextualized_ready)
+                || (voyage_rerank_required && !voyage_rerank_ready)
+                || (canonical_vector_retrieval_required && !voyage_embeddings_ready))
         {
             "blocked_provider_capability".to_string()
-        } else if !qdrant_ready {
+        } else if !input.skip_provider_probes && !qdrant_ready {
             "blocked_retrieval_contract".to_string()
-        } else if !missing_qdrant_collections.is_empty() || !missing_collections.is_empty() {
+        } else if input.require_materialized_projections
+            && ((!input.skip_provider_probes && !missing_qdrant_collections.is_empty())
+                || !missing_collections.is_empty())
+        {
             "blocked_missing_collection".to_string()
-        } else if !stale_collections.is_empty() {
+        } else if input.require_materialized_projections && !stale_collections.is_empty() {
             "blocked_stale_collection".to_string()
-        } else if projection_blocked || !incomplete_collections.is_empty() {
+        } else if input.require_materialized_projections
+            && (projection_blocked || !incomplete_collections.is_empty())
+        {
             "blocked_projection_incomplete".to_string()
         } else {
             "pass".to_string()
@@ -421,16 +612,19 @@ pub(crate) async fn seo_preflight_impl(
         _ => None,
     };
     let graph_contract_status = if graph_capability_required {
-        if (neo4j_sync_required && !neo4j_ready)
-            || (graph_query_required && !graph_query_ready)
-            || (graph_gds_required && !graph_gds_ready)
+        if !input.skip_provider_probes
+            && ((neo4j_sync_required && !neo4j_ready)
+                || (graph_query_required && !graph_query_ready)
+                || (graph_gds_required && !graph_gds_ready))
         {
             "blocked_provider_capability".to_string()
-        } else if !missing_graph_projections.is_empty() {
+        } else if input.require_materialized_projections && !missing_graph_projections.is_empty() {
             "blocked_missing_projection".to_string()
-        } else if !stale_graph_projections.is_empty() {
+        } else if input.require_materialized_projections && !stale_graph_projections.is_empty() {
             "blocked_stale_projection".to_string()
-        } else if graph_projection_blocked || !incomplete_graph_projections.is_empty() {
+        } else if input.require_materialized_projections
+            && (graph_projection_blocked || !incomplete_graph_projections.is_empty())
+        {
             "blocked_projection_incomplete".to_string()
         } else {
             "pass".to_string()
@@ -494,6 +688,7 @@ pub(crate) async fn seo_preflight_impl(
         voyage_rerank_ready,
         qdrant_ready,
         qdrant_collection_contract_ready,
+        provider_probes_skipped: input.skip_provider_probes,
         neo4j_ready,
         graph_query_ready,
         graph_gds_ready,
@@ -529,4 +724,74 @@ pub(crate) async fn seo_preflight_impl(
             }
         },
     })
+}
+
+#[cfg(test)]
+mod canonical_production_contract_tests {
+    use super::{
+        graph_projection_due_at_gate, missing_required_contract_flags,
+        optional_projection_valid_empty,
+    };
+
+    #[test]
+    fn valid_empty_requires_current_run_producer_evidence() {
+        let completed = vec![
+            "opportunity_build".to_string(),
+            "link_recommend".to_string(),
+            "global_site_reconcile".to_string(),
+        ];
+        assert!(optional_projection_valid_empty("content_gap", 0, 0, &completed));
+        assert!(optional_projection_valid_empty(
+            "link_recommendation",
+            0,
+            0,
+            &completed
+        ));
+        assert!(!optional_projection_valid_empty("page_node", 0, 0, &completed));
+        assert!(!optional_projection_valid_empty("content_gap", 1, 0, &completed));
+        assert!(!optional_projection_valid_empty(
+            "content_gap",
+            0,
+            1,
+            &completed
+        ));
+        assert!(!optional_projection_valid_empty(
+            "link_recommendation",
+            0,
+            0,
+            &["link_recommend".to_string()]
+        ));
+        assert!(!optional_projection_valid_empty(
+            "content_gap",
+            0,
+            0,
+            &["global_site_reconcile".to_string()]
+        ));
+    }
+
+    #[test]
+    fn required_capabilities_must_be_explicit() {
+        let missing = missing_required_contract_flags(&[
+            ("GRAPH_CAPABILITY_REQUIRED", true),
+            ("RETRIEVAL_CAPABILITY_REQUIRED", false),
+            ("GRAPH_GDS_REQUIRED", false),
+        ]);
+        assert_eq!(
+            missing,
+            vec!["RETRIEVAL_CAPABILITY_REQUIRED", "GRAPH_GDS_REQUIRED"]
+        );
+        assert!(missing_required_contract_flags(&[
+            ("GRAPH_CAPABILITY_REQUIRED", true),
+            ("RETRIEVAL_CAPABILITY_REQUIRED", true),
+        ])
+        .is_empty());
+    }
+
+    #[test]
+    fn future_brief_is_not_due_at_ia_gate_but_is_due_after_draft_assembly() {
+        assert!(graph_projection_due_at_gate("page_node", false));
+        assert!(graph_projection_due_at_gate("link_recommendation", false));
+        assert!(!graph_projection_due_at_gate("page_brief", false));
+        assert!(graph_projection_due_at_gate("page_brief", true));
+    }
 }
