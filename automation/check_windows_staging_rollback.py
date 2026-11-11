@@ -98,6 +98,10 @@ def check(script: str) -> None:
     assert "Remove-Item -LiteralPath $scratch -Force -Recurse" in script
     assert "& $docker rm $verifier" in script
     assert "RETRIEVAL_CAPABILITY_REQUIRED" not in script  # no bypass of publication gates
+    workflow = (ROOT / ".github" / "workflows" / "automation-verify.yml").read_text(encoding="utf-8")
+    assert "  push:\\n    branches: [main]".replace("\\\\n", "\\n") in workflow, (
+        "canonical main must run automation-verify automatically for exact-SHA staging CI"
+    )
     assert script.index("if ($oldSha -eq $Commit)") > script.index("effective Compose config")
     assert "Test-Staging-EnvironmentMatches -Expected $expectedEnvironment -Actual $oldEnv" in script
     assert "Environment = @($info.Config.Env)" in script
