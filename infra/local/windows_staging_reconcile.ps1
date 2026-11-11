@@ -1,6 +1,44 @@
 # Pure, read-only deployment identity and decision contract.
 # Windows PowerShell 7; sourced only by windows_staging.ps1 and its offline tests.
 # No Docker invocation, WSL, state mutation, or external service.
+function ConvertTo-Staging-EnvironmentMap {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Environment)
+    $map = @{}
+    foreach ($entry in @($Environment)) {
+        if ($null -eq $entry) { continue }
+        $line = [string]$entry
+        $split = $line.IndexOf('=')
+        if ($split -gt 0) {
+            $map[$line.Substring(0, $split)] = $line.Substring($split + 1)
+        }
+    }
+    return $map
+}
+
+function Test-Staging-EnvironmentMatches {
+    [CmdletBinding()]
+    param([AllowNull()][object]$Expected, [AllowNull()][object]$Actual)
+    if ($null -eq $Expected -or $null -eq $Actual) { return $false }
+    $actualMap = ConvertTo-Staging-EnvironmentMap -Environment $Actual
+    $expectedMap = @{}
+    if ($Expected -is [System.Collections.IDictionary]) {
+        foreach ($key in $Expected.Keys) { $expectedMap[[string]$key] = [string]$Expected[$key] }
+    } else {
+        foreach ($property in $Expected.PSObject.Properties) {
+            $expectedMap[[string]$property.Name] = [string]$property.Value
+        }
+    }
+    foreach ($key in $expectedMap.Keys) {
+        if (-not $actualMap.ContainsKey($key) -or -not
+            [string]::Equals([string]$actualMap[$key], [string]$expectedMap[$key],
+                [System.StringComparison]::Ordinal)) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Test-Staging-Readback {
     [CmdletBinding()]
     param(
@@ -10,7 +48,8 @@ function Test-Staging-Readback {
         [string]$ExpectedCheckout,
         [string]$ExpectedBuildId,
         [bool]$MetricsRequired,
-        [bool]$MetricsOk
+        [bool]$MetricsOk,
+        [AllowNull()][object]$ExpectedEnvironment
     )
     if ($null -eq $Observed) { return $false }
     if ($Observed.State -ne 'running') { return $false }
@@ -25,6 +64,10 @@ function Test-Staging-Readback {
         return $false
     }
     if ($MetricsRequired -and -not $MetricsOk) { return $false }
+    if ($null -ne $ExpectedEnvironment -and -not
+        (Test-Staging-EnvironmentMatches -Expected $ExpectedEnvironment -Actual $Observed.Environment)) {
+        return $false
+    }
     return $true
 }
 
