@@ -29,6 +29,13 @@ def check() -> None:
     gate = source.split("  gate:\n", 1)[1]
     for job in required:
         assert f"      - {job}\n" in gate, f"not included in final CI gate: {job}"
+    assert source.count("    if: github.event_name == 'pull_request'") == len(required), (
+        "every full owner job must run on PR only; main must not repeat heavy builds"
+    )
+    assert "        if: github.event_name == 'push'" in source
+    assert "commits/{merge_sha}/pulls" in source
+    assert "actions/runs?head_sha={source_sha}" in source
+    assert "job[\"conclusion\"]" in source
     for phase in ("contracts", "product", "integration"):
         assert source.count(f"bash automation/ci_verify.sh {phase}") == 1
         assert f'"$PHASE" == "{phase}"' in shell

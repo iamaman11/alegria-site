@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -14,6 +16,7 @@ concurrency:
 
 jobs:
   architecture-and-rust:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
@@ -73,6 +76,7 @@ jobs:
             --report-json automation/reports/fact_verifier_parity.rust.json
 
   rust-security:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -104,6 +108,7 @@ jobs:
           cargo tree --locked --target all -e features -i sqlx-mysql@0.9.0 || true
 
   cloudflare-static-build:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -129,6 +134,7 @@ jobs:
           cmp "$public/index.html" "$built"
 
   temporal-worker-docker:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
@@ -154,6 +160,7 @@ jobs:
           '
 
   stack-temporal-postgres18:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -177,6 +184,7 @@ jobs:
           docker compose down -v --remove-orphans
 
   stack-storage-graph:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -204,6 +212,7 @@ jobs:
           docker compose down -v --remove-orphans
 
   verify:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -272,6 +281,7 @@ jobs:
             automation/reports/consistency_report.md
 
   windows-operator-smoke:
+    if: github.event_name == 'pull_request'
     name: Native Windows first-site operator regression
     runs-on: windows-latest
     timeout-minutes: 15
@@ -305,6 +315,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Require every mandatory job to succeed
+        if: github.event_name == 'pull_request'
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
         run: |
@@ -320,4 +331,76 @@ jobs:
               print("CI_GATE=FAIL")
               sys.exit(1)
           print("CI_GATE=PASS")
+          PY
+
+      - name: Verify main merge comes from a fully successful PR CI
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPO_NAME: ${{ github.repository }}
+          MERGE_SHA: ${{ github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.request
+
+          repo = os.environ["REPO_NAME"]
+          merge_sha = os.environ["MERGE_SHA"]
+          token = os.environ["GITHUB_TOKEN"]
+          expected_jobs = {
+              "architecture-and-rust", "rust-security", "cloudflare-static-build",
+              "temporal-worker-docker", "stack-temporal-postgres18",
+              "stack-storage-graph", "verify",
+              "Native Windows first-site operator regression", "CI",
+          }
+
+          def fetch(path):
+              request = urllib.request.Request(
+                  f"https://api.github.com/repos/{repo}/{path}",
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "alegria-merge-provenance",
+                  },
+              )
+              with urllib.request.urlopen(request, timeout=20) as result:
+                  return json.load(result)
+
+          def require(condition, reason):
+              if not condition:
+                  sys.exit(f"CI_GATE=FAIL {reason}")
+
+          commit = fetch(f"commits/{merge_sha}")
+          parents = [parent["sha"] for parent in commit["parents"]]
+          require(len(parents) == 2, "main commit must be a two-parent GitHub PR merge")
+          source_sha = parents[1]
+          pull_requests = fetch(f"commits/{merge_sha}/pulls")
+          matches = [
+              pr for pr in pull_requests
+              if pr["merged_at"] and pr["merge_commit_sha"] == merge_sha
+              and pr["head"]["sha"] == source_sha and pr["base"]["ref"] == "main"
+          ]
+          require(len(matches) == 1, "merge commit does not match one accepted PR head")
+          runs = fetch(f"actions/runs?head_sha={source_sha}&per_page=100")["workflow_runs"]
+          accepted = [
+              run for run in runs
+              if run["head_sha"] == source_sha and run["event"] == "pull_request"
+              and run["name"] == "ci" and run["status"] == "completed"
+              and run["conclusion"] == "success"
+          ]
+          require(bool(accepted), "exact source PR head has no successful full CI")
+          accepted.sort(key=lambda run: run["id"], reverse=True)
+          run = accepted[0]
+          results = {
+              job["name"]: job["conclusion"]
+              for job in fetch(f"actions/runs/{run['id']}/jobs?per_page=100")["jobs"]
+          }
+          require(
+              all(results.get(job) == "success" for job in expected_jobs),
+              "source PR full CI did not pass every mandatory owner",
+          )
+          print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
