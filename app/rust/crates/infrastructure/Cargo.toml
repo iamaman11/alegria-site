@@ -24,7 +24,6 @@ async-trait = "0.1"
 uuid = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"] }
-futures = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"

@@ -166,6 +166,79 @@ pub async fn spawn_text_stub(
     })
 }
 
+/// The same standard POST/GET contract used by the actual provider, with
+/// deterministic task ids and a fixed fixture reply per task. Test-only.
+#[derive(Clone)]
+struct StandardSerpStubState {
+    replies: Arc<Vec<Value>>,
+    posts: Arc<AtomicUsize>,
+}
+
+async fn serve_standard_serp_post(
+    State(state): State<StandardSerpStubState>,
+) -> (StatusCode, Json<Value>) {
+    let idx = state.posts.fetch_add(1, Ordering::SeqCst);
+    let id = format!("stub-serp-{idx}");
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 20100, "id": id}]
+        })),
+    )
+}
+
+async fn serve_standard_serp_get(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    State(state): State<StandardSerpStubState>,
+) -> (StatusCode, Json<Value>) {
+    let idx = id
+        .strip_prefix("stub-serp-")
+        .and_then(|part| part.parse::<usize>().ok());
+    let value = idx
+        .and_then(|idx| state.replies.get(idx))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 40401, "result": null}]
+        }));
+    (StatusCode::OK, Json(value))
+}
+
+pub async fn spawn_standard_serp_stub(replies: Vec<Value>) -> Result<StubServerHandle> {
+    if replies.is_empty() {
+        anyhow::bail!("Standard SERP stub requires result fixtures");
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let addr = listener.local_addr()?;
+    let state = StandardSerpStubState {
+        replies: Arc::new(replies),
+        posts: Arc::new(AtomicUsize::new(0)),
+    };
+    let app = Router::new()
+        .route(
+            "/v3/serp/google/organic/task_post",
+            any(serve_standard_serp_post),
+        )
+        .route(
+            "/v3/serp/google/organic/task_get/advanced/{id}",
+            any(serve_standard_serp_get),
+        )
+        .with_state(state);
+    let (tx, rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let server = axum::serve(listener, app).with_graceful_shutdown(async {
+            let _ = rx.await;
+        });
+        let _ = server.await;
+    });
+    Ok(StubServerHandle {
+        base_url: format!("http://{addr}"),
+        shutdown: Some(tx),
+        task,
+    })
+}
+
 //// Native Voyage HTTP contract stub for integration tests. Its embeddings
 //// are deterministic test vectors, never production semantic evidence.
 async fn serve_voyage_embeddings(Json(body): Json<Value>) -> Json<Value> {

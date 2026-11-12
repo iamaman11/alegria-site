@@ -851,10 +851,7 @@
                 .find(|(fixture_id, _)| fixture_id == &fixture.fixture_id)
                 .map(|(_, payload)| payload.clone())
                 .expect("SERP response for current fixture");
-            let serp_stub = stub_servers::spawn_json_sequence_stub(
-                "/v3/serp/google/organic/live/advanced",
-                vec![serp_reply],
-            )
+            let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_reply])
             .await
             .unwrap();
             let truth_stub = stub_servers::spawn_json_sequence_stub(
@@ -880,7 +877,7 @@
             worker_env.insert("TEMPORAL_NAMESPACE".to_string(), temporal.namespace.clone());
             worker_env.extend(truth_certification_env(
                 &format!(
-                    "{}/v3/serp/google/organic/live/advanced",
+                    "{}/v3/serp/google/organic/task_post",
                     serp_stub.base_url
                 ),
                 &format!("{}/v1/chat/completions", truth_stub.base_url),

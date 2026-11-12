@@ -69,8 +69,8 @@
         .unwrap();
 
         let serp = reqwest::Client::new()
-            .post(format!(
-                "{}/v3/serp/google/organic/live/advanced",
+            .get(format!(
+                "{}/v3/serp/google/organic/task_get/advanced/stub-serp-0",
                 ctx.dataforseo.base_url
             ))
             .send()
@@ -198,11 +198,10 @@
 
         let config = DataForSeoConfig::from_env_with_locale(Some("en-US"))
             .expect("dataforseo config from integration env");
-        let serp = DataForSeoSerpClient::from_config(config)
-            .unwrap()
-            .google_organic_live_advanced("visa rules")
-            .await
-            .unwrap();
+        let client = DataForSeoSerpClient::from_config(config).unwrap();
+        let posted = client.submit_standard_task("visa rules").await.unwrap();
+        assert_eq!(posted["tasks"][0]["status_code"], 20100);
+        let serp = client.fetch_standard_task("stub-serp-0").await.unwrap().unwrap();
         assert_eq!(serp.organic_results.len(), 1);
         assert_eq!(serp.organic_results[0].title, "Official source");
 

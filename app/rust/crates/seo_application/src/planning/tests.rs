@@ -135,8 +135,9 @@ mod tests {
 
     #[async_trait]
     impl SerpSearchPort for FakeSerpSearchPort {
-        async fn fetch_google_organic_live_advanced(
+        async fn fetch_google_organic_standard(
             &self,
+            _run_id: &str,
             _locale: Option<&str>,
             _query: &str,
         ) -> Result<Option<OrganicSerpResponse>, DomainError> {

@@ -2341,7 +2341,6 @@ dependencies = [
  "bytes",
  "chrono",
  "contracts",
- "futures",
  "http-body-util",
  "hyper",
  "hyper-util",

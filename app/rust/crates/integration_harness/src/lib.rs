@@ -16,10 +16,7 @@ pub struct IntegrationCtx {
 
 impl IntegrationCtx {
     pub async fn start(dataforseo_payload: Value, openai_payload: Value) -> Result<Self> {
-        let dataforseo = stub_servers::spawn_json_stub(
-            "/v3/serp/google/organic/live/advanced",
-            dataforseo_payload,
-        )
+        let dataforseo = stub_servers::spawn_standard_serp_stub(vec![dataforseo_payload])
         .await
         .context("start dataforseo stub failed")?;
         let openai = stub_servers::spawn_json_stub("/v1/chat/completions", openai_payload)
@@ -55,7 +52,7 @@ impl IntegrationCtx {
             (
                 "DATAFORSEO_ENDPOINT".to_string(),
                 format!(
-                    "{}/v3/serp/google/organic/live/advanced",
+                    "{}/v3/serp/google/organic/task_post",
                     self.dataforseo.base_url
                 ),
             ),
