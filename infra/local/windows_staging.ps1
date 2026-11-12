@@ -154,9 +154,11 @@ if ($oldSha -eq $Commit) {
     }
 }
 # Staging only: do not change the worker while business runs are active.
-$count = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c 'SELECT count(*) FROM pipeline.execution_runs;' | Out-String).Trim()
-Assert-Exit 'business-run safety check'
-if ($count -ne '0') { throw "Run history is nonempty ($count): require explicit drain plan" }
+# Completed and failed workflow history is immutable and must never block a
+# later exact-SHA staging deploy. Only non-terminal business runs require drain.
+$activeCount = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c "SELECT count(*) FROM pipeline.execution_runs WHERE status NOT IN ('done','failed');" | Out-String).Trim()
+Assert-Exit 'active business-run safety check'
+if ($activeCount -ne '0') { throw "Active business runs ($activeCount): require explicit drain plan" }
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
