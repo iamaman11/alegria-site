@@ -33,8 +33,11 @@ case "$MODE" in
   full)
     run_full
     ;;
+  report)
+    : # CI has already run the 3 phases; render the existing report.
+    ;;
   *)
-    echo "Usage: bash automation/audit.sh [fast|full]"
+    echo "Usage: bash automation/audit.sh [fast|full|report]"
     exit 2
     ;;
 esac

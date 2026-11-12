@@ -1,4 +1,4 @@
-name: quality-gate
+name: ci
 
 on:
   pull_request:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: quality-gate-${{ github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -28,9 +28,6 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
 
-      - name: Install Python quality tooling
-        run: python3 -m pip install --disable-pip-version-check ruff==0.17.4
-
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
@@ -38,31 +35,42 @@ jobs:
         working-directory: app/rust
         run: cargo fmt --all -- --check
 
-      - name: Repository architecture audit
-        run: bash automation/audit.sh fast
+      - name: Integration image boundary
+        run: python3 automation/smoke_integration_harness_image_contract.py
 
-      - name: Static-site publication contract
-        run: python3 automation/check_static_site_builder_contract.py
+      - name: Cache Rust workspace builds
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
 
-      - name: Canonical Temporal launch certification contract (read-only smoke)
-        run: |
-          python3 automation/smoke_e2e_canonical_temporal.py
-          python3 automation/smoke_e2e_publication_verdict.py
-          python3 automation/smoke_e2e_first_site.py
-          python3 automation/smoke_first_site_release.py
-          python3 automation/smoke_integration_harness_image_contract.py
-
-      - name: Rust workspace check
-        working-directory: app/rust
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo check --workspace --locked
-
-      - name: Rust workspace tests
+      - name: Rust workspace tests (includes compile)
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
         run: cargo test --workspace --locked
+
+      - name: Compile e2e-feature integration harness
+        working-directory: app/rust
+        env:
+          SQLX_OFFLINE: "true"
+        run: cargo test -p integration_harness --features e2e --no-run --locked
+
+      - name: Rust migration and fact-verifier parity
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
+            check-rust-migration-contract --root . \
+            --report-json automation/reports/rust_migration_contract.rust.json
+          cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
+            check-fact-verifier-parity --root . \
+            --report-json automation/reports/fact_verifier_parity.rust.json
 
   rust-security:
     runs-on: ubuntu-latest
@@ -194,3 +202,122 @@ jobs:
           docker compose ps -a || true
           docker compose logs --tail=100 postgres pgbouncer neo4j qdrant || true
           docker compose down -v --remove-orphans
+
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      # Disposable integration database, never a production credential.
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      # Only this disposable CI database may run scoped truth SQL smoke tests.
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install Python audit tools
+        run: python -m pip install --disable-pip-version-check ruff==0.17.4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install native audit/build tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
+
+      - name: Initialize disposable integration schema
+        run: |
+          sudo apt-get install -y postgresql-client
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Source contracts and policy
+        run: bash automation/ci_verify.sh contracts
+
+      - name: Product and truth invariants
+        run: bash automation/ci_verify.sh product
+
+      - name: Integration and consistency checks
+        run: bash automation/ci_verify.sh integration
+
+      - name: Render consistency report
+        if: always()
+        run: bash automation/audit.sh report
+
+      - name: Upload consistency reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: consistency-reports
+          path: |
+            automation/reports/consistency_report.json
+            automation/reports/consistency_report.md
+
+  windows-operator-smoke:
+    name: Native Windows first-site operator regression
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout canonical GitHub source
+        uses: actions/checkout@v7
+
+      - name: Setup native Windows Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Run native Windows-only staging regression
+        shell: pwsh
+        run: |
+          python automation/check_windows_staging_rollback.py
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
+
+  gate:
+    name: CI
+    if: always()
+    needs:
+      - architecture-and-rust
+      - rust-security
+      - cloudflare-static-build
+      - temporal-worker-docker
+      - stack-temporal-postgres18
+      - stack-storage-graph
+      - verify
+      - windows-operator-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every mandatory job to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          results = {name: item["result"] for name, item in json.loads(os.environ["NEEDS_JSON"]).items()}
+          for name, result in sorted(results.items()):
+              print(f"{name}: {result}")
+          if not results or any(result != "success" for result in results.values()):
+              print("CI_GATE=FAIL")
+              sys.exit(1)
+          print("CI_GATE=PASS")
+          PY
