@@ -31,8 +31,6 @@ ENV_REQUIRED_SNIPPETS = [
 
 CI_REQUIRED_SNIPPETS = [
     "python3 automation/check_integration_harness_present.py",
-    "cargo test -q -p integration_harness",
-    "cargo test -q -p integration_harness --features e2e --no-run",
 ]
 
 CONTAINERS_REQUIRED_SNIPPETS = [
@@ -130,11 +128,27 @@ def main() -> int:
         print("FAIL integration_harness images=" + ",".join(image_failures))
         return 1
 
-    ci_text = (ROOT / "automation/ci_verify.sh").read_text()
+    ci_text = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     missing_ci = [snippet for snippet in CI_REQUIRED_SNIPPETS if snippet not in ci_text]
     if missing_ci:
         print("FAIL integration_harness ci_missing=" + ",".join(missing_ci))
         return 1
+
+    # Test execution moved to the canonical Rust owner in the single CI.
+    # Workspace tests cover integration_harness's default suite; the separate
+    # e2e-feature compile remains required. Never recreate duplicate Cargo runs.
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    if "  architecture-and-rust:\\n" not in workflow or "\\n  rust-security:\\n" not in workflow:
+        print("FAIL integration_harness missing Rust owner")
+        return 1
+    rust_job = workflow.split("  architecture-and-rust:\\n", 1)[1].split("\\n  rust-security:\\n", 1)[0]
+    for snippet in (
+        "run: cargo test --workspace --locked",
+        "run: cargo test -p integration_harness --features e2e --no-run --locked",
+    ):
+        if snippet not in rust_job:
+            print("FAIL integration_harness missing Rust CI coverage: " + snippet)
+            return 1
 
     print("OK integration_harness contract")
     return 0
