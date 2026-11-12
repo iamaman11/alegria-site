@@ -41,7 +41,7 @@ def check(script: str) -> None:
         "$startProcess.Kill($true)",
         "foreach ($line in [System.IO.File]::ReadLines($EnvFile))",
         "if ($key -ne 'WORKER_BUILD_ID')",
-        "[System.Environment]::SetEnvironmentVariable($key, $null, 'Process')",
+        "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
         "$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs",
         "& $docker image tag $rollbackTag $latestTag",
         "$rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs",
@@ -147,7 +147,7 @@ def main() -> None:
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
         "$startProcess.WaitForExit(20000)",
-        "[System.Environment]::SetEnvironmentVariable($key, $null, 'Process')",
+        "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
     ):
         mutated = source.replace(fragment, "", 1)
         try:

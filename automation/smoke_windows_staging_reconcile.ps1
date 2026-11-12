@@ -128,4 +128,14 @@ if (@($parseErrors).Count -gt 0) {
     throw 'Windows staging script contains PowerShell syntax errors'
 }
 
+# Removing an inherited variable must remove it, not leave an empty value:
+# Docker Compose otherwise treats empty as higher priority than --env-file.
+$env:ALEGRIA_STAGING_ENV_TEST = 'inherited-placeholder'
+try {
+    Remove-Item -LiteralPath 'Env:ALEGRIA_STAGING_ENV_TEST' -ErrorAction Stop
+    Assert-Equal (Test-Path -LiteralPath 'Env:ALEGRIA_STAGING_ENV_TEST') $false 'provider variable removed'
+} finally {
+    Remove-Item -LiteralPath 'Env:ALEGRIA_STAGING_ENV_TEST' -ErrorAction SilentlyContinue
+}
+
 Write-Output 'WINDOWS_STAGING_ENGINE_RECONCILE=PASS'

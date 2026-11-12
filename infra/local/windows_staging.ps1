@@ -85,12 +85,13 @@ if ($EnvFile) {
         throw 'Provider secrets must live outside immutable Git checkouts'
     }
     # Docker Compose gives the inherited shell priority over --env-file.
-    # The explicit protected file owns its values; Compose still parses them.
+    # Remove the PowerShell env item entirely: setting it to empty would still
+    # shadow the explicit protected env file. Compose parses the actual values.
     foreach ($line in [System.IO.File]::ReadLines($EnvFile)) {
         if ($line -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=') {
             $key = $Matches[1]
             if ($key -ne 'WORKER_BUILD_ID') {
-                [System.Environment]::SetEnvironmentVariable($key, $null, 'Process')
+                Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue
             }
         }
     }
