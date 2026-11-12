@@ -16,7 +16,8 @@ COMPOSE = ROOT / "docker-compose.yml"
 def check(script: str) -> None:
     required = [
         "if ($oldSha -eq $Commit)",
-        "if ($count -ne '0')",
+        "if ($activeCount -ne '0')",
+        "WHERE status NOT IN ('done','failed');",
         "if ($EnvFile)",
         "if ($Service -ne 'temporal-worker')",
         "& $docker @previousArgs build $Service",
@@ -147,6 +148,7 @@ def main() -> None:
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
         "$startProcess.WaitForExit(20000)",
+        "WHERE status NOT IN ('done','failed');",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
     ):
         mutated = source.replace(fragment, "", 1)
