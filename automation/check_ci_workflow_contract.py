@@ -29,7 +29,7 @@ def check() -> None:
     gate = source.split("  gate:\n", 1)[1]
     for job in required:
         assert f"      - {job}\n" in gate, f"not included in final CI gate: {job}"
-    assert source.count("    if: github.event_name == 'pull_request'") == len(required), (
+    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", source)) == len(required), (
         "every full owner job must run on PR only; main must not repeat heavy builds"
     )
     assert "        if: github.event_name == 'push'" in source
