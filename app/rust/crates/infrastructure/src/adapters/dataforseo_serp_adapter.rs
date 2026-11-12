@@ -117,6 +117,7 @@ impl DataForSeoSerpClient {
             .context("read DataForSEO SERP response")?;
         let raw_json: Value =
             serde_json::from_str(&raw_payload_utf8).context("parse DataForSEO SERP JSON")?;
+        validate_successful_task_response(&raw_json)?;
         let organic_results = parse_organic_results(&raw_json);
 
         Ok(DataForSeoSerpResponse {
@@ -125,6 +126,34 @@ impl DataForSeoSerpClient {
             organic_results,
         })
     }
+}
+
+fn validate_successful_task_response(response: &Value) -> Result<()> {
+    let status_code = response
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    if status_code != 20000 {
+        bail!("DataForSEO SERP response failed status_code={status_code}");
+    }
+    let tasks = response
+        .get("tasks")
+        .and_then(Value::as_array)
+        .context("DataForSEO SERP response missing tasks")?;
+    if tasks.len() != 1 {
+        bail!("DataForSEO SERP expected one task, got {}", tasks.len());
+    }
+    let task_status = tasks[0]
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    if task_status != 20000 {
+        bail!("DataForSEO SERP task failed status_code={task_status}");
+    }
+    if tasks[0].get("result").and_then(Value::as_array).is_none() {
+        bail!("DataForSEO SERP successful task missing results");
+    }
+    Ok(())
 }
 
 fn language_from_locale(locale: &str) -> Option<String> {
@@ -254,6 +283,32 @@ mod tests {
             configured_endpoint(Some("https://example.test/serp".into())),
             "https://example.test/serp"
         );
+    }
+
+    #[test]
+    fn provider_task_failure_is_not_a_successful_empty_serp() {
+        let failed = json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 40501, "status_message": "Invalid Field: location_code", "result": null}]
+        });
+        assert!(validate_successful_task_response(&failed)
+            .unwrap_err()
+            .to_string()
+            .contains("40501"));
+        assert!(parse_organic_results(&failed).is_empty());
+    }
+
+    #[test]
+    fn provider_top_level_failure_is_rejected() {
+        let failed = json!({"status_code": 50000, "tasks": []});
+        assert!(validate_successful_task_response(&failed).is_err());
+    }
+
+    #[test]
+    fn successful_provider_task_accepts_legitimate_empty_results() {
+        let empty = json!({"status_code": 20000, "tasks": [{"status_code": 20000, "result": []}]});
+        assert!(validate_successful_task_response(&empty).is_ok());
+        assert!(parse_organic_results(&empty).is_empty());
     }
 
     #[test]
