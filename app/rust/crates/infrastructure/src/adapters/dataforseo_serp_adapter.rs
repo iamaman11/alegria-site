@@ -239,7 +239,7 @@ impl DataForSeoSerpClient {
                     .into_iter()
                     .filter_map(|item| {
                         let url = item.url.clone();
-                        apply_direct_source(item, &url)
+                        apply_direct_source(item, &url, &self.config.endpoint)
                     })
                     .collect();
                 if had_organic && organic_results.is_empty() {
@@ -288,11 +288,33 @@ fn direct_public_https_url(raw: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+// The in-process integration harness serves synthetic source pages over
+// HTTP loopback. Allow that exact case only when the configured provider is
+// also an HTTP 127.0.0.1 stub. Production DataForSEO HTTPS can never enter it.
+fn local_stub_source_url(raw: &str, provider_endpoint: &str) -> Option<String> {
+    let provider = Url::parse(provider_endpoint).ok()?;
+    if provider.scheme() != "http" || provider.host_str() != Some("127.0.0.1") {
+        return None;
+    }
+    let mut url = Url::parse(raw).ok()?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
 fn apply_direct_source(
     mut result: DataForSeoOrganicResult,
     final_url: &str,
+    provider_endpoint: &str,
 ) -> Option<DataForSeoOrganicResult> {
-    let url = direct_public_https_url(final_url)?;
+    let url = direct_public_https_url(final_url)
+        .or_else(|| local_stub_source_url(final_url, provider_endpoint))?;
     let domain = domain_norm(&url);
     result.source_tier = classify_domain_tier(&domain, &url);
     result.url_norm = url_norm(&url);
@@ -593,6 +615,19 @@ mod tests {
         assert_eq!(parsed[0].domain_norm, "example.com");
         assert_eq!(parsed[0].source_tier, "low_trust");
         assert_eq!(parsed[0].snippet, "Fee details");
+    }
+
+    #[test]
+    fn only_in_process_standard_stub_accepts_http_loopback_sources() {
+        let stub = "http://127.0.0.1:4567/v3/serp/google/organic/task_post";
+        let production = DEFAULT_ENDPOINT;
+        let local = "http://127.0.0.1:6789/test-source";
+        assert_eq!(local_stub_source_url(local, stub).as_deref(), Some(local));
+        assert!(local_stub_source_url(local, production).is_none());
+        assert!(local_stub_source_url("http://localhost:6789/", stub).is_none());
+        assert!(local_stub_source_url("http://192.168.1.2/", stub).is_none());
+        assert!(local_stub_source_url("https://google.com/goto?id=1", stub).is_none());
+        assert!(local_stub_source_url("http://127.0.0.1@evil.test/", stub).is_none());
     }
 
     #[test]
