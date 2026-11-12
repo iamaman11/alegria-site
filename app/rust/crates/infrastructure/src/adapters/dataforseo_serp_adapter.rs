@@ -114,8 +114,8 @@ impl DataForSeoSerpClient {
         }
         if !self.config.endpoint.ends_with("/task_post") {
             return Err(permanent(
-            "DataForSEO must use the canonical Google Standard task_post endpoint",
-        ));
+                "DataForSEO must use the canonical Google Standard task_post endpoint",
+            ));
         }
         let task = json!({
             "keyword": keyword.trim(),
@@ -244,8 +244,8 @@ impl DataForSeoSerpClient {
                     .collect();
                 if had_organic && organic_results.is_empty() {
                     return Err(permanent(
-            "DataForSEO Standard returned no validated direct source URL",
-        ));
+                        "DataForSEO Standard returned no validated direct source URL",
+                    ));
                 }
                 Ok(Some(DataForSeoSerpResponse {
                     raw_json,
@@ -365,8 +365,8 @@ fn standard_task_get_state(response: &Value) -> Result<StandardGetState> {
         20000 => {
             if tasks[0].get("result").and_then(Value::as_array).is_none() {
                 return Err(permanent(
-            "DataForSEO Standard completed task missing result array",
-        ));
+                    "DataForSEO Standard completed task missing result array",
+                ));
             }
             Ok(StandardGetState::Ready)
         }
