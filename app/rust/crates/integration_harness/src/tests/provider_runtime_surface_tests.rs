@@ -42,7 +42,9 @@
     async fn integration_ctx_exposes_stub_servers() {
         let ctx = IntegrationCtx::start(
             serde_json::json!({
+                "status_code": 20000,
                 "tasks": [{
+                    "status_code": 20000,
                     "result": [{
                         "items": [{
                             "rank_absolute": 1,
@@ -165,7 +167,9 @@
     async fn provider_env_drives_real_adapter_contracts_against_stubs() {
         let ctx = IntegrationCtx::start(
             serde_json::json!({
+                "status_code": 20000,
                 "tasks": [{
+                    "status_code": 20000,
                     "result": [{
                         "items": [{
                             "type": "organic",
