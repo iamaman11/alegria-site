@@ -138,10 +138,10 @@ def main() -> int:
     # Workspace tests cover integration_harness's default suite; the separate
     # e2e-feature compile remains required. Never recreate duplicate Cargo runs.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    if "  architecture-and-rust:\\n" not in workflow or "\\n  rust-security:\\n" not in workflow:
+    if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
         print("FAIL integration_harness missing Rust owner")
         return 1
-    rust_job = workflow.split("  architecture-and-rust:\\n", 1)[1].split("\\n  rust-security:\\n", 1)[0]
+    rust_job = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
     for snippet in (
         "run: cargo test --workspace --locked",
         "run: cargo test -p integration_harness --features e2e --no-run --locked",
