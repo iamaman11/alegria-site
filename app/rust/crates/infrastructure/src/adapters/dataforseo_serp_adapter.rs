@@ -124,7 +124,7 @@ impl DataForSeoSerpClient {
             "depth": self.config.depth,
             "priority": 1
         });
-        let posted: Value = self
+        let posted_response = self
             .client
             .post(&self.config.endpoint)
             .basic_auth(&self.config.login, Some(&self.config.password))
@@ -132,7 +132,7 @@ impl DataForSeoSerpClient {
             .send()
             .await
             .context("DataForSEO Standard task POST")?;
-        let posted: Value = checked_provider_http(posted, "POST")?
+        let posted: Value = checked_provider_http(posted_response, "POST")?
             .json()
             .await
             .context("decode DataForSEO Standard task receipt")?;
@@ -191,7 +191,9 @@ impl DataForSeoSerpClient {
             .await
             .context("persist DataForSEO paid Standard task receipt")?;
             if updated.rows_affected() != 1 {
-                return Err(permanent("DataForSEO paid task claim changed; reconcile before retry"));
+                return Err(permanent(
+                    "DataForSEO paid task claim changed; reconcile before retry",
+                ));
             }
             task_id
         } else {
@@ -535,9 +537,11 @@ fn classify_domain_tier(raw_url: &str) -> String {
                 .is_some_and(|prefix| prefix.ends_with('.'))
     };
     // Official government DNS namespaces, not generic embassy/mfa words.
-    if ["gov", "gov.by", "gov.uk", "gov.au", "gov.nz", "gob.es", "gob.mx", "gob.ar"]
-        .iter()
-        .any(|domain| host_matches(domain))
+    if [
+        "gov", "gov.by", "gov.uk", "gov.au", "gov.nz", "gob.es", "gob.mx", "gob.ar",
+    ]
+    .iter()
+    .any(|domain| host_matches(domain))
     {
         "official".to_string()
     } else if ["vfsglobal.com", "blsspainvisa.com", "blsspainglobal.com"]
@@ -545,15 +549,20 @@ fn classify_domain_tier(raw_url: &str) -> String {
         .any(|domain| host_matches(domain))
     {
         "vfs".to_string()
-    } else if host.split('.').any(|label| label.contains("agency") || label.contains("consult")) {
+    } else if host
+        .split('.')
+        .any(|label| label.contains("agency") || label.contains("consult"))
+    {
         "agency".to_string()
-    } else if host.split('.').any(|label| {
-        ["forum", "reddit", "quora", "stackexchange", "community"].contains(&label)
-    }) {
+    } else if host
+        .split('.')
+        .any(|label| ["forum", "reddit", "quora", "stackexchange", "community"].contains(&label))
+    {
         "forum".to_string()
-    } else if host.split('.').any(|label| {
-        ["news", "blog", "editorial", "magazine", "medium"].contains(&label)
-    }) {
+    } else if host
+        .split('.')
+        .any(|label| ["news", "blog", "editorial", "magazine", "medium"].contains(&label))
+    {
         "editorial".to_string()
     } else {
         "low_trust".to_string()
@@ -737,8 +746,9 @@ mod tests {
             snippet: String::new(),
             raw_json: json!({}),
         };
-        let result = apply_direct_source(base, "https://bolivia.blsspainvisa.com/", DEFAULT_ENDPOINT)
-            .expect("delegated HTTPS domain");
+        let result =
+            apply_direct_source(base, "https://bolivia.blsspainvisa.com/", DEFAULT_ENDPOINT)
+                .expect("delegated HTTPS domain");
         assert_eq!(result.domain_norm, "bolivia.blsspainvisa.com");
         assert_eq!(result.source_tier, "vfs");
     }
@@ -755,16 +765,30 @@ mod tests {
             assert_ne!(classify_domain_tier(url), "official", "{url}");
             assert_ne!(classify_domain_tier(url), "vfs", "{url}");
         }
-        assert_eq!(classify_domain_tier("https://exteriores.gob.es/visa"), "official");
-        assert_eq!(classify_domain_tier("https://bolivia.blsspainvisa.com/"), "vfs");
+        assert_eq!(
+            classify_domain_tier("https://exteriores.gob.es/visa"),
+            "official"
+        );
+        assert_eq!(
+            classify_domain_tier("https://bolivia.blsspainvisa.com/"),
+            "vfs"
+        );
     }
 
     #[test]
     fn provider_http_retryability_is_explicit() {
-        for status in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN, StatusCode::BAD_REQUEST] {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::BAD_REQUEST,
+        ] {
             assert!(is_permanent_provider_status(status));
         }
-        for status in [StatusCode::REQUEST_TIMEOUT, StatusCode::TOO_MANY_REQUESTS, StatusCode::BAD_GATEWAY] {
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+        ] {
             assert!(!is_permanent_provider_status(status));
         }
     }
@@ -772,15 +796,22 @@ mod tests {
     #[test]
     fn local_stub_keeps_simulated_source_identity_without_leaking_to_https() {
         let item = DataForSeoOrganicResult {
-            rank: 1, title: "Ministry".into(), url: "http://127.0.0.1:1234/visa".into(),
-            url_norm: "127.0.0.1/visa".into(), domain_norm: "mfa.gov.by".into(),
-            source_tier: "official".into(), snippet: String::new(), raw_json: json!({}),
+            rank: 1,
+            title: "Ministry".into(),
+            url: "http://127.0.0.1:1234/visa".into(),
+            url_norm: "127.0.0.1/visa".into(),
+            domain_norm: "mfa.gov.by".into(),
+            source_tier: "official".into(),
+            snippet: String::new(),
+            raw_json: json!({}),
         };
         let stub = "http://127.0.0.1:4567/v3/serp/google/organic/task_post";
         let retained = apply_direct_source(item.clone(), &item.url, stub).unwrap();
         assert_eq!(retained.domain_norm, "mfa.gov.by");
         assert_eq!(retained.source_tier, "official");
-        assert!(apply_direct_source(item, "http://127.0.0.1:1234/visa", DEFAULT_ENDPOINT).is_none());
+        assert!(
+            apply_direct_source(item, "http://127.0.0.1:1234/visa", DEFAULT_ENDPOINT).is_none()
+        );
     }
 
     #[test]
@@ -789,13 +820,7 @@ mod tests {
             classify_domain_tier("https://www.mfa.gov.by/visa"),
             "official"
         );
-        assert_eq!(
-            classify_domain_tier("https://vfsglobal.com/visa"),
-            "vfs"
-        );
-        assert_eq!(
-            classify_domain_tier("https://reddit.com/r/visas"),
-            "forum"
-        );
+        assert_eq!(classify_domain_tier("https://vfsglobal.com/visa"), "vfs");
+        assert_eq!(classify_domain_tier("https://reddit.com/r/visas"), "forum");
     }
 }
