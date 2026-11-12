@@ -1,6 +1,8 @@
 use anyhow::{bail, Context, Result};
-use reqwest::Client;
+use futures::{stream, StreamExt};
+use reqwest::{Client, Url};
 use serde_json::{json, Value};
+use std::{net::IpAddr, time::Duration};
 
 use primitives::url_norm::{domain_norm, url_norm};
 
@@ -118,7 +120,21 @@ impl DataForSeoSerpClient {
         let raw_json: Value =
             serde_json::from_str(&raw_payload_utf8).context("parse DataForSEO SERP JSON")?;
         validate_successful_task_response(&raw_json)?;
-        let organic_results = parse_organic_results(&raw_json);
+        // DataForSEO may return Google /goto tracking URLs whose identical
+        // google.com host collapses every organic result into one crawl source.
+        // Resolve the provider's HTTP redirect before ranking by domain and
+        // registering evidence. Keep raw_json untouched for audit.
+        let parsed = parse_organic_results(&raw_json);
+        let had_organic = !parsed.is_empty();
+        let organic_results: Vec<_> = stream::iter(parsed)
+            .map(|result| resolve_tracking_result(&self.client, result))
+            .buffered(6)
+            .filter_map(|result| async move { result })
+            .collect()
+            .await;
+        if had_organic && organic_results.is_empty() {
+            bail!("DataForSEO SERP returned organic links, but none has a usable direct source URL");
+        }
 
         Ok(DataForSeoSerpResponse {
             raw_json,
@@ -126,6 +142,71 @@ impl DataForSeoSerpClient {
             organic_results,
         })
     }
+}
+
+// The source identity is the verified HTTP redirect destination, not
+// DataForSEO's Google tracking link or a SERP breadcrumb.
+fn is_google_tracking_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    host.eq_ignore_ascii_case("google.com") && matches!(url.path(), "/goto" | "/url")
+}
+
+fn direct_public_https_url(raw: &str) -> Option<String> {
+    let mut url = Url::parse(raw).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host.parse::<IpAddr>().is_ok()
+        || !host.contains('.')
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || is_google_tracking_url(url.as_str())
+    {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
+fn apply_direct_source(
+    mut result: DataForSeoOrganicResult,
+    final_url: &str,
+) -> Option<DataForSeoOrganicResult> {
+    let url = direct_public_https_url(final_url)?;
+    let domain = domain_norm(&url);
+    result.source_tier = classify_domain_tier(&domain, &url);
+    result.url_norm = url_norm(&url);
+    result.domain_norm = domain;
+    result.url = url;
+    Some(result)
+}
+
+async fn resolve_tracking_result(
+    client: &Client,
+    result: DataForSeoOrganicResult,
+) -> Option<DataForSeoOrganicResult> {
+    if !is_google_tracking_url(&result.url) {
+        return Some(result);
+    }
+    // HEAD follows the native HTTP Location chain. Unresolvable tracking
+    // links are skipped, never persisted as google.com evidence.
+    let response = client
+        .head(&result.url)
+        .timeout(Duration::from_secs(12))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    apply_direct_source(result, response.url().as_str())
 }
 
 fn validate_successful_task_response(response: &Value) -> Result<()> {
@@ -338,6 +419,64 @@ mod tests {
         assert_eq!(parsed[0].domain_norm, "example.com");
         assert_eq!(parsed[0].source_tier, "low_trust");
         assert_eq!(parsed[0].snippet, "Fee details");
+    }
+
+    #[test]
+    fn google_tracking_link_is_not_canonical_source_evidence() {
+        let tracking = "https://google.com/goto?url=opaque-encoded-id&gsessionid=123";
+        assert!(is_google_tracking_url(tracking));
+        assert!(is_google_tracking_url("https://www.google.com/url?q=encoded"));
+        assert!(!is_google_tracking_url("https://www.exteriores.gob.es/visa"));
+        assert!(direct_public_https_url(tracking).is_none());
+        assert!(direct_public_https_url("https://127.0.0.1/visa").is_none());
+        assert!(direct_public_https_url("http://exteriores.gob.es/visa").is_none());
+        assert_eq!(
+            direct_public_https_url("https://www.exteriores.gob.es/visa#intro").as_deref(),
+            Some("https://www.exteriores.gob.es/visa")
+        );
+    }
+
+    #[test]
+    fn resolved_google_redirect_uses_actual_source_domain_and_tier() {
+        let tracking = "https://google.com/goto?url=opaque";
+        let mut item = parse_organic_results(&json!({
+            "tasks": [{"result": [{"items": [{
+                "type": "organic", "rank_group": 1, "url": tracking,
+                "domain": "google.com", "title": "Schengen visas"
+            }]}]}]
+        }))
+        .remove(0);
+        assert_eq!(item.url_norm, "google.com/goto");
+        assert_eq!(item.source_tier, "low_trust");
+        item = apply_direct_source(
+            item,
+            "https://www.exteriores.gob.es/Consulados/toronto/en/Visados-Schengen.aspx",
+        )
+        .expect("real redirect destination");
+        assert_eq!(item.domain_norm, "exteriores.gob.es");
+        assert_eq!(item.source_tier, "official");
+        assert_eq!(item.url_norm,
+            "exteriores.gob.es/consulados/toronto/en/visados-schengen.aspx");
+        assert!(item.url.starts_with("https://www.exteriores.gob.es/"));
+        assert!(!item.url.contains("google.com/goto"));
+    }
+
+    #[test]
+    fn delegated_visa_center_redirect_keeps_delegated_tier() {
+        let base = DataForSeoOrganicResult {
+            rank: 2,
+            title: "Visa centre".into(),
+            url: "https://google.com/goto?url=encoded".into(),
+            url_norm: "google.com/goto".into(),
+            domain_norm: "google.com".into(),
+            source_tier: "low_trust".into(),
+            snippet: String::new(),
+            raw_json: json!({}),
+        };
+        let result = apply_direct_source(base, "https://bolivia.blsspainvisa.com/")
+            .expect("delegated HTTPS domain");
+        assert_eq!(result.domain_norm, "bolivia.blsspainvisa.com");
+        assert_eq!(result.source_tier, "vfs");
     }
 
     #[test]
