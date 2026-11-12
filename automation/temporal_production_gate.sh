@@ -347,14 +347,10 @@ assert_invariants() {
     db_scalar "insert into kb.sources (source_key, source_type, source_label, base_url, trust_level, status) values ('smoke_source','internal','Smoke Source','https://example.com',3,'active') on conflict (source_key) do nothing;" >/dev/null
   fi
 
-  # Required concepts for deterministic support bootstrap.
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('consular_fee','fee','Консульский сбор','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('passport','document','Паспорт','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('medical_insurance','document','Медицинская страховка','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_processing_time','timeline','Стандартный срок рассмотрения','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_tourist_eligibility','rule','Стандартные условия туристической визы','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_application_process','process','Порядок подачи заявления','active') on conflict (concept_key) do nothing;" >/dev/null
-  db_scalar "insert into kb.concepts (concept_key, concept_type, label_ru, status) values ('standard_application_channel','location','Канал подачи заявления','active') on conflict (concept_key) do nothing;" >/dev/null
+  # Concepts come from the one canonical schema.sql bootstrap, not smoke fixtures.
+  local concept_count
+  concept_count="$(db_scalar "select count(*) from kb.concepts where status='active' and concept_key in ('consular_fee','passport','medical_insurance','standard_processing_time','standard_tourist_eligibility','standard_application_process','standard_application_channel');" | tr -d '[:space:]')"
+  [ "$concept_count" = "7" ] || die "canonical ontology vocabulary is incomplete"
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('pl:work:by','pl','work',null,'by','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:by','ES','tourist',null,'BY','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:empty:by','ES','tourist','empty-gate','BY','active') on conflict (context_key) do nothing;" >/dev/null
