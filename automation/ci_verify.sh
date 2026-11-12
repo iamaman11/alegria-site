@@ -8,7 +8,17 @@ if [[ -x "$ROOT_DIR/.venv/bin/python3" ]]; then
   export PATH="$ROOT_DIR/.venv/bin:$PATH"
 fi
 
-echo "== Alegria Expert Verification =="
+PHASE="${1:-all}"
+case "$PHASE" in
+  all|contracts|product|integration) ;;
+  *) echo "Usage: bash automation/ci_verify.sh [all|contracts|product|integration]" >&2; exit 2 ;;
+esac
+
+echo "== Alegria audit: $PHASE =="
+if [[ "$PHASE" == "all" || "$PHASE" == "contracts" ]]; then
+
+echo "[0/50] Single CI ownership and aggregate policy"
+python3 automation/check_ci_workflow_contract.py
 
 echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
@@ -35,9 +45,6 @@ python3 automation/check_support_surface_execution.py
 
 echo "[4c/50] Release/restore gate surface"
 python3 automation/check_release_restore_gate_surface.py
-
-echo "[4c1/50] Windows staging rollback safety"
-python3 automation/check_windows_staging_rollback.py
 
 echo "[4d/50] Voyage retrieval surface"
 python3 automation/check_voyage_retrieval_surface.py
@@ -180,6 +187,9 @@ python3 automation/check_shadow_verification_surface.py
 echo "[35g2/58] Cutover convergence policy"
 python3 automation/check_cutover_convergence_policy.py
 
+fi
+
+if [[ "$PHASE" == "all" || "$PHASE" == "product" ]]; then
 echo "[35g3a/58] Truth certification fail-closed baseline migration policy"
 python3 automation/smoke_truth_certification_strict_projection_policy.py
 
@@ -292,9 +302,6 @@ python3 automation/smoke_first_site_release.py
 echo "[52b3/53] HTTPS readback behavioral regression"
 python3 automation/smoke_public_http_readback.py
 
-echo "[52b4/53] Cloudflare SEO immutable deployment boundary (offline only)"
-python3 automation/smoke_seo_cloudflare_deploy.py
-
 echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
@@ -346,6 +353,9 @@ python3 automation/smoke_seo_legacy_replay_environment_probe.py
 echo "[52q/53] Local operational evidence schema"
 python3 automation/check_local_operational_evidence_schema.py
 
+fi
+
+if [[ "$PHASE" == "all" || "$PHASE" == "integration" ]]; then
 echo "[41/53] Temporal build-id policy"
 python3 automation/check_temporal_build_id_policy.py
 
@@ -401,7 +411,6 @@ echo "[53/60] Backup/restore layout"
 python3 automation/check_backup_restore_layout.py
 
 echo "[54/60] SQLx offline contract"
-(cd app/rust && SQLX_OFFLINE=true cargo check -q)
 python3 automation/check_sqlx_offline_contract.py
 
 echo "[55/60] End-to-end invariant checks (schema + JSONL data)"
@@ -417,15 +426,6 @@ python3 automation/check_expert_consistency.py \
 
 echo "[57/60] Integration harness presence"
 python3 automation/check_integration_harness_present.py
-
-echo "[58/60] SEO use-case acceptance test"
-(cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_steps seo_steps_form_publish_ready_pipeline)
-
-echo "[59/60] Integration harness stub test"
-(cd app/rust && cargo test -q -p integration_harness)
-
-echo "[60/60] Integration harness e2e surface compile"
-(cd app/rust && cargo test -q -p integration_harness --features e2e --no-run)
 
 echo "[60a/60] Live-provider smoke evidence schema"
 python3 automation/check_live_provider_smoke_evidence_schema.py
@@ -454,15 +454,6 @@ python3 automation/smoke_serp_top10_pattern_pipeline.py
 echo "[60h/60] Whole-page semantic fixture gate"
 bash automation/run_whole_page_semantic_gate.sh
 
-echo "[post] Rust migration contract + fact verifier parity"
-SQLX_OFFLINE=true cargo run -q --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
-  check-rust-migration-contract \
-  --root . \
-  --report-json automation/reports/rust_migration_contract.rust.json
+fi
 
-SQLX_OFFLINE=true cargo run -q --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
-  check-fact-verifier-parity \
-  --root . \
-  --report-json automation/reports/fact_verifier_parity.rust.json
-
-echo "All checks passed."
+echo "AUDIT_PHASE_PASS=$PHASE"

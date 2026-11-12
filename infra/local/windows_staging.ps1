@@ -61,7 +61,7 @@ if ($remote -ne $Commit) { throw 'GitHub commit SHA does not match' }
 $runJson = & gh run list -R $repo --commit $Commit --json databaseId,workflowName,conclusion,status,headSha --limit 100
 Assert-Exit 'GitHub Actions lookup'
 $runs = $runJson | ConvertFrom-Json
-foreach ($name in @('quality-gate', 'automation-verify')) {
+foreach ($name in @('ci')) {
     $latest = @($runs | Where-Object { $_.workflowName -eq $name -and $_.headSha -eq $Commit } | Sort-Object databaseId -Descending | Select-Object -First 1)
     if ($latest.Count -ne 1 -or $latest[0].status -ne 'completed' -or $latest[0].conclusion -ne 'success') {
         throw "CI NO-GO: $name not SUCCESS at $Commit"
