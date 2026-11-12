@@ -117,4 +117,15 @@ $unhealthyRollback = $verifiedRollbackCheck.Clone()
 $unhealthyRollback.MetricsOk = $false
 Assert-Equal (Test-Staging-Readback -Observed $recoveredRunning @unhealthyRollback) $false 'rebuilt previous missing metrics'
 
+# Parse the actual deployment entrypoint on Windows without running Docker.
+$tokens = $null
+$parseErrors = $null
+[System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $PSScriptRoot '..\infra\local\windows_staging.ps1'),
+    [ref]$tokens, [ref]$parseErrors
+) | Out-Null
+if (@($parseErrors).Count -gt 0) {
+    throw 'Windows staging script contains PowerShell syntax errors'
+}
+
 Write-Output 'WINDOWS_STAGING_ENGINE_RECONCILE=PASS'

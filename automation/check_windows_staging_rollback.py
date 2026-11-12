@@ -35,7 +35,13 @@ def check(script: str) -> None:
         "& $docker @newArgs build $Service",
         "function Invoke-Compose-Recreate-Start",
         "& $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service",
-        "& $docker start $target",
+        "$startInfo.ArgumentList.Add('start')",
+        "$startInfo.ArgumentList.Add($target)",
+        "$startProcess.WaitForExit(20000)",
+        "$startProcess.Kill($true)",
+        "foreach ($line in [System.IO.File]::ReadLines($EnvFile))",
+        "if ($key -ne 'WORKER_BUILD_ID')",
+        "[System.Environment]::SetEnvironmentVariable($key, $null, 'Process')",
         "$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs",
         "& $docker image tag $rollbackTag $latestTag",
         "$rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs",
@@ -140,6 +146,8 @@ def main() -> None:
         "if ($decision -eq 'ENGINE_UNAVAILABLE')",
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
+        "$startProcess.WaitForExit(20000)",
+        "[System.Environment]::SetEnvironmentVariable($key, $null, 'Process')",
     ):
         mutated = source.replace(fragment, "", 1)
         try:

@@ -84,6 +84,16 @@ if ($EnvFile) {
     if ($EnvFile.StartsWith($runtime, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw 'Provider secrets must live outside immutable Git checkouts'
     }
+    # Docker Compose gives the inherited shell priority over --env-file.
+    # The explicit protected file owns its values; Compose still parses them.
+    foreach ($line in [System.IO.File]::ReadLines($EnvFile)) {
+        if ($line -match '^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=') {
+            $key = $Matches[1]
+            if ($key -ne 'WORKER_BUILD_ID') {
+                [System.Environment]::SetEnvironmentVariable($key, $null, 'Process')
+            }
+        }
+    }
 } else {
     $existing = ((& $docker inspect $target --format '{{json .Config.Env}}') | Out-String) | ConvertFrom-Json
     Assert-Exit 'existing secret-presence check'
@@ -305,8 +315,23 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
     }
     if ($createExit -ne 0) { return $createExit }
     try {
-        $null = & $docker start $target
-        return [int]$LASTEXITCODE
+        # Docker Desktop may leave the native CLI waiting even after it has
+        # accepted the start. Bound the CLI, then trust only engine readback.
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+            $startInfo.FileName = $docker
+            $startInfo.ArgumentList.Add('start')
+            $startInfo.ArgumentList.Add($target)
+            $startInfo.UseShellExecute = $true
+            $startInfo.CreateNoWindow = $true
+            $startProcess = [System.Diagnostics.Process]::Start($startInfo)
+            if ($startProcess.WaitForExit(20000)) {
+                return [int]$startProcess.ExitCode
+            }
+            try { $startProcess.Kill($true) } catch {}
+            Write-Warning "Native Docker start timed out (attempt $attempt/2); checking engine after retry"
+        }
+        return -1
     } catch {
         Write-Warning 'Native Docker start raised an exception; reconciling actual container state'
         return -1
