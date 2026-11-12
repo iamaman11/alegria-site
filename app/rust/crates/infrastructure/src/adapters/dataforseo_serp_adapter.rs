@@ -133,7 +133,9 @@ impl DataForSeoSerpClient {
             .collect()
             .await;
         if had_organic && organic_results.is_empty() {
-            bail!("DataForSEO SERP returned organic links, but none has a usable direct source URL");
+            bail!(
+                "DataForSEO SERP returned organic links, but none has a usable direct source URL"
+            );
         }
 
         Ok(DataForSeoSerpResponse {
@@ -425,8 +427,12 @@ mod tests {
     fn google_tracking_link_is_not_canonical_source_evidence() {
         let tracking = "https://google.com/goto?url=opaque-encoded-id&gsessionid=123";
         assert!(is_google_tracking_url(tracking));
-        assert!(is_google_tracking_url("https://www.google.com/url?q=encoded"));
-        assert!(!is_google_tracking_url("https://www.exteriores.gob.es/visa"));
+        assert!(is_google_tracking_url(
+            "https://www.google.com/url?q=encoded"
+        ));
+        assert!(!is_google_tracking_url(
+            "https://www.exteriores.gob.es/visa"
+        ));
         assert!(direct_public_https_url(tracking).is_none());
         assert!(direct_public_https_url("https://127.0.0.1/visa").is_none());
         assert!(direct_public_https_url("http://exteriores.gob.es/visa").is_none());
@@ -455,8 +461,10 @@ mod tests {
         .expect("real redirect destination");
         assert_eq!(item.domain_norm, "exteriores.gob.es");
         assert_eq!(item.source_tier, "official");
-        assert_eq!(item.url_norm,
-            "exteriores.gob.es/consulados/toronto/en/visados-schengen.aspx");
+        assert_eq!(
+            item.url_norm,
+            "exteriores.gob.es/consulados/toronto/en/visados-schengen.aspx"
+        );
         assert!(item.url.starts_with("https://www.exteriores.gob.es/"));
         assert!(!item.url.contains("google.com/goto"));
     }
