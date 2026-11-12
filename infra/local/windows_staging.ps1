@@ -76,11 +76,9 @@ $oldSha = (Split-Path $oldRoot -Leaf) -replace '^alegria-site-', ''
 if ($oldSha -notmatch '^[a-f0-9]{40}$' -or -not (Test-Path (Join-Path $oldRoot 'docker-compose.yml'))) {
     throw 'Previous canonical checkout absent: cannot guarantee rollback'
 }
-if ($oldSha -eq $Commit) { Write-Output "NOOP: $Service already at $Commit"; exit 0 }
-# Staging only: do not drain an actual business run implicitly.
-$count = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c 'SELECT count(*) FROM pipeline.execution_runs;' | Out-String).Trim()
-Assert-Exit 'business-run safety check'
-if ($count -ne '0') { throw "Run history is nonempty ($count): require explicit drain plan" }
+# A repeated Deploy of the same SHA may carry new provider credentials.
+# Compute and compare the effective environment before treating it as a no-op.
+$env:WORKER_BUILD_ID = $Commit
 if ($EnvFile) {
     $EnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
     if ($EnvFile.StartsWith($runtime, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -136,6 +134,18 @@ Assert-Exit 'inspect previous build identity'
 $oldBuildId = [string]($oldEnv | Where-Object { $_ -match '^WORKER_BUILD_ID=' } |
     Select-Object -First 1)
 $oldBuildId = $oldBuildId -replace '^WORKER_BUILD_ID=', ''
+$oldEnvironment = ConvertTo-Staging-EnvironmentMap -Environment $oldEnv
+$expectedEnvironment = $config.services.$Service.environment
+if ($oldSha -eq $Commit) {
+    if (Test-Staging-EnvironmentMatches -Expected $expectedEnvironment -Actual $oldEnv) {
+        Write-Output "NOOP: $Service already at $Commit with matching environment"
+        exit 0
+    }
+}
+# Staging only: do not change the worker while business runs are active.
+$count = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c 'SELECT count(*) FROM pipeline.execution_runs;' | Out-String).Trim()
+Assert-Exit 'business-run safety check'
+if ($count -ne '0') { throw "Run history is nonempty ($count): require explicit drain plan" }
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
@@ -231,6 +241,7 @@ function Read-Worker-Observed {
             Project = [string]$labels.PSObject.Properties['com.docker.compose.project'].Value
             Checkout = [string]$labels.PSObject.Properties['com.docker.compose.project.working_dir'].Value
             BuildId = $buildId
+            Environment = @($info.Config.Env)
         }
     } catch { return $null }
 }
@@ -257,11 +268,13 @@ function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
             $newVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $newImage `
                 -ExpectedProject $project -ExpectedCheckout $root `
                 -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
-                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
+                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk `
+                -ExpectedEnvironment $expectedEnvironment
             $oldVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $rollbackImage `
                 -ExpectedProject $project -ExpectedCheckout $oldRoot `
                 -ExpectedBuildId ([string]$oldBuildId) `
-                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk
+                -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk `
+                -ExpectedEnvironment $oldEnvironment
             $decision = Resolve-Staging-Decision -EngineReady $true -NewVerified $newVerified `
                 -OldVerified $oldVerified -StartExit $StartExit
             if ($decision -ne 'UNVERIFIED') { return $decision }
@@ -338,7 +351,20 @@ Write-Warning "Candidate failed verification; restoring immutable old image $old
 Assert-Exit 'retag preserved image for rollback'
 $rollbackExit = -1
 $previousBuildEnvironment = [Environment]::GetEnvironmentVariable('WORKER_BUILD_ID', 'Process')
+# Retain previous provider configuration in memory for a true environment rollback.
+# Process variables override -EnvFile; values are never written to the checkout.
+$rollbackKeys = @(
+    [regex]::Matches([System.IO.File]::ReadAllText((Join-Path $oldRoot 'docker-compose.yml')),
+        '\$\{([A-Za-z_][A-Za-z0-9_]*)') |
+        ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+)
+$rollbackProcessEnvironment = @{}
 try {
+    foreach ($key in $rollbackKeys) {
+        if ($key -eq 'WORKER_BUILD_ID' -or -not $oldEnvironment.ContainsKey($key)) { continue }
+        $rollbackProcessEnvironment[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+        [Environment]::SetEnvironmentVariable($key, [string]$oldEnvironment[$key], 'Process')
+    }
     # Rollback must not use the NEW commit's WORKER_BUILD_ID from -EnvFile.
     # The original image and the worker identity must remain consistent.
     if ($oldBuildId) {
@@ -351,8 +377,14 @@ try {
     if ($oldBuildId -and $rollbackConfig.services.$Service.environment.WORKER_BUILD_ID -ne $oldBuildId) {
         throw 'Rollback build identity does not match previous container; refuse recreate'
     }
+    if (-not (Test-Staging-EnvironmentMatches -Expected $rollbackConfig.services.$Service.environment -Actual $oldEnv)) {
+        throw 'Rollback environment differs from previous worker; refuse recreate'
+    }
     $rollbackExit = Invoke-Compose-Recreate-Start -ComposeArgs $previousArgs
 } finally {
+    foreach ($key in $rollbackProcessEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($key, $rollbackProcessEnvironment[$key], 'Process')
+    }
     if ($null -eq $previousBuildEnvironment) {
         Remove-Item Env:WORKER_BUILD_ID -ErrorAction SilentlyContinue
     } else {

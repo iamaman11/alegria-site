@@ -42,12 +42,17 @@ pub struct DataForSeoSerpClient {
     config: DataForSeoConfig,
 }
 
+fn configured_endpoint(value: Option<String>) -> String {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_ENDPOINT.to_string())
+}
+
 impl DataForSeoConfig {
     pub fn from_env_with_locale(locale: Option<&str>) -> Option<Self> {
         let login = std::env::var("DATAFORSEO_LOGIN").ok()?;
         let password = std::env::var("DATAFORSEO_PASSWORD").ok()?;
-        let endpoint =
-            std::env::var("DATAFORSEO_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
+        let endpoint = configured_endpoint(std::env::var("DATAFORSEO_ENDPOINT").ok());
         let language_code = std::env::var("DATAFORSEO_LANGUAGE_CODE")
             .ok()
             .or_else(|| locale.and_then(language_from_locale))
@@ -239,6 +244,17 @@ fn classify_domain_tier(domain: &str, url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_or_blank_endpoint_uses_default() {
+        assert_eq!(configured_endpoint(None), DEFAULT_ENDPOINT);
+        assert_eq!(configured_endpoint(Some(String::new())), DEFAULT_ENDPOINT);
+        assert_eq!(configured_endpoint(Some("   ".into())), DEFAULT_ENDPOINT);
+        assert_eq!(
+            configured_endpoint(Some("https://example.test/serp".into())),
+            "https://example.test/serp"
+        );
+    }
 
     #[test]
     fn parses_dataforseo_organic_items() {

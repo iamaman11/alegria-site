@@ -55,6 +55,26 @@ $noMetrics = $check.Clone()
 $noMetrics.MetricsOk = $false
 Assert-Equal (Test-Staging-Readback -Observed $readback @noMetrics) $false 'not ready metrics'
 Assert-Equal (Test-Staging-Readback -Observed $null @check) $false 'no engine readback'
+
+# Same source/version must be recreated when credentials change. No real secrets.
+$wanted = [pscustomobject]@{
+    DATAFORSEO_LOGIN = 'example-login'
+    CLOUDFLARE_API_TOKEN = 'new-example-token'
+}
+$withEnv = $readback.Clone()
+$withEnv.Environment = @('DATAFORSEO_LOGIN=example-login', 'CLOUDFLARE_API_TOKEN=new-example-token')
+$withEnvCheck = $check.Clone()
+$withEnvCheck.ExpectedEnvironment = $wanted
+Assert-Equal (Test-Staging-Readback -Observed $withEnv @withEnvCheck) $true 'desired config readback'
+Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $true 'same SHA same environment noop'
+$withEnv.Environment = @('DATAFORSEO_LOGIN=example-login', 'CLOUDFLARE_API_TOKEN=old-example-token')
+Assert-Equal (Test-Staging-Readback -Observed $withEnv @withEnvCheck) $false 'stale token rejected'
+Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $false 'same SHA different environment requires recreate'
+$wanted.CLOUDFLARE_API_TOKEN = ''
+$withEnv.Environment = @('DATAFORSEO_LOGIN=example-login', 'CLOUDFLARE_API_TOKEN=')
+Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $true 'blank previous secret preserved'
+$withEnv.Environment = @('DATAFORSEO_LOGIN=example-login')
+Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $false 'missing required env key'
 $oldCheck = $check.Clone()
 $oldCheck.ExpectedImage = $old
 $oldCheck.ExpectedCheckout = $oldRoot
