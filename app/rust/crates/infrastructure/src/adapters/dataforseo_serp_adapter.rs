@@ -2,7 +2,10 @@ use anyhow::{bail, Context, Result};
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
-use std::{net::IpAddr, time::{Duration, Instant}};
+use std::{
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 use primitives::url_norm::{domain_norm, url_norm};
 
@@ -11,6 +14,21 @@ use super::reqwest_adapter;
 const DEFAULT_ENDPOINT: &str = "https://api.dataforseo.com/v3/serp/google/organic/task_post";
 const TASK_WAIT: Duration = Duration::from_secs(480);
 const TASK_POLL: Duration = Duration::from_secs(12);
+
+#[derive(Debug)]
+pub struct PermanentSerpError(pub String);
+
+impl std::fmt::Display for PermanentSerpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PermanentSerpError {}
+
+fn permanent(message: impl Into<String>) -> anyhow::Error {
+    PermanentSerpError(message.into()).into()
+}
 
 #[derive(Debug, Clone)]
 pub struct DataForSeoConfig {
@@ -92,10 +110,10 @@ impl DataForSeoSerpClient {
 
     pub async fn submit_standard_task(&self, keyword: &str) -> Result<Value> {
         if keyword.trim().is_empty() {
-            bail!("DataForSEO keyword is empty");
+            return Err(permanent("DataForSEO keyword is empty"));
         }
         if !self.config.endpoint.ends_with("/task_post") {
-            bail!("DataForSEO must use the canonical Google Standard task_post endpoint");
+            return Err(permanent("DataForSEO must use the canonical Google Standard task_post endpoint"));
         }
         let task = json!({
             "keyword": keyword.trim(),
@@ -130,7 +148,7 @@ impl DataForSeoSerpClient {
         keyword: &str,
     ) -> Result<DataForSeoSerpResponse> {
         if run_id.trim().is_empty() || keyword.trim().is_empty() {
-            bail!("DataForSEO Standard requires run_id and keyword");
+            return Err(permanent("DataForSEO Standard requires run_id and keyword"));
         }
         let receipt_key = format!(
             "dataforseo-standard-task-{}",
@@ -184,9 +202,11 @@ impl DataForSeoSerpClient {
         task_id: &str,
     ) -> Result<Option<DataForSeoSerpResponse>> {
         if task_id.is_empty()
-            || !task_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            || !task_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
         {
-            bail!("invalid DataForSEO Standard task id");
+            return Err(permanent("invalid DataForSEO Standard task id"));
         }
         let prefix = self
             .config
@@ -221,7 +241,7 @@ impl DataForSeoSerpClient {
                     })
                     .collect();
                 if had_organic && organic_results.is_empty() {
-                    bail!("DataForSEO Standard returned no validated direct source URL");
+                    return Err(permanent("DataForSEO Standard returned no validated direct source URL"));
                 }
                 Ok(Some(DataForSeoSerpResponse {
                     raw_json,
@@ -285,43 +305,60 @@ enum StandardGetState {
 
 fn standard_task_post_id(response: &Value) -> Result<&str> {
     if response.get("status_code").and_then(Value::as_i64) != Some(20000) {
-        bail!("DataForSEO Standard POST top-level status is not successful");
+        return Err(permanent("DataForSEO Standard POST top-level status is not successful"));
     }
-    let tasks = response.get("tasks").and_then(Value::as_array)
+    let tasks = response
+        .get("tasks")
+        .and_then(Value::as_array)
         .context("DataForSEO Standard POST missing tasks")?;
     if tasks.len() != 1 || tasks[0].get("status_code").and_then(Value::as_i64) != Some(20100) {
-        bail!("DataForSEO Standard POST must return one created task (20100)");
+        return Err(permanent("DataForSEO Standard POST must return one created task (20100)"));
     }
-    let task_id = tasks[0].get("id").and_then(Value::as_str)
+    let task_id = tasks[0]
+        .get("id")
+        .and_then(Value::as_str)
         .context("DataForSEO Standard POST task id missing")?;
     if task_id.is_empty()
-        || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        || !task_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
     {
-        bail!("DataForSEO Standard POST malformed task id");
+        return Err(permanent("DataForSEO Standard POST malformed task id"));
     }
     Ok(task_id)
 }
 
 fn standard_task_get_state(response: &Value) -> Result<StandardGetState> {
-    let code = response.get("status_code").and_then(Value::as_i64).unwrap_or_default();
+    let code = response
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
     if code != 20000 {
-        bail!("DataForSEO Standard GET failed top-level status_code={code}");
+        return Err(permanent(format!("DataForSEO Standard GET failed top-level status_code={code}")));
     }
-    let tasks = response.get("tasks").and_then(Value::as_array)
+    let tasks = response
+        .get("tasks")
+        .and_then(Value::as_array)
         .context("DataForSEO Standard GET missing tasks")?;
     if tasks.len() != 1 {
-        bail!("DataForSEO Standard GET expected one task, got {}", tasks.len());
+        return Err(permanent(format!(
+            "DataForSEO Standard GET expected one task, got {}",
+            tasks.len()
+        )));
     }
-    let code = tasks[0].get("status_code").and_then(Value::as_i64).unwrap_or_default();
+    let code = tasks[0]
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
     match code {
         40601 | 40602 => Ok(StandardGetState::Queued),
         20000 => {
             if tasks[0].get("result").and_then(Value::as_array).is_none() {
-                bail!("DataForSEO Standard completed task missing result array");
+                return Err(permanent("DataForSEO Standard completed task missing result array"));
             }
             Ok(StandardGetState::Ready)
         }
-        _ => bail!("DataForSEO Standard task failed status_code={code}"),
+        _ => Err(permanent(format!("DataForSEO Standard task failed status_code={code}"))),
     }
 }
 
@@ -476,7 +513,10 @@ mod tests {
     #[test]
     fn successful_provider_task_accepts_legitimate_empty_results() {
         let empty = json!({"status_code": 20000, "tasks": [{"status_code": 20000, "result": []}]});
-        assert_eq!(standard_task_get_state(&empty).unwrap(), StandardGetState::Ready);
+        assert_eq!(
+            standard_task_get_state(&empty).unwrap(),
+            StandardGetState::Ready
+        );
         assert!(parse_organic_results(&empty).is_empty());
     }
 
@@ -500,6 +540,16 @@ mod tests {
                 StandardGetState::Queued
             );
         }
+    }
+
+    #[test]
+    fn terminal_provider_error_is_typed_non_retryable() {
+        let error = standard_task_get_state(&json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 40101, "result": null}]
+        }))
+        .unwrap_err();
+        assert!(error.downcast_ref::<PermanentSerpError>().is_some());
     }
 
     #[test]

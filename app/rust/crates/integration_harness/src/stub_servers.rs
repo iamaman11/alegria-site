@@ -198,10 +198,12 @@ async fn serve_standard_serp_get(
     let value = idx
         .and_then(|idx| state.replies.get(idx))
         .cloned()
-        .unwrap_or_else(|| serde_json::json!({
-            "status_code": 20000,
-            "tasks": [{"status_code": 40401, "result": null}]
-        }));
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "status_code": 20000,
+                "tasks": [{"status_code": 40401, "result": null}]
+            })
+        });
     (StatusCode::OK, Json(value))
 }
 

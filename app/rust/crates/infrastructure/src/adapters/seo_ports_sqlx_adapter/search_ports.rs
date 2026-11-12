@@ -19,8 +19,16 @@ impl SerpSearchPort for SqlxSeoRuntimeRepository<'_> {
         let response = client
             .google_organic_standard(self.pool, run_id, query)
             .await
-            .map_err(|err| DomainError::InfraUnavailable {
-                message: format!("DataForSEO organic Standard failed: {err}"),
+            .map_err(|err| {
+                let message = format!("DataForSEO organic Standard failed: {err}");
+                if err
+                    .downcast_ref::<dataforseo_serp_adapter::PermanentSerpError>()
+                    .is_some()
+                {
+                    DomainError::ValidationFailure { message }
+                } else {
+                    DomainError::InfraUnavailable { message }
+                }
             })?;
         Ok(Some(OrganicSerpResponse {
             raw_payload_utf8: response.raw_payload_utf8,

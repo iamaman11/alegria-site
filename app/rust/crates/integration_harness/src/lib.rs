@@ -17,8 +17,8 @@ pub struct IntegrationCtx {
 impl IntegrationCtx {
     pub async fn start(dataforseo_payload: Value, openai_payload: Value) -> Result<Self> {
         let dataforseo = stub_servers::spawn_standard_serp_stub(vec![dataforseo_payload])
-        .await
-        .context("start dataforseo stub failed")?;
+            .await
+            .context("start dataforseo stub failed")?;
         let openai = stub_servers::spawn_json_stub("/v1/chat/completions", openai_payload)
             .await
             .context("start openai stub failed")?;
