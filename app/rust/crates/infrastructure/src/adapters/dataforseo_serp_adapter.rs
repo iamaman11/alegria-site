@@ -1,14 +1,16 @@
 use anyhow::{bail, Context, Result};
-use futures::{stream, StreamExt};
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
-use std::{net::IpAddr, time::Duration};
+use sqlx::{types::Json, PgPool, Row};
+use std::{net::IpAddr, time::{Duration, Instant}};
 
 use primitives::url_norm::{domain_norm, url_norm};
 
 use super::reqwest_adapter;
 
-const DEFAULT_ENDPOINT: &str = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
+const DEFAULT_ENDPOINT: &str = "https://api.dataforseo.com/v3/serp/google/organic/task_post";
+const TASK_WAIT: Duration = Duration::from_secs(480);
+const TASK_POLL: Duration = Duration::from_secs(12);
 
 #[derive(Debug, Clone)]
 pub struct DataForSeoConfig {
@@ -88,61 +90,146 @@ impl DataForSeoSerpClient {
         })
     }
 
-    pub async fn google_organic_live_advanced(
-        &self,
-        keyword: &str,
-    ) -> Result<DataForSeoSerpResponse> {
-        let keyword = keyword.trim();
-        if keyword.is_empty() {
+    pub async fn submit_standard_task(&self, keyword: &str) -> Result<Value> {
+        if keyword.trim().is_empty() {
             bail!("DataForSEO keyword is empty");
         }
-
+        if !self.config.endpoint.ends_with("/task_post") {
+            bail!("DataForSEO must use the canonical Google Standard task_post endpoint");
+        }
         let task = json!({
-            "keyword": keyword,
+            "keyword": keyword.trim(),
             "language_code": self.config.language_code,
             "location_code": self.config.location_code,
             "depth": self.config.depth,
+            "priority": 1
         });
-
-        let raw_payload_utf8 = self
+        let posted: Value = self
             .client
             .post(&self.config.endpoint)
             .basic_auth(&self.config.login, Some(&self.config.password))
             .json(&vec![task])
             .send()
             .await
-            .context("send DataForSEO SERP request")?
+            .context("DataForSEO Standard task POST")?
             .error_for_status()
-            .context("DataForSEO SERP HTTP status")?
+            .context("DataForSEO Standard task POST HTTP failure")?
+            .json()
+            .await
+            .context("decode DataForSEO Standard task receipt")?;
+        standard_task_post_id(&posted)?;
+        Ok(posted)
+    }
+
+    /// Keep the paid task receipt in the existing SERP snapshot table.
+    /// Temporal retries reuse it, rather than POSTing a fresh search.
+    pub async fn google_organic_standard(
+        &self,
+        pool: &PgPool,
+        run_id: &str,
+        keyword: &str,
+    ) -> Result<DataForSeoSerpResponse> {
+        if run_id.trim().is_empty() || keyword.trim().is_empty() {
+            bail!("DataForSEO Standard requires run_id and keyword");
+        }
+        let receipt_key = format!(
+            "dataforseo-standard-task-{}",
+            primitives::hash::content_hash_v1(&format!(
+                "{run_id}|{keyword}|{}|{}|{}",
+                self.config.location_code, self.config.language_code, self.config.depth
+            ))
+        );
+        let stored = sqlx::query(
+            "SELECT raw_result FROM serp.raw_snapshots WHERE run_id = $1 AND job_id = $2",
+        )
+        .bind(run_id)
+        .bind(&receipt_key)
+        .fetch_optional(pool)
+        .await
+        .context("read DataForSEO Standard task receipt")?;
+        let task_id = if let Some(row) = stored {
+            let receipt: Json<Value> = row.get("raw_result");
+            standard_task_post_id(&receipt.0)?.to_string()
+        } else {
+            let receipt = self.submit_standard_task(keyword).await?;
+            let task_id = standard_task_post_id(&receipt)?.to_string();
+            sqlx::query(
+                "INSERT INTO serp.raw_snapshots (run_id, job_id, query, raw_result)
+                 VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (run_id, job_id) DO NOTHING",
+            )
+            .bind(run_id)
+            .bind(&receipt_key)
+            .bind(keyword.trim())
+            .bind(Json(receipt))
+            .execute(pool)
+            .await
+            .context("persist DataForSEO paid Standard task receipt")?;
+            task_id
+        };
+        let deadline = Instant::now() + TASK_WAIT;
+        loop {
+            if let Some(result) = self.fetch_standard_task(&task_id).await? {
+                return Ok(result);
+            }
+            if Instant::now() >= deadline {
+                bail!("DataForSEO Standard task {task_id} still queued; task receipt retained");
+            }
+            tokio::time::sleep(TASK_POLL).await;
+        }
+    }
+
+    pub async fn fetch_standard_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<DataForSeoSerpResponse>> {
+        if task_id.is_empty()
+            || !task_id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            bail!("invalid DataForSEO Standard task id");
+        }
+        let prefix = self
+            .config
+            .endpoint
+            .strip_suffix("/task_post")
+            .context("DataForSEO Standard endpoint must end in /task_post")?;
+        let url = format!("{prefix}/task_get/advanced/{task_id}");
+        let raw_payload_utf8 = self
+            .client
+            .get(url)
+            .basic_auth(&self.config.login, Some(&self.config.password))
+            .send()
+            .await
+            .context("GET DataForSEO Standard result")?
+            .error_for_status()
+            .context("DataForSEO Standard GET HTTP failure")?
             .text()
             .await
-            .context("read DataForSEO SERP response")?;
+            .context("read DataForSEO Standard task result")?;
         let raw_json: Value =
-            serde_json::from_str(&raw_payload_utf8).context("parse DataForSEO SERP JSON")?;
-        validate_successful_task_response(&raw_json)?;
-        // DataForSEO may return Google /goto tracking URLs whose identical
-        // google.com host collapses every organic result into one crawl source.
-        // Resolve the provider's HTTP redirect before ranking by domain and
-        // registering evidence. Keep raw_json untouched for audit.
-        let parsed = parse_organic_results(&raw_json);
-        let had_organic = !parsed.is_empty();
-        let organic_results: Vec<_> = stream::iter(parsed)
-            .map(|result| resolve_tracking_result(&self.client, result))
-            .buffered(6)
-            .filter_map(|result| async move { result })
-            .collect()
-            .await;
-        if had_organic && organic_results.is_empty() {
-            bail!(
-                "DataForSEO SERP returned organic links, but none has a usable direct source URL"
-            );
+            serde_json::from_str(&raw_payload_utf8).context("decode Standard result")?;
+        match standard_task_get_state(&raw_json)? {
+            StandardGetState::Queued => Ok(None),
+            StandardGetState::Ready => {
+                let parsed = parse_organic_results(&raw_json);
+                let had_organic = !parsed.is_empty();
+                let organic_results: Vec<_> = parsed
+                    .into_iter()
+                    .filter_map(|item| {
+                        let url = item.url.clone();
+                        apply_direct_source(item, &url)
+                    })
+                    .collect();
+                if had_organic && organic_results.is_empty() {
+                    bail!("DataForSEO Standard returned no validated direct source URL");
+                }
+                Ok(Some(DataForSeoSerpResponse {
+                    raw_json,
+                    raw_payload_utf8,
+                    organic_results,
+                }))
+            }
         }
-
-        Ok(DataForSeoSerpResponse {
-            raw_json,
-            raw_payload_utf8,
-            organic_results,
-        })
     }
 }
 
@@ -190,53 +277,52 @@ fn apply_direct_source(
     Some(result)
 }
 
-async fn resolve_tracking_result(
-    client: &Client,
-    result: DataForSeoOrganicResult,
-) -> Option<DataForSeoOrganicResult> {
-    if !is_google_tracking_url(&result.url) {
-        return Some(result);
-    }
-    // HEAD follows the native HTTP Location chain. Unresolvable tracking
-    // links are skipped, never persisted as google.com evidence.
-    let response = client
-        .head(&result.url)
-        .timeout(Duration::from_secs(12))
-        .send()
-        .await
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    apply_direct_source(result, response.url().as_str())
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StandardGetState {
+    Queued,
+    Ready,
 }
 
-fn validate_successful_task_response(response: &Value) -> Result<()> {
-    let status_code = response
-        .get("status_code")
-        .and_then(Value::as_i64)
-        .unwrap_or_default();
-    if status_code != 20000 {
-        bail!("DataForSEO SERP response failed status_code={status_code}");
+fn standard_task_post_id(response: &Value) -> Result<&str> {
+    if response.get("status_code").and_then(Value::as_i64) != Some(20000) {
+        bail!("DataForSEO Standard POST top-level status is not successful");
     }
-    let tasks = response
-        .get("tasks")
-        .and_then(Value::as_array)
-        .context("DataForSEO SERP response missing tasks")?;
+    let tasks = response.get("tasks").and_then(Value::as_array)
+        .context("DataForSEO Standard POST missing tasks")?;
+    if tasks.len() != 1 || tasks[0].get("status_code").and_then(Value::as_i64) != Some(20100) {
+        bail!("DataForSEO Standard POST must return one created task (20100)");
+    }
+    let task_id = tasks[0].get("id").and_then(Value::as_str)
+        .context("DataForSEO Standard POST task id missing")?;
+    if task_id.is_empty()
+        || !task_id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        bail!("DataForSEO Standard POST malformed task id");
+    }
+    Ok(task_id)
+}
+
+fn standard_task_get_state(response: &Value) -> Result<StandardGetState> {
+    let code = response.get("status_code").and_then(Value::as_i64).unwrap_or_default();
+    if code != 20000 {
+        bail!("DataForSEO Standard GET failed top-level status_code={code}");
+    }
+    let tasks = response.get("tasks").and_then(Value::as_array)
+        .context("DataForSEO Standard GET missing tasks")?;
     if tasks.len() != 1 {
-        bail!("DataForSEO SERP expected one task, got {}", tasks.len());
+        bail!("DataForSEO Standard GET expected one task, got {}", tasks.len());
     }
-    let task_status = tasks[0]
-        .get("status_code")
-        .and_then(Value::as_i64)
-        .unwrap_or_default();
-    if task_status != 20000 {
-        bail!("DataForSEO SERP task failed status_code={task_status}");
+    let code = tasks[0].get("status_code").and_then(Value::as_i64).unwrap_or_default();
+    match code {
+        40601 | 40602 => Ok(StandardGetState::Queued),
+        20000 => {
+            if tasks[0].get("result").and_then(Value::as_array).is_none() {
+                bail!("DataForSEO Standard completed task missing result array");
+            }
+            Ok(StandardGetState::Ready)
+        }
+        _ => bail!("DataForSEO Standard task failed status_code={code}"),
     }
-    if tasks[0].get("result").and_then(Value::as_array).is_none() {
-        bail!("DataForSEO SERP successful task missing results");
-    }
-    Ok(())
 }
 
 fn language_from_locale(locale: &str) -> Option<String> {
@@ -374,7 +460,7 @@ mod tests {
             "status_code": 20000,
             "tasks": [{"status_code": 40501, "status_message": "Invalid Field: location_code", "result": null}]
         });
-        assert!(validate_successful_task_response(&failed)
+        assert!(standard_task_get_state(&failed)
             .unwrap_err()
             .to_string()
             .contains("40501"));
@@ -384,14 +470,36 @@ mod tests {
     #[test]
     fn provider_top_level_failure_is_rejected() {
         let failed = json!({"status_code": 50000, "tasks": []});
-        assert!(validate_successful_task_response(&failed).is_err());
+        assert!(standard_task_get_state(&failed).is_err());
     }
 
     #[test]
     fn successful_provider_task_accepts_legitimate_empty_results() {
         let empty = json!({"status_code": 20000, "tasks": [{"status_code": 20000, "result": []}]});
-        assert!(validate_successful_task_response(&empty).is_ok());
+        assert_eq!(standard_task_get_state(&empty).unwrap(), StandardGetState::Ready);
         assert!(parse_organic_results(&empty).is_empty());
+    }
+
+    #[test]
+    fn normal_priority_standard_post_and_queued_get_are_distinct() {
+        let receipt = json!({"status_code": 20000, "tasks": [{
+            "id": "11122152-3107-0066-0000-2f0ad56279d1", "status_code": 20100
+        }]});
+        assert_eq!(
+            standard_task_post_id(&receipt).unwrap(),
+            "11122152-3107-0066-0000-2f0ad56279d1"
+        );
+        for code in [40601, 40602] {
+            assert_eq!(
+                standard_task_get_state(&json!({
+                    "status_code": 20000, "tasks": [{
+                        "status_code": code, "result": null
+                    }]
+                }))
+                .unwrap(),
+                StandardGetState::Queued
+            );
+        }
     }
 
     #[test]

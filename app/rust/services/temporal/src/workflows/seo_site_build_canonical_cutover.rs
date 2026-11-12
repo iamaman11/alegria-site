@@ -132,7 +132,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     scope: Some(scope.clone()),
                     queries: site_input.queries.clone(),
                 },
-                db_opts(30),
+                db_opts(1800),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;

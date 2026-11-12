@@ -208,8 +208,9 @@ pub trait RebuildRepository: Send + Sync {
 
 #[async_trait]
 pub trait SerpSearchPort: Send + Sync {
-    async fn fetch_google_organic_live_advanced(
+    async fn fetch_google_organic_standard(
         &self,
+        run_id: &str,
         locale: Option<&str>,
         query: &str,
     ) -> Result<Option<OrganicSerpResponse>, DomainError>;
