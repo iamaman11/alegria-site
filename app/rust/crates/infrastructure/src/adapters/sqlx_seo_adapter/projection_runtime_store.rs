@@ -199,6 +199,9 @@ pub struct VerifiedTruthCandidateWrite {
     pub span_end: i32,
     pub source_key: String,
     pub source_snapshot_hash: String,
+    pub provider_key: String,
+    pub model_key: String,
+    pub prompt_version: String,
     pub epistemic_status: String,
 }
 
@@ -218,7 +221,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
          VALUES (
              $1, $2, $3, $4, $5, $6, $7, $19, $8, '[]'::jsonb,
              '', '', '[]'::jsonb, '', 'direct', $9, false, $10, $11, $12,
-             $13, $14, $15, $16, $17, 'deterministic', 'cutover-runtime', 'cutover@1', $18, '[]'::jsonb
+             $13, $14, $15, $16, $17, $20, $21, $22, $18, '[]'::jsonb
          )
          ON CONFLICT (rule_candidate_id) DO UPDATE
          SET role = EXCLUDED.role,
@@ -261,6 +264,9 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.source_snapshot_hash)
     .bind(&candidate.epistemic_status)
     .bind(Json::<Value>(candidate.scope.clone()))
+    .bind(&candidate.provider_key)
+    .bind(&candidate.model_key)
+    .bind(&candidate.prompt_version)
     .execute(pool)
     .await
     .map_err(classify_sqlx)?;
