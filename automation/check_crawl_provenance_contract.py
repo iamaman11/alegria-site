@@ -9,6 +9,7 @@ RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 PORTS = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
 SERP = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_serp_adapter.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
+RAW_TYPES = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/types.rs"
 
 
 def read_with_includes(path: Path) -> str:
@@ -29,6 +30,7 @@ def main() -> int:
     raw = read_with_includes(RAW)
     ports = read_with_includes(PORTS)
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    raw_types = RAW_TYPES.read_text(encoding="utf-8")
     serp = SERP.read_text(encoding="utf-8")
 
     failures: list[str] = []
@@ -65,6 +67,15 @@ def main() -> int:
     ]:
         if needle not in raw and needle not in ports:
             failures.append(f"provenance contract missing `{needle}`")
+
+    for needle in ["MAX_RAW_SECTION_BYTES", "MAX_CONTEXTUAL_GROUP_BYTES", "HtmlSection"]:
+        if needle not in raw_types:
+            failures.append(f"retrieval-safe section contract missing `{needle}`")
+    for needle in ["bounded_raw_sections(", "contextual_section_groups(", ".flatten()", "raw section embedding failed:"]:
+        if needle not in (raw + ports):
+            failures.append(f"oversized contextual embedding handling missing `{needle}`")
+    if "limit: 5" not in workflow or workflow.count("db_opts(600)") < 2:
+        failures.append("crawl activity must fit a bounded network/embedding timeout")
 
     # A URL completed by a prior run must be eligible again in a fresh run;
     # otherwise all overlapping top-ten competitors disappear from that run.

@@ -199,6 +199,47 @@ pub async fn evaluate_robots_policy(source_url: &str) -> Result<RobotsDecisionTr
     Ok(trace)
 }
 
+// Preserve the complete crawled HTML and all section text, but never send a
+// single unbounded HTML section to the Voyage embedding API. A long section
+// becomes ordered raw.sections with the same heading provenance.
+fn bounded_raw_sections(sections: Vec<HtmlSection>) -> Vec<HtmlSection> {
+    let mut bounded = Vec::new();
+    for section in sections {
+        let text = section.content_md.as_str();
+        if text.is_empty() {
+            let mut part = section.clone();
+            part.section_order = bounded.len();
+            bounded.push(part);
+            continue;
+        }
+        let mut start = 0;
+        while start < text.len() {
+            let mut end = (start + MAX_RAW_SECTION_BYTES).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end < text.len() {
+                // Prefer a word boundary without omitting whitespace or text.
+                if let Some((offset, separator)) = text[start..end]
+                    .char_indices()
+                    .rev()
+                    .find(|(offset, ch)| *offset >= MAX_RAW_SECTION_BYTES / 2 && ch.is_whitespace())
+                {
+                    end = start + offset + separator.len_utf8();
+                }
+            }
+            let chunk = &text[start..end];
+            let mut part = section.clone();
+            part.section_order = bounded.len();
+            part.content_md = chunk.to_string();
+            part.content_hash = content_hash_v1(chunk);
+            bounded.push(part);
+            start = end;
+        }
+    }
+    bounded
+}
+
 pub async fn save_crawled_html(
     pool: &PgPool,
     source_url: &str,
@@ -212,7 +253,7 @@ pub async fn save_crawled_html(
     robots_trace: &RobotsDecisionTrace,
 ) -> std::result::Result<SavedRawPage, primitives::errors::DomainError> {
     let meta = extract_meta_typed(raw_html);
-    let sections = extract_sections_typed(raw_html, source_url);
+    let sections = bounded_raw_sections(extract_sections_typed(raw_html, source_url));
     let content_hash = content_hash_v1(raw_html);
     let domain = if source_domain.trim().is_empty() {
         domain_norm(source_url)

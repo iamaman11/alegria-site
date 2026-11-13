@@ -71,12 +71,39 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                     {
                         Ok(saved) => {
                             let emitted = if input.emit_qdrant {
-                                raw_crawl_adapter::emit_raw_section_qdrant_events(
+                                match raw_crawl_adapter::emit_raw_section_qdrant_events(
                                     self.pool,
                                     &input.run_id,
                                     saved.page_id,
                                 )
-                                .await?
+                                .await
+                                {
+                                    Ok(emitted) => emitted,
+                                    Err(err) => {
+                                        let error = format!("raw section embedding failed: {err}");
+                                        if raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count) {
+                                            raw_crawl_adapter::mark_crawl_retry(
+                                                self.pool,
+                                                &item.url_norm,
+                                                Some(fetched.status_code),
+                                                &error,
+                                                item.attempt_count,
+                                            )
+                                            .await?;
+                                        } else {
+                                            raw_crawl_adapter::mark_crawl_failed(
+                                                self.pool,
+                                                &item.url_norm,
+                                                Some(fetched.status_code),
+                                                &error,
+                                            )
+                                            .await?;
+                                            failed_count += 1;
+                                            failed_urls.push(item.url.clone());
+                                        }
+                                        continue;
+                                    }
+                                }
                             } else {
                                 0
                             };

@@ -16,7 +16,7 @@ use policies::truth_governance::{
 };
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
-use primitives::html_sections::{extract_meta_typed, extract_sections_typed};
+use primitives::html_sections::{extract_meta_typed, extract_sections_typed, HtmlSection};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use primitives::truth_candidates::{
     validate_truth_candidate, TruthCandidateRuntime, TruthParamValue, TruthStructuredCandidate,
@@ -36,6 +36,9 @@ use super::voyage_api_adapter::{
 const CRAWL_USER_AGENT: &str = "AlegriaBot/1.0 (+https://alegria.local/seo-research)";
 const MAX_REDIRECT_HOPS: usize = 10;
 const MAX_CRAWL_ATTEMPTS: i32 = 4;
+// Byte budgets bound even multilingual text below Voyage context windows.
+const MAX_RAW_SECTION_BYTES: usize = 8 * 1024;
+const MAX_CONTEXTUAL_GROUP_BYTES: usize = 20 * 1024;
 const RAW_CHUNKS_STANDARD_COLLECTION: &str = "raw_chunks_4";
 const RAW_CHUNKS_CONTEXT_COLLECTION: &str = "raw_chunks_ctx";
 const DEFAULT_VOYAGE_STANDARD_MODEL: &str = "voyage-4-large";

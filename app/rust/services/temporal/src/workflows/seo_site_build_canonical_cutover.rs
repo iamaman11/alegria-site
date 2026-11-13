@@ -142,14 +142,14 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         let crawl_input = CrawlSourcesInputPayload {
             run_id: run_id.clone(),
             query_batch_key: ingest.query_batch_key.clone(),
-            limit: 25,
+            limit: 5,
             emit_qdrant: true,
         };
         let mut crawled = ctx
             .start_activity(
                 AlegriaActivities::run_crawl_sources_step,
                 crawl_input.clone(),
-                db_opts(120),
+                db_opts(600),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -166,7 +166,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 .start_activity(
                     AlegriaActivities::run_crawl_sources_step,
                     crawl_input.clone(),
-                    db_opts(120),
+                    db_opts(600),
                 )
                 .await?;
             if crawled.status == "more" && next.claimed_count == 0 {
