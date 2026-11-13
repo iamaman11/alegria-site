@@ -184,6 +184,36 @@ pub fn extract_meta_typed(html: &str) -> HtmlMeta {
     }
 }
 
+
+/// Some official sites put the H1 in a title wrapper and the actual article
+/// in the wrapper's *sibling*, not next to the H1 itself. If the heading
+/// traversal yielded no usable sections, recover visible article text from a
+/// semantic main-content container. Never fall back to all DOM text here:
+/// navigation and footers are not legal evidence.
+fn fallback_main_article_text(document: &Html) -> Option<String> {
+    for css in [
+        "main .single__text",
+        "main article",
+        "article",
+        "[role='main'] .single__text",
+        ".ms-rtestate-field",
+        "main",
+        "[role='main']",
+    ] {
+        let selector = Selector::parse(css).ok()?;
+        for element in document.select(&selector) {
+            let node = document.tree.get(element.id())?;
+            let mut parts = Vec::new();
+            collect_text_dfs(node, &mut parts);
+            let text = parts.join("\n").trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
 /// Extract sections from HTML.
 pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
     let document = Html::parse_document(html);
@@ -238,6 +268,28 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
         }
     }
 
+    // An H1 nested in a title wrapper can have no direct sibling text even
+    // though a real article follows in main. Preserve its heading provenance
+    // and only include the scoped visible article, never script/nav/footer.
+    if sections.is_empty() && !headings.is_empty() {
+        if let Some(text) = fallback_main_article_text(&document) {
+            let (tag, heading, _) = headings
+                .iter()
+                .find(|(tag, heading, _)| tag == "h1" && !heading.is_empty())
+                .or_else(|| headings.iter().find(|(_, heading, _)| !heading.is_empty()))
+                .expect("nonempty headings or no scoped article");
+            let hash = content_hash_v1(&text);
+            sections.push(HtmlSection {
+                heading_path: heading.clone(),
+                heading_level: heading_level(tag),
+                section_order: 0,
+                section_type: identify_section_type(heading).to_string(),
+                content_md: text,
+                content_hash: hash,
+            });
+        }
+    }
+
     sections
 }
 
@@ -270,6 +322,37 @@ mod visible_text_tests {
             meta.word_count < 30,
             "scripts/styles must not inflate word count"
         );
+    }
+
+
+    #[test]
+    fn wrapped_official_heading_recovers_only_article_body() {
+        // Real Spanish consular pages wrap the H1 in a distinct title DIV;
+        // the next sibling of that wrapper contains the substantive content.
+        let html = r#"<html lang="ru"><body>
+          <nav><a>Главная Страница меню, не доказательство</a></nav>
+          <main>
+            <div class="section__header-title">
+              <h1>Условия въезда в Испанию</h1>
+            </div>
+            <div class="single__text"><div>
+              <p>Граждане третьих стран могут находиться в Испании до 90 дней.</p>
+              <script>window.fake_rule = "600 дней"</script>
+              <p>Для отдельных случаев действуют дополнительные условия.</p>
+            </div></div>
+          </main>
+          <footer>Услуги и контакты</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://www.exteriores.gob.es/");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading_path, "Условия въезда в Испанию");
+        assert_eq!(sections[0].section_type, "eligibility");
+        assert!(sections[0].content_md.contains("до 90 дней"));
+        assert!(sections[0].content_md.contains("дополнительные условия"));
+        assert!(!sections[0].content_md.contains("Главная Страница"));
+        assert!(!sections[0].content_md.contains("Услуги и контакты"));
+        assert!(!sections[0].content_md.contains("600 дней"));
+        assert_eq!(sections[0].content_hash, content_hash_v1(&sections[0].content_md));
     }
 
     #[test]
