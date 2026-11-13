@@ -199,6 +199,9 @@ pub(crate) async fn candidate_validation_impl(
                 span_start: runtime.span_start,
                 span_end: runtime.span_end,
                 source_snapshot_hash: runtime.source_snapshot_hash,
+                provider_key: "deterministic".to_string(),
+                model_key: "cutover-runtime".to_string(),
+                prompt_version: "cutover@1".to_string(),
                 freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
                 completeness_class: classify_candidate_completeness_local(&validation),
                 epistemic_status,
@@ -231,6 +234,9 @@ pub(crate) async fn candidate_validation_impl(
                     message: format!("manual truth evidence snapshot changed: {}", raw.id),
                 });
             }
+            let provider_key = response.provider_key.clone();
+            let model_key = response.model_key.clone();
+            let prompt_version = response.prompt_version.clone();
             for (ordinal, rule) in response.candidates.into_iter().enumerate() {
                 let (params, scope) =
                     infrastructure::adapters::manual_llm_queue::validated_candidate_values(&rule)?;
@@ -298,6 +304,9 @@ pub(crate) async fn candidate_validation_impl(
                     span_start: runtime.span_start,
                     span_end: runtime.span_end,
                     source_snapshot_hash: runtime.source_snapshot_hash,
+                    provider_key: provider_key.clone(),
+                    model_key: model_key.clone(),
+                    prompt_version: prompt_version.clone(),
                     freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
                     completeness_class: classify_candidate_completeness_local(&validation),
                     epistemic_status,
