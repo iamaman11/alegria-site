@@ -225,14 +225,10 @@ if (-not $newImage) {
     throw 'Candidate build has no verifiable image ID'
 }
 
-# Reconcile only terminal executions from the authoritative Temporal server.
-# Use the candidate's existing Rust CLI in a disposable Compose run; the old
-# installed worker may predate this command. No parallel service is created.
-if ($Service -eq 'temporal-worker') {
-    & $docker @newArgs run --rm --no-deps --entrypoint /usr/local/bin/temporal_starter $Service --temporal-url http://alegria_temporal:7233 run-reconcile
-} else {
-    & $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter --temporal-url http://alegria_temporal:7233 run-reconcile
-}
+# Reconcile terminal executions through the already-running canonical Rust
+# worker, without creating/attaching a second Compose container on Windows.
+# The accepted installed worker owns the same stable Temporal readback CLI.
+& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter --temporal-url http://alegria_temporal:7233 run-reconcile
 Assert-Exit 'Temporal terminal-run reconciliation'
 # Only genuinely active or unrecognised runs may block replacement.
 $activeCount = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c "SELECT count(*) FROM pipeline.execution_runs WHERE status NOT IN ('done','failed');" | Out-String).Trim()

@@ -79,6 +79,10 @@ def check(script: str) -> None:
     recreate = script.index("$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs")
     rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
     assert recovery < compare < preserve < rollback_image < guard < candidate_build < recreate
+    assert "& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter" in script
+    assert " @newArgs run --rm --no-deps" not in script, (
+        "terminal-run reconciliation must reuse the running worker, not a temporary Compose run"
+    )
     reconcile = script.index("Assert-Exit 'Temporal terminal-run reconciliation'")
     active_guard = script.index("if ($activeCount -ne '0')")
     assert candidate_build < reconcile < active_guard < recreate, (
