@@ -674,7 +674,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     entity_spans: entity_spans.clone(),
                     procedural: procedural.clone(),
                 },
-                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -689,7 +689,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     schema_validate: schema_validate.clone(),
                     completeness: completeness.clone(),
                 },
-                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -704,7 +704,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     procedural: procedural.clone(),
                     candidate_validation: candidate_validation.clone(),
                 },
-                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
