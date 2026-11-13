@@ -92,7 +92,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
         if !linkable_state(&source.lifecycle_state) {
             continue;
         }
-        let mut added = 0usize;
+        let mut candidates = Vec::new();
         for target in &input.page_nodes {
             if source.page_node_key == target.page_node_key {
                 continue;
@@ -105,9 +105,6 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
             else {
                 continue;
             };
-            if !required_flag && added >= max_links {
-                break;
-            }
             let same_scope = source.scope_signature == target.scope_signature;
             if !same_scope && required_flag {
                 continue;
@@ -138,7 +135,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
             } else {
                 (base_score * 0.42) + (semantic * 0.13) + (graph_bonus * 0.5)
             });
-            link_recommendations.push(LinkRecommendationState {
+            candidates.push(LinkRecommendationState {
                 link_recommendation_key: artifact_key(
                     "link_recommendation",
                     &[
@@ -176,10 +173,21 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
                 },
                 support_refs: Vec::new(),
             });
-            if !required_flag {
-                added += 1;
-            }
         }
+        // Graph affinity must influence WHICH optional links are selected,
+        // not merely annotate whichever first pages happened to be in the input.
+        let mut optional = candidates
+            .iter()
+            .filter(|link| !link.required_flag)
+            .cloned()
+            .collect::<Vec<_>>();
+        optional.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.target_page_key.cmp(&b.target_page_key))
+        });
+        link_recommendations.extend(candidates.into_iter().filter(|link| link.required_flag));
+        link_recommendations.extend(optional.into_iter().take(max_links));
     }
 
     LinkRecommendOutputPayload {
@@ -239,5 +247,80 @@ mod tests {
                 && link.target_page_key == "target"
                 && link.reason_code == "graph_topic_adjacency"
         }));
+    }
+
+    #[test]
+    fn changing_graph_topic_adjacency_changes_selected_optional_link() {
+        use contracts::generated::alegria::temporal::v1::{KeywordClusterState, PageNodeState};
+
+        let page = |key: &str, cluster: &str, path: &str| PageNodeState {
+            page_node_key: key.to_string(),
+            scope_signature: "scope".to_string(),
+            page_type_key: "detail_page".to_string(),
+            keyword_cluster_key: cluster.to_string(),
+            canonical_url_path: path.to_string(),
+            canonical_url_family: "visa_type_leaf".to_string(),
+            lifecycle_state: "planned".to_string(),
+            ..Default::default()
+        };
+        let mut input = LinkRecommendInputPayload {
+            max_links_per_page: 1,
+            page_nodes: vec![
+                page("source", "cluster-source", "/visas/spain/start"),
+                page("alpha-other", "cluster-other", "/visas/spain/other"),
+                page("zeta-related", "cluster-related", "/visas/spain/related"),
+            ],
+            graph_context: Some(GraphPlanningContextState {
+                keyword_clusters: vec![
+                    KeywordClusterState {
+                        cluster_key: "cluster-source".to_string(),
+                        topic_keys: vec!["shared_topic".to_string()],
+                        ..Default::default()
+                    },
+                    KeywordClusterState {
+                        cluster_key: "cluster-other".to_string(),
+                        topic_keys: vec!["unrelated_topic".to_string()],
+                        ..Default::default()
+                    },
+                    KeywordClusterState {
+                        cluster_key: "cluster-related".to_string(),
+                        topic_keys: vec!["shared_topic".to_string()],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let first = execute(&input);
+        let selected = first
+            .link_recommendations
+            .iter()
+            .filter(|link| link.source_page_key == "source")
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].target_page_key, "zeta-related");
+        assert_eq!(selected[0].reason_code, "graph_topic_adjacency");
+
+        // With the graph relationship removed, the same paths and page order
+        // select the stable structural candidate instead.
+        input.graph_context = None;
+        let without_graph = execute(&input);
+        let selected = without_graph
+            .link_recommendations
+            .iter()
+            .filter(|link| link.source_page_key == "source")
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].target_page_key, "alpha-other");
+
+        input.page_nodes.swap(1, 2);
+        let reordered = execute(&input);
+        let selected = reordered
+            .link_recommendations
+            .iter()
+            .find(|link| link.source_page_key == "source")
+            .unwrap();
+        assert_eq!(selected.target_page_key, "alpha-other");
     }
 }
