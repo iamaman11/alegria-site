@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use infrastructure::adapters::temporalio_sdk_adapter::{
-    connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowGetResultOptions,
+    connect_client, Client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
 };
 use infrastructure::adapters::{
-    neo4rs_adapter, qdrant_client_adapter,
+    neo4rs_adapter, qdrant_client_adapter, sqlx_execution_runs_adapter,
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
     sqlx_seo_adapter,
@@ -20,6 +20,7 @@ use seo_application::registration::register_site_build_input;
 use seo_domain::identity;
 use seo_ports::SeoSiteBuildRegistrationRequest;
 use serde_json::{json, Value};
+use temporalio_client::{WorkflowDescribeOptions, WorkflowExecutionStatus};
 use sqlx::{types::Json, Row};
 use std::collections::BTreeMap;
 use std::env;
@@ -168,6 +169,11 @@ enum Command {
     WorkflowWait {
         #[arg(long)]
         workflow_id: String,
+    },
+    /// Compare unfinished business runs with Temporal and close only verified terminal runs.
+    RunReconcile {
+        #[arg(long)]
+        database_url: Option<String>,
     },
 }
 
