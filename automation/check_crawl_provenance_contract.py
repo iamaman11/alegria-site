@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 PORTS = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+SERP = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_serp_adapter.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
 
 
@@ -28,6 +29,7 @@ def main() -> int:
     raw = read_with_includes(RAW)
     ports = read_with_includes(PORTS)
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    serp = SERP.read_text(encoding="utf-8")
 
     failures: list[str] = []
 
@@ -64,6 +66,20 @@ def main() -> int:
         if needle not in raw and needle not in ports:
             failures.append(f"provenance contract missing `{needle}`")
 
+    # A URL completed by a prior run must be eligible again in a fresh run;
+    # otherwise all overlapping top-ten competitors disappear from that run.
+    organic_upsert = serp.split("pub async fn save_dataforseo_organic_results_and_enqueue(", 1)[-1].split(
+        "pub async fn enqueue_crawl(", 1
+    )[0]
+    for needle in [
+        "serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id",
+        "serp.crawl_queue.locked_until > now()",
+        "locked_until = CASE",
+        "crawl_attempt_count = CASE",
+        "ELSE 0",
+    ]:
+        if needle not in organic_upsert:
+            failures.append(f"cross-run top-ten recrawl incomplete: missing `{needle}`")
     # Regression: same-domain documents and >25 unique URLs must not disappear.
     crawl_claim = raw.split("pub async fn claim_pending_crawl_batch(", 1)[-1].split(
         "pub async fn crawl_queue_backlog(", 1
