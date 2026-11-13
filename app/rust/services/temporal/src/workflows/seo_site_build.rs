@@ -150,6 +150,7 @@ impl SeoSiteBuildWorkflow {
                                         query_batch_key: ingest_ref.query_batch_key.clone(),
                                         limit: 25,
                                         emit_qdrant: true,
+                                        sweep_index: 0,
                                     },
                                     db_opts(120),
                                 )

@@ -71,6 +71,7 @@ async fn crawl_pending_sources(
             query_batch_key,
             limit: limit as u32,
             emit_qdrant,
+            sweep_index: 0,
         },
     )
     .await?;

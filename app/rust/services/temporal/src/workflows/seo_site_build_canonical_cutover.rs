@@ -57,6 +57,16 @@ pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
 }
 include!("seo_site_build_canonical_cutover/helpers.rs");
 include!("seo_site_build_canonical_cutover/page_publish.rs");
+ 
+// Every claimed batch has a different persisted step identity. Reusing the
+// same input would replay the first completed step and spin the workflow.
+fn advance_crawl_sweep(input: &mut CrawlSourcesInputPayload) -> WorkflowResult<()> {
+    input.sweep_index = input.sweep_index.checked_add(1).ok_or_else(|| {
+        super::runtime::workflow_contract_failure("crawl sweep index exhausted")
+    })?;
+    Ok(())
+}
+
 
 #[workflow_methods]
 impl SeoSiteBuildCanonicalCutoverWorkflow {
@@ -139,11 +149,12 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
-        let crawl_input = CrawlSourcesInputPayload {
+        let mut crawl_input = CrawlSourcesInputPayload {
             run_id: run_id.clone(),
             query_batch_key: ingest.query_batch_key.clone(),
             limit: 5,
             emit_qdrant: true,
+            sweep_index: 0,
         };
         let mut crawled = ctx
             .start_activity(
@@ -162,6 +173,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 ctx.timer(Duration::from_secs(60)).await;
                 ctx.wait_condition(|s| !s.paused).await?;
             }
+            advance_crawl_sweep(&mut crawl_input)?;
             let next = ctx
                 .start_activity(
                     AlegriaActivities::run_crawl_sources_step,
@@ -1014,5 +1026,44 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             phase: self.phase.clone(),
             paused: self.paused,
         }
+    }
+}
+
+#[cfg(test)]
+mod crawl_batch_identity_tests {
+    use super::*;
+
+    #[test]
+    fn successive_crawl_batches_have_distinct_durable_step_keys() {
+        let mut input = CrawlSourcesInputPayload {
+            run_id: "test-run".to_string(),
+            query_batch_key: "test-batch".to_string(),
+            limit: 5,
+            emit_qdrant: true,
+            sweep_index: 0,
+        };
+        let initial = infrastructure::adapters::sqlx_pipeline_runtime_adapter::derive_step_keys(
+            &input.run_id,
+            "crawl_sources",
+            1,
+            &input,
+        )
+        .expect("initial keys");
+        assert!(advance_crawl_sweep(&mut input).is_ok());
+        let next = infrastructure::adapters::sqlx_pipeline_runtime_adapter::derive_step_keys(
+            &input.run_id,
+            "crawl_sources",
+            1,
+            &input,
+        )
+        .expect("next keys");
+        assert_ne!(initial.1, next.1, "a new batch must not replay a cached crawl result");
+        assert_eq!(input.sweep_index, 1);
+        assert_eq!(input.query_batch_key, "test-batch");
+        assert_eq!(input.limit, 5);
+        assert!(input.emit_qdrant);
+
+        input.sweep_index = u32::MAX;
+        assert!(advance_crawl_sweep(&mut input).is_err());
     }
 }
