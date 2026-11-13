@@ -5,32 +5,24 @@ pub async fn claim_pending_crawl_batch(
     limit: i64,
 ) -> std::result::Result<Vec<CrawlQueueItem>, primitives::errors::DomainError> {
     let rows = sqlx::query(
-        "WITH per_domain AS (
-             SELECT DISTINCT ON (coalesce(nullif(source_domain, ''), url_norm))
-                    url_norm,
-                    first_seen_at,
-                    CASE
-                        WHEN dtype IN ('official', 'government') THEN 0
-                        WHEN dtype IN ('vfs', 'delegated_authority', 'official_publisher') THEN 1
-                        WHEN dtype IN ('agency', 'editorial') THEN 3
-                        WHEN dtype IN ('forum') THEN 4
-                        ELSE 2
-                    END AS source_priority
+        "WITH candidates AS (
+             SELECT url_norm
              FROM serp.crawl_queue
              WHERE status = 'pending'
                AND ($2 = '' OR first_seen_run_id = $2)
                AND ($3 = '' OR query_batch_key = $3)
                AND next_attempt_at <= now()
                AND (locked_until IS NULL OR locked_until <= now())
-             ORDER BY coalesce(nullif(source_domain, ''), url_norm), source_priority, first_seen_at
-         ),
-         candidates AS (
-             SELECT q.url_norm
-             FROM serp.crawl_queue q
-             JOIN per_domain d ON d.url_norm = q.url_norm
-             ORDER BY d.source_priority, q.first_seen_at
+             ORDER BY CASE
+                          WHEN dtype IN ('official', 'government') THEN 0
+                          WHEN dtype IN ('vfs', 'delegated_authority', 'official_publisher') THEN 1
+                          WHEN dtype IN ('agency', 'editorial') THEN 3
+                          WHEN dtype = 'forum' THEN 4
+                          ELSE 2
+                      END,
+                      first_seen_at, url_norm
              LIMIT $1
-             FOR UPDATE OF q SKIP LOCKED
+             FOR UPDATE SKIP LOCKED
          )
          UPDATE serp.crawl_queue q
          SET status = 'processing',
@@ -60,6 +52,31 @@ pub async fn claim_pending_crawl_batch(
             attempt_count: row.get("crawl_attempt_count"),
         })
         .collect())
+}
+
+/// Unresolved URLs for this run, including delayed retries and outstanding leases.
+/// No queued document is silently treated as completed.
+pub async fn crawl_queue_backlog(
+    pool: &PgPool,
+    run_id: &str,
+    query_batch_key: &str,
+) -> std::result::Result<(i64, i64), primitives::errors::DomainError> {
+    let row = sqlx::query(
+        "SELECT count(*) FILTER (
+                    WHERE status = 'pending'
+                      AND next_attempt_at <= now()
+                      AND (locked_until IS NULL OR locked_until <= now())
+                ) AS ready_count,
+                count(*) FILTER (WHERE status IN ('pending', 'processing')) AS unresolved_count
+         FROM serp.crawl_queue
+         WHERE first_seen_run_id = $1 AND query_batch_key = $2",
+    )
+    .bind(run_id)
+    .bind(query_batch_key)
+    .fetch_one(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok((row.get("ready_count"), row.get("unresolved_count")))
 }
 
 pub async fn fetch_html(url: &str) -> Result<FetchedHtml> {

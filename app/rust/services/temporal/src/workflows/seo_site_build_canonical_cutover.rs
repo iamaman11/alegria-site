@@ -138,19 +138,62 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "crawl_sources".to_string());
-        let crawled = ctx
+        let crawl_input = CrawlSourcesInputPayload {
+            run_id: run_id.clone(),
+            query_batch_key: ingest.query_batch_key.clone(),
+            limit: 25,
+            emit_qdrant: true,
+        };
+        let mut crawled = ctx
             .start_activity(
                 AlegriaActivities::run_crawl_sources_step,
-                CrawlSourcesInputPayload {
-                    run_id: run_id.clone(),
-                    query_batch_key: ingest.query_batch_key.clone(),
-                    limit: 25,
-                    emit_qdrant: true,
-                },
+                crawl_input.clone(),
                 db_opts(120),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
+        // Keep one durable workflow and claim all URLs, including multiple pages
+        // from the same domain. A single 25-item activity is not full coverage.
+        while crawled.status == "more" {
+            let next = ctx
+                .start_activity(
+                    AlegriaActivities::run_crawl_sources_step,
+                    crawl_input.clone(),
+                    db_opts(120),
+                )
+                .await?;
+            if next.claimed_count == 0 {
+                return Err(super::runtime::workflow_contract_failure(
+                    "crawl backlog is not claimable",
+                ));
+            }
+            crawled.claimed_count = crawled.claimed_count.saturating_add(next.claimed_count);
+            crawled.crawled_count = crawled.crawled_count.saturating_add(next.crawled_count);
+            crawled.failed_count = crawled.failed_count.saturating_add(next.failed_count);
+            crawled.raw_page_count = crawled.raw_page_count.saturating_add(next.raw_page_count);
+            crawled.raw_section_count = crawled.raw_section_count.saturating_add(next.raw_section_count);
+            crawled.qdrant_event_count = crawled.qdrant_event_count.saturating_add(next.qdrant_event_count);
+            crawled.raw_page_ids.extend(next.raw_page_ids);
+            crawled.failed_urls.extend(next.failed_urls);
+            crawled.status = next.status;
+            ctx.wait_condition(|s| !s.paused).await?;
+        }
+        if crawled.status == "pending_retry" {
+            return Ok(block_execution_plan_invariant(
+                ctx,
+                &run_id,
+                "crawl_unresolved_pending_retry",
+            ));
+        }
+        if crawled.status != "done" && crawled.status != "partial" {
+            return Err(super::runtime::workflow_contract_failure(format!(
+                "unexpected crawl completion status: {}",
+                crawled.status
+            )));
+        }
+        if crawled.failed_count > 0 {
+            crawled.status = "partial".to_string();
+        }
 
         ctx.state_mut(|s| s.phase = "whole_page_semantic_pass".to_string());
         let semantic = ctx
@@ -450,6 +493,101 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
 
+        // The competitor corpus and its topic graph can plan non-publishable
+        // pages before legal/procedural claims are verified. The existing
+        // truth, projection, HITL and publish gates remain downstream.
+        ctx.state_mut(|s| s.phase = "triple_builder".to_string());
+        let triples = ctx
+            .start_activity(
+                AlegriaActivities::run_triple_builder_sweep_step,
+                TripleBuilderSweepInput {
+                    run_id: run_id.clone(),
+                    procedural: procedural.clone(),
+                    operational: operational.clone(),
+                    editorial: editorial.clone(),
+                },
+                db_opts(60),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "serp_normalize".to_string());
+        let serp_normalize = ctx
+            .start_activity(
+                AlegriaActivities::run_serp_normalize_step,
+                SerpNormalizeInputPayload {
+                    run_id: run_id.clone(),
+                    query_batch_key: ingest.query_batch_key.clone(),
+                    scope: Some(scope.clone()),
+                    queries: site_input.queries.clone(),
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "opportunity_build".to_string());
+        let opportunity_build = ctx
+            .start_activity(
+                AlegriaActivities::run_opportunity_build_step,
+                OpportunityBuildInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    serp_patterns: serp_normalize.serp_patterns.clone(),
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "ia_build".to_string());
+        let ia_build = ctx
+            .start_activity(
+                AlegriaActivities::run_ia_build_step,
+                IaBuildInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    keyword_clusters: opportunity_build.keyword_clusters.clone(),
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "link_recommend".to_string());
+        let link_recommend = ctx
+            .start_activity(
+                AlegriaActivities::run_link_recommend_step,
+                LinkRecommendInputPayload {
+                    run_id: run_id.clone(),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    max_links_per_page: 3,
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
+        let global_site_reconcile = ctx
+            .start_activity(
+                AlegriaActivities::run_global_site_reconcile_step,
+                GlobalSiteReconcileInputPayload {
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    link_recommendations: link_recommend.link_recommendations.clone(),
+                    reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
         let validation_input = CandidateValidationInput {
             run_id: run_id.clone(),
             context_key: site_input.context_key.clone(),
@@ -499,21 +637,6 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .start_activity(
                 AlegriaActivities::run_candidate_validation_step,
                 validation_input,
-                db_opts(60),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "triple_builder".to_string());
-        let triples = ctx
-            .start_activity(
-                AlegriaActivities::run_triple_builder_sweep_step,
-                TripleBuilderSweepInput {
-                    run_id: run_id.clone(),
-                    procedural: procedural.clone(),
-                    operational: operational.clone(),
-                    editorial: editorial.clone(),
-                },
                 db_opts(60),
             )
             .await?;
@@ -647,83 +770,6 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 ProjectionBarrierAuditInputPayload {
                     run_id: run_id.clone(),
                     checkpoint: "projection_barrier(semantic_projection)".to_string(),
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "serp_normalize".to_string());
-        let serp_normalize = ctx
-            .start_activity(
-                AlegriaActivities::run_serp_normalize_step,
-                SerpNormalizeInputPayload {
-                    run_id: run_id.clone(),
-                    query_batch_key: ingest.query_batch_key.clone(),
-                    scope: Some(scope.clone()),
-                    queries: site_input.queries.clone(),
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "opportunity_build".to_string());
-        let opportunity_build = ctx
-            .start_activity(
-                AlegriaActivities::run_opportunity_build_step,
-                OpportunityBuildInputPayload {
-                    run_id: run_id.clone(),
-                    scope: Some(scope.clone()),
-                    serp_patterns: serp_normalize.serp_patterns.clone(),
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "ia_build".to_string());
-        let ia_build = ctx
-            .start_activity(
-                AlegriaActivities::run_ia_build_step,
-                IaBuildInputPayload {
-                    run_id: run_id.clone(),
-                    scope: Some(scope.clone()),
-                    keyword_clusters: opportunity_build.keyword_clusters.clone(),
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "link_recommend".to_string());
-        let link_recommend = ctx
-            .start_activity(
-                AlegriaActivities::run_link_recommend_step,
-                LinkRecommendInputPayload {
-                    run_id: run_id.clone(),
-                    page_nodes: ia_build.page_nodes.clone(),
-                    max_links_per_page: 3,
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
-        let global_site_reconcile = ctx
-            .start_activity(
-                AlegriaActivities::run_global_site_reconcile_step,
-                GlobalSiteReconcileInputPayload {
-                    run_id: run_id.clone(),
-                    scope: Some(scope.clone()),
-                    page_nodes: ia_build.page_nodes.clone(),
-                    link_recommendations: link_recommend.link_recommendations.clone(),
-                    reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
-                    graph_context: None,
                 },
                 db_opts(30),
             )

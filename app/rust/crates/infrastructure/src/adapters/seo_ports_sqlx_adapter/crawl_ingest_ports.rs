@@ -173,6 +173,24 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
             }
         }
 
+        let (ready_count, unresolved_count) = raw_crawl_adapter::crawl_queue_backlog(
+            self.pool,
+            &input.run_id,
+            &input.query_batch_key,
+        )
+        .await?;
+        let status = if unresolved_count > 0 {
+            if ready_count > 0 {
+                "more"
+            } else {
+                // A delayed retry or active lease is not a completed crawl.
+                "pending_retry"
+            }
+        } else if failed_count > 0 {
+            "partial"
+        } else {
+            "done"
+        };
         Ok(CrawlSourcesOutputPayload {
             claimed_count,
             crawled_count,
@@ -180,11 +198,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
             raw_page_count,
             raw_section_count,
             qdrant_event_count,
-            status: if failed_count > 0 {
-                "partial".to_string()
-            } else {
-                "done".to_string()
-            },
+            status: status.to_string(),
             raw_page_ids,
             failed_urls,
         })
