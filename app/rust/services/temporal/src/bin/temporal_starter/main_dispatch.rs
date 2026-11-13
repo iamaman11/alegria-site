@@ -66,8 +66,8 @@ async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<Stri
             anyhow::bail!("unexpected Temporal workflow identity for {workflow_id}");
         }
         let terminal_status = match description.status() {
-            WorkflowExecutionStatus::Running | WorkflowExecutionStatus::Paused => None,
-            WorkflowExecutionStatus::Completed => {
+            WorkflowClientStatus::Running | WorkflowClientStatus::Paused => None,
+            WorkflowClientStatus::Completed => {
                 // A completed workflow may contain a blocked/non-publishable
                 // result. Treat it as done ONLY with verified pages and truth.
                 let raw = handle
@@ -85,10 +85,10 @@ async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<Stri
                     Some("failed")
                 }
             }
-            WorkflowExecutionStatus::Failed
-            | WorkflowExecutionStatus::Canceled
-            | WorkflowExecutionStatus::Terminated
-            | WorkflowExecutionStatus::TimedOut => Some("failed"),
+            WorkflowClientStatus::Failed
+            | WorkflowClientStatus::Canceled
+            | WorkflowClientStatus::Terminated
+            | WorkflowClientStatus::TimedOut => Some("failed"),
             other => anyhow::bail!("unsupported Temporal status {other:?} for {workflow_id}"),
         };
         if let Some(status) = terminal_status {

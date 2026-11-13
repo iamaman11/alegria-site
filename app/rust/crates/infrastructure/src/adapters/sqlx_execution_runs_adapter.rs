@@ -250,7 +250,6 @@ pub async fn advance_execution_run_typed<T: RuntimeProtoPayload>(
     .await
 }
 
-
 /// Set a business run terminal only if the canonical Temporal readback proved
 /// terminal status. This conditional update never reopens a finished run.
 pub async fn reconcile_terminal_execution_run(
