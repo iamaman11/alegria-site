@@ -42,6 +42,12 @@ use super::runtime::{db_opts, BasicWorkflowStatus};
 use std::time::Duration;
 
 #[workflow]
+// Whole-section semantic retrieval took several minutes in the real first-site
+// acceptance. A 60s start-to-close timeout retried the same expensive sweep
+// while prior attempts were still executing. Bound the full activity, not
+// each DB/network subcall, without relaxing any truth or publication gate.
+const SEMANTIC_SWEEP_TIMEOUT_SECS: u64 = 600;
+
 #[derive(Default)]
 struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
@@ -668,7 +674,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     entity_spans: entity_spans.clone(),
                     procedural: procedural.clone(),
                 },
-                db_opts(60),
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -683,7 +689,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     schema_validate: schema_validate.clone(),
                     completeness: completeness.clone(),
                 },
-                db_opts(60),
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -698,7 +704,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     procedural: procedural.clone(),
                     candidate_validation: candidate_validation.clone(),
                 },
-                db_opts(60),
+                db_opts(SEMANTIC_SWEEP_TIMEOUT_SECS)
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
