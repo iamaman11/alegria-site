@@ -73,6 +73,16 @@ fn is_heading(name: &str) -> bool {
 
 /// Recursively collect all text leaves from a node subtree.
 fn collect_text_dfs(node: NodeRef<Node>, parts: &mut Vec<String>) {
+    // A crawled HTML snapshot retains every byte, but SEO knowledge must not
+    // turn JavaScript, CSS or inert DOM templates into evidence or embeddings.
+    if let Node::Element(element) = node.value() {
+        if matches!(
+            element.name(),
+            "script" | "style" | "template" | "svg" | "iframe" | "canvas"
+        ) {
+            return;
+        }
+    }
     for child in node.children() {
         match child.value() {
             Node::Text(t) => {
@@ -229,4 +239,49 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
     }
 
     sections
+}
+
+#[cfg(test)]
+mod visible_text_tests {
+    use super::*;
+
+    #[test]
+    fn skip_inert_dom_for_heading_sections_and_word_count() {
+        let html = r#"<html><head>
+            <title>Tourist visa guide</title>
+            <script>window.WIZ_global_data = {"巨大":"do not embed"};</script>
+            <style>body { display: none; } totally_inert_css</style>
+            </head><body>
+            <h1>Документы для визы</h1>
+            <section><p>Паспорт и подтверждение проживания.</p>
+              <script>secret_script_payload_123</script>
+              <template>unrendered_template_payload_123</template>
+            </section>
+            </body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/visa");
+        assert_eq!(sections.len(), 1);
+        assert!(sections[0].content_md.contains("Паспорт и подтверждение"));
+        assert!(!sections[0].content_md.contains("secret_script_payload"));
+        assert!(!sections[0].content_md.contains("unrendered_template"));
+        let meta = extract_meta_typed(html);
+        assert_eq!(meta.title, "Tourist visa guide");
+        assert!(meta.word_count > 0);
+        assert!(meta.word_count < 30, "scripts/styles must not inflate word count");
+    }
+
+    #[test]
+    fn headingless_html_keeps_visible_content_without_javascript() {
+        let html = r#"<html><body>
+            <script>window.WIZ_global_data = "a very long invisible payload";</script>
+            <style>.content { color: red }</style>
+            <p>Для туристов из Беларуси полезно проверить актуальные правила.</p>
+            <svg><text>svg_internal_string</text></svg>
+            </body></html>"#;
+        let parts = extract_sections_typed(html, "https://example.org/");
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].content_md.contains("туристов из Беларуси"));
+        assert!(!parts[0].content_md.contains("WIZ_global_data"));
+        assert!(!parts[0].content_md.contains("svg_internal_string"));
+        assert_eq!(parts[0].content_hash, content_hash_v1(&parts[0].content_md));
+    }
 }
