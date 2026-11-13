@@ -266,7 +266,10 @@ mod visible_text_tests {
         let meta = extract_meta_typed(html);
         assert_eq!(meta.title, "Tourist visa guide");
         assert!(meta.word_count > 0);
-        assert!(meta.word_count < 30, "scripts/styles must not inflate word count");
+        assert!(
+            meta.word_count < 30,
+            "scripts/styles must not inflate word count"
+        );
     }
 
     #[test]
