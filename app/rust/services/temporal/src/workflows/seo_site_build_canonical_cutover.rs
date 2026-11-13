@@ -171,8 +171,12 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             crawled.crawled_count = crawled.crawled_count.saturating_add(next.crawled_count);
             crawled.failed_count = crawled.failed_count.saturating_add(next.failed_count);
             crawled.raw_page_count = crawled.raw_page_count.saturating_add(next.raw_page_count);
-            crawled.raw_section_count = crawled.raw_section_count.saturating_add(next.raw_section_count);
-            crawled.qdrant_event_count = crawled.qdrant_event_count.saturating_add(next.qdrant_event_count);
+            crawled.raw_section_count = crawled
+                .raw_section_count
+                .saturating_add(next.raw_section_count);
+            crawled.qdrant_event_count = crawled
+                .qdrant_event_count
+                .saturating_add(next.qdrant_event_count);
             crawled.raw_page_ids.extend(next.raw_page_ids);
             crawled.failed_urls.extend(next.failed_urls);
             crawled.status = next.status;
