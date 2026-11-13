@@ -100,6 +100,9 @@
                 span_end: raw_text.len() as i32,
                 source_key: source_key.clone(),
                 source_snapshot_hash: "test-source-snapshot".to_string(),
+                provider_key: "chat_manual".to_string(),
+                model_key: "gpt-6".to_string(),
+                prompt_version: "truth_extraction_prompt@1".to_string(),
                 epistemic_status: "verified".to_string(),
             };
         infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
@@ -108,6 +111,16 @@
         )
         .await
         .unwrap();
+        // The SQL write must retain the original typed ChatGPT attribution;
+        // a candidate proposal remains unverified until governance approves it.
+        let provenance: (String, String, String) = sqlx::query_as(
+            "SELECT llm_provider, llm_model, prompt_version FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+        )
+        .bind(&candidate_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(provenance, ("chat_manual".to_string(), "gpt-6".to_string(), "truth_extraction_prompt@1".to_string()));
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,
