@@ -143,9 +143,9 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                             &error,
                         )
                         .await?;
+                        failed_count += 1;
+                        failed_urls.push(item.url.clone());
                     }
-                    failed_count += 1;
-                    failed_urls.push(item.url.clone());
                 }
                 Err(err) => {
                     let error = format!("fetch failed: {err}");
@@ -166,9 +166,9 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                             &error,
                         )
                         .await?;
+                        failed_count += 1;
+                        failed_urls.push(item.url.clone());
                     }
-                    failed_count += 1;
-                    failed_urls.push(item.url.clone());
                 }
             }
         }

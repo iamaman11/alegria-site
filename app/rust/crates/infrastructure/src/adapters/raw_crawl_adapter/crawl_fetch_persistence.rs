@@ -8,7 +8,8 @@ pub async fn claim_pending_crawl_batch(
         "WITH candidates AS (
              SELECT url_norm
              FROM serp.crawl_queue
-             WHERE status = 'pending'
+             WHERE (status = 'pending'
+                    OR (status = 'processing' AND locked_until IS NOT NULL AND locked_until <= now()))
                AND ($2 = '' OR first_seen_run_id = $2)
                AND ($3 = '' OR query_batch_key = $3)
                AND next_attempt_at <= now()
@@ -63,7 +64,8 @@ pub async fn crawl_queue_backlog(
 ) -> std::result::Result<(i64, i64), primitives::errors::DomainError> {
     let row = sqlx::query(
         "SELECT count(*) FILTER (
-                    WHERE status = 'pending'
+                    WHERE (status = 'pending'
+                           OR (status = 'processing' AND locked_until IS NOT NULL AND locked_until <= now()))
                       AND next_attempt_at <= now()
                       AND (locked_until IS NULL OR locked_until <= now())
                 ) AS ready_count,

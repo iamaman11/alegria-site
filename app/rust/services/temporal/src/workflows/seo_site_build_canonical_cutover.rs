@@ -39,6 +39,7 @@ use crate::activities::AlegriaActivities;
 use crate::metrics;
 
 use super::runtime::{db_opts, BasicWorkflowStatus};
+use std::time::Duration;
 
 #[workflow]
 #[derive(Default)]
@@ -154,7 +155,13 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         ctx.wait_condition(|s| !s.paused).await?;
         // Keep one durable workflow and claim all URLs, including multiple pages
         // from the same domain. A single 25-item activity is not full coverage.
-        while crawled.status == "more" {
+        while crawled.status == "more" || crawled.status == "pending_retry" {
+            if crawled.status == "pending_retry" {
+                // A durable Temporal timer survives worker restarts and delayed retries.
+                // Do not end the workflow or start a second coordinator for pending URLs.
+                ctx.timer(Duration::from_secs(60)).await;
+                ctx.wait_condition(|s| !s.paused).await?;
+            }
             let next = ctx
                 .start_activity(
                     AlegriaActivities::run_crawl_sources_step,
@@ -162,7 +169,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     db_opts(120),
                 )
                 .await?;
-            if next.claimed_count == 0 {
+            if crawled.status == "more" && next.claimed_count == 0 {
                 return Err(super::runtime::workflow_contract_failure(
                     "crawl backlog is not claimable",
                 ));
@@ -181,13 +188,6 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             crawled.failed_urls.extend(next.failed_urls);
             crawled.status = next.status;
             ctx.wait_condition(|s| !s.paused).await?;
-        }
-        if crawled.status == "pending_retry" {
-            return Ok(block_execution_plan_invariant(
-                ctx,
-                &run_id,
-                "crawl_unresolved_pending_retry",
-            ));
         }
         if crawled.status != "done" && crawled.status != "partial" {
             return Err(super::runtime::workflow_contract_failure(format!(

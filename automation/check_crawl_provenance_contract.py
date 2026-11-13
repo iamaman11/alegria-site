@@ -72,6 +72,7 @@ def main() -> int:
         failures.append("crawl claim still discards URLs on domain boundaries")
     for needle in [
         "FOR UPDATE SKIP LOCKED",
+        "status = 'processing' AND locked_until IS NOT NULL AND locked_until <= now()",
         "pub async fn crawl_queue_backlog(",
         "status IN ('pending', 'processing')",
         '"more"',
@@ -82,10 +83,14 @@ def main() -> int:
     for needle in [
         'while crawled.status == "more"',
         "crawled.raw_page_ids.extend(next.raw_page_ids)",
-        '"crawl_unresolved_pending_retry"',
+        'ctx.timer(Duration::from_secs(60)).await',
     ]:
         if needle not in workflow:
             failures.append(f"durable crawl drain missing `{needle}`")
+    if '"crawl_unresolved_pending_retry"' in workflow:
+        failures.append("retry pending must not terminate the canonical workflow")
+    if 'failed_count += 1;' not in ports:
+        failures.append("terminal crawl failures not counted")
     phases = [
         '"triple_builder".to_string()',
         '"serp_normalize".to_string()',
