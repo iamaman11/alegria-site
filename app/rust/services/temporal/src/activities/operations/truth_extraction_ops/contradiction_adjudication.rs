@@ -184,6 +184,67 @@ pub(crate) async fn contradiction_gate_sweep_impl(
     })
 }
 
+// A human rejection applies only to the exact previously reviewed proposal.
+// Approvals cannot grant an alternative path around truth governance.
+fn matches_exact_rejected_review(
+    candidate: &ValidatedTruthCandidateRecord,
+    payload: &serde_json::Value,
+    context_key: &str,
+) -> bool {
+    let txt = |key: &str| payload.get(key).and_then(serde_json::Value::as_str);
+    txt("context_key") == Some(context_key)
+        && txt("candidate_id") == Some(candidate.rule_candidate_id.as_str())
+        && txt("source_snapshot_hash") == Some(candidate.source_snapshot_hash.as_str())
+        && txt("source_url") == Some(candidate.source_key.as_str())
+        && txt("role") == Some(candidate.role.as_str())
+        && txt("concept") == Some(candidate.concept_canonical_key.as_str())
+        && payload.get("params") == Some(&truth_param_value_to_json_local(&candidate.params))
+        && payload.get("scope") == Some(&truth_param_value_to_json_local(&candidate.scope))
+        && txt("evidence_quote") == Some(candidate.evidence_quote.as_str())
+        && payload.get("span_start").and_then(serde_json::Value::as_u64)
+            == Some(candidate.span_start as u64)
+        && payload.get("span_end").and_then(serde_json::Value::as_u64)
+            == Some(candidate.span_end as u64)
+        && txt("llm_provider") == Some(candidate.provider_key.as_str())
+        && txt("llm_model") == Some(candidate.model_key.as_str())
+        && txt("prompt_version") == Some(candidate.prompt_version.as_str())
+        && payload.pointer("/review/decision").and_then(serde_json::Value::as_str)
+            == Some("reject")
+}
+
+/// Rejection removes evidence and conservatively holds the *same scoped*
+/// semantic identity. It never manufactures independent corroboration.
+fn apply_exact_review_rejection_veto(
+    decisions: &mut [TruthAdjudicationCandidateDecision],
+    rejected_ids: &BTreeSet<String>,
+) -> BTreeSet<i64> {
+    let held_slots = decisions.iter()
+        .filter(|d| rejected_ids.contains(&d.rule_candidate_id))
+        .map(|d| (d.role.clone(), d.concept_canonical_key.clone(), d.scope.stable_signature()))
+        .collect::<BTreeSet<_>>();
+    let mut affected = BTreeSet::new();
+    for decision in decisions {
+        let slot = (
+            decision.role.clone(),
+            decision.concept_canonical_key.clone(),
+            decision.scope.stable_signature(),
+        );
+        if rejected_ids.contains(&decision.rule_candidate_id) {
+            decision.decision = "rejected".to_string();
+            decision.publish_admissibility = "not_admissible".to_string();
+            decision.verification_method = "truth_review_veto@1".to_string();
+            decision.adjudication_reason = "human_rejected_exact_source_evidence".to_string();
+            affected.insert(decision.section_id);
+        } else if held_slots.contains(&slot) && decision.decision == "verified" {
+            decision.decision = "needs_hitl".to_string();
+            decision.publish_admissibility = "needs_hitl".to_string();
+            decision.adjudication_reason = "reviewed_rejection_blocks_semantic_identity".to_string();
+            affected.insert(decision.section_id);
+        }
+    }
+    affected
+}
+
 pub(crate) async fn truth_adjudication_sweep_impl(
     acts: &AlegriaActivities,
     input: &TruthAdjudicationSweepInput,
@@ -488,6 +549,22 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         }
     }
 
+    let rejected_reviews =
+        infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+            &acts.pool,
+            &input.context_key,
+        )
+        .await?;
+    let rejected_ids = input.candidate_validation.sections.iter()
+        .flat_map(|section| section.candidates.iter())
+        .filter(|candidate| rejected_reviews.iter().any(|payload| {
+            matches_exact_rejected_review(candidate, payload, &input.context_key)
+        }))
+        .map(|candidate| candidate.rule_candidate_id.clone())
+        .collect::<BTreeSet<_>>();
+    let affected_review_sections =
+        apply_exact_review_rejection_veto(&mut decisions, &rejected_ids);
+
     let mut section_states = input
         .candidate_validation
         .sections
@@ -527,6 +604,31 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             }
         })
         .collect::<Vec<_>>();
+    // Recalculate counters after a human veto even for fixed resolution
+    // states. No section may report VERIFIED from a held semantic identity.
+    for state in &mut section_states {
+        if !affected_review_sections.contains(&state.section_id) || state.status == "blocked" {
+            continue;
+        }
+        let decisions_for_section = decisions.iter()
+            .filter(|decision| decision.section_id == state.section_id)
+            .collect::<Vec<_>>();
+        state.verified_count = decisions_for_section.iter()
+            .filter(|decision| decision.decision == "verified").count();
+        state.needs_hitl_count = decisions_for_section.iter()
+            .filter(|decision| decision.decision == "needs_hitl").count();
+        state.rejected_count = decisions_for_section.iter()
+            .filter(|decision| decision.decision == "rejected").count();
+        let label = if state.verified_count > 0 {
+            "verified"
+        } else if state.needs_hitl_count > 0 {
+            "needs_hitl"
+        } else {
+            "rejected"
+        };
+        state.status = label.to_string();
+        state.decision = label.to_string();
+    }
     section_states.sort_by_key(|section| section.section_id);
 
     Ok(TruthAdjudicationSweepOutput {
@@ -609,6 +711,86 @@ mod manual_candidate_contradiction_tests {
                 facts: validated_candidate_assertions(state),
             },
         )
+    }
+
+    #[test]
+    fn human_rejection_requires_identical_source_evidence_not_approval() {
+        let candidate = manual_candidate(35, 0.95, "needs_hitl");
+        let mut payload = serde_json::json!({
+            "context_key": "ES|tourist||BY",
+            "candidate_id": candidate.rule_candidate_id,
+            "source_snapshot_hash": candidate.source_snapshot_hash,
+            "source_url": candidate.source_key,
+            "role": candidate.role,
+            "concept": candidate.concept_canonical_key,
+            "params": truth_param_value_to_json_local(&candidate.params),
+            "scope": truth_param_value_to_json_local(&candidate.scope),
+            "evidence_quote": candidate.evidence_quote,
+            "span_start": candidate.span_start,
+            "span_end": candidate.span_end,
+            "llm_provider": candidate.provider_key,
+            "llm_model": candidate.model_key,
+            "prompt_version": candidate.prompt_version,
+            "review": {"decision": "reject"}
+        });
+        assert!(matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
+        payload["review"]["decision"] = serde_json::json!("approve");
+        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
+        payload["review"]["decision"] = serde_json::json!("reject");
+        payload["source_snapshot_hash"] = serde_json::json!("another snapshot");
+        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
+        payload["source_snapshot_hash"] = serde_json::json!(candidate.source_snapshot_hash);
+        payload["evidence_quote"] = serde_json::json!("another claim");
+        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
+    }
+
+    #[test]
+    fn rejected_source_holds_same_scope_but_not_other_profile() {
+        let base = manual_candidate(35, 0.95, "structured");
+        let make = |id: &str, scope: TruthParamValue| TruthAdjudicationCandidateDecision {
+            section_id: 41,
+            page_id: 11,
+            rule_candidate_id: id.to_string(),
+            role: base.role.clone(),
+            concept_canonical_key: base.concept_canonical_key.clone(),
+            params: base.params.clone(),
+            scope,
+            source_key: base.source_key.clone(),
+            source_tier: base.source_tier.clone(),
+            confidence: base.confidence,
+            freshness_class: base.freshness_class.clone(),
+            completeness_class: base.completeness_class.clone(),
+            evidence_quote: base.evidence_quote.clone(),
+            span_start: base.span_start,
+            span_end: base.span_end,
+            source_snapshot_hash: base.source_snapshot_hash.clone(),
+            provider_key: base.provider_key.clone(),
+            model_key: base.model_key.clone(),
+            prompt_version: base.prompt_version.clone(),
+            decision: "verified".to_string(),
+            publish_admissibility: "admissible".to_string(),
+            verification_method: "truth_governance@1".to_string(),
+            adjudication_reason: "independent".to_string(),
+        };
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        let student = TruthParamValue::object([
+            ("applicant_profile", TruthParamValue::Text("student".to_string())),
+        ]);
+        let mut decisions = vec![
+            make("review-rejected", global.clone()),
+            make("other-source", global),
+            make("other-profile", student),
+        ];
+        let sections = apply_exact_review_rejection_veto(
+            &mut decisions,
+            &BTreeSet::from(["review-rejected".to_string()]),
+        );
+        assert!(sections.contains(&41));
+        assert_eq!(decisions[0].decision, "rejected");
+        assert_eq!(decisions[1].decision, "needs_hitl");
+        assert_eq!(decisions[2].decision, "verified");
+        assert_ne!(decisions[0].publish_admissibility, "admissible");
+        assert_ne!(decisions[1].publish_admissibility, "admissible");
     }
 
     #[test]
