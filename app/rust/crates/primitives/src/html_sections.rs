@@ -184,7 +184,6 @@ pub fn extract_meta_typed(html: &str) -> HtmlMeta {
     }
 }
 
-
 /// Some official sites put the H1 in a title wrapper and the actual article
 /// in the wrapper's *sibling*, not next to the H1 itself. If the heading
 /// traversal yielded no usable sections, recover visible article text from a
@@ -324,7 +323,6 @@ mod visible_text_tests {
         );
     }
 
-
     #[test]
     fn wrapped_official_heading_recovers_only_article_body() {
         // Real Spanish consular pages wrap the H1 in a distinct title DIV;
@@ -352,7 +350,10 @@ mod visible_text_tests {
         assert!(!sections[0].content_md.contains("Главная Страница"));
         assert!(!sections[0].content_md.contains("Услуги и контакты"));
         assert!(!sections[0].content_md.contains("600 дней"));
-        assert_eq!(sections[0].content_hash, content_hash_v1(&sections[0].content_md));
+        assert_eq!(
+            sections[0].content_hash,
+            content_hash_v1(&sections[0].content_md)
+        );
     }
 
     #[test]
