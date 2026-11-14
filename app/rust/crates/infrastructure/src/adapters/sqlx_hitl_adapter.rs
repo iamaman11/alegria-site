@@ -107,6 +107,39 @@ pub async fn reconcile_truth_candidate_reviews(
             "truth HITL context_key and run_id are required",
         ));
     }
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
+    // Close obsolete open reviews only AFTER the canonical candidate's
+    // independent status or exact source snapshot has changed. The audit is
+    // append-only; human approval on its own cannot close a truth gap.
+    sqlx::query(
+        r#"
+        UPDATE site.seo_hitl_tasks AS t
+        SET queue_state = 'superseded',
+            audit_log_payload = t.audit_log_payload || jsonb_build_array(
+                jsonb_build_object('event', 'truth_candidate_rechecked',
+                    'candidate_status', c.epistemic_status,
+                    'run_id', $2::text, 'at', now())),
+            updated_at = now()
+        FROM extracted.rule_candidates AS c
+        WHERE t.task_type = 'truth_candidate_review'
+          AND t.scope_signature = $1
+          AND t.blocking_execution_key = c.rule_candidate_id
+          AND t.queue_state IN ('open', 'in_review', 'reopened')
+          AND (
+              c.epistemic_status <> 'needs_hitl'
+              OR (t.decision_payload->>'source_snapshot_hash')
+                     IS DISTINCT FROM c.source_snapshot_hash
+          )
+        "#,
+    )
+    .bind(context_key)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| infra_unavailable(e.to_string()))?;
     let result = sqlx::query(
         r#"
         INSERT INTO site.seo_hitl_tasks
@@ -141,9 +174,12 @@ pub async fn reconcile_truth_candidate_reviews(
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(result.rows_affected())
 }
 
@@ -285,15 +321,24 @@ pub async fn decide_truth_candidate_review(
             .map_err(|e| infra_unavailable(e.to_string()))?;
         return Ok(state);
     }
-    if !matches!(state.as_str(), "open" | "in_review" | "reopened") {
+    if !matches!(state.as_str(), "open" | "in_review" | "reopened")
+        || previous.is_some_and(|review| {
+            matches!(
+                review.get("decision").and_then(Value::as_str),
+                Some("approve" | "reject")
+            )
+        })
+    {
         return Err(contract_violation(
-            "truth review already resolved; do not overwrite its audit",
+            "truth review already decided; do not overwrite its audit",
         ));
     }
     let next_state = if decision == "request_changes" {
         "reopened"
     } else {
-        "resolved"
+        // Remain actionable until independent truth adjudication changes the
+        // candidate or its source snapshot; no human vote grants VERIFIED.
+        "in_review"
     };
     // In particular, "approve" is NOT a verified candidate and does not
     // write to extracted.rule_candidates or verified.rule_instances.

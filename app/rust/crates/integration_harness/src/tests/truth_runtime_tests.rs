@@ -172,13 +172,13 @@
         )
         .await
         .unwrap();
-        assert_eq!(reviewed, "resolved");
+        assert_eq!(reviewed, "in_review");
         let same = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "ci_human_reviewer", "approve", "source checked",
         )
         .await
         .unwrap();
-        assert_eq!(same, "resolved");
+        assert_eq!(same, "in_review");
         assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "other_reviewer", "reject", "different decision",
         )
@@ -190,7 +190,7 @@
             )
             .await
             .unwrap();
-        assert_eq!(task_after["queue_state"], "resolved");
+        assert_eq!(task_after["queue_state"], "in_review");
         assert_eq!(task_after["audit_log"].as_array().unwrap().len(), 3);
         let not_verified: String = sqlx::query_scalar(
             "SELECT epistemic_status FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
@@ -226,6 +226,22 @@
             .await
             .is_err()
         );
+
+        let reconciled_after_independent_verification =
+            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+                &pool, &context_key, "ci-truth-rechecked",
+            )
+            .await
+            .unwrap();
+        assert_eq!(reconciled_after_independent_verification, 0);
+        let superseded =
+            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+                &pool, &task,
+            )
+            .await
+            .unwrap();
+        assert_eq!(superseded["queue_state"], "superseded");
+        assert_eq!(superseded["audit_log"].as_array().unwrap().len(), 4);
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,
