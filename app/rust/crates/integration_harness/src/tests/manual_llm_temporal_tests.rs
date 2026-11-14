@@ -182,6 +182,19 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                 // Report the *actual* failure boundary rather than treating every
                 // missing editorial task as a slow LLM or raising the timeout.
                 let steps = certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                let verified_facts: Result<i64, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT count(*)::bigint FROM verified.rule_instances
+                     WHERE context_key = $1 AND status = 'verified'",
+                )
+                .bind(&input.context_key)
+                .fetch_one(&infra.postgres.pool)
+                .await;
+                let verified_vectors: Result<i64, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT count(*)::bigint FROM kb.qdrant_points
+                     WHERE collection_name = 'verified_rules_4'",
+                )
+                .fetch_one(&infra.postgres.pool)
+                .await;
                 let jobs = sqlx::query(
                     "SELECT operation, job_status, count(*)::bigint AS total
                      FROM pipeline.manual_llm_jobs
@@ -222,6 +235,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                     "canonical Temporal workflow did not enqueue a manual editorial job: \
                      run_id={run_id}; execution_run={run_status:?}; \
                      workflow={temporal}; truth_driver_finished={}; \
+                     verified_facts={verified_facts:?}; verified_vectors={verified_vectors:?}; \
                      manual_jobs={jobs:?}; last_steps=\n{steps}",
                     truth_driver.is_finished(),
                 );

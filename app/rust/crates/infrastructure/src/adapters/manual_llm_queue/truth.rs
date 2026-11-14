@@ -32,10 +32,39 @@ pub fn validated_candidate_values(
     ),
     DomainError,
 > {
-    let params = serde_json::from_value(candidate.params.clone())
+    use primitives::truth_candidates::TruthParamValue;
+    let mut params: TruthParamValue = serde_json::from_value(candidate.params.clone())
         .map_err(|err| validation(format!("manual truth params malformed: {err}")))?;
     let scope = serde_json::from_value(candidate.scope.clone())
         .map_err(|err| validation(format!("manual truth scope malformed: {err}")))?;
+
+    // The procedural fee extractor represents amounts as Decimal. JSON LLM
+    // answers often encode whole amounts as Integer. Without this narrow
+    // canonicalization, the SAME 80 EUR quote has two different stable truth
+    // signatures ("int:80" versus "decimal:80.00000000"), which the strict
+    // contradiction gate correctly treats as conflicting values and blocks
+    // all source-section evidence. Do not alter the global signature contract
+    // or normalize unrelated integer fields such as processing days.
+    if candidate.role == "FEE_ITEM" {
+        if let TruthParamValue::Object(fields) = &mut params {
+            for name in ["amount", "min_amount", "max_amount"] {
+                if let Some(value @ TruthParamValue::Integer(_)) = fields.get_mut(name) {
+                    let integer = match value {
+                        TruthParamValue::Integer(integer) => *integer,
+                        _ => unreachable!(),
+                    };
+                    // f64 can exactly represent integers up to 2^53.
+                    // Refuse to silently change an oversized financial claim.
+                    if !(-9_007_199_254_740_992..=9_007_199_254_740_992).contains(&integer) {
+                        return Err(validation(format!(
+                            "manual truth fee {name} cannot be represented exactly as decimal"
+                        )));
+                    }
+                    *value = TruthParamValue::Decimal(integer as f64);
+                }
+            }
+        }
+    }
     Ok((params, scope))
 }
 
@@ -243,4 +272,77 @@ pub async fn read_truth_results(
         results.push((input, output));
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod fee_parameter_canonicalization_tests {
+    use super::*;
+    use primitives::truth_candidates::TruthParamValue;
+    use serde_json::json;
+
+    fn proposal(role: &str, params: serde_json::Value) -> TruthRuleCandidate {
+        TruthRuleCandidate {
+            role: role.to_string(),
+            params,
+            scope: json!({}),
+            ..TruthRuleCandidate::default()
+        }
+    }
+
+    #[test]
+    fn manual_whole_fee_matches_procedural_decimal_without_weakening_other_types() {
+        let (manual, scope) = validated_candidate_values(&proposal(
+            "FEE_ITEM",
+            json!({"amount": 80, "currency": "EUR"}),
+        ))
+        .unwrap();
+        let procedural = TruthParamValue::object([
+            ("amount", TruthParamValue::Decimal(80.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        assert_eq!(manual.stable_signature(), procedural.stable_signature());
+        assert_eq!(scope.stable_signature(), TruthParamValue::default().stable_signature());
+        let (different, _) = validated_candidate_values(&proposal(
+            "FEE_ITEM",
+            json!({"amount": 120, "currency": "EUR"}),
+        ))
+        .unwrap();
+        assert_ne!(manual.stable_signature(), different.stable_signature());
+        let (fractional, _) = validated_candidate_values(&proposal(
+            "FEE_ITEM",
+            json!({"amount": 80.5, "currency": "EUR"}),
+        ))
+        .unwrap();
+        assert_ne!(manual.stable_signature(), fractional.stable_signature());
+        let (timeline, _) = validated_candidate_values(&proposal(
+            "TIMELINE_ITEM",
+            json!({"days": 15}),
+        ))
+        .unwrap();
+        assert_eq!(
+            timeline.stable_signature(),
+            TruthParamValue::object([("days", TruthParamValue::Integer(15))])
+                .stable_signature()
+        );
+    }
+
+    #[test]
+    fn fee_ranges_canonicalize_and_out_of_range_values_fail_closed() {
+        let (values, _) = validated_candidate_values(&proposal(
+            "FEE_ITEM",
+            json!({"min_amount": 35, "max_amount": 80, "currency": "EUR"}),
+        ))
+        .unwrap();
+        let expected = TruthParamValue::object([
+            ("min_amount", TruthParamValue::Decimal(35.0)),
+            ("max_amount", TruthParamValue::Decimal(80.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        assert_eq!(values.stable_signature(), expected.stable_signature());
+        assert!(validated_candidate_values(&proposal(
+            "FEE_ITEM",
+            json!({"amount": 9007199254740993i64, "currency": "EUR"}),
+        ))
+        .is_err());
+    }
 }
