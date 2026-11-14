@@ -10,6 +10,7 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
 use infrastructure::adapters::{
+    raw_crawl_adapter,
     reqwest_adapter::new_default_client,
     sqlx_adapter::connect_pg,
     tonic_adapter::AnalyticsClient,
@@ -130,6 +131,13 @@ enum Command {
         output_dir: String,
         #[arg(long, default_value = "https://example.com")]
         base_url: String,
+    },
+    /// Recover missing semantic sections from existing HTML bytes; no network or LLM.
+    RawReextractEmpty {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        page_id: i64,
     },
     CrawlPendingSources {
         #[arg(long)]
