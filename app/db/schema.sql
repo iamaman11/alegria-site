@@ -65,6 +65,18 @@ CREATE TABLE IF NOT EXISTS kb.concepts (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Canonical ontology vocabulary only; not visa claims or verified facts.
+-- One owner on fresh installation; idempotent against existing databases.
+INSERT INTO kb.concepts (concept_key, concept_type, label_ru, status) VALUES
+  ('consular_fee', 'fee', 'Консульский сбор', 'active'),
+  ('passport', 'document', 'Паспорт', 'active'),
+  ('medical_insurance', 'document', 'Медицинская страховка', 'active'),
+  ('standard_processing_time', 'timeline', 'Стандартный срок рассмотрения', 'active'),
+  ('standard_tourist_eligibility', 'rule', 'Стандартные условия туристической визы', 'active'),
+  ('standard_application_process', 'process', 'Порядок подачи заявления', 'active'),
+  ('standard_application_channel', 'location', 'Канал подачи заявления', 'active')
+ON CONFLICT (concept_key) DO NOTHING;
+
 -- ----------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS kb.concept_aliases (
@@ -1054,7 +1066,7 @@ CREATE TABLE IF NOT EXISTS site.seo_hitl_tasks (
     task_type              TEXT NOT NULL
                            CHECK (task_type IN (
                                'cannibalization_conflict','unsafe_serp_pattern',
-                               'unsupported_factual_fragment','registry_change',
+                               'unsupported_factual_fragment','truth_candidate_review','registry_change',
                                'rebuild_suppression','canonical_url_conflict',
                                'publish_gate_blocker'
                            )),

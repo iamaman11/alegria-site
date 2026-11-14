@@ -75,7 +75,10 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
              VALUES ($1, $2, $3, 'top10', $4, $5, $6, $7, 'pending', now(), $8)
              ON CONFLICT (url_norm) DO UPDATE
              SET status = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.status
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN 'processing'
+                     WHEN serp.crawl_queue.status = 'done'
+                          AND serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id THEN 'done'
                      ELSE 'pending'
                  END,
                  source_domain = CASE
@@ -87,20 +90,38 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
                      ELSE serp.crawl_queue.dtype
                  END,
                  first_seen_run_id = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_run_id
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.first_seen_run_id
                      ELSE EXCLUDED.first_seen_run_id
                  END,
                  first_seen_job_id = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_job_id
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.first_seen_job_id
                      ELSE EXCLUDED.first_seen_job_id
                  END,
                  query_batch_key = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.query_batch_key
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.query_batch_key
                      ELSE EXCLUDED.query_batch_key
                  END,
                  next_attempt_at = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.next_attempt_at
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.next_attempt_at
+                     WHEN serp.crawl_queue.status = 'done'
+                          AND serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                     THEN serp.crawl_queue.next_attempt_at
                      ELSE now()
+                 END,
+                 locked_until = CASE
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.locked_until
+                     ELSE NULL
+                 END,
+                 crawl_attempt_count = CASE
+                     WHEN serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                          AND serp.crawl_queue.status IN ('done', 'processing')
+                     THEN serp.crawl_queue.crawl_attempt_count
+                     ELSE 0
                  END,
                  notes = EXCLUDED.notes",
         )

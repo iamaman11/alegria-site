@@ -63,6 +63,7 @@ async fn run_initial_phase<
                     query_batch_key: ingest.query_batch_key.clone(),
                     limit: 25,
                     emit_qdrant: true,
+                    sweep_index: 0,
                 },
             )
             .await?;

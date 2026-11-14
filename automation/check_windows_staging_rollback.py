@@ -16,7 +16,10 @@ COMPOSE = ROOT / "docker-compose.yml"
 def check(script: str) -> None:
     required = [
         "if ($oldSha -eq $Commit)",
-        "if ($count -ne '0')",
+        "if ($activeCount -ne '0')",
+        "run-reconcile",
+        "Assert-Exit 'Temporal terminal-run reconciliation'",
+        "WHERE status NOT IN ('done','failed');",
         "if ($EnvFile)",
         "if ($Service -ne 'temporal-worker')",
         "& $docker @previousArgs build $Service",
@@ -76,6 +79,15 @@ def check(script: str) -> None:
     recreate = script.index("$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs")
     rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
     assert recovery < compare < preserve < rollback_image < guard < candidate_build < recreate
+    assert "& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter" in script
+    assert " @newArgs run --rm --no-deps" not in script, (
+        "terminal-run reconciliation must reuse the running worker, not a temporary Compose run"
+    )
+    reconcile = script.index("Assert-Exit 'Temporal terminal-run reconciliation'")
+    active_guard = script.index("if ($activeCount -ne '0')")
+    assert candidate_build < reconcile < active_guard < recreate, (
+        "verify Temporal terminal state using the candidate CLI before replacing a worker"
+    )
     readback = script.index("$decision = Wait-Worker-Reconciliation -StartExit $startExit")
     rollback_tag = script.index("& $docker image tag $rollbackTag $latestTag")
     assert recreate < readback < rollback_tag, (
@@ -147,6 +159,7 @@ def main() -> None:
         "if ($decision -eq 'DEPLOYED_AFTER_START_ERROR')",
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
         "$startProcess.WaitForExit(20000)",
+        "WHERE status NOT IN ('done','failed');",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
     ):
         mutated = source.replace(fragment, "", 1)

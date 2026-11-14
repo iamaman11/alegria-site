@@ -71,12 +71,39 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                     {
                         Ok(saved) => {
                             let emitted = if input.emit_qdrant {
-                                raw_crawl_adapter::emit_raw_section_qdrant_events(
+                                match raw_crawl_adapter::emit_raw_section_qdrant_events(
                                     self.pool,
                                     &input.run_id,
                                     saved.page_id,
                                 )
-                                .await?
+                                .await
+                                {
+                                    Ok(emitted) => emitted,
+                                    Err(err) => {
+                                        let error = format!("raw section embedding failed: {err}");
+                                        if raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count) {
+                                            raw_crawl_adapter::mark_crawl_retry(
+                                                self.pool,
+                                                &item.url_norm,
+                                                Some(fetched.status_code),
+                                                &error,
+                                                item.attempt_count,
+                                            )
+                                            .await?;
+                                        } else {
+                                            raw_crawl_adapter::mark_crawl_failed(
+                                                self.pool,
+                                                &item.url_norm,
+                                                Some(fetched.status_code),
+                                                &error,
+                                            )
+                                            .await?;
+                                            failed_count += 1;
+                                            failed_urls.push(item.url.clone());
+                                        }
+                                        continue;
+                                    }
+                                }
                             } else {
                                 0
                             };
@@ -143,9 +170,9 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                             &error,
                         )
                         .await?;
+                        failed_count += 1;
+                        failed_urls.push(item.url.clone());
                     }
-                    failed_count += 1;
-                    failed_urls.push(item.url.clone());
                 }
                 Err(err) => {
                     let error = format!("fetch failed: {err}");
@@ -166,13 +193,31 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                             &error,
                         )
                         .await?;
+                        failed_count += 1;
+                        failed_urls.push(item.url.clone());
                     }
-                    failed_count += 1;
-                    failed_urls.push(item.url.clone());
                 }
             }
         }
 
+        let (ready_count, unresolved_count) = raw_crawl_adapter::crawl_queue_backlog(
+            self.pool,
+            &input.run_id,
+            &input.query_batch_key,
+        )
+        .await?;
+        let status = if unresolved_count > 0 {
+            if ready_count > 0 {
+                "more"
+            } else {
+                // A delayed retry or active lease is not a completed crawl.
+                "pending_retry"
+            }
+        } else if failed_count > 0 {
+            "partial"
+        } else {
+            "done"
+        };
         Ok(CrawlSourcesOutputPayload {
             claimed_count,
             crawled_count,
@@ -180,11 +225,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
             raw_page_count,
             raw_section_count,
             qdrant_event_count,
-            status: if failed_count > 0 {
-                "partial".to_string()
-            } else {
-                "done".to_string()
-            },
+            status: status.to_string(),
             raw_page_ids,
             failed_urls,
         })

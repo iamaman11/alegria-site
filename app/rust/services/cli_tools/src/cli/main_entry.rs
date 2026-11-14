@@ -101,6 +101,27 @@ async fn main() -> Result<()> {
             output_dir,
             base_url,
         } => build_static_site(database_url, &output_dir, &base_url).await?,
+        Command::RawReextractEmpty { database_url, page_id } => {
+            raw_reextract_empty(database_url, page_id).await?
+        }
+        Command::TruthHitlReconcile { database_url, context_key } => {
+            truth_hitl_reconcile(database_url, &context_key).await?
+        }
+        Command::TruthHitlList { database_url, context_key, limit } => {
+            truth_hitl_list(database_url, &context_key, limit).await?
+        }
+        Command::TruthHitlShow { database_url, task_key } => {
+            truth_hitl_show(database_url, &task_key).await?
+        }
+        Command::TruthHitlDecide {
+            database_url,
+            task_key,
+            actor_role,
+            decision,
+            reason,
+        } => {
+            truth_hitl_decide(database_url, &task_key, &actor_role, &decision, &reason).await?
+        }
         Command::CrawlPendingSources {
             database_url,
             run_id,

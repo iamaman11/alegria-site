@@ -27,7 +27,9 @@
 
         let ctx = IntegrationCtx::start(
             serde_json::json!({
+                "status_code": 20000,
                 "tasks": [{
+                    "status_code": 20000,
                     "result": [{
                         "items": [{
                             "type": "organic",
@@ -185,7 +187,9 @@
 
         let ctx = IntegrationCtx::start(
             serde_json::json!({
+                "status_code": 20000,
                 "tasks": [{
+                    "status_code": 20000,
                     "result": [{
                         "items": [{
                             "type": "organic",

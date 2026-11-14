@@ -628,6 +628,8 @@ message CrawlSourcesInputPayload {
   string query_batch_key = 2;
   uint32 limit = 3;
   bool emit_qdrant = 4;
+  // Stable ordinal for distinct, idempotent Temporal crawl activity batches.
+  uint32 sweep_index = 5;
 }
 
 message CrawlSourcesOutputPayload {

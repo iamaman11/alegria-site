@@ -205,11 +205,24 @@ pub(crate) async fn verified_truth_write_impl(
                 span_end,
                 source_key: decision.source_key.clone(),
                 source_snapshot_hash: decision.source_snapshot_hash.clone(),
+                provider_key: decision.provider_key.clone(),
+                model_key: decision.model_key.clone(),
+                prompt_version: decision.prompt_version.clone(),
                 epistemic_status: candidate_status.to_string(),
             },
         )
         .await?;
     }
+
+    // The persisted candidate projection is the canonical input for HITL.
+    // This also repairs older unresolved candidates in the same context.
+    // A human decision never changes the verifier's candidate status.
+    infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+        &acts.pool,
+        &input.context_key,
+        &input.run_id,
+    )
+    .await?;
 
     // Exactly one verdict and one outbox event per semantic slot. A rejected
     // source cannot demote a verified fact backed by independent sources.
@@ -353,6 +366,9 @@ mod tests {
             span_start: 0,
             span_end: 12,
             source_snapshot_hash: "snapshot".to_string(),
+            provider_key: "deterministic".to_string(),
+            model_key: "cutover-runtime".to_string(),
+            prompt_version: "cutover@1".to_string(),
             decision: decision.to_string(),
             publish_admissibility: match decision {
                 "verified" => "admissible",

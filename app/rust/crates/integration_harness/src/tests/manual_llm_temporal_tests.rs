@@ -21,10 +21,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     assert!(!source_servers.is_empty());
     let infra = InfraHarness::start().await.unwrap();
     let voyage_stub = stub_servers::spawn_voyage_contract_stub().await.unwrap();
-    let serp_stub = stub_servers::spawn_json_sequence_stub(
-        "/v3/serp/google/organic/live/advanced",
-        vec![serp_responses[0].1.clone()],
-    )
+    let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_responses[0].1.clone()])
     .await
     .unwrap();
     let truth_stub = stub_servers::spawn_json_sequence_stub(
@@ -42,7 +39,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     let mut worker_env = infra.runtime_env();
     worker_env.extend(truth_certification_env(
         &format!(
-            "{}/v3/serp/google/organic/live/advanced",
+            "{}/v3/serp/google/organic/task_post",
             serp_stub.base_url
         ),
         &format!("{}/v1/chat/completions", truth_stub.base_url),

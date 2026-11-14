@@ -1,12 +1,34 @@
 use anyhow::{bail, Context, Result};
-use reqwest::Client;
+use reqwest::{Client, Response, StatusCode, Url};
 use serde_json::{json, Value};
+use sqlx::{types::Json, PgPool, Row};
+use std::{
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 use primitives::url_norm::{domain_norm, url_norm};
 
 use super::reqwest_adapter;
 
-const DEFAULT_ENDPOINT: &str = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced";
+const DEFAULT_ENDPOINT: &str = "https://api.dataforseo.com/v3/serp/google/organic/task_post";
+const TASK_WAIT: Duration = Duration::from_secs(480);
+const TASK_POLL: Duration = Duration::from_secs(12);
+
+#[derive(Debug)]
+pub struct PermanentSerpError(pub String);
+
+impl std::fmt::Display for PermanentSerpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for PermanentSerpError {}
+
+fn permanent(message: impl Into<String>) -> anyhow::Error {
+    PermanentSerpError(message.into()).into()
+}
 
 #[derive(Debug, Clone)]
 pub struct DataForSeoConfig {
@@ -86,44 +108,344 @@ impl DataForSeoSerpClient {
         })
     }
 
-    pub async fn google_organic_live_advanced(
-        &self,
-        keyword: &str,
-    ) -> Result<DataForSeoSerpResponse> {
-        let keyword = keyword.trim();
-        if keyword.is_empty() {
-            bail!("DataForSEO keyword is empty");
+    pub async fn submit_standard_task(&self, keyword: &str) -> Result<Value> {
+        if keyword.trim().is_empty() {
+            return Err(permanent("DataForSEO keyword is empty"));
         }
-
+        if !self.config.endpoint.ends_with("/task_post") {
+            return Err(permanent(
+                "DataForSEO must use the canonical Google Standard task_post endpoint",
+            ));
+        }
         let task = json!({
-            "keyword": keyword,
+            "keyword": keyword.trim(),
             "language_code": self.config.language_code,
             "location_code": self.config.location_code,
             "depth": self.config.depth,
+            "priority": 1
         });
-
-        let raw_payload_utf8 = self
+        let posted_response = self
             .client
             .post(&self.config.endpoint)
             .basic_auth(&self.config.login, Some(&self.config.password))
             .json(&vec![task])
             .send()
             .await
-            .context("send DataForSEO SERP request")?
-            .error_for_status()
-            .context("DataForSEO SERP HTTP status")?
+            .context("DataForSEO Standard task POST")?;
+        let posted: Value = checked_provider_http(posted_response, "POST")?
+            .json()
+            .await
+            .context("decode DataForSEO Standard task receipt")?;
+        standard_task_post_id(&posted)?;
+        Ok(posted)
+    }
+
+    /// Keep the paid task receipt in the existing SERP snapshot table.
+    /// Temporal retries reuse it, rather than POSTing a fresh search.
+    pub async fn google_organic_standard(
+        &self,
+        pool: &PgPool,
+        run_id: &str,
+        keyword: &str,
+    ) -> Result<DataForSeoSerpResponse> {
+        if run_id.trim().is_empty() || keyword.trim().is_empty() {
+            return Err(permanent("DataForSEO Standard requires run_id and keyword"));
+        }
+        let receipt_key = format!(
+            "dataforseo-standard-task-{}",
+            primitives::hash::content_hash_v1(&format!(
+                "{run_id}|{keyword}|{}|{}|{}",
+                self.config.location_code, self.config.language_code, self.config.depth
+            ))
+        );
+        // The durable claim MUST precede the paid POST. A crash, timeout or
+        // ambiguous provider response leaves an unresolved claim, not a second
+        // paid POST on Temporal retry or a concurrent activity.
+        let claim = json!({"submission_state": "uncertain"});
+        let claimed = sqlx::query(
+            "INSERT INTO serp.raw_snapshots (run_id, job_id, query, raw_result)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (run_id, job_id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(&receipt_key)
+        .bind(keyword.trim())
+        .bind(Json(claim))
+        .execute(pool)
+        .await
+        .context("claim DataForSEO paid Standard task before POST")?
+        .rows_affected()
+            == 1;
+        let task_id = if claimed {
+            let receipt = self.submit_standard_task(keyword).await?;
+            let task_id = standard_task_post_id(&receipt)?.to_string();
+            let updated = sqlx::query(
+                "UPDATE serp.raw_snapshots SET raw_result = $3
+                 WHERE run_id = $1 AND job_id = $2
+                   AND raw_result->>'submission_state' = 'uncertain'",
+            )
+            .bind(run_id)
+            .bind(&receipt_key)
+            .bind(Json(receipt))
+            .execute(pool)
+            .await
+            .context("persist DataForSEO paid Standard task receipt")?;
+            if updated.rows_affected() != 1 {
+                return Err(permanent(
+                    "DataForSEO paid task claim changed; reconcile before retry",
+                ));
+            }
+            task_id
+        } else {
+            let row = sqlx::query(
+                "SELECT raw_result FROM serp.raw_snapshots WHERE run_id = $1 AND job_id = $2",
+            )
+            .bind(run_id)
+            .bind(&receipt_key)
+            .fetch_one(pool)
+            .await
+            .context("read existing DataForSEO Standard task claim")?;
+            let receipt: Json<Value> = row.get("raw_result");
+            if receipt.0.get("submission_state").and_then(Value::as_str) == Some("uncertain") {
+                return Err(permanent(
+                    "DataForSEO paid POST result is unresolved; reconcile provider receipt before retry",
+                ));
+            }
+            standard_task_post_id(&receipt.0)?.to_string()
+        };
+        let deadline = Instant::now() + TASK_WAIT;
+        loop {
+            if let Some(result) = self.fetch_standard_task(&task_id).await? {
+                return Ok(result);
+            }
+            if Instant::now() >= deadline {
+                bail!("DataForSEO Standard task {task_id} still queued; task receipt retained");
+            }
+            tokio::time::sleep(TASK_POLL).await;
+        }
+    }
+
+    pub async fn fetch_standard_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<DataForSeoSerpResponse>> {
+        if task_id.is_empty()
+            || !task_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        {
+            return Err(permanent("invalid DataForSEO Standard task id"));
+        }
+        let prefix = self
+            .config
+            .endpoint
+            .strip_suffix("/task_post")
+            .context("DataForSEO Standard endpoint must end in /task_post")?;
+        let url = format!("{prefix}/task_get/advanced/{task_id}");
+        let response = self
+            .client
+            .get(url)
+            .basic_auth(&self.config.login, Some(&self.config.password))
+            .send()
+            .await
+            .context("GET DataForSEO Standard result")?;
+        let raw_payload_utf8 = checked_provider_http(response, "GET")?
             .text()
             .await
-            .context("read DataForSEO SERP response")?;
+            .context("read DataForSEO Standard task result")?;
         let raw_json: Value =
-            serde_json::from_str(&raw_payload_utf8).context("parse DataForSEO SERP JSON")?;
-        let organic_results = parse_organic_results(&raw_json);
+            serde_json::from_str(&raw_payload_utf8).context("decode Standard result")?;
+        match standard_task_get_state(&raw_json)? {
+            StandardGetState::Queued => Ok(None),
+            StandardGetState::Ready => {
+                let parsed = parse_organic_results(&raw_json);
+                let had_organic = !parsed.is_empty();
+                let organic_results: Vec<_> = parsed
+                    .into_iter()
+                    .filter_map(|item| {
+                        let url = item.url.clone();
+                        apply_direct_source(item, &url, &self.config.endpoint)
+                    })
+                    .collect();
+                if had_organic && organic_results.is_empty() {
+                    return Err(permanent(
+                        "DataForSEO Standard returned no validated direct source URL",
+                    ));
+                }
+                Ok(Some(DataForSeoSerpResponse {
+                    raw_json,
+                    raw_payload_utf8,
+                    organic_results,
+                }))
+            }
+        }
+    }
+}
 
-        Ok(DataForSeoSerpResponse {
-            raw_json,
-            raw_payload_utf8,
-            organic_results,
-        })
+// HTTP auth/config errors must not retry indefinitely in Temporal.
+// Rate limits and server failures remain transient.
+fn is_permanent_provider_status(status: StatusCode) -> bool {
+    status.is_client_error()
+        && status != StatusCode::REQUEST_TIMEOUT
+        && status != StatusCode::TOO_MANY_REQUESTS
+}
+
+fn checked_provider_http(response: Response, operation: &str) -> Result<Response> {
+    if is_permanent_provider_status(response.status()) {
+        return Err(permanent(format!(
+            "DataForSEO Standard {operation} terminal HTTP {}",
+            response.status()
+        )));
+    }
+    response
+        .error_for_status()
+        .with_context(|| format!("DataForSEO Standard {operation} HTTP failure"))
+}
+
+// The source identity is the verified HTTP redirect destination, not
+// DataForSEO's Google tracking link or a SERP breadcrumb.
+fn is_google_tracking_url(raw: &str) -> bool {
+    let Ok(url) = Url::parse(raw) else {
+        return false;
+    };
+    let host = url.host_str().unwrap_or_default();
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    host.eq_ignore_ascii_case("google.com") && matches!(url.path(), "/goto" | "/url")
+}
+
+fn direct_public_https_url(raw: &str) -> Option<String> {
+    let mut url = Url::parse(raw).ok()?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+        return None;
+    }
+    let host = url.host_str()?.to_ascii_lowercase();
+    if host.parse::<IpAddr>().is_ok()
+        || !host.contains('.')
+        || host == "localhost"
+        || host.ends_with(".localhost")
+        || host.ends_with(".local")
+        || host.ends_with(".internal")
+        || is_google_tracking_url(url.as_str())
+    {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
+// The in-process integration harness serves synthetic source pages over
+// HTTP loopback. Allow that exact case only when the configured provider is
+// also an HTTP 127.0.0.1 stub. Production DataForSEO HTTPS can never enter it.
+fn local_stub_source_url(raw: &str, provider_endpoint: &str) -> Option<String> {
+    let provider = Url::parse(provider_endpoint).ok()?;
+    if provider.scheme() != "http" || provider.host_str() != Some("127.0.0.1") {
+        return None;
+    }
+    let mut url = Url::parse(raw).ok()?;
+    if url.scheme() != "http"
+        || url.host_str() != Some("127.0.0.1")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return None;
+    }
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
+fn apply_direct_source(
+    mut result: DataForSeoOrganicResult,
+    final_url: &str,
+    provider_endpoint: &str,
+) -> Option<DataForSeoOrganicResult> {
+    // Synthetic source URLs in the local integration harness have a physical
+    // loopback host but a distinct simulated source identity in the fixture.
+    // Only the local HTTP provider stub may preserve that test attribution.
+    if let Some(url) = local_stub_source_url(final_url, provider_endpoint) {
+        result.url_norm = url_norm(&url);
+        result.url = url;
+        return Some(result);
+    }
+    let url = direct_public_https_url(final_url)?;
+    result.domain_norm = domain_norm(&url);
+    result.source_tier = classify_domain_tier(&url);
+    result.url_norm = url_norm(&url);
+    result.url = url;
+    Some(result)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StandardGetState {
+    Queued,
+    Ready,
+}
+
+fn standard_task_post_id(response: &Value) -> Result<&str> {
+    if response.get("status_code").and_then(Value::as_i64) != Some(20000) {
+        return Err(permanent(
+            "DataForSEO Standard POST top-level status is not successful",
+        ));
+    }
+    let tasks = response
+        .get("tasks")
+        .and_then(Value::as_array)
+        .context("DataForSEO Standard POST missing tasks")?;
+    if tasks.len() != 1 || tasks[0].get("status_code").and_then(Value::as_i64) != Some(20100) {
+        return Err(permanent(
+            "DataForSEO Standard POST must return one created task (20100)",
+        ));
+    }
+    let task_id = tasks[0]
+        .get("id")
+        .and_then(Value::as_str)
+        .context("DataForSEO Standard POST task id missing")?;
+    if task_id.is_empty()
+        || !task_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    {
+        return Err(permanent("DataForSEO Standard POST malformed task id"));
+    }
+    Ok(task_id)
+}
+
+fn standard_task_get_state(response: &Value) -> Result<StandardGetState> {
+    let code = response
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    if code != 20000 {
+        return Err(permanent(format!(
+            "DataForSEO Standard GET failed top-level status_code={code}"
+        )));
+    }
+    let tasks = response
+        .get("tasks")
+        .and_then(Value::as_array)
+        .context("DataForSEO Standard GET missing tasks")?;
+    if tasks.len() != 1 {
+        return Err(permanent(format!(
+            "DataForSEO Standard GET expected one task, got {}",
+            tasks.len()
+        )));
+    }
+    let code = tasks[0]
+        .get("status_code")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    match code {
+        40601 | 40602 => Ok(StandardGetState::Queued),
+        20000 => {
+            if tasks[0].get("result").and_then(Value::as_array).is_none() {
+                return Err(permanent(
+                    "DataForSEO Standard completed task missing result array",
+                ));
+            }
+            Ok(StandardGetState::Ready)
+        }
+        _ => Err(permanent(format!(
+            "DataForSEO Standard task failed status_code={code}"
+        ))),
     }
 }
 
@@ -179,7 +501,7 @@ fn parse_organic_results(raw: &Value) -> Vec<DataForSeoOrganicResult> {
                 let domain = json_str(item, "domain")
                     .map(str::to_string)
                     .unwrap_or_else(|| domain_norm(url));
-                let source_tier = classify_domain_tier(&domain, url);
+                let source_tier = classify_domain_tier(&format!("https://{domain}/"));
                 out.push(DataForSeoOrganicResult {
                     rank,
                     title: json_str(item, "title").unwrap_or_default().to_string(),
@@ -198,42 +520,48 @@ fn parse_organic_results(raw: &Value) -> Vec<DataForSeoOrganicResult> {
     out
 }
 
-fn classify_domain_tier(domain: &str, url: &str) -> String {
-    let value = format!(
-        "{} {}",
-        domain.to_ascii_lowercase(),
-        url.to_ascii_lowercase()
-    );
-    if value.contains(".gov")
-        || value.contains(".gob.")
-        || value.contains("embassy")
-        || value.contains("consulate")
-        || value.contains("mfa.")
-        || value.contains("mid.")
-        || value.contains("exteriores.gob.es")
+// SERP hints are preliminary. Never confer an official tier based on
+// user-controlled URL paths, queries, or a substring of another hostname.
+fn classify_domain_tier(raw_url: &str) -> String {
+    let Some(host) = Url::parse(raw_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_ascii_lowercase))
+    else {
+        return "low_trust".to_string();
+    };
+    let host = host.trim_end_matches('.');
+    let host_matches = |domain: &str| {
+        host == domain
+            || host
+                .strip_suffix(domain)
+                .is_some_and(|prefix| prefix.ends_with('.'))
+    };
+    // Official government DNS namespaces, not generic embassy/mfa words.
+    if [
+        "gov", "gov.by", "gov.uk", "gov.au", "gov.nz", "gob.es", "gob.mx", "gob.ar",
+    ]
+    .iter()
+    .any(|domain| host_matches(domain))
     {
         "official".to_string()
-    } else if value.contains("vfsglobal")
-        || value.contains("vfs ")
-        || value.contains(" vfs")
-        || value.contains("blsspain")
-        || value.contains("blsspainglobal")
+    } else if ["vfsglobal.com", "blsspainvisa.com", "blsspainglobal.com"]
+        .iter()
+        .any(|domain| host_matches(domain))
     {
         "vfs".to_string()
-    } else if value.contains("agency") || value.contains("consult") {
+    } else if host
+        .split('.')
+        .any(|label| label.contains("agency") || label.contains("consult"))
+    {
         "agency".to_string()
-    } else if value.contains("forum")
-        || value.contains("reddit.")
-        || value.contains("quora.")
-        || value.contains("stackexchange")
-        || value.contains("community")
+    } else if host
+        .split('.')
+        .any(|label| ["forum", "reddit", "quora", "stackexchange", "community"].contains(&label))
     {
         "forum".to_string()
-    } else if value.contains("news")
-        || value.contains("blog")
-        || value.contains("editorial")
-        || value.contains("magazine")
-        || value.contains("medium.")
+    } else if host
+        .split('.')
+        .any(|label| ["news", "blog", "editorial", "magazine", "medium"].contains(&label))
     {
         "editorial".to_string()
     } else {
@@ -254,6 +582,67 @@ mod tests {
             configured_endpoint(Some("https://example.test/serp".into())),
             "https://example.test/serp"
         );
+    }
+
+    #[test]
+    fn provider_task_failure_is_not_a_successful_empty_serp() {
+        let failed = json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 40501, "status_message": "Invalid Field: location_code", "result": null}]
+        });
+        assert!(standard_task_get_state(&failed)
+            .unwrap_err()
+            .to_string()
+            .contains("40501"));
+        assert!(parse_organic_results(&failed).is_empty());
+    }
+
+    #[test]
+    fn provider_top_level_failure_is_rejected() {
+        let failed = json!({"status_code": 50000, "tasks": []});
+        assert!(standard_task_get_state(&failed).is_err());
+    }
+
+    #[test]
+    fn successful_provider_task_accepts_legitimate_empty_results() {
+        let empty = json!({"status_code": 20000, "tasks": [{"status_code": 20000, "result": []}]});
+        assert_eq!(
+            standard_task_get_state(&empty).unwrap(),
+            StandardGetState::Ready
+        );
+        assert!(parse_organic_results(&empty).is_empty());
+    }
+
+    #[test]
+    fn normal_priority_standard_post_and_queued_get_are_distinct() {
+        let receipt = json!({"status_code": 20000, "tasks": [{
+            "id": "11122152-3107-0066-0000-2f0ad56279d1", "status_code": 20100
+        }]});
+        assert_eq!(
+            standard_task_post_id(&receipt).unwrap(),
+            "11122152-3107-0066-0000-2f0ad56279d1"
+        );
+        for code in [40601, 40602] {
+            assert_eq!(
+                standard_task_get_state(&json!({
+                    "status_code": 20000, "tasks": [{
+                        "status_code": code, "result": null
+                    }]
+                }))
+                .unwrap(),
+                StandardGetState::Queued
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_provider_error_is_typed_non_retryable() {
+        let error = standard_task_get_state(&json!({
+            "status_code": 20000,
+            "tasks": [{"status_code": 40101, "result": null}]
+        }))
+        .unwrap_err();
+        assert!(error.downcast_ref::<PermanentSerpError>().is_some());
     }
 
     #[test]
@@ -286,18 +675,152 @@ mod tests {
     }
 
     #[test]
-    fn classifies_domain_tiers() {
+    fn only_in_process_standard_stub_accepts_http_loopback_sources() {
+        let stub = "http://127.0.0.1:4567/v3/serp/google/organic/task_post";
+        let production = DEFAULT_ENDPOINT;
+        let local = "http://127.0.0.1:6789/test-source";
+        assert_eq!(local_stub_source_url(local, stub).as_deref(), Some(local));
+        assert!(local_stub_source_url(local, production).is_none());
+        assert!(local_stub_source_url("http://localhost:6789/", stub).is_none());
+        assert!(local_stub_source_url("http://192.168.1.2/", stub).is_none());
+        assert!(local_stub_source_url("https://google.com/goto?id=1", stub).is_none());
+        assert!(local_stub_source_url("http://127.0.0.1@evil.test/", stub).is_none());
+    }
+
+    #[test]
+    fn google_tracking_link_is_not_canonical_source_evidence() {
+        let tracking = "https://google.com/goto?url=opaque-encoded-id&gsessionid=123";
+        assert!(is_google_tracking_url(tracking));
+        assert!(is_google_tracking_url(
+            "https://www.google.com/url?q=encoded"
+        ));
+        assert!(!is_google_tracking_url(
+            "https://www.exteriores.gob.es/visa"
+        ));
+        assert!(direct_public_https_url(tracking).is_none());
+        assert!(direct_public_https_url("https://127.0.0.1/visa").is_none());
+        assert!(direct_public_https_url("http://exteriores.gob.es/visa").is_none());
         assert_eq!(
-            classify_domain_tier("www.mfa.gov.by", "https://www.mfa.gov.by/visa"),
+            direct_public_https_url("https://www.exteriores.gob.es/visa#intro").as_deref(),
+            Some("https://www.exteriores.gob.es/visa")
+        );
+    }
+
+    #[test]
+    fn resolved_google_redirect_uses_actual_source_domain_and_tier() {
+        let tracking = "https://google.com/goto?url=opaque";
+        let mut item = parse_organic_results(&json!({
+            "tasks": [{"result": [{"items": [{
+                "type": "organic", "rank_group": 1, "url": tracking,
+                "domain": "google.com", "title": "Schengen visas"
+            }]}]}]
+        }))
+        .remove(0);
+        assert_eq!(item.url_norm, "google.com/goto");
+        assert_eq!(item.source_tier, "low_trust");
+        item = apply_direct_source(
+            item,
+            "https://www.exteriores.gob.es/Consulados/toronto/en/Visados-Schengen.aspx",
+            DEFAULT_ENDPOINT,
+        )
+        .expect("real redirect destination");
+        assert_eq!(item.domain_norm, "exteriores.gob.es");
+        assert_eq!(item.source_tier, "official");
+        assert_eq!(
+            item.url_norm,
+            "exteriores.gob.es/consulados/toronto/en/visados-schengen.aspx"
+        );
+        assert!(item.url.starts_with("https://www.exteriores.gob.es/"));
+        assert!(!item.url.contains("google.com/goto"));
+    }
+
+    #[test]
+    fn delegated_visa_center_redirect_keeps_delegated_tier() {
+        let base = DataForSeoOrganicResult {
+            rank: 2,
+            title: "Visa centre".into(),
+            url: "https://google.com/goto?url=encoded".into(),
+            url_norm: "google.com/goto".into(),
+            domain_norm: "google.com".into(),
+            source_tier: "low_trust".into(),
+            snippet: String::new(),
+            raw_json: json!({}),
+        };
+        let result =
+            apply_direct_source(base, "https://bolivia.blsspainvisa.com/", DEFAULT_ENDPOINT)
+                .expect("delegated HTTPS domain");
+        assert_eq!(result.domain_norm, "bolivia.blsspainvisa.com");
+        assert_eq!(result.source_tier, "vfs");
+    }
+
+    #[test]
+    fn untrusted_domain_substrings_and_paths_never_gain_official_tier() {
+        for url in [
+            "https://fake.example/path/exteriores.gob.es/visa",
+            "https://fake.example/?source=https://mfa.gov.by",
+            "https://exteriores.gob.es.evil.example/visa",
+            "https://notgov.by/consulate",
+            "https://www.vfsglobal.com.evil.example/visa",
+        ] {
+            assert_ne!(classify_domain_tier(url), "official", "{url}");
+            assert_ne!(classify_domain_tier(url), "vfs", "{url}");
+        }
+        assert_eq!(
+            classify_domain_tier("https://exteriores.gob.es/visa"),
             "official"
         );
         assert_eq!(
-            classify_domain_tier("vfsglobal.com", "https://vfsglobal.com/visa"),
+            classify_domain_tier("https://bolivia.blsspainvisa.com/"),
             "vfs"
         );
-        assert_eq!(
-            classify_domain_tier("reddit.com", "https://reddit.com/r/visas"),
-            "forum"
+    }
+
+    #[test]
+    fn provider_http_retryability_is_explicit() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::BAD_REQUEST,
+        ] {
+            assert!(is_permanent_provider_status(status));
+        }
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+        ] {
+            assert!(!is_permanent_provider_status(status));
+        }
+    }
+
+    #[test]
+    fn local_stub_keeps_simulated_source_identity_without_leaking_to_https() {
+        let item = DataForSeoOrganicResult {
+            rank: 1,
+            title: "Ministry".into(),
+            url: "http://127.0.0.1:1234/visa".into(),
+            url_norm: "127.0.0.1/visa".into(),
+            domain_norm: "mfa.gov.by".into(),
+            source_tier: "official".into(),
+            snippet: String::new(),
+            raw_json: json!({}),
+        };
+        let stub = "http://127.0.0.1:4567/v3/serp/google/organic/task_post";
+        let retained = apply_direct_source(item.clone(), &item.url, stub).unwrap();
+        assert_eq!(retained.domain_norm, "mfa.gov.by");
+        assert_eq!(retained.source_tier, "official");
+        assert!(
+            apply_direct_source(item, "http://127.0.0.1:1234/visa", DEFAULT_ENDPOINT).is_none()
         );
+    }
+
+    #[test]
+    fn classifies_domain_tiers() {
+        assert_eq!(
+            classify_domain_tier("https://www.mfa.gov.by/visa"),
+            "official"
+        );
+        assert_eq!(classify_domain_tier("https://vfsglobal.com/visa"), "vfs");
+        assert_eq!(classify_domain_tier("https://reddit.com/r/visas"), "forum");
     }
 }

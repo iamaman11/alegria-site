@@ -390,6 +390,18 @@ pub fn validate_truth_candidate(
         };
     }
 
+    // Exact substring equality alone is insufficient to prove an asserted
+    // claim. Isolated numbers, one-word titles and keywords require a
+    // substantive source quotation before any automatic adjudication.
+    let quote = candidate.evidence_quote.trim();
+    if quote.chars().count() < 20 || quote.split_whitespace().count() < 3 {
+        needs_hitl(
+            &mut issues,
+            "evidence_fragment_requires_context",
+            "the cited span is too short to support a standalone factual claim",
+        );
+    }
+
     // Only the exact applicant_profile predicate is representable by the
     // existing verified.rule_instance_profiles and SEO support resolver.
     // Unknown keys, extra dimensions and malformed values fail closed.
@@ -793,6 +805,22 @@ mod tests {
             is_range: false,
             is_incomplete: false,
             uncertainty_flags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn isolated_number_or_keyword_never_becomes_structured() {
+        for snippet in ["35", "паспорт", "Консульский сбор"] {
+            let mut candidate = base_candidate();
+            candidate.raw_mention = snippet.to_string();
+            candidate.evidence_quote = snippet.to_string();
+            candidate.span_end = snippet.len();
+            let result = validate_truth_candidate(&candidate, snippet);
+            assert_eq!(result.epistemic_status, "needs_hitl");
+            assert!(result
+                .issues
+                .iter()
+                .any(|issue| { issue.code == "evidence_fragment_requires_context" }));
         }
     }
 

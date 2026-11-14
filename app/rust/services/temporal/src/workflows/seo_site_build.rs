@@ -135,7 +135,7 @@ impl SeoSiteBuildWorkflow {
                                         scope: scope.clone(),
                                         queries: site_input.queries.clone(),
                                     },
-                                    db_opts(30),
+                                    db_opts(1800),
                                 )
                                 .await?,
                             );
@@ -150,6 +150,7 @@ impl SeoSiteBuildWorkflow {
                                         query_batch_key: ingest_ref.query_batch_key.clone(),
                                         limit: 25,
                                         emit_qdrant: true,
+                                        sweep_index: 0,
                                     },
                                     db_opts(120),
                                 )

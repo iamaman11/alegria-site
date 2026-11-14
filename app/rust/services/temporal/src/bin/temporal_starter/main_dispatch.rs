@@ -35,6 +35,81 @@ fn report_workflow_completion(
     Ok(())
 }
 
+// Temporal owns workflow lifecycle. PostgreSQL stores a read model, never an
+// independent guess about whether a job is still active. Fail closed on any
+// inaccessible or unexpected Temporal execution.
+async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<String>) -> Result<()> {
+    let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
+    let rows = sqlx::query(
+        "SELECT run_id, workflow_run_id FROM pipeline.execution_runs
+         WHERE workflow_type = 'seo_site_build' AND status NOT IN ('done', 'failed')
+         ORDER BY created_at, run_id",
+    )
+    .fetch_all(&pool)
+    .await?;
+    let mut active = 0usize;
+    let mut reconciled = 0usize;
+    for row in rows {
+        let run_id: Uuid = row.get("run_id");
+        let workflow_id: String = row.get("workflow_run_id");
+        if run_id.to_string() != workflow_id {
+            anyhow::bail!("run_id and Temporal workflow_id differ: {run_id}");
+        }
+        let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.clone());
+        let description = handle
+            .describe(WorkflowDescribeOptions::default())
+            .await
+            .with_context(|| format!("Temporal description unavailable for {workflow_id}"))?;
+        if description.id() != workflow_id
+            || description.workflow_type() != "SeoSiteBuildCanonicalCutoverWorkflow"
+        {
+            anyhow::bail!("unexpected Temporal workflow identity for {workflow_id}");
+        }
+        let terminal_status = match description.status() {
+            WorkflowClientStatus::Running | WorkflowClientStatus::Paused => None,
+            WorkflowClientStatus::Completed => {
+                // A completed workflow may contain a blocked/non-publishable
+                // result. Treat it as done ONLY with verified pages and truth.
+                let raw = handle
+                    .get_result(WorkflowGetResultOptions::default())
+                    .await
+                    .with_context(|| format!("completed workflow result missing: {workflow_id}"))?;
+                let result: String = serde_json::from_slice(
+                    &raw.payloads.first().context("completed workflow missing payload")?.data,
+                )?;
+                if report_workflow_completion(
+                    "SeoSiteBuildCanonicalCutoverWorkflow", &workflow_id, &result, true,
+                ).is_ok() {
+                    Some("done")
+                } else {
+                    Some("failed")
+                }
+            }
+            WorkflowClientStatus::Failed
+            | WorkflowClientStatus::Canceled
+            | WorkflowClientStatus::Terminated
+            | WorkflowClientStatus::TimedOut => Some("failed"),
+            other => anyhow::bail!("unsupported Temporal status {other:?} for {workflow_id}"),
+        };
+        if let Some(status) = terminal_status {
+            let updated = sqlx_execution_runs_adapter::reconcile_terminal_execution_run(
+                &pool, &workflow_id, status,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "RUN_RECONCILE workflow_id={} temporal={:?} status={} updated={}",
+                workflow_id, description.status(), status, updated
+            );
+            reconciled += usize::from(updated);
+        } else {
+            active += 1;
+        }
+    }
+    println!("RUN_RECONCILE complete active={active} reconciled={reconciled}");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli {
@@ -303,6 +378,9 @@ async fn main() -> Result<()> {
                 &result,
                 true,
             )?;
+        }
+        Command::RunReconcile { database_url } => {
+            reconcile_terminal_site_runs(&client, database_url).await?;
         }
         Command::WorkflowResume { workflow_id } => {
             let handle = client.get_workflow_handle::<UntypedWorkflow>(workflow_id.clone());

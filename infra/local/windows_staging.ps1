@@ -153,10 +153,6 @@ if ($oldSha -eq $Commit) {
         exit 0
     }
 }
-# Staging only: do not change the worker while business runs are active.
-$count = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c 'SELECT count(*) FROM pipeline.execution_runs;' | Out-String).Trim()
-Assert-Exit 'business-run safety check'
-if ($count -ne '0') { throw "Run history is nonempty ($count): require explicit drain plan" }
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
@@ -228,6 +224,16 @@ Assert-Exit 'inspect newly built image'
 if (-not $newImage) {
     throw 'Candidate build has no verifiable image ID'
 }
+
+# Reconcile terminal executions through the already-running canonical Rust
+# worker, without creating/attaching a second Compose container on Windows.
+# The accepted installed worker owns the same stable Temporal readback CLI.
+& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter --temporal-url http://alegria_temporal:7233 run-reconcile
+Assert-Exit 'Temporal terminal-run reconciliation'
+# Only genuinely active or unrecognised runs may block replacement.
+$activeCount = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c "SELECT count(*) FROM pipeline.execution_runs WHERE status NOT IN ('done','failed');" | Out-String).Trim()
+Assert-Exit 'active business-run safety check'
+if ($activeCount -ne '0') { throw "Active business runs ($activeCount): require explicit drain plan" }
 
 function Test-Docker-Engine-Ready {
     try {

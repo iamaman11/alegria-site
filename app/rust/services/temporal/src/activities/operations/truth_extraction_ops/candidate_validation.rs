@@ -129,17 +129,20 @@ pub(crate) async fn candidate_validation_impl(
         let mut candidates = Vec::new();
         for (ordinal, rule) in section.rules.iter().enumerate() {
             let (role, concept_key) = role_and_concept_for_rule(rule);
-            let evidence_targets = if !rule.numeric_tokens.is_empty() {
-                rule.numeric_tokens.clone()
+            // The FIRST numeric token determines rule parameters; never
+            // cite a different amount or duration merely because it appears
+            // elsewhere in this raw section.
+            let evidence_targets: Vec<String> = if let Some(first) = rule.numeric_tokens.first() {
+                vec![first.clone()]
             } else {
-                vec![match rule.rule_key.as_str() {
-                    "passport_required" => "паспорт".to_string(),
-                    "insurance_required" => "страхов".to_string(),
-                    _ => rule.rule_key.clone(),
-                }]
+                match rule.rule_key.as_str() {
+                    "passport_required" => vec!["passport".to_string(), "паспорт".to_string()],
+                    "insurance_required" => vec!["insurance".to_string(), "страхов".to_string()],
+                    _ => vec![rule.rule_key.clone()],
+                }
             };
             let (span_start, span_end, evidence_quote) =
-                find_evidence_span(&raw.content_md, &evidence_targets);
+                find_evidence_span(&raw.content_md, &evidence_targets, &rule.rule_key);
             let uncertainty_flags = section_uncertainty_flags(&raw.content_md);
             let runtime = TruthCandidateRuntime {
                 rule_candidate_id: blake3_hex(
@@ -176,7 +179,12 @@ pub(crate) async fn candidate_validation_impl(
                 uncertainty_flags: uncertainty_flags.clone(),
             };
             let validation = validate_truth_candidate(&runtime, &raw.content_md);
+            let rule_context_supported =
+                deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
             let mut epistemic_status = validation.epistemic_status.clone();
+            if !rule_context_supported && epistemic_status != "rejected" {
+                epistemic_status = "needs_hitl".to_string();
+            }
             if ontology.needs_hitl && epistemic_status != "rejected" {
                 epistemic_status = "needs_hitl".to_string();
             }
@@ -199,6 +207,9 @@ pub(crate) async fn candidate_validation_impl(
                 span_start: runtime.span_start,
                 span_end: runtime.span_end,
                 source_snapshot_hash: runtime.source_snapshot_hash,
+                provider_key: "deterministic".to_string(),
+                model_key: "cutover-runtime".to_string(),
+                prompt_version: "cutover@1".to_string(),
                 freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
                 completeness_class: classify_candidate_completeness_local(&validation),
                 epistemic_status,
@@ -206,6 +217,10 @@ pub(crate) async fn candidate_validation_impl(
                     .issues
                     .iter()
                     .map(|issue| format!("{}:{}", issue.code, issue.message))
+                    .chain(
+                        (!rule_context_supported)
+                            .then_some("evidence_role_context_unsubstantiated:quoted sentence does not establish the extracted rule".to_string()),
+                    )
                     .collect(),
             });
         }
@@ -231,6 +246,9 @@ pub(crate) async fn candidate_validation_impl(
                     message: format!("manual truth evidence snapshot changed: {}", raw.id),
                 });
             }
+            let provider_key = response.provider_key.clone();
+            let model_key = response.model_key.clone();
+            let prompt_version = response.prompt_version.clone();
             for (ordinal, rule) in response.candidates.into_iter().enumerate() {
                 let (params, scope) =
                     infrastructure::adapters::manual_llm_queue::validated_candidate_values(&rule)?;
@@ -298,6 +316,9 @@ pub(crate) async fn candidate_validation_impl(
                     span_start: runtime.span_start,
                     span_end: runtime.span_end,
                     source_snapshot_hash: runtime.source_snapshot_hash,
+                    provider_key: provider_key.clone(),
+                    model_key: model_key.clone(),
+                    prompt_version: prompt_version.clone(),
                     freshness_class: classify_candidate_freshness_local(&uncertainty_flags),
                     completeness_class: classify_candidate_completeness_local(&validation),
                     epistemic_status,
