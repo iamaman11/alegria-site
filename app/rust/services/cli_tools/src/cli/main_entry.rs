@@ -101,6 +101,9 @@ async fn main() -> Result<()> {
             output_dir,
             base_url,
         } => build_static_site(database_url, &output_dir, &base_url).await?,
+        Command::RawReextractEmpty { database_url, page_id } => {
+            raw_reextract_empty(database_url, page_id).await?
+        }
         Command::CrawlPendingSources {
             database_url,
             run_id,
