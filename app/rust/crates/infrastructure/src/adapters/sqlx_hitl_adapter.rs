@@ -265,7 +265,7 @@ pub async fn load_rejected_truth_review_payloads(
           AND t.task_type = 'truth_candidate_review'
           AND t.queue_state = 'in_review'
           AND t.decision_payload->'review'->>'decision' = 'reject'
-          AND c.epistemic_status = 'needs_hitl'
+          AND c.epistemic_status IN ('needs_hitl', 'rejected')
           AND c.source_snapshot_hash = t.decision_payload->>'source_snapshot_hash'
           AND s.content_hash = c.source_snapshot_hash
         "#,
