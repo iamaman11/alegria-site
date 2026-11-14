@@ -183,6 +183,52 @@ pub async fn reconcile_truth_candidate_reviews(
     Ok(result.rows_affected())
 }
 
+/// A rejection is a conservative input to the *existing* canonical
+/// adjudication. Approval is intentionally not returned as verification.
+pub async fn load_rejected_truth_review_payloads(
+    pool: &PgPool,
+    context_key: &str,
+) -> std::result::Result<Vec<Value>, DomainError> {
+    if context_key.trim().is_empty() {
+        return Err(contract_violation("truth review context_key required"));
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT t.decision_payload
+        FROM site.seo_hitl_tasks AS t
+        JOIN extracted.rule_candidates AS c
+          ON c.rule_candidate_id = t.blocking_execution_key
+         AND c.context_key = t.scope_signature
+        JOIN raw.sections AS s ON s.id = c.raw_section_id
+        WHERE t.scope_signature = $1
+          AND t.task_type = 'truth_candidate_review'
+          AND t.queue_state = 'in_review'
+          AND t.decision_payload->'review'->>'decision' = 'reject'
+          AND c.epistemic_status = 'needs_hitl'
+          AND c.source_snapshot_hash = t.decision_payload->>'source_snapshot_hash'
+          AND s.content_hash = c.source_snapshot_hash
+        "#,
+    )
+    .bind(context_key)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| infra_unavailable(e.to_string()))?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.get::<Json<Value>, _>("decision_payload").0)
+        .collect())
+}
+
+/// Show bounded evidence context, never duplicate the original raw section
+/// into the persisted review task. Byte offsets stay UTF-8 exact.
+fn reviewer_evidence_excerpt(raw: &str, start: usize, end: usize) -> Option<String> {
+    let matched = raw.get(start..end)?;
+    let prefix = raw.get(..start)?.chars().rev().take(180).collect::<Vec<_>>();
+    let before = prefix.into_iter().rev().collect::<String>();
+    let after = raw.get(end..)?.chars().take(220).collect::<String>();
+    Some(format!("{before}{matched}{after}"))
+}
+
 pub async fn list_truth_candidate_reviews(
     pool: &PgPool,
     context_key: &str,
@@ -240,10 +286,48 @@ pub async fn show_truth_candidate_review(
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?
     .ok_or_else(|| contract_violation("truth review task not found"))?;
+    let payload = row.get::<Json<Value>, _>("decision_payload").0;
+    let candidate_id = payload
+        .get("candidate_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| contract_violation("review candidate_id missing"))?;
+    let section = sqlx::query(
+        r#"
+        SELECT s.content_md, s.content_hash, k.source_type
+        FROM extracted.rule_candidates AS c
+        JOIN raw.sections AS s ON s.id = c.raw_section_id
+        LEFT JOIN kb.sources AS k ON k.source_key = c.source_key
+        WHERE c.rule_candidate_id = $1
+        "#,
+    )
+    .bind(candidate_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| infra_unavailable(e.to_string()))?;
+    let evidence_context = section.map(|section| {
+        let raw: String = section.get("content_md");
+        let hash: String = section.get("content_hash");
+        let start = payload.get("span_start").and_then(Value::as_u64);
+        let end = payload.get("span_end").and_then(Value::as_u64);
+        let excerpt = start.zip(end).and_then(|(a, b)| {
+            reviewer_evidence_excerpt(&raw, a as usize, b as usize)
+        });
+        let exact = start.zip(end)
+            .and_then(|(a, b)| raw.get(a as usize..b as usize))
+            .is_some_and(|span| payload.get("evidence_quote").and_then(Value::as_str) == Some(span.trim()));
+        json!({
+            "excerpt": excerpt,
+            "source_type": section.get::<Option<String>, _>("source_type"),
+            "snapshot_matches": payload.get("source_snapshot_hash").and_then(Value::as_str)
+                == Some(hash.as_str()),
+            "quote_span_matches": exact,
+        })
+    });
     Ok(json!({
         "task_key": row.get::<String, _>("task_key"),
         "queue_state": row.get::<String, _>("queue_state"),
-        "candidate": row.get::<Json<Value>, _>("decision_payload").0,
+        "candidate": payload,
+        "evidence_context": evidence_context,
         "audit_log": row.get::<Json<Value>, _>("audit_log_payload").0,
         "updated_at": row.get::<String, _>("updated_at"),
     }))
