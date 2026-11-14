@@ -152,6 +152,21 @@
         )
         .await
         .is_err());
+        let changes_requested =
+            infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+                &pool, &task, "ci_human_reviewer", "request_changes", "source is incomplete",
+            )
+            .await
+            .unwrap();
+        assert_eq!(changes_requested, "reopened");
+        let unchanged_after_changes: String = sqlx::query_scalar(
+            "SELECT epistemic_status FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+        )
+        .bind(&candidate_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(unchanged_after_changes, "needs_hitl");
         let reviewed = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "ci_human_reviewer", "approve", "source checked",
         )
@@ -176,7 +191,7 @@
             .await
             .unwrap();
         assert_eq!(task_after["queue_state"], "resolved");
-        assert_eq!(task_after["audit_log"].as_array().unwrap().len(), 2);
+        assert_eq!(task_after["audit_log"].as_array().unwrap().len(), 3);
         let not_verified: String = sqlx::query_scalar(
             "SELECT epistemic_status FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
         )
@@ -201,6 +216,16 @@
         )
         .await
         .unwrap();
+
+        // A review of an earlier needs_hitl candidate is not a reusable
+        // approval for a later epistemic status or changed source snapshot.
+        assert!(
+            infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+                &pool, &task, "ci_human_reviewer", "approve", "source checked",
+            )
+            .await
+            .is_err()
+        );
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,

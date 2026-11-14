@@ -331,13 +331,3 @@ pub async fn decide_truth_candidate_review(
         .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(next_state.to_string())
 }
-
-#[cfg(test)]
-mod truth_review_policy_tests {
-    #[test]
-    fn approval_is_not_a_verification_method() {
-        // This boundary intentionally does not depend on verified rule writers.
-        assert_ne!("approve", "verified");
-        assert_ne!("request_changes", "verified");
-    }
-}
