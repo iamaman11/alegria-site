@@ -162,7 +162,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         }
     });
     let first: ManualLlmJob<EditorialDraftGenerateInputPayload> =
-        timeout(Duration::from_secs(180), async {
+        match timeout(Duration::from_secs(180), async {
             loop {
                 if let Some(job) = manual_llm_queue::next_editorial(&infra.postgres.pool)
                     .await
@@ -174,7 +174,57 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             }
         })
         .await
-        .expect("canonical Temporal workflow did not enqueue a manual editorial job");
+        {
+            Ok(job) => job,
+            Err(_) => {
+                // Report the *actual* failure boundary rather than treating every
+                // missing editorial task as a slow LLM or raising the timeout.
+                let steps = certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                let jobs = sqlx::query(
+                    "SELECT operation, job_status, count(*)::bigint AS total
+                     FROM pipeline.manual_llm_jobs
+                     WHERE run_id = $1
+                     GROUP BY operation, job_status
+                     ORDER BY operation, job_status",
+                )
+                .bind(&run_id)
+                .fetch_all(&infra.postgres.pool)
+                .await
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| format!(
+                            "{}:{}:{}",
+                            row.get::<String, _>("operation"),
+                            row.get::<String, _>("job_status"),
+                            row.get::<i64, _>("total")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+                let run_status: Result<Option<String>, sqlx::Error> =
+                    sqlx::query_scalar("SELECT status FROM pipeline.execution_runs WHERE run_id = $1")
+                        .bind(Uuid::parse_str(&run_id).expect("registered run is a UUID"))
+                        .fetch_optional(&infra.postgres.pool)
+                        .await;
+                let terminal = timeout(
+                    Duration::from_secs(2),
+                    handle.get_result(WorkflowGetResultOptions::default()),
+                )
+                .await;
+                let temporal = match terminal {
+                    Ok(Ok(_)) => "completed_without_editorial".to_string(),
+                    Ok(Err(error)) => format!("failed: {error}"),
+                    Err(_) => "not_terminal".to_string(),
+                };
+                panic!(
+                    "canonical Temporal workflow did not enqueue a manual editorial job: \
+                     run_id={run_id}; execution_run={run_status:?}; \
+                     workflow={temporal}; truth_driver_finished={}; \
+                     manual_jobs={jobs:?}; last_steps=\n{steps}",
+                    truth_driver.is_finished(),
+                );
+            }
+        };
     assert_eq!(first.payload.run_id, run_id);
     assert_eq!(first.operation, "editorial_draft");
     assert!(
