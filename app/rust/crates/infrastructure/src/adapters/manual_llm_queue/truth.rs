@@ -48,19 +48,20 @@ pub fn validated_candidate_values(
     if candidate.role == "FEE_ITEM" {
         if let TruthParamValue::Object(fields) = &mut params {
             for name in ["amount", "min_amount", "max_amount"] {
-                if let Some(value @ TruthParamValue::Integer(_)) = fields.get_mut(name) {
-                    let integer = match value {
-                        TruthParamValue::Integer(integer) => *integer,
-                        _ => unreachable!(),
-                    };
-                    // f64 can exactly represent integers up to 2^53.
-                    // Refuse to silently change an oversized financial claim.
-                    if !(-9_007_199_254_740_992..=9_007_199_254_740_992).contains(&integer) {
-                        return Err(validation(format!(
-                            "manual truth fee {name} cannot be represented exactly as decimal"
-                        )));
+                if let Some(value) = fields.get_mut(name) {
+                    if let TruthParamValue::Integer(integer) = value {
+                        let original = *integer;
+                        // f64 represents integers exactly only through 2^53.
+                        // Never round an oversized financial claim silently.
+                        if !(-9_007_199_254_740_992..=9_007_199_254_740_992)
+                            .contains(&original)
+                        {
+                            return Err(validation(format!(
+                                "manual truth fee {name} cannot be represented exactly as decimal"
+                            )));
+                        }
+                        *value = TruthParamValue::Decimal(original as f64);
                     }
-                    *value = TruthParamValue::Decimal(integer as f64);
                 }
             }
         }
