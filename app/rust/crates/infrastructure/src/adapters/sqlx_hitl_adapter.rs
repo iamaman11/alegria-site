@@ -129,9 +129,70 @@ pub async fn reconcile_truth_candidate_reviews(
           AND t.blocking_execution_key = c.rule_candidate_id
           AND t.queue_state IN ('open', 'in_review', 'reopened')
           AND (
-              c.epistemic_status <> 'needs_hitl'
-              OR (t.decision_payload->>'source_snapshot_hash')
-                     IS DISTINCT FROM c.source_snapshot_hash
+              (t.decision_payload->>'source_snapshot_hash')
+                  IS DISTINCT FROM c.source_snapshot_hash
+              OR (c.epistemic_status <> 'needs_hitl'
+                  AND NOT (
+                      c.epistemic_status = 'rejected'
+                      AND t.decision_payload->'review'->>'decision' = 'reject'
+                  ))
+          )
+        "#,
+    )
+    .bind(context_key)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| infra_unavailable(e.to_string()))?;
+    // A candidate can become unresolved again after an independent recheck,
+    // or the extraction projection can change while source bytes stay fixed.
+    // Reopen the SAME task; keep the immutable audit, discard the stale review
+    // verdict and refresh the candidate payload. No duplicate queue owner.
+    sqlx::query(
+        r#"
+        UPDATE site.seo_hitl_tasks AS t
+        SET queue_state = 'open',
+            current_owner_role = 'truth_reviewer',
+            decision_payload = (
+                t.decision_payload || jsonb_build_object(
+                    'raw_section_id', c.raw_section_id,
+                    'role', c.role,
+                    'concept', c.concept_canonical_key,
+                    'params', c.params, 'scope', c.scope,
+                    'source_url', c.source_key,
+                    'source_snapshot_hash', c.source_snapshot_hash,
+                    'evidence_quote', c.evidence_quote,
+                    'span_start', c.span_start, 'span_end', c.span_end,
+                    'llm_provider', c.llm_provider, 'llm_model', c.llm_model,
+                    'prompt_version', c.prompt_version,
+                    'epistemic_status', 'needs_hitl', 'recheck_required', true)
+            ) - 'review',
+            audit_log_payload = t.audit_log_payload || jsonb_build_array(
+                jsonb_build_object('event', 'truth_candidate_reopened_for_review',
+                    'run_id', $2::text, 'at', now())),
+            updated_at = now()
+        FROM extracted.rule_candidates AS c
+        WHERE t.task_key = 'truth_candidate_review@1:' ||
+                c.rule_candidate_id || ':' || c.source_snapshot_hash
+          AND t.task_type = 'truth_candidate_review'
+          AND t.scope_signature = $1
+          AND c.context_key = $1
+          AND c.epistemic_status = 'needs_hitl'
+          AND (
+              t.queue_state = 'superseded'
+              OR (t.decision_payload->>'raw_section_id')::bigint
+                  IS DISTINCT FROM c.raw_section_id
+              OR (t.decision_payload->>'role') IS DISTINCT FROM c.role
+              OR (t.decision_payload->>'concept') IS DISTINCT FROM c.concept_canonical_key
+              OR t.decision_payload->'params' IS DISTINCT FROM c.params
+              OR t.decision_payload->'scope' IS DISTINCT FROM c.scope
+              OR (t.decision_payload->>'source_url') IS DISTINCT FROM c.source_key
+              OR (t.decision_payload->>'evidence_quote') IS DISTINCT FROM c.evidence_quote
+              OR (t.decision_payload->>'span_start')::integer IS DISTINCT FROM c.span_start
+              OR (t.decision_payload->>'span_end')::integer IS DISTINCT FROM c.span_end
+              OR (t.decision_payload->>'llm_provider') IS DISTINCT FROM c.llm_provider
+              OR (t.decision_payload->>'llm_model') IS DISTINCT FROM c.llm_model
+              OR (t.decision_payload->>'prompt_version') IS DISTINCT FROM c.prompt_version
           )
         "#,
     )
