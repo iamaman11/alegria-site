@@ -21,6 +21,24 @@ jobs:
     timeout-minutes: 45
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      # Execute Rust truth/HITL SQL tests on this disposable PostgreSQL,
+      # not merely compile them in a separate job without DATABASE_URL.
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
@@ -32,7 +50,10 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+
+      - name: Initialize disposable truth/HITL schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Rust formatting
         working-directory: app/rust
