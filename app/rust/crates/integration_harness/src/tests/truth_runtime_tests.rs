@@ -300,6 +300,72 @@
         assert_eq!(negatives.len(), 1);
         assert_eq!(negatives[0]["candidate_id"], rejected_candidate_id);
         assert_eq!(negatives[0]["review"]["decision"], "reject");
+        // A rejected review is not forgotten just because truth governance
+        // persists the same candidate as rejected. A second canonical run
+        // must retain the negative veto on the same source snapshot.
+        rejected_candidate.epistemic_status = "rejected".to_string();
+        infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+            &pool, &rejected_candidate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+                &pool, &context_key, "ci-rejected-recheck",
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        let persistent =
+            infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+                &pool, &context_key,
+            )
+            .await
+            .unwrap();
+        assert_eq!(persistent.len(), 1);
+        let still_held =
+            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+                &pool, &rejection_key,
+            )
+            .await
+            .unwrap();
+        assert_eq!(still_held["queue_state"], "in_review");
+
+        // A changed extraction on the SAME source bytes must require a new
+        // human review instead of silently reusing the previous rejection.
+        rejected_candidate.epistemic_status = "needs_hitl".to_string();
+        rejected_candidate.evidence_quote = "35 EUR".to_string();
+        rejected_candidate.span_start = 16;
+        rejected_candidate.span_end = 22;
+        infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+            &pool, &rejected_candidate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+                &pool, &context_key, "ci-changed-extraction",
+            )
+            .await
+            .unwrap(),
+            0
+        );
+        let reopened = infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+            &pool, &rejection_key,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reopened["queue_state"], "open");
+        assert_eq!(reopened["candidate"]["evidence_quote"], "35 EUR");
+        assert!(reopened["candidate"].get("review").is_none());
+        assert_eq!(reopened["audit_log"].as_array().unwrap().len(), 3);
+        assert!(infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+            &pool, &context_key,
+        )
+        .await
+        .unwrap()
+        .is_empty());
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,
