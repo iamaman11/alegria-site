@@ -98,6 +98,15 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     // Before editorial generation, prove that the same Temporal run waits
     // for every raw-section truth proposal in the same durable inbox.
     // An explicit empty candidate array is valid but cannot create verified truth.
+    // Drive the manual path with the same evidence-bearing proposals as the
+    // certified happy path, not a passport-only subset that can leave fee/time
+    // unresolved and correctly block the subsequent editorial phase.
+    let truth_fixture_candidates = fixture.model_stub_inputs.extraction_responses[0]
+        .get("candidates")
+        .and_then(serde_json::Value::as_array)
+        .expect("certified happy path provides direct source proposals")
+        .clone();
+    assert_eq!(truth_fixture_candidates.len(), 3);
     let truth_pool = infra.postgres.pool.clone();
     let truth_run = run_id.clone();
     let truth_temporal = infra.temporal.temporal_url.clone();
@@ -119,31 +128,24 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                     job.payload["context_key"].as_str().unwrap().is_empty(),
                     false
                 );
-                // One real, byte-anchored source claim must pass the
-                // *canonical* validator, not just the JSON inbox parser.
+                // Re-anchor each certified proposal to this *actual* raw
+                // section. Missing source quotes cannot become candidates.
+                // The normal manual inbox and canonical validator still
+                // verify each byte span and all candidate fields.
                 let raw_text = job.payload["raw_text"].as_str().unwrap();
                 let section_id = job.payload["raw_section_id"].as_i64().unwrap();
-                let quote = "Passport is required for the visa application.";
-                let candidates = raw_text
-                    .find(quote)
-                    .map(|start| {
-                        vec![serde_json::json!({
-                            "role": "DOCUMENT_REQUIRED",
-                            "concept_canonical_key": "passport",
-                            "raw_mention": quote,
-                            "params": {"severity": "mandatory", "subtype": "passport"},
-                            "scope": {},
-                            "severity": "mandatory",
-                            "alternatives": [],
-                            "derivation_type": "direct",
-                            "confidence": 0.95,
-                            "evidence_section_id": section_id,
-                            "evidence_quote": quote,
-                            "span_start": start,
-                            "span_end": start + quote.len(),
-                        })]
+                let candidates = truth_fixture_candidates
+                    .iter()
+                    .filter_map(|fixture_candidate| {
+                        let quote = fixture_candidate.get("evidence_quote")?.as_str()?;
+                        let start = raw_text.find(quote)?;
+                        let mut candidate = fixture_candidate.clone();
+                        candidate["evidence_section_id"] = serde_json::json!(section_id);
+                        candidate["span_start"] = serde_json::json!(start);
+                        candidate["span_end"] = serde_json::json!(start + quote.len());
+                        Some(candidate)
                     })
-                    .unwrap_or_default();
+                    .collect::<Vec<_>>();
                 let submission: manual_llm_queue::ManualTruthSubmission =
                     serde_json::from_value(serde_json::json!({
                         "task_id": job.task_id,
