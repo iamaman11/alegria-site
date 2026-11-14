@@ -817,9 +817,10 @@ mod tests {
             candidate.span_end = snippet.len();
             let result = validate_truth_candidate(&candidate, snippet);
             assert_eq!(result.epistemic_status, "needs_hitl");
-            assert!(result.issues.iter().any(|issue| {
-                issue.code == "evidence_fragment_requires_context"
-            }));
+            assert!(result
+                .issues
+                .iter()
+                .any(|issue| { issue.code == "evidence_fragment_requires_context" }));
         }
     }
 

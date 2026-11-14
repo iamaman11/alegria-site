@@ -223,7 +223,12 @@ pub async fn load_rejected_truth_review_payloads(
 /// into the persisted review task. Byte offsets stay UTF-8 exact.
 fn reviewer_evidence_excerpt(raw: &str, start: usize, end: usize) -> Option<String> {
     let matched = raw.get(start..end)?;
-    let prefix = raw.get(..start)?.chars().rev().take(180).collect::<Vec<_>>();
+    let prefix = raw
+        .get(..start)?
+        .chars()
+        .rev()
+        .take(180)
+        .collect::<Vec<_>>();
     let before = prefix.into_iter().rev().collect::<String>();
     let after = raw.get(end..)?.chars().take(220).collect::<String>();
     Some(format!("{before}{matched}{after}"))
@@ -309,12 +314,15 @@ pub async fn show_truth_candidate_review(
         let hash: String = section.get("content_hash");
         let start = payload.get("span_start").and_then(Value::as_u64);
         let end = payload.get("span_end").and_then(Value::as_u64);
-        let excerpt = start.zip(end).and_then(|(a, b)| {
-            reviewer_evidence_excerpt(&raw, a as usize, b as usize)
-        });
-        let exact = start.zip(end)
+        let excerpt = start
+            .zip(end)
+            .and_then(|(a, b)| reviewer_evidence_excerpt(&raw, a as usize, b as usize));
+        let exact = start
+            .zip(end)
             .and_then(|(a, b)| raw.get(a as usize..b as usize))
-            .is_some_and(|span| payload.get("evidence_quote").and_then(Value::as_str) == Some(span.trim()));
+            .is_some_and(|span| {
+                payload.get("evidence_quote").and_then(Value::as_str) == Some(span.trim())
+            });
         json!({
             "excerpt": excerpt,
             "source_type": section.get::<Option<String>, _>("source_type"),
@@ -394,7 +402,12 @@ pub async fn decide_truth_candidate_review(
         "#,
     )
     .bind(candidate_id)
-    .bind(payload.get("context_key").and_then(Value::as_str).unwrap_or(""))
+    .bind(
+        payload
+            .get("context_key")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+    )
     .fetch_optional(&mut *tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?
