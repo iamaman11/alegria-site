@@ -179,8 +179,13 @@ pub(crate) async fn candidate_validation_impl(
                 uncertainty_flags: uncertainty_flags.clone(),
             };
             let validation = validate_truth_candidate(&runtime, &raw.content_md);
+            let amount_or_duration_matches = rule
+                .numeric_tokens
+                .first()
+                .is_none_or(|token| contains_exact_evidence_token(&evidence_quote, token.trim()));
             let rule_context_supported =
-                deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
+                amount_or_duration_matches
+                    && deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
             let mut epistemic_status = validation.epistemic_status.clone();
             if !rule_context_supported && epistemic_status != "rejected" {
                 epistemic_status = "needs_hitl".to_string();

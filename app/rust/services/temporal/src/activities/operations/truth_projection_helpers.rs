@@ -63,6 +63,22 @@ fn supporting_sentence_span(
     (start, start + quote.len(), quote.to_string())
 }
 
+fn literal_token_has_digit_boundaries(raw: &str, start: usize, end: usize) -> bool {
+    let first = raw[start..end].chars().next();
+    let last = raw[start..end].chars().next_back();
+    !(first.is_some_and(|ch| ch.is_ascii_digit())
+        && raw[..start].chars().next_back().is_some_and(|ch| ch.is_ascii_digit())
+        || last.is_some_and(|ch| ch.is_ascii_digit())
+            && raw[end..].chars().next().is_some_and(|ch| ch.is_ascii_digit()))
+}
+
+fn contains_exact_evidence_token(quote: &str, token: &str) -> bool {
+    !token.is_empty()
+        && quote.match_indices(token).any(|(start, _)| {
+            literal_token_has_digit_boundaries(quote, start, start + token.len())
+        })
+}
+
 fn find_evidence_span(
     raw_text: &str,
     candidates: &[String],
@@ -76,16 +92,10 @@ fn find_evidence_span(
         }
         for (start, _) in raw_text.match_indices(token) {
             let end = start + token.len();
-            // "80" must not match the last digits of "180", or the
-            // fractional component of a different amount.
-            if token.chars().all(|ch| ch.is_ascii_digit()) {
-                let prev = raw_text[..start].chars().next_back();
-                let next = raw_text[end..].chars().next();
-                if prev.is_some_and(|ch| ch.is_ascii_digit())
-                    || next.is_some_and(|ch| ch.is_ascii_digit())
-                {
-                    continue;
-                }
+            // An isolated amount or duration cannot be a substring of
+            // a different numerical value (80 must not match 180).
+            if !literal_token_has_digit_boundaries(raw_text, start, end) {
+                continue;
             }
             let found = supporting_sentence_span(raw_text, start, end);
             if deterministic_evidence_has_role_context(rule_key, &found.2) {
@@ -166,6 +176,17 @@ mod source_evidence_span_tests {
             find_evidence_span(raw, &["80".to_string()], "consular_fee");
         assert_eq!(quote, "Consular fee is 80 EUR.");
         assert_eq!(&raw[start..end], quote);
+    }
+
+    #[test]
+    fn amount_80_does_not_cite_180_even_in_fee_sentence() {
+        let raw = "Consular fee is 180 EUR.";
+        let (start, end, quote) =
+            find_evidence_span(raw, &["80".to_string()], "consular_fee");
+        assert_eq!(quote, raw);
+        assert_eq!(&raw[start..end], quote);
+        assert!(!contains_exact_evidence_token(&quote, "80"));
+        assert!(contains_exact_evidence_token(&quote, "180"));
     }
 
     #[test]
