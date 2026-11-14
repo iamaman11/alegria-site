@@ -133,10 +133,16 @@ pub(crate) async fn candidate_validation_impl(
                 rule.numeric_tokens.clone()
             } else {
                 vec![match rule.rule_key.as_str() {
-                    "passport_required" => "паспорт".to_string(),
-                    "insurance_required" => "страхов".to_string(),
+                    "passport_required" => "passport".to_string(),
+                    "insurance_required" => "insurance".to_string(),
                     _ => rule.rule_key.clone(),
                 }]
+                .into_iter()
+                .chain(match rule.rule_key.as_str() {
+                    "passport_required" => Some("паспорт".to_string()),
+                    "insurance_required" => Some("страхов".to_string()),
+                    _ => None,
+                })
             };
             let (span_start, span_end, evidence_quote) =
                 find_evidence_span(&raw.content_md, &evidence_targets);
@@ -176,7 +182,12 @@ pub(crate) async fn candidate_validation_impl(
                 uncertainty_flags: uncertainty_flags.clone(),
             };
             let validation = validate_truth_candidate(&runtime, &raw.content_md);
+            let rule_context_supported =
+                deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
             let mut epistemic_status = validation.epistemic_status.clone();
+            if !rule_context_supported && epistemic_status != "rejected" {
+                epistemic_status = "needs_hitl".to_string();
+            }
             if ontology.needs_hitl && epistemic_status != "rejected" {
                 epistemic_status = "needs_hitl".to_string();
             }
@@ -209,6 +220,10 @@ pub(crate) async fn candidate_validation_impl(
                     .issues
                     .iter()
                     .map(|issue| format!("{}:{}", issue.code, issue.message))
+                    .chain(
+                        (!rule_context_supported)
+                            .then_some("evidence_role_context_unsubstantiated:quoted sentence does not establish the extracted rule".to_string()),
+                    )
                     .collect(),
             });
         }
