@@ -54,6 +54,16 @@ async fn build_static_site(
     Ok(0)
 }
 
+async fn raw_reextract_empty(database_url: Option<String>, page_id: i64) -> Result<i32> {
+    let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
+    let restored = raw_crawl_adapter::recover_empty_raw_sections(&pool, page_id).await?;
+    println!(
+        "RAW_REEXTRACT_EMPTY page_id={page_id} recovered_sections={restored} status={}",
+        if restored == 0 { "already_materialized" } else { "recovered" }
+    );
+    Ok(0)
+}
+
 async fn crawl_pending_sources(
     database_url: Option<String>,
     run_id: String,
