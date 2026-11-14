@@ -73,8 +73,8 @@
         .await
         .unwrap();
         let section_id: i64 = sqlx::query_scalar(
-            "INSERT INTO raw.sections (page_id, content_md)
-             VALUES ($1, $2) RETURNING id",
+            "INSERT INTO raw.sections (page_id, content_md, content_hash)
+             VALUES ($1, $2, 'test-source-snapshot') RETURNING id",
         )
         .bind(page_id)
         .bind(raw_text)
@@ -147,6 +147,15 @@
         assert_eq!(reviews[0]["candidate"]["source_snapshot_hash"], "test-source-snapshot");
         assert_eq!(reviews[0]["candidate"]["llm_provider"], "chat_manual");
         assert_eq!(reviews[0]["candidate"]["evidence_quote"], raw_text);
+        let show = infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+            &pool, &task,
+        )
+        .await
+        .unwrap();
+        assert_eq!(show["evidence_context"]["quote_span_matches"], true);
+        assert_eq!(show["evidence_context"]["snapshot_matches"], true);
+        assert!(show["evidence_context"]["excerpt"]
+            .as_str().unwrap().contains("Consular fee"));
         assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "seo_system", "approve", "test approval",
         )
@@ -173,6 +182,12 @@
         .await
         .unwrap();
         assert_eq!(reviewed, "in_review");
+        let reject_only = infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+            &pool, &context_key,
+        )
+        .await
+        .unwrap();
+        assert!(reject_only.is_empty(), "approval never bypasses truth governance");
         let same = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "ci_human_reviewer", "approve", "source checked",
         )
@@ -242,6 +257,49 @@
             .unwrap();
         assert_eq!(superseded["queue_state"], "superseded");
         assert_eq!(superseded["audit_log"].as_array().unwrap().len(), 4);
+
+        // Independently unresolved candidate with a negative human review:
+        // load only the exact section-bound rejection, not the prior approval.
+        let rejected_candidate_id = format!("review_rejected_{marker}");
+        let mut rejected_candidate = write_candidate.clone();
+        rejected_candidate.rule_candidate_id = rejected_candidate_id.clone();
+        rejected_candidate.epistemic_status = "needs_hitl".to_string();
+        rejected_candidate.concept_canonical_key = format!("review_rejected_concept_{marker}");
+        infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+            &pool, &rejected_candidate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+                &pool, &context_key, "ci-reviewed-rejection",
+            )
+            .await
+            .unwrap(),
+            1
+        );
+        let reviews = infrastructure::adapters::sqlx_hitl_adapter::list_truth_candidate_reviews(
+            &pool, &context_key, 10,
+        )
+        .await
+        .unwrap();
+        let rejection_key = reviews.iter()
+            .find(|task| task["candidate"]["candidate_id"] == rejected_candidate_id)
+            .unwrap()["task_key"].as_str().unwrap().to_string();
+        infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            &pool, &rejection_key, "ci_human_reviewer", "reject", "not supported by source",
+        )
+        .await
+        .unwrap();
+        let negatives =
+            infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+                &pool, &context_key,
+            )
+            .await
+            .unwrap();
+        assert_eq!(negatives.len(), 1);
+        assert_eq!(negatives[0]["candidate_id"], rejected_candidate_id);
+        assert_eq!(negatives[0]["review"]["decision"], "reject");
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,
