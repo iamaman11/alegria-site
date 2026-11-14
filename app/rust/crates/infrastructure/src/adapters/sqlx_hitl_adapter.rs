@@ -2,9 +2,9 @@ use anyhow::Context;
 use contracts::generated::alegria::temporal::v1::{HitlDecision, HitlTaskContext};
 use primitives::errors::DomainError;
 use serde::Serialize;
-use std::collections::BTreeSet;
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
+use std::collections::BTreeSet;
 
 fn contract_violation(message: impl Into<String>) -> DomainError {
     DomainError::ContractViolation {
@@ -282,10 +282,8 @@ fn matches_exact_rejected_review(
         && payload.get("params") == Some(&candidate.params)
         && payload.get("scope") == Some(&candidate.scope)
         && txt("evidence_quote") == Some(candidate.evidence_quote.as_str())
-        && payload.get("span_start").and_then(Value::as_u64)
-            == Some(candidate.span_start as u64)
-        && payload.get("span_end").and_then(Value::as_u64)
-            == Some(candidate.span_end as u64)
+        && payload.get("span_start").and_then(Value::as_u64) == Some(candidate.span_start as u64)
+        && payload.get("span_end").and_then(Value::as_u64) == Some(candidate.span_end as u64)
         && txt("llm_provider") == Some(candidate.llm_provider.as_str())
         && txt("llm_model") == Some(candidate.llm_model.as_str())
         && txt("prompt_version") == Some(candidate.prompt_version.as_str())
@@ -298,9 +296,14 @@ pub async fn load_exact_rejected_truth_candidate_ids(
     candidates: &[TruthReviewCandidateSnapshot],
 ) -> std::result::Result<BTreeSet<String>, DomainError> {
     let payloads = load_rejected_truth_review_payloads(pool, context_key).await?;
-    Ok(candidates.iter()
-        .filter(|candidate| candidate.context_key == context_key
-            && payloads.iter().any(|payload| matches_exact_rejected_review(candidate, payload)))
+    Ok(candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.context_key == context_key
+                && payloads
+                    .iter()
+                    .any(|payload| matches_exact_rejected_review(candidate, payload))
+        })
         .map(|candidate| candidate.candidate_id.clone())
         .collect())
 }
