@@ -240,6 +240,96 @@ fn bounded_raw_sections(sections: Vec<HtmlSection>) -> Vec<HtmlSection> {
     bounded
 }
 
+/// Re-extract only a persisted HTTP snapshot that currently has no semantic
+/// sections. This is a repair of source-derived data, not a new crawl or a
+/// change to the raw HTML, snapshot identity, or verified truth.
+pub async fn recover_empty_raw_sections(
+    pool: &PgPool,
+    page_id: i64,
+) -> std::result::Result<usize, primitives::errors::DomainError> {
+    if page_id <= 0 {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: "raw page_id must be positive".to_string(),
+        });
+    }
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let row = sqlx::query(
+        "SELECT url, raw_html, content_hash,
+                COALESCE(status_code, 0)::integer AS status_code
+         FROM raw.pages WHERE id = $1 FOR UPDATE",
+    )
+    .bind(page_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?
+    .ok_or_else(|| primitives::errors::DomainError::ValidationFailure {
+        message: format!("persisted raw page not found: {page_id}"),
+    })?;
+    let status_code: i32 = row.get("status_code");
+    let source_url: String = row.get("url");
+    let html: Option<String> = row.get("raw_html");
+    let hash: Option<String> = row.get("content_hash");
+    let html = html.ok_or_else(|| primitives::errors::DomainError::ValidationFailure {
+        message: format!("raw page has no stored HTML: {page_id}"),
+    })?;
+    let hash_matches = hash
+        .as_deref()
+        .is_some_and(|saved| !saved.is_empty() && saved == content_hash_v1(&html));
+    if status_code != 200 || html.is_empty() || !hash_matches {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: format!("raw page HTTP/HTML/hash guard rejected: {page_id}"),
+        });
+    }
+    let existing: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM raw.sections WHERE page_id = $1")
+            .bind(page_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?;
+    if existing > 0 {
+        // No deletes or recomputation of existing evidence.
+        tx.commit().await.map_err(classify_sqlx)?;
+        return Ok(0);
+    }
+    let sections = bounded_raw_sections(extract_sections_typed(&html, &source_url));
+    if sections.is_empty() {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: format!("no visible article sections in saved HTML: {page_id}"),
+        });
+    }
+    for section in &sections {
+        sqlx::query(
+            "INSERT INTO raw.sections
+             (page_id, heading_path, heading_level, section_order, section_type, content_md, content_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(page_id)
+        .bind(&section.heading_path)
+        .bind(section.heading_level as i16)
+        .bind(section.section_order as i32)
+        .bind(&section.section_type)
+        .bind(&section.content_md)
+        .bind(&section.content_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
+    sqlx::query(
+        "UPDATE raw.pages
+         SET content = jsonb_set(COALESCE(content, '{}'::jsonb), '{section_count}',
+                                 to_jsonb($2::integer), true),
+             processed = false
+         WHERE id = $1",
+    )
+    .bind(page_id)
+    .bind(sections.len() as i32)
+    .execute(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(sections.len())
+}
+
 pub async fn save_crawled_html(
     pool: &PgPool,
     source_url: &str,
