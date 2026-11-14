@@ -123,6 +123,26 @@ fn find_evidence_span(
 
 fn deterministic_evidence_has_role_context(rule_key: &str, quote: &str) -> bool {
     let lower = quote.to_lowercase();
+    // A private service charge is not a consular fee even when the number
+    // and the word "fee" happen to match. Keep those claims unresolved;
+    // source authority is checked independently by canonical adjudication.
+    if rule_key == "consular_fee"
+        && [
+            "service fee",
+            "agency service",
+            "our service",
+            "service charge",
+            "agency fee",
+            "agent fee",
+            "сервисный сбор",
+            "сбор за услуги",
+            "плата за услуги",
+        ]
+        .iter()
+        .any(|term| lower.contains(term))
+    {
+        return false;
+    }
     let markers: &[&str] = match rule_key {
         "consular_fee" => &["fee", "consular", "сбор", "пошлин", "консульск", "стоим"],
         "processing_time" => &["processing", "process time", "days to process", "срок", "рассмотр", "обработ", "takes", "take up to"],
@@ -197,6 +217,28 @@ mod source_evidence_span_tests {
         assert_eq!(quote, "Паспорт необходимо предъявить.");
         assert_eq!(&raw[start..end], quote);
         assert!(!deterministic_evidence_has_role_context("insurance_required", &quote));
+    }
+
+    #[test]
+    fn agency_service_charge_is_not_consular_fee() {
+        for raw in [
+            "Our agency service costs 250 EUR.",
+            "Our agency service fee is 250 EUR.",
+            "Сервисный сбор агентства составляет 250 евро.",
+        ] {
+            let (start, end, quote) =
+                find_evidence_span(raw, &["250".to_string()], "consular_fee");
+            assert_eq!(quote, raw);
+            assert_eq!(&raw[start..end], quote);
+            assert!(!deterministic_evidence_has_role_context("consular_fee", &quote));
+        }
+        // An agency's genuinely fee-related claim is structurally eligible
+        // for source-governance review but never automatically authoritative.
+        let agency_summary = "Agency summary says fee is 80 EUR.";
+        assert!(deterministic_evidence_has_role_context(
+            "consular_fee",
+            agency_summary
+        ));
     }
 
     #[test]
