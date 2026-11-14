@@ -111,6 +111,44 @@
         )
         .await
         .unwrap();
+        // Replayed source evidence with another extractor ID resolves to the
+        // existing candidate FK, without inventing another independent source.
+        let mut duplicate = write_candidate.clone();
+        duplicate.rule_candidate_id = format!("deterministic_same_evidence_{marker}");
+        duplicate.provider_key = "deterministic".to_string();
+        duplicate.model_key = "cutover-runtime".to_string();
+        duplicate.prompt_version = "cutover@1".to_string();
+        let canonical = infrastructure::adapters::sqlx_seo_adapter::
+            upsert_extracted_rule_candidate_from_adjudication(&pool, &duplicate)
+            .await
+            .unwrap();
+        assert_eq!(canonical, candidate_id, "existing HITL/verified FK ID is stable");
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*)::bigint FROM extracted.rule_candidates
+                 WHERE raw_section_id = $1 AND role = $2
+                   AND concept_canonical_key = $3 AND evidence_quote = $4",
+            )
+            .bind(write_candidate.section_id)
+            .bind(&write_candidate.role)
+            .bind(&write_candidate.concept_canonical_key)
+            .bind(&write_candidate.evidence_quote)
+            .fetch_one(&pool)
+            .await
+            .unwrap(),
+            1
+        );
+        // Identical source spans cannot silently combine different claims.
+        duplicate.rule_candidate_id = format!("conflicting_same_evidence_{marker}");
+        duplicate.params = serde_json::json!({"amount": 999, "currency": "EUR"});
+        assert!(
+            infrastructure::adapters::sqlx_seo_adapter::
+                upsert_extracted_rule_candidate_from_adjudication(&pool, &duplicate)
+                .await
+                .is_err(),
+            "different claim values cannot share a canonical source-evidence row"
+        );
+
         // The SQL write must retain the original typed ChatGPT attribution;
         // a candidate proposal remains unverified until governance approves it.
         let provenance: (String, String, String) = sqlx::query_as(
@@ -300,6 +338,17 @@
         assert_eq!(negatives.len(), 1);
         assert_eq!(negatives[0]["candidate_id"], rejected_candidate_id);
         assert_eq!(negatives[0]["review"]["decision"], "reject");
+        // A new proposal ID cannot bypass an existing negative human review
+        // of the identical source span.
+        let mut rejected_alias = rejected_candidate.clone();
+        rejected_alias.rule_candidate_id = format!("rejected_alias_{marker}");
+        assert!(
+            infrastructure::adapters::sqlx_seo_adapter::
+                upsert_extracted_rule_candidate_from_adjudication(&pool, &rejected_alias)
+                .await
+                .is_err(),
+            "rejected human review must not be bypassed by an alias ID"
+        );
         // A rejected review is not forgotten just because truth governance
         // persists the same candidate as rejected. A second canonical run
         // must retain the negative veto on the same source snapshot.

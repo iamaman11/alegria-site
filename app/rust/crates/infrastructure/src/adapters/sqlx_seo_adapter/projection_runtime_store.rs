@@ -208,8 +208,10 @@ pub struct VerifiedTruthCandidateWrite {
 pub async fn upsert_extracted_rule_candidate_from_adjudication(
     pool: &PgPool,
     candidate: &VerifiedTruthCandidateWrite,
-) -> Result<(), DomainError> {
-    sqlx::query(
+) -> Result<String, DomainError> {
+    // Keep primary-key replay idempotent. Reconcile a second extractor ID
+    // for the same unique source evidence after detecting that exact conflict.
+    let insert = sqlx::query(
         "INSERT INTO extracted.rule_candidates (
              rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
              raw_mention, params, scope, severity, applies_to_profiles, exceptions_raw,
@@ -268,9 +270,83 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.model_key)
     .bind(&candidate.prompt_version)
     .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
+    .await;
+
+    match insert {
+        Ok(_) => Ok(candidate.rule_candidate_id.clone()),
+        Err(sqlx::Error::Database(ref db))
+            if db.is_unique_violation()
+                && db.constraint()
+                    == Some("rule_candidates_raw_section_id_role_concept_canonical_key_e_key") =>
+        {
+            // One evidence key can have multiple extractor proposals but only
+            // ONE durable SQL identity. Keep existing HITL and verified FKs.
+            // A conflicting claim, source, context or rejected review fails closed.
+            let canonical_id: Option<String> = sqlx::query_scalar(
+                r#"
+                UPDATE extracted.rule_candidates AS c
+                SET llm_provider = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $16 ELSE c.llm_provider END,
+                    llm_model = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $17 ELSE c.llm_model END,
+                    prompt_version = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $18 ELSE c.prompt_version END,
+                    confidence = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $15 ELSE c.confidence END,
+                    epistemic_status = $19,
+                    updated_at = now()
+                WHERE c.raw_section_id = $1 AND c.role = $2
+                  AND c.concept_canonical_key = $3
+                  AND c.evidence_quote = $4
+                  AND c.span_start = $5 AND c.span_end = $6
+                  AND c.context_key = $7
+                  AND c.params = $8::jsonb AND c.scope = $9::jsonb
+                  AND c.source_key = $10 AND c.source_snapshot_hash = $11
+                  AND c.severity = $12
+                  AND c.is_numeric = $13 AND c.is_incomplete = $14
+                  AND NOT EXISTS (
+                      SELECT 1 FROM site.seo_hitl_tasks AS t
+                      WHERE t.blocking_execution_key = c.rule_candidate_id
+                        AND t.scope_signature = c.context_key
+                        AND t.task_type = 'truth_candidate_review'
+                        AND t.queue_state = 'in_review'
+                        AND t.decision_payload->'review'->>'decision' = 'reject'
+                  )
+                RETURNING c.rule_candidate_id
+                "#,
+            )
+            .bind(candidate.section_id)
+            .bind(&candidate.role)
+            .bind(&candidate.concept_canonical_key)
+            .bind(&candidate.evidence_quote)
+            .bind(candidate.span_start)
+            .bind(candidate.span_end)
+            .bind(&candidate.context_key)
+            .bind(Json::<Value>(candidate.params.clone()))
+            .bind(Json::<Value>(candidate.scope.clone()))
+            .bind(&candidate.source_key)
+            .bind(&candidate.source_snapshot_hash)
+            .bind(&candidate.severity)
+            .bind(candidate.is_numeric)
+            .bind(candidate.is_incomplete)
+            .bind(candidate.confidence)
+            .bind(&candidate.provider_key)
+            .bind(&candidate.model_key)
+            .bind(&candidate.prompt_version)
+            .bind(&candidate.epistemic_status)
+            .fetch_optional(pool)
+            .await
+            .map_err(classify_sqlx)?;
+            canonical_id.ok_or_else(|| DomainError::ValidationFailure {
+                message: "duplicate source evidence has incompatible claim, context, snapshot, or rejected human review".to_string(),
+            })
+        }
+        Err(err) => Err(classify_sqlx(err)),
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -76,6 +76,8 @@ pub(crate) async fn verified_truth_write_impl(
     let mut suppressed_scoped_projection_ids = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
+    // A source-evidence collision must preserve the already persisted ID.
+    let mut persisted_candidate_ids = BTreeMap::<String, String>::new();
     let mut semantic_candidates =
         BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
     for decision in &input.truth_adjudication.decisions {
@@ -186,7 +188,8 @@ pub(crate) async fn verified_truth_write_impl(
             SemanticTruthWriteOutcome::Rejected(_) => "rejected",
             _ => decision.decision.as_str(),
         };
-        sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+        let persisted_candidate_id =
+            sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
             &acts.pool,
             &sqlx_seo_adapter::VerifiedTruthCandidateWrite {
                 rule_candidate_id: decision.rule_candidate_id.clone(),
@@ -212,6 +215,10 @@ pub(crate) async fn verified_truth_write_impl(
             },
         )
         .await?;
+        persisted_candidate_ids.insert(
+            decision.rule_candidate_id.clone(),
+            persisted_candidate_id,
+        );
     }
 
     // The persisted candidate projection is the canonical input for HITL.
@@ -243,7 +250,15 @@ pub(crate) async fn verified_truth_write_impl(
                         scope: truth_param_value_to_json_local(&decision.scope),
                         source_key: decision.source_key.clone(),
                         confidence: decision.confidence,
-                        rule_candidate_id: decision.rule_candidate_id.clone(),
+                        rule_candidate_id: persisted_candidate_ids
+                            .get(&decision.rule_candidate_id)
+                            .ok_or_else(|| DomainError::ValidationFailure {
+                                message: format!(
+                                    "verified candidate {} was not persisted",
+                                    decision.rule_candidate_id
+                                ),
+                            })?
+                            .clone(),
                         evidence_section_id: decision.section_id,
                         evidence_quote: decision.evidence_quote.clone(),
                         span_start: decision.span_start.max(0) as i32,
