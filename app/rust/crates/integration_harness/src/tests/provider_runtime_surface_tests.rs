@@ -38,6 +38,55 @@
         counts
     }
 
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    #[serial]
+    async fn persisted_wrapped_official_page_restores_sections_once_without_changing_source() {
+        let pg = PostgresHarness::start().await.unwrap();
+        let html = r#"<html><body><main>
+        <div class="section__header-title"><h1>Условия въезда в Испанию</h1></div>
+        <div class="single__text"><p>Официальный текст для проверки правил въезда.</p></div>
+        </main></body></html>"#;
+        let original_hash = primitives::hash::content_hash_v1(html);
+        let page_id: i64 = sqlx::query_scalar(
+            "INSERT INTO raw.pages (url,domain,dtype,status_code,raw_html,raw_html_bytes,content_hash)
+             VALUES ($1,'exteriores.gob.es','official',200,$2,$3,$4) RETURNING id",
+        )
+        .bind(format!("https://www.exteriores.gob.es/test/{}", Uuid::new_v4()))
+        .bind(html)
+        .bind(html.len() as i32)
+        .bind(&original_hash)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        let first = raw_crawl_adapter::recover_empty_raw_sections(&pg.pool, page_id)
+            .await
+            .unwrap();
+        assert_eq!(first, 1);
+        let second = raw_crawl_adapter::recover_empty_raw_sections(&pg.pool, page_id)
+            .await
+            .unwrap();
+        assert_eq!(second, 0);
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*)::bigint FROM raw.sections WHERE page_id = $1",
+        )
+        .bind(page_id)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1);
+        let row = sqlx::query(
+            "SELECT raw_html, content_hash, content->>'section_count' AS count FROM raw.pages WHERE id=$1",
+        )
+        .bind(page_id)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(row.get::<String, _>("raw_html"), html);
+        assert_eq!(row.get::<String, _>("content_hash"), original_hash);
+        assert_eq!(row.get::<String, _>("count"), "1");
+    }
+
     #[tokio::test]
     async fn integration_ctx_exposes_stub_servers() {
         let ctx = IntegrationCtx::start(
