@@ -377,19 +377,65 @@ pub async fn decide_truth_candidate_review(
         .get("source_snapshot_hash")
         .and_then(Value::as_str)
         .ok_or_else(|| contract_violation("truth review task has no snapshot hash"))?;
-    let current: Option<(String, String)> = sqlx::query_as(
-        "SELECT epistemic_status, source_snapshot_hash
-         FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+    // A stable source hash does not prove that the extracted proposition is
+    // unchanged: parser revisions can replace the quote, scope and params.
+    // Lock the current candidate and original section for this decision.
+    let current = sqlx::query(
+        r#"
+        SELECT c.epistemic_status, c.source_snapshot_hash, c.source_key,
+               c.role, c.concept_canonical_key, c.params, c.scope,
+               c.evidence_quote, c.span_start, c.span_end,
+               c.llm_provider, c.llm_model, c.prompt_version,
+               s.content_hash, s.content_md
+        FROM extracted.rule_candidates AS c
+        JOIN raw.sections AS s ON s.id = c.raw_section_id
+        WHERE c.rule_candidate_id = $1 AND c.context_key = $2
+        FOR SHARE OF c, s
+        "#,
     )
     .bind(candidate_id)
+    .bind(payload.get("context_key").and_then(Value::as_str).unwrap_or(""))
     .fetch_optional(&mut *tx)
     .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
-    if !matches!(current, Some((ref epistemic, ref hash))
-        if epistemic == "needs_hitl" && hash == snapshot)
-    {
+    .map_err(|e| infra_unavailable(e.to_string()))?
+    .ok_or_else(|| contract_violation("review source candidate no longer exists"))?;
+    let current_hash: String = current.get("source_snapshot_hash");
+    let section_hash: String = current.get("content_hash");
+    let section_text: String = current.get("content_md");
+    let span_start: i32 = current.get("span_start");
+    let span_end: i32 = current.get("span_end");
+    let evidence_span = if span_start >= 0 && span_end > span_start {
+        section_text.get(span_start as usize..span_end as usize)
+    } else {
+        None
+    };
+    let candidate_unchanged = current.get::<String, _>("epistemic_status") == "needs_hitl"
+        && current_hash == snapshot
+        && section_hash == snapshot
+        && payload.get("source_url").and_then(Value::as_str)
+            == Some(current.get::<String, _>("source_key").as_str())
+        && payload.get("role").and_then(Value::as_str)
+            == Some(current.get::<String, _>("role").as_str())
+        && payload.get("concept").and_then(Value::as_str)
+            == Some(current.get::<String, _>("concept_canonical_key").as_str())
+        && payload.get("params") == Some(&current.get::<Json<Value>, _>("params").0)
+        && payload.get("scope") == Some(&current.get::<Json<Value>, _>("scope").0)
+        && payload.get("span_start").and_then(Value::as_i64) == Some(span_start as i64)
+        && payload.get("span_end").and_then(Value::as_i64) == Some(span_end as i64)
+        && payload.get("evidence_quote").and_then(Value::as_str)
+            == Some(current.get::<String, _>("evidence_quote").as_str())
+        && evidence_span.is_some_and(|span| {
+            Some(span.trim()) == payload.get("evidence_quote").and_then(Value::as_str)
+        })
+        && payload.get("llm_provider").and_then(Value::as_str)
+            == Some(current.get::<String, _>("llm_provider").as_str())
+        && payload.get("llm_model").and_then(Value::as_str)
+            == Some(current.get::<String, _>("llm_model").as_str())
+        && payload.get("prompt_version").and_then(Value::as_str)
+            == Some(current.get::<String, _>("prompt_version").as_str());
+    if !candidate_unchanged {
         return Err(contract_violation(
-            "candidate changed or was superseded; independent recheck required",
+            "reviewed candidate, original section or source claim changed; re-review required",
         ));
     }
 
