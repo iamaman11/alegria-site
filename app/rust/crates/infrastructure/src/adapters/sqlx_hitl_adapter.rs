@@ -103,7 +103,9 @@ pub async fn reconcile_truth_candidate_reviews(
     run_id: &str,
 ) -> std::result::Result<u64, DomainError> {
     if context_key.trim().is_empty() || run_id.trim().is_empty() {
-        return Err(contract_violation("truth HITL context_key and run_id are required"));
+        return Err(contract_violation(
+            "truth HITL context_key and run_id are required",
+        ));
     }
     let result = sqlx::query(
         r#"
@@ -151,7 +153,9 @@ pub async fn list_truth_candidate_reviews(
     limit: i64,
 ) -> std::result::Result<Vec<Value>, DomainError> {
     if context_key.trim().is_empty() || !(1..=500).contains(&limit) {
-        return Err(contract_violation("truth HITL context_key and limit 1..=500 required"));
+        return Err(contract_violation(
+            "truth HITL context_key and limit 1..=500 required",
+        ));
     }
     let rows = sqlx::query(
         r#"
@@ -228,7 +232,10 @@ pub async fn decide_truth_candidate_review(
             "truth review needs a task, human actor, valid decision and explicit reason",
         ));
     }
-    let mut tx = pool.begin().await.map_err(|e| infra_unavailable(e.to_string()))?;
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
     let row = sqlx::query(
         "SELECT queue_state, decision_payload
          FROM site.seo_hitl_tasks
@@ -273,7 +280,9 @@ pub async fn decide_truth_candidate_review(
             && review.get("decision").and_then(Value::as_str) == Some(decision)
             && review.get("reason").and_then(Value::as_str) == Some(reason)
     }) {
-        tx.commit().await.map_err(|e| infra_unavailable(e.to_string()))?;
+        tx.commit()
+            .await
+            .map_err(|e| infra_unavailable(e.to_string()))?;
         return Ok(state);
     }
     if !matches!(state.as_str(), "open" | "in_review" | "reopened") {
@@ -317,7 +326,9 @@ pub async fn decide_truth_candidate_review(
     .execute(&mut *tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
-    tx.commit().await.map_err(|e| infra_unavailable(e.to_string()))?;
+    tx.commit()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(next_state.to_string())
 }
 
