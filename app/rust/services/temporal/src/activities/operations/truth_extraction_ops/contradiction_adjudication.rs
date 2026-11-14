@@ -184,34 +184,6 @@ pub(crate) async fn contradiction_gate_sweep_impl(
     })
 }
 
-// A human rejection applies only to the exact previously reviewed proposal.
-// Approvals cannot grant an alternative path around truth governance.
-fn matches_exact_rejected_review(
-    candidate: &ValidatedTruthCandidateRecord,
-    payload: &serde_json::Value,
-    context_key: &str,
-) -> bool {
-    let txt = |key: &str| payload.get(key).and_then(serde_json::Value::as_str);
-    txt("context_key") == Some(context_key)
-        && txt("candidate_id") == Some(candidate.rule_candidate_id.as_str())
-        && txt("source_snapshot_hash") == Some(candidate.source_snapshot_hash.as_str())
-        && txt("source_url") == Some(candidate.source_key.as_str())
-        && txt("role") == Some(candidate.role.as_str())
-        && txt("concept") == Some(candidate.concept_canonical_key.as_str())
-        && payload.get("params") == Some(&truth_param_value_to_json_local(&candidate.params))
-        && payload.get("scope") == Some(&truth_param_value_to_json_local(&candidate.scope))
-        && txt("evidence_quote") == Some(candidate.evidence_quote.as_str())
-        && payload.get("span_start").and_then(serde_json::Value::as_u64)
-            == Some(candidate.span_start as u64)
-        && payload.get("span_end").and_then(serde_json::Value::as_u64)
-            == Some(candidate.span_end as u64)
-        && txt("llm_provider") == Some(candidate.provider_key.as_str())
-        && txt("llm_model") == Some(candidate.model_key.as_str())
-        && txt("prompt_version") == Some(candidate.prompt_version.as_str())
-        && payload.pointer("/review/decision").and_then(serde_json::Value::as_str)
-            == Some("reject")
-}
-
 /// Rejection removes evidence and conservatively holds the *same scoped*
 /// semantic identity. It never manufactures independent corroboration.
 fn apply_exact_review_rejection_veto(
@@ -549,19 +521,37 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         }
     }
 
-    let rejected_reviews =
-        infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+    // No arbitrary JSON is allowed in Temporal. Infrastructure checks the
+    // complete reviewed candidate fingerprint, original raw section and
+    // source snapshot; this activity sees only typed rejected identities.
+    let review_candidates = input.candidate_validation.sections.iter()
+        .flat_map(|section| section.candidates.iter())
+        .map(|candidate| {
+            infrastructure::adapters::sqlx_hitl_adapter::TruthReviewCandidateSnapshot {
+                candidate_id: candidate.rule_candidate_id.clone(),
+                context_key: input.context_key.clone(),
+                source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+                source_url: candidate.source_key.clone(),
+                role: candidate.role.clone(),
+                concept: candidate.concept_canonical_key.clone(),
+                params: truth_param_value_to_json_local(&candidate.params),
+                scope: truth_param_value_to_json_local(&candidate.scope),
+                evidence_quote: candidate.evidence_quote.clone(),
+                span_start: candidate.span_start,
+                span_end: candidate.span_end,
+                llm_provider: candidate.provider_key.clone(),
+                llm_model: candidate.model_key.clone(),
+                prompt_version: candidate.prompt_version.clone(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let rejected_ids =
+        infrastructure::adapters::sqlx_hitl_adapter::load_exact_rejected_truth_candidate_ids(
             &acts.pool,
             &input.context_key,
+            &review_candidates,
         )
         .await?;
-    let rejected_ids = input.candidate_validation.sections.iter()
-        .flat_map(|section| section.candidates.iter())
-        .filter(|candidate| rejected_reviews.iter().any(|payload| {
-            matches_exact_rejected_review(candidate, payload, &input.context_key)
-        }))
-        .map(|candidate| candidate.rule_candidate_id.clone())
-        .collect::<BTreeSet<_>>();
     let affected_review_sections =
         apply_exact_review_rejection_veto(&mut decisions, &rejected_ids);
 
@@ -711,37 +701,6 @@ mod manual_candidate_contradiction_tests {
                 facts: validated_candidate_assertions(state),
             },
         )
-    }
-
-    #[test]
-    fn human_rejection_requires_identical_source_evidence_not_approval() {
-        let candidate = manual_candidate(35, 0.95, "needs_hitl");
-        let mut payload = serde_json::json!({
-            "context_key": "ES|tourist||BY",
-            "candidate_id": candidate.rule_candidate_id,
-            "source_snapshot_hash": candidate.source_snapshot_hash,
-            "source_url": candidate.source_key,
-            "role": candidate.role,
-            "concept": candidate.concept_canonical_key,
-            "params": truth_param_value_to_json_local(&candidate.params),
-            "scope": truth_param_value_to_json_local(&candidate.scope),
-            "evidence_quote": candidate.evidence_quote,
-            "span_start": candidate.span_start,
-            "span_end": candidate.span_end,
-            "llm_provider": candidate.provider_key,
-            "llm_model": candidate.model_key,
-            "prompt_version": candidate.prompt_version,
-            "review": {"decision": "reject"}
-        });
-        assert!(matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
-        payload["review"]["decision"] = serde_json::json!("approve");
-        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
-        payload["review"]["decision"] = serde_json::json!("reject");
-        payload["source_snapshot_hash"] = serde_json::json!("another snapshot");
-        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
-        payload["source_snapshot_hash"] = serde_json::json!(candidate.source_snapshot_hash);
-        payload["evidence_quote"] = serde_json::json!("another claim");
-        assert!(!matches_exact_rejected_review(&candidate, &payload, "ES|tourist||BY"));
     }
 
     #[test]
