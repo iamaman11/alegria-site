@@ -2,6 +2,7 @@ use anyhow::Context;
 use contracts::generated::alegria::temporal::v1::{HitlDecision, HitlTaskContext};
 use primitives::errors::DomainError;
 use serde::Serialize;
+use std::collections::BTreeSet;
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
 
@@ -246,6 +247,64 @@ pub async fn reconcile_truth_candidate_reviews(
 
 /// A rejection is a conservative input to the *existing* canonical
 /// adjudication. Approval is intentionally not returned as verification.
+/// Exact evidence fingerprint supplied by the canonical Rust adjudicator.
+/// JSON comparisons and review storage belong only to this infrastructure
+/// adapter; Temporal handles typed candidate IDs and typed truth decisions.
+#[derive(Debug, Clone)]
+pub struct TruthReviewCandidateSnapshot {
+    pub candidate_id: String,
+    pub context_key: String,
+    pub source_snapshot_hash: String,
+    pub source_url: String,
+    pub role: String,
+    pub concept: String,
+    pub params: Value,
+    pub scope: Value,
+    pub evidence_quote: String,
+    pub span_start: usize,
+    pub span_end: usize,
+    pub llm_provider: String,
+    pub llm_model: String,
+    pub prompt_version: String,
+}
+
+fn matches_exact_rejected_review(
+    candidate: &TruthReviewCandidateSnapshot,
+    payload: &Value,
+) -> bool {
+    let txt = |key: &str| payload.get(key).and_then(Value::as_str);
+    txt("context_key") == Some(candidate.context_key.as_str())
+        && txt("candidate_id") == Some(candidate.candidate_id.as_str())
+        && txt("source_snapshot_hash") == Some(candidate.source_snapshot_hash.as_str())
+        && txt("source_url") == Some(candidate.source_url.as_str())
+        && txt("role") == Some(candidate.role.as_str())
+        && txt("concept") == Some(candidate.concept.as_str())
+        && payload.get("params") == Some(&candidate.params)
+        && payload.get("scope") == Some(&candidate.scope)
+        && txt("evidence_quote") == Some(candidate.evidence_quote.as_str())
+        && payload.get("span_start").and_then(Value::as_u64)
+            == Some(candidate.span_start as u64)
+        && payload.get("span_end").and_then(Value::as_u64)
+            == Some(candidate.span_end as u64)
+        && txt("llm_provider") == Some(candidate.llm_provider.as_str())
+        && txt("llm_model") == Some(candidate.llm_model.as_str())
+        && txt("prompt_version") == Some(candidate.prompt_version.as_str())
+        && payload.pointer("/review/decision").and_then(Value::as_str) == Some("reject")
+}
+
+pub async fn load_exact_rejected_truth_candidate_ids(
+    pool: &PgPool,
+    context_key: &str,
+    candidates: &[TruthReviewCandidateSnapshot],
+) -> std::result::Result<BTreeSet<String>, DomainError> {
+    let payloads = load_rejected_truth_review_payloads(pool, context_key).await?;
+    Ok(candidates.iter()
+        .filter(|candidate| candidate.context_key == context_key
+            && payloads.iter().any(|payload| matches_exact_rejected_review(candidate, payload)))
+        .map(|candidate| candidate.candidate_id.clone())
+        .collect())
+}
+
 pub async fn load_rejected_truth_review_payloads(
     pool: &PgPool,
     context_key: &str,
@@ -579,4 +638,59 @@ pub async fn decide_truth_candidate_review(
         .await
         .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(next_state.to_string())
+}
+
+#[cfg(test)]
+mod exact_truth_review_match_tests {
+    use super::*;
+
+    fn candidate() -> TruthReviewCandidateSnapshot {
+        TruthReviewCandidateSnapshot {
+            candidate_id: "candidate-1".to_string(),
+            context_key: "ES|tourist||BY".to_string(),
+            source_snapshot_hash: "section-hash".to_string(),
+            source_url: "https://example.gov/fees".to_string(),
+            role: "FEE_ITEM".to_string(),
+            concept: "consular_fee".to_string(),
+            params: json!({"amount": 35, "currency": "EUR"}),
+            scope: json!({}),
+            evidence_quote: "Consular fee is 35 EUR".to_string(),
+            span_start: 0,
+            span_end: 22,
+            llm_provider: "chat_manual".to_string(),
+            llm_model: "gpt-6".to_string(),
+            prompt_version: "truth_prompt@1".to_string(),
+        }
+    }
+
+    #[test]
+    fn reject_only_on_exact_claim_and_source_not_on_approval() {
+        let candidate = candidate();
+        let mut review = json!({
+            "candidate_id": candidate.candidate_id,
+            "context_key": candidate.context_key,
+            "source_snapshot_hash": candidate.source_snapshot_hash,
+            "source_url": candidate.source_url,
+            "role": candidate.role,
+            "concept": candidate.concept,
+            "params": candidate.params,
+            "scope": candidate.scope,
+            "evidence_quote": candidate.evidence_quote,
+            "span_start": candidate.span_start,
+            "span_end": candidate.span_end,
+            "llm_provider": candidate.llm_provider,
+            "llm_model": candidate.llm_model,
+            "prompt_version": candidate.prompt_version,
+            "review": {"decision": "reject"},
+        });
+        assert!(matches_exact_rejected_review(&candidate, &review));
+        review["review"]["decision"] = json!("approve");
+        assert!(!matches_exact_rejected_review(&candidate, &review));
+        review["review"]["decision"] = json!("reject");
+        review["evidence_quote"] = json!("changed claim");
+        assert!(!matches_exact_rejected_review(&candidate, &review));
+        review["evidence_quote"] = json!(candidate.evidence_quote);
+        review["source_snapshot_hash"] = json!("other source snapshot");
+        assert!(!matches_exact_rejected_review(&candidate, &review));
+    }
 }
