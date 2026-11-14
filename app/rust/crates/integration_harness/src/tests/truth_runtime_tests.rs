@@ -82,7 +82,7 @@
         .await
         .unwrap();
 
-        let write_candidate =
+        let mut write_candidate =
             infrastructure::adapters::sqlx_seo_adapter::VerifiedTruthCandidateWrite {
                 rule_candidate_id: candidate_id.clone(),
                 context_key: context_key.clone(),
@@ -103,7 +103,7 @@
                 provider_key: "chat_manual".to_string(),
                 model_key: "gpt-6".to_string(),
                 prompt_version: "truth_extraction_prompt@1".to_string(),
-                epistemic_status: "verified".to_string(),
+                epistemic_status: "needs_hitl".to_string(),
             };
         infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
             &pool,
@@ -121,6 +121,86 @@
         .await
         .unwrap();
         assert_eq!(provenance, ("chat_manual".to_string(), "gpt-6".to_string(), "truth_extraction_prompt@1".to_string()));
+
+        // A real SQL queue receives one review for a needs_hitl candidate,
+        // regardless of how many times the same workflow activity replays.
+        let hits = infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            &pool, &context_key, "ci-truth-run",
+        )
+        .await
+        .unwrap();
+        assert_eq!(hits, 1);
+        let replay = infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            &pool, &context_key, "ci-truth-run",
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay, 0);
+        let reviews = infrastructure::adapters::sqlx_hitl_adapter::list_truth_candidate_reviews(
+            &pool, &context_key, 10,
+        )
+        .await
+        .unwrap();
+        assert_eq!(reviews.len(), 1);
+        let task = reviews[0]["task_key"].as_str().unwrap().to_string();
+        assert_eq!(reviews[0]["queue_state"], "open");
+        assert_eq!(reviews[0]["candidate"]["source_snapshot_hash"], "test-source-snapshot");
+        assert_eq!(reviews[0]["candidate"]["llm_provider"], "chat_manual");
+        assert_eq!(reviews[0]["candidate"]["evidence_quote"], raw_text);
+        assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            &pool, &task, "seo_system", "approve", "test approval",
+        )
+        .await
+        .is_err());
+        let reviewed = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            &pool, &task, "ci_human_reviewer", "approve", "source checked",
+        )
+        .await
+        .unwrap();
+        assert_eq!(reviewed, "resolved");
+        let same = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            &pool, &task, "ci_human_reviewer", "approve", "source checked",
+        )
+        .await
+        .unwrap();
+        assert_eq!(same, "resolved");
+        assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            &pool, &task, "other_reviewer", "reject", "different decision",
+        )
+        .await
+        .is_err());
+        let task_after =
+            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+                &pool, &task,
+            )
+            .await
+            .unwrap();
+        assert_eq!(task_after["queue_state"], "resolved");
+        assert_eq!(task_after["audit_log"].as_array().unwrap().len(), 2);
+        let not_verified: String = sqlx::query_scalar(
+            "SELECT epistemic_status FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+        )
+        .bind(&candidate_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(not_verified, "needs_hitl");
+        let after_review_replay =
+            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+                &pool, &context_key, "ci-truth-run",
+            )
+            .await
+            .unwrap();
+        assert_eq!(after_review_replay, 0);
+
+        // This separate synthetic writer fixture models an independent
+        // verification result; the human queue above did NOT promote it.
+        write_candidate.epistemic_status = "verified".to_string();
+        infrastructure::adapters::sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+            &pool, &write_candidate,
+        )
+        .await
+        .unwrap();
 
         let write_rule = infrastructure::adapters::sqlx_seo_adapter::VerifiedRuleInstanceWrite {
             scope,

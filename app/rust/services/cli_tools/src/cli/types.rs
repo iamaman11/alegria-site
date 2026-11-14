@@ -12,6 +12,7 @@ use infrastructure::adapters::sqlx_reconcile_adapter::{
 use infrastructure::adapters::{
     raw_crawl_adapter,
     reqwest_adapter::new_default_client,
+    sqlx_hitl_adapter,
     sqlx_adapter::connect_pg,
     tonic_adapter::AnalyticsClient,
 };
@@ -138,6 +139,41 @@ enum Command {
         database_url: Option<String>,
         #[arg(long)]
         page_id: i64,
+    },
+    /// Reconcile historical needs_hitl candidates into the same review queue.
+    TruthHitlReconcile {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        context_key: String,
+    },
+    /// List candidate reviews and exact source evidence without approval.
+    TruthHitlList {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        context_key: String,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    TruthHitlShow {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        task_key: String,
+    },
+    /// Record human review only; independent truth recheck remains mandatory.
+    TruthHitlDecide {
+        #[arg(long)]
+        database_url: Option<String>,
+        #[arg(long)]
+        task_key: String,
+        #[arg(long)]
+        actor_role: String,
+        #[arg(long)]
+        decision: String,
+        #[arg(long)]
+        reason: String,
     },
     CrawlPendingSources {
         #[arg(long)]

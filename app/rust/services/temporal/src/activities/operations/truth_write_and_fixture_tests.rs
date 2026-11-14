@@ -214,6 +214,16 @@ pub(crate) async fn verified_truth_write_impl(
         .await?;
     }
 
+    // The persisted candidate projection is the canonical input for HITL.
+    // This also repairs older unresolved candidates in the same context.
+    // A human decision never changes the verifier's candidate status.
+    infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+        &acts.pool,
+        &input.context_key,
+        &input.run_id,
+    )
+    .await?;
+
     // Exactly one verdict and one outbox event per semantic slot. A rejected
     // source cannot demote a verified fact backed by independent sources.
     for (rule_instance_id, outcome) in semantic_outcomes {

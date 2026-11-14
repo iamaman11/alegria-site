@@ -1066,7 +1066,7 @@ CREATE TABLE IF NOT EXISTS site.seo_hitl_tasks (
     task_type              TEXT NOT NULL
                            CHECK (task_type IN (
                                'cannibalization_conflict','unsafe_serp_pattern',
-                               'unsupported_factual_fragment','registry_change',
+                               'unsupported_factual_fragment','truth_candidate_review','registry_change',
                                'rebuild_suppression','canonical_url_conflict',
                                'publish_gate_blocker'
                            )),
