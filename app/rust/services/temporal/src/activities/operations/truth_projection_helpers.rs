@@ -20,7 +20,11 @@ fn section_source_tier(section: &raw_crawl_adapter::RawSectionRecord) -> String 
 // Extraction must quote the supporting sentence, not just an isolated
 // number/keyword. The returned offsets always refer to the exact UTF-8
 // bytes in raw.sections.content_md; no synthetic text is introduced.
-fn supporting_sentence_span(raw: &str, anchor_start: usize, anchor_end: usize) -> (usize, usize, String) {
+fn supporting_sentence_span(
+    raw: &str,
+    anchor_start: usize,
+    anchor_end: usize,
+) -> (usize, usize, String) {
     let is_boundary = |offset: usize, ch: char| {
         if matches!(ch, '\n' | '\r' | ';' | '!' | '?') {
             return true;
@@ -59,7 +63,12 @@ fn supporting_sentence_span(raw: &str, anchor_start: usize, anchor_end: usize) -
     (start, start + quote.len(), quote.to_string())
 }
 
-fn find_evidence_span(raw_text: &str, candidates: &[String]) -> (usize, usize, String) {
+fn find_evidence_span(
+    raw_text: &str,
+    candidates: &[String],
+    rule_key: &str,
+) -> (usize, usize, String) {
+    let mut unsubstantiated = None;
     for candidate in candidates {
         let token = candidate.trim();
         if token.is_empty() {
@@ -78,8 +87,17 @@ fn find_evidence_span(raw_text: &str, candidates: &[String]) -> (usize, usize, S
                     continue;
                 }
             }
-            return supporting_sentence_span(raw_text, start, end);
+            let found = supporting_sentence_span(raw_text, start, end);
+            if deterministic_evidence_has_role_context(rule_key, &found.2) {
+                return found;
+            }
+            if unsubstantiated.is_none() {
+                unsubstantiated = Some(found);
+            }
         }
+    }
+    if let Some(found) = unsubstantiated {
+        return found;
     }
     // A missing token is not evidence. Preserve a byte-accurate preview for
     // an operator, but candidate_validation must withhold unsupported roles.
@@ -88,8 +106,8 @@ fn find_evidence_span(raw_text: &str, candidates: &[String]) -> (usize, usize, S
         (0, 0, String::new())
     } else {
         let start = raw_text.len() - raw_text.trim_start().len();
-        let end = raw_text.len();
-        supporting_sentence_span(raw_text, start, end.min(start + fallback.len().min(1)))
+        let end = start + fallback.chars().next().map_or(0, char::len_utf8);
+        supporting_sentence_span(raw_text, start, end)
     }
 }
 
@@ -112,11 +130,11 @@ mod source_evidence_span_tests {
     #[test]
     fn numeric_anchor_returns_exact_statement_without_earlier_180() {
         let raw = "Other request: 180 EUR.\nConsular fee is 80 EUR.\nProcessing time is 15 days.";
-        let (start, end, quote) = find_evidence_span(raw, &["80".to_string()]);
+        let (start, end, quote) = find_evidence_span(raw, &["80".to_string()], "consular_fee");
         assert_eq!(quote, "Consular fee is 80 EUR.");
         assert_eq!(&raw[start..end], quote);
         assert!(deterministic_evidence_has_role_context("consular_fee", &quote));
-        let (start, end, quote) = find_evidence_span(raw, &["15".to_string()]);
+        let (start, end, quote) = find_evidence_span(raw, &["15".to_string()], "processing_time");
         assert_eq!(quote, "Processing time is 15 days.");
         assert_eq!(&raw[start..end], quote);
         assert!(deterministic_evidence_has_role_context("processing_time", &quote));
@@ -125,7 +143,7 @@ mod source_evidence_span_tests {
     #[test]
     fn cyrillic_fee_sentence_keeps_utf8_byte_offsets() {
         let raw = "Меню\nКонсульский сбор составляет 35 евро.\nПрочие услуги.";
-        let (start, end, quote) = find_evidence_span(raw, &["35".to_string()]);
+        let (start, end, quote) = find_evidence_span(raw, &["35".to_string()], "consular_fee");
         assert_eq!(quote, "Консульский сбор составляет 35 евро.");
         assert_eq!(&raw[start..end], quote);
         assert!(start > "Меню".len());
@@ -135,16 +153,35 @@ mod source_evidence_span_tests {
     #[test]
     fn incidental_number_is_not_proof_of_consular_fee() {
         let raw = "Route number 80 arrives today.\nPassport is required.";
-        let (start, end, quote) = find_evidence_span(raw, &["80".to_string()]);
+        let (start, end, quote) = find_evidence_span(raw, &["80".to_string()], "consular_fee");
         assert_eq!(&raw[start..end], quote);
         assert!(!deterministic_evidence_has_role_context("consular_fee", &quote));
         assert!(!deterministic_evidence_has_role_context("processing_time", &quote));
     }
 
     #[test]
+    fn duplicated_number_prefers_matching_proposition_not_menu() {
+        let raw = "80 people were served.\nConsular fee is 80 EUR.";
+        let (start, end, quote) =
+            find_evidence_span(raw, &["80".to_string()], "consular_fee");
+        assert_eq!(quote, "Consular fee is 80 EUR.");
+        assert_eq!(&raw[start..end], quote);
+    }
+
+    #[test]
+    fn missing_token_in_cyrillic_text_is_safe_and_not_synthetic() {
+        let raw = "  Паспорт необходимо предъявить.\nПорядок рассмотрения.";
+        let (start, end, quote) =
+            find_evidence_span(raw, &["insurance".to_string()], "insurance_required");
+        assert_eq!(quote, "Паспорт необходимо предъявить.");
+        assert_eq!(&raw[start..end], quote);
+        assert!(!deterministic_evidence_has_role_context("insurance_required", &quote));
+    }
+
+    #[test]
     fn unbounded_document_does_not_turn_numeric_token_into_false_proof() {
         let raw = format!("80 {}", "unrelated ".repeat(150));
-        let (start, end, quote) = find_evidence_span(&raw, &["80".to_string()]);
+        let (start, end, quote) = find_evidence_span(&raw, &["80".to_string()], "consular_fee");
         assert_eq!(quote, "80");
         assert_eq!(&raw[start..end], quote);
         assert!(!deterministic_evidence_has_role_context("consular_fee", &quote));

@@ -129,23 +129,20 @@ pub(crate) async fn candidate_validation_impl(
         let mut candidates = Vec::new();
         for (ordinal, rule) in section.rules.iter().enumerate() {
             let (role, concept_key) = role_and_concept_for_rule(rule);
-            let evidence_targets = if !rule.numeric_tokens.is_empty() {
-                rule.numeric_tokens.clone()
+            // The FIRST numeric token determines rule parameters; never
+            // cite a different amount or duration merely because it appears
+            // elsewhere in this raw section.
+            let evidence_targets: Vec<String> = if let Some(first) = rule.numeric_tokens.first() {
+                vec![first.clone()]
             } else {
-                vec![match rule.rule_key.as_str() {
-                    "passport_required" => "passport".to_string(),
-                    "insurance_required" => "insurance".to_string(),
-                    _ => rule.rule_key.clone(),
-                }]
-                .into_iter()
-                .chain(match rule.rule_key.as_str() {
-                    "passport_required" => Some("паспорт".to_string()),
-                    "insurance_required" => Some("страхов".to_string()),
-                    _ => None,
-                })
+                match rule.rule_key.as_str() {
+                    "passport_required" => vec!["passport".to_string(), "паспорт".to_string()],
+                    "insurance_required" => vec!["insurance".to_string(), "страхов".to_string()],
+                    _ => vec![rule.rule_key.clone()],
+                }
             };
             let (span_start, span_end, evidence_quote) =
-                find_evidence_span(&raw.content_md, &evidence_targets);
+                find_evidence_span(&raw.content_md, &evidence_targets, &rule.rule_key);
             let uncertainty_flags = section_uncertainty_flags(&raw.content_md);
             let runtime = TruthCandidateRuntime {
                 rule_candidate_id: blake3_hex(
