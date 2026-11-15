@@ -517,20 +517,21 @@ mod visible_text_tests {
             .iter()
             .find(|section| section.heading_path == "What is a Schengen visa?")
             .expect("ECL policy evidence must not disappear behind a date-only H1");
-        assert!(schengen.content_md.contains("90 days in any 180-day period"));
+        assert!(schengen
+            .content_md
+            .contains("90 days in any 180-day period"));
         assert!(!schengen.content_md.contains("short-stay calculator"));
         assert!(!schengen.content_md.contains("Menu entry"));
         assert!(!schengen.content_md.contains("marketing footer"));
-        assert_eq!(
-            schengen.content_hash,
-            content_hash_v1(&schengen.content_md)
-        );
+        assert_eq!(schengen.content_hash, content_hash_v1(&schengen.content_md));
         let calculator = sections
             .iter()
             .find(|section| section.heading_path == "How long can you stay?")
             .expect("second ECL heading retains its own section");
         assert!(calculator.content_md.contains("short-stay calculator"));
-        assert!(!calculator.content_md.contains("90 days in any 180-day period"));
+        assert!(!calculator
+            .content_md
+            .contains("90 days in any 180-day period"));
     }
 
     #[test]
