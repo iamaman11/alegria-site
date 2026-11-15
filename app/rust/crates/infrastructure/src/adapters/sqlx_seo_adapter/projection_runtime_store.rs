@@ -297,7 +297,23 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
                     confidence = CASE
                         WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
                         THEN $15 ELSE c.confidence END,
-                    epistemic_status = $19,
+                    -- A disagreement in evidence metadata is not a second
+                    -- factual claim. Retain one canonical FK but fail closed:
+                    -- never silently promote a disputed extraction to VERIFIED.
+                    severity = CASE
+                        WHEN c.severity = $12 THEN c.severity
+                        ELSE 'unknown'
+                    END,
+                    is_incomplete = c.is_incomplete OR $14,
+                    epistemic_status = CASE
+                        WHEN c.epistemic_status = 'rejected' OR $19 = 'rejected'
+                            THEN 'rejected'
+                        WHEN c.epistemic_status = 'needs_hitl' OR $19 = 'needs_hitl'
+                            OR c.severity <> $12 OR c.is_incomplete <> $14
+                            THEN 'needs_hitl'
+                        WHEN c.epistemic_status = $19 THEN c.epistemic_status
+                        ELSE 'needs_hitl'
+                    END,
                     updated_at = now()
                 WHERE c.raw_section_id = $1 AND c.role = $2
                   AND c.concept_canonical_key = $3
@@ -306,8 +322,9 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
                   AND c.context_key = $7
                   AND c.params = $8::jsonb AND c.scope = $9::jsonb
                   AND c.source_key = $10 AND c.source_snapshot_hash = $11
-                  AND c.severity = $12
-                  AND c.is_numeric = $13 AND c.is_incomplete = $14
+                  -- Core fact, source and snapshot must match exactly;
+                  -- advisory severity/completeness can differ across extractors.
+                  AND c.is_numeric = $13
                   AND NOT EXISTS (
                       SELECT 1 FROM site.seo_hitl_tasks AS t
                       WHERE t.blocking_execution_key = c.rule_candidate_id

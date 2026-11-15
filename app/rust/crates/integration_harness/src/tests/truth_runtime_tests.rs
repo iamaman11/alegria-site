@@ -138,6 +138,30 @@
             .unwrap(),
             1
         );
+        // Two extractors can cite the exact same claim and span while
+        // disagreeing on completeness/severity. Preserve the original FK
+        // and hold the merged evidence for review rather than fail the run.
+        let mut metadata_variant = write_candidate.clone();
+        metadata_variant.rule_candidate_id = format!("metadata_variant_{marker}");
+        metadata_variant.severity = "unknown".to_string();
+        metadata_variant.is_incomplete = true;
+        metadata_variant.provider_key = "deterministic".to_string();
+        metadata_variant.model_key = "cutover-runtime".to_string();
+        let reused = infrastructure::adapters::sqlx_seo_adapter::
+            upsert_extracted_rule_candidate_from_adjudication(&pool, &metadata_variant)
+            .await
+            .unwrap();
+        assert_eq!(reused, candidate_id);
+        let merged: (String, bool, String) = sqlx::query_as(
+            "SELECT severity, is_incomplete, epistemic_status
+             FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+        )
+        .bind(&candidate_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(merged, ("unknown".to_string(), true, "needs_hitl".to_string()));
+
         // Identical source spans cannot silently combine different claims.
         duplicate.rule_candidate_id = format!("conflicting_same_evidence_{marker}");
         duplicate.params = serde_json::json!({"amount": 999, "currency": "EUR"});
