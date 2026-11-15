@@ -829,7 +829,7 @@ mod tests {
             }]}]}]
         }))
         .remove(0);
-        assert_eq!(item.url_norm, "google.com/goto");
+        assert_eq!(item.url_norm, "google.com/goto?url=opaque");
         assert_eq!(item.source_tier, "low_trust");
         item = apply_direct_source(
             item,
