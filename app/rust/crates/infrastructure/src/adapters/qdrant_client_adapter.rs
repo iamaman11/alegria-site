@@ -295,7 +295,9 @@ fn raw_chunk_points_match(expected: &[RawChunkReadbackPoint], actual: &[Value]) 
         if !seen.insert(id)
             || point.pointer("/payload/section_id").and_then(Value::as_str)
                 != Some(want.section_id.as_str())
-            || point.pointer("/payload/content_hash").and_then(Value::as_str)
+            || point
+                .pointer("/payload/content_hash")
+                .and_then(Value::as_str)
                 != Some(want.content_hash.as_str())
         {
             return false;
@@ -364,18 +366,27 @@ mod raw_chunk_readback_tests {
         assert!(raw_chunk_points_match(&expected, good));
         assert!(!raw_chunk_points_match(&[], good));
         assert!(!raw_chunk_points_match(&expected, &[]));
-        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
-            "id": "point-1",
-            "payload": {"section_id": "1223", "content_hash": "stale"}
-        })]));
-        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
-            "id": "point-other",
-            "payload": {"section_id": "1223", "content_hash": "source-hash"}
-        })]));
-        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
-            "id": "point-1",
-            "payload": {"section_id": "older", "content_hash": "source-hash"}
-        })]));
+        assert!(!raw_chunk_points_match(
+            &expected,
+            &[serde_json::json!({
+                "id": "point-1",
+                "payload": {"section_id": "1223", "content_hash": "stale"}
+            })]
+        ));
+        assert!(!raw_chunk_points_match(
+            &expected,
+            &[serde_json::json!({
+                "id": "point-other",
+                "payload": {"section_id": "1223", "content_hash": "source-hash"}
+            })]
+        ));
+        assert!(!raw_chunk_points_match(
+            &expected,
+            &[serde_json::json!({
+                "id": "point-1",
+                "payload": {"section_id": "older", "content_hash": "source-hash"}
+            })]
+        ));
         let duplicated = vec![expected[0].clone(), expected[0].clone()];
         assert!(!raw_chunk_points_match(&duplicated, good));
     }
