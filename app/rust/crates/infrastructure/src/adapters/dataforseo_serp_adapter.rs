@@ -592,9 +592,25 @@ fn classify_domain_tier(raw_url: &str) -> String {
                 .strip_suffix(domain)
                 .is_some_and(|prefix| prefix.ends_with('.'))
     };
-    // Official government DNS namespaces, not generic embassy/mfa words.
+    // Official government DNS namespaces and a small, explicit set of
+    // institution-operated EU domains. Do not classify all of europa.eu as
+    // a primary authority: institutional ownership is narrower than the TLD.
+    // These are preliminary source tiers only; verified truth still requires
+    // independently corroborated, source-anchored evidence.
     if [
-        "gov", "gov.by", "gov.uk", "gov.au", "gov.nz", "gob.es", "gob.mx", "gob.ar",
+        "gov",
+        "gov.by",
+        "gov.uk",
+        "gov.au",
+        "gov.nz",
+        "gob.es",
+        "gob.mx",
+        "gob.ar",
+        "home-affairs.ec.europa.eu",
+        "commission.europa.eu",
+        "eeas.europa.eu",
+        "eur-lex.europa.eu",
+        "consilium.europa.eu",
     ]
     .iter()
     .any(|domain| host_matches(domain))
@@ -886,6 +902,31 @@ mod tests {
             classify_domain_tier("https://bolivia.blsspainvisa.com/"),
             "vfs"
         );
+    }
+
+    #[test]
+    fn independently_operated_eu_primary_sources_are_not_misclassified_as_forums() {
+        for url in [
+            "https://home-affairs.ec.europa.eu/policies/schengen/visa-policy/applying-schengen-visa_en",
+            "https://www.eeas.europa.eu/belarus/travel-study_en",
+            "https://eur-lex.europa.eu/legal-content/EN/TXT/",
+            "https://www.consilium.europa.eu/en/policies/eu-visa-policy/",
+        ] {
+            let (_, _, domain, tier) = operator_source_identity(url).expect("direct EU URL");
+            assert!(!domain.is_empty());
+            assert_eq!(tier, "official", "{url}");
+        }
+        // Source trust must depend on the parsed DNS hostname, never the
+        // query string, a lookalike suffix, or a merely similar EU site.
+        for url in [
+            "https://home-affairs.ec.europa.eu.evil.example/visa",
+            "https://fake.example/?site=eeas.europa.eu",
+            "https://not-eeas.europa.eu/visa",
+            "https://random.europa.eu/visa",
+            "https://commission.europa.eu.evil.example/visa",
+        ] {
+            assert_ne!(classify_domain_tier(url), "official", "{url}");
+        }
     }
 
     #[test]
