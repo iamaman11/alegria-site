@@ -149,6 +149,24 @@ fn seo_graph_projection_event(
     }
 }
 
+/// A projection is idempotent for the same source content but must be
+/// re-emitted when the canonical record changes while its identity stays put.
+/// The existing worker still reads and materializes the canonical SQL record.
+fn seo_graph_projection_event_with_revision(
+    artifact_type: &str,
+    artifact_key: &str,
+    scope_signature: &str,
+    source_revision: &str,
+) -> OutboxEnvelope {
+    let mut event = seo_graph_projection_event(artifact_type, artifact_key, scope_signature);
+    event.idempotency_key = primitives::hash::content_hash_v1(&format!(
+        "{}|source_revision@1|{}",
+        event.idempotency_key,
+        primitives::hash::blake3_hex(source_revision.as_bytes())
+    ));
+    event
+}
+
 fn fingerprint_vector(text: &str) -> Vec<f32> {
     let digest = primitives::hash::blake3_hex(text.as_bytes());
     let mut vector = Vec::with_capacity(16);

@@ -71,9 +71,9 @@ pub async fn read_run_verified_rule_points(
     Ok(verified)
 }
 
-/// A completed graph projection cannot become stale merely because time passes.
-/// It can become stale if the source changed after the last successful receipt.
-/// Live Neo4j scope readback and pending/failed outbox checks are separate gates.
+/// Graph freshness is certified by completed revision-aware outbox receipts
+/// and the separate real Neo4j scope readback, not wall-clock materialization age.
+/// An unfinished run-owned projection is always a blocker.
 pub async fn read_run_graph_source_synced(
     pool: &PgPool,
     run_id: &str,
@@ -81,29 +81,18 @@ pub async fn read_run_graph_source_synced(
 ) -> Result<bool, DomainError> {
     sqlx::query_scalar::<_, bool>(
         r#"
-        WITH source_updates(changed_at) AS (
-            SELECT max(updated_at) FROM site.keyword_clusters WHERE scope_signature = $2
-            UNION ALL SELECT max(updated_at) FROM serp.serp_patterns WHERE scope_signature = $2
-            UNION ALL SELECT max(bp.updated_at) FROM site.page_blueprints bp
-              WHERE EXISTS (SELECT 1 FROM site.page_nodes pn
-                             WHERE pn.blueprint_key = bp.blueprint_key AND pn.scope_signature = $2)
-            UNION ALL SELECT max(updated_at) FROM site.page_nodes WHERE scope_signature = $2
-            UNION ALL SELECT max(updated_at) FROM site.content_gaps WHERE scope_signature = $2
-            UNION ALL SELECT max(updated_at) FROM site.link_recommendations WHERE scope_signature = $2
-            UNION ALL SELECT max(pb.updated_at) FROM site.page_briefs pb
-              JOIN site.page_nodes pn ON pn.page_node_key = pb.page_node_key
-             WHERE pn.scope_signature = $2
+        SELECT EXISTS(
+            SELECT 1 FROM site.page_nodes p WHERE p.scope_signature = $2
         )
-        SELECT COALESCE(
-            (SELECT max(o.updated_at) FROM system.sync_outbox o
-             WHERE o.run_id = $1 AND o.target_system = 'neo4j' AND o.status = 'done')
-            >= (SELECT max(changed_at) FROM source_updates),
-            FALSE
-        )
-        AND NOT EXISTS (
+        AND EXISTS(
             SELECT 1 FROM system.sync_outbox o
             WHERE o.run_id = $1 AND o.target_system = 'neo4j'
-              AND o.status IN ('pending', 'processing', 'failed')
+              AND o.status = 'done'
+        )
+        AND NOT EXISTS(
+            SELECT 1 FROM system.sync_outbox o
+            WHERE o.run_id = $1 AND o.target_system = 'neo4j'
+              AND o.status <> 'done'
         )
         "#,
     )

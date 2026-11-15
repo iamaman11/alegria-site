@@ -274,10 +274,14 @@ pub async fn persist_serp_normalize_output(
             .map_err(classify_sqlx)?;
         }
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "serp_pattern",
             &pattern.serp_pattern_key,
             &pattern.scope_signature,
+            &format!(
+                "{}|{}|{}|{}",
+                pattern.query, pattern.pattern_type, pattern.dominant_intent, pattern.status
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -371,10 +375,17 @@ pub async fn persist_opportunity_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "keyword_cluster",
             &cluster.cluster_key,
             cluster_scope,
+            &format!(
+                "{}|{}|{}|{}",
+                cluster.seed_keyword,
+                cluster.dominant_intent,
+                cluster.status,
+                cluster.cluster_version
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -471,10 +482,11 @@ pub async fn persist_opportunity_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "content_gap",
             &gap.content_gap_key,
             &gap.scope_signature,
+            &format!("{}|{}|{}", gap.missing_topic, gap.severity, gap.status),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -535,10 +547,18 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "page_blueprint",
             &blueprint.blueprint_key,
             "",
+            &format!(
+                "{}|{}|{}|{}|{:?}",
+                blueprint.page_type_key,
+                blueprint.dominant_intent,
+                blueprint.scope_class,
+                blueprint.title_pattern,
+                blueprint.required_sections
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -734,10 +754,19 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "page_node",
             &page.page_node_key,
             &page.scope_signature,
+            &format!(
+                "{}|{}|{}|{}|{}|{}",
+                page.canonical_url_path,
+                page.page_type_key,
+                page.dominant_intent,
+                page.lifecycle_state,
+                page.keyword_cluster_key,
+                page.blueprint_key
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -795,10 +824,14 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "cannibalization_conflict",
             &conflict.conflict_key,
             &conflict.scope_signature,
+            &format!(
+                "{}|{}|{}",
+                conflict.conflict_reason, conflict.severity, conflict.status
+            ),
         ));
     }
 
@@ -877,10 +910,20 @@ pub async fn persist_link_recommend_output(
             .map_err(classify_sqlx)?;
         }
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "link_recommendation",
             &link.link_recommendation_key,
             &link.scope_signature,
+            &format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                link.source_page_key,
+                link.target_page_key,
+                link.link_role,
+                link.anchor_strategy,
+                link.required_flag,
+                link.score,
+                link.status
+            ),
         ));
     }
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
