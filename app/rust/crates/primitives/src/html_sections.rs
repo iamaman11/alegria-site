@@ -146,10 +146,37 @@ fn collect_wrapped_heading_body(document: &Html, heading_id: ego_tree::NodeId) -
         return String::new();
     };
     let header_class = element.attr("class").unwrap_or("").to_ascii_lowercase();
+    // EC Drupal/ECL articles wrap their H2 in a plain div.ecl and put
+    // substantive paragraphs in the next div.ecl. A dated H1 elsewhere
+    // on the page can already create a tiny section, so the whole-document
+    // empty-sections fallback never fires. Only lift these ECL headings when
+    // they belong to a real article; never lift navigation or sidebar text.
+    let mut ancestor = wrapper.parent();
+    let mut inside_article = false;
+    while let Some(parent) = ancestor {
+        if matches!(parent.value(), Node::Element(el) if el.name() == "article") {
+            inside_article = true;
+            break;
+        }
+        ancestor = parent.parent();
+    }
+    let ecl_article_heading = inside_article
+        && element.name() == "div"
+        && header_class.split_whitespace().any(|class| class == "ecl")
+        && matches!(
+            heading.value(),
+            Node::Element(el)
+                if el
+                    .attr("class")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .any(|class| class.starts_with("ecl-u-type-heading-"))
+        );
     let is_header_wrapper = element.name() == "header"
         || header_class.split_whitespace().any(|class| {
             class.contains("header") || class.contains("heading") || class.ends_with("title")
-        });
+        })
+        || ecl_article_heading;
     if !is_header_wrapper {
         return String::new();
     }
@@ -455,6 +482,55 @@ mod visible_text_tests {
         assert!(!schengen.content_md.contains("window.fake_fee"));
         assert!(!schengen.content_md.contains("Unrelated telephone numbers"));
         assert_eq!(schengen.content_hash, content_hash_v1(&schengen.content_md));
+    }
+
+    #[test]
+    fn european_commission_ecl_article_heading_recovers_exact_policy_body() {
+        // Physical EC page: article H2 is in a plain div.ecl, factual text
+        // in the next div.ecl, whereas the page H1 already yields a date.
+        // Preserve independent heading boundaries, not navigation evidence.
+        let html = r#"<html><body>
+          <nav><h2 class="ecl-u-type-heading-2">Page contents</h2>
+            <p>Menu entry, not legal evidence.</p></nav>
+          <main><h1>Applying for a Schengen visa</h1>
+            <div>2 December 2025</div>
+            <article dir="ltr">
+              <div class="ecl-u-mb-2xl">
+                <div class="ecl"><h2 class="ecl-u-type-heading-2">What is a Schengen visa?</h2></div>
+                <div class="ecl"><p>A <strong>Schengen visa</strong> is an entry permit
+                  for non-EU nationals to make a short visit of up to
+                  <strong>90 days in any 180-day period</strong>.</p></div>
+              </div>
+              <div class="ecl-u-mb-2xl">
+                <div class="ecl"><h2 class="ecl-u-type-heading-2">How long can you stay?</h2></div>
+                <div class="ecl"><p>The short-stay calculator can help
+                  calculate the remaining period.</p></div>
+              </div>
+            </article>
+          </main><footer>Unrelated marketing footer</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(
+            html,
+            "https://home-affairs.ec.europa.eu/policies/schengen/visa-policy/applying-schengen-visa_en",
+        );
+        let schengen = sections
+            .iter()
+            .find(|section| section.heading_path == "What is a Schengen visa?")
+            .expect("ECL policy evidence must not disappear behind a date-only H1");
+        assert!(schengen.content_md.contains("90 days in any 180-day period"));
+        assert!(!schengen.content_md.contains("short-stay calculator"));
+        assert!(!schengen.content_md.contains("Menu entry"));
+        assert!(!schengen.content_md.contains("marketing footer"));
+        assert_eq!(
+            schengen.content_hash,
+            content_hash_v1(&schengen.content_md)
+        );
+        let calculator = sections
+            .iter()
+            .find(|section| section.heading_path == "How long can you stay?")
+            .expect("second ECL heading retains its own section");
+        assert!(calculator.content_md.contains("short-stay calculator"));
+        assert!(!calculator.content_md.contains("90 days in any 180-day period"));
     }
 
     #[test]
