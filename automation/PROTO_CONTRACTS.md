@@ -8,7 +8,7 @@ Generated file. Do not edit manually.
 |---|---|---:|---:|---|
 | `app/contracts/proto/condition.proto` | `alegria.condition.v1` | 2 | 0 | `6edc65f85dbf94426e150f0d997fe4f98d4bdba5a80b4afb863b850d3447369c` |
 | `app/contracts/proto/ontology.proto` | `alegria.ontology.v1` | 6 | 0 | `dce4dff6cc54bd745ec112f68b24c17495d0190fd7117d89255c0470daad9368` |
-| `app/contracts/proto/primitives.proto` | `alegria.primitives.v1` | 10 | 1 | `1eab30267de1ce980ce3e37e84893fb3f8b7fe21a03e7204663e6cf1db94b34d` |
+| `app/contracts/proto/primitives.proto` | `alegria.primitives.v1` | 10 | 1 | `60b482a112a676cf4002e413c836c103b6b37cb19c13b516361767ae29cbdde8` |
 | `app/contracts/proto/read_api.proto` | `alegria.read_api.v1` | 14 | 0 | `a690559a168b00b7ed554002e84ddad902ed346d989f82a068953af729ca4561` |
 | `app/contracts/proto/rules.proto` | `alegria.rules.v1` | 11 | 0 | `8eb0f733a0929558c39b0359b583b507f484ad614ee25f74a55eaa40e2601434` |
 | `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 12 | 0 | `7e526dd92504423f29fafaabe53efb07a14be74cfde7fccf59e966e1cbc017b0` |
