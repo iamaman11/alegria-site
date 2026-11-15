@@ -28,7 +28,12 @@ where
 {
     tokio::time::timeout(deadline, operation)
         .await
-        .map_err(|_| anyhow::anyhow!("Neo4j readiness query timed out after {}s", deadline.as_secs()))?
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Neo4j readiness query timed out after {}s",
+                deadline.as_secs()
+            )
+        })?
 }
 
 #[cfg(test)]
@@ -59,7 +64,10 @@ mod readiness_tests {
             anyhow::bail!("unreachable Bolt backend")
         })
         .await;
-        assert!(result.unwrap_err().to_string().contains("unreachable Bolt backend"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unreachable Bolt backend"));
     }
 }
 
