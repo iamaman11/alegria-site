@@ -1,4 +1,3 @@
-
 #[derive(Debug, Clone)]
 pub struct RunVerifiedRulePoint {
     pub point_id: String,
@@ -401,4 +400,3 @@ pub async fn read_projection_sync_status(
         })
         .collect())
 }
-
