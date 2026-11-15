@@ -476,8 +476,10 @@ async fn run_seo_preflight(
             }
         );
     }
-    if llm_configured() {
-        println!("OK llm_provider");
+    if manual_llm_configured() {
+        println!("OK llm_provider mode=chat_manual human_input_required=true");
+    } else if llm_configured() {
+        println!("OK llm_provider api_credentials_present");
     } else {
         println!("WARN llm_provider missing; deterministic fallback cannot produce production-quality pages");
     }

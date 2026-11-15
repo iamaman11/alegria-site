@@ -126,6 +126,29 @@ fn required_graph_projections() -> [&'static str; 7] {
     ]
 }
 
+fn manual_llm_configured() -> bool {
+    is_chat_manual_provider(&env::var("SEO_LLM_PROVIDER").unwrap_or_default())
+        && is_chat_manual_provider(&env::var("SEO_TRUTH_LLM_PROVIDER").unwrap_or_default())
+}
+
+fn is_chat_manual_provider(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("chat_manual")
+}
+
+#[cfg(test)]
+mod manual_llm_readiness_tests {
+    use super::is_chat_manual_provider;
+
+    #[test]
+    fn only_explicit_chat_manual_is_treated_as_manual_provider() {
+        assert!(is_chat_manual_provider("chat_manual"));
+        assert!(is_chat_manual_provider(" chat_manual "));
+        assert!(!is_chat_manual_provider("deterministic"));
+        assert!(!is_chat_manual_provider(""));
+        assert!(!is_chat_manual_provider("chat"));
+    }
+}
+
 fn llm_configured() -> bool {
     env_set("VERTEX_GEMINI_PROJECT")
         || env_set("GOOGLE_CLOUD_PROJECT")
@@ -189,15 +212,9 @@ async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
         }
     };
 
-    match tokio::time::timeout(
-        Duration::from_secs(3),
-        neo4rs_adapter::run_cypher(&graph, "RETURN 1 AS ok"),
-    )
-    .await
-    {
-        Ok(Ok(())) => probe.graph_query_ready = true,
-        Ok(Err(err)) => probe.errors.push(format!("neo4j_query:{err}")),
-        Err(_) => probe.errors.push("neo4j_query:timeout".to_string()),
+    match neo4rs_adapter::probe_ready_query(&graph).await {
+        Ok(()) => probe.graph_query_ready = true,
+        Err(err) => probe.errors.push(format!("neo4j_query:{err}")),
     }
 
     let gds_queries = [

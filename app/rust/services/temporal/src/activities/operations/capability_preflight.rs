@@ -219,15 +219,9 @@ async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
         }
     };
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        neo4rs_adapter::run_cypher(&graph, "RETURN 1 AS ok"),
-    )
-    .await
-    {
-        Ok(Ok(_)) => probe.graph_query_ready = true,
-        Ok(Err(err)) => probe.errors.push(format!("neo4j_query:{err}")),
-        Err(_) => probe.errors.push("neo4j_query:timeout".to_string()),
+    match neo4rs_adapter::probe_ready_query(&graph).await {
+        Ok(()) => probe.graph_query_ready = true,
+        Err(err) => probe.errors.push(format!("neo4j_query:{err}")),
     }
 
     let gds_queries = [
