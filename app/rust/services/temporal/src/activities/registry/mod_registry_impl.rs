@@ -770,7 +770,10 @@ impl AlegriaActivities {
         input: operations::TruthAdjudicationSweepInput,
     ) -> Result<operations::TruthAdjudicationSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "truth_adjudication", 1, &input, || async {
+        // Governance changed after the first live run. A reset must not reuse
+        // the old v1 successful adjudication ledger/output instead of applying
+        // the corrected policy to preserved source and LLM evidence.
+        self.execute_step(&run_id, "truth_adjudication", 2, &input, || async {
             operations::truth_adjudication_sweep_impl(self.as_ref(), &input).await
         })
         .await
