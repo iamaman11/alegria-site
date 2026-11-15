@@ -145,6 +145,34 @@ pub async fn reconcile_truth_candidate_reviews(
     .execute(&mut *tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
+    // Raw re-extraction may cascade-delete a candidate after a review was
+    // created. Close the now-unreviewable task without deleting its audit;
+    // a new exact source candidate is queued by the ordinary reconciler below.
+    // Never grant approval to an orphaned candidate or assume its former
+    // evidence still exists.
+    sqlx::query(
+        r#"
+        UPDATE site.seo_hitl_tasks AS t
+        SET queue_state = 'superseded',
+            audit_log_payload = t.audit_log_payload || jsonb_build_array(
+                jsonb_build_object('event', 'truth_candidate_source_missing',
+                    'run_id', $2::text, 'at', now())),
+            updated_at = now()
+        WHERE t.task_type = 'truth_candidate_review'
+          AND t.scope_signature = $1
+          AND t.queue_state IN ('open', 'in_review', 'reopened')
+          AND NOT EXISTS (
+              SELECT 1 FROM extracted.rule_candidates AS c
+              WHERE c.rule_candidate_id = t.blocking_execution_key
+                AND c.context_key = $1
+          )
+        "#,
+    )
+    .bind(context_key)
+    .bind(run_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| infra_unavailable(e.to_string()))?;
     // A candidate can become unresolved again after an independent recheck,
     // or the extraction projection can change while source bytes stay fixed.
     // Reopen the SAME task; keep the immutable audit, discard the stale review
