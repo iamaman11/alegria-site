@@ -58,12 +58,24 @@ async fn persist_seo_site_build_input(
     citizenship_code: String,
     bootstrap_context: bool,
     queries: Vec<String>,
+    source_urls: Vec<String>,
     query_batch_key: Option<String>,
     run_mode: String,
 ) -> Result<()> {
+    // Validate every source URL before modifying the registered run. No
+    // source may silently become an official fact or a synthetic SERP rank.
+    if source_urls.len() > 25 {
+        anyhow::bail!("at most 25 explicit source URLs are allowed per run");
+    }
+    let mut sources = std::collections::BTreeMap::new();
+    for source in &source_urls {
+        let (url, identity, _, _) = dataforseo_serp_adapter::operator_source_identity(source)
+            .with_context(|| format!("invalid --source-url: {source}"))?;
+        sources.insert(identity, url);
+    }
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
-    register_site_build_input(
+    let site_input = register_site_build_input(
         &repo,
         &SeoSiteBuildRegistrationRequest {
             run_id: run_id.to_string(),
@@ -83,6 +95,23 @@ async fn persist_seo_site_build_input(
     )
     .await
     .map_err(|err| anyhow::anyhow!("{err}"))?;
+    for source in sources.values() {
+        sqlx_serp_adapter::enqueue_operator_source_for_run(
+            &pool,
+            run_id,
+            &site_input.query_batch_key,
+            source,
+        )
+        .await?;
+    }
+    if !sources.is_empty() {
+        println!(
+            "CANONICAL_CRAWL_SOURCES run_id={} explicit_source_count={} real_serp_query_count={}",
+            run_id,
+            sources.len(),
+            site_input.queries.len()
+        );
+    }
     Ok(())
 }
 

@@ -205,6 +205,7 @@ async fn main() -> Result<()> {
             citizenship_code,
             bootstrap_context,
             queries,
+            source_urls,
             query_batch_key,
             run_mode,
             wait,
@@ -257,6 +258,7 @@ async fn main() -> Result<()> {
                     citizenship_code,
                     bootstrap_context,
                     queries,
+                    source_urls,
                     query_batch_key,
                     run_mode,
                 )

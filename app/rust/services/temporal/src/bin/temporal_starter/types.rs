@@ -6,7 +6,8 @@ use infrastructure::adapters::temporalio_sdk_adapter::{
     WorkflowSignalOptions, WorkflowStartOptions,
 };
 use infrastructure::adapters::{
-    neo4rs_adapter, qdrant_client_adapter, sqlx_execution_runs_adapter,
+    dataforseo_serp_adapter, neo4rs_adapter, qdrant_client_adapter,
+    sqlx_execution_runs_adapter, sqlx_serp_adapter,
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
     sqlx_seo_adapter,
@@ -82,6 +83,10 @@ enum Command {
         /// SEO query batch. Repeat --query for multiple fixed queries.
         #[arg(long = "query")]
         queries: Vec<String>,
+        /// Verified primary URLs for the SAME canonical source crawl.
+        /// Repeat --source-url; these never acquire a fabricated SERP rank.
+        #[arg(long = "source-url")]
+        source_urls: Vec<String>,
         #[arg(long)]
         query_batch_key: Option<String>,
         #[arg(long, default_value = "publish_with_hitl")]

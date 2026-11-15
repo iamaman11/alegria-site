@@ -345,6 +345,19 @@ fn matches_explicit_site_scope(keyword: &str, source_url: &str) -> bool {
     actual_path == required_path || actual_path.starts_with(&format!("{required_path}/"))
 }
 
+/// A deliberately supplied primary source is a real crawl URL, never an
+/// invented SERP rank or automatically verified fact. Apply exactly the
+/// same public HTTPS guard and source-tier classification as organic URLs.
+pub fn operator_source_identity(raw: &str) -> Option<(String, String, String, String)> {
+    let url = direct_public_https_url(raw.trim())?;
+    Some((
+        url.clone(),
+        url_norm(&url),
+        domain_norm(&url),
+        classify_domain_tier(&url),
+    ))
+}
+
 // The source identity is the verified HTTP redirect destination, not
 // DataForSEO's Google tracking link or a SERP breadcrumb.
 fn is_google_tracking_url(raw: &str) -> bool {
@@ -647,6 +660,27 @@ mod tests {
             "site:not-a-valid-host",
             "https://www.exteriores.gob.es/visa"
         ));
+    }
+
+    #[test]
+    fn explicit_primary_source_keeps_source_identity_without_a_serp_rank() {
+        let schengen = "https://www.exteriores.gob.es/Consulados/moscu/es/ServiciosConsulares/Paginas/index.aspx?scca=Visados&scs=Visado+de+estancia+%28visado+Schengen%29";
+        let national = "https://www.exteriores.gob.es/Consulados/moscu/es/ServiciosConsulares/Paginas/index.aspx?scca=Visados&scs=Visados+Nacionales";
+        let (url, norm, domain, tier) = operator_source_identity(schengen).unwrap();
+        assert_eq!(url, schengen);
+        assert!(norm.ends_with("scs=Visado+de+estancia+%28visado+Schengen%29"));
+        assert_eq!(domain, "exteriores.gob.es");
+        assert_ne!(tier, "low_trust");
+        assert_ne!(norm, operator_source_identity(national).unwrap().1);
+        for unsafe_url in [
+            "http://www.exteriores.gob.es/visa",
+            "https://127.0.0.1/admin",
+            "https://localhost/private",
+            "https://user:password@example.com/visa",
+            "https://google.com/goto?url=https://example.com",
+        ] {
+            assert!(operator_source_identity(unsafe_url).is_none(), "{unsafe_url}");
+        }
     }
 
     #[test]
