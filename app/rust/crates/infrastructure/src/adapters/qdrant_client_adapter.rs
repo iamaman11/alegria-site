@@ -392,6 +392,118 @@ mod raw_chunk_readback_tests {
     }
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRuleReadbackPoint {
+    pub point_id: String,
+    pub rule_instance_id: String,
+    pub context_key: String,
+    pub concept_key: String,
+    pub source_key: String,
+}
+
+fn verified_rule_points_match(expected: &[VerifiedRuleReadbackPoint], actual: &[Value]) -> bool {
+    use std::collections::{BTreeMap, BTreeSet};
+    if expected.is_empty() || expected.len() != actual.len() {
+        return false;
+    }
+    let by_id = expected.iter()
+        .map(|point| (point.point_id.as_str(), point))
+        .collect::<BTreeMap<_, _>>();
+    if by_id.len() != expected.len() {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    for point in actual {
+        let Some(id) = point.get("id").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(want) = by_id.get(id) else {
+            return false;
+        };
+        if !seen.insert(id)
+            || point.pointer("/payload/rule_instance_id").and_then(Value::as_str) != Some(want.rule_instance_id.as_str())
+            || point.pointer("/payload/context_key").and_then(Value::as_str) != Some(want.context_key.as_str())
+            || point.pointer("/payload/concept_key").and_then(Value::as_str) != Some(want.concept_key.as_str())
+            || point.pointer("/payload/source_key").and_then(Value::as_str) != Some(want.source_key.as_str())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Check the actual Qdrant fact point against the verified canonical SQL fact.
+pub async fn verify_verified_rule_readback(expected: &[VerifiedRuleReadbackPoint]) -> Result<bool> {
+    if expected.is_empty() {
+        return Ok(false);
+    }
+    let url = format!(
+        "{}/collections/verified_rules_4/points",
+        qdrant_rest_url_from_env().trim_end_matches('/')
+    );
+    for chunk in expected.chunks(128) {
+        let ids = chunk.iter().map(|point| point.point_id.as_str()).collect::<Vec<_>>();
+        let response = reqwest::Client::new()
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(8))
+            .json(&serde_json::json!({
+                "ids": ids,
+                "with_payload": ["rule_instance_id", "context_key", "concept_key", "source_key"],
+                "with_vector": false
+            }))
+            .send()
+            .await
+            .context("Qdrant verified rule readback failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("Qdrant verified rule readback HTTP {status}");
+        }
+        let body: Value = response.json().await?;
+        let actual = body.get("result").and_then(Value::as_array)
+            .context("Qdrant verified rule readback missing result array")?;
+        if !verified_rule_points_match(chunk, actual) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+#[cfg(test)]
+mod verified_rule_readback_tests {
+    use super::*;
+    #[test]
+    fn verified_fact_requires_matching_live_source_context_and_id() {
+        let want = vec![VerifiedRuleReadbackPoint {
+            point_id: "point-a".into(),
+            rule_instance_id: "fact-a".into(),
+            context_key: "ES|tourist||BY".into(),
+            concept_key: "standard_tourist_eligibility".into(),
+            source_key: "https://official.example/rule".into(),
+        }];
+        let good = serde_json::json!([{"id":"point-a","payload":{
+            "rule_instance_id":"fact-a", "context_key":"ES|tourist||BY",
+            "concept_key":"standard_tourist_eligibility",
+            "source_key":"https://official.example/rule"}}]);
+        let actual = good.as_array().unwrap();
+        assert!(verified_rule_points_match(&want, actual));
+        assert!(!verified_rule_points_match(&[], actual));
+        assert!(!verified_rule_points_match(&want, &[]));
+        for field in ["id", "rule_instance_id", "context_key", "concept_key", "source_key"] {
+            let mut bad = actual.clone();
+            let obj = bad[0].as_object_mut().unwrap();
+            if field == "id" {
+                obj.insert(field.into(), Value::String("wrong".into()));
+            } else {
+                obj.get_mut("payload").unwrap().as_object_mut().unwrap()
+                    .insert(field.into(), Value::String("wrong".into()));
+            }
+            assert!(!verified_rule_points_match(&want, &bad), "{field}");
+        }
+        assert!(!verified_rule_points_match(&[want[0].clone(),want[0].clone()], actual));
+    }
+}
+
 pub fn scored_point_payload_value(point: &ScoredPoint) -> Value {
     let payload: Payload = point.payload.clone().into();
     payload.into()

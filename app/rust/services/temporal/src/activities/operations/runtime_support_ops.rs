@@ -350,6 +350,23 @@ pub(crate) async fn seo_preflight_impl(
             };
             verified.insert(collection.to_owned(), fresh);
         }
+        let verified_points =
+            sqlx_seo_adapter::read_run_verified_rule_points(&acts.pool, &input.run_id, &input.context_key).await?;
+        let expected = verified_points.iter().map(|point| qdrant_client_adapter::VerifiedRuleReadbackPoint {
+            point_id: point.point_id.clone(),
+            rule_instance_id: point.rule_instance_id.clone(),
+            context_key: point.context_key.clone(),
+            concept_key: point.concept_key.clone(),
+            source_key: point.source_key.clone(),
+        }).collect::<Vec<_>>();
+        let fresh = match qdrant_client_adapter::verify_verified_rule_readback(&expected).await {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                tracing::warn!(error = %error, "verified fact Qdrant readback failed");
+                false
+            }
+        };
+        verified.insert("verified_rules_4".to_string(), fresh);
         verified
     } else {
         std::collections::BTreeMap::new()
@@ -424,6 +441,11 @@ pub(crate) async fn seo_preflight_impl(
     } else {
         Default::default()
     };
+    let run_graph_source_synced = if input.require_materialized_projections {
+        sqlx_seo_adapter::read_run_graph_source_synced(&acts.pool, &input.run_id, &scope.scope_signature).await?
+    } else {
+        false
+    };
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
@@ -459,11 +481,14 @@ pub(crate) async fn seo_preflight_impl(
                 projection_name: status.artifact_name,
                 materialization_outcome: materialization_outcome.to_string(),
                 exists: source_count > 0 && actual_count > 0,
-                fresh: valid_empty
-                    || status
+                fresh: if input.require_materialized_projections {
+                    valid_empty || (complete && run_graph_source_synced)
+                } else {
+                    valid_empty || status
                         .lag_seconds
                         .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                        .unwrap_or(false),
+                        .unwrap_or(false)
+                },
                 projection_complete: valid_empty || complete,
                 point_count: actual_count,
                 last_materialized_at: status.last_materialized_at,

@@ -1,3 +1,108 @@
+
+#[derive(Debug, Clone)]
+pub struct RunVerifiedRulePoint {
+    pub point_id: String,
+    pub rule_instance_id: String,
+    pub context_key: String,
+    pub concept_key: String,
+    pub source_key: String,
+}
+
+/// A verified fact is eligible for retrieval only if its canonical SQL state,
+/// current business-run outbox receipt, and Qdrant point all agree.
+pub async fn read_run_verified_rule_points(
+    pool: &PgPool,
+    run_id: &str,
+    context_key: &str,
+) -> Result<Vec<RunVerifiedRulePoint>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT ri.rule_instance_id, ri.context_key, ri.concept_key, ri.source_key,
+               q.point_id,
+               EXISTS (
+                   SELECT 1 FROM system.sync_outbox o
+                   WHERE o.run_id = $1 AND o.target_system = 'qdrant'
+                     AND o.aggregate_type = 'rule_instance'
+                     AND o.aggregate_key = ri.rule_instance_id
+                     AND o.event_type = 'QdrantUpsertCommand'
+                     AND o.status = 'done'
+               ) AS delivered
+        FROM verified.rule_instances ri
+        LEFT JOIN kb.qdrant_points q
+          ON q.collection_name = 'verified_rules_4'
+         AND q.entity_type = 'rule_instance'
+         AND q.entity_key = ri.rule_instance_id
+        WHERE ri.context_key = $2 AND ri.status = 'verified'
+        ORDER BY ri.rule_instance_id
+        "#,
+    )
+    .bind(run_id)
+    .bind(context_key)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+
+    let mut verified = Vec::with_capacity(rows.len());
+    for row in rows {
+        let delivered: bool = row.get("delivered");
+        let point_id: Option<String> = row.get("point_id");
+        if !delivered || point_id.is_none() {
+            return Ok(Vec::new());
+        }
+        verified.push(RunVerifiedRulePoint {
+            point_id: point_id.unwrap(),
+            rule_instance_id: row.get("rule_instance_id"),
+            context_key: row.get("context_key"),
+            concept_key: row.get("concept_key"),
+            source_key: row.get("source_key"),
+        });
+    }
+    Ok(verified)
+}
+
+/// A completed graph projection cannot become stale merely because time passes.
+/// It can become stale if the source changed after the last successful receipt.
+/// Live Neo4j scope readback and pending/failed outbox checks are separate gates.
+pub async fn read_run_graph_source_synced(
+    pool: &PgPool,
+    run_id: &str,
+    scope_signature: &str,
+) -> Result<bool, DomainError> {
+    sqlx::query_scalar::<_, bool>(
+        r#"
+        WITH source_updates(changed_at) AS (
+            SELECT max(updated_at) FROM site.keyword_clusters WHERE scope_signature = $2
+            UNION ALL SELECT max(updated_at) FROM serp.serp_patterns WHERE scope_signature = $2
+            UNION ALL SELECT max(bp.updated_at) FROM site.page_blueprints bp
+              WHERE EXISTS (SELECT 1 FROM site.page_nodes pn
+                             WHERE pn.blueprint_key = bp.blueprint_key AND pn.scope_signature = $2)
+            UNION ALL SELECT max(updated_at) FROM site.page_nodes WHERE scope_signature = $2
+            UNION ALL SELECT max(updated_at) FROM site.content_gaps WHERE scope_signature = $2
+            UNION ALL SELECT max(updated_at) FROM site.link_recommendations WHERE scope_signature = $2
+            UNION ALL SELECT max(pb.updated_at) FROM site.page_briefs pb
+              JOIN site.page_nodes pn ON pn.page_node_key = pb.page_node_key
+             WHERE pn.scope_signature = $2
+        )
+        SELECT COALESCE(
+            (SELECT max(o.updated_at) FROM system.sync_outbox o
+             WHERE o.run_id = $1 AND o.target_system = 'neo4j' AND o.status = 'done')
+            >= (SELECT max(changed_at) FROM source_updates),
+            FALSE
+        )
+        AND NOT EXISTS (
+            SELECT 1 FROM system.sync_outbox o
+            WHERE o.run_id = $1 AND o.target_system = 'neo4j'
+              AND o.status IN ('pending', 'processing', 'failed')
+        )
+        "#,
+    )
+    .bind(run_id)
+    .bind(scope_signature)
+    .fetch_one(pool)
+    .await
+    .map_err(classify_sqlx)
+}
+
 /// Immutable raw evidence is fresh when this business run's outbox has
 /// completed and every indexed section still agrees with the stored source.
 /// Wall-clock age of the last embedding is not evidence of staleness.
