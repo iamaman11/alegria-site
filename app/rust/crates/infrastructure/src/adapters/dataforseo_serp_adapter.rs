@@ -215,7 +215,14 @@ impl DataForSeoSerpClient {
         };
         let deadline = Instant::now() + TASK_WAIT;
         loop {
-            if let Some(result) = self.fetch_standard_task(&task_id).await? {
+            if let Some(mut result) = self.fetch_standard_task(&task_id).await? {
+                // Preserve the paid provider receipt and raw SERP for audit,
+                // but Google may return unrelated domains even for an
+                // explicit site: query. Only matching direct source URLs
+                // are admissible to the crawl and truth queues.
+                result
+                    .organic_results
+                    .retain(|item| matches_explicit_site_scope(keyword, &item.url));
                 return Ok(result);
             }
             if Instant::now() >= deadline {
@@ -300,6 +307,44 @@ fn checked_provider_http(response: Response, operation: &str) -> Result<Response
     response
         .error_for_status()
         .with_context(|| format!("DataForSEO Standard {operation} HTTP failure"))
+}
+
+// DataForSEO Standard may return off-site organic items for an explicit
+// Google site: query (observed physically: ten Belarus visa marketing pages
+// for a Spain consular site: query). A SERP rank is not source authorization.
+// Do not fake results, discard the raw provider payload, or follow a redirect
+// to a different site. Source URL still passes the direct-HTTPS guard below.
+fn matches_explicit_site_scope(keyword: &str, source_url: &str) -> bool {
+    let restriction = keyword
+        .split_whitespace()
+        .find_map(|word| {
+            word.get(..5)
+                .filter(|prefix| prefix.eq_ignore_ascii_case("site:"))
+                .map(|_| &word[5..])
+        });
+    let Some(restriction) = restriction else {
+        return true;
+    };
+    let Ok(expected) = Url::parse(&format!("https://{restriction}")) else {
+        return false;
+    };
+    let Ok(actual) = Url::parse(source_url) else {
+        return false;
+    };
+    let (Some(site_host), Some(actual_host)) = (expected.host_str(), actual.host_str()) else {
+        return false;
+    };
+    let site_host = site_host.to_ascii_lowercase();
+    let actual_host = actual_host.to_ascii_lowercase();
+    if actual_host != site_host && !actual_host.ends_with(&format!(".{site_host}")) {
+        return false;
+    }
+    let required_path = expected.path().trim_end_matches('/').to_ascii_lowercase();
+    if required_path.is_empty() {
+        return true;
+    }
+    let actual_path = actual.path().to_ascii_lowercase();
+    actual_path == required_path || actual_path.starts_with(&format!("{required_path}/"))
 }
 
 // The source identity is the verified HTTP redirect destination, not
@@ -572,6 +617,39 @@ fn classify_domain_tier(raw_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_site_filter_rejects_unrelated_google_results() {
+        let q = "site:exteriores.gob.es/Consulados/moscu Visado Schengen Bielorrusia";
+        assert!(matches_explicit_site_scope(
+            q,
+            "https://www.exteriores.gob.es/Consulados/moscu/es/ServiciosConsulares/Paginas/Visados.aspx"
+        ));
+        assert!(!matches_explicit_site_scope(
+            q,
+            "https://www.visateam.pt/e-visa-bielorrussia/"
+        ));
+        assert!(!matches_explicit_site_scope(
+            q,
+            "https://exteriores.gob.es.evil.example/Consulados/moscu/"
+        ));
+        assert!(!matches_explicit_site_scope(
+            q,
+            "https://www.exteriores.gob.es/Consulados/sydney/es/visa/"
+        ));
+        assert!(matches_explicit_site_scope(
+            "site:eeas.europa.eu/belarus Spain Schengen",
+            "https://www.eeas.europa.eu/belarus/travel-study_en?s=218"
+        ));
+        assert!(matches_explicit_site_scope(
+            "Spain tourist visa for Belarusian citizens",
+            "https://www.exteriores.gob.es/consulados/moscu/es/visa"
+        ));
+        assert!(!matches_explicit_site_scope(
+            "site:not-a-valid-host",
+            "https://www.exteriores.gob.es/visa"
+        ));
+    }
 
     #[test]
     fn missing_or_blank_endpoint_uses_default() {
