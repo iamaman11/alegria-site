@@ -11,13 +11,12 @@ mod tests {
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
-        CrawlIngestRepository, GraphCoverageEvaluation, GraphNeighborhoodHit, GraphReasoningPort,
-        OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
+        CrawlIngestRepository, GraphCapabilityPort, GraphCoverageEvaluation, GraphNeighborhoodHit,
+        GraphReasoningPort, OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
         RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
         SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
-        GraphCapabilityPort,
     };
 
     #[derive(Default)]
@@ -160,6 +159,14 @@ mod tests {
             _scope_signature: &str,
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(runtime_models::GraphPlanningContext::default())
+        }
+
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_ingest_output(

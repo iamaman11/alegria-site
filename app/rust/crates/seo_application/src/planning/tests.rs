@@ -3,10 +3,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use seo_ports::{
-        GlobalNavigationPersistReport, GraphCoverageEvaluation, GraphNeighborhoodHit,
-        GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
-        RebuildDependencyEvidence, SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
-        GraphCapabilityPort,
+        GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
+        GraphNeighborhoodHit, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
+        PlanningRepository, RebuildDependencyEvidence, SemanticLinkCandidate,
+        SemanticLinkSearchPort, SerpSearchPort,
     };
     use std::sync::Mutex;
 
@@ -28,6 +28,14 @@ mod tests {
             _scope_signature: &str,
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(runtime_models::GraphPlanningContext::default())
+        }
+
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_ingest_output(
@@ -227,6 +235,14 @@ mod tests {
             _scope_signature: &str,
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(self.graph_context.clone())
+        }
+
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_ingest_output(
