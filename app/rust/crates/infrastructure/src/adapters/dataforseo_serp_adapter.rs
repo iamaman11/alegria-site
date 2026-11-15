@@ -315,13 +315,11 @@ fn checked_provider_http(response: Response, operation: &str) -> Result<Response
 // Do not fake results, discard the raw provider payload, or follow a redirect
 // to a different site. Source URL still passes the direct-HTTPS guard below.
 fn matches_explicit_site_scope(keyword: &str, source_url: &str) -> bool {
-    let restriction = keyword
-        .split_whitespace()
-        .find_map(|word| {
-            word.get(..5)
-                .filter(|prefix| prefix.eq_ignore_ascii_case("site:"))
-                .map(|_| &word[5..])
-        });
+    let restriction = keyword.split_whitespace().find_map(|word| {
+        word.get(..5)
+            .filter(|prefix| prefix.eq_ignore_ascii_case("site:"))
+            .map(|_| &word[5..])
+    });
     let Some(restriction) = restriction else {
         return true;
     };
