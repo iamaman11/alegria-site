@@ -679,7 +679,10 @@ mod tests {
             "https://user:password@example.com/visa",
             "https://google.com/goto?url=https://example.com",
         ] {
-            assert!(operator_source_identity(unsafe_url).is_none(), "{unsafe_url}");
+            assert!(
+                operator_source_identity(unsafe_url).is_none(),
+                "{unsafe_url}"
+            );
         }
     }
 

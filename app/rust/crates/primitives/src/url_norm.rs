@@ -63,8 +63,12 @@ mod tests {
     #[test]
     fn consular_query_parameters_identify_distinct_real_documents() {
         let base = "https://www.exteriores.gob.es/Consulados/moscu/es/ServiciosConsulares/Paginas/index.aspx";
-        let schengen = format!("{base}?scca=Visados&scco=Rusia&scd=203&scs=Visado+de+estancia+%28visado+Schengen%29");
-        let digital_nomad = format!("{base}?scca=Visados&scco=Rusia&scd=203&scs=Visado+de+residencia+para+teletrabajo");
+        let schengen = format!(
+            "{base}?scca=Visados&scco=Rusia&scd=203&scs=Visado+de+estancia+%28visado+Schengen%29"
+        );
+        let digital_nomad = format!(
+            "{base}?scca=Visados&scco=Rusia&scd=203&scs=Visado+de+residencia+para+teletrabajo"
+        );
         assert_ne!(url_norm(&schengen), url_norm(&digital_nomad));
         assert!(url_norm(&schengen).contains("scs=Visado+de+estancia"));
         assert!(url_norm(&digital_nomad).contains("scs=Visado+de+residencia"));
