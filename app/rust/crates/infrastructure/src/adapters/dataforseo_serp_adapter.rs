@@ -841,7 +841,7 @@ mod tests {
         assert_eq!(item.source_tier, "official");
         assert_eq!(
             item.url_norm,
-            "exteriores.gob.es/consulados/toronto/en/visados-schengen.aspx"
+            "exteriores.gob.es/Consulados/toronto/en/Visados-Schengen.aspx"
         );
         assert!(item.url.starts_with("https://www.exteriores.gob.es/"));
         assert!(!item.url.contains("google.com/goto"));
