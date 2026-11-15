@@ -147,9 +147,9 @@ fn collect_wrapped_heading_body(document: &Html, heading_id: ego_tree::NodeId) -
     };
     let header_class = element.attr("class").unwrap_or("").to_ascii_lowercase();
     let is_header_wrapper = element.name() == "header"
-        || header_class
-            .split_whitespace()
-            .any(|class| class.contains("header") || class.contains("heading") || class.ends_with("title"));
+        || header_class.split_whitespace().any(|class| {
+            class.contains("header") || class.contains("heading") || class.ends_with("title")
+        });
     if !is_header_wrapper {
         return String::new();
     }
@@ -441,17 +441,20 @@ mod visible_text_tests {
         let sections = extract_sections_typed(html, "https://www.eeas.europa.eu/belarus/");
         let schengen = sections
             .iter()
-            .find(|section| section.heading_path == "Information for Schengen Visa Applicants in Belarus")
+            .find(|section| {
+                section.heading_path == "Information for Schengen Visa Applicants in Belarus"
+            })
             .expect("Schengen FAQ heading exists");
-        assert!(schengen.content_md.contains("Answers to the frequently asked questions"));
+        assert!(schengen
+            .content_md
+            .contains("Answers to the frequently asked questions"));
         assert!(schengen.content_md.contains("Spanish Visa Center in Minsk"));
-        assert!(!schengen.content_md.contains("EU citizens travelling to Belarus"));
+        assert!(!schengen
+            .content_md
+            .contains("EU citizens travelling to Belarus"));
         assert!(!schengen.content_md.contains("window.fake_fee"));
         assert!(!schengen.content_md.contains("Unrelated telephone numbers"));
-        assert_eq!(
-            schengen.content_hash,
-            content_hash_v1(&schengen.content_md)
-        );
+        assert_eq!(schengen.content_hash, content_hash_v1(&schengen.content_md));
     }
 
     #[test]
