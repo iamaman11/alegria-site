@@ -70,13 +70,44 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
     let mut seen_cluster_families = BTreeSet::new();
     let mut cluster_topics_by_family: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
+    // A cluster_ref is an internal family identity, never a human search query.
+    // Pick the same representative real SERP phrase regardless of input order.
+    let mut representative_queries = BTreeMap::<(String, String), (String, f64)>::new();
     for pattern in &input.serp_patterns {
         let scope = if pattern.scope_signature.is_empty() {
             fallback_scope.clone()
         } else {
             pattern.scope_signature.clone()
         };
-        let seed_keyword = pattern.query.trim().to_ascii_lowercase();
+        let query = pattern.query.trim().to_lowercase();
+        if query.is_empty() {
+            continue;
+        }
+        let topic_signal = best_topic_family(&query, graph_context);
+        let family = cluster_ref_from_evidence(&pattern.evidence_ref)
+            .unwrap_or_else(|| seed_or_topic_key(&query, topic_signal));
+        match representative_queries.entry((scope, family)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((query, pattern.reliability_score));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (best_query, best_score) = entry.get();
+                if pattern.reliability_score > *best_score
+                    || (pattern.reliability_score == *best_score && query < *best_query)
+                {
+                    entry.insert((query, pattern.reliability_score));
+                }
+            }
+        }
+    }
+
+    for pattern in &input.serp_patterns {
+        let scope = if pattern.scope_signature.is_empty() {
+            fallback_scope.clone()
+        } else {
+            pattern.scope_signature.clone()
+        };
+        let seed_keyword = pattern.query.trim().to_lowercase();
         if seed_keyword.is_empty() {
             continue;
         }
@@ -126,7 +157,10 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
         keyword_clusters.push(KeywordClusterState {
             cluster_key: cluster_key.clone(),
             scope_signature: scope.clone(),
-            seed_keyword: family_key.clone(),
+            seed_keyword: representative_queries
+                .get(&(scope.clone(), family_key.clone()))
+                .map(|(query, _)| query.clone())
+                .unwrap_or_else(|| seed_keyword.clone()),
             dominant_intent: if pattern.dominant_intent.is_empty() {
                 "informational".to_string()
             } else {
@@ -159,7 +193,10 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
                 ),
                 scope_signature: scope.clone(),
                 page_node_key: String::new(),
-                missing_topic: family_key.clone(),
+                missing_topic: representative_queries
+                    .get(&(scope.clone(), family_key.clone()))
+                    .map(|(query, _)| query.clone())
+                    .unwrap_or_else(|| seed_keyword.clone()),
                 severity: "medium".to_string(),
                 status: "open".to_string(),
                 reason_code: "low_reliability_serp".to_string(),
@@ -260,6 +297,48 @@ mod tests {
         assert_eq!(
             output.keyword_clusters[0].reason_code,
             "graph_topic_family_merge"
+        );
+    }
+
+    #[test]
+    fn cluster_reference_is_not_exposed_as_keyword_and_ranking_is_stable() {
+        fn build(patterns: Vec<(&str, f64)>) -> OpportunityBuildOutputPayload {
+            execute(&OpportunityBuildInputPayload {
+                serp_patterns: patterns.into_iter().map(|(query, score)| {
+                    contracts::generated::alegria::temporal::v1::SerpPatternState {
+                        scope_signature: "scope".to_string(),
+                        query: query.to_string(),
+                        dominant_intent: "informational".to_string(),
+                        reliability_score: score,
+                        evidence_ref: "cluster_ref:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                        ..Default::default()
+                    }
+                }).collect(),
+                ..Default::default()
+            })
+        }
+        let queries = vec![
+            ("туристическая виза в Испанию", 0.78),
+            ("виза в Испанию для белорусов документы", 0.92),
+        ];
+        let result = build(queries.clone());
+        let reversed = build(queries.into_iter().rev().collect());
+        assert_eq!(result.keyword_clusters.len(), 1);
+        assert_eq!(
+            result.keyword_clusters[0].cluster_key,
+            reversed.keyword_clusters[0].cluster_key
+        );
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            reversed.keyword_clusters[0].seed_keyword
+        );
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            "виза в испанию для белорусов документы"
+        );
+        assert_ne!(
+            result.keyword_clusters[0].seed_keyword,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
     }
 

@@ -85,6 +85,43 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         sqlx_seo_adapter::persist_opportunity_build_output(self.pool, input, output).await
     }
 
+    async fn existing_page_owners_by_cluster(
+        &self,
+        scope_signature: &str,
+        cluster_keys: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if cluster_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT keyword_cluster_key, page_node_key
+             FROM site.page_nodes
+             WHERE scope_signature = $1 AND keyword_cluster_key = ANY($2)
+               AND lifecycle_state <> 'deprecated'
+             ORDER BY keyword_cluster_key, created_at",
+        )
+        .bind(scope_signature)
+        .bind(cluster_keys)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|error| DomainError::InfraUnavailable {
+            message: format!("read canonical page ownership: {error}"),
+        })?;
+        let mut owners = std::collections::BTreeMap::<String, String>::new();
+        for row in rows {
+            let cluster: String = row.get("keyword_cluster_key");
+            let page: String = row.get("page_node_key");
+            if let Some(previous) = owners.insert(cluster.clone(), page.clone()) {
+                if previous != page {
+                    return Err(DomainError::ConflictViolation {
+                        message: format!("multiple active pages own keyword cluster {cluster}"),
+                    });
+                }
+            }
+        }
+        Ok(owners.into_iter().collect())
+    }
+
     async fn persist_ia_build_output(
         &self,
         input: &IaBuildInputPayload,
@@ -165,4 +202,3 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         })
     }
 }
-

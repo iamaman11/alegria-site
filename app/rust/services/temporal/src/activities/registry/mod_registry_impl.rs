@@ -923,7 +923,7 @@ impl AlegriaActivities {
         input: OpportunityBuildInputPayload,
     ) -> Result<OpportunityBuildOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "opportunity_build", 1, &input, || async {
+        self.execute_step(&run_id, "opportunity_build", 2, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::planning::run_opportunity_build(&repo, &repo, &input).await
         })

@@ -303,6 +303,13 @@ pub trait PlanningRepository: Send + Sync {
         output: &OpportunityBuildOutputPayload,
     ) -> Result<(), DomainError>;
 
+    /// The same keyword cluster retains one page identity when its URL changes.
+    async fn existing_page_owners_by_cluster(
+        &self,
+        scope_signature: &str,
+        cluster_keys: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError>;
+
     async fn persist_ia_build_output(
         &self,
         input: &IaBuildInputPayload,

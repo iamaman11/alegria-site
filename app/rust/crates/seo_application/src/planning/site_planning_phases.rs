@@ -61,6 +61,39 @@ pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort + GraphCapa
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
     let mut output = seo_steps::ia_build_step::execute(&enriched);
+    let cluster_keys = output
+        .page_nodes
+        .iter()
+        .filter(|node| !node.keyword_cluster_key.is_empty())
+        .map(|node| node.keyword_cluster_key.clone())
+        .collect::<Vec<_>>();
+    let owners = repo
+        .existing_page_owners_by_cluster(&scope_signature, &cluster_keys)
+        .await?
+        .into_iter()
+        .collect::<HashMap<_, _>>();
+    let mut remapped_keys = HashMap::<String, String>::new();
+    for node in &mut output.page_nodes {
+        if let Some(owner_key) = owners.get(&node.keyword_cluster_key) {
+            if *owner_key != node.page_node_key {
+                remapped_keys.insert(node.page_node_key.clone(), owner_key.clone());
+                node.page_node_key = owner_key.clone();
+            }
+        }
+    }
+    for node in &mut output.page_nodes {
+        if let Some(owner_key) = remapped_keys.get(&node.parent_page_node_key) {
+            node.parent_page_node_key = owner_key.clone();
+        }
+    }
+    for conflict in &mut output.cannibalization_conflicts {
+        if let Some(owner_key) = remapped_keys.get(&conflict.page_key_a) {
+            conflict.page_key_a = owner_key.clone();
+        }
+        if let Some(owner_key) = remapped_keys.get(&conflict.page_key_b) {
+            conflict.page_key_b = owner_key.clone();
+        }
+    }
     if voyage_retrieval_ready_or_optional()? {
         let mut cluster_owner = HashMap::<String, String>::new();
         for node in &output.page_nodes {
@@ -214,4 +247,3 @@ pub async fn run_global_site_reconcile<
         .await?;
     Ok(output)
 }
-

@@ -38,8 +38,8 @@ pub fn canonical_slug(input: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in input.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
+        if ch.is_alphanumeric() {
+            out.extend(ch.to_lowercase());
             last_dash = false;
         } else if !last_dash {
             out.push('-');
@@ -69,6 +69,18 @@ mod tests {
         assert_eq!(
             scope_signature(&[("Market", "BY")]),
             scope_signature(&[("market", " by ")])
+        );
+    }
+
+    #[test]
+    fn slug_preserves_human_unicode_keywords() {
+        assert_eq!(
+            canonical_slug("Виза в Испанию: документы и сроки 2026"),
+            "виза-в-испанию-документы-и-сроки-2026"
+        );
+        assert_eq!(
+            canonical_slug("España: visado turístico"),
+            "españa-visado-turístico"
         );
     }
 
