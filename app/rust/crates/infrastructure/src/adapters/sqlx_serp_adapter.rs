@@ -170,7 +170,19 @@ pub async fn enqueue_operator_source_for_run(
          VALUES ($1, $2, $3, 'operator', $4, $5, $6, $7, 'pending',
                  now(), 'explicit_operator_source')
          ON CONFLICT (url_norm) DO UPDATE
-         SET status = CASE
+         SET source_type = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.source_type
+                 ELSE EXCLUDED.source_type
+             END,
+             url = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.url
+                 ELSE EXCLUDED.url
+             END,
+             status = CASE
                  WHEN serp.crawl_queue.status = 'processing'
                       AND serp.crawl_queue.locked_until > now() THEN 'processing'
                  WHEN serp.crawl_queue.status = 'done'
