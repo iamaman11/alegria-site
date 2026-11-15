@@ -287,12 +287,14 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         input: operations::ProjectionSyncInput,
     ) -> Result<operations::ProjectionSyncOutput, ActivityError> {
-        let run_id = input.run_id.clone();
-        let step_name = input.step_name.clone();
-        self.execute_step(&run_id, &step_name, 1, &input, || async {
-            operations::projection_sync_impl(self.as_ref(), &input).await
-        })
-        .await
+        // A projection sync drains mutable outbox state, unlike an immutable
+        // calculation: a later replay can add new source-revision events with
+        // the same run_id and step_name. Reusing a completed step result would
+        // skip those events and let the strict graph preflight race materialization.
+        // Temporal owns activity replay; the outbox receipt owns idempotency.
+        operations::projection_sync_impl(self.as_ref(), &input)
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))
     }
 
     #[allow(dead_code)]
