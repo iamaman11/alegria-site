@@ -356,7 +356,7 @@ pub async fn save_crawled_html(
         dtype.trim()
     };
     let content = json!({
-        "extractor": "primitives::html_sections@1",
+        "extractor": "primitives::html_sections@2",
         "source_url": source_url,
         "final_url": final_url,
         "redirect_chain": redirect_chain,

@@ -130,6 +130,53 @@ fn collect_siblings_text(document: &Html, node_id: ego_tree::NodeId) -> String {
     parts.join("\n")
 }
 
+/// Headings in real official pages are often nested in a title/header
+/// wrapper, while the substantive article is the NEXT sibling of that
+/// wrapper. The heading's own sibling text then contains only a subtitle.
+/// Lift one level only for an explicit header wrapper: never scan an entire
+/// body, main, navigation sidebar, or neighboring article for legal evidence.
+fn collect_wrapped_heading_body(document: &Html, heading_id: ego_tree::NodeId) -> String {
+    let Some(heading) = document.tree.get(heading_id) else {
+        return String::new();
+    };
+    let Some(wrapper) = heading.parent() else {
+        return String::new();
+    };
+    let Node::Element(element) = wrapper.value() else {
+        return String::new();
+    };
+    let header_class = element.attr("class").unwrap_or("").to_ascii_lowercase();
+    let is_header_wrapper = element.name() == "header"
+        || header_class
+            .split_whitespace()
+            .any(|class| class.contains("header") || class.contains("heading") || class.ends_with("title"));
+    if !is_header_wrapper {
+        return String::new();
+    }
+
+    fn has_heading(node: NodeRef<Node>) -> bool {
+        if let Node::Element(element) = node.value() {
+            if is_heading(element.name()) {
+                return true;
+            }
+        }
+        node.children().any(has_heading)
+    }
+
+    let mut parts = Vec::new();
+    let mut next = wrapper.next_sibling();
+    while let Some(sibling) = next {
+        // Never attach the following heading's content to this heading,
+        // including when another article is nested in its own DIV.
+        if has_heading(sibling) {
+            break;
+        }
+        collect_text_dfs(sibling, &mut parts);
+        next = sibling.next_sibling();
+    }
+    parts.join("\n")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HtmlMeta {
     pub title: String,
@@ -249,7 +296,14 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
             if heading_text.is_empty() {
                 continue;
             }
-            let content = collect_siblings_text(&document, *node_id);
+            let mut content = collect_siblings_text(&document, *node_id);
+            let wrapped_body = collect_wrapped_heading_body(&document, *node_id);
+            if !wrapped_body.is_empty() {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&wrapped_body);
+            }
             if content.is_empty() {
                 continue;
             }
@@ -353,6 +407,50 @@ mod visible_text_tests {
         assert_eq!(
             sections[0].content_hash,
             content_hash_v1(&sections[0].content_md)
+        );
+    }
+
+    #[test]
+    fn wrapped_eu_faq_heading_retains_real_article_evidence() {
+        // Based on the actual EEAS Drupal card structure: the heading lives
+        // inside text-box-header and its factual paragraphs are in a sibling
+        // card-text, not in the h2's next sibling. Navigation stays separate.
+        let html = r#"<html><body>
+          <nav><h3>On This Page</h3><ul><li>Visa</li><li>Information</li></ul></nav>
+          <main>
+            <div class="card"><div class="card-body">
+              <div class="text-box-header">
+                <h2 class="card-title">Information for EU citizens</h2>
+                <div class="h5 card-subtitle">Travelling to Belarus</div>
+              </div>
+              <div class="card-text"><p>EU citizens travelling to Belarus.</p></div>
+            </div></div>
+            <div class="card"><div class="card-body">
+              <div class="text-box-header">
+                <h2 class="card-title">Information for Schengen Visa Applicants in Belarus</h2>
+                <div class="h5 card-subtitle">Answers to the frequently asked questions</div>
+              </div>
+              <div class="card-text"><div class="field__item">
+                <p>Spain: A Schengen visa application for Spain may be submitted at the Spanish Visa Center in Minsk.</p>
+                <script>window.fake_fee = "1000 EUR"</script>
+              </div></div>
+            </div></div>
+          </main>
+          <footer>Unrelated telephone numbers</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://www.eeas.europa.eu/belarus/");
+        let schengen = sections
+            .iter()
+            .find(|section| section.heading_path == "Information for Schengen Visa Applicants in Belarus")
+            .expect("Schengen FAQ heading exists");
+        assert!(schengen.content_md.contains("Answers to the frequently asked questions"));
+        assert!(schengen.content_md.contains("Spanish Visa Center in Minsk"));
+        assert!(!schengen.content_md.contains("EU citizens travelling to Belarus"));
+        assert!(!schengen.content_md.contains("window.fake_fee"));
+        assert!(!schengen.content_md.contains("Unrelated telephone numbers"));
+        assert_eq!(
+            schengen.content_hash,
+            content_hash_v1(&schengen.content_md)
         );
     }
 
