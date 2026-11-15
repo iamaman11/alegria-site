@@ -63,9 +63,11 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     let schema_sql = root.join("app/db/schema.sql");
     if schema_sql.exists() {
         let schema = read_text(&schema_sql)?;
-        let migration = root.join("app/db/migrations/20261116_0001_outbox_revision_idempotency.sql");
+        let migration =
+            root.join("app/db/migrations/20261116_0001_outbox_revision_idempotency.sql");
         let migrated = migration.exists()
-            && read_text(&migration)?.contains("DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;");
+            && read_text(&migration)?
+                .contains("DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;");
         if !schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_idempotency")
             || !schema.contains("DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;")
             || schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_dedup")
