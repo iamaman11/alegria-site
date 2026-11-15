@@ -425,9 +425,10 @@ CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_aggregate
 CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_target_run_status
     ON system.sync_outbox(target_system, run_id, status);
 
--- Idempotency guard: prevents duplicate logical events on activity retries.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_dedup
-    ON system.sync_outbox(aggregate_key, event_type, payload_hash);
+-- A projection revision may have identical lookup payload bytes but different
+-- canonical SQL content. Payload-byte uniqueness would discard that revision.
+-- The existing logical idempotency index below is the sole deduplication owner.
+DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_idempotency
     ON system.sync_outbox(aggregate_key, event_type, idempotency_key)
