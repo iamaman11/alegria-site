@@ -24,6 +24,57 @@ fn validated_candidate_assertions(
         .collect()
 }
 
+// An unresolved *low-trust* repetition of the exact same assertion is
+// not negative evidence against two independent structured primary sources.
+// It stays needs_hitl itself. Any differing params/scope, official uncertainty,
+// source-level contradiction, or negative review still holds the semantic slot.
+fn independently_confirmed_weak_duplicate(
+    weak: &TruthAdjudicationCandidateDecision,
+    sections: &[CandidateValidationSectionState],
+    decisions: &[TruthAdjudicationCandidateDecision],
+    registry: &BTreeMap<String, SourceGovernanceRecord>,
+) -> bool {
+    if weak.decision != "needs_hitl"
+        || weak.adjudication_reason != "candidate_validation_requires_hitl"
+    {
+        return false;
+    }
+    let Some(source) = registry.get(&weak.source_key) else {
+        return false;
+    };
+    if source.authority_class != "forum" || source.trust_level > 1 {
+        return false;
+    }
+    let decided = decisions
+        .iter()
+        .map(|decision| decision.rule_candidate_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut independent_primary_groups = BTreeSet::new();
+    for section in sections.iter().filter(|section| !section.blocked_by_gate) {
+        for candidate in &section.candidates {
+            if candidate.epistemic_status != "structured"
+                || decided.contains(candidate.rule_candidate_id.as_str())
+                || candidate.role != weak.role
+                || candidate.concept_canonical_key != weak.concept_canonical_key
+                || candidate.params.stable_signature() != weak.params.stable_signature()
+                || candidate.scope.stable_signature() != weak.scope.stable_signature()
+            {
+                continue;
+            }
+            let Some(governance) = registry.get(&candidate.source_key) else {
+                continue;
+            };
+            if governance.authority_class == "primary_authority"
+                && governance.trust_level >= 5
+                && !governance.independence_group_key.trim().is_empty()
+            {
+                independent_primary_groups.insert(governance.independence_group_key.clone());
+            }
+        }
+    }
+    independent_primary_groups.len() >= 2
+}
+
 // A blocked source section does not produce adjudication decisions. Still,
 // its non-rejected claims are evidence about the same semantic identity:
 // a sibling section must not globally verify that fact behind the block.
@@ -31,12 +82,16 @@ fn validated_candidate_assertions(
 fn held_semantic_identities(
     sections: &[CandidateValidationSectionState],
     decisions: &[TruthAdjudicationCandidateDecision],
+    registry: &BTreeMap<String, SourceGovernanceRecord>,
 ) -> BTreeSet<(String, String)> {
     let mut held = decisions
         .iter()
         .filter(|decision| {
-            decision.decision == "needs_hitl"
-                || decision.adjudication_reason == "contradiction_block"
+            (decision.decision == "needs_hitl"
+                || decision.adjudication_reason == "contradiction_block")
+                && !independently_confirmed_weak_duplicate(
+                    decision, sections, decisions, registry,
+                )
         })
         .map(|decision| {
             (
@@ -455,7 +510,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     // contradictory or schema-blocked. Blocked sections have no decisions,
     // which is why the source sections must be consulted here as well.
     let held_identities =
-        held_semantic_identities(&input.candidate_validation.sections, &decisions);
+        held_semantic_identities(&input.candidate_validation.sections, &decisions, &source_registry);
     for ((role, concept, _scope), group) in grouped_candidates {
         let mut structured = group
             .iter()
@@ -790,7 +845,7 @@ mod manual_candidate_contradiction_tests {
     fn blocked_section_holds_sibling_semantic_identity_without_a_decision() {
         let mut blocked = section(vec![manual_candidate(80, 0.95, "structured")]);
         blocked.blocked_by_gate = true;
-        let held = held_semantic_identities(&[blocked], &[]);
+        let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
         assert!(held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())));
         assert!(!held.contains(&("FEE_ITEM".to_string(), "other_fee".to_string())));
     }
@@ -799,14 +854,14 @@ mod manual_candidate_contradiction_tests {
     fn rejected_candidate_in_blocked_section_does_not_poison_sibling() {
         let mut blocked = section(vec![manual_candidate(80, 0.95, "rejected")]);
         blocked.blocked_by_gate = true;
-        assert!(held_semantic_identities(&[blocked], &[]).is_empty());
+        assert!(held_semantic_identities(&[blocked], &[], &BTreeMap::new()).is_empty());
     }
 
     #[test]
     fn held_semantic_identity_stops_independent_global_corroboration() {
         let mut blocked = section(vec![manual_candidate(120, 0.96, "structured")]);
         blocked.blocked_by_gate = true;
-        let held = held_semantic_identities(&[blocked], &[]);
+        let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
         let mut siblings = vec![
             TruthStructuredCandidate {
                 rule_candidate_id: "official-1".to_string(),
@@ -839,6 +894,91 @@ mod manual_candidate_contradiction_tests {
             .decisions
             .iter()
             .all(|decision| { decision.publish_admissibility != "admissible" }));
+    }
+
+    #[test]
+    fn weak_identical_claim_cannot_veto_two_independent_primary_sources() {
+        let mut first = manual_candidate(80, 0.98, "structured");
+        first.rule_candidate_id = "first-official".to_string();
+        first.source_key = "https://first.example.gov/fees".to_string();
+        let mut second = manual_candidate(80, 0.97, "structured");
+        second.rule_candidate_id = "second-official".to_string();
+        second.source_key = "https://second.example.gov/fees".to_string();
+        let mut weak = manual_candidate(80, 0.76, "needs_hitl");
+        weak.rule_candidate_id = "weak-repetition".to_string();
+        weak.source_key = "https://forum.example/fees".to_string();
+        weak.source_tier = "low_trust".to_string();
+        let decision = TruthAdjudicationCandidateDecision {
+            section_id: 44,
+            page_id: 12,
+            rule_candidate_id: weak.rule_candidate_id.clone(),
+            role: weak.role.clone(),
+            concept_canonical_key: weak.concept_canonical_key.clone(),
+            params: weak.params.clone(),
+            scope: weak.scope.clone(),
+            source_key: weak.source_key.clone(),
+            source_tier: weak.source_tier.clone(),
+            confidence: weak.confidence,
+            freshness_class: weak.freshness_class.clone(),
+            completeness_class: weak.completeness_class.clone(),
+            evidence_quote: weak.evidence_quote.clone(),
+            span_start: weak.span_start,
+            span_end: weak.span_end,
+            source_snapshot_hash: weak.source_snapshot_hash.clone(),
+            provider_key: weak.provider_key.clone(),
+            model_key: weak.model_key.clone(),
+            prompt_version: weak.prompt_version.clone(),
+            decision: "needs_hitl".to_string(),
+            publish_admissibility: "needs_hitl".to_string(),
+            verification_method: "truth_adjudication@1".to_string(),
+            adjudication_reason: "candidate_validation_requires_hitl".to_string(),
+        };
+        let registry = BTreeMap::from([
+            (first.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "primary_authority".to_string(),
+                trust_level: 5,
+                independence_group_key: "first.gov".to_string(),
+                ..SourceGovernanceRecord::default()
+            }),
+            (second.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "primary_authority".to_string(),
+                trust_level: 5,
+                independence_group_key: "second.gov".to_string(),
+                ..SourceGovernanceRecord::default()
+            }),
+            (weak.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "forum".to_string(),
+                trust_level: 1,
+                independence_group_key: "forum.example".to_string(),
+                ..SourceGovernanceRecord::default()
+            }),
+        ]);
+        let sections = [section(vec![first.clone(), second.clone(), weak])];
+        let semantic_slot = ("FEE_ITEM".to_string(), "consular_fee".to_string());
+        assert!(!held_semantic_identities(&sections, &[decision.clone()], &registry)
+            .contains(&semantic_slot),
+            "weak repetition stays in HITL but cannot veto two primary witnesses");
+
+        let mut mismatched = decision.clone();
+        mismatched.params = TruthParamValue::object([
+            ("amount", TruthParamValue::Integer(120)),
+        ]);
+        assert!(held_semantic_identities(&sections, &[mismatched], &registry)
+            .contains(&semantic_slot),
+            "contradicting weak assertion still holds the full semantic slot");
+
+        let mut official_unresolved = decision.clone();
+        official_unresolved.source_key = first.source_key.clone();
+        assert!(held_semantic_identities(&sections, &[official_unresolved], &registry)
+            .contains(&semantic_slot),
+            "unresolved primary-authority evidence remains binding");
+
+        let mut same_group = registry.clone();
+        same_group.get_mut(&second.source_key).unwrap().independence_group_key =
+            "first.gov".to_string();
+        assert!(held_semantic_identities(&sections, &[decision], &same_group)
+            .contains(&semantic_slot),
+            "two pages of one owner cannot manufacture independence");
     }
 
     #[test]
