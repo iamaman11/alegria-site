@@ -51,11 +51,11 @@ fn country_slug(country_code: &str) -> String {
 
 fn page_type_path_segment(page_type: &str, canonical_slug: &str) -> String {
     match page_type {
-        "requirement_page" => "requirements".to_string(),
-        "fee_page" => "fees".to_string(),
-        "timeline_page" => "processing-times".to_string(),
-        "faq_page" => "faq".to_string(),
-        "checklist_page" => "checklist".to_string(),
+        "requirement_page" => format!("requirements/{canonical_slug}"),
+        "fee_page" => format!("fees/{canonical_slug}"),
+        "timeline_page" => format!("processing-times/{canonical_slug}"),
+        "faq_page" => format!("faq/{canonical_slug}"),
+        "checklist_page" => format!("checklist/{canonical_slug}"),
         "troubleshooting_page" => format!("problems/{canonical_slug}"),
         "comparison_page" => format!("compare/{canonical_slug}"),
         "supporting_editorial" => format!("guides/{canonical_slug}"),
@@ -449,6 +449,49 @@ mod tests {
             .find(|node| node.keyword_cluster_key == "cluster-2")
             .unwrap();
         assert_eq!(source.lifecycle_state, "blocked");
+    }
+
+    #[test]
+    fn specialized_pages_keep_distinct_canonical_paths_per_topic() {
+        let output = execute(&IaBuildInputPayload {
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    locale: "ru-RU".into(),
+                    country_code: "ES".into(),
+                    visa_type: "tourist".into(),
+                    scope_signature: "scope".into(),
+                    ..Default::default()
+                },
+            ),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-documents".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "Документы на туристическую визу".into(),
+                    dominant_intent: "informational".into(),
+                    ..Default::default()
+                },
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-requirements".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "Visa requirements for tourists".into(),
+                    dominant_intent: "informational".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let pages = output
+            .page_nodes
+            .iter()
+            .filter(|node| node.page_type_key == "requirement_page")
+            .collect::<Vec<_>>();
+        assert_eq!(pages.len(), 2);
+        assert_ne!(pages[0].canonical_url_path, pages[1].canonical_url_path);
+        assert!(pages
+            .iter()
+            .all(|page| page.canonical_url_path.contains("/requirements/")));
+        assert!(output.cannibalization_conflicts.is_empty());
     }
 
     #[test]
