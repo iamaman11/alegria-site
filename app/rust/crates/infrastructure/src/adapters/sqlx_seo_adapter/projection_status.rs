@@ -1,3 +1,68 @@
+/// Immutable raw evidence is fresh when this business run's outbox has
+/// completed and every indexed section still agrees with the stored source.
+/// Wall-clock age of the last embedding is not evidence of staleness.
+#[derive(Debug, Clone)]
+pub struct RunRawChunkPoint {
+    pub collection_name: String,
+    pub point_id: String,
+    pub section_id: String,
+    pub content_hash: String,
+}
+
+pub async fn read_run_raw_chunk_points(
+    pool: &PgPool,
+    run_id: &str,
+) -> Result<Vec<RunRawChunkPoint>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT split_part(o.aggregate_key, '|', 2) AS collection_name,
+               o.status,
+               s.id::TEXT AS section_id,
+               s.content_hash,
+               q.point_id
+        FROM system.sync_outbox o
+        LEFT JOIN raw.sections s
+            ON s.id = split_part(split_part(o.aggregate_key, '|', 1), ':', 2)::BIGINT
+        LEFT JOIN kb.qdrant_points q
+            ON q.collection_name = split_part(o.aggregate_key, '|', 2)
+           AND q.entity_type = 'raw_section'
+           AND q.entity_key = split_part(o.aggregate_key, '|', 1)
+        WHERE o.run_id = $1
+          AND o.target_system = 'qdrant'
+          AND o.aggregate_type = 'raw_section'
+          AND split_part(o.aggregate_key, '|', 2) IN ('raw_chunks_4', 'raw_chunks_ctx')
+        ORDER BY collection_name, section_id
+        "#,
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+
+    let mut points = Vec::with_capacity(rows.len());
+    for row in rows {
+        let status: String = row.get("status");
+        let section_id: Option<String> = row.get("section_id");
+        let content_hash: Option<String> = row.get("content_hash");
+        let point_id: Option<String> = row.get("point_id");
+        // A missing source, SQL point, or unfinished outbox lease fails closed.
+        if status != "done"
+            || section_id.is_none()
+            || content_hash.as_ref().is_none_or(String::is_empty)
+            || point_id.is_none()
+        {
+            return Ok(Vec::new());
+        }
+        points.push(RunRawChunkPoint {
+            collection_name: row.get("collection_name"),
+            point_id: point_id.unwrap(),
+            section_id: section_id.unwrap(),
+            content_hash: content_hash.unwrap(),
+        });
+    }
+    Ok(points)
+}
+
 /// The step journal is durable producer evidence: an empty optional graph
 /// output is valid only when the producer finished for this exact run.
 pub async fn read_completed_seo_producers(

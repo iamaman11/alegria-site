@@ -322,6 +322,38 @@ pub(crate) async fn seo_preflight_impl(
     let collection_statuses =
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
+    // The two raw collections store immutable section embeddings. Their age
+    // is not a freshness signal. Certify this run's completed projections
+    // against exact current source hashes in the live Qdrant provider.
+    let raw_chunk_readback = if input.require_materialized_projections {
+        let expected =
+            sqlx_seo_adapter::read_run_raw_chunk_points(&acts.pool, &input.run_id).await?;
+        let mut verified = std::collections::BTreeMap::<String, bool>::new();
+        for collection in ["raw_chunks_4", "raw_chunks_ctx"] {
+            let points = expected
+                .iter()
+                .filter(|point| point.collection_name == collection)
+                .map(|point| qdrant_client_adapter::RawChunkReadbackPoint {
+                    point_id: point.point_id.clone(),
+                    section_id: point.section_id.clone(),
+                    content_hash: point.content_hash.clone(),
+                })
+                .collect::<Vec<_>>();
+            let fresh = match qdrant_client_adapter::verify_raw_chunk_readback(collection, &points)
+                .await
+            {
+                Ok(fresh) => fresh,
+                Err(error) => {
+                    tracing::warn!(collection, error = %error, "raw Qdrant evidence readback failed");
+                    false
+                }
+            };
+            verified.insert(collection.to_owned(), fresh);
+        }
+        verified
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let required_collection_statuses = collection_statuses
         .into_iter()
         .map(|status| {
@@ -342,7 +374,9 @@ pub(crate) async fn seo_preflight_impl(
                 && optional_retrieval_valid_empty(&status.collection_name, &completed_producers);
             SeoPreflightCollectionStatus {
                 exists: point_count > 0 || valid_empty,
-                fresh: if valid_empty {
+                fresh: if let Some(raw_verified) = raw_chunk_readback.get(&status.collection_name) {
+                    *raw_verified
+                } else if valid_empty {
                     true
                 } else if current_run_verified {
                     // These points carry this run's identity in Qdrant.

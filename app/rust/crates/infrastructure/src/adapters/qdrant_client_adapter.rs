@@ -264,6 +264,123 @@ pub async fn search_dense(
     Ok(resp.result)
 }
 
+/// Expected immutable source evidence for one physical Qdrant point.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawChunkReadbackPoint {
+    pub point_id: String,
+    pub section_id: String,
+    pub content_hash: String,
+}
+
+fn raw_chunk_points_match(expected: &[RawChunkReadbackPoint], actual: &[Value]) -> bool {
+    use std::collections::{BTreeMap, BTreeSet};
+    if expected.is_empty() || expected.len() != actual.len() {
+        return false;
+    }
+    let expected_by_id = expected
+        .iter()
+        .map(|point| (point.point_id.as_str(), point))
+        .collect::<BTreeMap<_, _>>();
+    if expected_by_id.len() != expected.len() {
+        return false;
+    }
+    let mut seen = BTreeSet::new();
+    for point in actual {
+        let Some(id) = point.get("id").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(want) = expected_by_id.get(id) else {
+            return false;
+        };
+        if !seen.insert(id)
+            || point.pointer("/payload/section_id").and_then(Value::as_str)
+                != Some(want.section_id.as_str())
+            || point.pointer("/payload/content_hash").and_then(Value::as_str)
+                != Some(want.content_hash.as_str())
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Compare exact point IDs, section IDs and content hashes against live Qdrant.
+/// A collection's mere existence or old SQL timestamp cannot certify evidence.
+pub async fn verify_raw_chunk_readback(
+    collection: &str,
+    expected: &[RawChunkReadbackPoint],
+) -> Result<bool> {
+    if expected.is_empty() {
+        return Ok(false);
+    }
+    let url = format!(
+        "{}/collections/{}/points",
+        qdrant_rest_url_from_env().trim_end_matches('/'),
+        collection
+    );
+    let ids = expected
+        .iter()
+        .map(|point| point.point_id.as_str())
+        .collect::<Vec<_>>();
+    let response = reqwest::Client::new()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .json(&serde_json::json!({
+            "ids": ids,
+            "with_payload": ["section_id", "content_hash"],
+            "with_vector": false
+        }))
+        .send()
+        .await
+        .with_context(|| format!("Qdrant raw evidence readback failed: {collection}"))?;
+    let status = response.status();
+    if !status.is_success() {
+        bail!("Qdrant raw evidence readback HTTP {status}: {collection}");
+    }
+    let body: Value = response.json().await?;
+    let actual = body
+        .get("result")
+        .and_then(Value::as_array)
+        .context("Qdrant raw evidence readback missing points array")?;
+    Ok(raw_chunk_points_match(expected, actual))
+}
+
+#[cfg(test)]
+mod raw_chunk_readback_tests {
+    use super::*;
+
+    #[test]
+    fn immutable_raw_points_require_exact_ids_and_source_hashes() {
+        let expected = vec![RawChunkReadbackPoint {
+            point_id: "point-1".into(),
+            section_id: "1223".into(),
+            content_hash: "source-hash".into(),
+        }];
+        let actual = serde_json::json!([{
+            "id": "point-1",
+            "payload": {"section_id": "1223", "content_hash": "source-hash"}
+        }]);
+        let good = actual.as_array().unwrap();
+        assert!(raw_chunk_points_match(&expected, good));
+        assert!(!raw_chunk_points_match(&[], good));
+        assert!(!raw_chunk_points_match(&expected, &[]));
+        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
+            "id": "point-1",
+            "payload": {"section_id": "1223", "content_hash": "stale"}
+        })]));
+        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
+            "id": "point-other",
+            "payload": {"section_id": "1223", "content_hash": "source-hash"}
+        })]));
+        assert!(!raw_chunk_points_match(&expected, &[serde_json::json!({
+            "id": "point-1",
+            "payload": {"section_id": "older", "content_hash": "source-hash"}
+        })]));
+        let duplicated = vec![expected[0].clone(), expected[0].clone()];
+        assert!(!raw_chunk_points_match(&duplicated, good));
+    }
+}
+
 pub fn scored_point_payload_value(point: &ScoredPoint) -> Value {
     let payload: Payload = point.payload.clone().into();
     payload.into()
