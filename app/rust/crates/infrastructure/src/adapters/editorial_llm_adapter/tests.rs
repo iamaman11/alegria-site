@@ -62,6 +62,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn deterministic_factual_blocks_contain_only_verifiable_source_text() {
+        let mut input = sample_input();
+        let brief = input
+            .request
+            .as_mut()
+            .and_then(|request| request.editorial_brief.as_mut())
+            .expect("sample editorial brief");
+        brief.section_templates.push(SectionTemplateBinding {
+            template_key: "fees".to_string(),
+            page_type_key: "detail".to_string(),
+            dominant_intent: "informational".to_string(),
+            section_role: "fees".to_string(),
+            heading: "Fees".to_string(),
+            template_body: String::new(),
+            template_version: 1,
+            required: true,
+        });
+        brief.verified_support.push(SeoVerifiedFactSupportState {
+            support_ref: "rule-fee".to_string(),
+            role_type: "fee_item".to_string(),
+            fragment_text: "An official source specifies the application fee.".to_string(),
+            source_label: "Official source".to_string(),
+            source_tier: "official".to_string(),
+            freshness_class: "fresh".to_string(),
+            ..Default::default()
+        });
+
+        let candidate = build_deterministic_candidate(
+            &input,
+            "deterministic_fixture",
+            "source_backed_template@1",
+        )
+        .expect("deterministic candidate");
+        let fee = candidate
+            .content_blocks
+            .iter()
+            .find(|block| block.section_role == "fees")
+            .expect("fees content block");
+        assert_eq!(
+            fee.markdown.trim(),
+            "- An official source specifies the application fee."
+        );
+        assert_eq!(fee.support_refs, vec!["rule-fee"]);
+        assert!(!candidate
+            .content_blocks
+            .iter()
+            .any(|block| block.markdown.contains("Verified source-backed structured content")));
+        assert!(candidate
+            .claim_ledger
+            .iter()
+            .any(|claim| claim.support_refs == ["rule-fee"]
+                && claim.fragment_text == "An official source specifies the application fee."));
+    }
+
     #[tokio::test]
     async fn deterministic_fallback_is_used_when_no_provider_is_configured() {
         // Ensure no external provider is considered configured for this fallback test
