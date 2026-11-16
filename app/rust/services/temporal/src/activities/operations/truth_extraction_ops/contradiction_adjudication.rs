@@ -9,19 +9,194 @@ fn validated_candidate_assertions(
         .candidates
         .iter()
         .filter(|candidate| candidate.epistemic_status != "rejected")
-        .map(
-            |candidate| seo_steps::contradiction_gate_step::FactAssertion {
-                subject_key: format!(
-                    "section:{}:{}:{}",
-                    state.section_id, candidate.role, candidate.concept_canonical_key
-                ),
-                predicate_key: "structured_params".to_string(),
-                value_normalized: candidate.params.stable_signature(),
-                source_key: Some(candidate.source_key.clone()),
-                confidence: candidate.confidence as f32,
+        .flat_map(|candidate| {
+            // Different properties of the same rule are complementary:
+            // passport validity, passport requirement, and insurance coverage
+            // must not conflict solely because their JSON objects differ.
+            // Compare the SAME typed parameter key within the SAME explicit
+            // source scope. Real conflicting amounts remain contradictions.
+            let subject = format!(
+                "section:{}:{}:{}:scope:{}",
+                state.section_id,
+                candidate.role,
+                candidate.concept_canonical_key,
+                candidate.scope.stable_signature(),
+            );
+            let assertion = |predicate_key: String, value_normalized: String| {
+                seo_steps::contradiction_gate_step::FactAssertion {
+                    subject_key: subject.clone(),
+                    predicate_key,
+                    value_normalized,
+                    source_key: Some(candidate.source_key.clone()),
+                    confidence: candidate.confidence as f32,
+                }
+            };
+            match candidate.params.as_object() {
+                Some(fields) if !fields.is_empty() => fields
+                    .iter()
+                    .map(|(key, value)| {
+                        assertion(format!("param:{key}"), value.stable_signature())
+                    })
+                    .collect::<Vec<_>>(),
+                _ => vec![assertion(
+                    "structured_params".to_string(),
+                    candidate.params.stable_signature(),
+                )],
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod typed_contradiction_regressions {
+    use super::*;
+
+    fn candidate(
+        role: &str,
+        concept: &str,
+        params: TruthParamValue,
+        scope: TruthParamValue,
+    ) -> ValidatedTruthCandidateRecord {
+        ValidatedTruthCandidateRecord {
+            section_id: 1248,
+            page_id: 133,
+            rule_candidate_id: format!("candidate-{role}-{concept}"),
+            role: role.to_string(),
+            concept_canonical_key: concept.to_string(),
+            raw_mention: "exact published source quotation".to_string(),
+            params,
+            scope,
+            source_key: "https://official.example/visa".to_string(),
+            source_tier: "government".to_string(),
+            confidence: 0.98,
+            evidence_quote: "exact published source quotation".to_string(),
+            span_start: 0,
+            span_end: 32,
+            source_snapshot_hash: "verified-test-hash".to_string(),
+            provider_key: "chat_manual".to_string(),
+            model_key: "test".to_string(),
+            prompt_version: "truth@1".to_string(),
+            freshness_class: "fresh".to_string(),
+            completeness_class: "complete".to_string(),
+            epistemic_status: "structured".to_string(),
+            issues: Vec::new(),
+        }
+    }
+
+    fn check(candidates: Vec<ValidatedTruthCandidateRecord>) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+        let state = CandidateValidationSectionState {
+            section_id: 1248,
+            page_id: 133,
+            candidates,
+            accepted_count: 2,
+            needs_hitl_count: 0,
+            rejected_count: 0,
+            blocked_by_gate: false,
+            status: "accepted".to_string(),
+        };
+        seo_steps::contradiction_gate_step::execute(
+            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+                run_id: "same-evidence".to_string(),
+                facts: validated_candidate_assertions(&state),
             },
         )
-        .collect()
+    }
+
+    fn global() -> TruthParamValue {
+        TruthParamValue::object(Vec::<(String, TruthParamValue)>::new())
+    }
+
+    #[test]
+    fn independent_fields_do_not_create_false_official_contradictions() {
+        let cases = [
+            (
+                "DOCUMENT_REQUIRED",
+                "medical_insurance",
+                TruthParamValue::object([
+                    ("severity", TruthParamValue::Text("mandatory".to_string())),
+                    ("subtype", TruthParamValue::Text("medical_insurance".to_string())),
+                ]),
+                TruthParamValue::object([
+                    ("minimum_coverage_eur", TruthParamValue::Integer(30000)),
+                ]),
+            ),
+            (
+                "DOCUMENT_REQUIRED",
+                "passport",
+                TruthParamValue::object([
+                    ("severity", TruthParamValue::Text("mandatory".to_string())),
+                    ("subtype", TruthParamValue::Text("passport".to_string())),
+                ]),
+                TruthParamValue::object([
+                    ("expiry_months_after_schengen_departure", TruthParamValue::Integer(3)),
+                ]),
+            ),
+            (
+                "TIMELINE_ITEM",
+                "standard_processing_time",
+                TruthParamValue::object([("days", TruthParamValue::Integer(15))]),
+                TruthParamValue::object([("max_days", TruthParamValue::Integer(45))]),
+            ),
+            (
+                "WHERE_TO_APPLY",
+                "standard_application_channel",
+                TruthParamValue::object([(
+                    "main_destination", TruthParamValue::Text("longest_stay".to_string()),
+                )]),
+                TruthParamValue::object([(
+                    "tie_breaker", TruthParamValue::Text("first_entry".to_string()),
+                )]),
+            ),
+        ];
+        for (role, concept, left, right) in cases {
+            let result = check(vec![
+                candidate(role, concept, left, global()),
+                candidate(role, concept, right, global()),
+            ]);
+            assert!(!result.is_blocked, "{role}:{concept}");
+            assert_eq!(result.conflict_count, 0, "{role}:{concept}");
+        }
+    }
+
+    #[test]
+    fn same_fee_attribute_with_different_values_still_blocks() {
+        let left = TruthParamValue::object([
+            ("amount", TruthParamValue::Decimal(35.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        let right = TruthParamValue::object([
+            ("amount", TruthParamValue::Decimal(90.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        let result = check(vec![
+            candidate("FEE_ITEM", "consular_fee", left, global()),
+            candidate("FEE_ITEM", "consular_fee", right, global()),
+        ]);
+        assert!(result.is_blocked);
+        assert_eq!(result.conflict_count, 1);
+        assert_eq!(result.conflicts[0].predicate_key, "param:amount");
+    }
+
+    #[test]
+    fn different_explicit_profiles_do_not_form_a_false_price_conflict() {
+        let adult = TruthParamValue::object([
+            ("amount", TruthParamValue::Decimal(35.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        let minor = TruthParamValue::object([
+            ("amount", TruthParamValue::Decimal(0.0)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        let scope = |name: &str| TruthParamValue::object([(
+            "applicant_profile", TruthParamValue::Text(name.to_string())
+        )]);
+        let result = check(vec![
+            candidate("FEE_ITEM", "consular_fee", adult, scope("adult")),
+            candidate("FEE_ITEM", "consular_fee", minor, scope("minor")),
+        ]);
+        assert!(!result.is_blocked);
+        assert_eq!(result.conflict_count, 0);
+    }
 }
 
 // An unresolved *low-trust* repetition of the exact same assertion is
