@@ -174,6 +174,8 @@ impl DataForSeoSerpClient {
               AND snapshot.job_id LIKE 'dataforseo-standard-task-%'
               AND snapshot.query = $2
               AND snapshot.raw_result->'tasks'->0->>'status_code' = '20100'
+              -- A copied receipt cannot reset the original paid task's age.
+              AND NOT (snapshot.raw_result ? 'reuse_provenance')
               AND snapshot.raw_result->'tasks'->0->'data'->>'keyword' = $2
               AND snapshot.raw_result->'tasks'->0->'data'->>'language_code' = $3
               AND snapshot.raw_result->'tasks'->0->'data'->>'location_code' = $4
@@ -518,6 +520,10 @@ fn reusable_standard_task_id<'a>(
     location_code: i64,
     depth: u32,
 ) -> Option<&'a str> {
+    // A prior reuse is not a new paid task; preserve the original age limit.
+    if receipt.get("reuse_provenance").is_some() {
+        return None;
+    }
     let id = standard_task_post_id(receipt).ok()?;
     let data = receipt.pointer("/tasks/0/data")?;
     if data.get("keyword")?.as_str()? != keyword
@@ -778,6 +784,18 @@ mod tests {
         uncertain["tasks"][0]["status_code"] = json!(20000);
         assert_eq!(
             reusable_standard_task_id(&uncertain, "Spain visa Belarus", "ru", 2724, 10),
+            None
+        );
+        let mut already_reused = receipt.clone();
+        already_reused["reuse_provenance"] = json!({"source_run_id": "older-run"});
+        assert_eq!(
+            reusable_standard_task_id(
+                &already_reused,
+                "Spain visa Belarus",
+                "ru",
+                2724,
+                10,
+            ),
             None
         );
         let mut invalid = receipt;
