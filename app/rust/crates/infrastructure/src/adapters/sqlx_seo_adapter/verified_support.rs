@@ -198,10 +198,7 @@ async fn resolve_verified_fact_support(
         let params: Json<serde_json::Value> = row.get("params");
         let role_type: String = row.get("role_type");
         let concept_key: String = row.get("concept_key");
-        semantic_key_by_id.insert(
-            rule_instance_id.clone(),
-            (role_type.clone(), concept_key),
-        );
+        semantic_key_by_id.insert(rule_instance_id.clone(), (role_type.clone(), concept_key));
         let concept_label: String = row.get("concept_label");
         let source_type: String = row.get("source_type");
         let trust_level: i32 = row.get("trust_level");
@@ -244,10 +241,7 @@ async fn resolve_verified_fact_support(
             support,
         ));
     }
-    let mut resolution = applicability::resolve_support_candidates(
-        applicant_profile,
-        candidates,
-    );
+    let mut resolution = applicability::resolve_support_candidates(applicant_profile, candidates);
     // The public page has one value per semantic rule. A global and a
     // profile-scoped rule for the same concept cannot both be silently
     // presented as independent universal facts.
@@ -266,13 +260,17 @@ async fn resolve_verified_fact_support(
         .flat_map(|(_, ids)| ids)
         .collect::<BTreeSet<_>>();
     if !overlaps.is_empty() {
-        resolution.included.retain(|support| !overlaps.contains(&support.support_ref));
+        resolution
+            .included
+            .retain(|support| !overlaps.contains(&support.support_ref));
         for rule_instance_id in overlaps {
-            resolution.unresolved_rules.push(applicability::SupportResolutionDiagnostic {
-                rule_instance_id,
-                reason_code: "overlapping_profile_and_global_truth".to_string(),
-                detail: json!({"applicant_profile": applicant_profile}),
-            });
+            resolution
+                .unresolved_rules
+                .push(applicability::SupportResolutionDiagnostic {
+                    rule_instance_id,
+                    reason_code: "overlapping_profile_and_global_truth".to_string(),
+                    detail: json!({"applicant_profile": applicant_profile}),
+                });
         }
     }
     Ok(resolution)

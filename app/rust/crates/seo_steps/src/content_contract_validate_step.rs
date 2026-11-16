@@ -93,7 +93,10 @@ pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
                 ));
             }
         }
-        if block.markdown.contains("Verified source-backed structured content") {
+        if block
+            .markdown
+            .contains("Verified source-backed structured content")
+        {
             blockers.push(blocker(
                 "placeholder_factual_content",
                 "Replace placeholder prose with actual verified evidence before publishing.",
@@ -201,9 +204,11 @@ mod tests {
         };
 
         let blockers = validate(&input);
-        assert!(blockers
-            .iter()
-            .any(|blocker| blocker.reason_code == "content_block_type_mismatch"));
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker.reason_code == "content_block_type_mismatch")
+        );
     }
 
     #[test]
@@ -232,7 +237,11 @@ mod tests {
             ..DraftQaInputPayload::default()
         };
         let blockers = validate(&input);
-        assert!(blockers.iter().any(|b| b.reason_code == "unmatched_factual_support_ref"));
+        assert!(
+            blockers
+                .iter()
+                .any(|b| b.reason_code == "unmatched_factual_support_ref")
+        );
     }
 
     #[test]
@@ -261,7 +270,11 @@ mod tests {
             ..DraftQaInputPayload::default()
         };
         let blockers = validate(&input);
-        assert!(!blockers.iter().any(|b| b.reason_code == "unmatched_factual_support_ref"));
+        assert!(
+            !blockers
+                .iter()
+                .any(|b| b.reason_code == "unmatched_factual_support_ref")
+        );
     }
 
     #[test]
@@ -275,7 +288,11 @@ mod tests {
             }),
             ..DraftQaInputPayload::default()
         };
-        assert!(validate(&input).iter().any(|b| b.reason_code == "placeholder_factual_content"));
+        assert!(
+            validate(&input)
+                .iter()
+                .any(|b| b.reason_code == "placeholder_factual_content")
+        );
     }
 
     #[test]
@@ -294,8 +311,10 @@ mod tests {
         };
 
         let blockers = validate(&input);
-        assert!(blockers
-            .iter()
-            .any(|blocker| blocker.reason_code == "unsupported_factual_content_block"));
+        assert!(
+            blockers
+                .iter()
+                .any(|blocker| blocker.reason_code == "unsupported_factual_content_block")
+        );
     }
 }

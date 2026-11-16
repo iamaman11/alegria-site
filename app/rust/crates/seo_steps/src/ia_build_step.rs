@@ -516,9 +516,11 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(pages.len(), 2);
         assert_ne!(pages[0].canonical_url_path, pages[1].canonical_url_path);
-        assert!(pages
-            .iter()
-            .all(|page| page.canonical_url_path.contains("/requirements/")));
+        assert!(
+            pages
+                .iter()
+                .all(|page| page.canonical_url_path.contains("/requirements/"))
+        );
         assert!(output.cannibalization_conflicts.is_empty());
     }
 
@@ -526,16 +528,22 @@ mod tests {
     fn opaque_seed_uses_existing_semantic_topic_for_url() {
         let digest = "f".repeat(64);
         let output = execute(&IaBuildInputPayload {
-            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
-                cluster_key: "cluster-opaque".to_string(),
-                seed_keyword: digest.clone(),
-                topic_keys: vec!["visa_refusal_appeal".to_string()],
-                graph_confidence: 0.9,
-                ..Default::default()
-            }],
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-opaque".to_string(),
+                    seed_keyword: digest.clone(),
+                    topic_keys: vec!["visa_refusal_appeal".to_string()],
+                    graph_confidence: 0.9,
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         });
-        let page = output.page_nodes.iter().find(|node| node.keyword_cluster_key == "cluster-opaque").unwrap();
+        let page = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-opaque")
+            .unwrap();
         assert!(!page.canonical_url_path.contains(&digest));
         assert!(page.canonical_slug.contains("visa"));
         assert_eq!(page.lifecycle_state, "planned");
@@ -545,14 +553,20 @@ mod tests {
     fn opaque_seed_without_semantic_topic_cannot_be_planned_for_publication() {
         let digest = "a".repeat(64);
         let output = execute(&IaBuildInputPayload {
-            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
-                cluster_key: "cluster-unresolved".to_string(),
-                seed_keyword: digest.clone(),
-                ..Default::default()
-            }],
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-unresolved".to_string(),
+                    seed_keyword: digest.clone(),
+                    ..Default::default()
+                },
+            ],
             ..Default::default()
         });
-        let page = output.page_nodes.iter().find(|node| node.keyword_cluster_key == "cluster-unresolved").unwrap();
+        let page = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-unresolved")
+            .unwrap();
         assert!(!page.canonical_url_path.contains(&digest));
         assert_eq!(page.lifecycle_state, "blocked");
     }

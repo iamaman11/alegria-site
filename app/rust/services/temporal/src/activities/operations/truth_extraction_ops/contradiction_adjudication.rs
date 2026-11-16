@@ -1076,36 +1076,56 @@ mod manual_candidate_contradiction_tests {
         blocked.blocked_by_gate = true;
         let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
         let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
-        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &global));
-        assert!(!semantic_identity_is_held(&held, "FEE_ITEM", "other_fee", &global));
+        assert!(semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "consular_fee",
+            &global
+        ));
+        assert!(!semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "other_fee",
+            &global
+        ));
     }
 
     #[test]
     fn blocked_profile_does_not_hold_unrelated_profile_but_holds_global() {
         let profile = |key: &str| {
-            TruthParamValue::object([(
-                "applicant_profile",
-                TruthParamValue::Text(key.to_string()),
-            )])
+            TruthParamValue::object([("applicant_profile", TruthParamValue::Text(key.to_string()))])
         };
         let mut scoped = manual_candidate(80, 0.95, "structured");
         scoped.scope = profile("student");
         let mut blocked = section(vec![scoped]);
         blocked.blocked_by_gate = true;
         let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
-        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &profile("student")));
-        assert!(!semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &profile("adult")));
+        assert!(semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "consular_fee",
+            &profile("student")
+        ));
+        assert!(!semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "consular_fee",
+            &profile("adult")
+        ));
         let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
-        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &global));
+        assert!(semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "consular_fee",
+            &global
+        ));
     }
 
     #[test]
     fn unsupported_scoped_condition_holds_all_profiles() {
         let mut unknown = manual_candidate(80, 0.95, "needs_hitl");
-        unknown.scope = TruthParamValue::object([(
-            "unresolved_condition",
-            TruthParamValue::Bool(true),
-        )]);
+        unknown.scope =
+            TruthParamValue::object([("unresolved_condition", TruthParamValue::Bool(true))]);
         let mut blocked = section(vec![unknown]);
         blocked.blocked_by_gate = true;
         let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
@@ -1113,7 +1133,12 @@ mod manual_candidate_contradiction_tests {
             "applicant_profile",
             TruthParamValue::Text("student".to_string()),
         )]);
-        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &student));
+        assert!(semantic_identity_is_held(
+            &held,
+            "FEE_ITEM",
+            "consular_fee",
+            &student
+        ));
     }
 
     #[test]
@@ -1157,10 +1182,12 @@ mod manual_candidate_contradiction_tests {
         let result = adjudicate_truth_candidates_with_governance(&siblings, &BTreeMap::new());
         assert_eq!(result.verified_count, 0);
         assert_eq!(result.needs_hitl_count, 2);
-        assert!(result
-            .decisions
-            .iter()
-            .all(|decision| { decision.publish_admissibility != "admissible" }));
+        assert!(
+            result
+                .decisions
+                .iter()
+                .all(|decision| { decision.publish_admissibility != "admissible" })
+        );
     }
 
     #[test]
@@ -1235,21 +1262,33 @@ mod manual_candidate_contradiction_tests {
             semantic_identity_is_held(held, "FEE_ITEM", "consular_fee", &global)
         };
         assert!(
-            !applies(&held_semantic_identities(&sections, &[decision.clone()], &registry)),
+            !applies(&held_semantic_identities(
+                &sections,
+                &[decision.clone()],
+                &registry
+            )),
             "weak repetition stays in HITL but cannot veto two primary witnesses"
         );
 
         let mut mismatched = decision.clone();
         mismatched.params = TruthParamValue::object([("amount", TruthParamValue::Integer(120))]);
         assert!(
-            applies(&held_semantic_identities(&sections, &[mismatched], &registry)),
+            applies(&held_semantic_identities(
+                &sections,
+                &[mismatched],
+                &registry
+            )),
             "contradicting weak assertion still holds the full semantic slot"
         );
 
         let mut official_unresolved = decision.clone();
         official_unresolved.source_key = first.source_key.clone();
         assert!(
-            applies(&held_semantic_identities(&sections, &[official_unresolved], &registry)),
+            applies(&held_semantic_identities(
+                &sections,
+                &[official_unresolved],
+                &registry
+            )),
             "unresolved primary-authority evidence remains binding"
         );
 
@@ -1259,7 +1298,11 @@ mod manual_candidate_contradiction_tests {
             .unwrap()
             .independence_group_key = "first.gov".to_string();
         assert!(
-            applies(&held_semantic_identities(&sections, &[decision], &same_group)),
+            applies(&held_semantic_identities(
+                &sections,
+                &[decision],
+                &same_group
+            )),
             "two pages of one owner cannot manufacture independence"
         );
     }
