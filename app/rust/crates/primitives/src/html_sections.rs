@@ -308,7 +308,12 @@ fn append_titled_headingless_articles(document: &Html, sections: &mut Vec<HtmlSe
         let Some(title) = wrapper.select(&title_selector).next() else {
             continue;
         };
-        let heading = title.text().collect::<Vec<_>>().join(" ").trim().to_string();
+        let heading = title
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
         if heading.is_empty() {
             continue;
         }
@@ -319,7 +324,9 @@ fn append_titled_headingless_articles(document: &Html, sections: &mut Vec<HtmlSe
         collect_text_dfs(body_node, &mut parts);
         let content = parts.join("\n").trim().to_string();
         if content.is_empty()
-            || sections.iter().any(|section| section.content_md.contains(&content))
+            || sections
+                .iter()
+                .any(|section| section.content_md.contains(&content))
         {
             continue;
         }
