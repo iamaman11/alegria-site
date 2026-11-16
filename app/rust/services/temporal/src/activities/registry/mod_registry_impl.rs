@@ -762,7 +762,10 @@ impl AlegriaActivities {
         input: operations::ContradictionGateSweepInput,
     ) -> Result<operations::ContradictionGateSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "contradiction_gate", 1, &input, || async {
+        // v2 compares identical typed attributes instead of treating distinct
+        // fields of one rule as a critical contradiction. Replay the saved
+        // candidate evidence through this corrected gate, not v1 cached output.
+        self.execute_step(&run_id, "contradiction_gate", 2, &input, || async {
             operations::contradiction_gate_sweep_impl(self.as_ref(), &input).await
         })
         .await
