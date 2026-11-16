@@ -56,7 +56,6 @@ def main() -> int:
         "final_url: &str",
         "redirect_chain: &[String]",
         "robots_trace: &RobotsDecisionTrace",
-        "source_observation = $9",
         "source_observation_json",
         "&fetched.source_url",
         "&fetched.final_url",
@@ -67,6 +66,27 @@ def main() -> int:
     ]:
         if needle not in raw and needle not in ports:
             failures.append(f"provenance contract missing `{needle}`")
+
+    # A recrawl must append a complete, provenance-bearing snapshot, never
+    # mutate or discard previously referenced raw evidence sections.
+    snapshot_write = raw.split("pub async fn save_crawled_html(", 1)[-1].split(
+        "pub async fn record_content_hash_alias_linkage(", 1
+    )[0]
+    for needle in [
+        "INSERT " + "INTO raw.pages",
+        "final_url, redirect_chain, robots_trace,",
+        "source_observation, title, meta_desc",
+        ".bind(redirect_chain_json)",
+        ".bind(robots_trace_json)",
+        ".bind(source_observation_json)",
+        "RETURNING id",
+    ]:
+        if needle not in snapshot_write:
+            failures.append(f"immutable crawl provenance missing `{needle}`")
+    if "UPDATE raw.pages" in snapshot_write or (
+        "DELETE " + "FROM raw.sections"
+    ) in snapshot_write:
+        failures.append("recrawl must not modify or remove existing evidence snapshots")
 
     for needle in ["MAX_RAW_SECTION_BYTES", "MAX_CONTEXTUAL_GROUP_BYTES", "HtmlSection"]:
         if needle not in raw_types:
