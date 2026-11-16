@@ -101,11 +101,20 @@
             "<html><body><h1>Passport requirement</h1><p>Valid passport required for applicants.</p></body></html>";
         let second_html =
             "<html><body><h1>Insurance requirement</h1><p>Medical insurance required for applicants.</p></body></html>";
-        let save = |html: &str| raw_crawl_adapter::save_crawled_html(
-            &pg.pool, &url, "example.gov", &url, "official", 200, "text/html",
-            html, std::slice::from_ref(&url), &robots,
-        );
-        let first = save(first_html).await.unwrap();
+        let first = raw_crawl_adapter::save_crawled_html(
+            &pg.pool,
+            &url,
+            "example.gov",
+            &url,
+            "official",
+            200,
+            "text/html",
+            first_html,
+            std::slice::from_ref(&url),
+            &robots,
+        )
+        .await
+        .unwrap();
         let old_sections: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM raw.sections WHERE page_id = $1 ORDER BY id",
         )
@@ -117,7 +126,20 @@
 
         // Previously this tried DELETE FROM raw.sections, breaking VERIFIED
         // evidence foreign keys. The original page/section IDs are durable.
-        let second = save(second_html).await.unwrap();
+        let second = raw_crawl_adapter::save_crawled_html(
+            &pg.pool,
+            &url,
+            "example.gov",
+            &url,
+            "official",
+            200,
+            "text/html",
+            second_html,
+            std::slice::from_ref(&url),
+            &robots,
+        )
+        .await
+        .unwrap();
         assert_ne!(first.page_id, second.page_id);
         let preserved_sections: Vec<i64> = sqlx::query_scalar(
             "SELECT id FROM raw.sections WHERE page_id = $1 ORDER BY id",
