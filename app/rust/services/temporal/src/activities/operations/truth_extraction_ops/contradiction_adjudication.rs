@@ -260,15 +260,39 @@ fn independently_confirmed_weak_duplicate(
     independent_primary_groups.len() >= 2
 }
 
-// A blocked source section does not produce adjudication decisions. Still,
-// its non-rejected claims are evidence about the same semantic identity:
-// a sibling section must not globally verify that fact behind the block.
-// Critical contradiction decisions are similarly a source-level veto.
+// A blocked section holds overlapping scope, not every applicant profile.
+// A global or unrepresentable scope conservatively overlaps all profiles.
+fn held_scope_key(scope: &TruthParamValue) -> String {
+    if primitives::truth_candidates::truth_scope_target(scope).is_some() {
+        scope.stable_signature()
+    } else {
+        TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature()
+    }
+}
+
+fn semantic_identity_is_held(
+    held: &BTreeSet<(String, String, String)>,
+    role: &str,
+    concept: &str,
+    scope: &TruthParamValue,
+) -> bool {
+    let own_scope = scope.stable_signature();
+    let global_scope =
+        TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature();
+    held.iter().any(|(held_role, held_concept, held_scope)| {
+        held_role == role
+            && held_concept == concept
+            && (held_scope == &own_scope
+                || held_scope == &global_scope
+                || own_scope == global_scope)
+    })
+}
+
 fn held_semantic_identities(
     sections: &[CandidateValidationSectionState],
     decisions: &[TruthAdjudicationCandidateDecision],
     registry: &BTreeMap<String, SourceGovernanceRecord>,
-) -> BTreeSet<(String, String)> {
+) -> BTreeSet<(String, String, String)> {
     let mut held = decisions
         .iter()
         .filter(|decision| {
@@ -280,6 +304,7 @@ fn held_semantic_identities(
             (
                 decision.role.clone(),
                 decision.concept_canonical_key.clone(),
+                held_scope_key(&decision.scope),
             )
         })
         .collect::<BTreeSet<_>>();
@@ -289,6 +314,7 @@ fn held_semantic_identities(
                 held.insert((
                     candidate.role.clone(),
                     candidate.concept_canonical_key.clone(),
+                    held_scope_key(&candidate.scope),
                 ));
             }
         }
@@ -697,9 +723,8 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         }
     }
 
-    // Hold the semantic slot when ANY section is unresolved, critically
-    // contradictory or schema-blocked. Blocked sections have no decisions,
-    // which is why the source sections must be consulted here as well.
+    // Hold overlapping scoped identities from unresolved, contradictory or
+    // schema-blocked sections, including blocked sources without decisions.
     let held_identities = held_semantic_identities(
         &input.candidate_validation.sections,
         &decisions,
@@ -723,7 +748,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                 epistemic_status: candidate.epistemic_status.clone(),
             })
             .collect::<Vec<_>>();
-        if held_identities.contains(&(role, concept)) {
+        if semantic_identity_is_held(&held_identities, &role, &concept, &group[0].scope) {
             for candidate in &mut structured {
                 if candidate.epistemic_status == "structured" {
                     candidate.epistemic_status = "needs_hitl".to_string();
@@ -1050,8 +1075,45 @@ mod manual_candidate_contradiction_tests {
         let mut blocked = section(vec![manual_candidate(80, 0.95, "structured")]);
         blocked.blocked_by_gate = true;
         let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
-        assert!(held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())));
-        assert!(!held.contains(&("FEE_ITEM".to_string(), "other_fee".to_string())));
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &global));
+        assert!(!semantic_identity_is_held(&held, "FEE_ITEM", "other_fee", &global));
+    }
+
+    #[test]
+    fn blocked_profile_does_not_hold_unrelated_profile_but_holds_global() {
+        let profile = |key: &str| {
+            TruthParamValue::object([(
+                "applicant_profile",
+                TruthParamValue::Text(key.to_string()),
+            )])
+        };
+        let mut scoped = manual_candidate(80, 0.95, "structured");
+        scoped.scope = profile("student");
+        let mut blocked = section(vec![scoped]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
+        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &profile("student")));
+        assert!(!semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &profile("adult")));
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &global));
+    }
+
+    #[test]
+    fn unsupported_scoped_condition_holds_all_profiles() {
+        let mut unknown = manual_candidate(80, 0.95, "needs_hitl");
+        unknown.scope = TruthParamValue::object([(
+            "unresolved_condition",
+            TruthParamValue::Bool(true),
+        )]);
+        let mut blocked = section(vec![unknown]);
+        blocked.blocked_by_gate = true;
+        let held = held_semantic_identities(&[blocked], &[], &BTreeMap::new());
+        let student = TruthParamValue::object([(
+            "applicant_profile",
+            TruthParamValue::Text("student".to_string()),
+        )]);
+        assert!(semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &student));
     }
 
     #[test]
@@ -1084,7 +1146,8 @@ mod manual_candidate_contradiction_tests {
                 ..TruthStructuredCandidate::default()
             },
         ];
-        if held.contains(&("FEE_ITEM".to_string(), "consular_fee".to_string())) {
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        if semantic_identity_is_held(&held, "FEE_ITEM", "consular_fee", &global) {
             for candidate in &mut siblings {
                 if candidate.epistemic_status == "structured" {
                     candidate.epistemic_status = "needs_hitl".to_string();
@@ -1167,25 +1230,26 @@ mod manual_candidate_contradiction_tests {
             ),
         ]);
         let sections = [section(vec![first.clone(), second.clone(), weak])];
-        let semantic_slot = ("FEE_ITEM".to_string(), "consular_fee".to_string());
+        let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
+        let applies = |held: &BTreeSet<(String, String, String)>| {
+            semantic_identity_is_held(held, "FEE_ITEM", "consular_fee", &global)
+        };
         assert!(
-            !held_semantic_identities(&sections, &[decision.clone()], &registry)
-                .contains(&semantic_slot),
+            !applies(&held_semantic_identities(&sections, &[decision.clone()], &registry)),
             "weak repetition stays in HITL but cannot veto two primary witnesses"
         );
 
         let mut mismatched = decision.clone();
         mismatched.params = TruthParamValue::object([("amount", TruthParamValue::Integer(120))]);
         assert!(
-            held_semantic_identities(&sections, &[mismatched], &registry).contains(&semantic_slot),
+            applies(&held_semantic_identities(&sections, &[mismatched], &registry)),
             "contradicting weak assertion still holds the full semantic slot"
         );
 
         let mut official_unresolved = decision.clone();
         official_unresolved.source_key = first.source_key.clone();
         assert!(
-            held_semantic_identities(&sections, &[official_unresolved], &registry)
-                .contains(&semantic_slot),
+            applies(&held_semantic_identities(&sections, &[official_unresolved], &registry)),
             "unresolved primary-authority evidence remains binding"
         );
 
@@ -1195,7 +1259,7 @@ mod manual_candidate_contradiction_tests {
             .unwrap()
             .independence_group_key = "first.gov".to_string();
         assert!(
-            held_semantic_identities(&sections, &[decision], &same_group).contains(&semantic_slot),
+            applies(&held_semantic_identities(&sections, &[decision], &same_group)),
             "two pages of one owner cannot manufacture independence"
         );
     }
