@@ -34,9 +34,7 @@ fn validated_candidate_assertions(
             match candidate.params.as_object() {
                 Some(fields) if !fields.is_empty() => fields
                     .iter()
-                    .map(|(key, value)| {
-                        assertion(format!("param:{key}"), value.stable_signature())
-                    })
+                    .map(|(key, value)| assertion(format!("param:{key}"), value.stable_signature()))
                     .collect::<Vec<_>>(),
                 _ => vec![assertion(
                     "structured_params".to_string(),
@@ -83,7 +81,9 @@ mod typed_contradiction_regressions {
         }
     }
 
-    fn check(candidates: Vec<ValidatedTruthCandidateRecord>) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+    fn check(
+        candidates: Vec<ValidatedTruthCandidateRecord>,
+    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
         let state = CandidateValidationSectionState {
             section_id: 1248,
             page_id: 133,
@@ -114,11 +114,15 @@ mod typed_contradiction_regressions {
                 "medical_insurance",
                 TruthParamValue::object([
                     ("severity", TruthParamValue::Text("mandatory".to_string())),
-                    ("subtype", TruthParamValue::Text("medical_insurance".to_string())),
+                    (
+                        "subtype",
+                        TruthParamValue::Text("medical_insurance".to_string()),
+                    ),
                 ]),
-                TruthParamValue::object([
-                    ("minimum_coverage_eur", TruthParamValue::Integer(30000)),
-                ]),
+                TruthParamValue::object([(
+                    "minimum_coverage_eur",
+                    TruthParamValue::Integer(30000),
+                )]),
             ),
             (
                 "DOCUMENT_REQUIRED",
@@ -127,9 +131,10 @@ mod typed_contradiction_regressions {
                     ("severity", TruthParamValue::Text("mandatory".to_string())),
                     ("subtype", TruthParamValue::Text("passport".to_string())),
                 ]),
-                TruthParamValue::object([
-                    ("expiry_months_after_schengen_departure", TruthParamValue::Integer(3)),
-                ]),
+                TruthParamValue::object([(
+                    "expiry_months_after_schengen_departure",
+                    TruthParamValue::Integer(3),
+                )]),
             ),
             (
                 "TIMELINE_ITEM",
@@ -141,10 +146,12 @@ mod typed_contradiction_regressions {
                 "WHERE_TO_APPLY",
                 "standard_application_channel",
                 TruthParamValue::object([(
-                    "main_destination", TruthParamValue::Text("longest_stay".to_string()),
+                    "main_destination",
+                    TruthParamValue::Text("longest_stay".to_string()),
                 )]),
                 TruthParamValue::object([(
-                    "tie_breaker", TruthParamValue::Text("first_entry".to_string()),
+                    "tie_breaker",
+                    TruthParamValue::Text("first_entry".to_string()),
                 )]),
             ),
         ];
@@ -187,9 +194,12 @@ mod typed_contradiction_regressions {
             ("amount", TruthParamValue::Decimal(0.0)),
             ("currency", TruthParamValue::Text("EUR".to_string())),
         ]);
-        let scope = |name: &str| TruthParamValue::object([(
-            "applicant_profile", TruthParamValue::Text(name.to_string())
-        )]);
+        let scope = |name: &str| {
+            TruthParamValue::object([(
+                "applicant_profile",
+                TruthParamValue::Text(name.to_string()),
+            )])
+        };
         let result = check(vec![
             candidate("FEE_ITEM", "consular_fee", adult, scope("adult")),
             candidate("FEE_ITEM", "consular_fee", minor, scope("minor")),
@@ -264,9 +274,7 @@ fn held_semantic_identities(
         .filter(|decision| {
             (decision.decision == "needs_hitl"
                 || decision.adjudication_reason == "contradiction_block")
-                && !independently_confirmed_weak_duplicate(
-                    decision, sections, decisions, registry,
-                )
+                && !independently_confirmed_weak_duplicate(decision, sections, decisions, registry)
         })
         .map(|decision| {
             (
@@ -420,9 +428,16 @@ fn apply_exact_review_rejection_veto(
     decisions: &mut [TruthAdjudicationCandidateDecision],
     rejected_ids: &BTreeSet<String>,
 ) -> BTreeSet<i64> {
-    let held_slots = decisions.iter()
+    let held_slots = decisions
+        .iter()
         .filter(|d| rejected_ids.contains(&d.rule_candidate_id))
-        .map(|d| (d.role.clone(), d.concept_canonical_key.clone(), d.scope.stable_signature()))
+        .map(|d| {
+            (
+                d.role.clone(),
+                d.concept_canonical_key.clone(),
+                d.scope.stable_signature(),
+            )
+        })
         .collect::<BTreeSet<_>>();
     let mut affected = BTreeSet::new();
     for decision in decisions {
@@ -440,7 +455,8 @@ fn apply_exact_review_rejection_veto(
         } else if held_slots.contains(&slot) && decision.decision == "verified" {
             decision.decision = "needs_hitl".to_string();
             decision.publish_admissibility = "needs_hitl".to_string();
-            decision.adjudication_reason = "reviewed_rejection_blocks_semantic_identity".to_string();
+            decision.adjudication_reason =
+                "reviewed_rejection_blocks_semantic_identity".to_string();
             affected.insert(decision.section_id);
         }
     }
@@ -684,8 +700,11 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     // Hold the semantic slot when ANY section is unresolved, critically
     // contradictory or schema-blocked. Blocked sections have no decisions,
     // which is why the source sections must be consulted here as well.
-    let held_identities =
-        held_semantic_identities(&input.candidate_validation.sections, &decisions, &source_registry);
+    let held_identities = held_semantic_identities(
+        &input.candidate_validation.sections,
+        &decisions,
+        &source_registry,
+    );
     for ((role, concept, _scope), group) in grouped_candidates {
         let mut structured = group
             .iter()
@@ -754,7 +773,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
     // No arbitrary JSON is allowed in Temporal. Infrastructure checks the
     // complete reviewed candidate fingerprint, original raw section and
     // source snapshot; this activity sees only typed rejected identities.
-    let review_candidates = input.candidate_validation.sections.iter()
+    let review_candidates = input
+        .candidate_validation
+        .sections
+        .iter()
         .flat_map(|section| section.candidates.iter())
         .map(|candidate| {
             infrastructure::adapters::sqlx_hitl_adapter::TruthReviewCandidateSnapshot {
@@ -782,8 +804,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             &review_candidates,
         )
         .await?;
-    let affected_review_sections =
-        apply_exact_review_rejection_veto(&mut decisions, &rejected_ids);
+    let affected_review_sections = apply_exact_review_rejection_veto(&mut decisions, &rejected_ids);
 
     let mut section_states = input
         .candidate_validation
@@ -830,15 +851,22 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         if !affected_review_sections.contains(&state.section_id) || state.status == "blocked" {
             continue;
         }
-        let decisions_for_section = decisions.iter()
+        let decisions_for_section = decisions
+            .iter()
             .filter(|decision| decision.section_id == state.section_id)
             .collect::<Vec<_>>();
-        state.verified_count = decisions_for_section.iter()
-            .filter(|decision| decision.decision == "verified").count();
-        state.needs_hitl_count = decisions_for_section.iter()
-            .filter(|decision| decision.decision == "needs_hitl").count();
-        state.rejected_count = decisions_for_section.iter()
-            .filter(|decision| decision.decision == "rejected").count();
+        state.verified_count = decisions_for_section
+            .iter()
+            .filter(|decision| decision.decision == "verified")
+            .count();
+        state.needs_hitl_count = decisions_for_section
+            .iter()
+            .filter(|decision| decision.decision == "needs_hitl")
+            .count();
+        state.rejected_count = decisions_for_section
+            .iter()
+            .filter(|decision| decision.decision == "rejected")
+            .count();
         let label = if state.verified_count > 0 {
             "verified"
         } else if state.needs_hitl_count > 0 {
@@ -962,9 +990,10 @@ mod manual_candidate_contradiction_tests {
             adjudication_reason: "independent".to_string(),
         };
         let global = TruthParamValue::object(Vec::<(String, TruthParamValue)>::new());
-        let student = TruthParamValue::object([
-            ("applicant_profile", TruthParamValue::Text("student".to_string())),
-        ]);
+        let student = TruthParamValue::object([(
+            "applicant_profile",
+            TruthParamValue::Text("student".to_string()),
+        )]);
         let mut decisions = vec![
             make("review-rejected", global.clone()),
             make("other-source", global),
@@ -1109,51 +1138,66 @@ mod manual_candidate_contradiction_tests {
             adjudication_reason: "candidate_validation_requires_hitl".to_string(),
         };
         let registry = BTreeMap::from([
-            (first.source_key.clone(), SourceGovernanceRecord {
-                authority_class: "primary_authority".to_string(),
-                trust_level: 5,
-                independence_group_key: "first.gov".to_string(),
-                ..SourceGovernanceRecord::default()
-            }),
-            (second.source_key.clone(), SourceGovernanceRecord {
-                authority_class: "primary_authority".to_string(),
-                trust_level: 5,
-                independence_group_key: "second.gov".to_string(),
-                ..SourceGovernanceRecord::default()
-            }),
-            (weak.source_key.clone(), SourceGovernanceRecord {
-                authority_class: "forum".to_string(),
-                trust_level: 1,
-                independence_group_key: "forum.example".to_string(),
-                ..SourceGovernanceRecord::default()
-            }),
+            (
+                first.source_key.clone(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    trust_level: 5,
+                    independence_group_key: "first.gov".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                second.source_key.clone(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    trust_level: 5,
+                    independence_group_key: "second.gov".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                weak.source_key.clone(),
+                SourceGovernanceRecord {
+                    authority_class: "forum".to_string(),
+                    trust_level: 1,
+                    independence_group_key: "forum.example".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
         ]);
         let sections = [section(vec![first.clone(), second.clone(), weak])];
         let semantic_slot = ("FEE_ITEM".to_string(), "consular_fee".to_string());
-        assert!(!held_semantic_identities(&sections, &[decision.clone()], &registry)
-            .contains(&semantic_slot),
-            "weak repetition stays in HITL but cannot veto two primary witnesses");
+        assert!(
+            !held_semantic_identities(&sections, &[decision.clone()], &registry)
+                .contains(&semantic_slot),
+            "weak repetition stays in HITL but cannot veto two primary witnesses"
+        );
 
         let mut mismatched = decision.clone();
-        mismatched.params = TruthParamValue::object([
-            ("amount", TruthParamValue::Integer(120)),
-        ]);
-        assert!(held_semantic_identities(&sections, &[mismatched], &registry)
-            .contains(&semantic_slot),
-            "contradicting weak assertion still holds the full semantic slot");
+        mismatched.params = TruthParamValue::object([("amount", TruthParamValue::Integer(120))]);
+        assert!(
+            held_semantic_identities(&sections, &[mismatched], &registry).contains(&semantic_slot),
+            "contradicting weak assertion still holds the full semantic slot"
+        );
 
         let mut official_unresolved = decision.clone();
         official_unresolved.source_key = first.source_key.clone();
-        assert!(held_semantic_identities(&sections, &[official_unresolved], &registry)
-            .contains(&semantic_slot),
-            "unresolved primary-authority evidence remains binding");
+        assert!(
+            held_semantic_identities(&sections, &[official_unresolved], &registry)
+                .contains(&semantic_slot),
+            "unresolved primary-authority evidence remains binding"
+        );
 
         let mut same_group = registry.clone();
-        same_group.get_mut(&second.source_key).unwrap().independence_group_key =
-            "first.gov".to_string();
-        assert!(held_semantic_identities(&sections, &[decision], &same_group)
-            .contains(&semantic_slot),
-            "two pages of one owner cannot manufacture independence");
+        same_group
+            .get_mut(&second.source_key)
+            .unwrap()
+            .independence_group_key = "first.gov".to_string();
+        assert!(
+            held_semantic_identities(&sections, &[decision], &same_group).contains(&semantic_slot),
+            "two pages of one owner cannot manufacture independence"
+        );
     }
 
     #[test]
