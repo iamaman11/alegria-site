@@ -880,7 +880,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .collect::<Vec<_>>();
         let page_keys = page_phase_keys(&plan);
         let mut publish_projection_barrier = None;
-        let published_pages = match run_page_publish_phases(
+        let (published_pages, page_blocked_status) = match run_page_publish_phases(
             ctx,
             &run_id,
             &plan,
@@ -895,11 +895,15 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         )
         .await?
         {
-            PagePublishLoopOutcome::Completed(published_pages) => published_pages,
-            PagePublishLoopOutcome::Blocked(status) => return Ok(status),
+            PagePublishLoopOutcome::Completed(published_pages) => (published_pages, None),
+            PagePublishLoopOutcome::Blocked(status) => (0, Some(status)),
         };
 
-        if page_keys.contains(&SeoPhaseKey::FinalizePublish) {
+        // Rebuild impact belongs to the verified knowledge change, not to the
+        // success of an unrelated editorial page. A blocked publication must
+        // still emit the canonical rebuild assessment, without proceeding to
+        // finalization or reporting the run as published.
+        if page_blocked_status.is_none() && page_keys.contains(&SeoPhaseKey::FinalizePublish) {
             ctx.state_mut(|s| s.phase = "projection_barrier(publish)".to_string());
             publish_projection_barrier = Some(
                 ctx.start_activity(
@@ -936,6 +940,11 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 _ => {}
             }
             ctx.wait_condition(|s| !s.paused).await?;
+        }
+
+        if let Some(status) = page_blocked_status {
+            ctx.state_mut(|s| s.phase = status.clone());
+            return Ok(status);
         }
 
         ctx.start_activity(AlegriaActivities::finalize_run, run_id.clone(), db_opts(10))
