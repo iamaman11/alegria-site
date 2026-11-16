@@ -4,6 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature, slug};
+use runtime_models::seo_blocks::is_opaque_topic_identifier;
 
 fn locale_lang(locale: &str) -> String {
     locale
@@ -14,23 +15,16 @@ fn locale_lang(locale: &str) -> String {
         .to_ascii_lowercase()
 }
 
-// A stable storage key or SHA digest is not a publishable semantic URL.
-// An existing topic key may supply a readable alternative; otherwise the
-// page stays blocked until a reviewer supplies meaningful topic metadata.
-fn opaque_keyword(value: &str) -> bool {
-    let trimmed = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
-    let hex = trimmed.replace('-', "");
-    hex.len() >= 32 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
-}
-
+// A stable storage identifier is never a publishable topic. Use the
+// shared slug policy for both IA and the final publication gate.
 fn semantic_keyword<'a>(seed: &'a str, topic_keys: &'a [String]) -> Option<&'a str> {
-    if !seed.trim().is_empty() && !opaque_keyword(seed) {
+    if !seed.trim().is_empty() && !is_opaque_topic_identifier(seed) {
         return Some(seed);
     }
     topic_keys
         .iter()
         .map(String::as_str)
-        .find(|topic| !topic.trim().is_empty() && !opaque_keyword(topic))
+        .find(|topic| !topic.trim().is_empty() && !is_opaque_topic_identifier(topic))
 }
 
 fn page_type_for_keyword(seed_keyword: &str) -> &'static str {

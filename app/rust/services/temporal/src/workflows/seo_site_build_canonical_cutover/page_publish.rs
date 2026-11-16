@@ -16,9 +16,29 @@ async fn run_page_publish_phases(
     applicant_profile: &str,
     scope: &SeoScopePayload,
 ) -> WorkflowResult<PagePublishLoopOutcome> {
+    // Persisted IA rows may predate semantic-slug validation. Exclude
+    // opaque paths at the final gate as well, without rewriting history.
+    let opaque_page_paths = page_nodes
+        .iter()
+        .filter(|node| !matches!(node.lifecycle_state.as_str(), "blocked" | "deprecated"))
+        .filter(|node| {
+            runtime_models::seo_blocks::is_opaque_topic_identifier(&node.canonical_slug)
+                || node
+                    .canonical_url_path
+                    .split('/')
+                    .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
+        })
+        .count();
     let publishable_pages = page_nodes
         .iter()
         .filter(|node| !matches!(node.lifecycle_state.as_str(), "blocked" | "deprecated"))
+        .filter(|node| {
+            !runtime_models::seo_blocks::is_opaque_topic_identifier(&node.canonical_slug)
+                && !node
+                    .canonical_url_path
+                    .split('/')
+                    .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
+        })
         .collect::<Vec<_>>();
     let page_total = publishable_pages.len();
     if page_total == 0 {
@@ -29,7 +49,11 @@ async fn run_page_publish_phases(
     let page_keys = page_phase_keys(plan);
     let mut published_pages = 0usize;
     let mut published_page_keys = std::collections::BTreeSet::new();
-    let mut first_blocked: Option<String> = None;
+    let mut first_blocked: Option<String> = if opaque_page_paths > 0 {
+        Some(format!("opaque_page_paths_blocked={opaque_page_paths}"))
+    } else {
+        None
+    };
     let mut published_before_block = 0usize;
 
     for (page_index, page_node) in publishable_pages.into_iter().cloned().enumerate() {

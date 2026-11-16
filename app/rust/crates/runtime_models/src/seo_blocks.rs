@@ -12,6 +12,14 @@ pub struct PlannedContentBlock {
     pub deterministic_only: bool,
 }
 
+/// Refuse technical identifiers as public slugs, including SHA-256 and UUID
+/// shapes; keep this rule in one owner shared by IA and publication.
+pub fn is_opaque_topic_identifier(value: &str) -> bool {
+    let trimmed = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
+    let hex = trimmed.replace('-', "");
+    hex.len() >= 32 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
 pub fn heading_for_role(section_role: &str) -> &'static str {
     match section_role {
         "overview" => "Overview",
@@ -186,6 +194,15 @@ mod verified_page_readiness_tests {
             freshness_class: "fresh".to_string(),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn opaque_sha_and_uuid_are_never_public_slugs() {
+        assert!(is_opaque_topic_identifier(&"a".repeat(64)));
+        assert!(is_opaque_topic_identifier(&format!("sha256:{}", "9".repeat(64))));
+        assert!(is_opaque_topic_identifier("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(!is_opaque_topic_identifier("plant-leaf-care"));
+        assert!(!is_opaque_topic_identifier("spain-tourist-visa"));
     }
 
     #[test]
