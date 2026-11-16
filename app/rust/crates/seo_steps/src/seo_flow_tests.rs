@@ -175,7 +175,6 @@ fn seo_steps_form_publish_ready_pipeline() {
         .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
         .cloned()
         .expect("blueprint for page node");
-    let fragments = Vec::new();
     let verified_support = vec![
         support(
             "Required document: passport.",
@@ -214,6 +213,12 @@ fn seo_steps_form_publish_ready_pipeline() {
             "Official consular route",
         ),
     ];
+    // QA must receive the actual source-backed fragments, not an empty
+    // placeholder list: only these exact strings are eligible evidence.
+    let fragments = verified_support
+        .iter()
+        .map(|support| support.fragment_text.clone())
+        .collect::<Vec<_>>();
     let required_links: Vec<_> = links
         .link_recommendations
         .iter()
@@ -288,7 +293,7 @@ fn seo_steps_form_publish_ready_pipeline() {
     let qa = crate::draft_qa_step::execute(&DraftQaInputPayload {
         run_id: run_id.clone(),
         draft: draft_state.clone(),
-        supported_fragments: fragments,
+        supported_fragments: fragments.clone(),
         required_links,
     });
     assert_eq!(qa.verdict, "publish_ready");
@@ -327,7 +332,7 @@ fn seo_steps_form_publish_ready_pipeline() {
     let qa_without_links = crate::draft_qa_step::execute(&DraftQaInputPayload {
         run_id: run_id.clone(),
         draft: draft_without_links.draft,
-        supported_fragments: Vec::new(),
+        supported_fragments: fragments,
         required_links: Vec::new(),
     });
     assert_eq!(qa_without_links.verdict, "publish_ready");
