@@ -287,6 +287,54 @@ fn fallback_main_article_text(document: &Html) -> Option<String> {
     None
 }
 
+/// Recover a substantive, visibly titled article whose template uses a
+/// styled paragraph instead of an H1-H4. A neighboring sidebar heading must
+/// not make that article disappear. Stay within the article body: no page-wide
+/// text scan, navigation, footer or unrelated sidebar evidence.
+fn append_titled_headingless_articles(document: &Html, sections: &mut Vec<HtmlSection>) {
+    let wrapper_selector = Selector::parse(".single__detail-Wrapper").unwrap();
+    let title_selector = Selector::parse(".section__header-title").unwrap();
+    let body_selector = Selector::parse(".single__text").unwrap();
+    let heading_selector = Selector::parse("h1, h2, h3, h4").unwrap();
+
+    for wrapper in document.select(&wrapper_selector) {
+        let Some(body) = wrapper.select(&body_selector).next() else {
+            continue;
+        };
+        // Ordinary heading-based extraction owns articles with actual headings.
+        if body.select(&heading_selector).next().is_some() {
+            continue;
+        }
+        let Some(title) = wrapper.select(&title_selector).next() else {
+            continue;
+        };
+        let heading = title.text().collect::<Vec<_>>().join(" ").trim().to_string();
+        if heading.is_empty() {
+            continue;
+        }
+        let Some(body_node) = document.tree.get(body.id()) else {
+            continue;
+        };
+        let mut parts = Vec::new();
+        collect_text_dfs(body_node, &mut parts);
+        let content = parts.join("\n").trim().to_string();
+        if content.is_empty()
+            || sections.iter().any(|section| section.content_md.contains(&content))
+        {
+            continue;
+        }
+        let hash = content_hash_v1(&content);
+        sections.push(HtmlSection {
+            heading_path: heading.clone(),
+            heading_level: heading_level(title.value().name()),
+            section_order: sections.len(),
+            section_type: identify_section_type(&heading).to_string(),
+            content_md: content,
+            content_hash: hash,
+        });
+    }
+}
+
 /// Extract sections from HTML.
 pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
     let document = Html::parse_document(html);
@@ -347,6 +395,10 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
             });
         }
     }
+
+    // Also recover semantically scoped, headingless article bodies even when
+    // a sidebar H2 already produced an unrelated section.
+    append_titled_headingless_articles(&document, &mut sections);
 
     // An H1 nested in a title wrapper can have no direct sibling text even
     // though a real article follows in main. Preserve its heading provenance
@@ -532,6 +584,61 @@ mod visible_text_tests {
         assert!(!calculator
             .content_md
             .contains("90 days in any 180-day period"));
+    }
+
+    #[test]
+    fn titled_article_without_h_tags_is_not_lost_to_sidebar_heading() {
+        // The official consular page uses a styled paragraph title and
+        // .single__text for its substantive body, with an H2 in the sidebar.
+        let html = r#"<html><body>
+            <nav><h2>Navigation</h2><p>Navigation only</p></nav>
+            <div class="row"><div class="col-12 col-md-8">
+              <section class="body__detail-Wrapper">
+                <div class="single__detail-Wrapper">
+                  <h1 class="section__header-title hide">Consular services</h1>
+                </div>
+              </section>
+              <section class="body__detail-Wrapper">
+                <div class="single__detail-Wrapper">
+                  <p class="section__header-title">Where to submit an application</p>
+                  <div class="single__text">
+                    <p>Visa application centre</p>
+                    <p><strong>Minsk</strong></p>
+                    <p>8 Tolstoi Street</p>
+                    <p>Applications accepted on weekdays.</p>
+                    <script>fake_evidence = "another location"</script>
+                  </div>
+                </div>
+              </section>
+            </div><div class="aside-right">
+              <aside><h2>More information</h2><p>Unrelated prize news</p></aside>
+            </div></div>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/consular");
+        let article = sections
+            .iter()
+            .find(|section| section.heading_path == "Where to submit an application")
+            .expect("visible article must survive an unrelated sidebar H2");
+        assert!(article.content_md.contains("Minsk"));
+        assert!(article.content_md.contains("8 Tolstoi Street"));
+        assert!(!article.content_md.contains("Unrelated prize news"));
+        assert!(!article.content_md.contains("Navigation only"));
+        assert!(!article.content_md.contains("fake_evidence"));
+        assert_eq!(article.content_hash, content_hash_v1(&article.content_md));
+    }
+
+    #[test]
+    fn titled_article_with_actual_headings_is_not_duplicated() {
+        let html = r#"<html><body><div class="single__detail-Wrapper">
+            <p class="section__header-title">Visa application</p>
+            <div class="single__text">
+              <h2>Required documents</h2><p>Valid passport and travel insurance</p>
+            </div>
+        </div></body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/visa");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading_path, "Required documents");
+        assert!(sections[0].content_md.contains("Valid passport"));
     }
 
     #[test]
