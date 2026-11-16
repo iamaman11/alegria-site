@@ -28,6 +28,8 @@ async fn run_page_publish_phases(
     }
     let page_keys = page_phase_keys(plan);
     let mut published_pages = 0usize;
+    let mut published_page_keys = std::collections::BTreeSet::new();
+    let mut first_blocked: Option<String> = None;
 
     for (page_index, page_node) in publishable_pages.into_iter().cloned().enumerate() {
         let page_blueprint = page_blueprints
@@ -35,11 +37,40 @@ async fn run_page_publish_phases(
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
+        // A target is linkable only after this run has actually finalized its
+        // publication. Planned, blocked or future pages must not leak into
+        // public editorial content.
         let required_links: Vec<_> = link_recommendations
             .iter()
-            .filter(|link| link.required_flag && link.source_page_key == page_node.page_node_key)
+            .filter(|link| {
+                link.required_flag
+                    && link.source_page_key == page_node.page_node_key
+                    && published_page_keys.contains(&link.target_page_key)
+            })
             .cloned()
             .collect();
+
+        // Evaluate page-specific verified support before any editorial/LLM
+        // work. Independent pages remain eligible even if a sibling is
+        // blocked by missing evidence; publication status stays BLOCKED.
+        if page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate) {
+            let missing_roles = runtime_models::seo_blocks::missing_required_factual_roles(
+                &page_blueprint,
+                support_bundle,
+            );
+            if !missing_roles.is_empty() {
+                let reason = format!(
+                    "page_missing_verified_support:page_node_key={}:roles={}",
+                    page_node.page_node_key,
+                    missing_roles.join(","),
+                );
+                ctx.state_mut(|state| state.phase = reason.clone());
+                if first_blocked.is_none() {
+                    first_blocked = Some(reason);
+                }
+                continue;
+            }
+        }
 
         let mut draft_plan: Option<DraftAssembleOutputPayload> = None;
         let mut editorial_candidate: Option<EditorialDraftGenerateOutputPayload> = None;
@@ -140,9 +171,9 @@ async fn run_page_publish_phases(
                             s.phase = format!("llm_wait:page:{}/{}", page_index + 1, page_total);
                         });
                         loop {
-                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
-                                .await?;
-                            ctx.state_mut(|s| s.llm_result_ready = false);
+                            // The durable LLM task is authoritative. A result
+                            // saved before Reset/Replay must not require a new
+                            // signal, and a signal is never evidence of success.
                             generated = ctx
                                 .start_activity(
                                     AlegriaActivities::load_manual_editorial_result,
@@ -162,6 +193,9 @@ async fn run_page_publish_phases(
                                     ),
                                 ));
                             }
+                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
+                                .await?;
+                            ctx.state_mut(|s| s.llm_result_ready = false);
                         }
                         ctx.state_mut(|s| {
                             s.phase = phase_with_ordinal(key, page_index, page_total)
@@ -563,6 +597,7 @@ async fn run_page_publish_phases(
                         .await?;
                     if finalized.verdict == "published" {
                         published_pages += 1;
+                        published_page_keys.insert(page_node.page_node_key.clone());
                     } else {
                         page_blocked = true;
                         ctx.state_mut(|s| {
@@ -581,14 +616,21 @@ async fn run_page_publish_phases(
         }
 
         if page_blocked {
-            return Ok(PagePublishLoopOutcome::Blocked(format!(
-                "{}:page_node_key={}:published_before_block={}",
+            let reason = format!(
+                "{}:page_node_key={}",
                 blocked_publish_gate_status(),
                 page_node.page_node_key,
-                published_pages
-            )));
+            );
+            if first_blocked.is_none() {
+                first_blocked = Some(reason);
+            }
         }
     }
 
+    if let Some(reason) = first_blocked {
+        return Ok(PagePublishLoopOutcome::Blocked(format!(
+            "{reason}:published_pages={published_pages}",
+        )));
+    }
     Ok(PagePublishLoopOutcome::Completed(published_pages))
 }

@@ -1,5 +1,5 @@
 use contracts::generated::alegria::temporal::v1::{
-    LinkRecommendationState, SectionTemplateBinding, SeoVerifiedFactSupportState,
+    LinkRecommendationState, PageBlueprintState, SectionTemplateBinding, SeoVerifiedFactSupportState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +105,38 @@ pub fn mandatory_section_roles() -> &'static [&'static str] {
     ]
 }
 
+/// Required factual sections must have *applicable, current* VERIFIED support
+/// before scheduling expensive editorial generation. This is a completeness
+/// check on a support bundle already resolved by the database; it does not
+/// create verified knowledge or act as a replacement for publish-time QA.
+pub fn missing_required_factual_roles(
+    blueprint: &PageBlueprintState,
+    support: &[SeoVerifiedFactSupportState],
+) -> Vec<String> {
+    let required_roles = if blueprint.required_sections.is_empty() {
+        mandatory_section_roles()
+            .iter()
+            .map(|role| (*role).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        blueprint.required_sections.clone()
+    };
+    let mut missing = required_roles
+        .into_iter()
+        .filter(|role| factual_role(role))
+        .filter(|role| {
+            !supports_for_role(support, role).iter().any(|entry| {
+                !entry.support_ref.trim().is_empty()
+                    && !entry.fragment_text.trim().is_empty()
+                    && entry.freshness_class == "fresh"
+            })
+        })
+        .collect::<Vec<_>>();
+    missing.sort();
+    missing.dedup();
+    missing
+}
+
 pub fn planned_content_blocks(
     templates: &[SectionTemplateBinding],
     verified_support: &[SeoVerifiedFactSupportState],
@@ -139,4 +171,70 @@ pub fn planned_content_blocks(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod verified_page_readiness_tests {
+    use super::*;
+
+    fn support(role_type: &str) -> SeoVerifiedFactSupportState {
+        SeoVerifiedFactSupportState {
+            role_type: role_type.to_string(),
+            support_ref: "verified-rule-1".to_string(),
+            fragment_text: "Exact original source quotation".to_string(),
+            freshness_class: "fresh".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn page_specific_readiness_does_not_demand_unrelated_visa_blocks() {
+        let blueprint = PageBlueprintState {
+            required_sections: vec![
+                "overview".to_string(),
+                "faq".to_string(),
+                "related_pages".to_string(),
+            ],
+            ..Default::default()
+        };
+        assert!(missing_required_factual_roles(&blueprint, &[support("eligibility_rule")])
+            .is_empty());
+    }
+
+    #[test]
+    fn missing_fee_support_blocks_only_page_requiring_fee() {
+        let blueprint = PageBlueprintState {
+            required_sections: vec!["overview".to_string(), "fees".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(
+            missing_required_factual_roles(&blueprint, &[support("eligibility_rule")]),
+            vec!["fees".to_string()]
+        );
+    }
+
+    #[test]
+    fn empty_or_stale_support_cannot_satisfy_required_role() {
+        let blueprint = PageBlueprintState {
+            required_sections: vec!["fees".to_string()],
+            ..Default::default()
+        };
+        let mut stale = support("fee_item");
+        stale.freshness_class = "stale".to_string();
+        assert_eq!(missing_required_factual_roles(&blueprint, &[stale]), vec!["fees"]);
+        let mut empty = support("fee_item");
+        empty.fragment_text.clear();
+        assert_eq!(missing_required_factual_roles(&blueprint, &[empty]), vec!["fees"]);
+    }
+
+    #[test]
+    fn default_blueprint_requires_real_factual_section_support() {
+        let missing = missing_required_factual_roles(
+            &PageBlueprintState::default(),
+            &[support("eligibility_rule")],
+        );
+        assert!(missing.contains(&"documents".to_string()));
+        assert!(missing.contains(&"fees".to_string()));
+        assert!(missing.contains(&"timing".to_string()));
+    }
 }

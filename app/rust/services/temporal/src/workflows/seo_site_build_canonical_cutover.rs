@@ -629,9 +629,8 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         if manual_state == "awaiting_manual" {
             ctx.state_mut(|s| s.phase = "manual_truth_wait".to_string());
             loop {
-                ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
-                    .await?;
-                ctx.state_mut(|s| s.llm_result_ready = false);
+                // Saved task state wins over an ephemeral wakeup signal.
+                // Replay/Reset must resume completed manual work immediately.
                 let status: String = ctx
                     .start_activity(
                         AlegriaActivities::load_manual_truth_status,
@@ -647,6 +646,9 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                         "manual truth job status invalid",
                     ));
                 }
+                ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
+                    .await?;
+                ctx.state_mut(|s| s.llm_result_ready = false);
             }
         } else if manual_state != "done" {
             return Err(super::runtime::workflow_contract_failure(
