@@ -2,7 +2,11 @@
 // extraction can still drive structure and page diagnostics, but its loose
 // numeric/keyword heuristics must not compete with strict chat_manual truth.
 fn active_heuristic_truth_rules<T>(rules: &[T], manual_selected: bool) -> &[T] {
-    if manual_selected { &[] } else { rules }
+    if manual_selected {
+        &[]
+    } else {
+        rules
+    }
 }
 
 pub(crate) async fn extraction_schema_validate_impl(
@@ -193,9 +197,8 @@ pub(crate) async fn candidate_validation_impl(
                 .numeric_tokens
                 .first()
                 .is_none_or(|token| contains_exact_evidence_token(&evidence_quote, token.trim()));
-            let rule_context_supported =
-                amount_or_duration_matches
-                    && deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
+            let rule_context_supported = amount_or_duration_matches
+                && deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
             let mut epistemic_status = validation.epistemic_status.clone();
             if !rule_context_supported && epistemic_status != "rejected" {
                 epistemic_status = "needs_hitl".to_string();
