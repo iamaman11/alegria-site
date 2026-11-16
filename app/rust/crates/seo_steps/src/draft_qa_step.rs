@@ -211,7 +211,8 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         verdict: verdict.to_string(),
         blocking_reasons,
         supported_claims,
-        unsupported_claims: unsupported_claims + unsupported_ledger_claims
+        unsupported_claims: unsupported_claims
+            + unsupported_ledger_claims
             + unsupported_factual_blocks as u32,
         traceability_entries: draft.traceability_entries,
         blockers,
@@ -264,8 +265,12 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(qa.verdict, "qa_failed");
-        assert!(qa.blocking_reasons.contains(&"unsupported_claim_ledger_entry".to_string()));
-        assert!(qa.blocking_reasons.contains(&"factual_block_without_exact_evidence".to_string()));
+        assert!(qa
+            .blocking_reasons
+            .contains(&"unsupported_claim_ledger_entry".to_string()));
+        assert!(qa
+            .blocking_reasons
+            .contains(&"factual_block_without_exact_evidence".to_string()));
     }
 
     #[test]
@@ -301,7 +306,11 @@ mod tests {
             supported_fragments: vec![quote.to_string()],
             ..Default::default()
         });
-        assert!(!qa.blocking_reasons.contains(&"unsupported_claim_ledger_entry".to_string()));
-        assert!(!qa.blocking_reasons.contains(&"factual_block_without_exact_evidence".to_string()));
+        assert!(!qa
+            .blocking_reasons
+            .contains(&"unsupported_claim_ledger_entry".to_string()));
+        assert!(!qa
+            .blocking_reasons
+            .contains(&"factual_block_without_exact_evidence".to_string()));
     }
 }

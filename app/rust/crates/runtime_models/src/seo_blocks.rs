@@ -199,8 +199,13 @@ mod verified_page_readiness_tests {
     #[test]
     fn opaque_sha_and_uuid_are_never_public_slugs() {
         assert!(is_opaque_topic_identifier(&"a".repeat(64)));
-        assert!(is_opaque_topic_identifier(&format!("sha256:{}", "9".repeat(64))));
-        assert!(is_opaque_topic_identifier("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(is_opaque_topic_identifier(&format!(
+            "sha256:{}",
+            "9".repeat(64)
+        )));
+        assert!(is_opaque_topic_identifier(
+            "123e4567-e89b-12d3-a456-426614174000"
+        ));
         assert!(!is_opaque_topic_identifier("plant-leaf-care"));
         assert!(!is_opaque_topic_identifier("spain-tourist-visa"));
     }
