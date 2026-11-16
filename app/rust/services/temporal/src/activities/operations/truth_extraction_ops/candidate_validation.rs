@@ -1,3 +1,10 @@
+// A single owner of factual candidates per run. Deterministic procedural
+// extraction can still drive structure and page diagnostics, but its loose
+// numeric/keyword heuristics must not compete with strict chat_manual truth.
+fn active_heuristic_truth_rules<T>(rules: &[T], manual_selected: bool) -> &[T] {
+    if manual_selected { &[] } else { rules }
+}
+
 pub(crate) async fn extraction_schema_validate_impl(
     input: &ExtractionSchemaValidateInput,
 ) -> Result<ExtractionSchemaValidateOutput, DomainError> {
@@ -127,7 +134,10 @@ pub(crate) async fn candidate_validation_impl(
                 message: format!("missing ontology section for {}", section.section_id),
             })?;
         let mut candidates = Vec::new();
-        for (ordinal, rule) in section.rules.iter().enumerate() {
+        for (ordinal, rule) in active_heuristic_truth_rules(&section.rules, manual_enabled)
+            .iter()
+            .enumerate()
+        {
             let (role, concept_key) = role_and_concept_for_rule(rule);
             // The FIRST numeric token determines rule parameters; never
             // cite a different amount or duration merely because it appears
@@ -387,4 +397,19 @@ pub(crate) async fn candidate_validation_impl(
             .sum(),
         sections: section_states,
     })
+}
+
+#[cfg(test)]
+mod candidate_source_ownership_tests {
+    use super::active_heuristic_truth_rules;
+
+    #[test]
+    fn manual_truth_never_mixes_with_heuristic_candidates() {
+        let proposed = ["passport", "insurance", "fee"];
+        assert!(active_heuristic_truth_rules(&proposed, true).is_empty());
+        assert_eq!(
+            active_heuristic_truth_rules(&proposed, false),
+            proposed.as_slice()
+        );
+    }
 }
