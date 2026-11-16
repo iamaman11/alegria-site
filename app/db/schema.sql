@@ -1136,7 +1136,8 @@ CREATE TABLE IF NOT EXISTS raw.pages (
     processed       BOOLEAN DEFAULT false
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_pages_url_date ON raw.pages (url, CAST(snapshot_at AT TIME ZONE 'UTC' AS DATE));
+-- Immutable evidence: every same-day re-fetch is a new snapshot, never an UPDATE.
+CREATE INDEX IF NOT EXISTS idx_raw_pages_url_snapshot ON raw.pages (url, snapshot_at DESC);
 
 COMMENT ON COLUMN raw.pages.content_hash IS
     'blake3(raw_html), hex64. Source: primitives::hash::content_hash_v1';

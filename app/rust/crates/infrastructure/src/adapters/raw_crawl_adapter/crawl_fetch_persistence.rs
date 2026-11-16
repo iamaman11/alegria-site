@@ -380,102 +380,38 @@ pub async fn save_crawled_html(
     let robots_trace_json = Json(robots_trace.clone());
     let source_observation_json = Json(trace_json.clone());
 
+    // A source snapshot is immutable evidence. Even a same-day re-fetch must
+    // create a new page and sections: VERIFIED rules and graph projections may
+    // hold foreign keys to the original raw.sections rows. Never rewrite them.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    let existing = sqlx::query(
-        "SELECT id
-         FROM raw.pages
-         WHERE url = $1
-           AND CAST(snapshot_at AT TIME ZONE 'UTC' AS DATE) = CAST(now() AT TIME ZONE 'UTC' AS DATE)
-         ORDER BY id DESC
-         LIMIT 1",
+    let page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages
+         (url, domain, dtype, status_code, content_type, crawled_at, final_url, redirect_chain, robots_trace,
+          source_observation, title, meta_desc, canonical, word_count, content, raw_html, raw_html_bytes,
+          content_hash, processed)
+         VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, false)
+         RETURNING id",
     )
     .bind(source_url)
-    .fetch_optional(&mut *tx)
+    .bind(&domain)
+    .bind(dtype)
+    .bind(status_code as i16)
+    .bind(content_type)
+    .bind(final_url)
+    .bind(redirect_chain_json)
+    .bind(robots_trace_json)
+    .bind(source_observation_json)
+    .bind(&meta.title)
+    .bind(&meta.meta_desc)
+    .bind(&meta.canonical)
+    .bind(meta.word_count as i32)
+    .bind(Json(content.clone()))
+    .bind(raw_html)
+    .bind(raw_html.len() as i32)
+    .bind(&content_hash)
+    .fetch_one(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
-
-    let page_id = if let Some(row) = existing {
-        let page_id: i64 = row.get("id");
-        sqlx::query(
-            "UPDATE raw.pages
-             SET domain = $2,
-                 dtype = $3,
-                 status_code = $4,
-                 content_type = $5,
-                 crawled_at = now(),
-                 final_url = $6,
-                 redirect_chain = $7,
-                 robots_trace = $8,
-                 source_observation = $9,
-                 title = $10,
-                 meta_desc = $11,
-                 canonical = $12,
-                 word_count = $13,
-                 content = $14,
-                 raw_html = $15,
-                 raw_html_bytes = $16,
-                 content_hash = $17,
-                 processed = false
-             WHERE id = $1",
-        )
-        .bind(page_id)
-        .bind(&domain)
-        .bind(dtype)
-        .bind(status_code as i16)
-        .bind(content_type)
-        .bind(final_url)
-        .bind(redirect_chain_json.clone())
-        .bind(robots_trace_json.clone())
-        .bind(source_observation_json.clone())
-        .bind(&meta.title)
-        .bind(&meta.meta_desc)
-        .bind(&meta.canonical)
-        .bind(meta.word_count as i32)
-        .bind(Json(content.clone()))
-        .bind(raw_html)
-        .bind(raw_html.len() as i32)
-        .bind(&content_hash)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
-        page_id
-    } else {
-        let row = sqlx::query(
-            "INSERT INTO raw.pages
-             (url, domain, dtype, status_code, content_type, crawled_at, final_url, redirect_chain, robots_trace,
-              source_observation, title, meta_desc, canonical, word_count, content, raw_html, raw_html_bytes,
-              content_hash, processed)
-             VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, false)
-             RETURNING id",
-        )
-        .bind(source_url)
-        .bind(&domain)
-        .bind(dtype)
-        .bind(status_code as i16)
-        .bind(content_type)
-        .bind(final_url)
-        .bind(redirect_chain_json.clone())
-        .bind(robots_trace_json.clone())
-        .bind(source_observation_json.clone())
-        .bind(&meta.title)
-        .bind(&meta.meta_desc)
-        .bind(&meta.canonical)
-        .bind(meta.word_count as i32)
-        .bind(Json(content.clone()))
-        .bind(raw_html)
-        .bind(raw_html.len() as i32)
-        .bind(&content_hash)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
-        row.get("id")
-    };
-
-    sqlx::query("DELETE FROM raw.sections WHERE page_id = $1")
-        .bind(page_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
 
     for section in &sections {
         sqlx::query(

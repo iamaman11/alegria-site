@@ -87,6 +87,72 @@
         assert_eq!(row.get::<String, _>("count"), "1");
     }
 
+    #[cfg(feature = "e2e")]
+    #[tokio::test]
+    #[serial]
+    async fn same_day_recrawl_preserves_original_evidence_and_appends_snapshot() {
+        let pg = PostgresHarness::start().await.unwrap();
+        let url = format!("https://example.gov/visa/{}", Uuid::new_v4());
+        let robots = raw_crawl_adapter::RobotsDecisionTrace {
+            allowed: true,
+            ..Default::default()
+        };
+        let first_html =
+            "<html><body><h1>Passport requirement</h1><p>Valid passport required for applicants.</p></body></html>";
+        let second_html =
+            "<html><body><h1>Insurance requirement</h1><p>Medical insurance required for applicants.</p></body></html>";
+        let save = |html: &str| raw_crawl_adapter::save_crawled_html(
+            &pg.pool, &url, "example.gov", &url, "official", 200, "text/html",
+            html, std::slice::from_ref(&url), &robots,
+        );
+        let first = save(first_html).await.unwrap();
+        let old_sections: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM raw.sections WHERE page_id = $1 ORDER BY id",
+        )
+        .bind(first.page_id)
+        .fetch_all(&pg.pool)
+        .await
+        .unwrap();
+        assert!(!old_sections.is_empty());
+
+        // Previously this tried DELETE FROM raw.sections, breaking VERIFIED
+        // evidence foreign keys. The original page/section IDs are durable.
+        let second = save(second_html).await.unwrap();
+        assert_ne!(first.page_id, second.page_id);
+        let preserved_sections: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM raw.sections WHERE page_id = $1 ORDER BY id",
+        )
+        .bind(first.page_id)
+        .fetch_all(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(preserved_sections, old_sections);
+        let old_body: String = sqlx::query_scalar(
+            "SELECT raw_html FROM raw.pages WHERE id = $1",
+        )
+        .bind(first.page_id)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(old_body, first_html);
+        let fresh_body: String = sqlx::query_scalar(
+            "SELECT raw_html FROM raw.pages WHERE id = $1",
+        )
+        .bind(second.page_id)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(fresh_body, second_html);
+        let page_count: i64 = sqlx::query_scalar(
+            "SELECT count(*)::bigint FROM raw.pages WHERE url = $1",
+        )
+        .bind(&url)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(page_count, 2);
+    }
+
     #[tokio::test]
     async fn integration_ctx_exposes_stub_servers() {
         let ctx = IntegrationCtx::start(
