@@ -702,7 +702,11 @@ impl AlegriaActivities {
         input: operations::CandidateValidationInput,
     ) -> Result<operations::CandidateValidationOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "candidate_validation", 1, &input, || async {
+        // The fee-evidence validator now distinguishes actual consular payments
+        // from insurance coverage and service charges. Replay must read the
+        // preserved source/manual LLM jobs through this v2 gate rather than
+        // silently returning the pre-fix v1 step result.
+        self.execute_step(&run_id, "candidate_validation", 2, &input, || async {
             operations::candidate_validation_impl(self.as_ref(), &input).await
         })
         .await
