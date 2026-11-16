@@ -1,5 +1,6 @@
 use contracts::generated::alegria::temporal::v1::{
-    LinkRecommendationState, PageBlueprintState, SectionTemplateBinding, SeoVerifiedFactSupportState,
+    LinkRecommendationState, PageBlueprintState, SectionTemplateBinding,
+    SeoVerifiedFactSupportState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,8 +198,9 @@ mod verified_page_readiness_tests {
             ],
             ..Default::default()
         };
-        assert!(missing_required_factual_roles(&blueprint, &[support("eligibility_rule")])
-            .is_empty());
+        assert!(
+            missing_required_factual_roles(&blueprint, &[support("eligibility_rule")]).is_empty()
+        );
     }
 
     #[test]
@@ -221,10 +223,16 @@ mod verified_page_readiness_tests {
         };
         let mut stale = support("fee_item");
         stale.freshness_class = "stale".to_string();
-        assert_eq!(missing_required_factual_roles(&blueprint, &[stale]), vec!["fees"]);
+        assert_eq!(
+            missing_required_factual_roles(&blueprint, &[stale]),
+            vec!["fees"]
+        );
         let mut empty = support("fee_item");
         empty.fragment_text.clear();
-        assert_eq!(missing_required_factual_roles(&blueprint, &[empty]), vec!["fees"]);
+        assert_eq!(
+            missing_required_factual_roles(&blueprint, &[empty]),
+            vec!["fees"]
+        );
     }
 
     #[test]
