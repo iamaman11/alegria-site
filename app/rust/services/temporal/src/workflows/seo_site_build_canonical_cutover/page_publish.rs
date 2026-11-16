@@ -30,6 +30,7 @@ async fn run_page_publish_phases(
     let mut published_pages = 0usize;
     let mut published_page_keys = std::collections::BTreeSet::new();
     let mut first_blocked: Option<String> = None;
+    let mut published_before_block = 0usize;
 
     for (page_index, page_node) in publishable_pages.into_iter().cloned().enumerate() {
         let page_blueprint = page_blueprints
@@ -66,6 +67,7 @@ async fn run_page_publish_phases(
                 );
                 ctx.state_mut(|state| state.phase = reason.clone());
                 if first_blocked.is_none() {
+                    published_before_block = published_pages;
                     first_blocked = Some(reason);
                 }
                 continue;
@@ -622,6 +624,7 @@ async fn run_page_publish_phases(
                 page_node.page_node_key,
             );
             if first_blocked.is_none() {
+                published_before_block = published_pages;
                 first_blocked = Some(reason);
             }
         }
@@ -629,7 +632,7 @@ async fn run_page_publish_phases(
 
     if let Some(reason) = first_blocked {
         return Ok(PagePublishLoopOutcome::Blocked(format!(
-            "{reason}:published_pages={published_pages}",
+            "{reason}:published_before_block={published_before_block}:published_pages={published_pages}",
         )));
     }
     Ok(PagePublishLoopOutcome::Completed(published_pages))
