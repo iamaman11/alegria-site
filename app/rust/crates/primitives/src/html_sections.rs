@@ -287,6 +287,62 @@ fn fallback_main_article_text(document: &Html) -> Option<String> {
     None
 }
 
+/// The factual body of an official legal document can use only styled
+/// paragraphs, while its footer has the page's only H2 headings. Restrict
+/// extraction to the published document subtree, never page-wide navigation.
+fn append_scoped_legal_document_paragraphs(document: &Html, sections: &mut Vec<HtmlSection>) {
+    let doc_selector = Selector::parse("#document1 .contentWrapper .content").unwrap();
+    let paragraph_selector = Selector::parse("p").unwrap();
+    let heading_selector = Selector::parse("h1, h2, h3, h4").unwrap();
+    let mut part_number = 1;
+    for document_body in document.select(&doc_selector) {
+        // Headed documents are already owned by the ordinary extractor.
+        if document_body.select(&heading_selector).next().is_some() {
+            continue;
+        }
+        let mut chunk = String::new();
+        let flush =
+            |chunk: &mut String, part_number: &mut usize, sections: &mut Vec<HtmlSection>| {
+                if chunk.is_empty() {
+                    return;
+                }
+                let content = std::mem::take(chunk);
+                let hash = content_hash_v1(&content);
+                sections.push(HtmlSection {
+                    heading_path: format!("Legal document body / part {}", part_number),
+                    heading_level: 0,
+                    section_order: sections.len(),
+                    section_type: "other".to_string(),
+                    content_md: content,
+                    content_hash: hash,
+                });
+                *part_number += 1;
+            };
+        for paragraph in document_body.select(&paragraph_selector) {
+            let Some(node) = document.tree.get(paragraph.id()) else {
+                continue;
+            };
+            let mut parts = Vec::new();
+            collect_text_dfs(node, &mut parts);
+            let text = parts
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if text.is_empty() {
+                continue;
+            }
+            if !chunk.is_empty() && chunk.len() + text.len() + 1 > 2800 {
+                flush(&mut chunk, &mut part_number, sections);
+            }
+            if !chunk.is_empty() {
+                chunk.push('\n');
+            }
+            chunk.push_str(&text);
+        }
+        flush(&mut chunk, &mut part_number, sections);
+    }
+}
 /// Recover a substantive, visibly titled article whose template uses a
 /// styled paragraph instead of an H1-H4. A neighboring sidebar heading must
 /// not make that article disappear. Stay within the article body: no page-wide
@@ -406,6 +462,7 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
     // Also recover semantically scoped, headingless article bodies even when
     // a sidebar H2 already produced an unrelated section.
     append_titled_headingless_articles(&document, &mut sections);
+    append_scoped_legal_document_paragraphs(&document, &mut sections);
 
     // An H1 nested in a title wrapper can have no direct sibling text even
     // though a real article follows in main. Preserve its heading provenance
@@ -593,6 +650,102 @@ mod visible_text_tests {
             .contains("90 days in any 180-day period"));
     }
 
+    #[test]
+    fn eurlex_document_body_is_not_lost_to_footer_headings() {
+        // Physical EUR-Lex structure: the report is inside #document1,
+        // but the h2 headings refer only to unrelated navigation.
+        let html = r#"<html><body>
+            <nav><h2>Need help?</h2><p>Call us for support, not law.</p></nav>
+            <div id="document1"><div class="tabContent"><div class="contentWrapper">
+              <div class="content">
+                <p class="Normal">The European Commission reports on visa policy.</p>
+                <p class="li ListDash1"><span>Belarus: the visa fee is reduced to EUR </span>
+                  <span>35 for adult applicants</span><span> and waived for children under 12.</span>
+                </p>
+                <script>fabricated_visa_fee = "999"</script>
+              </div>
+            </div></div></div>
+            <footer><h2>EU institutions</h2><p>Footer is not legal evidence.</p></footer>
+        </body></html>"#;
+        let sections =
+            extract_sections_typed(html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|section| {
+                section
+                    .heading_path
+                    .starts_with("Legal document body / part")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(legal.len(), 1);
+        assert!(legal[0]
+            .content_md
+            .contains("Belarus: the visa fee is reduced to EUR 35 for adult applicants"));
+        assert!(!legal[0].content_md.contains("Footer is not legal evidence"));
+        assert!(!legal[0].content_md.contains("fabricated_visa_fee"));
+        assert!(!legal[0].content_md.contains("Call us for support"));
+        assert_eq!(legal[0].content_hash, content_hash_v1(&legal[0].content_md));
+    }
+
+    #[test]
+    fn eurlex_long_document_is_split_on_paragraph_boundaries() {
+        let mut html = String::from("<html><body><div id=\"document1\"><div class=\"contentWrapper\"><div class=\"content\">");
+        for n in 0..9 {
+            html.push_str(&format!(
+                "<p>Verified legal paragraph {n}: {}</p>",
+                "documentary evidence ".repeat(30)
+            ));
+        }
+        html.push_str(
+            "</div></div></div><footer><h2>Links</h2><p>Unrelated</p></footer></body></html>",
+        );
+        let sections =
+            extract_sections_typed(&html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|section| {
+                section
+                    .heading_path
+                    .starts_with("Legal document body / part")
+            })
+            .collect::<Vec<_>>();
+        assert!(legal.len() >= 2);
+        let joined = legal
+            .iter()
+            .map(|section| section.content_md.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for n in 0..9 {
+            assert!(joined.contains(&format!("Verified legal paragraph {n}:")));
+        }
+        assert!(!joined.contains("Unrelated"));
+    }
+    #[test]
+    fn eurlex_multipart_document_keeps_later_fee_provisions() {
+        let html = r#"<html><body>
+          <div id="document1">
+            <div class="contentWrapper"><div class="content">
+              <p>European Commission cover page.</p>
+            </div></div>
+            <div class="contentWrapper"><div class="content">
+              <p>Applicable legal provisions.</p>
+              <p>Belarus: EUR 35 for adult applicants with exceptions.</p>
+            </div></div>
+          </div>
+          <footer><h2>EU institutions</h2><p>Unrelated list of offices.</p></footer>
+        </body></html>"#;
+        let sections =
+            extract_sections_typed(html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|s| s.heading_path.starts_with("Legal document body / part"))
+            .collect::<Vec<_>>();
+        assert_eq!(legal.len(), 2);
+        assert_eq!(legal[0].heading_path, "Legal document body / part 1");
+        assert_eq!(legal[1].heading_path, "Legal document body / part 2");
+        assert!(legal[1].content_md.contains("Belarus: EUR 35"));
+        assert!(!legal[1].content_md.contains("Unrelated list"));
+    }
     #[test]
     fn titled_article_without_h_tags_is_not_lost_to_sidebar_heading() {
         // The official consular page uses a styled paragraph title and

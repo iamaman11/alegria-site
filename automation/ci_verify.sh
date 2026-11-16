@@ -34,6 +34,20 @@ python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
 echo "[3/50] Python scope check (no forbidden imports)"
 python3 automation/check_python_scope.py
 
+echo "[3a/50] Crawler invariants contract (fail early)"
+python3 automation/check_crawler_invariants.py
+
+echo "[3b/50] Crawler robots-policy smoke (fail early)"
+python3 automation/smoke_crawler_robots_policy.py
+
+echo "[3c/50] Crawl provenance contract (fail early)"
+python3 automation/check_crawl_provenance_contract.py
+
+echo "[3d/50] Crawl dedup contract (fail early)"
+python3 automation/check_crawl_dedup_contract.py
+
+echo "[3e/50] SERP intelligence contract (fail early)"
+python3 automation/check_serp_intelligence_contract.py
 echo "[4/50] Docs layout check (flat docs/, no docs/knowledge drift)"
 python3 automation/check_docs_layout.py
 
@@ -432,21 +446,6 @@ python3 automation/check_live_provider_smoke_evidence_schema.py
 
 echo "[60aa/60] Graph contract gate evidence schema"
 python3 automation/check_graph_contract_gate.py docs/runs/graph_contract_gate_evidence.json
-
-echo "[60b/60] Crawler invariants contract"
-python3 automation/check_crawler_invariants.py
-
-echo "[60c/60] Crawler robots-policy smoke"
-python3 automation/smoke_crawler_robots_policy.py
-
-echo "[60d/60] Crawl provenance contract"
-python3 automation/check_crawl_provenance_contract.py
-
-echo "[60e/60] Crawl dedup contract"
-python3 automation/check_crawl_dedup_contract.py
-
-echo "[60f/60] SERP intelligence contract"
-python3 automation/check_serp_intelligence_contract.py
 
 echo "[60g/60] SERP top10 pattern smoke"
 python3 automation/smoke_serp_top10_pattern_pipeline.py
