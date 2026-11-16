@@ -516,11 +516,9 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(pages.len(), 2);
         assert_ne!(pages[0].canonical_url_path, pages[1].canonical_url_path);
-        assert!(
-            pages
-                .iter()
-                .all(|page| page.canonical_url_path.contains("/requirements/"))
-        );
+        assert!(pages
+            .iter()
+            .all(|page| page.canonical_url_path.contains("/requirements/")));
         assert!(output.cannibalization_conflicts.is_empty());
     }
 

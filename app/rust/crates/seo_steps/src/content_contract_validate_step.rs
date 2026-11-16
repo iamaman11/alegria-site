@@ -204,11 +204,9 @@ mod tests {
         };
 
         let blockers = validate(&input);
-        assert!(
-            blockers
-                .iter()
-                .any(|blocker| blocker.reason_code == "content_block_type_mismatch")
-        );
+        assert!(blockers
+            .iter()
+            .any(|blocker| blocker.reason_code == "content_block_type_mismatch"));
     }
 
     #[test]
@@ -237,11 +235,9 @@ mod tests {
             ..DraftQaInputPayload::default()
         };
         let blockers = validate(&input);
-        assert!(
-            blockers
-                .iter()
-                .any(|b| b.reason_code == "unmatched_factual_support_ref")
-        );
+        assert!(blockers
+            .iter()
+            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
     }
 
     #[test]
@@ -270,11 +266,9 @@ mod tests {
             ..DraftQaInputPayload::default()
         };
         let blockers = validate(&input);
-        assert!(
-            !blockers
-                .iter()
-                .any(|b| b.reason_code == "unmatched_factual_support_ref")
-        );
+        assert!(!blockers
+            .iter()
+            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
     }
 
     #[test]
@@ -288,11 +282,9 @@ mod tests {
             }),
             ..DraftQaInputPayload::default()
         };
-        assert!(
-            validate(&input)
-                .iter()
-                .any(|b| b.reason_code == "placeholder_factual_content")
-        );
+        assert!(validate(&input)
+            .iter()
+            .any(|b| b.reason_code == "placeholder_factual_content"));
     }
 
     #[test]
@@ -311,10 +303,8 @@ mod tests {
         };
 
         let blockers = validate(&input);
-        assert!(
-            blockers
-                .iter()
-                .any(|blocker| blocker.reason_code == "unsupported_factual_content_block")
-        );
+        assert!(blockers
+            .iter()
+            .any(|blocker| blocker.reason_code == "unsupported_factual_content_block"));
     }
 }
