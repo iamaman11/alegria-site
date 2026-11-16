@@ -158,10 +158,65 @@ impl DataForSeoSerpClient {
                 self.config.location_code, self.config.language_code, self.config.depth
             ))
         );
-        // The durable claim MUST precede the paid POST. A crash, timeout or
+        // A different run may already have paid for this exact Standard query.
+        // Reuse ONLY a recent, completed task_post receipt whose provider
+        // identity matches keyword, language, location and depth. The real
+        // task_get remains mandatory; SERP results are never promoted to truth.
+        // The source run's timestamp, not a nullable snapshot timestamp, bounds
+        // reuse. A task inaccessible to the active provider credentials fails
+        // closed, never silently triggers a second paid POST on retry.
+        let previous = sqlx::query(
+            r#"
+            SELECT snapshot.run_id, snapshot.raw_result
+            FROM serp.raw_snapshots snapshot
+            JOIN pipeline.execution_runs run ON run.run_id::text = snapshot.run_id
+            WHERE snapshot.run_id <> $1
+              AND snapshot.job_id LIKE 'dataforseo-standard-task-%'
+              AND snapshot.query = $2
+              AND snapshot.raw_result->'tasks'->0->>'status_code' = '20100'
+              AND snapshot.raw_result->'tasks'->0->'data'->>'keyword' = $2
+              AND snapshot.raw_result->'tasks'->0->'data'->>'language_code' = $3
+              AND snapshot.raw_result->'tasks'->0->'data'->>'location_code' = $4
+              AND snapshot.raw_result->'tasks'->0->'data'->>'depth' = $5
+              AND run.created_at >= now() - interval '7 days'
+            ORDER BY run.created_at DESC, snapshot.run_id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(run_id)
+        .bind(keyword.trim())
+        .bind(&self.config.language_code)
+        .bind(self.config.location_code.to_string())
+        .bind(self.config.depth.to_string())
+        .fetch_optional(pool)
+        .await
+        .context("find recent already-paid DataForSEO Standard task")?;
+        let reusable = previous.and_then(|row| {
+            let prior_run_id: String = row.get("run_id");
+            let receipt: Json<Value> = row.get("raw_result");
+            reusable_standard_task_id(
+                &receipt.0,
+                keyword.trim(),
+                &self.config.language_code,
+                self.config.location_code,
+                self.config.depth,
+            )
+            .map(|_| (prior_run_id, receipt.0))
+        });
+        // The durable claim MUST precede any paid POST. A crash, timeout or
         // ambiguous provider response leaves an unresolved claim, not a second
-        // paid POST on Temporal retry or a concurrent activity.
-        let claim = json!({"submission_state": "uncertain"});
+        // paid POST on Temporal retry or a concurrent activity. A reused
+        // receipt is also claimed durably, with explicit provenance.
+        let claim = if let Some((prior_run_id, receipt)) = &reusable {
+            let mut copy = receipt.clone();
+            copy["reuse_provenance"] = json!({
+                "source_run_id": prior_run_id,
+                "policy": "exact_provider_params_last_7_days",
+            });
+            copy
+        } else {
+            json!({"submission_state": "uncertain"})
+        };
         let claimed = sqlx::query(
             "INSERT INTO serp.raw_snapshots (run_id, job_id, query, raw_result)
              VALUES ($1, $2, $3, $4)
@@ -177,25 +232,35 @@ impl DataForSeoSerpClient {
         .rows_affected()
             == 1;
         let task_id = if claimed {
-            let receipt = self.submit_standard_task(keyword).await?;
-            let task_id = standard_task_post_id(&receipt)?.to_string();
-            let updated = sqlx::query(
-                "UPDATE serp.raw_snapshots SET raw_result = $3
-                 WHERE run_id = $1 AND job_id = $2
-                   AND raw_result->>'submission_state' = 'uncertain'",
-            )
-            .bind(run_id)
-            .bind(&receipt_key)
-            .bind(Json(receipt))
-            .execute(pool)
-            .await
-            .context("persist DataForSEO paid Standard task receipt")?;
-            if updated.rows_affected() != 1 {
-                return Err(permanent(
-                    "DataForSEO paid task claim changed; reconcile before retry",
-                ));
+            if let Some((source_run_id, receipt)) = &reusable {
+                let task_id = standard_task_post_id(receipt)?.to_string();
+                tracing::info!(
+                    run_id,
+                    source_run_id,
+                    "reused existing paid DataForSEO Standard task; no new POST"
+                );
+                task_id
+            } else {
+                let receipt = self.submit_standard_task(keyword).await?;
+                let task_id = standard_task_post_id(&receipt)?.to_string();
+                let updated = sqlx::query(
+                    "UPDATE serp.raw_snapshots SET raw_result = $3
+                     WHERE run_id = $1 AND job_id = $2
+                       AND raw_result->>'submission_state' = 'uncertain'",
+                )
+                .bind(run_id)
+                .bind(&receipt_key)
+                .bind(Json(receipt))
+                .execute(pool)
+                .await
+                .context("persist DataForSEO paid Standard task receipt")?;
+                if updated.rows_affected() != 1 {
+                    return Err(permanent(
+                        "DataForSEO paid task claim changed; reconcile before retry",
+                    ));
+                }
+                task_id
             }
-            task_id
         } else {
             let row = sqlx::query(
                 "SELECT raw_result FROM serp.raw_snapshots WHERE run_id = $1 AND job_id = $2",
@@ -436,6 +501,26 @@ enum StandardGetState {
     Ready,
 }
 
+// A receipt is an existing paid provider task, not a cached assertion.
+fn reusable_standard_task_id<'a>(
+    receipt: &'a Value,
+    keyword: &str,
+    language_code: &str,
+    location_code: i64,
+    depth: u32,
+) -> Option<&'a str> {
+    let id = standard_task_post_id(receipt).ok()?;
+    let data = receipt.pointer("/tasks/0/data")?;
+    if data.get("keyword")?.as_str()? != keyword
+        || data.get("language_code")?.as_str()? != language_code
+        || data.get("location_code")?.as_i64()? != location_code
+        || data.get("depth")?.as_u64()? != u64::from(depth)
+    {
+        return None;
+    }
+    Some(id)
+}
+
 fn standard_task_post_id(response: &Value) -> Result<&str> {
     if response.get("status_code").and_then(Value::as_i64) != Some(20000) {
         return Err(permanent(
@@ -644,6 +729,55 @@ fn classify_domain_tier(raw_url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paid_serp_receipts_reuse_only_identical_request_and_successful_provider_task() {
+        let receipt = json!({
+            "status_code": 20000,
+            "tasks": [{
+                "status_code": 20100,
+                "id": "saved-task-123",
+                "data": {
+                    "keyword": "Spain visa Belarus",
+                    "language_code": "ru",
+                    "location_code": 2724,
+                    "depth": 10,
+                }
+            }]
+        });
+        assert_eq!(
+            reusable_standard_task_id(&receipt, "Spain visa Belarus", "ru", 2724, 10),
+            Some("saved-task-123")
+        );
+        assert_eq!(
+            reusable_standard_task_id(&receipt, "Spain visa Russia", "ru", 2724, 10),
+            None
+        );
+        assert_eq!(
+            reusable_standard_task_id(&receipt, "Spain visa Belarus", "en", 2724, 10),
+            None
+        );
+        assert_eq!(
+            reusable_standard_task_id(&receipt, "Spain visa Belarus", "ru", 2840, 10),
+            None
+        );
+        assert_eq!(
+            reusable_standard_task_id(&receipt, "Spain visa Belarus", "ru", 2724, 100),
+            None
+        );
+        let mut uncertain = receipt.clone();
+        uncertain["tasks"][0]["status_code"] = json!(20000);
+        assert_eq!(
+            reusable_standard_task_id(&uncertain, "Spain visa Belarus", "ru", 2724, 10),
+            None
+        );
+        let mut invalid = receipt;
+        invalid["tasks"][0]["id"] = json!("bad task id!");
+        assert_eq!(
+            reusable_standard_task_id(&invalid, "Spain visa Belarus", "ru", 2724, 10),
+            None
+        );
+    }
 
     #[test]
     fn explicit_site_filter_rejects_unrelated_google_results() {
