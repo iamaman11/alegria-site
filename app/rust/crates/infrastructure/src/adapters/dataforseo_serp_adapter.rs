@@ -789,13 +789,7 @@ mod tests {
         let mut already_reused = receipt.clone();
         already_reused["reuse_provenance"] = json!({"source_run_id": "older-run"});
         assert_eq!(
-            reusable_standard_task_id(
-                &already_reused,
-                "Spain visa Belarus",
-                "ru",
-                2724,
-                10,
-            ),
+            reusable_standard_task_id(&already_reused, "Spain visa Belarus", "ru", 2724, 10,),
             None
         );
         let mut invalid = receipt;
