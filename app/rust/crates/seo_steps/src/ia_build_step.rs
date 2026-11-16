@@ -14,6 +14,25 @@ fn locale_lang(locale: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// A stable storage key or SHA digest is not a publishable semantic URL.
+// An existing topic key may supply a readable alternative; otherwise the
+// page stays blocked until a reviewer supplies meaningful topic metadata.
+fn opaque_keyword(value: &str) -> bool {
+    let trimmed = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
+    let hex = trimmed.replace('-', "");
+    hex.len() >= 32 && hex.chars().all(|ch| ch.is_ascii_hexdigit())
+}
+
+fn semantic_keyword<'a>(seed: &'a str, topic_keys: &'a [String]) -> Option<&'a str> {
+    if !seed.trim().is_empty() && !opaque_keyword(seed) {
+        return Some(seed);
+    }
+    topic_keys
+        .iter()
+        .map(String::as_str)
+        .find(|topic| !topic.trim().is_empty() && !opaque_keyword(topic))
+}
+
 fn page_type_for_keyword(seed_keyword: &str) -> &'static str {
     let query = seed_keyword.to_lowercase();
     if query.contains("document") || query.contains("requirements") || query.contains("документ")
@@ -266,8 +285,14 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         } else {
             cluster.topic_keys.join("|")
         };
-        let canonical_slug = slug(&cluster.seed_keyword);
-        let page_type_key = page_type_for_keyword(&cluster.seed_keyword).to_string();
+        let semantic_seed = semantic_keyword(&cluster.seed_keyword, &cluster.topic_keys);
+        let canonical_slug = semantic_seed
+            .map(slug)
+            .unwrap_or_else(|| "needs-editorial-review".to_string());
+        let page_type_key = semantic_seed
+            .map(page_type_for_keyword)
+            .unwrap_or("detail_page")
+            .to_string();
         let path_segment = page_type_path_segment(&page_type_key, &canonical_slug);
         let canonical_url_path = format!("{canonical_prefix}/{path_segment}/");
         let dominant_intent = if cluster.dominant_intent.is_empty() {
@@ -339,7 +364,10 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             dominant_intent,
             canonical_slug,
             canonical_url_path,
-            lifecycle_state: if ambiguous_topic_family || source_discovery_query {
+            lifecycle_state: if ambiguous_topic_family
+                || source_discovery_query
+                || semantic_seed.is_none()
+            {
                 "blocked".to_string()
             } else {
                 "planned".to_string()
@@ -492,6 +520,41 @@ mod tests {
             .iter()
             .all(|page| page.canonical_url_path.contains("/requirements/")));
         assert!(output.cannibalization_conflicts.is_empty());
+    }
+
+    #[test]
+    fn opaque_seed_uses_existing_semantic_topic_for_url() {
+        let digest = "f".repeat(64);
+        let output = execute(&IaBuildInputPayload {
+            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                cluster_key: "cluster-opaque".to_string(),
+                seed_keyword: digest.clone(),
+                topic_keys: vec!["visa_refusal_appeal".to_string()],
+                graph_confidence: 0.9,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let page = output.page_nodes.iter().find(|node| node.keyword_cluster_key == "cluster-opaque").unwrap();
+        assert!(!page.canonical_url_path.contains(&digest));
+        assert!(page.canonical_slug.contains("visa"));
+        assert_eq!(page.lifecycle_state, "planned");
+    }
+
+    #[test]
+    fn opaque_seed_without_semantic_topic_cannot_be_planned_for_publication() {
+        let digest = "a".repeat(64);
+        let output = execute(&IaBuildInputPayload {
+            keyword_clusters: vec![contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                cluster_key: "cluster-unresolved".to_string(),
+                seed_keyword: digest.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let page = output.page_nodes.iter().find(|node| node.keyword_cluster_key == "cluster-unresolved").unwrap();
+        assert!(!page.canonical_url_path.contains(&digest));
+        assert_eq!(page.lifecycle_state, "blocked");
     }
 
     #[test]
