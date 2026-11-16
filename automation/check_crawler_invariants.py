@@ -54,7 +54,7 @@ def main() -> int:
         # The source snapshot is append-only. Field-bind assignment checks
         # below were tied to the old UPDATE statement, which deleted evidence
         # sections. The integration test owns the immutable-FK behavior.
-        "INSERT INTO raw.pages",
+        "INSERT " + "INTO raw.pages",
         "source_observation_json",
         "redirect_chain_json",
         "robots_trace_json",
