@@ -179,6 +179,9 @@ impl DataForSeoSerpClient {
               AND snapshot.raw_result->'tasks'->0->'data'->>'location_code' = $4
               AND snapshot.raw_result->'tasks'->0->'data'->>'depth' = $5
               AND run.created_at >= now() - interval '7 days'
+              -- Never reuse an external paid task through a disposable local
+              -- provider stub or a nonstandard API environment.
+              AND $6 = 'https://api.dataforseo.com/v3/serp/google/organic/task_post'
             ORDER BY run.created_at DESC, snapshot.run_id DESC
             LIMIT 1
             "#,
@@ -188,20 +191,26 @@ impl DataForSeoSerpClient {
         .bind(&self.config.language_code)
         .bind(self.config.location_code.to_string())
         .bind(self.config.depth.to_string())
+        .bind(&self.config.endpoint)
         .fetch_optional(pool)
         .await
         .context("find recent already-paid DataForSEO Standard task")?;
         let reusable = previous.and_then(|row| {
             let prior_run_id: String = row.get("run_id");
             let receipt: Json<Value> = row.get("raw_result");
-            reusable_standard_task_id(
+            let can_reuse = reusable_standard_task_id(
                 &receipt.0,
                 keyword.trim(),
                 &self.config.language_code,
                 self.config.location_code,
                 self.config.depth,
             )
-            .map(|_| (prior_run_id, receipt.0))
+            .is_some();
+            if can_reuse {
+                Some((prior_run_id, receipt.0))
+            } else {
+                None
+            }
         });
         // The durable claim MUST precede any paid POST. A crash, timeout or
         // ambiguous provider response leaves an unresolved claim, not a second
