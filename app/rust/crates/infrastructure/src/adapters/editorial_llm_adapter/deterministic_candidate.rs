@@ -39,11 +39,10 @@ fn build_deterministic_candidate(
         } else if block.section_role == "cta_disclaimer" {
             body.push_str("This draft is ready for human editorial review. Confirm current official requirements before publication.\n");
         } else {
-            body.push_str(if block.deterministic_only {
-                "Verified source-backed structured content:\n"
-            } else {
-                "Based on verified source-backed evidence:\n"
-            });
+            // The deterministic provider is a fixture/fallback, not an
+            // editorial author. Render only the exact VERIFIED quotations:
+            // synthetic headings masquerading as factual copy must not
+            // reach the publish gate.
             for support in supports {
                 body.push_str("- ");
                 body.push_str(support.fragment_text.trim());
