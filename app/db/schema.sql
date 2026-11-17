@@ -71,6 +71,7 @@ INSERT INTO kb.concepts (concept_key, concept_type, label_ru, status) VALUES
   ('consular_fee', 'fee', 'Консульский сбор', 'active'),
   ('passport', 'document', 'Паспорт', 'active'),
   ('medical_insurance', 'document', 'Медицинская страховка', 'active'),
+  ('schengen_visa_application_form', 'document', 'Анкета на шенгенскую визу', 'active'),
   ('standard_processing_time', 'timeline', 'Стандартный срок рассмотрения', 'active'),
   ('standard_tourist_eligibility', 'rule', 'Стандартные условия туристической визы', 'active'),
   ('standard_application_process', 'process', 'Порядок подачи заявления', 'active'),

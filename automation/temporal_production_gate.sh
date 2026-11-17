@@ -349,8 +349,8 @@ assert_invariants() {
 
   # Concepts come from the one canonical schema.sql bootstrap, not smoke fixtures.
   local concept_count
-  concept_count="$(db_scalar "select count(*) from kb.concepts where status='active' and concept_key in ('consular_fee','passport','medical_insurance','standard_processing_time','standard_tourist_eligibility','standard_application_process','standard_application_channel');" | tr -d '[:space:]')"
-  [ "$concept_count" = "7" ] || die "canonical ontology vocabulary is incomplete"
+  concept_count="$(db_scalar "select count(*) from kb.concepts where status='active' and concept_key in ('consular_fee','passport','medical_insurance','schengen_visa_application_form','standard_processing_time','standard_tourist_eligibility','standard_application_process','standard_application_channel');" | tr -d '[:space:]')"
+  [ "$concept_count" = "8" ] || die "canonical ontology vocabulary is incomplete"
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('pl:work:by','pl','work',null,'by','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:by','ES','tourist',null,'BY','active') on conflict (context_key) do nothing;" >/dev/null
   db_scalar "insert into kb.visa_contexts (context_key, country_code, visa_family, visa_subtype, citizenship_code, status) values ('es:tourist:empty:by','ES','tourist','empty-gate','BY','active') on conflict (context_key) do nothing;" >/dev/null

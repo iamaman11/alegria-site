@@ -727,7 +727,7 @@ fn consular_fee_evidence_issue(
     static EUR_AMOUNT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let expression = EUR_AMOUNT.get_or_init(|| {
         regex::Regex::new(
-            r"(?i)(?:€\s*(?P<leading>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)|(?P<trailing>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*(?:€|EUR\b|euros?\b|евро\b))",
+            r"(?i)(?:€\s*(?P<leading>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)|(?P<trailing>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*(?:€|EUR\b|euros?\b|евро\b)|(?:EUR\b|euros?\b|евро\b)\s*(?P<prefixed>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?))",
         )
         .expect("valid fixed euro-evidence pattern")
     });
@@ -737,6 +737,7 @@ fn consular_fee_evidence_issue(
             captures
                 .name("leading")
                 .or_else(|| captures.name("trailing"))
+                .or_else(|| captures.name("prefixed"))
         })
         .map(|capture| capture.as_str())
         .collect::<Vec<_>>();
@@ -1020,6 +1021,7 @@ mod tests {
             ),
             ("Visa fee is 000 евро", 0.0, "truncated_money_evidence"),
             ("Visa fee is €90", 35.0, "consular_fee_amount_mismatch"),
+            ("Visa fee is EUR 350", 35.0, "consular_fee_amount_mismatch"),
         ] {
             let candidate = with_fee_quote(quote, amount);
             let result = validate_truth_candidate(&candidate, quote);
@@ -1035,6 +1037,9 @@ mod tests {
     fn fee_quote_accepts_real_amounts_and_keeps_conditions_for_review() {
         for (quote, amount) in [
             ("Consular fee is 35 EUR", 35.0),
+            ("Visa fee is EUR 35 for Belarusian adults", 35.0),
+            ("The visa fee is reduced to EUR 35", 35.0),
+            ("Consular fee EUR 67,50", 67.5),
             ("Visa fee is €35 for applicants from Belarus", 35.0),
             (
                 "Visa fees are €90 for adults and €35 for applicants from Belarus",
