@@ -31,10 +31,17 @@ pub async fn persist_finalize_publish_output(
     if is_published {
         // Render readiness is NOT publication. Activate an immutable,
         // approved release and prove real HTTPS bytes before DB commit.
+        let allow_first_publication: bool = sqlx::query_scalar(
+            "SELECT NOT EXISTS (SELECT 1 FROM site.cms_pages WHERE published_at IS NOT NULL)",
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
         match promote_and_verify_public_release(
             &artifact,
             &input.page_node_key,
             &input.revision_id,
+            allow_first_publication,
         )
         .await
         {

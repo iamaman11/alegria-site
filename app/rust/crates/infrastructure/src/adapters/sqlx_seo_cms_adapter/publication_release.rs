@@ -261,6 +261,29 @@ fn create_immutable_release(
     Ok(release)
 }
 
+// A fresh persistent volume may contain an empty, unmanaged output directory.
+// Only the first publication may remove it, and remove_dir refuses nonempty
+// directories atomically. Never recursively delete or replace unknown content.
+#[cfg(unix)]
+fn prepare_public_pointer(
+    public: &ReleasePath,
+    allow_first_publication: bool,
+) -> Result<Option<ReleasePathBuf>, String> {
+    match std::fs::symlink_metadata(public) {
+        Ok(meta) if meta.file_type().is_symlink() => std::fs::read_link(public)
+            .map(Some)
+            .map_err(|err| format!("read current live release: {err}")),
+        Ok(meta) if meta.is_dir() && allow_first_publication => {
+            std::fs::remove_dir(public)
+                .map_err(|err| format!("first publication requires an empty output directory: {err}"))?;
+            Ok(None)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound && allow_first_publication => Ok(None),
+        Ok(_) => Err("public output must be a managed symlink or an empty first-publication directory".into()),
+        Err(err) => Err(format!("inspect current live release: {err}")),
+    }
+}
+
 #[cfg(unix)]
 fn swap_public_release(
     public: &ReleasePath,
@@ -574,6 +597,7 @@ async fn promote_and_verify_public_release(
     artifact: &PublishArtifact,
     page_node_key: &str,
     revision_id: &str,
+    allow_first_publication: bool,
 ) -> Result<PublicationActivation, String> {
     let meta: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
         .map_err(|err| format!("persisted candidate metadata: {err}"))?;
@@ -616,11 +640,13 @@ async fn promote_and_verify_public_release(
     let files = publication_files(&candidate, page_node_key, revision_id, origin_raw, run_id)?;
     let release = create_immutable_release(&candidate, &files)?;
     let journal_path = pending_publication_path(&public)?;
-    let previous = match std::fs::read_link(&public) {
-        Ok(link) => Some(link),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(format!("read current live release: {err}")),
-    };
+    // Do not touch the live pointer while an earlier activation is unresolved.
+    match std::fs::symlink_metadata(&journal_path) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
+        Ok(_) => return Err("pending publication must first be reconciled".into()),
+        Err(err) => return Err(format!("inspect pending publication: {err}")),
+    }
+    let previous = prepare_public_pointer(&public, allow_first_publication)?;
     let pending = PendingPublication {
         new_release: release.clone(),
         previous: previous.clone(),
@@ -655,6 +681,7 @@ async fn promote_and_verify_public_release(
     _artifact: &PublishArtifact,
     _page_node_key: &str,
     _revision_id: &str,
+    _allow_first_publication: bool,
 ) -> Result<PublicationActivation, String> {
     Err("atomic static deployment requires a Unix filesystem".into())
 }
@@ -796,6 +823,28 @@ mod publication_release_tests {
 
         std::fs::write(release.join(".alegria_static_site"), b"tampered").unwrap();
         assert!(create_immutable_release(&candidate, &files).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_publication_bootstraps_only_empty_unmanaged_directory() {
+        let root = std::env::temp_dir().join(format!("alegria-first-pointer-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let public = root.join("live");
+        let release = root.join("release");
+        std::fs::create_dir(&release).unwrap();
+        std::fs::create_dir(&public).unwrap();
+        assert!(prepare_public_pointer(&public, false).is_err());
+        std::fs::write(public.join("keep.txt"), b"keep").unwrap();
+        assert!(prepare_public_pointer(&public, true).is_err());
+        assert_eq!(std::fs::read(public.join("keep.txt")).unwrap(), b"keep");
+        std::fs::remove_file(public.join("keep.txt")).unwrap();
+        assert!(prepare_public_pointer(&public, true).unwrap().is_none());
+        assert!(!public.exists());
+        assert!(prepare_public_pointer(&public, false).is_err());
+        assert!(swap_public_release(&public, &release).unwrap().is_none());
+        assert_eq!(prepare_public_pointer(&public, false).unwrap(), Some(release.clone()));
         std::fs::remove_dir_all(root).unwrap();
     }
 
