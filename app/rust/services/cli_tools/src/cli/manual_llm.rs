@@ -2,6 +2,25 @@ use infrastructure::adapters::manual_llm_queue::{
     self, ManualLlmSubmission, ManualTruthSubmission,
 };
 
+#[derive(Debug)]
+enum ManualSubmission {
+    Editorial(ManualLlmSubmission),
+    Truth(ManualTruthSubmission),
+}
+
+fn decode_manual_submission(envelope: serde_json::Value) -> Result<ManualSubmission> {
+    // Let the existing strict, mutually exclusive response types own the
+    // transport contract. Do not duplicate their field names in CLI routing.
+    match serde_json::from_value::<ManualLlmSubmission>(envelope.clone()) {
+        Ok(submission) => Ok(ManualSubmission::Editorial(submission)),
+        Err(editorial_error) => serde_json::from_value::<ManualTruthSubmission>(envelope)
+            .map(ManualSubmission::Truth)
+            .with_context(|| {
+                format!("invalid typed manual LLM submission (editorial: {editorial_error})")
+            }),
+    }
+}
+
 async fn llm_pool(database_url: Option<String>) -> Result<sqlx::PgPool> {
     let url = database_url
         .or_else(|| env::var("DATABASE_URL").ok())
@@ -29,23 +48,17 @@ async fn llm_submit(
         .with_context(|| format!("read LLM submission from {response_file}"))?;
     let envelope: serde_json::Value = serde_json::from_str(&raw)
         .with_context(|| format!("decode LLM submission from {response_file}"))?;
-    let response = envelope
-        .get("response")
-        .and_then(serde_json::Value::as_object)
-        .context("typed manual LLM response object is required")?;
+    let submission = decode_manual_submission(envelope)?;
     let pool = llm_pool(database_url).await?;
-    let (run_id, task_id) = if response.contains_key("sections") {
-        let submission: ManualLlmSubmission =
-            serde_json::from_value(envelope).context("invalid strict editorial LLM response")?;
-        let run_id = manual_llm_queue::submit_editorial(&pool, &submission, model_key).await?;
-        (run_id, submission.task_id)
-    } else if response.contains_key("candidates") {
-        let submission: ManualTruthSubmission = serde_json::from_value(envelope)
-            .context("invalid strict truth-candidate LLM response")?;
-        let run_id = manual_llm_queue::submit_truth(&pool, &submission, model_key).await?;
-        (run_id, submission.task_id)
-    } else {
-        anyhow::bail!("manual LLM response must contain sections or candidates");
+    let (run_id, task_id) = match submission {
+        ManualSubmission::Editorial(submission) => {
+            let run_id = manual_llm_queue::submit_editorial(&pool, &submission, model_key).await?;
+            (run_id, submission.task_id)
+        }
+        ManualSubmission::Truth(submission) => {
+            let run_id = manual_llm_queue::submit_truth(&pool, &submission, model_key).await?;
+            (run_id, submission.task_id)
+        }
     };
     // Write-first: if Temporal is unreachable, the completed job remains in
     // PostgreSQL. Retrying this exact submission is idempotent and re-signals.
@@ -65,4 +78,50 @@ async fn llm_submit(
         task_id, run_id
     );
     Ok(0)
+}
+
+#[cfg(test)]
+mod manual_submission_tests {
+    use super::*;
+
+    fn envelope(response: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({
+            "task_id": "test-task",
+            "schema_version": 1,
+            "input_sha256": "test-hash",
+            "response": response
+        })
+    }
+
+    #[test]
+    fn cli_routes_typed_editorial_and_legacy_and_truth() {
+        let typed = serde_json::json!({
+            "claims": {"documents": [{"support_ref": "ref", "text": "Passport required"}]},
+            "metadata": {"title": "A useful title", "description": "An evidence-bound description"}
+        });
+        assert!(matches!(
+            decode_manual_submission(envelope(typed)),
+            Ok(ManualSubmission::Editorial(_))
+        ));
+        assert!(matches!(
+            decode_manual_submission(envelope(serde_json::json!({"sections": {}}))),
+            Ok(ManualSubmission::Editorial(_))
+        ));
+        assert!(matches!(
+            decode_manual_submission(envelope(serde_json::json!({"candidates": []}))),
+            Ok(ManualSubmission::Truth(_))
+        ));
+    }
+
+    #[test]
+    fn cli_rejects_mixed_and_unknown_responses() {
+        for response in [
+            serde_json::json!({"claims": {}, "metadata": {"title": "A useful title", "description": "An evidence-bound description"}, "candidates": []}),
+            serde_json::json!({"sections": {}, "candidates": []}),
+            serde_json::json!({"claims": {}}),
+            serde_json::json!({"unknown": {}}),
+        ] {
+            assert!(decode_manual_submission(envelope(response)).is_err());
+        }
+    }
 }
