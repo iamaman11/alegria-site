@@ -289,6 +289,7 @@ message SeoVerifiedFactSupportState {
   string freshness_class = 6;
   string observed_at = 7;
   string valid_until = 8;
+  string source_url = 9;
 }
 
 message SourceContextChunkState {
@@ -391,6 +392,8 @@ message EditorialBrief {
   repeated LinkRecommendationState required_links = 8;
   string truth_snapshot_ref = 9;
   repeated SourceContextChunkState source_context_chunks = 10;
+  string locale_code = 11;
+  string canonical_url_path = 12;
 }
 
 message LlmDraftRequest {
@@ -415,6 +418,8 @@ message LlmDraftCandidate {
   string faq_json = 10;
   string schema_markup_json = 11;
   string status = 12;
+  string seo_title = 13;
+  string seo_meta_description = 14;
 }
 
 message EditorialDraftGenerateInputPayload {
@@ -779,6 +784,7 @@ message DraftNormalizeInputPayload {
 message DraftNormalizeOutputPayload {
   DraftState draft = 1;
   ContentBlockPlanState content_block_plan = 2;
+  PageBriefState page_brief = 3;
 }
 
 message ContentContractValidateInputPayload {

@@ -1,4 +1,3 @@
-
 pub async fn persist_draft_assemble_output(
     pool: &PgPool,
     run_id: &str,
@@ -275,7 +274,7 @@ pub async fn persist_draft_normalize_output(
 ) -> Result<(), DomainError> {
     upsert_runtime_blob(pool, &input.run_id, "draft_normalize_output", output).await?;
     let output_as_assemble = DraftAssembleOutputPayload {
-        page_brief: None,
+        page_brief: output.page_brief.clone(),
         draft: output.draft.clone(),
         editorial_brief: None,
         llm_request: None,

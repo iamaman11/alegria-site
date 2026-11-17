@@ -63,12 +63,14 @@ fn prompt_from_input(input: &EditorialDraftGenerateInputPayload) -> Result<Strin
             .join("\n");
 
     Ok(format!(
-        "Return a JSON object with one top-level key `sections` mapping section_role -> markdown body.\n\
+        "Return a JSON object with two top-level keys: sections (role -> markdown) and metadata (title 15-110 chars, description 45-190 chars).\n\
 Do not include any prose outside JSON. Do not invent facts. Paraphrase only the supplied support lines.\n\
 Supplemental source context is for topic coverage and structure only; do not treat it as factual proof.\n\
 Do not mention support refs explicitly in the final text. Keep each section concise and expert.\n\
-Page node: {}\nTarget audience: {}\nExpertise goal: {}\nPrompt version: {}\n\n{}",
+Page node: {}\nEditorial locale: {}\nCanonical URL path: {}\nTarget audience: {}\nExpertise goal: {}\nPrompt version: {}\n\n{}",
         brief.page_node_key,
+        brief.locale_code,
+        brief.canonical_url_path,
         brief.target_audience,
         brief.expertise_goal,
         request.prompt_version,

@@ -11,7 +11,12 @@ fn overlay_generated_sections(
         &brief.verified_support,
         &brief.required_links,
     );
-    let mut body_parts = vec!["# Expert travel visa guide".to_string(), String::new()];
+    let title = if generated.seo_title.is_empty() {
+        "Expert travel visa guide"
+    } else {
+        &generated.seo_title
+    };
+    let mut body_parts = vec![format!("# {title}"), String::new()];
     for section in &mut candidate.sections {
         let Some(block) = block_plan
             .iter()
@@ -51,6 +56,13 @@ fn overlay_generated_sections(
         }
     }
     candidate.body_markdown = body_parts.join("\n");
+    candidate.seo_title = generated.seo_title;
+    candidate.seo_meta_description = generated.seo_meta_description;
+    // Rebuild Article schema with the verified editorial headline downstream,
+    // rather than retaining the deterministic English placeholder.
+    if !candidate.seo_title.is_empty() {
+        candidate.schema_markup_json.clear();
+    }
     candidate
 }
 
@@ -69,7 +81,11 @@ fn candidate_from_generated_text(
     let deterministic = build_deterministic_candidate(input, provider_key, model_key)?;
     let generated = parse_generated_sections(text)?;
     for role in generated.sections.keys() {
-        if !deterministic.sections.iter().any(|section| section.section_role == *role) {
+        if !deterministic
+            .sections
+            .iter()
+            .any(|section| section.section_role == *role)
+        {
             return Err(DomainError::ValidationFailure {
                 message: format!("unknown editorial section role from LLM: {role}"),
             });

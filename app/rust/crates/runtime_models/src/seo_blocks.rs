@@ -36,6 +36,33 @@ pub fn heading_for_role(section_role: &str) -> &'static str {
     }
 }
 
+/// A public page's editorial locale comes from its canonical URL, not from
+/// the language of a cited source. Custom non-default headings are preserved.
+pub fn locale_from_canonical_path(path: &str) -> &str {
+    path.split('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or("en")
+}
+
+pub fn heading_for_role_locale(role: &str, locale: &str) -> &'static str {
+    if locale != "ru" {
+        return heading_for_role(role);
+    }
+    match role {
+        "overview" => "Обзор",
+        "who_fits" => "Кому подходит",
+        "documents" => "Документы",
+        "process" => "Порядок оформления",
+        "fees" => "Консульский сбор",
+        "timing" => "Сроки",
+        "where_to_apply" => "Куда подавать заявление",
+        "faq" => "Вопросы и ответы",
+        "related_pages" => "Источники и связанные страницы",
+        "cta_disclaimer" => "Что делать дальше",
+        _ => heading_for_role(role),
+    }
+}
+
 pub fn block_type_for_role(section_role: &str) -> &'static str {
     match section_role {
         "documents" => "documents_checklist",
@@ -196,6 +223,18 @@ mod verified_page_readiness_tests {
         }
     }
 
+    #[test]
+    fn russian_locale_headings_are_reusable_across_unrelated_topics() {
+        assert_eq!(locale_from_canonical_path("/ru/visa/spain/"), "ru");
+        assert_eq!(
+            locale_from_canonical_path("/ru/gardening/plant-care/"),
+            "ru"
+        );
+        assert_eq!(heading_for_role_locale("fees", "ru"), "Консульский сбор");
+        assert_eq!(heading_for_role_locale("documents", "ru"), "Документы");
+        assert_eq!(heading_for_role_locale("fees", "en"), "Fees");
+        assert_eq!(heading_for_role_locale("unknown", "ru"), "Section");
+    }
     #[test]
     fn opaque_sha_and_uuid_are_never_public_slugs() {
         assert!(is_opaque_topic_identifier(&"a".repeat(64)));

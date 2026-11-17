@@ -36,17 +36,54 @@ fn build_deterministic_candidate(
                 body.push_str(&link.target_page_key);
                 body.push('\n');
             }
+            // If there are no already-published internal targets, never
+            // invent them: render unique exact HTTPS URLs of VERIFIED
+            // primary sources, not a vague placeholder.
+            if brief.required_links.is_empty() {
+                let mut seen = std::collections::BTreeSet::new();
+                for support in &brief.verified_support {
+                    let url = support.source_url.trim();
+                    if !url.starts_with("https://")
+                        || url.contains([')', ']', '\n', '\r'])
+                        || !seen.insert(url.to_string())
+                    {
+                        continue;
+                    }
+                    let label = if support.source_label.trim().is_empty() {
+                        "official source"
+                    } else {
+                        support.source_label.trim()
+                    };
+                    body.push_str(&format!("- [{label}]({url})\n"));
+                }
+            }
         } else if block.section_role == "cta_disclaimer" {
             body.push_str("This draft is ready for human editorial review. Confirm current official requirements before publication.\n");
         } else {
-            // The deterministic provider is a fixture/fallback, not an
-            // editorial author. Render only the exact VERIFIED quotations:
-            // synthetic headings masquerading as factual copy must not
-            // reach the publish gate.
+            // Deterministic evidence blocks always retain exact VERIFIED
+            // quotations. Localized labels add context, not new claims.
+            if brief.locale_code == "ru" {
+                let intro = match block.section_role.as_str() {
+                    "documents" => "Документы по официальным источникам:\n",
+                    "fees" => "Консульский сбор зависит от категории и возможных исключений. Подтверждённая формулировка:\n",
+                    "timing" => "Сроки рассмотрения по официальным источникам:\n",
+                    _ => "",
+                };
+                body.push_str(intro);
+            }
             for support in supports {
                 body.push_str("- ");
                 body.push_str(support.fragment_text.trim());
                 body.push('\n');
+                let url = support.source_url.trim();
+                if url.starts_with("https://") && !url.contains([')', ']', '\n', '\r']) {
+                    let source_label = if brief.locale_code == "ru" {
+                        "Официальный источник"
+                    } else {
+                        "Official source"
+                    };
+                    body.push_str(&format!("  [{source_label}]({url})\n"));
+                }
                 let claim_key = primitives::seo::seo_artifact_key(
                     "claim",
                     &[page_node_key, &block.section_role, &support.support_ref],
@@ -162,5 +199,7 @@ fn build_deterministic_candidate(
         faq_json,
         schema_markup_json,
         status: "ready".to_string(),
+        seo_title: String::new(),
+        seo_meta_description: String::new(),
     })
 }

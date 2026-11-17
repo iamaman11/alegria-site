@@ -11,8 +11,9 @@ use contracts::generated::alegria::temporal::v1::{
     SeoVerifiedFactSupportState,
 };
 use runtime_models::seo_blocks::{
-    default_section_roles, factual_role, heading_for_role, mandatory_section_roles,
-    planned_content_blocks, support_traceability_label, supports_for_role,
+    default_section_roles, factual_role, heading_for_role, heading_for_role_locale,
+    locale_from_canonical_path, mandatory_section_roles, planned_content_blocks,
+    support_traceability_label, supports_for_role,
 };
 
 // Draft assembly must emit traceability_entries with verified_fact / verified_summary
@@ -39,8 +40,24 @@ fn title_from_slug(slug: &str) -> String {
 }
 
 fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBinding> {
+    let locale = input
+        .page_node
+        .as_ref()
+        .map(|node| locale_from_canonical_path(&node.canonical_url_path))
+        .unwrap_or("en");
     if !input.section_templates.is_empty() {
-        return input.section_templates.clone();
+        return input
+            .section_templates
+            .iter()
+            .map(|original| {
+                let mut localized = original.clone();
+                if localized.heading == heading_for_role(&original.section_role) {
+                    localized.heading =
+                        heading_for_role_locale(&original.section_role, locale).to_string();
+                }
+                localized
+            })
+            .collect();
     }
     let page_type = input
         .page_blueprint
@@ -82,7 +99,7 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
             page_type_key: page_type.clone(),
             dominant_intent: intent.clone(),
             section_role: (*role).to_string(),
-            heading: heading_for_role(role).to_string(),
+            heading: heading_for_role_locale(role, locale).to_string(),
             template_body: format!(
                 "Write the {role} section using only verified support refs and neutral expert tone."
             ),
@@ -501,7 +518,18 @@ fn merge_candidate_content_blocks(
 pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload {
     let page_node = input.page_node.clone().unwrap_or_default();
     let blueprint = input.page_blueprint.clone().unwrap_or_default();
-    let safe_title = title_from_slug(&page_node.canonical_slug);
+    let generated_metadata = input
+        .llm_candidate
+        .as_ref()
+        .filter(|candidate| candidate.status == "ready");
+    let safe_title = generated_metadata
+        .map(|candidate| sanitize_text(candidate.seo_title.trim()))
+        .filter(|title| !title.is_empty() && title.chars().count() <= 110)
+        .unwrap_or_else(|| title_from_slug(&page_node.canonical_slug));
+    let seo_description = generated_metadata
+        .map(|candidate| sanitize_text(candidate.seo_meta_description.trim()))
+        .filter(|desc| !desc.is_empty() && desc.chars().count() <= 190)
+        .unwrap_or_else(|| "Expert guide assembled from verified source-backed facts.".to_string());
     let templates = template_bindings(input);
     let sanitized_support = sanitize_support_bundle(&input.verified_support);
     let sanitized_source_context_chunks =
@@ -526,6 +554,8 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         required_links: input.required_links.clone(),
         truth_snapshot_ref: input.run_id.clone(),
         source_context_chunks: sanitized_source_context_chunks,
+        locale_code: locale_from_canonical_path(&page_node.canonical_url_path).to_string(),
+        canonical_url_path: page_node.canonical_url_path.clone(),
     };
     let llm_request = LlmDraftRequest {
         request_key: artifact_key(
@@ -699,8 +729,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             page_node_key: page_node.page_node_key,
             blueprint_key: blueprint.blueprint_key,
             title: safe_title,
-            meta_description: "Expert guide assembled from verified source-backed facts."
-                .to_string(),
+            meta_description: seo_description,
             brief_version: 1,
             status: "ready".to_string(),
             scope_signature: page_node.scope_signature,

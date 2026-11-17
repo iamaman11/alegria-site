@@ -220,49 +220,35 @@ fn render_navigation(pages: &[StaticCmsPageRow]) -> Result<String> {
     Ok(items)
 }
 
-fn breadcrumb_label(segment: &str) -> String {
-    segment
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => format!("{}{}", first.to_ascii_uppercase(), chars.as_str()),
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-fn breadcrumb_entries(page: &StaticCmsPageRow, base_url: &str) -> Result<Vec<(String, String)>> {
-    let canonical_path = normalize_url_path(&page.canonical_url_path)?;
-    let mut entries = vec![("Home".to_string(), absolute_url(base_url, "/")?)];
-    if canonical_path == "/" {
-        return Ok(entries);
+fn breadcrumb_entries(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    base_url: &str,
+) -> Result<Vec<(String, String)>> {
+    let current = normalize_url_path(&page.canonical_url_path)?;
+    let mut ancestors = Vec::new();
+    // Every breadcrumb target must exist in the exact release snapshot.
+    for candidate in pages {
+        let path = normalize_url_path(&candidate.canonical_url_path)?;
+        if path != current && (path == "/" || current.starts_with(&format!("{path}/"))) {
+            ancestors.push((path, candidate.title.clone()));
+        }
     }
-    let segments = canonical_path
-        .trim_matches('/')
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
-    let mut current = String::new();
-    for (idx, segment) in segments.iter().enumerate() {
-        current.push('/');
-        current.push_str(segment);
-        current.push('/');
-        let label = if idx + 1 == segments.len() {
-            page.title.clone()
-        } else {
-            breadcrumb_label(segment)
-        };
-        entries.push((label, absolute_url(base_url, &current)?));
+    ancestors.sort_by_key(|(path, _)| path.len());
+    let mut entries = Vec::new();
+    for (path, title) in ancestors {
+        entries.push((title, absolute_url(base_url, &path)?));
     }
+    entries.push((page.title.clone(), absolute_url(base_url, &current)?));
     Ok(entries)
 }
 
-fn render_breadcrumbs(page: &StaticCmsPageRow, base_url: &str) -> Result<String> {
-    let entries = breadcrumb_entries(page, base_url)?;
+fn render_breadcrumbs(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    base_url: &str,
+) -> Result<String> {
+    let entries = breadcrumb_entries(page, pages, base_url)?;
     let mut items = String::new();
     for (idx, (label, href)) in entries.iter().enumerate() {
         let current = if idx + 1 == entries.len() {
@@ -278,12 +264,21 @@ fn render_breadcrumbs(page: &StaticCmsPageRow, base_url: &str) -> Result<String>
         ));
     }
     Ok(format!(
-        r#"<nav class="breadcrumbs" aria-label="Breadcrumb"><ol>{items}</ol></nav>"#
+        r#"<nav class="breadcrumbs" aria-label="{}"><ol>{items}</ol></nav>"#,
+        if page.locale_code == "ru" {
+            "Навигационная цепочка"
+        } else {
+            "Breadcrumb"
+        }
     ))
 }
 
-fn breadcrumb_list_json(page: &StaticCmsPageRow, base_url: &str) -> Result<Value> {
-    let entries = breadcrumb_entries(page, base_url)?;
+fn breadcrumb_list_json(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    base_url: &str,
+) -> Result<Value> {
+    let entries = breadcrumb_entries(page, pages, base_url)?;
     Ok(json!({
         "@type": "BreadcrumbList",
         "itemListElement": entries.iter().enumerate().map(|(idx, (label, href))| json!({
@@ -327,7 +322,7 @@ fn faq_entities(markdown: &str) -> Vec<Value> {
     for line in markdown.lines() {
         let trimmed = line.trim();
         if let Some(heading) = trimmed.strip_prefix("## ") {
-            let heading_key = heading.trim().to_ascii_lowercase();
+            let heading_key = heading.trim().to_lowercase();
             if in_faq {
                 push_faq_item(&mut items, &question, &answer_lines);
                 question = None;
@@ -341,10 +336,22 @@ fn faq_entities(markdown: &str) -> Vec<Value> {
         if !in_faq {
             continue;
         }
-        if let Some(next_question) = trimmed.strip_prefix("### ") {
+        let next_question = trimmed
+            .strip_prefix("### ")
+            .map(|text| (text, ""))
+            .or_else(|| {
+                trimmed
+                    .strip_prefix("**")
+                    .and_then(|text| text.split_once("**"))
+                    .filter(|(text, _)| text.trim_end().ends_with('?'))
+            });
+        if let Some((next_question, inline_answer)) = next_question {
             push_faq_item(&mut items, &question, &answer_lines);
             question = Some(next_question.trim().to_string());
             answer_lines.clear();
+            if !inline_answer.trim().is_empty() {
+                answer_lines.push(inline_answer.trim().to_string());
+            }
         } else if question.is_some() {
             answer_lines.push(trimmed.to_string());
         }
@@ -355,10 +362,15 @@ fn faq_entities(markdown: &str) -> Vec<Value> {
     items
 }
 
-fn fallback_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
+fn fallback_schema_json(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    canonical: &str,
+    base_url: &str,
+) -> Result<Value> {
     let mut graph = vec![
         json!({ "@type": "Article", "headline": page.title, "url": canonical }),
-        breadcrumb_list_json(page, base_url)?,
+        breadcrumb_list_json(page, pages, base_url)?,
     ];
     append_faq_schema(&mut graph, page);
     Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
@@ -371,7 +383,12 @@ fn append_faq_schema(graph: &mut Vec<Value>, page: &StaticCmsPageRow) {
     }
 }
 
-fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) -> Result<Value> {
+fn page_schema_json(
+    page: &StaticCmsPageRow,
+    pages: &[StaticCmsPageRow],
+    canonical: &str,
+    base_url: &str,
+) -> Result<Value> {
     let custom_schema = page.schema_markup_payload.is_object()
         && !page
             .schema_markup_payload
@@ -379,11 +396,11 @@ fn page_schema_json(page: &StaticCmsPageRow, canonical: &str, base_url: &str) ->
             .map(|value| value.is_empty())
             .unwrap_or(true);
     if !custom_schema {
-        return fallback_schema_json(page, canonical, base_url);
+        return fallback_schema_json(page, pages, canonical, base_url);
     }
     let mut graph = vec![
         page.schema_markup_payload.clone(),
-        breadcrumb_list_json(page, base_url)?,
+        breadcrumb_list_json(page, pages, base_url)?,
     ];
     append_faq_schema(&mut graph, page);
     Ok(json!({ "@context": "https://schema.org", "@graph": graph }))
@@ -409,6 +426,12 @@ fn render_related_links(
     let mut items = String::new();
     for link in links {
         let Some(target) = pages_by_key.get(&link.target_page_key) else {
+            if link.required_flag {
+                anyhow::bail!(
+                    "required link target absent from release: {}",
+                    link.target_page_key
+                );
+            }
             continue;
         };
         rendered_link_count += 1;
@@ -430,7 +453,14 @@ fn render_related_links(
         Ok((String::new(), required_link_count, rendered_link_count))
     } else {
         Ok((
-            format!(r#"<section class="related"><h2>Related Pages</h2><ul>{items}</ul></section>"#),
+            format!(
+                r#"<section class="related"><h2>{}</h2><ul>{items}</ul></section>"#,
+                if page.locale_code == "ru" {
+                    "Связанные страницы"
+                } else {
+                    "Related Pages"
+                }
+            ),
             required_link_count,
             rendered_link_count,
         ))
@@ -453,10 +483,10 @@ fn render_page(
         block_body
     };
     let nav = render_navigation(pages)?;
-    let breadcrumbs = render_breadcrumbs(page, base_url)?;
+    let breadcrumbs = render_breadcrumbs(page, pages, base_url)?;
     let (related, required_link_count, rendered_link_count) =
         render_related_links(page, pages_by_key, links_by_source)?;
-    let schema_json = json_for_script(&page_schema_json(page, &canonical, base_url)?)?;
+    let schema_json = json_for_script(&page_schema_json(page, pages, &canonical, base_url)?)?;
 
     let html = format!(
         r#"<!doctype html>
@@ -831,6 +861,88 @@ mod tests {
         );
         assert!(output_path_for_url("/../secret").is_err());
         assert!(output_path_for_url("/safe?x=1").is_err());
+    }
+
+    #[test]
+    fn russian_faq_uses_unicode_heading_and_bold_questions() {
+        let faq = faq_entities("## ВОПРОСЫ И ОТВЕТЫ\n\n**Как поливать?**\n\nОтвет.");
+        assert_eq!(faq.len(), 1);
+        assert_eq!(faq[0]["name"], "Как поливать?");
+        assert_eq!(faq[0]["acceptedAnswer"]["text"], "Ответ.");
+    }
+
+    fn sample_release_page(key: &str, path: &str, title: &str) -> StaticCmsPageRow {
+        StaticCmsPageRow {
+            page_node_key: key.into(),
+            canonical_url_path: path.into(),
+            locale_code: "ru".into(),
+            page_type_key: "guide".into(),
+            dominant_intent_key: "informational".into(),
+            current_status: "published".into(),
+            cms_document_id: key.into(),
+            revision_id: key.into(),
+            title: title.into(),
+            meta_description: "Описание".into(),
+            h1: title.into(),
+            body_payload: json!({"markdown":"Текст"}),
+            schema_markup_payload: json!({}),
+            updated_at: "2026-11-17".into(),
+        }
+    }
+
+    #[test]
+    fn breadcrumbs_include_only_existing_release_routes() {
+        let page = sample_release_page("child", "/ru/garden/watering/", "Полив");
+        let parent = sample_release_page("parent", "/ru/garden/", "Сад");
+        let unrelated = sample_release_page("other", "/ru/gardeners/", "Другой");
+        let base = "https://example.test";
+        let single = breadcrumb_entries(&page, &[page.clone()], base).unwrap();
+        assert_eq!(
+            single,
+            vec![(
+                "Полив".into(),
+                "https://example.test/ru/garden/watering".into()
+            )]
+        );
+        let pages = vec![page.clone(), unrelated, parent];
+        let result = breadcrumb_entries(&page, &pages, base).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(
+            result[0],
+            ("Сад".into(), "https://example.test/ru/garden".into())
+        );
+        let html = render_breadcrumbs(&page, &pages, base).unwrap();
+        assert!(!html.contains("href=\"https://example.test/ru\""));
+    }
+
+    #[test]
+    fn required_related_links_must_have_real_targets() {
+        let page = sample_release_page("child", "/ru/garden/watering/", "Полив");
+        let parent = sample_release_page("parent", "/ru/garden/", "Сад");
+        let link = StaticCmsLinkRow {
+            source_page_key: "child".into(),
+            target_page_key: "parent".into(),
+            link_role: String::new(),
+            required_flag: true,
+        };
+        let links = HashMap::from([("child".to_string(), vec![link])]);
+        assert!(render_related_links(&page, &HashMap::new(), &links).is_err());
+        let targets = HashMap::from([("parent".to_string(), parent)]);
+        let (html, required, rendered) = render_related_links(&page, &targets, &links).unwrap();
+        assert_eq!((required, rendered), (1, 1));
+        assert!(html.contains("Связанные страницы"));
+        assert!(html.contains("href=\"/ru/garden\""));
+    }
+
+    #[test]
+    fn faq_preserves_inline_answers_from_existing_markdown() {
+        let faq = faq_entities("## Вопросы и ответы\n\n**Как поливать?** Утром.\n\nПо необходимости.\n\n**Когда?** Весной.\n\n## Далее");
+        assert_eq!(faq.len(), 2);
+        assert_eq!(
+            faq[0]["acceptedAnswer"]["text"],
+            "Утром.\nПо необходимости."
+        );
+        assert_eq!(faq[1]["acceptedAnswer"]["text"], "Весной.");
     }
 
     #[test]

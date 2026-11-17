@@ -66,6 +66,7 @@ pub fn sanitize_support_bundle(
             support_ref: entry.support_ref.clone(),
             role_type: entry.role_type.clone(),
             source_label: sanitize_text(&entry.source_label),
+            source_url: sanitize_text(&entry.source_url),
             source_tier: entry.source_tier.clone(),
             freshness_class: entry.freshness_class.clone(),
             observed_at: entry.observed_at.clone(),
@@ -135,6 +136,8 @@ pub fn sanitize_candidate(candidate: &LlmDraftCandidate) -> LlmDraftCandidate {
         faq_json: sanitize_text(&candidate.faq_json),
         schema_markup_json: sanitize_text(&candidate.schema_markup_json),
         status: candidate.status.clone(),
+        seo_title: sanitize_text(&candidate.seo_title),
+        seo_meta_description: sanitize_text(&candidate.seo_meta_description),
     }
 }
 

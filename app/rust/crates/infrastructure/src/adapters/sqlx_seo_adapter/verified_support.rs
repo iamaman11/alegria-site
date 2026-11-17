@@ -45,6 +45,7 @@ async fn resolve_verified_fact_support(
             COALESCE(r.freshness_class, 'unknown') AS freshness_class,
             COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
             COALESCE(s.source_label, '') AS source_label,
+            s.source_key AS source_url,
             COALESCE(s.source_type, 'editorial') AS source_type,
             COALESCE(s.trust_level, 3) AS trust_level,
             EXISTS (
@@ -218,6 +219,7 @@ async fn resolve_verified_fact_support(
             support_ref: rule_instance_id.clone(),
             role_type,
             source_label: row.get("source_label"),
+            source_url: row.get("source_url"),
             source_tier: source_tier.to_string(),
             freshness_class,
             observed_at: row

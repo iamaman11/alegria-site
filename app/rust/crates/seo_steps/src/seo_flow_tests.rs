@@ -40,6 +40,7 @@ fn support(
         freshness_class: "fresh".to_string(),
         observed_at: "2026-05-06T00:00:00Z".to_string(),
         valid_until: "2027-05-06T00:00:00Z".to_string(),
+        source_url: String::new(),
     }
 }
 
@@ -78,6 +79,8 @@ fn llm_candidate(
         faq_json: String::new(),
         schema_markup_json: String::new(),
         status: "ready".to_string(),
+        seo_title: String::new(),
+        seo_meta_description: String::new(),
     }
 }
 

@@ -64,6 +64,7 @@ mod tests {
                 freshness_class: "fresh".to_string(),
                 observed_at: String::new(),
                 valid_until: String::new(),
+                source_url: String::new(),
             }])
         }
     }
@@ -363,6 +364,8 @@ mod tests {
                     faq_json: "[]".to_string(),
                     schema_markup_json: "{}".to_string(),
                     status: "selected".to_string(),
+                    seo_title: String::new(),
+                    seo_meta_description: String::new(),
                 }),
             })
         }

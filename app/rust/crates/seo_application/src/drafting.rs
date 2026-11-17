@@ -398,6 +398,8 @@ mod tests {
                     faq_json: "[]".to_string(),
                     schema_markup_json: "{}".to_string(),
                     status: "selected".to_string(),
+                    seo_title: String::new(),
+                    seo_meta_description: String::new(),
                 }),
             })
         }
@@ -430,6 +432,7 @@ mod tests {
                     freshness_class: "fresh".to_string(),
                     observed_at: String::new(),
                     valid_until: String::new(),
+                    source_url: String::new(),
                 }],
                 required_links: Vec::new(),
                 section_templates: Vec::new(),
@@ -464,6 +467,8 @@ mod tests {
                         required_links: Vec::new(),
                         truth_snapshot_ref: "truth-1".to_string(),
                         source_context_chunks: Vec::new(),
+                        locale_code: "en".to_string(),
+                        canonical_url_path: "/en/visa/spain/".to_string(),
                     }),
                     provider_policy: "multi_provider:first_available".to_string(),
                     prompt_version: "prompt@1".to_string(),

@@ -42,4 +42,6 @@ pub struct DeterministicEditorialClient;
 #[derive(Debug, Clone, Default)]
 struct GeneratedSections {
     sections: BTreeMap<String, String>,
+    seo_title: String,
+    seo_meta_description: String,
 }
