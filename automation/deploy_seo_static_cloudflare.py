@@ -16,7 +16,7 @@ import sys
 import tempfile
 import shutil
 
-from check_public_http_readback import verify
+from check_public_http_readback import public_paths, verify
 from check_public_static_output import validate_origin
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -78,8 +78,13 @@ def prepare_public_assets(release: Path, destination: Path) -> Path:
             shutil.copyfile(item, target)
         else:
             raise ValueError(f"unsupported asset in immutable release: {relative}")
-    if not (destination / "index.html").is_file():
-        raise ValueError("static release must contain a public homepage")
+    # The release manifest owns the public route set. Incremental publication
+    # may start at a nested route; never add an unapproved synthetic homepage.
+    manifest = json.loads((release / "alegria-static-manifest.json").read_text(encoding="utf-8"))
+    expected = {Path(relative) for relative, _ in public_paths(manifest)}
+    actual = {item.relative_to(destination) for item in destination.rglob("*") if item.is_file()}
+    if actual != expected:
+        raise ValueError("public assets must exactly match the published manifest routes")
     return destination
 
 

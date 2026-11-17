@@ -123,6 +123,39 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
             self.assertFalse((public / "alegria-static-manifest.json").exists())
             self.assertFalse((public / ".alegria_static_site").exists())
 
+    def test_nested_first_page_uploads_without_synthetic_homepage(self) -> None:
+        route = "/ru/visa/spain/"
+        page = self.release / "ru/visa/spain/index.html"
+        page.parent.mkdir(parents=True)
+        html = (self.release / "index.html").read_text(encoding="utf-8")
+        page.write_text(html.replace(f'{EXPECTED_ORIGIN}/"', f'{EXPECTED_ORIGIN}{route.rstrip("/")}"'), encoding="utf-8")
+        (self.release / "index.html").unlink()
+        sitemap = self.release / "sitemap.xml"
+        sitemap.write_text(sitemap.read_text(encoding="utf-8").replace(
+            f"<loc>{EXPECTED_ORIGIN}/</loc>", f"<loc>{EXPECTED_ORIGIN}{route.rstrip('/')}</loc>"
+        ), encoding="utf-8")
+        self.manifest["pages"][0]["canonical_url_path"] = route
+        self.persist_manifest()
+        preflight(validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN))
+        with tempfile.TemporaryDirectory() as directory:
+            public = prepare_public_assets(self.release, Path(directory) / "public")
+            self.assertEqual(
+                {p.relative_to(public).as_posix() for p in public.rglob("*") if p.is_file()},
+                {"ru/visa/spain/index.html", "robots.txt", "sitemap.xml"},
+            )
+            self.assertEqual((public / "ru/visa/spain/index.html").read_bytes(), page.read_bytes())
+            self.assertFalse((public / "index.html").exists())
+
+    def test_unlisted_or_missing_public_asset_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (self.release / "unlisted.html").write_text("not approved", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly match"):
+                prepare_public_assets(self.release, Path(directory) / "extra")
+            (self.release / "unlisted.html").unlink()
+            (self.release / "index.html").unlink()
+            with self.assertRaisesRegex(ValueError, "exactly match"):
+                prepare_public_assets(self.release, Path(directory) / "missing")
+
     def test_native_cf_build_prebuilt_deploy_only(self) -> None:
         commands = []
         with tempfile.TemporaryDirectory() as directory:
