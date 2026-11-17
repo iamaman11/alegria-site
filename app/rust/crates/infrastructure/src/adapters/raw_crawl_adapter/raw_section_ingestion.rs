@@ -92,6 +92,7 @@ pub async fn ingest_raw_pages_into_verified(
 
         let Some(extraction) = truth_extraction_llm_adapter::extract_rule_candidates(
             &truth_extraction_llm_adapter::TruthExtractionInput {
+                revision: truth_extraction_llm_adapter::TruthExtractionRevision::AtomicCoverage,
                 context_key: context_key.to_string(),
                 raw_section_id: section.id,
                 source_url: section.source_url.clone(),

@@ -655,6 +655,7 @@ impl AlegriaActivities {
         for section in sections.iter().filter(|s| allowed.contains(&s.id)) {
             let extraction_input =
                 infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionInput {
+                    revision: infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionRevision::AtomicCoverage,
                     context_key: input.context_key.clone(),
                     raw_section_id: section.id,
                     source_url: section.source_url.clone(),

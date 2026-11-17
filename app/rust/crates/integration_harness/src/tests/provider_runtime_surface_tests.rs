@@ -588,11 +588,12 @@ async fn manual_llm_queue_persists_validates_replays_and_recovers() {
 async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically() {
     use infrastructure::adapters::{
         manual_llm_queue::{self, ManualTruthSubmission},
-        truth_extraction_llm_adapter::TruthExtractionInput,
+        truth_extraction_llm_adapter::{TruthExtractionInput, TruthExtractionRevision},
     };
     let pg = PostgresHarness::start().await.unwrap();
     let run_id = Uuid::new_v4().to_string();
     let source = TruthExtractionInput {
+        revision: TruthExtractionRevision::Legacy,
         context_key: "test:visa:by".to_string(),
         raw_section_id: 42,
         source_url: "https://example.gov/requirements".to_string(),
@@ -616,6 +617,21 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
         .expect("pending truth job");
     assert_eq!(job.operation, "truth_candidates");
     assert_eq!(job.payload["raw_section_id"], 42);
+    assert!(job.payload.get("revision").is_none());
+    assert!(job.instructions.as_deref().unwrap().contains("exact evidence spans"));
+    // A retry after upgrading the prompt must retain the historical task.
+    let mut upgraded = source.clone();
+    upgraded.revision = TruthExtractionRevision::AtomicCoverage;
+    manual_llm_queue::enqueue_truth(&pg.pool, &run_id, &upgraded)
+        .await
+        .unwrap();
+    let same = manual_llm_queue::next_job(&pg.pool).await.unwrap().unwrap();
+    assert_eq!(same.task_id, job.task_id);
+    let mut changed_source = upgraded.clone();
+    changed_source.raw_text.push_str(" Another requirement.");
+    assert!(manual_llm_queue::enqueue_truth(&pg.pool, &run_id, &changed_source)
+        .await
+        .is_err());
     let candidate = serde_json::json!({
         "role": "DOCUMENT_REQUIRED",
         "concept_canonical_key": "passport",
@@ -684,7 +700,16 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].1.candidates.len(), 1);
     assert_eq!(results[0].1.provider_key, "chat_manual");
+    assert_eq!(results[0].1.prompt_version, "truth_extraction_prompt@1");
     assert_eq!(results[0].0.raw_text, source.raw_text);
+    let fresh_run = Uuid::new_v4().to_string();
+    manual_llm_queue::enqueue_truth(&reopened, &fresh_run, &upgraded)
+        .await
+        .unwrap();
+    let fresh = manual_llm_queue::next_job(&reopened).await.unwrap().unwrap();
+    assert_ne!(fresh.task_id, job.task_id);
+    assert_eq!(fresh.payload["revision"], "truth_extraction_prompt@2");
+    assert!(fresh.instructions.as_deref().unwrap().contains("Atomic coverage protocol"));
     assert_eq!(
         manual_llm_queue::submit_truth(&reopened, &submitted, "gpt-6")
             .await

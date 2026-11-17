@@ -20,6 +20,9 @@ pub struct ManualLlmJob<T> {
     pub input_sha256: String,
     pub operation: String,
     pub payload: T,
+    /// Request guidance, not part of the submitted response or input hash.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// Strict transport contract; neither this type nor its contents grant truth or publication status.
@@ -138,6 +141,7 @@ pub async fn next_editorial(
             input_sha256: row.get("input_sha256"),
             operation: row.get("operation"),
             payload,
+            instructions: None,
         })
     })
     .transpose()

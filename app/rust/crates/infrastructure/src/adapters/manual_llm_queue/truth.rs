@@ -106,6 +106,38 @@ pub async fn enqueue_truth(
     input: &TruthExtractionInput,
 ) -> Result<(), DomainError> {
     let (task_id, sha256, value) = truth_fingerprint(pool, run_id, input).await?;
+    // One immutable extraction request per run and source section. A prompt
+    // upgrade cannot silently enqueue a second response during replay.
+    let mut tx = pool.begin().await.map_err(db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(21919, hashtext($1))")
+        .bind(format!("{run_id}:{}", input.raw_section_id))
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let existing: Vec<Value> = sqlx::query_scalar(
+        "SELECT input_json FROM pipeline.manual_llm_jobs
+         WHERE run_id = $1 AND operation = $2
+           AND input_json->>'raw_section_id' = $3",
+    )
+    .bind(run_id)
+    .bind(TRUTH_OPERATION)
+    .bind(input.raw_section_id.to_string())
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(db_error)?;
+    if existing.len() > 1 {
+        return Err(validation("multiple truth requests own the same run and raw section"));
+    }
+    if let Some(prior) = existing.into_iter().next() {
+        let mut prior: TruthExtractionInput = serde_json::from_value(prior)
+            .map_err(|err| validation(format!("stored truth input invalid: {err}")))?;
+        prior.revision = input.revision;
+        if &prior != input {
+            return Err(validation("truth source changed within existing run; start a new run"));
+        }
+        tx.commit().await.map_err(db_error)?;
+        return Ok(());
+    }
     sqlx::query(
         "INSERT INTO pipeline.manual_llm_jobs
           (task_id, schema_version, run_id, operation, input_sha256, input_json)
@@ -118,9 +150,10 @@ pub async fn enqueue_truth(
     .bind(TRUTH_OPERATION)
     .bind(sha256)
     .bind(Json(value))
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     Ok(())
 }
 
@@ -135,12 +168,22 @@ pub async fn next_job(pool: &PgPool) -> Result<Option<ManualLlmJob<Value>>, Doma
     .await
     .map_err(db_error)?;
     row.map(|row| {
+        let operation: String = row.get("operation");
+        let payload: Value = row.get("input_json");
+        let instructions = if operation == TRUTH_OPERATION {
+            let input: TruthExtractionInput = serde_json::from_value(payload.clone())
+                .map_err(|err| validation(format!("stored truth input invalid: {err}")))?;
+            Some(truth_extraction_llm_adapter::truth_extraction_instructions(input.revision))
+        } else {
+            None
+        };
         Ok(ManualLlmJob {
             task_id: row.get("task_id"),
             schema_version: row.get("schema_version"),
             input_sha256: row.get("input_sha256"),
-            operation: row.get("operation"),
-            payload: row.get("input_json"),
+            operation,
+            payload,
+            instructions,
         })
     })
     .transpose()
@@ -267,8 +310,10 @@ pub async fn read_truth_results(
             output.ok_or_else(|| validation("completed manual truth result missing"))?,
         )
         .map_err(|err| validation(format!("decode stored truth candidates: {err}")))?;
-        if output.provider_key != "chat_manual" {
-            return Err(validation("manual truth result provider does not match"));
+        if output.provider_key != "chat_manual"
+            || output.prompt_version != input.revision.prompt_version()
+        {
+            return Err(validation("manual truth result provider or prompt revision does not match"));
         }
         results.push((input, output));
     }
