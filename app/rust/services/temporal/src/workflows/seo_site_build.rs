@@ -458,6 +458,7 @@ impl SeoSiteBuildWorkflow {
                                             draft: draft_ref.draft.clone(),
                                             supported_fragments: factual_fragments.clone(),
                                             required_links: required_links.clone(),
+                                            verified_support: verified_support.clone(),
                                         },
                                         db_opts(30),
                                     )

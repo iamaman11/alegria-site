@@ -30,10 +30,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     )
     .await
     .unwrap();
-    let editorial_stub = stub_servers::spawn_json_sequence_stub(
-        "/v1/chat/completions",
-        truth_certification_editorial_sequence(std::slice::from_ref(&fixture)),
-    )
+    let editorial_stub = stub_servers::spawn_editorial_fixture_stub(None)
     .await
     .unwrap();
     let mut worker_env = infra.runtime_env();
@@ -295,26 +292,14 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             .as_ref()
             .and_then(|request| request.editorial_brief.as_ref())
             .expect("canonical workflow created editorial brief");
-        let role = brief
-            .section_templates
-            .iter()
-            .find(|section| section.required)
-            .expect("at least one required editorial section")
-            .section_role
-            .clone();
-        let supported_text = brief
-            .verified_support
-            .first()
-            .expect("manual editorial requires verified evidence")
-            .fragment_text
-            .clone();
-        let mut sections = serde_json::Map::new();
-        sections.insert(role, serde_json::json!(supported_text));
+        assert_eq!(job.payload.request.as_ref().unwrap().output_contract, "llm_draft_candidate@2");
+        let allowed = infrastructure::adapters::editorial_llm_adapter::editorial_allowed_support(brief);
+        let editorial = stub_servers::editorial_fixture_claims(&serde_json::to_value(allowed).unwrap()).unwrap();
         let response = serde_json::json!({
             "task_id": job.task_id,
             "schema_version": job.schema_version,
             "input_sha256": job.input_sha256,
-            "response": {"sections": sections}
+            "response": editorial
         });
         serde_json::from_value::<ManualLlmSubmission>(response).unwrap()
     };

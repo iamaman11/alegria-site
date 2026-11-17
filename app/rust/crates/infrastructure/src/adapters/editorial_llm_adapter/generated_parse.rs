@@ -7,31 +7,53 @@ fn parse_generated_sections(text: &str) -> Result<GeneratedSections, DomainError
         .ok_or_else(|| DomainError::InfraUnavailable {
             message: "llm output must be a JSON object".to_string(),
         })?;
-    if !object.contains_key("sections")
-        || object.len() > 2
-        || object.keys().any(|k| k != "sections" && k != "metadata")
+    let typed_claims = object.contains_key("claims");
+    if (typed_claims && (object.len() != 2 || !object.contains_key("metadata")))
+        || (!typed_claims
+            && (!object.contains_key("sections")
+                || object.len() > 2
+                || object.keys().any(|k| k != "sections" && k != "metadata")))
     {
         return Err(DomainError::InfraUnavailable {
-            message: "llm output allows only sections and optional metadata".to_string(),
+            message:
+                "editorial output must be claims + metadata, or the historical sections envelope"
+                    .to_string(),
         });
     }
-    let sections_value = object
-        .get("sections")
-        .and_then(Value::as_object)
-        .filter(|sections| !sections.is_empty())
-        .ok_or_else(|| DomainError::InfraUnavailable {
-            message: "llm output requires a non-empty sections object".to_string(),
-        })?;
     let mut sections = BTreeMap::new();
-    for (role, body) in sections_value {
-        let markdown = body
-            .as_str()
-            .filter(|body| !body.trim().is_empty())
-            .ok_or_else(|| DomainError::InfraUnavailable {
-                message: format!("llm section {role} must be a non-empty string"),
+    let claims = if typed_claims {
+        let envelope: TypedEditorialResponse =
+            serde_json::from_value(value.clone()).map_err(|err| {
+                DomainError::ValidationFailure {
+                    message: format!("invalid typed claim envelope: {err}"),
+                }
             })?;
-        sections.insert(role.clone(), markdown.trim().to_string());
-    }
+        let claims = envelope.claims;
+        if claims.is_empty() || claims.values().any(Vec::is_empty) {
+            return Err(DomainError::ValidationFailure {
+                message: "typed claims must cover non-empty factual sections".to_string(),
+            });
+        }
+        Some(claims)
+    } else {
+        let sections_value = object
+            .get("sections")
+            .and_then(Value::as_object)
+            .filter(|sections| !sections.is_empty())
+            .ok_or_else(|| DomainError::InfraUnavailable {
+                message: "llm output requires a non-empty sections object".to_string(),
+            })?;
+        for (role, body) in sections_value {
+            let markdown = body
+                .as_str()
+                .filter(|body| !body.trim().is_empty())
+                .ok_or_else(|| DomainError::InfraUnavailable {
+                    message: format!("llm section {role} must be a non-empty string"),
+                })?;
+            sections.insert(role.clone(), markdown.trim().to_string());
+        }
+        None
+    };
 
     let (seo_title, seo_meta_description) = if let Some(metadata) = object.get("metadata") {
         let metadata = metadata
@@ -68,6 +90,7 @@ fn parse_generated_sections(text: &str) -> Result<GeneratedSections, DomainError
         sections,
         seo_title,
         seo_meta_description,
+        claims,
     })
 }
 

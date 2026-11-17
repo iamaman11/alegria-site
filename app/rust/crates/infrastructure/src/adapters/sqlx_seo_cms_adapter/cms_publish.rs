@@ -53,11 +53,22 @@ pub async fn persist_cms_publish_output(
     } else {
         planned.cms_document_id.clone()
     };
-    let valid_human_approval = input
-        .approval_decision
-        .as_ref()
-        .map(|decision| approval_decision_valid(decision, &row, &revision_id))
-        .unwrap_or(false);
+    let valid_human_approval = if input.publish_mode == "approved_publish" {
+        let persisted =
+            load_latest_approval_decision(pool, &row.page_node_key, &revision_id).await?;
+        input
+            .approval_decision
+            .as_ref()
+            .zip(persisted.as_ref())
+            .is_some_and(|(supplied, saved)| {
+                supplied.decision_key == saved.decision_key
+                    && supplied.actor_role == saved.actor_role
+                    && approval_decision_valid(supplied, &row, &revision_id)
+                    && approval_decision_valid(saved, &row, &revision_id)
+            })
+    } else {
+        false
+    };
     if input.publish_mode == "approved_publish" && !valid_human_approval {
         blockers.push("missing_persisted_human_approval".to_string());
     }
@@ -91,7 +102,7 @@ pub async fn persist_cms_publish_output(
             )
         };
 
-    sqlx::query(
+    let revision_write = sqlx::query(
         r#"
         INSERT INTO site.cms_page_revisions
             (revision_id, page_node_key, page_draft_key, page_brief_key, title,
@@ -101,11 +112,7 @@ pub async fn persist_cms_publish_output(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '[]'::jsonb, $9, $10, $11,
                 $12, $13, 'fresh', 'seo_editor', 'seo_publish_gate', $14)
         ON CONFLICT (revision_id) DO UPDATE
-        SET body_payload = CASE
-                WHEN site.cms_page_revisions.revision_status = 'published'
-                THEN site.cms_page_revisions.body_payload
-                ELSE EXCLUDED.body_payload END,
-            revision_status = CASE
+        SET revision_status = CASE
                 WHEN site.cms_page_revisions.revision_status = 'published'
                 THEN site.cms_page_revisions.revision_status
                 ELSE EXCLUDED.revision_status END,
@@ -113,6 +120,16 @@ pub async fn persist_cms_publish_output(
                 WHEN site.cms_page_revisions.revision_status = 'published'
                 THEN site.cms_page_revisions.updated_at
                 ELSE now() END
+        WHERE site.cms_page_revisions.page_draft_key = EXCLUDED.page_draft_key
+          AND site.cms_page_revisions.page_node_key = EXCLUDED.page_node_key
+          AND site.cms_page_revisions.page_brief_key = EXCLUDED.page_brief_key
+          AND site.cms_page_revisions.title = EXCLUDED.title
+          AND site.cms_page_revisions.meta_description = EXCLUDED.meta_description
+          AND site.cms_page_revisions.h1 = EXCLUDED.h1
+          AND site.cms_page_revisions.body_payload = EXCLUDED.body_payload
+          AND site.cms_page_revisions.schema_markup_payload = EXCLUDED.schema_markup_payload
+          AND site.cms_page_revisions.required_link_payload = EXCLUDED.required_link_payload
+          AND site.cms_page_revisions.traceability_manifest = EXCLUDED.traceability_manifest
         "#,
     )
     .bind(&revision_id)
@@ -153,10 +170,8 @@ pub async fn persist_cms_publish_output(
     .await
     .map_err(classify_sqlx)?;
 
-    if input.publish_mode == "approved_publish" && valid_human_approval {
-        if let Some(decision) = input.approval_decision.as_ref() {
-            persist_approval_decision(pool, decision).await?;
-        }
+    if revision_write.rows_affected() != 1 {
+        return Err(validation_failure("immutable CMS revision content changed"));
     }
 
     sqlx::query(
@@ -386,4 +401,3 @@ pub async fn persist_cms_publish_output(
         publish_artifact,
     })
 }
-

@@ -110,8 +110,8 @@ async fn load_publish_draft(
             d.body_markdown,
             d.qa_verdict,
             d.truth_snapshot_ref,
-            b.title,
-            b.meta_description,
+            COALESCE(d.traceability_manifest->>'seo_title', b.title) AS title,
+            COALESCE(d.traceability_manifest->>'seo_meta_description', b.meta_description) AS meta_description,
             b.blueprint_key,
             p.scope_signature,
             COALESCE(NULLIF(scope.locale, ''), 'und') AS locale_code,
@@ -225,40 +225,6 @@ fn approval_decision_valid(
         && decision.actor_role != "seo_system"
 }
 
-async fn persist_approval_decision(
-    pool: &PgPool,
-    decision: &CmsApprovalDecision,
-) -> Result<(), DomainError> {
-    sqlx::query(
-        r#"
-        INSERT INTO site.cms_approval_decisions
-            (decision_key, page_node_key, revision_id, actor_role, decision, reason,
-             decided_at, decision_payload)
-        VALUES ($1, $2, $3, $4, $5, $6,
-                COALESCE(NULLIF($7, '')::timestamptz, now()), $8)
-        ON CONFLICT (decision_key) DO UPDATE
-        SET decision = EXCLUDED.decision,
-            reason = EXCLUDED.reason,
-            decision_payload = EXCLUDED.decision_payload
-        "#,
-    )
-    .bind(&decision.decision_key)
-    .bind(&decision.page_node_key)
-    .bind(&decision.revision_id)
-    .bind(&decision.actor_role)
-    .bind(&decision.decision)
-    .bind(&decision.reason)
-    .bind(&decision.decided_at)
-    .bind(Json(json!({
-        "actor_role": decision.actor_role.clone(),
-        "reason": decision.reason.clone(),
-    })))
-    .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
-}
-
 pub async fn load_latest_approval_decision(
     pool: &PgPool,
     page_node_key: &str,
@@ -315,4 +281,3 @@ async fn resolve_seo_workflow_id(
     .map_err(classify_sqlx)?;
     Ok(row.and_then(|row| row.get::<Option<String>, _>("run_id")))
 }
-

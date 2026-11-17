@@ -493,6 +493,7 @@ mod tests {
                 draft: Some(DraftState::default()),
                 supported_fragments: Vec::new(),
                 required_links: Vec::new(),
+                verified_support: Vec::new(),
             },
         )
         .await
@@ -604,6 +605,7 @@ mod tests {
                 }),
                 supported_fragments: Vec::new(),
                 required_links: Vec::new(),
+                verified_support: Vec::new(),
             },
         )
         .await

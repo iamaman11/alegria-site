@@ -100,6 +100,7 @@ fn build_deterministic_candidate(
                     support_refs: vec![support.support_ref.clone()],
                     validation_verdict: "supported".to_string(),
                     source_section_key: block.section_role.clone(),
+                    editorial_proposal: None,
                 });
             }
         }

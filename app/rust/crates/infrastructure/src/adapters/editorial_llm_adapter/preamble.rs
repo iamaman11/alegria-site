@@ -44,4 +44,28 @@ struct GeneratedSections {
     sections: BTreeMap<String, String>,
     seo_title: String,
     seo_meta_description: String,
+    claims: Option<BTreeMap<String, Vec<GeneratedEditorialClaim>>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GeneratedEditorialClaim {
+    support_ref: String,
+    text: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    question: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EditorialMetadata {
+    title: String,
+    description: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TypedEditorialResponse {
+    claims: BTreeMap<String, Vec<GeneratedEditorialClaim>>,
+    metadata: EditorialMetadata,
 }

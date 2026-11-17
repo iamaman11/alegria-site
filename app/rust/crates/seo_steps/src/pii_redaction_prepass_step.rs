@@ -102,6 +102,13 @@ pub fn sanitize_claim_ledger(entries: &[ClaimLedgerEntry]) -> Vec<ClaimLedgerEnt
             support_refs: entry.support_refs.clone(),
             validation_verdict: entry.validation_verdict.clone(),
             source_section_key: entry.source_section_key.clone(),
+            editorial_proposal: entry.editorial_proposal.as_ref().map(|proposal| {
+                contracts::generated::alegria::temporal::v1::EditorialClaimProposal {
+                    text: sanitize_text(&proposal.text),
+                    question: sanitize_text(&proposal.question),
+                    source_url: sanitize_text(&proposal.source_url),
+                }
+            }),
         })
         .collect()
 }

@@ -159,6 +159,7 @@ fn claim_from_traceability(
         support_refs: entry.support_refs.clone(),
         validation_verdict: entry.validation_verdict.clone(),
         source_section_key: section_key.to_string(),
+        editorial_proposal: None,
     }
 }
 
@@ -545,9 +546,9 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         ),
         page_node_key: page_node.page_node_key.clone(),
         page_brief_key: page_brief_key.clone(),
-        target_audience: "visa/tourism applicants".to_string(),
+        target_audience: "Readers seeking reliable answers to the page's dominant intent".to_string(),
         expertise_goal:
-            "Produce a source-backed expert travel/visa page without introducing unsourced claims."
+            "Produce useful localized expert guidance from the applicable verified sources without introducing unsourced claims."
                 .to_string(),
         section_templates: templates.clone(),
         verified_support: sanitized_support.clone(),
@@ -563,14 +564,15 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             &[
                 &page_node.page_node_key,
                 &page_brief_key,
-                "seo_editorial_prompt@1",
+                &input.run_id,
+                "seo_editorial_prompt@2",
             ],
         ),
         run_id: input.run_id.clone(),
         editorial_brief: Some(editorial_brief.clone()),
         provider_policy: "multi_provider:first_available".to_string(),
-        prompt_version: "seo_editorial_prompt@1".to_string(),
-        output_contract: "llm_draft_candidate@1".to_string(),
+        prompt_version: "seo_editorial_prompt@2".to_string(),
+        output_contract: "llm_draft_candidate@2".to_string(),
     };
     let content_block_plan = build_content_block_plan(
         &page_node.page_node_key,
@@ -703,7 +705,8 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
                 &page_node.page_node_key,
                 &page_brief_key,
                 "1",
-                "seo_draft_assemble@3",
+                &input.run_id,
+                "seo_draft_assemble@4",
             ],
         ),
         page_node_key: page_node.page_node_key.clone(),
@@ -722,6 +725,14 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         llm_provider_key,
         llm_model_key,
         generation_request_key,
+        editorial_locale: if candidate
+            .as_ref()
+            .is_some_and(|c| c.prompt_version == "seo_editorial_prompt@2")
+        {
+            locale_from_canonical_path(&page_node.canonical_url_path).to_string()
+        } else {
+            String::new()
+        },
     });
     DraftAssembleOutputPayload {
         page_brief: Some(PageBriefState {
@@ -733,9 +744,9 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
             brief_version: 1,
             status: "ready".to_string(),
             scope_signature: page_node.scope_signature,
-            target_audience: "visa/tourism applicants".to_string(),
-            goal: "Answer the dominant visa/tourism intent with verified facts and human review."
+            target_audience: "Readers seeking reliable answers to the page's dominant intent"
                 .to_string(),
+            goal: "Answer the dominant intent with verified facts and human review.".to_string(),
             required_sections: section_roles(&templates),
             metadata_obligations: vec![
                 "title".to_string(),

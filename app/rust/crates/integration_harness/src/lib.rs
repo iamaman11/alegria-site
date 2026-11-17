@@ -19,7 +19,7 @@ impl IntegrationCtx {
         let dataforseo = stub_servers::spawn_standard_serp_stub(vec![dataforseo_payload])
             .await
             .context("start dataforseo stub failed")?;
-        let openai = stub_servers::spawn_json_stub("/v1/chat/completions", openai_payload)
+        let openai = stub_servers::spawn_editorial_fixture_stub(Some(openai_payload))
             .await
             .context("start openai stub failed")?;
         // Truth extraction and editorial generation require different response

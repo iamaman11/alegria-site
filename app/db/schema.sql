@@ -877,7 +877,7 @@ CREATE TABLE IF NOT EXISTS site.page_drafts (
     assembly_version     TEXT NOT NULL DEFAULT 'seo_draft_assemble@1',
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (page_node_key, page_brief_key, draft_revision)
+    CONSTRAINT page_drafts_run_revision_uq UNIQUE (page_node_key, page_brief_key, truth_snapshot_ref, draft_revision)
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_page_drafts_node_verdict

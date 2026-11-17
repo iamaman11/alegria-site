@@ -1191,10 +1191,7 @@
             )
             .await
             .unwrap();
-            let editorial_stub = stub_servers::spawn_json_sequence_stub(
-                "/v1/chat/completions",
-                truth_certification_editorial_sequence(std::slice::from_ref(fixture)),
-            )
+            let editorial_stub = stub_servers::spawn_editorial_fixture_stub(truth_certification_editorial_sequence(std::slice::from_ref(fixture)).into_iter().next())
             .await
             .unwrap();
 

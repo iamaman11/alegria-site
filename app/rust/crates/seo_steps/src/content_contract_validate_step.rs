@@ -138,6 +138,7 @@ pub fn execute(
         draft: input.draft.clone(),
         supported_fragments: Vec::new(),
         required_links: input.required_links.clone(),
+        verified_support: Vec::new(),
     });
     let mut blocking_reasons = blockers
         .iter()
@@ -201,6 +202,7 @@ mod tests {
             }),
             supported_fragments: Vec::new(),
             required_links: Vec::new(),
+            verified_support: Vec::new(),
         };
 
         let blockers = validate(&input);
@@ -300,6 +302,7 @@ mod tests {
             }),
             supported_fragments: Vec::new(),
             required_links: Vec::new(),
+            verified_support: Vec::new(),
         };
 
         let blockers = validate(&input);

@@ -73,6 +73,7 @@ fn llm_candidate(
                 support_refs: vec![support.support_ref.clone()],
                 validation_verdict: "supported".to_string(),
                 source_section_key: support.role_type.clone(),
+                editorial_proposal: None,
             })
             .collect(),
         content_blocks: Vec::new(),
@@ -298,6 +299,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         draft: draft_state.clone(),
         supported_fragments: fragments.clone(),
         required_links,
+        verified_support: verified_support.clone(),
     });
     assert_eq!(qa.verdict, "publish_ready");
     assert!(qa.blocking_reasons.is_empty());
@@ -337,6 +339,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         draft: draft_without_links.draft,
         supported_fragments: fragments,
         required_links: Vec::new(),
+        verified_support: verified_support.clone(),
     });
     assert_eq!(qa_without_links.verdict, "publish_ready");
     assert!(!qa_without_links

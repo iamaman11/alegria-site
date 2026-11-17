@@ -308,6 +308,7 @@ async fn run_page_publish_phases(
                                 draft: draft_ref.draft.clone(),
                                 supported_fragments: factual_fragments.to_vec(),
                                 required_links: required_links.clone(),
+                                verified_support: support_bundle.to_vec(),
                             },
                             db_opts(30),
                         )

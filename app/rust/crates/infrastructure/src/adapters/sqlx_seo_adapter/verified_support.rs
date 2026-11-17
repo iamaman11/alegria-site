@@ -45,7 +45,7 @@ async fn resolve_verified_fact_support(
             COALESCE(r.freshness_class, 'unknown') AS freshness_class,
             COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
             COALESCE(s.source_label, '') AS source_label,
-            s.source_key AS source_url,
+            COALESCE(NULLIF(evidence_page.final_url, ''), evidence_page.url) AS source_url,
             COALESCE(s.source_type, 'editorial') AS source_type,
             COALESCE(s.trust_level, 3) AS trust_level,
             EXISTS (
@@ -123,6 +123,8 @@ async fn resolve_verified_fact_support(
         FROM verified.rule_instances r
         LEFT JOIN kb.concepts c ON c.concept_key = r.concept_key
         LEFT JOIN kb.sources s ON s.source_key = r.source_key
+        JOIN raw.sections evidence_section ON evidence_section.id = r.evidence_section_id
+        JOIN raw.pages evidence_page ON evidence_page.id = evidence_section.page_id
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'

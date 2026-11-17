@@ -25,8 +25,15 @@ pub struct ManualLlmJob<T> {
 /// Strict transport contract; neither this type nor its contents grant truth or publication status.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct ManualEditorialResponse {
+pub struct LegacyManualEditorialResponse {
     pub sections: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ManualEditorialResponse {
+    Typed(super::editorial_llm_adapter::TypedEditorialResponse),
+    Legacy(LegacyManualEditorialResponse),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -276,6 +283,17 @@ mod tests {
             "response":{"sections":{"intro":"safe text"}}
         });
         assert!(serde_json::from_value::<ManualLlmSubmission>(good.clone()).is_ok());
+        let typed = serde_json::json!({
+            "task_id":"a", "schema_version":1, "input_sha256":"abc",
+            "response":{
+                "claims":{"timing":[{"support_ref":"rule1","text":"15 days"}]},
+                "metadata":{"title":"A source-backed title","description":"A sufficiently detailed source-backed description"}
+            }
+        });
+        assert!(serde_json::from_value::<ManualLlmSubmission>(typed.clone()).is_ok());
+        let mut invalid_claim = typed.clone();
+        invalid_claim["response"]["claims"]["timing"][0]["approved"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ManualLlmSubmission>(invalid_claim).is_err());
         let mut extra = good.clone();
         extra["verified"] = serde_json::json!(true);
         assert!(serde_json::from_value::<ManualLlmSubmission>(extra).is_err());

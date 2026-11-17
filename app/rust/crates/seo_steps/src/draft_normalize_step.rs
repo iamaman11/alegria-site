@@ -119,3 +119,53 @@ mod localized_editorial_preflight_tests {
         assert_eq!(brief.title, "Plant Care");
     }
 }
+
+#[cfg(test)]
+mod immutable_run_revision_tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::{
+        CmsPublishInputPayload, LlmDraftCandidate, PageBlueprintState, PageNodeState,
+    };
+
+    #[test]
+    fn regeneration_requires_new_cms_review_identity_but_retry_is_stable() {
+        let input = DraftNormalizeInputPayload {
+            run_id: "run-one".into(),
+            page_node: Some(PageNodeState {
+                page_node_key: "page".into(),
+                canonical_url_path: "/ru/guide/".into(),
+                ..Default::default()
+            }),
+            page_blueprint: Some(PageBlueprintState {
+                blueprint_key: "blueprint".into(),
+                ..Default::default()
+            }),
+            llm_candidate: Some(LlmDraftCandidate {
+                status: "ready".into(),
+                body_markdown: "# Source-backed example".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let first = execute(&input).draft.unwrap();
+        let retry = execute(&input).draft.unwrap();
+        let next = execute(&DraftNormalizeInputPayload {
+            run_id: "run-two".into(),
+            ..input.clone()
+        })
+        .draft
+        .unwrap();
+        assert_eq!(first.page_draft_key, retry.page_draft_key);
+        assert_eq!(first.page_brief_key, next.page_brief_key);
+        assert_ne!(first.page_draft_key, next.page_draft_key);
+        let revision = |draft| {
+            crate::cms_publish_step::execute(&CmsPublishInputPayload {
+                page_node: input.page_node.clone(),
+                draft: Some(draft),
+                ..Default::default()
+            })
+            .revision_id
+        };
+        assert_ne!(revision(first), revision(next));
+    }
+}

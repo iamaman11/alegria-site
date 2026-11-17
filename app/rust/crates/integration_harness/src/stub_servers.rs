@@ -321,3 +321,58 @@ pub async fn spawn_voyage_contract_stub() -> Result<StubServerHandle> {
         task,
     })
 }
+
+ // Only used by the integration harness. The fixture answers the actual
+ // typed evidence request instead of hard-coding database-generated IDs.
+pub fn editorial_fixture_claims(allowed: &Value) -> Result<Value> {
+    let sections = allowed.as_object().context("fixture expected allowed claim roles")?;
+    let mut claims = serde_json::Map::new();
+    for (role, support) in sections {
+        let entries = support.as_array().context("fixture expected support list")?;
+        let mut proposals = Vec::new();
+        for entry in entries.iter().take(if matches!(role.as_str(), "overview" | "faq") { 1 } else { usize::MAX }) {
+            let reference = entry["support_ref"].as_str().context("fixture support ref")?;
+            let text = entry["fragment_text"].as_str().context("fixture source quote")?
+                .split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut proposal = serde_json::json!({"support_ref":reference,"text":text});
+            if role == "faq" {
+                proposal["question"] = serde_json::json!("What does the verified source say?");
+            }
+            proposals.push(proposal);
+        }
+        claims.insert(role.clone(), serde_json::json!(proposals));
+    }
+    Ok(serde_json::json!({
+        "claims":claims,
+        "metadata":{"title":"Source-backed expert guide","description":"An editorial guide based on verified sources for this integration fixture."}
+    }))
+}
+
+async fn serve_editorial_fixture(State(legacy): State<Option<Value>>, Json(request): Json<Value>) -> (StatusCode, Json<Value>) {
+    let response = (|| -> Result<Value> {
+        let prompt = request["messages"].as_array().context("fixture messages")?
+            .iter().find(|message| message["role"] == "user")
+            .and_then(|message| message["content"].as_str()).context("fixture editorial prompt")?;
+        let Some(allowed) = prompt.lines().find_map(|line| line.strip_prefix("ALLOWED_CLAIMS_JSON: ")) else {
+            return legacy.clone().context("fixture missing typed support payload");
+        };
+        let allowed: Value = serde_json::from_str(allowed)?;
+        let content = editorial_fixture_claims(&allowed)?.to_string();
+        Ok(serde_json::json!({"id":"editorial-fixture-v2","choices":[{"message":{"role":"assistant","content":content}}]}))
+    })();
+    match response {
+        Ok(value) => (StatusCode::OK, Json(value)),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error":error.to_string()}))),
+    }
+}
+
+pub async fn spawn_editorial_fixture_stub(legacy: Option<Value>) -> Result<StubServerHandle> {
+    let listener = TcpListener::bind("127.0.0.1:0").await.context("bind editorial fixture")?;
+    let addr = listener.local_addr()?;
+    let app = Router::new().route("/v1/chat/completions", any(serve_editorial_fixture)).with_state(legacy);
+    let (tx,rx) = oneshot::channel::<()>();
+    let task = tokio::spawn(async move {
+        let _ = axum::serve(listener, app).with_graceful_shutdown(async { let _ = rx.await; }).await;
+    });
+    Ok(StubServerHandle { base_url: format!("http://{addr}"), shutdown: Some(tx), task })
+}
