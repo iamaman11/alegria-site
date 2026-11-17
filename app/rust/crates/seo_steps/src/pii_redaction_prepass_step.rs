@@ -26,7 +26,21 @@ fn passport_re() -> &'static Regex {
     })
 }
 
-pub fn sanitize_text(text: &str) -> String {
+// A URL authority is structured data, not a telephone number. Protect only
+// a validated IPv4 host and its optional port, never URL credentials,
+// paths, query parameters or fragments. The same rule applies to a source
+// field and links embedded in Markdown/JSON, preserving canonical rendering.
+fn ipv4_url_authority_re() -> &'static Regex {
+    static URL_AUTHORITY: OnceLock<Regex> = OnceLock::new();
+    URL_AUTHORITY.get_or_init(|| {
+        Regex::new(
+            r"(?i)\bhttps?://(?P<host>(?:[0-9]{1,3}\.){3}[0-9]{1,3})(?::(?P<port>[0-9]{1,5}))?",
+        )
+        .expect("IPv4 URL authority regex")
+    })
+}
+
+fn redact_prose(text: &str) -> String {
     let mut output = text.to_string();
     for (regex, replacement) in [
         (passport_re(), "[redacted:passport]"),
@@ -35,6 +49,33 @@ pub fn sanitize_text(text: &str) -> String {
     ] {
         output = regex.replace_all(&output, replacement).to_string();
     }
+    output
+}
+
+pub fn sanitize_text(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for captures in ipv4_url_authority_re().captures_iter(text) {
+        let authority = captures.get(0).expect("full authority match");
+        // Reject partial hosts, userinfo and truncated/invalid ports.
+        let boundary = text[authority.end()..].chars().next();
+        if !boundary.is_none_or(|ch| {
+            ch.is_whitespace() || matches!(ch, '/' | '?' | '#' | ')' | ']' | '>' | '"' | '\'')
+        }) {
+            continue;
+        }
+        if captures["host"].parse::<std::net::Ipv4Addr>().is_err()
+            || captures
+                .name("port")
+                .is_some_and(|port| port.as_str().parse::<u16>().is_err())
+        {
+            continue;
+        }
+        output.push_str(&redact_prose(&text[cursor..authority.start()]));
+        output.push_str(authority.as_str());
+        cursor = authority.end();
+    }
+    output.push_str(&redact_prose(&text[cursor..]));
     output
 }
 
@@ -162,5 +203,41 @@ mod tests {
         assert!(redacted.contains("[redacted:email]"));
         assert!(redacted.contains("[redacted:phone]"));
         assert!(redacted.contains("[redacted:passport]"));
+    }
+
+    #[test]
+    fn source_authority_preserved_in_fields_and_rendered_links() {
+        let url = "http://127.0.0.1:41671/official/visa";
+        let support = SeoVerifiedFactSupportState {
+            source_url: url.into(),
+            source_label: "Official source".into(),
+            fragment_text: "Decision normally takes 15 days.".into(),
+            support_ref: "rule-1".into(),
+            role_type: "timeline_item".into(),
+            freshness_class: "fresh".into(),
+            ..Default::default()
+        };
+        assert_eq!(sanitize_support_bundle(&[support])[0].source_url, url);
+        let markdown = format!("- Decision normally takes 15 days. [Source]({url})");
+        assert_eq!(sanitize_text(&markdown), markdown);
+        let json = format!(r#"{{"url":"{url}"}}"#);
+        assert_eq!(sanitize_text(&json), json);
+        assert_eq!(sanitize_text(url), url);
+        assert_eq!(sanitize_text(&sanitize_text(url)), url);
+    }
+
+    #[test]
+    fn keeps_redacting_sensitive_url_paths_queries_and_surrounding_prose() {
+        let url = "https://127.0.0.1:443/path/AB?email=person@example.org&phone=123456789";
+        let text = format!("Call +48 123 456 789 before opening {url}");
+        let clean = sanitize_text(&text);
+        assert!(clean.contains("https://127.0.0.1:443/path/AB"));
+        assert!(!clean.contains("person@example.org"));
+        assert!(!clean.contains("123456789"));
+        assert!(!clean.contains("123 456 789"));
+        let invalid = "https://127.0.0.1:99999@other.example/";
+        assert!(sanitize_text(invalid).contains("[redacted:phone]"));
+        let standalone = "Call 127.0.0.1 for help";
+        assert!(sanitize_text(standalone).contains("[redacted:phone]"));
     }
 }

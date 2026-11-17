@@ -328,4 +328,153 @@ mod typed_claim_overlay_tests {
             assert!(candidate_from_generated_text(&input(), "test", "test", &body).is_err());
         }
     }
+
+    #[test]
+    fn v2_loopback_evidence_survives_assembly_normalize_and_independent_qa() {
+        use contracts::generated::alegria::temporal::v1::{
+            DraftAssembleInputPayload, DraftNormalizeInputPayload, DraftQaInputPayload,
+            LinkRecommendationState, PageBlueprintState, PageNodeState,
+        };
+        let url = "http://127.0.0.1:41671/official/visa";
+        let support = [
+            (
+                "document_required",
+                "Passport is required for the visa application.",
+            ),
+            (
+                "eligibility_rule",
+                "Eligibility rule: standard tourist applicant.",
+            ),
+            ("fee_item", "Consular fee is 80 EUR."),
+            ("step", "Application step 1: submit the application."),
+            ("timeline_item", "Processing time is 15 days."),
+            (
+                "where_to_apply",
+                "Where to apply: consulate via appointment.",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (role, quote))| SeoVerifiedFactSupportState {
+            support_ref: format!("rule-{i}"),
+            role_type: role.into(),
+            fragment_text: quote.into(),
+            source_label: "Official source".into(),
+            source_url: url.into(),
+            freshness_class: "fresh".into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+        let fragments = support
+            .iter()
+            .map(|s| s.fragment_text.clone())
+            .collect::<Vec<_>>();
+        let links = vec![LinkRecommendationState {
+            source_page_key: "test-page".into(),
+            target_page_key: "related".into(),
+            link_role: "context".into(),
+            required_flag: true,
+            ..Default::default()
+        }];
+        let page_node = Some(PageNodeState {
+            page_node_key: "test-page".into(),
+            canonical_url_path: "/en/visa/spain/".into(),
+            canonical_slug: "spain-visa".into(),
+            ..Default::default()
+        });
+        let page_blueprint = Some(PageBlueprintState {
+            blueprint_key: "test-blueprint".into(),
+            ..Default::default()
+        });
+        let assembled = seo_steps::draft_assemble_step::execute(&DraftAssembleInputPayload {
+            run_id: "test-run".into(),
+            page_node: page_node.clone(),
+            page_blueprint: page_blueprint.clone(),
+            verified_support: support.clone(),
+            factual_fragments: fragments.clone(),
+            required_links: links.clone(),
+            ..Default::default()
+        });
+        let req = assembled.llm_request.unwrap();
+        assert_eq!(req.output_contract, "llm_draft_candidate@2");
+        let brief = req.editorial_brief.as_ref().unwrap();
+        assert!(brief.verified_support.iter().all(|s| s.source_url == url));
+        let mut claims = BTreeMap::new();
+        for block in planned_content_blocks(
+            &brief.section_templates,
+            &brief.verified_support,
+            &brief.required_links,
+        ) {
+            if !factual_role(&block.section_role) {
+                continue;
+            }
+            let entries = supports_for_role(&brief.verified_support, &block.section_role);
+            let proposals = entries
+                .iter()
+                .take(
+                    if matches!(block.section_role.as_str(), "overview" | "faq") {
+                        1
+                    } else {
+                        usize::MAX
+                    },
+                )
+                .map(|s| {
+                    let mut claim = json!({"support_ref":s.support_ref,"text":s.fragment_text});
+                    if block.section_role == "faq" {
+                        claim["question"] = json!("What does the verified source say?");
+                    }
+                    claim
+                })
+                .collect::<Vec<_>>();
+            claims.insert(block.section_role, proposals);
+        }
+        let response = json!({"claims":claims,"metadata":{"title":"Source-backed expert guide","description":"An editorial guide based on verified sources for this integration fixture."}});
+        let candidate = candidate_from_generated_text(
+            &EditorialDraftGenerateInputPayload {
+                run_id: "test-run".into(),
+                request: Some(req),
+                ..Default::default()
+            },
+            "test",
+            "test",
+            &response.to_string(),
+        )
+        .unwrap();
+        let normalized = seo_steps::draft_normalize_step::execute(&DraftNormalizeInputPayload {
+            run_id: "test-run".into(),
+            page_node,
+            page_blueprint,
+            verified_support: support.clone(),
+            factual_fragments: fragments.clone(),
+            required_links: links.clone(),
+            llm_candidate: Some(candidate),
+            content_block_plan: assembled.content_block_plan,
+            ..Default::default()
+        });
+        let draft = normalized.draft.unwrap();
+        assert!(draft.body_markdown.contains(url));
+        assert!(!draft.body_markdown.contains("[redacted:phone]"));
+        assert!(draft.claim_ledger.iter().all(|claim| claim
+            .editorial_proposal
+            .as_ref()
+            .unwrap()
+            .source_url
+            == url));
+        let mut qa = DraftQaInputPayload {
+            run_id: "test-run".into(),
+            draft: Some(draft),
+            supported_fragments: fragments,
+            required_links: links,
+            verified_support: support,
+        };
+        let accepted = seo_steps::draft_qa_step::execute(&qa);
+        assert_eq!(
+            accepted.verdict, "publish_ready",
+            "{:?}",
+            accepted.blocking_reasons
+        );
+        qa.verified_support[0].source_url = "https://wrong.example/".into();
+        let rejected = seo_steps::draft_qa_step::execute(&qa);
+        assert_eq!(rejected.verdict, "qa_failed");
+    }
 }
