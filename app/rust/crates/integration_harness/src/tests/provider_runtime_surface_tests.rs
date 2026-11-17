@@ -216,18 +216,72 @@ async fn integration_ctx_exposes_stub_servers() {
         1
     );
 
-    let completion = reqwest::Client::new()
-        .post(format!("{}/v1/chat/completions", ctx.openai.base_url))
+    let client = reqwest::Client::new();
+    let endpoint = format!("{}/v1/chat/completions", ctx.openai.base_url);
+    let legacy_request = serde_json::json!({
+        "model": "stub-editorial-model",
+        "messages": [{"role": "user", "content": "Legacy editorial request"}]
+    });
+    let completion = client
+        .post(&endpoint)
+        .json(&legacy_request)
         .send()
         .await
+        .unwrap()
+        .error_for_status()
         .unwrap()
         .json::<Value>()
         .await
         .unwrap();
     assert_eq!(completion["choices"][0]["message"]["role"], "assistant");
+    let legacy_body = completion["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(legacy_body).unwrap(),
+        serde_json::json!({"sections": []})
+    );
+
+    let allowed = serde_json::json!({
+        "fees": [{"support_ref": "fee-1", "fragment_text": "Fee is 80 EUR."}]
+    });
+    let v2_request = serde_json::json!({
+        "model": "stub-editorial-model",
+        "messages": [{"role": "user", "content": format!("ALLOWED_CLAIMS_JSON: {allowed}")}]
+    });
+    let v2 = client
+        .post(&endpoint)
+        .json(&v2_request)
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    let claims: Value =
+        serde_json::from_str(v2["choices"][0]["message"]["content"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        claims["claims"]["fees"],
+        serde_json::json!([{"support_ref": "fee-1", "text": "Fee is 80 EUR."}])
+    );
+    assert!(claims["metadata"]["title"].is_string());
+    assert!(claims.get("sections").is_none());
+
+    for malformed in [
+        serde_json::json!({}),
+        serde_json::json!({"messages": [{"role": "user", "content": "ALLOWED_CLAIMS_JSON: invalid"}]}),
+        serde_json::json!({"messages": [{"role": "user", "content": "ALLOWED_CLAIMS_JSON: []"}]}),
+    ] {
+        let response = client.post(&endpoint).json(&malformed).send().await.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    }
+    let no_body = client.post(&endpoint).send().await.unwrap();
+    assert_eq!(no_body.status(), reqwest::StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
     // The two LLM operations must use distinct stubs with distinct JSON
-    // contracts: sections for editorial, candidates for truth extraction.
+    // contracts: claims for editorial v2, candidates for truth extraction.
     let truth_completion = reqwest::Client::new()
         .post(format!("{}/v1/chat/completions", ctx.truth.base_url))
         .send()

@@ -1,3 +1,58 @@
+fn missing_publish_ready_page_paths(snapshot: &SemanticSnapshot) -> Vec<String> {
+    let ready_paths = snapshot
+        .page_drafts
+        .iter()
+        .filter(|draft| draft.qa_verdict == "publish_ready")
+        .map(|draft| draft.canonical_url_path.as_str())
+        .collect::<BTreeSet<_>>();
+    snapshot
+        .page_nodes
+        .iter()
+        .filter(|node| !matches!(node.lifecycle_state.as_str(), "blocked" | "deprecated"))
+        .filter(|node| !ready_paths.contains(node.canonical_url_path.as_str()))
+        .map(|node| node.canonical_url_path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[test]
+fn site_draft_certification_requires_every_active_page_not_just_one_ready_draft() {
+    let node = |path: &str, state: &str| SemanticPageNode {
+        canonical_url_path: path.to_string(),
+        page_type_key: String::new(),
+        dominant_intent: String::new(),
+        lifecycle_state: state.to_string(),
+    };
+    let draft = |path: &str, verdict: &str| SemanticPageDraft {
+        canonical_url_path: path.to_string(),
+        qa_verdict: verdict.to_string(),
+        body_markdown: String::new(),
+        has_truth_snapshot_ref: true,
+        support_ref_count: 1,
+    };
+    let mut snapshot = SemanticSnapshot {
+        page_nodes: vec![
+            node("/guide/", "planned"),
+            node("/guide/fees/", "planned"),
+            node("/retired/", "deprecated"),
+            node("/excluded/", "blocked"),
+        ],
+        page_drafts: vec![
+            draft("/guide/fees/", "publish_ready"),
+            draft("/guide/fees/", "publish_ready"),
+            draft("/guide/", "blocked"),
+        ],
+    };
+    assert_eq!(
+        missing_publish_ready_page_paths(&snapshot),
+        vec!["/guide/".to_string()]
+    );
+    snapshot.page_drafts.push(draft("/guide/", "publish_ready"));
+    assert!(missing_publish_ready_page_paths(&snapshot).is_empty());
+}
+
+
 async fn collect_truth_certification_fixture_report(
     pool: &sqlx::PgPool,
     fixture: &TruthCertificationFixture,
@@ -193,7 +248,7 @@ async fn collect_truth_certification_fixture_report(
         .collect::<Vec<_>>();
 
     let draft_qas = latest_proto_outputs::<DraftQaOutputPayload>(pool, run_id, "draft_qa").await;
-    let draft_blocking_reasons = draft_qas
+    let mut draft_blocking_reasons = draft_qas
         .iter()
         .flat_map(|output| output.blocking_reasons.clone())
         .collect::<BTreeSet<_>>()
@@ -280,6 +335,16 @@ async fn collect_truth_certification_fixture_report(
         .collect::<Vec<_>>();
     let temporal_step_multiset = temporal_step_multiset(pool, run_id).await;
     let semantic_snapshot = capture_semantic_snapshot(pool, scope_signature).await;
+    // A valid specialist page cannot certify the whole planned site. The
+    // fixture resets site rows before each run, so these paths belong to
+    // this run only. Compare identities, not counts or just existing QA rows.
+    draft_blocking_reasons.extend(
+        missing_publish_ready_page_paths(&semantic_snapshot)
+            .into_iter()
+            .map(|path| format!("planned_page_without_publish_ready_draft:{path}")),
+    );
+    draft_blocking_reasons.sort();
+    draft_blocking_reasons.dedup();
     let semantic_page_draft_qa_verdicts = semantic_snapshot
         .page_drafts
         .iter()
