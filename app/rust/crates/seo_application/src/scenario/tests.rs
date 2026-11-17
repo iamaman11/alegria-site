@@ -508,6 +508,33 @@ mod tests {
         assert_eq!(result.status, "blocked_publish_gate");
     }
 
+    #[tokio::test]
+    async fn scenario_incomplete_evidence_blocks_before_editorial_generation() {
+        let result = execute_site_build_scenario(
+            &FakeRepo,
+            &SeoScenarioRequest {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::SemiAutoOperator,
+                policy: SeoRunPolicy::for_semi_auto_operator(false, false, true),
+                output_dir: "/tmp".to_string(),
+                base_url: "https://example.com".to_string(),
+                site_input: sample_site_input(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status, "blocked_publish_gate");
+        assert_eq!(result.published_pages, 0);
+        assert!(result.phase_reports.iter().any(|report| {
+            report.phase == "page_admissibility"
+                && report.detail.starts_with("page_missing_verified_support:roles=")
+                && report.detail.contains("fees")
+        }));
+        assert!(!result.phase_reports.iter().any(|report| {
+            matches!(report.phase.as_str(), "draft_assemble" | "editorial_draft_generate")
+        }));
+    }
+
     #[test]
     fn scenario_report_surface_serializes_phase_reports() {
         let result = SeoScenarioResult {

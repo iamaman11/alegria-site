@@ -27,51 +27,35 @@
         .unwrap()
     }
 
+    // The positive full-site fixture must cover the same required factual
+    // roles as the production blueprints. These are disposable DB test facts,
+    // not a fallback or a source of production truth.
     async fn seed_synthetic_truth(pool: &sqlx::PgPool, context_key: &str, source_base_url: &str) {
-        sqlx::query(
-            r#"
-            INSERT INTO kb.concepts (concept_key, concept_type, label_ru, status)
-            VALUES ('document.passport', 'document', 'Passport', 'active')
-            ON CONFLICT (concept_key) DO UPDATE
-            SET label_ru = EXCLUDED.label_ru,
-                status = EXCLUDED.status,
-                updated_at = now()
-            "#,
-        )
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            r#"
-            INSERT INTO kb.sources (source_key, source_type, source_label, base_url, trust_level, status)
-            VALUES ('source.official.synthetic', 'government', 'Synthetic official source', $1, 5, 'active')
-            ON CONFLICT (source_key) DO UPDATE
-            SET source_label = EXCLUDED.source_label,
-                base_url = EXCLUDED.base_url,
-                trust_level = EXCLUDED.trust_level,
-                status = EXCLUDED.status,
-                updated_at = now()
-            "#,
-        )
-        .bind(format!("{source_base_url}/official"))
-        .execute(pool)
-        .await
-        .unwrap();
-        seed_admissible_verified_rule(
-            pool,
-            context_key,
-            "rule.synthetic.passport",
-            "document_required",
-            "document.passport",
-            "document_required",
-            serde_json::json!({
-                "subtype": "travel_document",
-            }),
-            "source.official.synthetic",
-            &format!("{source_base_url}/official/passport"),
-            "Passport is required for the visa application.",
-        )
-        .await;
+        let facts = [
+            ("passport", "document", "document_required", serde_json::json!({"subtype": "travel_document"}), "Passport is required for the visa application."),
+            ("fee", "fee", "fee_item", serde_json::json!({"amount": 80, "currency": "EUR"}), "The visa fee is 80 EUR."),
+            ("eligibility", "rule", "eligibility_rule", serde_json::json!({"profile": "standard_tourist_applicant"}), "Standard tourist applicants are eligible to apply."),
+            ("submit", "process", "step", serde_json::json!({"action": "submit_application", "order": 1}), "Application step 1: submit the application."),
+            ("timing", "timeline", "timeline_item", serde_json::json!({"days": 15}), "Processing takes 15 days."),
+            ("location", "location", "where_to_apply", serde_json::json!({"channel": "visa_centre"}), "Applications are submitted at the visa centre."),
+        ];
+        for (key, concept_type, role, params, quote) in facts {
+            let concept = format!("synthetic.{key}");
+            seed_truth_context_and_concept(pool, context_key, &concept, concept_type, key).await;
+            seed_admissible_verified_rule(
+                pool,
+                context_key,
+                &format!("rule.synthetic.{key}"),
+                role,
+                &concept,
+                role,
+                params,
+                "source.official.synthetic",
+                &format!("{source_base_url}/official/spain-tourist-visa"),
+                quote,
+            )
+            .await;
+        }
     }
 
     async fn seed_admissible_verified_rule(

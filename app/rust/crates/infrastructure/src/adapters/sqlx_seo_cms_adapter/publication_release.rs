@@ -459,6 +459,7 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
     Ok(())
 }
 
+#[cfg(unix)]
 fn restore_public_release(
     public: &ReleasePath,
     previous: Option<&ReleasePath>,

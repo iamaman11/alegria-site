@@ -129,16 +129,55 @@ where
     let mut published_pages = 0u32;
     let page_keys = page_phase_keys(&plan);
     let ia = require_state_ref(&state.ia, "ia_build_required")?;
+    let mut support_blocked = false;
+    let mut published_page_keys = std::collections::BTreeSet::new();
     for page_node in page_nodes.iter().cloned() {
+        if matches!(page_node.lifecycle_state.as_str(), "blocked" | "deprecated") {
+            continue;
+        }
+        if runtime_models::seo_blocks::is_opaque_topic_identifier(&page_node.canonical_slug)
+            || page_node.canonical_url_path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier)
+        {
+            support_blocked = true;
+            phase_reports.push(phase_report(
+                "page_admissibility",
+                blocked_publish_gate_status(),
+                &page_node.page_node_key,
+                "opaque_page_path",
+            ));
+            continue;
+        }
         let page_blueprint = ia
             .page_blueprints
             .iter()
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
+        // Use the same page-specific completeness policy as the durable
+        // workflow. Unsupported required roles are not an LLM error.
+        if page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate) {
+            let missing_roles = runtime_models::seo_blocks::missing_required_factual_roles(
+                &page_blueprint,
+                &state.verified_support,
+            );
+            if !missing_roles.is_empty() {
+                support_blocked = true;
+                phase_reports.push(phase_report(
+                    "page_admissibility",
+                    blocked_publish_gate_status(),
+                    &page_node.page_node_key,
+                    format!("page_missing_verified_support:roles={}", missing_roles.join(",")),
+                ));
+                continue;
+            }
+        }
         let required_links = link_recommendations
             .iter()
-            .filter(|link| link.required_flag && link.source_page_key == page_node.page_node_key)
+            .filter(|link| {
+                link.required_flag
+                    && link.source_page_key == page_node.page_node_key
+                    && published_page_keys.contains(&link.target_page_key)
+            })
             .cloned()
             .collect::<Vec<_>>();
         let mut page_state = PageState::default();
@@ -170,6 +209,7 @@ where
                     }
                     if input.key == SeoPhaseKey::FinalizePublish {
                         published_pages += 1;
+                        published_page_keys.insert(page_node.page_node_key.clone());
                     }
                 }
             }
@@ -178,6 +218,10 @@ where
         if scenario_status.starts_with("blocked") || scenario_status == "hitl_required" {
             break;
         }
+    }
+
+    if support_blocked && scenario_status == "done" {
+        scenario_status = blocked_publish_gate_status().to_string();
     }
 
     cursor = SeoExecutionCursor {

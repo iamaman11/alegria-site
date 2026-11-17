@@ -16,6 +16,9 @@
                   <p>Passport is required for the visa application.</p>
                   <p>The visa fee is 80 EUR.</p>
                   <p>Applications are submitted at the visa centre.</p>
+                  <p>Standard tourist applicants are eligible to apply.</p>
+                  <p>Application step 1: submit the application.</p>
+                  <p>Processing takes 15 days.</p>
                 </main>
               </body>
             </html>
@@ -145,16 +148,17 @@
             .iter()
             .any(|r| r.phase == "draft_assemble"));
 
-        let draft_count: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")
-            .fetch_one(&infra.postgres.pool)
-            .await
-            .unwrap();
-        assert!(
-            draft_count >= 1,
-            "expected at least one persisted page draft, status={} page_total={} phases={:?}",
-            result.status,
-            result.page_total,
-            result.phase_reports
+        assert_eq!(result.status, "done", "{:?}", result.phase_reports);
+        let ready_pages: i64 = sqlx::query_scalar(
+            "SELECT count(DISTINCT page_node_key)::bigint FROM site.page_drafts WHERE qa_verdict = 'publish_ready'",
+        )
+        .fetch_one(&infra.postgres.pool)
+        .await
+        .unwrap();
+        assert!(result.page_total > 0);
+        assert_eq!(
+            ready_pages, i64::from(result.page_total),
+            "every planned page must have a ready draft: {:?}", result.phase_reports
         );
     }
 
@@ -176,6 +180,9 @@
                   <p>Passport is required for the visa application.</p>
                   <p>The visa fee is 80 EUR.</p>
                   <p>Applications are submitted at the visa centre.</p>
+                  <p>Standard tourist applicants are eligible to apply.</p>
+                  <p>Application step 1: submit the application.</p>
+                  <p>Processing takes 15 days.</p>
                 </main>
               </body>
             </html>
