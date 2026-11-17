@@ -391,6 +391,13 @@ mod tests {
 
     #[async_trait]
     impl PublishArtifactRepository for FakeRepo {
+        fn resolve_publish_materialize_input(
+            &self,
+            input: &PublishMaterializeInputPayload,
+        ) -> PublishMaterializeInputPayload {
+            input.clone()
+        }
+
         async fn persist_publish_materialize_output(
             &self,
             _input: &PublishMaterializeInputPayload,
@@ -527,11 +534,16 @@ mod tests {
         assert_eq!(result.published_pages, 0);
         assert!(result.phase_reports.iter().any(|report| {
             report.phase == "page_admissibility"
-                && report.detail.starts_with("page_missing_verified_support:roles=")
+                && report
+                    .detail
+                    .starts_with("page_missing_verified_support:roles=")
                 && report.detail.contains("fees")
         }));
         assert!(!result.phase_reports.iter().any(|report| {
-            matches!(report.phase.as_str(), "draft_assemble" | "editorial_draft_generate")
+            matches!(
+                report.phase.as_str(),
+                "draft_assemble" | "editorial_draft_generate"
+            )
         }));
     }
 

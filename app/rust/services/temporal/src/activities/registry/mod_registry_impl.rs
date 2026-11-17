@@ -1225,7 +1225,8 @@ impl AlegriaActivities {
         input: PublishMaterializeInputPayload,
     ) -> Result<PublishMaterializeOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "publish_materialize", 1, &input, || async {
+        // v2 resolves runtime settings before validation; do not replay cached v1 failures.
+        self.execute_step(&run_id, "publish_materialize", 2, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             let persisted =
                 seo_application::review_publish::run_publish_materialize(&repo, &input).await?;

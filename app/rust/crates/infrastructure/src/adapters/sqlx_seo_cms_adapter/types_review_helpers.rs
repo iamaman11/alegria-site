@@ -39,12 +39,6 @@ struct PublishDraftRow {
     traceability_manifest: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
-struct SeoPublishRuntimeConfig {
-    output_dir: String,
-    base_url: String,
-}
-
 fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
     value.encode_to_vec()
 }
@@ -78,24 +72,65 @@ fn hitl_task_type(blocker: &str) -> &'static str {
     }
 }
 
-fn seo_publish_runtime_config(input: &PublishMaterializeInputPayload) -> SeoPublishRuntimeConfig {
-    let output_dir = if input.output_dir.trim().is_empty() {
-        std::env::var("SEO_STATIC_OUTPUT_DIR")
-            .unwrap_or_else(|_| "app/rust/dist/static-site".to_string())
-    } else {
-        input.output_dir.clone()
-    };
-    let base_url = if input.base_url.trim().is_empty() {
-        std::env::var("SEO_STATIC_BASE_URL").unwrap_or_else(|_| "https://example.com".to_string())
-    } else {
-        input.base_url.clone()
-    };
-    SeoPublishRuntimeConfig {
-        output_dir,
-        base_url,
-    }
+pub fn resolve_publish_materialize_input(
+    input: &PublishMaterializeInputPayload,
+) -> PublishMaterializeInputPayload {
+    resolve_publish_settings(
+        input,
+        std::env::var("SEO_STATIC_OUTPUT_DIR").ok(),
+        std::env::var("SEO_STATIC_BASE_URL").ok(),
+    )
 }
 
+fn resolve_publish_settings(
+    input: &PublishMaterializeInputPayload,
+    configured_output_dir: Option<String>,
+    configured_base_url: Option<String>,
+) -> PublishMaterializeInputPayload {
+    let mut resolved = input.clone();
+    if resolved.output_dir.trim().is_empty() {
+        resolved.output_dir = configured_output_dir.unwrap_or_default();
+    }
+    if resolved.base_url.trim().is_empty() {
+        resolved.base_url = configured_base_url.unwrap_or_default();
+    }
+    resolved
+}
+
+#[cfg(test)]
+mod publish_runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_settings_resolve_and_explicit_settings_win() {
+        let input = PublishMaterializeInputPayload {
+            page_node_key: "page".to_string(),
+            ..Default::default()
+        };
+        let resolved = resolve_publish_settings(
+            &input,
+            Some("/configured/site".to_string()),
+            Some("https://configured.example".to_string()),
+        );
+        assert_eq!(resolved.output_dir, "/configured/site");
+        assert_eq!(resolved.base_url, "https://configured.example");
+        assert_eq!(resolved.page_node_key, input.page_node_key);
+        let explicit = resolve_publish_settings(
+            &resolved,
+            Some("/other".to_string()),
+            Some("https://other.example".to_string()),
+        );
+        assert_eq!(explicit, resolved);
+    }
+
+    #[test]
+    fn missing_settings_do_not_fall_back_to_a_placeholder_site() {
+        let resolved =
+            resolve_publish_settings(&PublishMaterializeInputPayload::default(), None, None);
+        assert!(resolved.output_dir.is_empty());
+        assert!(resolved.base_url.is_empty());
+    }
+}
 async fn load_publish_draft(
     pool: &PgPool,
     page_draft_key: &str,

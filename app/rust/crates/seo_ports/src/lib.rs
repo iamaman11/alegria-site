@@ -403,6 +403,13 @@ pub trait SeoWorkflowControlPort: Send + Sync {
 
 #[async_trait]
 pub trait PublishArtifactRepository: Send + Sync {
+    /// Resolve deployment-only settings before the pure materialization gate.
+    /// Unconfigured values stay empty so the gate fails closed.
+    fn resolve_publish_materialize_input(
+        &self,
+        input: &PublishMaterializeInputPayload,
+    ) -> PublishMaterializeInputPayload;
+
     async fn persist_publish_materialize_output(
         &self,
         input: &PublishMaterializeInputPayload,
