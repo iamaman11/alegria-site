@@ -12,7 +12,7 @@ import subprocess
 
 from deploy_seo_static_cloudflare import (
     CLOUD_CONFIG, EXPECTED_ACCOUNT, EXPECTED_ORIGIN, preflight,
-    prepare_public_assets, run_cf_deploy, validate_release,
+    prepare_public_assets, run_cf_deploy, validate_release, verify_with_retry,
 )
 
 
@@ -255,6 +255,22 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
                     self.assertFalse(run_cf_deploy(Path("/usr/bin/cf"), self.release))
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0][1], "build")
+
+    def test_readback_retries_without_upload(self) -> None:
+        report = {"published_page_count": 1}
+        with mock.patch("deploy_seo_static_cloudflare.verify", side_effect=[ValueError("not ready"), report]) as readback:
+            with mock.patch("deploy_seo_static_cloudflare.time.sleep") as sleep:
+                self.assertEqual(verify_with_retry(self.release), report)
+                self.assertEqual(readback.call_count, 2)
+                sleep.assert_called_once_with(1)
+
+    def test_readback_failure_is_bounded_and_not_accepted(self) -> None:
+        with mock.patch("deploy_seo_static_cloudflare.verify", side_effect=ValueError("mismatch")) as readback:
+            with mock.patch("deploy_seo_static_cloudflare.time.sleep") as sleep:
+                with self.assertRaisesRegex(ValueError, "mismatch"):
+                    verify_with_retry(self.release)
+                self.assertEqual(readback.call_count, 3)
+                self.assertEqual(sleep.call_count, 2)
 
     def test_failed_cf_build_never_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

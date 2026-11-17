@@ -42,6 +42,7 @@ pub async fn persist_finalize_publish_output(
             &input.page_node_key,
             &input.revision_id,
             allow_first_publication,
+            &mut tx,
         )
         .await
         {
@@ -191,6 +192,28 @@ pub async fn persist_finalize_publish_output(
         payload_version: "seo_cms_event@1".to_string(),
         metadata: HashMap::from([("verdict".to_string(), final_verdict.to_string())]),
     };
+    if is_published {
+        // Resolve only the exact technical blocker now proven by the normal
+        // finalizer. Historical draft/other-revision review tasks are unchanged.
+        sqlx::query(
+            r#"
+            UPDATE site.seo_hitl_tasks
+            SET queue_state = 'resolved', updated_at = now(),
+                audit_log_payload = audit_log_payload || $1::jsonb
+            WHERE page_node_key = $2 AND blocking_execution_key = $3
+              AND task_type = 'publish_gate_blocker'
+              AND blocking_step_name = 'publish_materialize'
+              AND decision_payload->>'blocker' = 'public_deployment_unverified'
+              AND queue_state IN ('open','in_review','reopened')
+            "#,
+        )
+        .bind(Json(json!([{ "event": "public_deployment_verified", "revision_id": input.revision_id }])))
+        .bind(&input.page_node_key)
+        .bind(&input.revision_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
     if !is_published {
         for blocker_reason in &blocking_reasons {
             let task_key = primitives::seo::seo_artifact_key(

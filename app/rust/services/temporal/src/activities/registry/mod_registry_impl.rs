@@ -1294,8 +1294,9 @@ impl AlegriaActivities {
         input: FinalizePublishInputPayload,
     ) -> Result<FinalizePublishOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        // v2 repairs first-publication bootstrap; do not reuse a cached v1 failure.
-        self.execute_step(&run_id, "finalize_publish", 2, &input, || async {
+        // v3 reconciles an externally verified pending first release; never
+        // reuse the v2 blocked receipt after deploying the recovery fix.
+        self.execute_step(&run_id, "finalize_publish", 3, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::review_publish::run_finalize_publish(&repo, &input).await
         })

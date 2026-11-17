@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import shutil
+import time
 
 from check_public_http_readback import public_paths, verify
 from check_public_static_output import validate_origin
@@ -91,15 +92,18 @@ def prepare_public_assets(release: Path, destination: Path) -> Path:
 def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
     """Native cf build + prebuilt deploy; never deploy a raw directory argument."""
     with tempfile.TemporaryDirectory(prefix="alegria-cloudflare-assets-") as directory:
+        print("SEO_CLOUDFLARE_STAGE=prepare_assets", flush=True)
         public = prepare_public_assets(release, Path(directory) / "public")
         env = os.environ.copy()
         env["CI"] = "1"
         env["ALEGRIA_CF_PUBLIC_DIR"] = str(public)
+        print("SEO_CLOUDFLARE_STAGE=build", flush=True)
         built = subprocess.run(
             [str(cf_binary), "build"], cwd=CLOUD_CONFIG, env=env, check=False
         )
         if built.returncode != 0:
             return False
+        print("SEO_CLOUDFLARE_STAGE=asset_gate", flush=True)
         # cf --prebuilt must use a real validated Build Output, not stale artifacts.
         if not (CLOUD_CONFIG / ".cloudflare/output/v0/config.json").is_file():
             return False
@@ -138,6 +142,7 @@ def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
             output_assets / ".alegria_static_site"
         ).exists():
             return False
+        print("SEO_CLOUDFLARE_STAGE=upload", flush=True)
         uploaded = subprocess.run(
             [str(cf_binary), "deploy", "--prebuilt", "--mode", "production"],
             cwd=CLOUD_CONFIG,
@@ -145,6 +150,19 @@ def run_cf_deploy(cf_binary: Path, release: Path) -> bool:
             check=False,
         )
         return uploaded.returncode == 0
+
+
+def verify_with_retry(release: Path) -> dict:
+    """Bounded propagation wait, never another deployment on readback failure."""
+    print("SEO_CLOUDFLARE_STAGE=https_readback", flush=True)
+    for delay in (1, 3, None):
+        try:
+            return verify(release, timeout=20.0)
+        except (OSError, ValueError, KeyError):
+            if delay is None:
+                raise
+            time.sleep(delay)
+    raise AssertionError("unreachable readback retry state")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -157,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        print("SEO_CLOUDFLARE_STAGE=preflight", flush=True)
         release = validate_release(args.release, root=args.release_root, expected_origin=EXPECTED_ORIGIN)
         preflight(release)
         previous = None
@@ -181,12 +200,13 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if not run_cf_deploy(cf, release):
                 raise RuntimeError("Cloudflare CLI deployment returned non-zero")
-            report = verify(release, timeout=20.0)
+            report = verify_with_retry(release)
         except Exception:
             if previous is not None:
+                print("SEO_CLOUDFLARE_STAGE=rollback", flush=True)
                 if not run_cf_deploy(cf, previous):
                     raise RuntimeError("Cloudflare rollback failed; manual recovery required")
-                verify(previous, timeout=20.0)
+                verify_with_retry(previous)
             else:
                 print(
                     "WARNING: first deployment has no prior release; inspect the live Worker "

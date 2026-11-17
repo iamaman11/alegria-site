@@ -346,6 +346,120 @@ fn write_pending_publication(
 }
 
 #[cfg(unix)]
+fn read_pending_publication(path: &ReleasePath) -> Result<PendingPublication, String> {
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|err| format!("inspect pending publication: {err}"))?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("pending publication must be a regular file".into());
+    }
+    serde_json::from_slice(
+        &std::fs::read(path).map_err(|err| format!("read pending publication: {err}"))?,
+    )
+    .map_err(|err| format!("parse pending publication: {err}"))
+}
+
+#[cfg(unix)]
+fn pending_first_identity_matches(
+    journal: &PendingPublication,
+    release: &ReleasePath,
+    page_node_key: &str,
+    revision_id: &str,
+    artifact_key: &str,
+) -> bool {
+    journal.previous.is_none()
+        && journal.new_release == release
+        && journal.page_node_key == page_node_key
+        && journal.revision_id == revision_id
+        && journal.artifact_key == artifact_key
+}
+
+// An uncommitted first deployment may already be publicly serving the exact
+// approved immutable release. Establish that fact without deploying again or
+// changing CMS status. Called under the existing site-wide publication lock.
+#[cfg(unix)]
+async fn verify_pending_first_publication(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    public: &ReleasePath,
+    journal: &PendingPublication,
+) -> Result<(), DomainError> {
+    if journal.previous.is_some()
+        || std::fs::read_link(public).ok().as_deref() != Some(journal.new_release.as_path())
+    {
+        return Err(validation_failure("first publication journal/live pointer mismatch"));
+    }
+    // Serialize with human-decision writes until this publication transaction
+    // ends. An older cached approval cannot override a new review decision.
+    sqlx::query("LOCK TABLE site.cms_approval_decisions IN SHARE MODE")
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT a.artifact_uri, a.manifest_json->>'run_id'
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        JOIN site.publish_artifacts a ON a.revision_id = r.revision_id
+                                      AND a.page_node_key = p.page_node_key
+        WHERE p.page_node_key = $1 AND r.revision_id = $2 AND a.artifact_key = $3
+          AND p.current_status IN ('approved','blocked')
+          AND r.revision_status IN ('approved','blocked')
+          AND a.status IN ('built_pending_validation','blocked')
+          AND a.manifest_json->>'run_id' IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM site.cms_pages WHERE published_at IS NOT NULL)
+          AND (
+            SELECT d.decision = 'approved' AND trim(d.actor_role) <> ''
+                AND d.actor_role <> 'seo_system'
+            FROM site.cms_approval_decisions d
+            WHERE d.page_node_key = p.page_node_key AND d.revision_id = r.revision_id
+            ORDER BY d.decided_at DESC NULLS LAST, d.created_at DESC
+            LIMIT 1
+          ) IS TRUE
+        FOR UPDATE OF p, r, a
+        "#,
+    )
+    .bind(&journal.page_node_key)
+    .bind(&journal.revision_id)
+    .bind(&journal.artifact_key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let (candidate_raw, run_id) = row
+        .ok_or_else(|| validation_failure("pending first release lacks current human approval or artifact identity"))?;
+    let root = std::fs::canonicalize(
+        std::env::var("SEO_STATIC_RELEASE_ROOT")
+            .map_err(|_| validation_failure("missing release root"))?,
+    )
+    .map_err(|err| validation_failure(format!("resolve release root: {err}")))?;
+    let candidate = std::fs::canonicalize(&candidate_raw)
+        .map_err(|err| validation_failure(format!("resolve pending candidate: {err}")))?;
+    if candidate.parent() != Some(root.as_path())
+        || std::fs::symlink_metadata(&candidate_raw)
+            .map_err(|err| validation_failure(format!("inspect pending candidate: {err}")))?
+            .file_type().is_symlink()
+    {
+        return Err(validation_failure("pending candidate is not a canonical release-root child"));
+    }
+    let expected_release = root.join(format!(
+        "{}-published",
+        candidate.file_name().and_then(|n| n.to_str())
+            .ok_or_else(|| validation_failure("invalid pending candidate id"))?
+    ));
+    if journal.new_release != expected_release {
+        return Err(validation_failure("pending journal does not name the persisted candidate release"));
+    }
+    let origin_raw = std::env::var("SEO_STATIC_BASE_URL")
+        .map_err(|_| validation_failure("missing public origin"))?;
+    let origin = publication_origin(&origin_raw).map_err(validation_failure)?;
+    let files = publication_files(
+        &candidate, &journal.page_node_key, &journal.revision_id, &origin_raw, &run_id,
+    )
+    .map_err(validation_failure)?;
+    verify_existing_immutable_release(&expected_release, &files).map_err(validation_failure)?;
+    verify_live_release(&origin, &files).await.map_err(validation_failure)?;
+    Ok(())
+}
+
+#[cfg(unix)]
 fn deploy_cloudflare_static_release(
     release: &ReleasePath,
     previous: Option<&ReleasePath>,
@@ -365,9 +479,16 @@ fn deploy_cloudflare_static_release(
     }
     let result = command.output().map_err(|err| format!("start Cloudflare deployment: {err}"))?;
     if !result.status.success() {
-        // The CLI's raw stderr may contain sensitive provider/account metadata.
+        // Only our fixed stage markers are exported. Never log provider CLI
+        // stdout/stderr, which may contain account details or credentials.
+        let stdout = String::from_utf8_lossy(&result.stdout);
+        let stage = stdout.lines().filter_map(|line| {
+            let value = line.strip_prefix("SEO_CLOUDFLARE_STAGE=")?;
+            matches!(value, "preflight" | "prepare_assets" | "build" | "asset_gate" | "upload" | "https_readback" | "rollback")
+                .then_some(value)
+        }).last().unwrap_or("unknown");
         return Err(format!(
-            "Cloudflare deployment/readback failed with status {}; inspect worker logs",
+            "Cloudflare publication stage={stage} failed with status {}",
             result.status
         ));
     }
@@ -418,10 +539,7 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
         tx.commit().await.map_err(classify_sqlx)?;
         return Ok(());
     }
-    let journal: PendingPublication = serde_json::from_slice(
-        &std::fs::read(&journal_path)
-            .map_err(|err| validation_failure(format!("read pending publication: {err}")))?,
-    ).map_err(|err| validation_failure(format!("parse pending publication: {err}")))?;
+    let journal = read_pending_publication(&journal_path).map_err(validation_failure)?;
     // Both database state and the file pointer must agree. Never infer
     // commitment from the presence of a ready-looking release directory.
     let committed: bool = sqlx::query_scalar(
@@ -464,12 +582,19 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
         {
             return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
         }
-        // An interrupted first publication has no prior public version.
-        // Preserve the journal and fail closed until a human can inspect
-        // the dedicated staging Worker and revoke any partial first upload.
-        let previous = journal.previous.as_deref().ok_or_else(|| {
-            validation_failure("first remote publication is uncommitted; manual recovery required")
-        })?;
+        // On a first publication there is no safe earlier release to restore.
+        // Permit startup ONLY when the exact still-approved release is already
+        // publicly verified. Keep the journal; only the original finalizer
+        // can commit CMS/outbox status. Unknown/mismatched output stays closed.
+        let Some(previous) = journal.previous.as_deref() else {
+            verify_pending_first_publication(&mut tx, &public, &journal).await?;
+            tx.commit().await.map_err(classify_sqlx)?;
+            tracing::info!(
+                revision_id = %journal.revision_id,
+                "verified pending first release; awaiting canonical finalization"
+            );
+            return Ok(());
+        };
         deploy_cloudflare_static_release(previous, None).map_err(validation_failure)?;
         if live.as_deref() == Some(journal.new_release.as_path()) {
             restore_public_release(&public, Some(previous))
@@ -598,6 +723,7 @@ async fn promote_and_verify_public_release(
     page_node_key: &str,
     revision_id: &str,
     allow_first_publication: bool,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<PublicationActivation, String> {
     let meta: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
         .map_err(|err| format!("persisted candidate metadata: {err}"))?;
@@ -640,10 +766,30 @@ async fn promote_and_verify_public_release(
     let files = publication_files(&candidate, page_node_key, revision_id, origin_raw, run_id)?;
     let release = create_immutable_release(&candidate, &files)?;
     let journal_path = pending_publication_path(&public)?;
-    // Do not touch the live pointer while an earlier activation is unresolved.
+    // A durable first-upload journal can be resumed only by its exact
+    // approved candidate. Do not deploy a second version: prove live bytes
+    // again under the transaction and let the normal finalizer commit.
     match std::fs::symlink_metadata(&journal_path) {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => (),
-        Ok(_) => return Err("pending publication must first be reconciled".into()),
+        Ok(_) => {
+            let journal = read_pending_publication(&journal_path)?;
+            if !allow_first_publication
+                || !pending_first_identity_matches(
+                    &journal, &release, page_node_key, revision_id, &artifact.artifact_key,
+                )
+            {
+                return Err("pending publication must first be reconciled".into());
+            }
+            verify_pending_first_publication(tx, &public, &journal).await
+                .map_err(|err| err.to_string())?;
+            return Ok(PublicationActivation {
+                public_path: public,
+                previous: None,
+                journal_path,
+                remote_activated: true,
+                armed: true,
+            });
+        }
         Err(err) => return Err(format!("inspect pending publication: {err}")),
     }
     let previous = prepare_public_pointer(&public, allow_first_publication)?;
@@ -682,6 +828,7 @@ async fn promote_and_verify_public_release(
     _page_node_key: &str,
     _revision_id: &str,
     _allow_first_publication: bool,
+    _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
 ) -> Result<PublicationActivation, String> {
     Err("atomic static deployment requires a Unix filesystem".into())
 }
@@ -824,6 +971,24 @@ mod publication_release_tests {
         std::fs::write(release.join(".alegria_static_site"), b"tampered").unwrap();
         assert!(create_immutable_release(&candidate, &files).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pending_first_recovery_requires_exact_identity_and_no_predecessor() {
+        let release = ReleasePathBuf::from("/release/candidate-published");
+        let mut journal = PendingPublication {
+            new_release: release.clone(), previous: None,
+            page_node_key: "page".into(), revision_id: "revision".into(),
+            artifact_key: "artifact".into(),
+        };
+        assert!(pending_first_identity_matches(&journal, &release, "page", "revision", "artifact"));
+        assert!(!pending_first_identity_matches(&journal, &release, "other", "revision", "artifact"));
+        assert!(!pending_first_identity_matches(&journal, &release, "page", "other", "artifact"));
+        assert!(!pending_first_identity_matches(&journal, &release, "page", "revision", "other"));
+        assert!(!pending_first_identity_matches(&journal, ReleasePath::new("/other"), "page", "revision", "artifact"));
+        journal.previous = Some(ReleasePathBuf::from("/previous"));
+        assert!(!pending_first_identity_matches(&journal, &release, "page", "revision", "artifact"));
     }
 
     #[cfg(unix)]
