@@ -7,18 +7,48 @@ pub struct RunVerifiedRulePoint {
     pub source_key: String,
 }
 
-/// The global retrieval index is reusable between runs. Verify every global
-/// fact for this context (plus any already projected profile-bound fact)
-/// against canonical SQL, a completed outbox receipt and live Qdrant.
-/// Profile-specific facts deliberately omitted from the global index are
-/// still resolved by the separate SQL applicant-profile support gate.
+/// The global retrieval index is reusable between runs. If this run emitted
+/// rule projections, validate its exact owned projection set; another SQL
+/// fact in the same context may legitimately be outside that run's output.
+/// For a retained run with no rule events, validate existing global facts
+/// against prior completed receipts and live Qdrant instead. Profile-specific
+/// facts omitted from the global index have a separate SQL support gate.
 pub async fn read_run_verified_rule_points(
     pool: &PgPool,
     run_id: &str,
     context_key: &str,
 ) -> Result<Vec<RunVerifiedRulePoint>, DomainError> {
-    let rows = sqlx::query(
+    let owned_rows = sqlx::query(
         r#"
+        SELECT ri.rule_instance_id, ri.context_key, ri.concept_key, ri.source_key,
+               q.point_id, bool_and(o.status = 'done') AS delivered
+        FROM system.sync_outbox o
+        LEFT JOIN verified.rule_instances ri
+          ON ri.rule_instance_id = o.aggregate_key
+         AND ri.context_key = $2
+         AND ri.status = 'verified'
+        LEFT JOIN kb.qdrant_points q
+          ON q.collection_name = 'verified_rules_4'
+         AND q.entity_type = 'rule_instance'
+         AND q.entity_key = o.aggregate_key
+        WHERE o.run_id = $1
+          AND o.target_system = 'qdrant'
+          AND o.aggregate_type = 'rule_instance'
+          AND o.event_type = 'QdrantUpsertCommand'
+        GROUP BY o.aggregate_key, ri.rule_instance_id, ri.context_key,
+                 ri.concept_key, ri.source_key, q.point_id
+        ORDER BY o.aggregate_key
+        "#,
+    )
+    .bind(run_id)
+    .bind(context_key)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+
+    let rows = if owned_rows.is_empty() {
+        sqlx::query(
+            r#"
         SELECT ri.rule_instance_id, ri.context_key, ri.concept_key, ri.source_key,
                q.point_id,
                EXISTS (
@@ -51,13 +81,16 @@ pub async fn read_run_verified_rule_points(
               )
           )
         ORDER BY ri.rule_instance_id
-        "#,
-    )
-    .bind(run_id)
-    .bind(context_key)
-    .fetch_all(pool)
-    .await
-    .map_err(classify_sqlx)?;
+            "#,
+        )
+        .bind(run_id)
+        .bind(context_key)
+        .fetch_all(pool)
+        .await
+        .map_err(classify_sqlx)?
+    } else {
+        owned_rows
+    };
 
     let mut verified = Vec::with_capacity(rows.len());
     for row in rows {
