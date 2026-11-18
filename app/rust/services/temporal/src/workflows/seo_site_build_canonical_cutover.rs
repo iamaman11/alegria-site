@@ -816,16 +816,10 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
 
-        let page_nodes = if global_site_reconcile.page_nodes.is_empty() {
-            ia_build.page_nodes.clone()
-        } else {
-            global_site_reconcile.page_nodes.clone()
-        };
-        let link_recommendations = if global_site_reconcile.link_recommendations.is_empty() {
-            link_recommend.link_recommendations.clone()
-        } else {
-            global_site_reconcile.link_recommendations.clone()
-        };
+        // Reconciled output is authoritative, even if every candidate/link
+        // was rejected. Never fall back to the pre-reconciliation plan.
+        let page_nodes = global_site_reconcile.page_nodes.clone();
+        let link_recommendations = global_site_reconcile.link_recommendations.clone();
         if page_nodes.is_empty() {
             // A strict run cannot be completed without any publishable pages.
             // Preserve the existing explicit blocked outcome; only dry-run
@@ -890,6 +884,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             &page_nodes,
             &ia_build.page_blueprints,
             &link_recommendations,
+            &global_site_reconcile.content_gaps,
             &support_bundle,
             &factual_fragments,
             &site_input.context_key,
@@ -899,7 +894,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         .await?
         {
             PagePublishLoopOutcome::Completed(published_pages) => (published_pages, None),
-            PagePublishLoopOutcome::Blocked(status) => (0, Some(status)),
+            PagePublishLoopOutcome::Blocked { status, published_pages } => (published_pages, Some(status)),
         };
 
         // Rebuild impact belongs to the verified knowledge change, not to the

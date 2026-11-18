@@ -1,6 +1,6 @@
 use contracts::generated::alegria::temporal::v1::{
-    LinkRecommendationState, PageBlueprintState, SectionTemplateBinding,
-    SeoVerifiedFactSupportState,
+    ContentGapState, LinkRecommendationState, PageBlueprintState, PageNodeState,
+    SectionTemplateBinding, SeoVerifiedFactSupportState,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +206,67 @@ pub fn page_verified_support(
         .filter(|entry| seen.insert(entry.support_ref.clone()))
         .cloned()
         .collect()
+}
+
+/// The reconciled page plan is the publication authority. Retired historical
+/// pages do not participate in the current run; blocked pages do, but cannot
+/// enter editorial generation. Both execution paths use this disposition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageAdmissibility {
+    Retired,
+    Blocked(String),
+    Eligible,
+}
+
+pub fn page_admissibility(
+    page: &PageNodeState,
+    blueprint: &PageBlueprintState,
+    support: &[SeoVerifiedFactSupportState],
+    gaps: &[ContentGapState],
+    requires_editorial: bool,
+) -> PageAdmissibility {
+    if page.lifecycle_state == "deprecated" {
+        return PageAdmissibility::Retired;
+    }
+    if is_opaque_topic_identifier(&page.canonical_slug)
+        || page
+            .canonical_url_path
+            .split('/')
+            .any(is_opaque_topic_identifier)
+    {
+        return PageAdmissibility::Blocked("opaque_page_path".into());
+    }
+    if requires_editorial {
+        let missing = missing_required_factual_roles(blueprint, support);
+        if !missing.is_empty() {
+            return PageAdmissibility::Blocked(format!(
+                "page_missing_verified_support:roles={}",
+                missing.join(",")
+            ));
+        }
+    }
+    if matches!(page.lifecycle_state.as_str(), "blocked" | "stale") {
+        let mut reasons = gaps
+            .iter()
+            .filter(|gap| {
+                gap.page_node_key == page.page_node_key
+                    && matches!(gap.status.as_str(), "open" | "accepted")
+                    && matches!(
+                        gap.reason_code.as_str(),
+                        "page_missing_verified_support" | "page_duplicate_verified_evidence"
+                    )
+            })
+            .map(|gap| format!("{}:{}", gap.reason_code, gap.missing_topic))
+            .collect::<Vec<_>>();
+        reasons.sort();
+        reasons.dedup();
+        return PageAdmissibility::Blocked(if reasons.is_empty() {
+            "page_blocked_by_reconciliation".into()
+        } else {
+            reasons.join(",")
+        });
+    }
+    PageAdmissibility::Eligible
 }
 
 /// A target page is one link obligation even if several graph roles support it.
@@ -728,5 +789,60 @@ mod page_evidence_selection_tests {
         );
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].link_recommendation_key, "b");
+    }
+}
+
+
+#[cfg(test)]
+mod page_admissibility_tests {
+    use super::*;
+
+    #[test]
+    fn mixed_plan_retains_every_live_blocker_and_excludes_retired_history() {
+        let blueprint = PageBlueprintState {
+            required_sections: vec!["fees".into()],
+            ..Default::default()
+        };
+        let support = vec![SeoVerifiedFactSupportState {
+            support_ref: "fee".into(),
+            role_type: "fee_item".into(),
+            fragment_text: "Confirmed fee".into(),
+            freshness_class: "fresh".into(),
+            ..Default::default()
+        }];
+        let node = |key: &str, state: &str| PageNodeState {
+            page_node_key: key.into(),
+            lifecycle_state: state.into(),
+            canonical_slug: key.into(),
+            canonical_url_path: format!("/{key}/"),
+            ..Default::default()
+        };
+        let gap = ContentGapState {
+            page_node_key: "duplicate".into(),
+            reason_code: "page_duplicate_verified_evidence".into(),
+            missing_topic: "distinct_verified_evidence".into(),
+            status: "open".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            page_admissibility(&node("ready", "planned"), &blueprint, &support, &[], true),
+            PageAdmissibility::Eligible
+        );
+        assert_eq!(
+            page_admissibility(&node("missing", "blocked"), &blueprint, &[], &[], true),
+            PageAdmissibility::Blocked("page_missing_verified_support:roles=fees".into())
+        );
+        assert_eq!(
+            page_admissibility(&node("duplicate", "blocked"), &blueprint, &support, &[gap], true),
+            PageAdmissibility::Blocked("page_duplicate_verified_evidence:distinct_verified_evidence".into())
+        );
+        assert_eq!(
+            page_admissibility(&node("old", "deprecated"), &blueprint, &[], &[], true),
+            PageAdmissibility::Retired
+        );
+        assert_eq!(
+            page_admissibility(&node("unknown", "blocked"), &blueprint, &support, &[], true),
+            PageAdmissibility::Blocked("page_blocked_by_reconciliation".into())
+        );
     }
 }

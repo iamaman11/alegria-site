@@ -1,6 +1,6 @@
 enum PagePublishLoopOutcome {
     Completed(usize),
-    Blocked(String),
+    Blocked { status: String, published_pages: usize },
 }
 
 async fn run_page_publish_phases(
@@ -10,62 +10,53 @@ async fn run_page_publish_phases(
     page_nodes: &[PageNodeState],
     page_blueprints: &[PageBlueprintState],
     link_recommendations: &[LinkRecommendationState],
+    content_gaps: &[contracts::generated::alegria::temporal::v1::ContentGapState],
     support_bundle: &[SeoVerifiedFactSupportState],
     factual_fragments: &[String],
     context_key: &str,
     applicant_profile: &str,
     scope: &SeoScopePayload,
 ) -> WorkflowResult<PagePublishLoopOutcome> {
-    // Persisted IA rows may predate semantic-slug validation. Exclude
-    // opaque paths at the final gate as well, without rewriting history.
-    let opaque_page_paths = page_nodes
+    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    let active_pages = page_nodes
         .iter()
-        .filter(|node| !matches!(node.lifecycle_state.as_str(), "blocked" | "deprecated"))
-        .filter(|node| {
-            runtime_models::seo_blocks::is_opaque_topic_identifier(&node.canonical_slug)
-                || node
-                    .canonical_url_path
-                    .split('/')
-                    .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
-        })
-        .count();
-    let publishable_pages = page_nodes
-        .iter()
-        .filter(|node| !matches!(node.lifecycle_state.as_str(), "blocked" | "deprecated"))
-        .filter(|node| {
-            !runtime_models::seo_blocks::is_opaque_topic_identifier(&node.canonical_slug)
-                && !node
-                    .canonical_url_path
-                    .split('/')
-                    .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
-        })
+        .filter(|node| node.lifecycle_state != "deprecated")
         .collect::<Vec<_>>();
-    let page_total = publishable_pages.len();
+    let page_total = active_pages.len();
     if page_total == 0 {
-        return Ok(PagePublishLoopOutcome::Blocked(
-            block_execution_plan_invariant(ctx, run_id, "no_publishable_pages"),
-        ));
+        return Ok(PagePublishLoopOutcome::Blocked {
+            status: block_execution_plan_invariant(ctx, run_id, "no_publishable_pages"),
+            published_pages: 0,
+        });
     }
     let page_keys = page_phase_keys(plan);
+    let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
     let mut published_pages = 0usize;
     let mut published_page_keys = std::collections::BTreeSet::new();
-    let mut first_blocked: Option<String> = if opaque_page_paths > 0 {
-        Some(format!("opaque_page_paths_blocked={opaque_page_paths}"))
-    } else {
-        None
-    };
+    let mut first_blocked: Option<String> = None;
     let mut published_before_block = 0usize;
 
-    for (page_index, page_node) in publishable_pages.into_iter().cloned().enumerate() {
+    for (page_index, page_node) in active_pages.into_iter().cloned().enumerate() {
         let page_blueprint = page_blueprints
             .iter()
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
-        // A target is linkable only after this run has actually finalized its
-        // publication. Planned, blocked or future pages must not leak into
-        // public editorial content.
         let page_support = runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
+        match page_admissibility(&page_node, &page_blueprint, &page_support, content_gaps, requires_editorial) {
+            PageAdmissibility::Retired => continue,
+            PageAdmissibility::Blocked(detail) => {
+                let reason = format!("{detail}:page_node_key={}", page_node.page_node_key);
+                ctx.state_mut(|state| state.phase = reason.clone());
+                if first_blocked.is_none() {
+                    published_before_block = published_pages;
+                    first_blocked = Some(reason);
+                }
+                continue;
+            }
+            PageAdmissibility::Eligible => {}
+        }
+        // A target is linkable only after this run has actually finalized it.
         let page_fragments = factual_fragments.iter()
             .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
             .cloned().collect::<Vec<_>>();
@@ -74,29 +65,6 @@ async fn run_page_publish_phases(
         let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
             link_recommendations, &page_node.page_node_key, &published_page_keys,
         );
-
-        // Evaluate page-specific verified support before any editorial/LLM
-        // work. Independent pages remain eligible even if a sibling is
-        // blocked by missing evidence; publication status stays BLOCKED.
-        if page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate) {
-            let missing_roles = runtime_models::seo_blocks::missing_required_factual_roles(
-                &page_blueprint,
-                support_bundle,
-            );
-            if !missing_roles.is_empty() {
-                let reason = format!(
-                    "page_missing_verified_support:page_node_key={}:roles={}",
-                    page_node.page_node_key,
-                    missing_roles.join(","),
-                );
-                ctx.state_mut(|state| state.phase = reason.clone());
-                if first_blocked.is_none() {
-                    published_before_block = published_pages;
-                    first_blocked = Some(reason);
-                }
-                continue;
-            }
-        }
 
         let mut draft_plan: Option<DraftAssembleOutputPayload> = None;
         let mut editorial_candidate: Option<EditorialDraftGenerateOutputPayload> = None;
@@ -656,9 +624,12 @@ async fn run_page_publish_phases(
     }
 
     if let Some(reason) = first_blocked {
-        return Ok(PagePublishLoopOutcome::Blocked(format!(
-            "{reason}:published_before_block={published_before_block}:published_pages={published_pages}",
-        )));
+        return Ok(PagePublishLoopOutcome::Blocked {
+            status: format!(
+                "{reason}:published_before_block={published_before_block}:published_pages={published_pages}",
+            ),
+            published_pages,
+        });
     }
     Ok(PagePublishLoopOutcome::Completed(published_pages))
 }

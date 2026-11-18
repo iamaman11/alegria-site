@@ -129,52 +129,39 @@ where
     let mut published_pages = 0u32;
     let page_keys = page_phase_keys(&plan);
     let ia = require_state_ref(&state.ia, "ia_build_required")?;
+    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    let gaps = &require_state_ref(&state.reconciled, "global_site_reconcile_required")?.content_gaps;
+    let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
     let mut support_blocked = false;
     let mut published_page_keys = std::collections::BTreeSet::new();
     for page_node in page_nodes.iter().cloned() {
-        if matches!(page_node.lifecycle_state.as_str(), "blocked" | "deprecated") {
-            continue;
-        }
-        if runtime_models::seo_blocks::is_opaque_topic_identifier(&page_node.canonical_slug)
-            || page_node.canonical_url_path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier)
-        {
-            support_blocked = true;
-            phase_reports.push(phase_report(
-                "page_admissibility",
-                blocked_publish_gate_status(),
-                &page_node.page_node_key,
-                "opaque_page_path",
-            ));
-            continue;
-        }
         let page_blueprint = ia
             .page_blueprints
             .iter()
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
-        let page_support = runtime_models::seo_blocks::page_verified_support(&page_blueprint, &state.verified_support);
-        let page_fragments = factual_fragments.iter()
-            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
-            .cloned().collect::<Vec<_>>();
-        // Use the same page-specific completeness policy as the durable
-        // workflow. Unsupported required roles are not an LLM error.
-        if page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate) {
-            let missing_roles = runtime_models::seo_blocks::missing_required_factual_roles(
-                &page_blueprint,
-                &page_support,
-            );
-            if !missing_roles.is_empty() {
+        let page_support =
+            runtime_models::seo_blocks::page_verified_support(&page_blueprint, &state.verified_support);
+        match page_admissibility(&page_node, &page_blueprint, &page_support, gaps, requires_editorial) {
+            PageAdmissibility::Retired => continue,
+            PageAdmissibility::Blocked(reason) => {
                 support_blocked = true;
                 phase_reports.push(phase_report(
                     "page_admissibility",
                     blocked_publish_gate_status(),
                     &page_node.page_node_key,
-                    format!("page_missing_verified_support:roles={}", missing_roles.join(",")),
+                    reason,
                 ));
                 continue;
             }
+            PageAdmissibility::Eligible => {}
         }
+        let page_fragments = factual_fragments
+            .iter()
+            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
         let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
             &link_recommendations, &page_node.page_node_key, &published_page_keys,
         );

@@ -141,15 +141,27 @@ def main() -> int:
     phases = [
         '"triple_builder".to_string()',
         '"serp_normalize".to_string()',
-        '"global_site_reconcile".to_string()',
+        '"opportunity_build".to_string()',
         '"manual_truth_prepare".to_string()',
         '"truth_adjudication".to_string()',
+        '"verified_truth_write".to_string()',
+        '"ia_build".to_string()',
+        '"link_recommend".to_string()',
+        '"global_site_reconcile".to_string()',
         '"graph_admissibility_gate".to_string()',
         '"seo_materialization_gate".to_string()',
     ]
     positions = [workflow.find(phase) for phase in phases]
     if any(index < 0 for index in positions) or positions != sorted(positions):
-        failures.append("non-publishable site planning must precede fact verification and publish gates")
+        failures.append(
+            "demand planning must precede fact verification; evidence-aware IA and reconciliation must follow verified truth and precede publication gates"
+        )
+    # The final structure and coverage must actually consume the verified
+    # bundle; changing phase names alone is not sufficient.
+    for activity in ("IaBuildInputPayload", "GlobalSiteReconcileInputPayload"):
+        request = workflow.split(f"{activity} {{", 1)[-1].split("},", 1)[0]
+        if "verified_support: support_bundle.clone()" not in request:
+            failures.append(f"{activity} must use admitted verified support")
 
     if failures:
         print("CRAWL_PROVENANCE_CONTRACT: FAILED")
