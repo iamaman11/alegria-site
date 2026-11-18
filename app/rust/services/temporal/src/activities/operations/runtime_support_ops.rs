@@ -321,11 +321,11 @@ pub(crate) async fn seo_preflight_impl(
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
     // The two raw collections store immutable section embeddings. Their age
-    // is not a freshness signal. Certify this run's completed projections
-    // against exact current source hashes in the live Qdrant provider.
+    // is not a freshness signal. A retained run reuses the original outbox
+    // receipts; certify its exact acquired sections in the live provider.
     let raw_chunk_readback = if input.require_materialized_projections {
         let expected =
-            sqlx_seo_adapter::read_run_raw_chunk_points(&acts.pool, &input.run_id).await?;
+            sqlx_seo_adapter::read_run_raw_chunk_points(&acts.pool, &input.raw_page_ids).await?;
         let mut verified = std::collections::BTreeMap::<String, bool>::new();
         for collection in ["raw_chunks_4", "raw_chunks_ctx"] {
             let points = expected

@@ -116,6 +116,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     context_key: site_input.context_key.clone(),
                     scope: scope.clone(),
+                    raw_page_ids: Vec::new(),
                     projection_max_lag_ms: 300_000,
                     require_materialized_projections: false,
                     enforce_required_contract,
@@ -858,6 +859,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                     run_id: run_id.clone(),
                     context_key: site_input.context_key.clone(),
                     scope: scope.clone(),
+                    raw_page_ids: crawled.raw_page_ids.clone(),
                     projection_max_lag_ms: 300_000,
                     require_materialized_projections: true,
                     enforce_required_contract: true,
@@ -890,6 +892,7 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             &site_input.context_key,
             &scope.applicant_profile,
             &scope,
+            &crawled.raw_page_ids,
         )
         .await?
         {

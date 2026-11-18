@@ -320,31 +320,39 @@ pub async fn verify_raw_chunk_readback(
         qdrant_rest_url_from_env().trim_end_matches('/'),
         collection
     );
-    let ids = expected
-        .iter()
-        .map(|point| point.point_id.as_str())
-        .collect::<Vec<_>>();
-    let response = reqwest::Client::new()
-        .post(&url)
-        .timeout(std::time::Duration::from_secs(8))
-        .json(&serde_json::json!({
-            "ids": ids,
-            "with_payload": ["section_id", "content_hash"],
-            "with_vector": false
-        }))
-        .send()
-        .await
-        .with_context(|| format!("Qdrant raw evidence readback failed: {collection}"))?;
-    let status = response.status();
-    if !status.is_success() {
-        bail!("Qdrant raw evidence readback HTTP {status}: {collection}");
+    let client = reqwest::Client::new();
+    // A retained corpus can span thousands of sections. Bound each provider
+    // request, while still requiring an exact match for every expected point.
+    for chunk in expected.chunks(128) {
+        let ids = chunk
+            .iter()
+            .map(|point| point.point_id.as_str())
+            .collect::<Vec<_>>();
+        let response = client
+            .post(&url)
+            .timeout(std::time::Duration::from_secs(8))
+            .json(&serde_json::json!({
+                "ids": ids,
+                "with_payload": ["section_id", "content_hash"],
+                "with_vector": false
+            }))
+            .send()
+            .await
+            .with_context(|| format!("Qdrant raw evidence readback failed: {collection}"))?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("Qdrant raw evidence readback HTTP {status}: {collection}");
+        }
+        let body: Value = response.json().await?;
+        let actual = body
+            .get("result")
+            .and_then(Value::as_array)
+            .context("Qdrant raw evidence readback missing points array")?;
+        if !raw_chunk_points_match(chunk, actual) {
+            return Ok(false);
+        }
     }
-    let body: Value = response.json().await?;
-    let actual = body
-        .get("result")
-        .and_then(Value::as_array)
-        .context("Qdrant raw evidence readback missing points array")?;
-    Ok(raw_chunk_points_match(expected, actual))
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -389,6 +397,20 @@ mod raw_chunk_readback_tests {
         ));
         let duplicated = vec![expected[0].clone(), expected[0].clone()];
         assert!(!raw_chunk_points_match(&duplicated, good));
+        let two = vec![
+            expected[0].clone(),
+            RawChunkReadbackPoint {
+                point_id: "point-2".into(),
+                section_id: "1224".into(),
+                content_hash: "other-hash".into(),
+            },
+        ];
+        let both = serde_json::json!([
+            {"id": "point-2", "payload": {"section_id": "1224", "content_hash": "other-hash"}},
+            {"id": "point-1", "payload": {"section_id": "1223", "content_hash": "source-hash"}}
+        ]);
+        assert!(raw_chunk_points_match(&two, both.as_array().unwrap()));
+        assert!(!raw_chunk_points_match(&two, good));
     }
 }
 

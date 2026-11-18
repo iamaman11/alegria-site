@@ -766,6 +766,92 @@ async fn changed_editorial_request_supersedes_only_pending_same_page_task() {
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
+async fn retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points() {
+    use infrastructure::adapters::{
+        raw_crawl_adapter::{self, RobotsDecisionTrace},
+        sqlx_seo_adapter,
+    };
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let url = "https://example.org/retained-visa";
+    let raw = raw_crawl_adapter::save_crawled_html(
+        pool,
+        url,
+        "example.org",
+        url,
+        "official",
+        200,
+        "text/html",
+        "<html><body><main><h1>Travel visa</h1><p>Passport requirements apply.</p></main></body></html>",
+        &[url.to_string()],
+        &RobotsDecisionTrace {
+            allowed: true,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let sections: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM raw.sections WHERE page_id=$1 AND btrim(content_md) <> ''",
+    )
+    .bind(raw.page_id)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert!(!sections.is_empty());
+    for section_id in &sections {
+        for collection in ["raw_chunks_4", "raw_chunks_ctx"] {
+            let key = format!("raw_section:{section_id}");
+            sqlx::query(
+                "INSERT INTO kb.qdrant_points \
+                 (point_id, entity_type, entity_key, collection_name, embedding_model, embedding_version) \
+                 VALUES ($1, 'raw_section', $2, $3, 'fixture', 'fixture@1')",
+            )
+            .bind(Uuid::new_v4().to_string())
+            .bind(&key)
+            .bind(collection)
+            .execute(pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO system.sync_outbox \
+                 (run_id, aggregate_type, aggregate_key, target_system, event_type, payload_hash, status) \
+                 VALUES ('earlier-acquisition-run', 'raw_section', $1, 'qdrant', 'QdrantUpsertCommand', 'fixture', 'done')",
+            )
+            .bind(format!("{key}|{collection}"))
+            .execute(pool)
+            .await
+            .unwrap();
+        }
+    }
+
+    // Retained runs have no new raw-section outbox rows. Their exact source
+    // pages must still be checked against both earlier delivered collections.
+    let inherited = sqlx_seo_adapter::read_run_raw_chunk_points(pool, &[raw.page_id])
+        .await
+        .unwrap();
+    assert_eq!(inherited.len(), sections.len() * 2);
+    assert!(sqlx_seo_adapter::read_run_raw_chunk_points(pool, &[])
+        .await
+        .unwrap()
+        .is_empty());
+
+    // A completed receipt alone cannot substitute for a missing SQL point.
+    sqlx::query("DELETE FROM kb.qdrant_points WHERE collection_name='raw_chunks_ctx' AND entity_key=$1")
+        .bind(format!("raw_section:{}", sections[0]))
+        .execute(pool)
+        .await
+        .unwrap();
+    assert!(sqlx_seo_adapter::read_run_raw_chunk_points(pool, &[raw.page_id])
+        .await
+        .unwrap()
+        .is_empty());
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
 async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition() {
     use contracts::generated::alegria::temporal::v1::{
         CrawlSourcesInputPayload, CrawlSourcesOutputPayload, SerpIngestInputPayload,

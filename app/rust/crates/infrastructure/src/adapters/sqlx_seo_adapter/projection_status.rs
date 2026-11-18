@@ -7,9 +7,11 @@ pub struct RunVerifiedRulePoint {
     pub source_key: String,
 }
 
-/// Verify the facts actually projected by this run against canonical SQL
-/// and Qdrant. Pre-existing VERIFIED facts are valid without re-emission;
-/// any run-owned projected fact with no receipt or changed status fails closed.
+/// The global retrieval index is reusable between runs. Verify every global
+/// fact for this context (plus any already projected profile-bound fact)
+/// against canonical SQL, a completed outbox receipt and live Qdrant.
+/// Profile-specific facts deliberately omitted from the global index are
+/// still resolved by the separate SQL applicant-profile support gate.
 pub async fn read_run_verified_rule_points(
     pool: &PgPool,
     run_id: &str,
@@ -18,23 +20,37 @@ pub async fn read_run_verified_rule_points(
     let rows = sqlx::query(
         r#"
         SELECT ri.rule_instance_id, ri.context_key, ri.concept_key, ri.source_key,
-               q.point_id, bool_and(o.status = 'done') AS delivered
-        FROM system.sync_outbox o
-        LEFT JOIN verified.rule_instances ri
-          ON ri.rule_instance_id = o.aggregate_key
-         AND ri.context_key = $2
-         AND ri.status = 'verified'
+               q.point_id,
+               EXISTS (
+                   SELECT 1 FROM system.sync_outbox o
+                   WHERE o.aggregate_key = ri.rule_instance_id
+                     AND o.aggregate_type = 'rule_instance'
+                     AND o.target_system = 'qdrant'
+                     AND o.event_type = 'QdrantUpsertCommand'
+                     AND o.status = 'done'
+               ) AS delivered
+        FROM verified.rule_instances ri
         LEFT JOIN kb.qdrant_points q
           ON q.collection_name = 'verified_rules_4'
          AND q.entity_type = 'rule_instance'
-         AND q.entity_key = o.aggregate_key
-        WHERE o.run_id = $1
-          AND o.target_system = 'qdrant'
-          AND o.aggregate_type = 'rule_instance'
-          AND o.event_type = 'QdrantUpsertCommand'
-        GROUP BY o.aggregate_key, ri.rule_instance_id, ri.context_key,
-                 ri.concept_key, ri.source_key, q.point_id
-        ORDER BY o.aggregate_key
+         AND q.entity_key = ri.rule_instance_id
+        WHERE ri.context_key = $2
+          AND ri.status = 'verified'
+          AND (
+              NOT EXISTS (
+                  SELECT 1 FROM verified.rule_instance_profiles rp
+                  WHERE rp.rule_instance_id = ri.rule_instance_id
+              )
+              OR q.point_id IS NOT NULL
+              OR EXISTS (
+                  SELECT 1 FROM system.sync_outbox owned
+                  WHERE owned.run_id = $1
+                    AND owned.aggregate_key = ri.rule_instance_id
+                    AND owned.aggregate_type = 'rule_instance'
+                    AND owned.target_system = 'qdrant'
+              )
+          )
+        ORDER BY ri.rule_instance_id
         "#,
     )
     .bind(run_id)
@@ -103,9 +119,10 @@ pub async fn read_run_graph_source_synced(
     .map_err(classify_sqlx)
 }
 
-/// Immutable raw evidence is fresh when this business run's outbox has
-/// completed and every indexed section still agrees with the stored source.
-/// Wall-clock age of the last embedding is not evidence of staleness.
+/// Immutable raw evidence remains valid across retained-corpus runs if every
+/// nonempty section of the exact acquired pages has a delivered projection
+/// receipt and its live Qdrant payload still matches the current source hash.
+/// Wall-clock embedding age and the outbox's original run ID are irrelevant.
 #[derive(Debug, Clone)]
 pub struct RunRawChunkPoint {
     pub collection_name: String,
@@ -116,42 +133,49 @@ pub struct RunRawChunkPoint {
 
 pub async fn read_run_raw_chunk_points(
     pool: &PgPool,
-    run_id: &str,
+    raw_page_ids: &[i64],
 ) -> Result<Vec<RunRawChunkPoint>, DomainError> {
+    if raw_page_ids.is_empty() {
+        return Ok(Vec::new());
+    }
     let rows = sqlx::query(
         r#"
-        SELECT split_part(o.aggregate_key, '|', 2) AS collection_name,
-               o.status,
+        SELECT c.collection_name,
                s.id::TEXT AS section_id,
                s.content_hash,
-               q.point_id
-        FROM system.sync_outbox o
-        LEFT JOIN raw.sections s
-            ON s.id = split_part(split_part(o.aggregate_key, '|', 1), ':', 2)::BIGINT
+               q.point_id,
+               EXISTS (
+                   SELECT 1 FROM system.sync_outbox o
+                   WHERE o.aggregate_type = 'raw_section'
+                     AND o.aggregate_key = 'raw_section:' || s.id::TEXT || '|' || c.collection_name
+                     AND o.target_system = 'qdrant'
+                     AND o.event_type = 'QdrantUpsertCommand'
+                     AND o.status = 'done'
+               ) AS delivered
+        FROM raw.sections s
+        CROSS JOIN (VALUES ('raw_chunks_4'), ('raw_chunks_ctx')) AS c(collection_name)
         LEFT JOIN kb.qdrant_points q
-            ON q.collection_name = split_part(o.aggregate_key, '|', 2)
+            ON q.collection_name = c.collection_name
            AND q.entity_type = 'raw_section'
-           AND q.entity_key = split_part(o.aggregate_key, '|', 1)
-        WHERE o.run_id = $1
-          AND o.target_system = 'qdrant'
-          AND o.aggregate_type = 'raw_section'
-          AND split_part(o.aggregate_key, '|', 2) IN ('raw_chunks_4', 'raw_chunks_ctx')
+           AND q.entity_key = 'raw_section:' || s.id::TEXT
+        WHERE s.page_id = ANY($1::BIGINT[])
+          AND btrim(s.content_md) <> ''
         ORDER BY collection_name, section_id
         "#,
     )
-    .bind(run_id)
+    .bind(raw_page_ids)
     .fetch_all(pool)
     .await
     .map_err(classify_sqlx)?;
 
     let mut points = Vec::with_capacity(rows.len());
     for row in rows {
-        let status: String = row.get("status");
+        let delivered: bool = row.get("delivered");
         let section_id: Option<String> = row.get("section_id");
         let content_hash: Option<String> = row.get("content_hash");
         let point_id: Option<String> = row.get("point_id");
-        // A missing source, SQL point, or unfinished outbox lease fails closed.
-        if status != "done"
+        // Missing source, SQL point, or completed outbox proof fails closed.
+        if !delivered
             || section_id.is_none()
             || content_hash.as_ref().is_none_or(String::is_empty)
             || point_id.is_none()

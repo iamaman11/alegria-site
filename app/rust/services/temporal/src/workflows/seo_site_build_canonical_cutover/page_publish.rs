@@ -49,6 +49,7 @@ async fn run_page_publish_phases(
     context_key: &str,
     applicant_profile: &str,
     scope: &SeoScopePayload,
+    raw_page_ids: &[i64],
 ) -> WorkflowResult<PagePublishLoopOutcome> {
     use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
     let active_pages = page_nodes
@@ -175,6 +176,7 @@ async fn run_page_publish_phases(
                                 run_id: run_id.to_string(),
                                 context_key: context_key.to_string(),
                                 scope: scope.clone(),
+                                raw_page_ids: raw_page_ids.to_vec(),
                                 projection_max_lag_ms: 300_000,
                                 require_materialized_projections: true,
                                 enforce_required_contract: true,
