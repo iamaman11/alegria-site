@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
 use primitives::seo::ContentGapDetector;
+use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, LinkRecommendationState,
@@ -203,7 +203,11 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
             for topic in missing {
                 content_gaps.push(
                     contracts::generated::alegria::temporal::v1::ContentGapState {
-                        content_gap_key: detector.key(&page.scope_signature, &page.page_node_key, &topic),
+                        content_gap_key: detector.key(
+                            &page.scope_signature,
+                            &page.page_node_key,
+                            &topic,
+                        ),
                         scope_signature: page.scope_signature.clone(),
                         page_node_key: page.page_node_key.clone(),
                         missing_topic: topic,
@@ -332,22 +336,31 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
     if let Some(graph_context) = input.graph_context.as_ref() {
         let mut seen = BTreeSet::new();
         for coverage in &graph_context.coverage_signals {
-            let Some(page) = node_by_key.get(&coverage.page_node_key) else {
-                continue;
+            let scope = if coverage.page_node_key.is_empty() {
+                if graph_context.scope_signature.trim().is_empty() {
+                    crate::seo_step_support::scope_signature(input.scope.as_ref())
+                } else {
+                    graph_context.scope_signature.clone()
+                }
+            } else {
+                let Some(page) = node_by_key.get(&coverage.page_node_key) else {
+                    continue;
+                };
+                if matches!(page.lifecycle_state.as_str(), "deprecated" | "stale") {
+                    continue;
+                }
+                page.scope_signature.clone()
             };
-            if matches!(page.lifecycle_state.as_str(), "deprecated" | "stale") {
-                continue;
-            }
             for missing_topic in &coverage.missing_topic_keys {
                 let detector = ContentGapDetector::ReconcileCoverage;
-                let gap_key = detector.key(&page.scope_signature, &page.page_node_key, missing_topic);
+                let gap_key = detector.key(&scope, &coverage.page_node_key, missing_topic);
                 if missing_topic.trim().is_empty() || !seen.insert(gap_key.clone()) {
                     continue;
                 }
                 content_gaps.push(
                     contracts::generated::alegria::temporal::v1::ContentGapState {
                         content_gap_key: gap_key,
-                        scope_signature: page.scope_signature.clone(),
+                        scope_signature: scope.clone(),
                         page_node_key: coverage.page_node_key.clone(),
                         missing_topic: missing_topic.clone(),
                         severity: "medium".to_string(),

@@ -79,9 +79,13 @@ impl ContentGapDetector {
     }
 
     pub fn valid_owner(self, page: &str) -> bool {
+        if page.trim() != page {
+            return false;
+        }
         match self {
             Self::SerpReliability => page.is_empty(),
-            _ => !page.is_empty(),
+            Self::GraphCoverage | Self::ReconcileCoverage => true,
+            Self::MissingVerifiedSupport | Self::DuplicateVerifiedEvidence => !page.is_empty(),
         }
     }
 
@@ -168,6 +172,9 @@ mod content_gap_identity_tests {
         assert_ne!(a, Detector::SerpReliability.key("scope", "", "fees"));
         assert_ne!(a, Detector::GraphCoverage.key("scope", "page-a", "fees"));
         assert!(!d.valid_owner(""));
+        assert!(!d.valid_owner(" "));
+        assert!(Detector::GraphCoverage.valid_owner(""));
+        assert!(Detector::ReconcileCoverage.valid_owner(""));
         assert!(!Detector::SerpReliability.valid_owner("page-a"));
         assert_ne!(d.key("a|b", "c", "d"), d.key("a", "b|c", "d"));
         assert_eq!(Detector::from_reason(d.reason()), Some(d));

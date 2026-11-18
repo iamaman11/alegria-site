@@ -214,10 +214,16 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
                 if !detector.valid_owner(&signal.page_node_key) || missing_topic.trim().is_empty() {
                     continue;
                 }
-                let scope = graph_context.page_nodes.iter()
+                let scope = graph_context
+                    .page_nodes
+                    .iter()
                     .find(|page| page.page_node_key == signal.page_node_key)
                     .map(|page| page.scope_signature.as_str())
                     .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        (!graph_context.scope_signature.is_empty())
+                            .then_some(graph_context.scope_signature.as_str())
+                    })
                     .unwrap_or(&fallback_scope);
                 let gap_key = detector.key(scope, &signal.page_node_key, missing_topic);
                 if !seen_gap_keys.insert(gap_key.clone()) {
