@@ -1874,7 +1874,7 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     operation TEXT NOT NULL CHECK (operation IN ('editorial_draft', 'truth_candidates')),
     input_sha256 TEXT NOT NULL CHECK (input_sha256 ~ '^[a-f0-9]{64}$'),
     input_json JSONB NOT NULL,
-    job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed')),
+    job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed', 'superseded')),
     response_json JSONB,
     output_json JSONB,
     model_key TEXT,
@@ -1882,7 +1882,7 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (run_id, operation, input_sha256),
     CHECK (
-        (job_status = 'pending' AND response_json IS NULL AND output_json IS NULL)
+        (job_status IN ('pending', 'superseded') AND response_json IS NULL AND output_json IS NULL)
         OR
         (job_status = 'completed' AND response_json IS NOT NULL AND output_json IS NOT NULL
          AND model_key IS NOT NULL)
@@ -1890,5 +1890,11 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_manual_llm_jobs_pending
     ON pipeline.manual_llm_jobs (created_at, task_id) WHERE job_status = 'pending';
+
+CREATE UNIQUE INDEX IF NOT EXISTS manual_llm_one_pending_editorial_owner
+    ON pipeline.manual_llm_jobs
+    (run_id, (input_json #>> '{request,editorial_brief,page_node_key}'))
+    WHERE operation = 'editorial_draft' AND job_status = 'pending'
+      AND nullif(input_json #>> '{request,editorial_brief,page_node_key}', '') IS NOT NULL;
 
 COMMIT;

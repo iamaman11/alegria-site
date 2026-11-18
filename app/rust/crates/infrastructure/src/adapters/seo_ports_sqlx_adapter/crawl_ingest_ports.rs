@@ -54,7 +54,7 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
             };
 
             match raw_crawl_adapter::fetch_html(&item.url).await {
-                Ok(fetched) if (200..400).contains(&fetched.status_code) => {
+                Ok(fetched) if fetched.status_code == 200 && !fetched.body.trim().is_empty() => {
                     match raw_crawl_adapter::save_crawled_html(
                         self.pool,
                         &fetched.source_url,

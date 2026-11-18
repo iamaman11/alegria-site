@@ -30,7 +30,7 @@ WHERE old.operation = 'editorial_draft' AND old.job_status = 'pending'
         AND (newer.created_at, newer.task_id) > (old.created_at, old.task_id)
   );
 
-CREATE UNIQUE INDEX manual_llm_one_pending_editorial_owner
+CREATE UNIQUE INDEX IF NOT EXISTS manual_llm_one_pending_editorial_owner
     ON pipeline.manual_llm_jobs
     (run_id, (input_json #>> '{request,editorial_brief,page_node_key}'))
     WHERE operation = 'editorial_draft' AND job_status = 'pending'

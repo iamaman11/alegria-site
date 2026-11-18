@@ -761,3 +761,120 @@ async fn changed_editorial_request_supersedes_only_pending_same_page_task() {
     ).bind(&obsolete.task_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(obsolete_status, "superseded");
 }
+
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition() {
+    use contracts::generated::alegria::temporal::v1::{
+        CrawlSourcesInputPayload, CrawlSourcesOutputPayload, SerpIngestInputPayload,
+        SerpIngestOutputPayload,
+    };
+    use infrastructure::adapters::{
+        raw_crawl_adapter::{self, RobotsDecisionTrace},
+        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
+        sqlx_seo_adapter, sqlx_step_ledger_adapter as ledger,
+    };
+    use seo_application::registration::register_site_build_input;
+    use seo_ports::SeoSiteBuildRegistrationRequest;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let repo = SqlxSeoRuntimeRepository::new(pool);
+    let source_id = Uuid::new_v4().to_string();
+    let query = "spain visa documents".to_string();
+    let request = SeoSiteBuildRegistrationRequest {
+        run_id: source_id.clone(),
+        context_key: None, market: "alegria-site".into(), locale: "ru-RU".into(),
+        country_code: "ES".into(), visa_type: "tourist".into(), visa_subtype: None,
+        applicant_profile: "standard".into(), citizenship_code: "BY".into(),
+        bootstrap_context: true, queries: vec![query.clone()],
+        query_batch_key: None, run_mode: Some("publish_with_hitl".into()),
+        retained_source_run_id: None,
+    };
+    let source = register_site_build_input(&repo,&request).await.unwrap();
+    let mut reuse = request.clone();
+    reuse.run_id = Uuid::new_v4().to_string();
+    reuse.context_key = Some(source.context_key.clone());
+    reuse.bootstrap_context = false;
+    reuse.queries.clear();
+    reuse.retained_source_run_id = Some(source_id.clone());
+    // Nonterminal acquisition cannot be reused.
+    assert!(register_site_build_input(&repo,&reuse).await.is_err());
+
+    let url = "https://example.org/visa";
+    let raw = raw_crawl_adapter::save_crawled_html(pool,url,"example.org",url,"official",
+        200,"text/html","<html><body><main><h1>Required documents</h1><p>A passport is required for the application.</p></main></body></html>",
+        &[url.to_string()],&RobotsDecisionTrace { allowed:true,..Default::default() })
+        .await.unwrap();
+    assert!(raw.section_count>0);
+    let empty_url = "https://example.org/unavailable";
+    let unavailable = raw_crawl_adapter::save_crawled_html(pool,empty_url,"example.org",empty_url,"official",
+        202,"text/html","",&[empty_url.to_string()],&RobotsDecisionTrace { allowed:true,..Default::default() })
+        .await.unwrap();
+
+    let provider_result = serde_json::json!({
+        "status_code":20000,"tasks":[{"status_code":20000,"result":[{"items":[
+            {"type":"organic","rank_group":1,"rank_absolute":1,"url":url,"title":"Official source"}
+        ]}]}]
+    });
+    sqlx::query("INSERT INTO serp.raw_snapshots(run_id,job_id,query,raw_result) VALUES($1,'source-job',$2,$3)")
+        .bind(&source_id).bind(&query).bind(sqlx::types::Json(&provider_result)).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO serp.gemini_top10(run_id,job_id,rank,url,title,source_tier) VALUES($1,'source-job',1,$2,'Official source','official')")
+        .bind(&source_id).bind(url).execute(pool).await.unwrap();
+
+    let serp_receipt=SerpIngestOutputPayload {
+        query_batch_key:source.query_batch_key.clone(),query_count:1,persisted_snapshot_count:1,
+        status:"done".into(),
+    };
+    let crawl_receipt=CrawlSourcesOutputPayload {
+        claimed_count:2,crawled_count:2,raw_page_count:2,raw_section_count:(raw.section_count+unavailable.section_count) as u32,
+        status:"done".into(),raw_page_ids:vec![raw.page_id,unavailable.page_id],..Default::default()
+    };
+    let serp_key = format!("{source_id}-serp");
+    let crawl_key = format!("{source_id}-crawl");
+    for (step,key) in [("serp_ingest",&serp_key),("crawl_sources",&crawl_key)] {
+        ledger::begin_step_execution(pool,&source_id,step,1,"fixture",key).await.unwrap();
+    }
+    let hash=ledger::write_step_payload_blob_typed(pool,&source_id,"serp_ingest",&serp_key,"output",1,&serp_receipt).await.unwrap();
+    ledger::complete_step_execution(pool,&source_id,"serp_ingest",&serp_key,&hash).await.unwrap();
+    let hash=ledger::write_step_payload_blob_typed(pool,&source_id,"crawl_sources",&crawl_key,"output",1,&crawl_receipt).await.unwrap();
+    ledger::complete_step_execution(pool,&source_id,"crawl_sources",&crawl_key,&hash).await.unwrap();
+    sqlx::query("UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1::uuid")
+        .bind(&source_id).execute(pool).await.unwrap();
+
+    let retained = register_site_build_input(&repo,&reuse).await.unwrap();
+    assert_eq!(retained.queries,source.queries);
+    assert_ne!(retained.query_batch_key,source.query_batch_key);
+    let ingest_input=SerpIngestInputPayload {
+        run_id:retained.run_id.clone(),query_batch_key:retained.query_batch_key.clone(),
+        scope:retained.scope.clone(),queries:retained.queries.clone(),
+    };
+    let first=sqlx_seo_adapter::retained_serp_ingest(pool,&ingest_input).await.unwrap().unwrap();
+    assert_eq!(first.persisted_snapshot_count,1);
+    let repeat=sqlx_seo_adapter::retained_serp_ingest(pool,&ingest_input).await.unwrap().unwrap();
+    assert_eq!(first,repeat);
+    let crawl_input=CrawlSourcesInputPayload {
+        run_id:retained.run_id.clone(),query_batch_key:retained.query_batch_key.clone(),
+        limit:25,emit_qdrant: false,sweep_index:0,
+    };
+    let reused=sqlx_seo_adapter::retained_crawl_sources(pool,&crawl_input).await.unwrap().unwrap();
+    assert_eq!(reused.raw_page_ids,vec![raw.page_id]);
+    assert_eq!(reused.crawled_count,0);
+    assert_eq!(reused.failed_urls,vec![empty_url]);
+    assert_eq!(reused.status,"partial");
+    let queued: i64=sqlx::query_scalar("SELECT count(*) FROM serp.crawl_queue WHERE first_seen_run_id=$1")
+        .bind(&retained.run_id).fetch_one(pool).await.unwrap();
+    assert_eq!(queued,0);
+    let paid:i64=sqlx::query_scalar("SELECT count(*) FROM serp.raw_snapshots WHERE run_id=$1 AND job_id LIKE 'dataforseo-standard-task-%'")
+        .bind(&retained.run_id).fetch_one(pool).await.unwrap();
+    assert_eq!(paid,0);
+    let ranks:i64=sqlx::query_scalar("SELECT count(*) FROM serp.gemini_top10 WHERE run_id=$1 AND rank=1 AND url=$2")
+        .bind(&retained.run_id).bind(url).fetch_one(pool).await.unwrap();
+    assert_eq!(ranks,1);
+    // A mismatched retained receipt cannot fall back to live acquisition.
+    let mut wrong=ingest_input.clone();
+    wrong.queries.push("unrelated".into());
+    assert!(sqlx_seo_adapter::retained_serp_ingest(pool,&wrong).await.is_err());
+}

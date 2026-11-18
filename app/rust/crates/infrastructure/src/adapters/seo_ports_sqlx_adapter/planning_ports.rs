@@ -159,6 +159,46 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
         )
         .await?;
+        let mut links = output.link_recommendations.clone();
+        let mut gaps = output.content_gaps.clone();
+        // Reconcile historical plans through the same persistence owners.
+        // Preserve unrelated scopes, manual decisions and published dependencies
+        // outside this run's evaluated plan.
+        if let Some(context) = input.graph_context.as_ref() {
+            let keys = output.page_nodes.iter().map(|node| node.page_node_key.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let link_keys = links.iter().map(|link| link.link_recommendation_key.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            for prior in &context.link_recommendations {
+                if matches!(prior.status.as_str(), "candidate" | "accepted")
+                    && keys.contains(prior.source_page_key.as_str())
+                    && keys.contains(prior.target_page_key.as_str())
+                    && !link_keys.contains(&prior.link_recommendation_key)
+                {
+                    let mut expired = prior.clone();
+                    expired.status = "expired".into();
+                    links.push(expired);
+                }
+            }
+            if !input.page_blueprints.is_empty() {
+                let gap_keys = gaps.iter().map(|gap| gap.content_gap_key.clone())
+                    .collect::<std::collections::BTreeSet<_>>();
+                for prior in &context.content_gaps {
+                    if prior.status == "open"
+                        && matches!(prior.reason_code.as_str(),
+                            "page_missing_verified_support" | "page_duplicate_verified_evidence")
+                        && !gap_keys.contains(&prior.content_gap_key)
+                        && output.page_nodes.iter().any(|page|
+                            page.page_node_key == prior.page_node_key
+                            && !matches!(page.lifecycle_state.as_str(), "blocked" | "deprecated" | "stale"))
+                    {
+                        let mut resolved = prior.clone();
+                        resolved.status = "resolved".into();
+                        gaps.push(resolved);
+                    }
+                }
+            }
+        }
         sqlx_seo_adapter::persist_link_recommend_output(
             self.pool,
             &LinkRecommendInputPayload {
@@ -168,7 +208,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 graph_context: None,
             },
             &LinkRecommendOutputPayload {
-                link_recommendations: output.link_recommendations.clone(),
+                link_recommendations: links,
             },
         )
         .await?;
@@ -182,7 +222,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
             &OpportunityBuildOutputPayload {
                 keyword_clusters: Vec::new(),
-                content_gaps: output.content_gaps.clone(),
+                content_gaps: gaps,
             },
         )
         .await?;
