@@ -30,7 +30,10 @@ fn page_is_linkable(page: &PageNodeState) -> bool {
         page.lifecycle_state.as_str(),
         "blocked" | "deprecated" | "stale"
     ) && !runtime_models::seo_blocks::is_opaque_topic_identifier(&page.canonical_slug)
-        && !page.canonical_url_path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier)
+        && !page
+            .canonical_url_path
+            .split('/')
+            .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
 }
 
 fn required_link(
@@ -156,16 +159,24 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
             if !page_is_linkable(page) {
                 continue;
             }
-            let blueprint = input.page_blueprints.iter()
+            let blueprint = input
+                .page_blueprints
+                .iter()
                 .find(|blueprint| blueprint.blueprint_key == page.blueprint_key);
             let (mut missing, mut refs) = if let Some(blueprint) = blueprint {
-                let support = runtime_models::seo_blocks::page_verified_support(blueprint, &input.verified_support);
+                let support = runtime_models::seo_blocks::page_verified_support(
+                    blueprint,
+                    &input.verified_support,
+                );
                 (
-                    runtime_models::seo_blocks::missing_required_factual_roles(blueprint,&support),
-                    support.into_iter().map(|entry| entry.support_ref).collect::<Vec<_>>(),
+                    runtime_models::seo_blocks::missing_required_factual_roles(blueprint, &support),
+                    support
+                        .into_iter()
+                        .map(|entry| entry.support_ref)
+                        .collect::<Vec<_>>(),
                 )
             } else {
-                (vec!["page_blueprint".to_string()],Vec::new())
+                (vec!["page_blueprint".to_string()], Vec::new())
             };
             refs.sort();
             refs.dedup();
@@ -189,19 +200,35 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
             };
             page.lifecycle_state = "blocked".to_string();
             for topic in missing {
-                content_gaps.push(contracts::generated::alegria::temporal::v1::ContentGapState {
-                    content_gap_key: primitives::seo::seo_artifact_key("content_gap",
-                        &[&page.scope_signature,&page.page_node_key,&topic,reason,"page_coverage@1"]),
-                    scope_signature: page.scope_signature.clone(),
-                    page_node_key: page.page_node_key.clone(),
-                    missing_topic: topic,
-                    severity: if duplicate.is_some() { "medium" } else { "high" }.into(),
-                    status: "open".into(),
-                    reason_code: reason.into(),
-                    topic_keys: Vec::new(), triple_refs: Vec::new(),
-                    graph_confidence: 0.0,
-                    support_refs: refs.clone(),
-                });
+                content_gaps.push(
+                    contracts::generated::alegria::temporal::v1::ContentGapState {
+                        content_gap_key: primitives::seo::seo_artifact_key(
+                            "content_gap",
+                            &[
+                                &page.scope_signature,
+                                &page.page_node_key,
+                                &topic,
+                                reason,
+                                "page_coverage@1",
+                            ],
+                        ),
+                        scope_signature: page.scope_signature.clone(),
+                        page_node_key: page.page_node_key.clone(),
+                        missing_topic: topic,
+                        severity: if duplicate.is_some() {
+                            "medium"
+                        } else {
+                            "high"
+                        }
+                        .into(),
+                        status: "open".into(),
+                        reason_code: reason.into(),
+                        topic_keys: Vec::new(),
+                        triple_refs: Vec::new(),
+                        graph_confidence: 0.0,
+                        support_refs: refs.clone(),
+                    },
+                );
             }
         }
     }
@@ -280,10 +307,14 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         }
     }
 
-    let mut unique_links = BTreeMap::<(String,String),LinkRecommendationState>::new();
+    let mut unique_links = BTreeMap::<(String, String), LinkRecommendationState>::new();
     for mut link in links {
-        if !node_by_key.get(&link.source_page_key).is_some_and(page_is_linkable)
-            || !node_by_key.get(&link.target_page_key).is_some_and(page_is_linkable)
+        if !node_by_key
+            .get(&link.source_page_key)
+            .is_some_and(page_is_linkable)
+            || !node_by_key
+                .get(&link.target_page_key)
+                .is_some_and(page_is_linkable)
             || link.source_page_key == link.target_page_key
             || matches!(link.status.as_str(), "deprecated" | "rejected" | "expired")
         {
@@ -292,17 +323,19 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         if link.status.trim().is_empty() {
             link.status = "candidate".to_string();
         }
-        let key=(link.source_page_key.clone(),link.target_page_key.clone());
-        let replace=unique_links.get(&key).is_none_or(|prior|
+        let key = (link.source_page_key.clone(), link.target_page_key.clone());
+        let replace = unique_links.get(&key).is_none_or(|prior| {
             (link.required_flag && !prior.required_flag)
-            || (link.required_flag == prior.required_flag &&
-                (link.score.total_cmp(&prior.score).is_gt()
-                 || (link.score==prior.score && link.link_recommendation_key<prior.link_recommendation_key))));
+                || (link.required_flag == prior.required_flag
+                    && (link.score.total_cmp(&prior.score).is_gt()
+                        || (link.score == prior.score
+                            && link.link_recommendation_key < prior.link_recommendation_key)))
+        });
         if replace {
-            unique_links.insert(key,link);
+            unique_links.insert(key, link);
         }
     }
-    let deduped=unique_links.into_values().collect::<Vec<_>>();
+    let deduped = unique_links.into_values().collect::<Vec<_>>();
 
     if let Some(graph_context) = input.graph_context.as_ref() {
         for coverage in &graph_context.coverage_signals {
@@ -411,35 +444,65 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod actual_coverage_tests {
     use super::*;
-    use contracts::generated::alegria::temporal::v1::{PageBlueprintState,SeoVerifiedFactSupportState};
+    use contracts::generated::alegria::temporal::v1::{
+        PageBlueprintState, SeoVerifiedFactSupportState,
+    };
 
     #[test]
     fn missing_and_duplicate_evidence_are_real_gaps_not_publishable_pages() {
-        let page=|key:&str,blueprint:&str| PageNodeState {
-            page_node_key:key.into(), blueprint_key:blueprint.into(),scope_signature:"scope".into(),
-            page_type_key:"detail_page".into(),canonical_url_path:format!("/{key}/"),
-            lifecycle_state:"planned".into(), ..Default::default()
-        };
-        let blueprint=|key:&str,role:&str| PageBlueprintState {
-            blueprint_key:key.into(),required_sections:vec!["overview".into(),role.into()],
+        let page = |key: &str, blueprint: &str| PageNodeState {
+            page_node_key: key.into(),
+            blueprint_key: blueprint.into(),
+            scope_signature: "scope".into(),
+            page_type_key: "detail_page".into(),
+            canonical_url_path: format!("/{key}/"),
+            lifecycle_state: "planned".into(),
             ..Default::default()
         };
-        let output=execute(&GlobalSiteReconcileInputPayload {
-            page_nodes:vec![page("documents","doc"),page("duplicate","doc"),page("cost","fee")],
-            page_blueprints:vec![blueprint("doc","documents"),blueprint("fee","fees")],
-            verified_support:vec![SeoVerifiedFactSupportState {
-                support_ref:"verified".into(),fragment_text:"Document required".into(),
-                role_type:"document_required".into(),freshness_class:"fresh".into(),..Default::default()
+        let blueprint = |key: &str, role: &str| PageBlueprintState {
+            blueprint_key: key.into(),
+            required_sections: vec!["overview".into(), role.into()],
+            ..Default::default()
+        };
+        let output = execute(&GlobalSiteReconcileInputPayload {
+            page_nodes: vec![
+                page("documents", "doc"),
+                page("duplicate", "doc"),
+                page("cost", "fee"),
+            ],
+            page_blueprints: vec![blueprint("doc", "documents"), blueprint("fee", "fees")],
+            verified_support: vec![SeoVerifiedFactSupportState {
+                support_ref: "verified".into(),
+                fragment_text: "Document required".into(),
+                role_type: "document_required".into(),
+                freshness_class: "fresh".into(),
+                ..Default::default()
             }],
             ..Default::default()
         });
-        assert_eq!(output.page_nodes.iter().filter(|page| page.lifecycle_state=="blocked").count(),2);
-        assert!(output.content_gaps.iter().any(|gap| gap.page_node_key=="cost" && gap.missing_topic=="fees"));
-        assert!(output.content_gaps.iter().any(|gap| gap.page_node_key=="duplicate" && gap.reason_code=="page_duplicate_verified_evidence"));
-        assert!(output.link_recommendations.iter().all(|link| link.target_page_key!="duplicate" && link.target_page_key!="cost"));
+        assert_eq!(
+            output
+                .page_nodes
+                .iter()
+                .filter(|page| page.lifecycle_state == "blocked")
+                .count(),
+            2
+        );
+        assert!(output
+            .content_gaps
+            .iter()
+            .any(|gap| gap.page_node_key == "cost" && gap.missing_topic == "fees"));
+        assert!(output
+            .content_gaps
+            .iter()
+            .any(|gap| gap.page_node_key == "duplicate"
+                && gap.reason_code == "page_duplicate_verified_evidence"));
+        assert!(output
+            .link_recommendations
+            .iter()
+            .all(|link| link.target_page_key != "duplicate" && link.target_page_key != "cost"));
     }
 }

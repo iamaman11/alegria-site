@@ -69,8 +69,14 @@ async fn ensure_pending_run(
     let state: Option<String> = sqlx::query_scalar(
         "SELECT status FROM pipeline.execution_runs WHERE run_id::text=$1 FOR SHARE",
     )
-    .bind(run_id).fetch_optional(&mut **tx).await.map_err(db_error)?;
-    if state.as_deref().is_some_and(|state| matches!(state, "done" | "failed")) {
+    .bind(run_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_error)?;
+    if state
+        .as_deref()
+        .is_some_and(|state| matches!(state, "done" | "failed"))
+    {
         return Err(validation("manual LLM job belongs to a terminal execution"));
     }
     Ok(())
@@ -115,7 +121,9 @@ pub async fn enqueue_editorial(
     input: &EditorialDraftGenerateInputPayload,
 ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
     let (task_id, sha256, value) = job_fingerprint(pool, input).await?;
-    let page_key = input.request.as_ref()
+    let page_key = input
+        .request
+        .as_ref()
         .and_then(|request| request.editorial_brief.as_ref())
         .map(|brief| brief.page_node_key.as_str())
         .filter(|key| !key.trim().is_empty())
@@ -123,14 +131,20 @@ pub async fn enqueue_editorial(
     let mut tx = pool.begin().await.map_err(db_error)?;
     sqlx::query("SELECT pg_advisory_xact_lock(21920, hashtext($1))")
         .bind(format!("{}:{page_key}", input.run_id))
-        .execute(&mut *tx).await.map_err(db_error)?;
-    let existing: Option<String> = sqlx::query_scalar(
-        "SELECT job_status FROM pipeline.manual_llm_jobs WHERE task_id=$1",
-    )
-    .bind(&task_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+        .execute(&mut *tx)
+        .await
+        .map_err(db_error)?;
+    let existing: Option<String> =
+        sqlx::query_scalar("SELECT job_status FROM pipeline.manual_llm_jobs WHERE task_id=$1")
+            .bind(&task_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_error)?;
     if let Some(status) = existing {
         if status == "superseded" {
-            return Err(validation("editorial request was superseded; use the current page request"));
+            return Err(validation(
+                "editorial request was superseded; use the current page request",
+            ));
         }
         tx.commit().await.map_err(db_error)?;
         return read_editorial_result(pool, input).await;
@@ -141,8 +155,11 @@ pub async fn enqueue_editorial(
          WHERE run_id=$1 AND operation='editorial_draft' AND job_status='pending'
            AND input_json #>> '{request,editorial_brief,page_node_key}'=$2",
     )
-    .bind(&input.run_id).bind(page_key)
-    .execute(&mut *tx).await.map_err(db_error)?;
+    .bind(&input.run_id)
+    .bind(page_key)
+    .execute(&mut *tx)
+    .await
+    .map_err(db_error)?;
     sqlx::query(
         "INSERT INTO pipeline.manual_llm_jobs
          (task_id, schema_version, run_id, operation, input_sha256, input_json)

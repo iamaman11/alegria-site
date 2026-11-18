@@ -51,8 +51,13 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
             .iter()
             .map(|original| {
                 let mut localized = original.clone();
-                if let Some(blueprint) = input.page_blueprint.as_ref().filter(|b| !b.required_sections.is_empty()) {
-                    localized.required = blueprint.required_sections.contains(&original.section_role);
+                if let Some(blueprint) = input
+                    .page_blueprint
+                    .as_ref()
+                    .filter(|b| !b.required_sections.is_empty())
+                {
+                    localized.required =
+                        blueprint.required_sections.contains(&original.section_role);
                 }
                 if localized.heading == heading_for_role(&original.section_role) {
                     localized.heading =

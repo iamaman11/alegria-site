@@ -33,7 +33,11 @@ fn multi_section_demand(seed: &str) -> bool {
         ["document", "requirement", "документ"],
         ["cost", "fee", "стоим"],
         ["time", "processing", "срок"],
-    ].iter().filter(|terms| terms.iter().any(|term| text.contains(*term))).count() > 1
+    ]
+    .iter()
+    .filter(|terms| terms.iter().any(|term| text.contains(*term)))
+    .count()
+        > 1
 }
 
 fn page_type_for_keyword(seed_keyword: &str) -> &'static str {
@@ -87,7 +91,13 @@ fn page_type_path_segment(page_type: &str, canonical_slug: &str) -> String {
 
 fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
     let roles: &[&str] = match page_type {
-        "country_hub_page" => &["overview", "who_fits", "where_to_apply", "related_pages", "cta_disclaimer"],
+        "country_hub_page" => &[
+            "overview",
+            "who_fits",
+            "where_to_apply",
+            "related_pages",
+            "cta_disclaimer",
+        ],
         "fee_page" => &["overview", "fees", "faq", "related_pages", "cta_disclaimer"],
         "timeline_page" => &[
             "overview",
@@ -98,7 +108,11 @@ fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
             "cta_disclaimer",
         ],
         "requirement_page" | "checklist_page" => &[
-            "overview", "documents", "faq", "related_pages", "cta_disclaimer",
+            "overview",
+            "documents",
+            "faq",
+            "related_pages",
+            "cta_disclaimer",
         ],
         "faq_page" => &["overview", "faq", "related_pages", "cta_disclaimer"],
         _ => &[
@@ -284,7 +298,8 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         };
         let semantic_seed = semantic_keyword(&cluster.seed_keyword, &cluster.topic_keys);
         // Broad multi-section demand belongs to the existing hub.
-        if !input.verified_support.is_empty() && !source_discovery_query
+        if !input.verified_support.is_empty()
+            && !source_discovery_query
             && semantic_seed.is_some_and(multi_section_demand)
         {
             continue;
@@ -389,32 +404,54 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         ("fee_page", "fees", "fees"),
         ("timeline_page", "timing", "processing-times"),
     ] {
-        if page_nodes.iter().any(|page| page.page_type_key == page_type
-            && page.lifecycle_state == "planned")
-            || !input.verified_support.iter().any(|entry|
-                entry.freshness_class == "fresh" && !entry.support_ref.trim().is_empty()
-                && !entry.fragment_text.trim().is_empty()
-                && runtime_models::seo_blocks::role_matches_section(&entry.role_type, factual_section))
+        if page_nodes
+            .iter()
+            .any(|page| page.page_type_key == page_type && page.lifecycle_state == "planned")
+            || !input.verified_support.iter().any(|entry| {
+                entry.freshness_class == "fresh"
+                    && !entry.support_ref.trim().is_empty()
+                    && !entry.fragment_text.trim().is_empty()
+                    && runtime_models::seo_blocks::role_matches_section(
+                        &entry.role_type,
+                        factual_section,
+                    )
+            })
         {
             continue;
         }
-        let blueprint_key = push_blueprint(&mut page_blueprints, page_type,
-            "informational", "visa_scope", "visa_type_leaf");
-        let page_node_key = artifact_key("page_node",
-            &[&fallback_scope, page_type, "informational", route]);
+        let blueprint_key = push_blueprint(
+            &mut page_blueprints,
+            page_type,
+            "informational",
+            "visa_scope",
+            "visa_type_leaf",
+        );
+        let page_node_key = artifact_key(
+            "page_node",
+            &[&fallback_scope, page_type, "informational", route],
+        );
         let canonical_url_path = format!("{canonical_prefix}/{route}/");
-        if page_nodes.iter().any(|page| page.canonical_url_path == canonical_url_path) {
+        if page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path == canonical_url_path)
+        {
             continue;
         }
         page_nodes.push(PageNodeState {
-            page_node_key, scope_signature:fallback_scope.clone(),
-            keyword_cluster_key:String::new(), blueprint_key,
-            page_type_key:page_type.into(), dominant_intent:"informational".into(),
-            canonical_slug:route.into(), canonical_url_path,
-            lifecycle_state:"planned".into(),
-            parent_page_node_key:hub_page_node_key.clone(), hierarchy_depth:4,
-            menu_group:format!("visa:{country_segment}"),
-            breadcrumb_policy:"path_segments".into(), canonical_url_family:"visa_type_leaf".into(),
+            page_node_key,
+            scope_signature: fallback_scope.clone(),
+            keyword_cluster_key: String::new(),
+            blueprint_key,
+            page_type_key: page_type.into(),
+            dominant_intent: "informational".into(),
+            canonical_slug: route.into(),
+            canonical_url_path,
+            lifecycle_state: "planned".into(),
+            parent_page_node_key: hub_page_node_key.clone(),
+            hierarchy_depth: 4,
+            menu_group: format!("visa:{country_segment}"),
+            breadcrumb_policy: "path_segments".into(),
+            canonical_url_family: "visa_type_leaf".into(),
         });
     }
     IaBuildOutputPayload {
@@ -643,31 +680,57 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod evidence_derived_ia_tests {
     use super::*;
-    use contracts::generated::alegria::temporal::v1::{SeoScopePayload, SeoVerifiedFactSupportState, KeywordClusterState};
+    use contracts::generated::alegria::temporal::v1::{
+        KeywordClusterState, SeoScopePayload, SeoVerifiedFactSupportState,
+    };
 
     #[test]
     fn broad_query_becomes_hub_and_evidence_creates_readable_focused_paths() {
-        let support = |role:&str| SeoVerifiedFactSupportState {
-            support_ref:role.into(), role_type:role.into(), fragment_text:"Verified example".into(),
-            freshness_class:"fresh".into(), ..Default::default()
+        let support = |role: &str| SeoVerifiedFactSupportState {
+            support_ref: role.into(),
+            role_type: role.into(),
+            fragment_text: "Verified example".into(),
+            freshness_class: "fresh".into(),
+            ..Default::default()
         };
-        let output=execute(&IaBuildInputPayload {
-            scope:Some(SeoScopePayload { country_code:"ES".into(), visa_type:"tourist".into(), locale:"ru-RU".into(), ..Default::default() }),
-            keyword_clusters:vec![KeywordClusterState {
-                seed_keyword:"виза документы стоимость сроки".into(), cluster_key:"cluster".into(),
+        let output = execute(&IaBuildInputPayload {
+            scope: Some(SeoScopePayload {
+                country_code: "ES".into(),
+                visa_type: "tourist".into(),
+                locale: "ru-RU".into(),
+                ..Default::default()
+            }),
+            keyword_clusters: vec![KeywordClusterState {
+                seed_keyword: "виза документы стоимость сроки".into(),
+                cluster_key: "cluster".into(),
                 ..Default::default()
             }],
-            verified_support:vec![support("document_required"),support("fee_item"),support("timeline_item")],
+            verified_support: vec![
+                support("document_required"),
+                support("fee_item"),
+                support("timeline_item"),
+            ],
             ..Default::default()
         });
-        assert_eq!(output.page_nodes.len(),5);
-        assert!(output.page_nodes.iter().any(|page| page.canonical_url_path.ends_with("/documents/")));
-        assert!(output.page_nodes.iter().any(|page| page.canonical_url_path.ends_with("/fees/")));
-        assert!(output.page_nodes.iter().any(|page| page.canonical_url_path.ends_with("/processing-times/")));
-        assert!(!output.page_nodes.iter().any(|page| page.keyword_cluster_key=="cluster"));
+        assert_eq!(output.page_nodes.len(), 5);
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/documents/")));
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/fees/")));
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/processing-times/")));
+        assert!(!output
+            .page_nodes
+            .iter()
+            .any(|page| page.keyword_cluster_key == "cluster"));
     }
 }

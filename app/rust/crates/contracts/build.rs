@@ -13,7 +13,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.page_blueprints",
         ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.verified_support",
     ] {
-        config.field_attribute(field, "#[serde(default, skip_serializing_if = \"Vec::is_empty\")]");
+        config.field_attribute(
+            field,
+            "#[serde(default, skip_serializing_if = \"Vec::is_empty\")]",
+        );
     }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);

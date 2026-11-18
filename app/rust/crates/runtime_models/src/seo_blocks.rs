@@ -179,19 +179,33 @@ pub fn page_verified_support(
     blueprint: &PageBlueprintState,
     support: &[SeoVerifiedFactSupportState],
 ) -> Vec<SeoVerifiedFactSupportState> {
-    let direct_roles = blueprint.required_sections.iter()
-        .filter(|role| matches!(role.as_str(),
-            "documents" | "fees" | "timing" | "where_to_apply" | "process" | "who_fits"))
+    let direct_roles = blueprint
+        .required_sections
+        .iter()
+        .filter(|role| {
+            matches!(
+                role.as_str(),
+                "documents" | "fees" | "timing" | "where_to_apply" | "process" | "who_fits"
+            )
+        })
         .collect::<Vec<_>>();
     let mut seen = std::collections::BTreeSet::new();
-    support.iter()
-        .filter(|entry| !entry.support_ref.trim().is_empty()
-            && !entry.fragment_text.trim().is_empty()
-            && entry.freshness_class == "fresh")
-        .filter(|entry| direct_roles.is_empty()
-            || direct_roles.iter().any(|role| role_matches_section(&entry.role_type, role)))
+    support
+        .iter()
+        .filter(|entry| {
+            !entry.support_ref.trim().is_empty()
+                && !entry.fragment_text.trim().is_empty()
+                && entry.freshness_class == "fresh"
+        })
+        .filter(|entry| {
+            direct_roles.is_empty()
+                || direct_roles
+                    .iter()
+                    .any(|role| role_matches_section(&entry.role_type, role))
+        })
         .filter(|entry| seen.insert(entry.support_ref.clone()))
-        .cloned().collect()
+        .cloned()
+        .collect()
 }
 
 /// A target page is one link obligation even if several graph roles support it.
@@ -202,15 +216,18 @@ pub fn required_links_for_published_targets(
     published: &std::collections::BTreeSet<String>,
 ) -> Vec<LinkRecommendationState> {
     let mut by_target = std::collections::BTreeMap::<String, LinkRecommendationState>::new();
-    for link in links.iter().filter(|link| link.required_flag
-        && link.source_page_key == source_page_key
-        && link.target_page_key != source_page_key
-        && published.contains(&link.target_page_key)
-        && !matches!(link.status.as_str(), "rejected" | "expired" | "deprecated"))
-    {
-        let replace = by_target.get(&link.target_page_key).is_none_or(|prior|
+    for link in links.iter().filter(|link| {
+        link.required_flag
+            && link.source_page_key == source_page_key
+            && link.target_page_key != source_page_key
+            && published.contains(&link.target_page_key)
+            && !matches!(link.status.as_str(), "rejected" | "expired" | "deprecated")
+    }) {
+        let replace = by_target.get(&link.target_page_key).is_none_or(|prior| {
             link.score.total_cmp(&prior.score).is_gt()
-            || (link.score == prior.score && link.link_recommendation_key < prior.link_recommendation_key));
+                || (link.score == prior.score
+                    && link.link_recommendation_key < prior.link_recommendation_key)
+        });
         if replace {
             by_target.insert(link.target_page_key.clone(), link.clone());
         }
@@ -649,7 +666,6 @@ pub fn render_verified_source_list(
         .join("\n")
 }
 
-
 #[cfg(test)]
 mod page_evidence_selection_tests {
     use super::*;
@@ -658,13 +674,17 @@ mod page_evidence_selection_tests {
     fn specialized_page_does_not_receive_unrelated_truth() {
         let support = vec![
             SeoVerifiedFactSupportState {
-                support_ref:"fee".into(), role_type:"fee_item".into(),
-                fragment_text:"Fee amount".into(), freshness_class:"fresh".into(),
+                support_ref: "fee".into(),
+                role_type: "fee_item".into(),
+                fragment_text: "Fee amount".into(),
+                freshness_class: "fresh".into(),
                 ..Default::default()
             },
             SeoVerifiedFactSupportState {
-                support_ref:"document".into(), role_type:"document_required".into(),
-                fragment_text:"Document required".into(), freshness_class:"fresh".into(),
+                support_ref: "document".into(),
+                role_type: "document_required".into(),
+                fragment_text: "Document required".into(),
+                freshness_class: "fresh".into(),
                 ..Default::default()
             },
         ];
@@ -672,27 +692,41 @@ mod page_evidence_selection_tests {
             required_sections: vec!["overview".into(), "fees".into(), "faq".into()],
             ..Default::default()
         };
-        let selected = page_verified_support(&blueprint,&support);
-        assert_eq!(selected.len(),1);
-        assert_eq!(selected[0].support_ref,"fee");
-        assert!(missing_required_factual_roles(&blueprint,&selected).is_empty());
+        let selected = page_verified_support(&blueprint, &support);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].support_ref, "fee");
+        assert!(missing_required_factual_roles(&blueprint, &selected).is_empty());
         let mut stale = support[0].clone();
         stale.freshness_class = "stale".into();
-        assert!(page_verified_support(&blueprint,&[stale]).is_empty());
+        assert!(page_verified_support(&blueprint, &[stale]).is_empty());
     }
 
     #[test]
     fn repeated_graph_roles_do_not_create_duplicate_links_or_future_targets() {
         let link = LinkRecommendationState {
-            source_page_key:"source".into(), target_page_key:"parent".into(),
-            required_flag:true, score:0.8, link_recommendation_key:"a".into(),
-            status:"candidate".into(), ..Default::default()
+            source_page_key: "source".into(),
+            target_page_key: "parent".into(),
+            required_flag: true,
+            score: 0.8,
+            link_recommendation_key: "a".into(),
+            status: "candidate".into(),
+            ..Default::default()
         };
-        let better = LinkRecommendationState { score:0.95, link_recommendation_key:"b".into(), ..link.clone() };
-        let future = LinkRecommendationState { target_page_key:"future".into(), ..link.clone() };
-        let selected = required_links_for_published_targets(&[link,better,future], "source",
-            &std::collections::BTreeSet::from(["parent".into()]));
-        assert_eq!(selected.len(),1);
-        assert_eq!(selected[0].link_recommendation_key,"b");
+        let better = LinkRecommendationState {
+            score: 0.95,
+            link_recommendation_key: "b".into(),
+            ..link.clone()
+        };
+        let future = LinkRecommendationState {
+            target_page_key: "future".into(),
+            ..link.clone()
+        };
+        let selected = required_links_for_published_targets(
+            &[link, better, future],
+            "source",
+            &std::collections::BTreeSet::from(["parent".into()]),
+        );
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].link_recommendation_key, "b");
     }
 }
