@@ -448,28 +448,39 @@ pub async fn persist_opportunity_build_output(
     }
 
     for gap in &output.content_gaps {
+        use primitives::seo::ContentGapDetector;
         non_empty(&gap.content_gap_key, "content_gap_key")?;
-        sqlx::query(
+        non_empty(&gap.scope_signature, "gap scope_signature")?;
+        non_empty(&gap.missing_topic, "gap missing_topic")?;
+        let detector = ContentGapDetector::from_reason(&gap.reason_code)
+            .ok_or_else(|| contract_violation("unknown content gap detector"))?;
+        if !detector.valid_owner(&gap.page_node_key) {
+            return Err(contract_violation("content gap detector has invalid owner"));
+        }
+        // The natural identity is the authority, including NULL page ownership.
+        // A migrated legacy record retains its original projection identity.
+        let canonical_key = detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic);
+        let persisted_key: String = sqlx::query_scalar(
             r#"
             INSERT INTO site.content_gaps
                 (content_gap_key, scope_signature, page_node_key, missing_topic,
                  severity, detector_version, status, reason_payload, reason_version)
-            VALUES ($1, $2, $3, $4, $5, 'seo_content_gap@1', $6, $7, 'graph_planning@1')
-            ON CONFLICT (content_gap_key) DO UPDATE
-            SET page_node_key = EXCLUDED.page_node_key,
-                missing_topic = EXCLUDED.missing_topic,
-                severity      = EXCLUDED.severity,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'graph_planning@1')
+            ON CONFLICT (scope_signature, page_node_key, missing_topic, detector_version) DO UPDATE
+            SET severity      = EXCLUDED.severity,
                 reason_payload = EXCLUDED.reason_payload,
                 reason_version = EXCLUDED.reason_version,
                 status        = EXCLUDED.status,
                 updated_at    = now()
+            RETURNING content_gap_key
             "#,
         )
-        .bind(&gap.content_gap_key)
+        .bind(&canonical_key)
         .bind(&gap.scope_signature)
         .bind(blank_as_none(&gap.page_node_key))
         .bind(&gap.missing_topic)
         .bind(&gap.severity)
+        .bind(detector.version())
         .bind(&gap.status)
         .bind(Json(graph_reason_payload(
             &gap.reason_code,
@@ -478,13 +489,13 @@ pub async fn persist_opportunity_build_output(
             &gap.support_refs,
             gap.graph_confidence,
         )))
-        .execute(pool)
+        .fetch_one(pool)
         .await
         .map_err(classify_sqlx)?;
 
         projection_events.push(seo_graph_projection_event_with_revision(
             "content_gap",
-            &gap.content_gap_key,
+            &persisted_key,
             &gap.scope_signature,
             &format!("{}|{}|{}", gap.missing_topic, gap.severity, gap.status),
         ));
@@ -492,7 +503,7 @@ pub async fn persist_opportunity_build_output(
             &input.run_id,
             "seo_content_gaps",
             "content_gap",
-            &gap.content_gap_key,
+            &persisted_key,
             &gap.scope_signature,
             &format!("{} {} {}", gap.missing_topic, gap.severity, gap.status),
             HashMap::from([

@@ -6,6 +6,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature};
+use primitives::seo::ContentGapDetector;
 
 fn topic_tokens(value: &str) -> BTreeSet<String> {
     value
@@ -181,25 +182,19 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
             support_refs,
         });
         if pattern.reliability_score < 0.5 {
+            let detector = ContentGapDetector::SerpReliability;
+            let missing_topic = representative_queries
+                .get(&(scope.clone(), family_key.clone()))
+                .map(|(query, _)| query.clone())
+                .unwrap_or_else(|| seed_keyword.clone());
             content_gaps.push(ContentGapState {
-                content_gap_key: artifact_key(
-                    "content_gap",
-                    &[
-                        &scope,
-                        &family_key,
-                        "low_reliability_serp",
-                        "seo_content_gap@1",
-                    ],
-                ),
+                content_gap_key: detector.key(&scope, "", &missing_topic),
                 scope_signature: scope.clone(),
                 page_node_key: String::new(),
-                missing_topic: representative_queries
-                    .get(&(scope.clone(), family_key.clone()))
-                    .map(|(query, _)| query.clone())
-                    .unwrap_or_else(|| seed_keyword.clone()),
+                missing_topic,
                 severity: "medium".to_string(),
                 status: "open".to_string(),
-                reason_code: "low_reliability_serp".to_string(),
+                reason_code: detector.reason().to_string(),
                 topic_keys: Vec::new(),
                 triple_refs: Vec::new(),
                 graph_confidence: pattern.reliability_score,
@@ -215,26 +210,27 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
     if let Some(graph_context) = graph_context {
         for signal in &graph_context.coverage_signals {
             for missing_topic in &signal.missing_topic_keys {
-                let gap_key = artifact_key(
-                    "content_gap",
-                    &[
-                        &fallback_scope,
-                        missing_topic,
-                        "graph_missing_topic_coverage",
-                        "seo_content_gap@1",
-                    ],
-                );
+                let detector = ContentGapDetector::GraphCoverage;
+                if !detector.valid_owner(&signal.page_node_key) || missing_topic.trim().is_empty() {
+                    continue;
+                }
+                let scope = graph_context.page_nodes.iter()
+                    .find(|page| page.page_node_key == signal.page_node_key)
+                    .map(|page| page.scope_signature.as_str())
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or(&fallback_scope);
+                let gap_key = detector.key(scope, &signal.page_node_key, missing_topic);
                 if !seen_gap_keys.insert(gap_key.clone()) {
                     continue;
                 }
                 content_gaps.push(ContentGapState {
                     content_gap_key: gap_key,
-                    scope_signature: fallback_scope.clone(),
+                    scope_signature: scope.to_string(),
                     page_node_key: signal.page_node_key.clone(),
                     missing_topic: missing_topic.clone(),
                     severity: "high".to_string(),
                     status: "open".to_string(),
-                    reason_code: "graph_missing_topic_coverage".to_string(),
+                    reason_code: detector.reason().to_string(),
                     topic_keys: vec![missing_topic.clone()],
                     triple_refs: graph_context
                         .triple_signals

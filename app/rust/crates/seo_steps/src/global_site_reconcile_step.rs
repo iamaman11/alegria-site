@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use primitives::seo::ContentGapDetector;
 
 use contracts::generated::alegria::temporal::v1::{
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, LinkRecommendationState,
@@ -189,29 +190,20 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
                 evidence_owners.insert(refs, page.page_node_key.clone());
                 continue;
             }
-            let reason = if duplicate.is_some() {
+            let detector = if duplicate.is_some() {
                 missing.push("distinct_verified_evidence".into());
-                "page_duplicate_verified_evidence"
+                ContentGapDetector::DuplicateVerifiedEvidence
             } else {
                 if missing.is_empty() {
                     missing.push("verified_evidence".into());
                 }
-                "page_missing_verified_support"
+                ContentGapDetector::MissingVerifiedSupport
             };
             page.lifecycle_state = "blocked".to_string();
             for topic in missing {
                 content_gaps.push(
                     contracts::generated::alegria::temporal::v1::ContentGapState {
-                        content_gap_key: primitives::seo::seo_artifact_key(
-                            "content_gap",
-                            &[
-                                &page.scope_signature,
-                                &page.page_node_key,
-                                &topic,
-                                reason,
-                                "page_coverage@1",
-                            ],
-                        ),
+                        content_gap_key: detector.key(&page.scope_signature, &page.page_node_key, &topic),
                         scope_signature: page.scope_signature.clone(),
                         page_node_key: page.page_node_key.clone(),
                         missing_topic: topic,
@@ -222,7 +214,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
                         }
                         .into(),
                         status: "open".into(),
-                        reason_code: reason.into(),
+                        reason_code: detector.reason().into(),
                         topic_keys: Vec::new(),
                         triple_refs: Vec::new(),
                         graph_confidence: 0.0,
@@ -338,31 +330,29 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
     let deduped = unique_links.into_values().collect::<Vec<_>>();
 
     if let Some(graph_context) = input.graph_context.as_ref() {
+        let mut seen = BTreeSet::new();
         for coverage in &graph_context.coverage_signals {
+            let Some(page) = node_by_key.get(&coverage.page_node_key) else {
+                continue;
+            };
+            if matches!(page.lifecycle_state.as_str(), "deprecated" | "stale") {
+                continue;
+            }
             for missing_topic in &coverage.missing_topic_keys {
+                let detector = ContentGapDetector::ReconcileCoverage;
+                let gap_key = detector.key(&page.scope_signature, &page.page_node_key, missing_topic);
+                if missing_topic.trim().is_empty() || !seen.insert(gap_key.clone()) {
+                    continue;
+                }
                 content_gaps.push(
                     contracts::generated::alegria::temporal::v1::ContentGapState {
-                        content_gap_key: primitives::seo::seo_artifact_key(
-                            "content_gap",
-                            &[
-                                &page_nodes
-                                    .first()
-                                    .map(|page| page.scope_signature.clone())
-                                    .unwrap_or_default(),
-                                missing_topic,
-                                "global_reconcile_missing_topic",
-                                "seo_content_gap@1",
-                            ],
-                        ),
-                        scope_signature: page_nodes
-                            .first()
-                            .map(|page| page.scope_signature.clone())
-                            .unwrap_or_default(),
+                        content_gap_key: gap_key,
+                        scope_signature: page.scope_signature.clone(),
                         page_node_key: coverage.page_node_key.clone(),
                         missing_topic: missing_topic.clone(),
                         severity: "medium".to_string(),
                         status: "open".to_string(),
-                        reason_code: "global_reconcile_missing_topic".to_string(),
+                        reason_code: detector.reason().to_string(),
                         topic_keys: vec![missing_topic.clone()],
                         triple_refs: Vec::new(),
                         graph_confidence: coverage.graph_confidence,

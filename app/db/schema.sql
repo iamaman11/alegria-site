@@ -792,7 +792,8 @@ CREATE TABLE IF NOT EXISTS site.content_gaps (
                        CHECK (status IN ('open','accepted','resolved','rejected','deprecated')),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (scope_signature, missing_topic, detector_version)
+    CONSTRAINT content_gaps_owner_topic_detector_key
+        UNIQUE NULLS NOT DISTINCT (scope_signature, page_node_key, missing_topic, detector_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_content_gaps_scope

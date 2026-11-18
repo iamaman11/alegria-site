@@ -181,13 +181,18 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 }
             }
             if !input.page_blueprints.is_empty() {
-                let gap_keys = gaps.iter().map(|gap| gap.content_gap_key.clone())
+                use primitives::seo::ContentGapDetector;
+                let identity = |gap: &contracts::generated::alegria::temporal::v1::ContentGapState| {
+                    ContentGapDetector::from_reason(&gap.reason_code)
+                        .map(|detector| detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic))
+                };
+                let gap_keys = gaps.iter().filter_map(identity)
                     .collect::<std::collections::BTreeSet<_>>();
                 for prior in &context.content_gaps {
                     if prior.status == "open"
                         && matches!(prior.reason_code.as_str(),
                             "page_missing_verified_support" | "page_duplicate_verified_evidence")
-                        && !gap_keys.contains(&prior.content_gap_key)
+                        && identity(prior).is_some_and(|key| !gap_keys.contains(&key))
                         && output.page_nodes.iter().any(|page|
                             page.page_node_key == prior.page_node_key
                             && !matches!(page.lifecycle_state.as_str(), "blocked" | "deprecated" | "stale"))
