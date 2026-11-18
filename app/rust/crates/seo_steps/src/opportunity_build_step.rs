@@ -282,16 +282,28 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
                 } else {
                     previous.clone()
                 };
-                merged.topic_keys.extend(previous.topic_keys.iter().cloned());
-                merged.topic_keys.extend(candidate.topic_keys.iter().cloned());
+                merged
+                    .topic_keys
+                    .extend(previous.topic_keys.iter().cloned());
+                merged
+                    .topic_keys
+                    .extend(candidate.topic_keys.iter().cloned());
                 merged.topic_keys.sort();
                 merged.topic_keys.dedup();
-                merged.triple_refs.extend(previous.triple_refs.iter().cloned());
-                merged.triple_refs.extend(candidate.triple_refs.iter().cloned());
+                merged
+                    .triple_refs
+                    .extend(previous.triple_refs.iter().cloned());
+                merged
+                    .triple_refs
+                    .extend(candidate.triple_refs.iter().cloned());
                 merged.triple_refs.sort();
                 merged.triple_refs.dedup();
-                merged.support_refs.extend(previous.support_refs.iter().cloned());
-                merged.support_refs.extend(candidate.support_refs.iter().cloned());
+                merged
+                    .support_refs
+                    .extend(previous.support_refs.iter().cloned());
+                merged
+                    .support_refs
+                    .extend(candidate.support_refs.iter().cloned());
                 merged.support_refs.sort();
                 merged.support_refs.dedup();
                 entry.insert(merged);
