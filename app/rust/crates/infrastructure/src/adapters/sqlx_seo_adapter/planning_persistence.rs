@@ -313,7 +313,7 @@ pub async fn persist_opportunity_build_output(
     pool: &PgPool,
     input: &OpportunityBuildInputPayload,
     output: &OpportunityBuildOutputPayload,
-) -> Result<(), DomainError> {
+) -> Result<OpportunityBuildOutputPayload, DomainError> {
     let fallback_scope_signature = input
         .scope
         .as_ref()
@@ -321,8 +321,47 @@ pub async fn persist_opportunity_build_output(
         .unwrap_or("default");
     let scope = scope_fields(input.scope.as_ref(), fallback_scope_signature);
 
+    // Technical SERP family keys can change between retained-corpus passes.
+    // The existing natural-key owner must survive: page nodes and graph edges
+    // may already reference it. Resolve before persisting *and* before handing
+    // the output to downstream IA, rather than weakening the UNIQUE constraint.
+    let mut canonical = output.clone();
+    for cluster in &mut canonical.keyword_clusters {
+        non_empty(&cluster.cluster_key, "cluster_key")?;
+        non_empty(&cluster.seed_keyword, "seed_keyword")?;
+        let existing: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT cluster_key FROM site.keyword_clusters
+            WHERE market = $1 AND locale = $2
+              AND country_code IS NOT DISTINCT FROM $3
+              AND visa_type IS NOT DISTINCT FROM $4
+              AND applicant_profile IS NOT DISTINCT FROM $5
+              AND seed_keyword = $6 AND cluster_version = $7
+            ORDER BY cluster_key LIMIT 2
+            "#,
+        )
+        .bind(&scope.market)
+        .bind(&scope.locale)
+        .bind(&scope.country_code)
+        .bind(&scope.visa_type)
+        .bind(&scope.applicant_profile)
+        .bind(&cluster.seed_keyword)
+        .bind(cluster.cluster_version as i32)
+        .fetch_all(pool)
+        .await
+        .map_err(classify_sqlx)?;
+        if existing.len() > 1 {
+            return Err(contract_violation(
+                "ambiguous existing keyword natural owner; refuse to reassign references",
+            ));
+        }
+        if let Some(owner_key) = existing.first() {
+            cluster.cluster_key = owner_key.clone();
+        }
+    }
+
     let mut projection_events = Vec::new();
-    for cluster in &output.keyword_clusters {
+    for cluster in &canonical.keyword_clusters {
         non_empty(&cluster.cluster_key, "cluster_key")?;
         non_empty(&cluster.seed_keyword, "seed_keyword")?;
         let cluster_scope = if cluster.scope_signature.trim().is_empty() {
@@ -515,7 +554,7 @@ pub async fn persist_opportunity_build_output(
     }
 
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
-    Ok(())
+    Ok(canonical)
 }
 
 pub async fn persist_ia_build_output(

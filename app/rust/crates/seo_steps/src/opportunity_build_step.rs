@@ -251,8 +251,56 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
         }
     }
 
+    // The same real query can appear under more than one internal SERP/Voyage
+    // family. The database owns one natural keyword identity per scope/query,
+    // regardless of how many technical cluster_ref values suggested it.
+    // Merge their evidence before persistence; keep the winner deterministic
+    // even when provider rows arrive in a different order.
+    // The persistence owner also fixes the market/locale/country/type/profile
+    // for this input; its natural UNIQUE key does not include scope_signature.
+    let mut by_keyword = BTreeMap::<(String, u32), KeywordClusterState>::new();
+    for candidate in keyword_clusters {
+        let natural = (candidate.seed_keyword.clone(), candidate.cluster_version);
+        match by_keyword.entry(natural) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let previous = entry.get();
+                let higher_confidence = candidate
+                    .graph_confidence
+                    .total_cmp(&previous.graph_confidence)
+                    .is_gt();
+                let same_confidence = candidate
+                    .graph_confidence
+                    .total_cmp(&previous.graph_confidence)
+                    .is_eq();
+                let mut merged = if higher_confidence
+                    || (same_confidence && candidate.cluster_key < previous.cluster_key)
+                {
+                    candidate.clone()
+                } else {
+                    previous.clone()
+                };
+                merged.topic_keys.extend(previous.topic_keys.iter().cloned());
+                merged.topic_keys.extend(candidate.topic_keys.iter().cloned());
+                merged.topic_keys.sort();
+                merged.topic_keys.dedup();
+                merged.triple_refs.extend(previous.triple_refs.iter().cloned());
+                merged.triple_refs.extend(candidate.triple_refs.iter().cloned());
+                merged.triple_refs.sort();
+                merged.triple_refs.dedup();
+                merged.support_refs.extend(previous.support_refs.iter().cloned());
+                merged.support_refs.extend(candidate.support_refs.iter().cloned());
+                merged.support_refs.sort();
+                merged.support_refs.dedup();
+                entry.insert(merged);
+            }
+        }
+    }
+
     OpportunityBuildOutputPayload {
-        keyword_clusters,
+        keyword_clusters: by_keyword.into_values().collect(),
         content_gaps,
     }
 }
@@ -299,6 +347,45 @@ mod tests {
         assert_eq!(
             output.keyword_clusters[0].reason_code,
             "graph_topic_family_merge"
+        );
+    }
+
+    #[test]
+    fn distinct_serp_families_cannot_duplicate_one_real_keyword() {
+        use contracts::generated::alegria::temporal::v1::SerpPatternState;
+
+        let patterns = vec![
+            SerpPatternState {
+                scope_signature: "same-scope".into(),
+                query: "Виза в Испанию для белорусов".into(),
+                dominant_intent: "informational".into(),
+                evidence_ref: "cluster_ref:family-one".into(),
+                reliability_score: 0.6,
+                ..Default::default()
+            },
+            SerpPatternState {
+                scope_signature: "same-scope".into(),
+                query: "виза в испанию для белорусов".into(),
+                dominant_intent: "commercial".into(),
+                evidence_ref: "cluster_ref:family-two".into(),
+                reliability_score: 0.9,
+                ..Default::default()
+            },
+        ];
+        let result = execute(&OpportunityBuildInputPayload {
+            serp_patterns: patterns.clone(),
+            ..Default::default()
+        });
+        let reversed = execute(&OpportunityBuildInputPayload {
+            serp_patterns: patterns.into_iter().rev().collect(),
+            ..Default::default()
+        });
+        assert_eq!(result.keyword_clusters.len(), 1);
+        assert_eq!(result.keyword_clusters, reversed.keyword_clusters);
+        assert_eq!(result.keyword_clusters[0].dominant_intent, "commercial");
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            "виза в испанию для белорусов"
         );
     }
 

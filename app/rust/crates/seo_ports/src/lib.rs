@@ -303,7 +303,7 @@ pub trait PlanningRepository: Send + Sync {
         &self,
         input: &OpportunityBuildInputPayload,
         output: &OpportunityBuildOutputPayload,
-    ) -> Result<(), DomainError>;
+    ) -> Result<OpportunityBuildOutputPayload, DomainError>;
 
     /// The same keyword cluster retains one page identity when its URL changes.
     async fn existing_page_owners_by_cluster(

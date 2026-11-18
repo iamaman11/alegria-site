@@ -81,7 +81,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         &self,
         input: &OpportunityBuildInputPayload,
         output: &OpportunityBuildOutputPayload,
-    ) -> Result<(), DomainError> {
+    ) -> Result<OpportunityBuildOutputPayload, DomainError> {
         sqlx_seo_adapter::persist_opportunity_build_output(self.pool, input, output).await
     }
 

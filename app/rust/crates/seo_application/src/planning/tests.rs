@@ -68,9 +68,9 @@ mod tests {
         async fn persist_opportunity_build_output(
             &self,
             _input: &OpportunityBuildInputPayload,
-            _output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
-            Ok(())
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+            Ok(output.clone())
         }
 
         async fn persist_ia_build_output(
@@ -276,10 +276,10 @@ mod tests {
             &self,
             input: &OpportunityBuildInputPayload,
             output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
             *self.opportunity_input.lock().unwrap() = Some(input.clone());
             *self.opportunity_output.lock().unwrap() = Some(output.clone());
-            Ok(())
+            Ok(output.clone())
         }
 
         async fn persist_ia_build_output(

@@ -38,9 +38,9 @@ pub async fn run_opportunity_build<
             }
         }
     }
-    repo.persist_opportunity_build_output(&enriched, &output)
-        .await?;
-    Ok(output)
+    // Persistence may resolve a new SERP family to the existing natural-key
+    // cluster owner. Return that canonical identity to IA and projection users.
+    repo.persist_opportunity_build_output(&enriched, &output).await
 }
 
 pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort + GraphCapabilityPort>(

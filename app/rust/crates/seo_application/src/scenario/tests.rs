@@ -212,9 +212,9 @@ mod tests {
         async fn persist_opportunity_build_output(
             &self,
             _input: &OpportunityBuildInputPayload,
-            _output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
-            Ok(())
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+            Ok(output.clone())
         }
         async fn persist_ia_build_output(
             &self,

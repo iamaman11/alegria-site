@@ -883,6 +883,94 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
+async fn keyword_cluster_natural_owner_survives_changed_serp_family() {
+    use contracts::generated::alegria::temporal::v1::{
+        KeywordClusterState, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
+    };
+    use infrastructure::adapters::{
+        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
+    };
+    use seo_application::registration::register_site_build_input;
+    use seo_ports::SeoSiteBuildRegistrationRequest;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let repo = SqlxSeoRuntimeRepository::new(pool);
+    let register = |run_id: String| SeoSiteBuildRegistrationRequest {
+        run_id,
+        context_key: None,
+        market: "alegria-site".into(),
+        locale: "ru-RU".into(),
+        country_code: "ES".into(),
+        visa_type: "tourist".into(),
+        visa_subtype: None,
+        applicant_profile: "standard".into(),
+        citizenship_code: "BY".into(),
+        bootstrap_context: true,
+        queries: vec!["виза в испанию для белорусов".into()],
+        query_batch_key: None,
+        run_mode: Some("publish_with_hitl".into()),
+        retained_source_run_id: None,
+    };
+    let first_site = register_site_build_input(&repo, &register(Uuid::new_v4().to_string()))
+        .await.unwrap();
+    let second_site = register_site_build_input(&repo, &register(Uuid::new_v4().to_string()))
+        .await.unwrap();
+    let keyword = "виза в испанию для белорусов";
+    let old_cluster = KeywordClusterState {
+        cluster_key: "original-natural-owner".into(),
+        scope_signature: first_site.scope.as_ref().unwrap().scope_signature.clone(),
+        seed_keyword: keyword.into(),
+        dominant_intent: "informational".into(),
+        status: "candidate".into(),
+        cluster_version: 1,
+        reason_code: "serp_seed_cluster".into(),
+        ..Default::default()
+    };
+    let first = sqlx_seo_adapter::persist_opportunity_build_output(
+        pool,
+        &OpportunityBuildInputPayload {
+            run_id: first_site.run_id,
+            scope: first_site.scope.clone(),
+            ..Default::default()
+        },
+        &OpportunityBuildOutputPayload {
+            keyword_clusters: vec![old_cluster.clone()],
+            ..Default::default()
+        },
+    ).await.unwrap();
+    assert_eq!(first.keyword_clusters[0].cluster_key, "original-natural-owner");
+
+    let mut changed_family = old_cluster;
+    changed_family.cluster_key = "new-technical-serp-family".into();
+    changed_family.dominant_intent = "commercial".into();
+    let second = sqlx_seo_adapter::persist_opportunity_build_output(
+        pool,
+        &OpportunityBuildInputPayload {
+            run_id: second_site.run_id,
+            scope: second_site.scope,
+            ..Default::default()
+        },
+        &OpportunityBuildOutputPayload {
+            keyword_clusters: vec![changed_family],
+            ..Default::default()
+        },
+    ).await.unwrap();
+    assert_eq!(second.keyword_clusters.len(), 1);
+    assert_eq!(second.keyword_clusters[0].cluster_key, "original-natural-owner");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.keyword_clusters WHERE seed_keyword=$1 AND cluster_version=1",
+    ).bind(keyword).fetch_one(pool).await.unwrap();
+    assert_eq!(count, 1, "repeat processing must preserve the natural-key owner");
+    let intent: String = sqlx::query_scalar(
+        "SELECT dominant_intent FROM site.keyword_clusters WHERE cluster_key='original-natural-owner'",
+    ).fetch_one(pool).await.unwrap();
+    assert_eq!(intent, "commercial");
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
 async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
     use contracts::generated::alegria::temporal::v1::{
         ContentGapState, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
