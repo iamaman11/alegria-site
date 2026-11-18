@@ -86,6 +86,7 @@ async fn run_planning_phase<
                 repo,
                 repo,
                 &IaBuildInputPayload {
+                    verified_support: state.verified_support.clone(),
                     run_id,
                     scope: request.site_input.scope.clone(),
                     keyword_clusters: opportunities.keyword_clusters.clone(),
@@ -131,6 +132,8 @@ async fn run_planning_phase<
                 repo,
                 repo,
                 &GlobalSiteReconcileInputPayload {
+                    page_blueprints: ia.page_blueprints.clone(),
+                    verified_support: state.verified_support.clone(),
                     run_id,
                     scope: request.site_input.scope.clone(),
                     page_nodes: ia.page_nodes.clone(),

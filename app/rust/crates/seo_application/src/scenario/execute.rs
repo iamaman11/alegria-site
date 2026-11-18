@@ -153,12 +153,16 @@ where
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
+        let page_support = runtime_models::seo_blocks::page_verified_support(&page_blueprint, &state.verified_support);
+        let page_fragments = factual_fragments.iter()
+            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
+            .cloned().collect::<Vec<_>>();
         // Use the same page-specific completeness policy as the durable
         // workflow. Unsupported required roles are not an LLM error.
         if page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate) {
             let missing_roles = runtime_models::seo_blocks::missing_required_factual_roles(
                 &page_blueprint,
-                &state.verified_support,
+                &page_support,
             );
             if !missing_roles.is_empty() {
                 support_blocked = true;
@@ -171,15 +175,9 @@ where
                 continue;
             }
         }
-        let required_links = link_recommendations
-            .iter()
-            .filter(|link| {
-                link.required_flag
-                    && link.source_page_key == page_node.page_node_key
-                    && published_page_keys.contains(&link.target_page_key)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+            &link_recommendations, &page_node.page_node_key, &published_page_keys,
+        );
         let mut page_state = PageState::default();
         cursor = SeoExecutionCursor {
             segment: Some(SeoExecutionSegment::PerPage),
@@ -196,8 +194,8 @@ where
                         &page_node,
                         &page_blueprint,
                         &required_links,
-                        &factual_fragments,
-                        &state.verified_support,
+                        &page_fragments,
+                        &page_support,
                         &mut page_state,
                         input.key,
                         &mut phase_reports,

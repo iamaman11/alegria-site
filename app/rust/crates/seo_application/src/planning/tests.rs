@@ -506,6 +506,8 @@ mod tests {
             &repo,
             &FakeSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
+                page_blueprints: Vec::new(),
+                verified_support: Vec::new(),
                 run_id: "run-2".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -585,6 +587,7 @@ mod tests {
             &repo,
             &OverlapSemanticSearchPort,
             &IaBuildInputPayload {
+                verified_support: Vec::new(),
                 run_id: "run-ia".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -640,6 +643,8 @@ mod tests {
             &repo,
             &OverlapSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
+                page_blueprints: Vec::new(),
+                verified_support: Vec::new(),
                 run_id: "run-global".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {

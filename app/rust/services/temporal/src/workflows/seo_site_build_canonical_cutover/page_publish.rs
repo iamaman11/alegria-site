@@ -65,15 +65,15 @@ async fn run_page_publish_phases(
         // A target is linkable only after this run has actually finalized its
         // publication. Planned, blocked or future pages must not leak into
         // public editorial content.
-        let required_links: Vec<_> = link_recommendations
-            .iter()
-            .filter(|link| {
-                link.required_flag
-                    && link.source_page_key == page_node.page_node_key
-                    && published_page_keys.contains(&link.target_page_key)
-            })
-            .cloned()
-            .collect();
+        let page_support = runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
+        let page_fragments = factual_fragments.iter()
+            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
+            .cloned().collect::<Vec<_>>();
+        let support_bundle = page_support.as_slice();
+        let factual_fragments = page_fragments.as_slice();
+        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+            link_recommendations, &page_node.page_node_key, &published_page_keys,
+        );
 
         // Evaluate page-specific verified support before any editorial/LLM
         // work. Independent pages remain eligible even if a sibling is

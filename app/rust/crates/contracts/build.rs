@@ -8,6 +8,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "#[serde(default, skip_serializing_if = \"String::is_empty\")]",
     );
 
+    for field in [
+        ".alegria.temporal.v1.IaBuildInputPayload.verified_support",
+        ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.page_blueprints",
+        ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.verified_support",
+    ] {
+        config.field_attribute(field, "#[serde(default, skip_serializing_if = \"Vec::is_empty\")]");
+    }
+
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let proto_dir = manifest_dir.join("../../../contracts/proto");
     println!("cargo:rerun-if-changed={}", proto_dir.display());

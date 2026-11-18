@@ -585,6 +585,17 @@ pub async fn persist_ia_build_output(
         ));
     }
 
+    // Published URLs are durable public identities; a new plan must not rename
+    // a committed CMS page. Publication itself owns its revision and status.
+    for page in &output.page_nodes {
+        let published_path: Option<String> = sqlx::query_scalar(
+            "SELECT canonical_url_path FROM site.cms_pages WHERE page_node_key=$1 AND published_at IS NOT NULL",
+        )
+        .bind(&page.page_node_key).fetch_optional(pool).await.map_err(classify_sqlx)?;
+        if published_path.as_ref().is_some_and(|path| path != &page.canonical_url_path) {
+            return Err(validation_failure("IA cannot rename a committed public page"));
+        }
+    }
     for page in &output.page_nodes {
         non_empty(&page.page_node_key, "page_node_key")?;
         sqlx::query(
@@ -836,6 +847,45 @@ pub async fn persist_ia_build_output(
     }
 
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    Ok(())
+}
+
+/// Retire only invalid, unpublished legacy plans within the reconciled scope.
+/// Keep their identity for diagnosis; never delete pages, evidence or CMS revisions.
+pub async fn retire_opaque_unpublished_plans(
+    pool: &PgPool, run_id: &str, scope: &str, current_keys: &[String],
+) -> Result<(), DomainError> {
+    if scope.trim().is_empty() || current_keys.is_empty() {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "SELECT page_node_key, canonical_slug, canonical_url_path FROM site.page_nodes p
+         WHERE scope_signature=$1 AND NOT(page_node_key=ANY($2))
+           AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
+           AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
+    ).bind(scope).bind(current_keys).fetch_all(pool).await.map_err(classify_sqlx)?;
+    let mut events = Vec::new();
+    for row in rows {
+        let key: String = row.get("page_node_key");
+        let slug: String = row.get("canonical_slug");
+        let path: String = row.get("canonical_url_path");
+        if !runtime_models::seo_blocks::is_opaque_topic_identifier(&slug)
+            && !path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier) {
+            continue;
+        }
+        let result = sqlx::query(
+            "UPDATE site.page_nodes p SET lifecycle_state='deprecated', updated_at=now()
+             WHERE page_node_key=$1 AND scope_signature=$2
+               AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
+               AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
+        ).bind(&key).bind(scope).execute(pool).await.map_err(classify_sqlx)?;
+        if result.rows_affected() != 0 {
+            events.push(seo_graph_projection_event_with_revision(
+                "page_node", &key, scope, "deprecated:opaque_legacy_plan",
+            ));
+        }
+    }
+    emit_projection_events_for_run(pool, run_id, events).await?;
     Ok(())
 }
 

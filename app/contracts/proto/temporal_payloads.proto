@@ -698,6 +698,8 @@ message GlobalSiteReconcileInputPayload {
   repeated LinkRecommendationState link_recommendations = 4;
   string reconcile_reason = 5;
   GraphPlanningContextState graph_context = 6;
+  repeated PageBlueprintState page_blueprints = 7;
+  repeated SeoVerifiedFactSupportState verified_support = 8;
 }
 
 message GlobalSiteReconcileOutputPayload {
@@ -741,6 +743,8 @@ message IaBuildInputPayload {
   SeoScopePayload scope = 2;
   repeated KeywordClusterState keyword_clusters = 3;
   GraphPlanningContextState graph_context = 4;
+  // Applicable verified facts, never SERP or unverified source fragments.
+  repeated SeoVerifiedFactSupportState verified_support = 5;
 }
 
 message IaBuildOutputPayload {

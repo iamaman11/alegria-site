@@ -128,6 +128,7 @@ fn seo_steps_form_publish_ready_pipeline() {
     assert!(opportunities.content_gaps.is_empty());
 
     let ia = crate::ia_build_step::execute(&IaBuildInputPayload {
+        verified_support: Vec::new(),
         run_id: run_id.clone(),
         scope: Some(scope),
         keyword_clusters: opportunities.keyword_clusters,

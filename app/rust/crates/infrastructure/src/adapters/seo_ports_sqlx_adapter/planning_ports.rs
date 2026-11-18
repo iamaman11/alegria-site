@@ -146,6 +146,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         sqlx_seo_adapter::persist_ia_build_output(
             self.pool,
             &IaBuildInputPayload {
+                verified_support: Vec::new(),
                 run_id: input.run_id.clone(),
                 scope: input.scope.clone(),
                 keyword_clusters: Vec::new(),
@@ -186,6 +187,9 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         )
         .await?;
         let scope = input.scope.as_ref().cloned().unwrap_or_default();
+        let current_keys = output.page_nodes.iter().map(|page| page.page_node_key.clone()).collect::<Vec<_>>();
+        sqlx_seo_adapter::retire_opaque_unpublished_plans(self.pool, &input.run_id,
+            &scope.scope_signature, &current_keys).await?;
         let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages(
             self.pool,
             &scope.market,

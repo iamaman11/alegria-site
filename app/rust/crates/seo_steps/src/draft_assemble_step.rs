@@ -51,6 +51,9 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
             .iter()
             .map(|original| {
                 let mut localized = original.clone();
+                if let Some(blueprint) = input.page_blueprint.as_ref().filter(|b| !b.required_sections.is_empty()) {
+                    localized.required = blueprint.required_sections.contains(&original.section_role);
+                }
                 if localized.heading == heading_for_role(&original.section_role) {
                     localized.heading =
                         heading_for_role_locale(&original.section_role, locale).to_string();
@@ -547,9 +550,10 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         page_node_key: page_node.page_node_key.clone(),
         page_brief_key: page_brief_key.clone(),
         target_audience: "Readers seeking reliable answers to the page's dominant intent".to_string(),
-        expertise_goal:
-            "Produce useful localized expert guidance from the applicable verified sources without introducing unsourced claims."
-                .to_string(),
+        expertise_goal: format!(
+            "Answer the distinct intent of {} ({}). Use only applicable verified support, avoid repeating other page intents, and do not invent facts or links.",
+            page_node.canonical_url_path, page_node.page_type_key,
+        ),
         section_templates: templates.clone(),
         verified_support: sanitized_support.clone(),
         required_links: input.required_links.clone(),

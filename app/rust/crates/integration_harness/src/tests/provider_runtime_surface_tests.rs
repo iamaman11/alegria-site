@@ -728,3 +728,36 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
         .await
         .is_err());
 }
+
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn changed_editorial_request_supersedes_only_pending_same_page_task() {
+    use infrastructure::adapters::manual_llm_queue::{self, ManualLlmSubmission};
+    let pg = PostgresHarness::start().await.unwrap();
+    let mut original = sample_editorial_input();
+    original.run_id = Uuid::new_v4().to_string();
+    original.request.as_mut().unwrap().run_id = original.run_id.clone();
+    original.provider_policy = "chat_manual".to_string();
+    manual_llm_queue::enqueue_editorial(&pg.pool, &original).await.unwrap();
+    let before = manual_llm_queue::next_editorial(&pg.pool).await.unwrap().unwrap();
+
+    let mut replacement = original.clone();
+    replacement.request.as_mut().unwrap().request_key.push_str("-revised");
+    manual_llm_queue::enqueue_editorial(&pg.pool, &replacement).await.unwrap();
+    let after = manual_llm_queue::next_editorial(&pg.pool).await.unwrap().unwrap();
+    assert_ne!(before.task_id, after.task_id);
+    assert!(manual_llm_queue::enqueue_editorial(&pg.pool, &original).await.is_err());
+    let obsolete: ManualLlmSubmission = serde_json::from_value(serde_json::json!({
+        "task_id": before.task_id, "schema_version": before.schema_version,
+        "input_sha256": before.input_sha256,
+        "response": {"sections":{"overview":"A passport is required."}}
+    })).unwrap();
+    assert!(manual_llm_queue::submit_editorial(&pg.pool, &obsolete, "gpt-6").await.is_err());
+    assert_eq!(manual_llm_queue::next_editorial(&pg.pool).await.unwrap().unwrap().task_id, after.task_id);
+    let obsolete_status: String = sqlx::query_scalar(
+        "SELECT job_status FROM pipeline.manual_llm_jobs WHERE task_id=$1",
+    ).bind(&obsolete.task_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(obsolete_status, "superseded");
+}

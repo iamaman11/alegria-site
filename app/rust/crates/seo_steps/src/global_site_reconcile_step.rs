@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use contracts::generated::alegria::temporal::v1::{
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, LinkRecommendationState,
@@ -29,7 +29,8 @@ fn page_is_linkable(page: &PageNodeState) -> bool {
     !matches!(
         page.lifecycle_state.as_str(),
         "blocked" | "deprecated" | "stale"
-    )
+    ) && !runtime_models::seo_blocks::is_opaque_topic_identifier(&page.canonical_slug)
+        && !page.canonical_url_path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier)
 }
 
 fn required_link(
@@ -146,6 +147,65 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         }
     }
 
+    // Evaluate actual page-specific verified evidence after truth admission.
+    // Planning-only diagnostics without supplied blueprints retain their
+    // existing behavior; they cannot manufacture factual readiness.
+    if !input.page_blueprints.is_empty() {
+        let mut evidence_owners = BTreeMap::<Vec<String>, String>::new();
+        for page in &mut page_nodes {
+            if !page_is_linkable(page) {
+                continue;
+            }
+            let blueprint = input.page_blueprints.iter()
+                .find(|blueprint| blueprint.blueprint_key == page.blueprint_key);
+            let (mut missing, mut refs) = if let Some(blueprint) = blueprint {
+                let support = runtime_models::seo_blocks::page_verified_support(blueprint, &input.verified_support);
+                (
+                    runtime_models::seo_blocks::missing_required_factual_roles(blueprint,&support),
+                    support.into_iter().map(|entry| entry.support_ref).collect::<Vec<_>>(),
+                )
+            } else {
+                (vec!["page_blueprint".to_string()],Vec::new())
+            };
+            refs.sort();
+            refs.dedup();
+            let duplicate = if missing.is_empty() && !refs.is_empty() {
+                evidence_owners.get(&refs).cloned()
+            } else {
+                None
+            };
+            if missing.is_empty() && duplicate.is_none() && !refs.is_empty() {
+                evidence_owners.insert(refs, page.page_node_key.clone());
+                continue;
+            }
+            let reason = if duplicate.is_some() {
+                missing.push("distinct_verified_evidence".into());
+                "page_duplicate_verified_evidence"
+            } else {
+                if missing.is_empty() {
+                    missing.push("verified_evidence".into());
+                }
+                "page_missing_verified_support"
+            };
+            page.lifecycle_state = "blocked".to_string();
+            for topic in missing {
+                content_gaps.push(contracts::generated::alegria::temporal::v1::ContentGapState {
+                    content_gap_key: primitives::seo::seo_artifact_key("content_gap",
+                        &[&page.scope_signature,&page.page_node_key,&topic,reason,"page_coverage@1"]),
+                    scope_signature: page.scope_signature.clone(),
+                    page_node_key: page.page_node_key.clone(),
+                    missing_topic: topic,
+                    severity: if duplicate.is_some() { "medium" } else { "high" }.into(),
+                    status: "open".into(),
+                    reason_code: reason.into(),
+                    topic_keys: Vec::new(), triple_refs: Vec::new(),
+                    graph_confidence: 0.0,
+                    support_refs: refs.clone(),
+                });
+            }
+        }
+    }
+
     let mut canonical_owner = BTreeMap::new();
     for page in &page_nodes {
         if let Some(previous_owner) =
@@ -220,28 +280,29 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         }
     }
 
-    let mut deduped = Vec::new();
-    let mut seen_links = BTreeSet::new();
+    let mut unique_links = BTreeMap::<(String,String),LinkRecommendationState>::new();
     for mut link in links {
-        if !node_by_key.contains_key(&link.source_page_key)
-            || !node_by_key.contains_key(&link.target_page_key)
+        if !node_by_key.get(&link.source_page_key).is_some_and(page_is_linkable)
+            || !node_by_key.get(&link.target_page_key).is_some_and(page_is_linkable)
             || link.source_page_key == link.target_page_key
+            || matches!(link.status.as_str(), "deprecated" | "rejected" | "expired")
         {
             continue;
         }
         if link.status.trim().is_empty() {
             link.status = "candidate".to_string();
         }
-        let dedupe_key = (
-            link.source_page_key.clone(),
-            link.target_page_key.clone(),
-            link.link_role.clone(),
-            link.anchor_strategy.clone(),
-        );
-        if seen_links.insert(dedupe_key) {
-            deduped.push(link);
+        let key=(link.source_page_key.clone(),link.target_page_key.clone());
+        let replace=unique_links.get(&key).is_none_or(|prior|
+            (link.required_flag && !prior.required_flag)
+            || (link.required_flag == prior.required_flag &&
+                (link.score.total_cmp(&prior.score).is_gt()
+                 || (link.score==prior.score && link.link_recommendation_key<prior.link_recommendation_key))));
+        if replace {
+            unique_links.insert(key,link);
         }
     }
+    let deduped=unique_links.into_values().collect::<Vec<_>>();
 
     if let Some(graph_context) = input.graph_context.as_ref() {
         for coverage in &graph_context.coverage_signals {
@@ -299,6 +360,8 @@ mod tests {
     #[test]
     fn emits_graph_backed_missing_topic_gap_without_upgrading_page_state() {
         let output = execute(&GlobalSiteReconcileInputPayload {
+            page_blueprints: Vec::new(),
+            verified_support: Vec::new(),
             graph_context: Some(
                 contracts::generated::alegria::temporal::v1::GraphPlanningContextState {
                     coverage_signals: vec![GraphPlanningCoverageSignalState {
@@ -345,5 +408,38 @@ mod tests {
             .page_nodes
             .iter()
             .all(|page| page.lifecycle_state == "planned"));
+    }
+}
+
+
+#[cfg(test)]
+mod actual_coverage_tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::{PageBlueprintState,SeoVerifiedFactSupportState};
+
+    #[test]
+    fn missing_and_duplicate_evidence_are_real_gaps_not_publishable_pages() {
+        let page=|key:&str,blueprint:&str| PageNodeState {
+            page_node_key:key.into(), blueprint_key:blueprint.into(),scope_signature:"scope".into(),
+            page_type_key:"detail_page".into(),canonical_url_path:format!("/{key}/"),
+            lifecycle_state:"planned".into(), ..Default::default()
+        };
+        let blueprint=|key:&str,role:&str| PageBlueprintState {
+            blueprint_key:key.into(),required_sections:vec!["overview".into(),role.into()],
+            ..Default::default()
+        };
+        let output=execute(&GlobalSiteReconcileInputPayload {
+            page_nodes:vec![page("documents","doc"),page("duplicate","doc"),page("cost","fee")],
+            page_blueprints:vec![blueprint("doc","documents"),blueprint("fee","fees")],
+            verified_support:vec![SeoVerifiedFactSupportState {
+                support_ref:"verified".into(),fragment_text:"Document required".into(),
+                role_type:"document_required".into(),freshness_class:"fresh".into(),..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert_eq!(output.page_nodes.iter().filter(|page| page.lifecycle_state=="blocked").count(),2);
+        assert!(output.content_gaps.iter().any(|gap| gap.page_node_key=="cost" && gap.missing_topic=="fees"));
+        assert!(output.content_gaps.iter().any(|gap| gap.page_node_key=="duplicate" && gap.reason_code=="page_duplicate_verified_evidence"));
+        assert!(output.link_recommendations.iter().all(|link| link.target_page_key!="duplicate" && link.target_page_key!="cost"));
     }
 }

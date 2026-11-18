@@ -563,53 +563,6 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
 
-        ctx.state_mut(|s| s.phase = "ia_build".to_string());
-        let ia_build = ctx
-            .start_activity(
-                AlegriaActivities::run_ia_build_step,
-                IaBuildInputPayload {
-                    run_id: run_id.clone(),
-                    scope: Some(scope.clone()),
-                    keyword_clusters: opportunity_build.keyword_clusters.clone(),
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "link_recommend".to_string());
-        let link_recommend = ctx
-            .start_activity(
-                AlegriaActivities::run_link_recommend_step,
-                LinkRecommendInputPayload {
-                    run_id: run_id.clone(),
-                    page_nodes: ia_build.page_nodes.clone(),
-                    max_links_per_page: 3,
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
-        ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
-        let global_site_reconcile = ctx
-            .start_activity(
-                AlegriaActivities::run_global_site_reconcile_step,
-                GlobalSiteReconcileInputPayload {
-                    run_id: run_id.clone(),
-                    scope: Some(scope.clone()),
-                    page_nodes: ia_build.page_nodes.clone(),
-                    link_recommendations: link_recommend.link_recommendations.clone(),
-                    reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
-                    graph_context: None,
-                },
-                db_opts(30),
-            )
-            .await?;
-        ctx.wait_condition(|s| !s.paused).await?;
-
         let validation_input = CandidateValidationInput {
             run_id: run_id.clone(),
             context_key: site_input.context_key.clone(),
@@ -752,6 +705,56 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
                 .await?;
             ctx.wait_condition(|s| !s.paused).await?;
         }
+
+        ctx.state_mut(|s| s.phase = "ia_build".to_string());
+        let ia_build = ctx
+            .start_activity(
+                AlegriaActivities::run_ia_build_step,
+                IaBuildInputPayload {
+                    verified_support: support_bundle.clone(),
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    keyword_clusters: opportunity_build.keyword_clusters.clone(),
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "link_recommend".to_string());
+        let link_recommend = ctx
+            .start_activity(
+                AlegriaActivities::run_link_recommend_step,
+                LinkRecommendInputPayload {
+                    run_id: run_id.clone(),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    max_links_per_page: 3,
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
+
+        ctx.state_mut(|s| s.phase = "global_site_reconcile".to_string());
+        let global_site_reconcile = ctx
+            .start_activity(
+                AlegriaActivities::run_global_site_reconcile_step,
+                GlobalSiteReconcileInputPayload {
+                    page_blueprints: ia_build.page_blueprints.clone(),
+                    verified_support: support_bundle.clone(),
+                    run_id: run_id.clone(),
+                    scope: Some(scope.clone()),
+                    page_nodes: ia_build.page_nodes.clone(),
+                    link_recommendations: link_recommend.link_recommendations.clone(),
+                    reconcile_reason: "seo_site_build_canonical_cutover@1".to_string(),
+                    graph_context: None,
+                },
+                db_opts(30),
+            )
+            .await?;
+        ctx.wait_condition(|s| !s.paused).await?;
 
         ctx.state_mut(|s| s.phase = "graph_admissibility_gate".to_string());
         let graph_gate = ctx

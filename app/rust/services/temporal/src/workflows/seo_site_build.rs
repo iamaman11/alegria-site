@@ -249,6 +249,7 @@ impl SeoSiteBuildWorkflow {
                                 ctx.start_activity(
                                     AlegriaActivities::run_ia_build_step,
                                     IaBuildInputPayload {
+                                        verified_support: Vec::new(),
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         keyword_clusters: opportunities_ref
@@ -284,6 +285,8 @@ impl SeoSiteBuildWorkflow {
                                 ctx.start_activity(
                                     AlegriaActivities::run_global_site_reconcile_step,
                                     GlobalSiteReconcileInputPayload {
+                                        page_blueprints: Vec::new(),
+                                        verified_support: Vec::new(),
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         page_nodes: ia_ref.page_nodes.clone(),

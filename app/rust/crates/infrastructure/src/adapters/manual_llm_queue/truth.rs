@@ -162,6 +162,11 @@ pub async fn next_job(pool: &PgPool) -> Result<Option<ManualLlmJob<Value>>, Doma
         "SELECT task_id, schema_version, input_sha256, operation, input_json
          FROM pipeline.manual_llm_jobs
          WHERE job_status = 'pending'
+           AND NOT EXISTS (
+               SELECT 1 FROM pipeline.execution_runs r
+               WHERE r.run_id::text = pipeline.manual_llm_jobs.run_id
+                 AND r.status IN ('done','failed')
+           )
          ORDER BY created_at, task_id LIMIT 1",
     )
     .fetch_optional(pool)
@@ -255,6 +260,7 @@ pub async fn submit_truth(
     if status != "pending" {
         return Err(validation("manual truth task is not pending"));
     }
+    ensure_pending_run(&mut tx, &run_id).await?;
     let input: TruthExtractionInput = serde_json::from_value(row.get("input_json"))
         .map_err(|err| validation(format!("manual truth source input corrupted: {err}")))?;
     let raw = serde_json::to_string(&submission.response)

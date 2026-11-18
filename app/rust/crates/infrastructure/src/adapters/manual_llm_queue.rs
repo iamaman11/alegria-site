@@ -60,6 +60,22 @@ fn validation(message: impl Into<String>) -> DomainError {
     }
 }
 
+// Jobs in a terminal registered run must not receive new responses. Unregistered
+// diagnostic inbox tests still use the same strict typed submission path.
+async fn ensure_pending_run(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+) -> Result<(), DomainError> {
+    let state: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM pipeline.execution_runs WHERE run_id::text=$1 FOR SHARE",
+    )
+    .bind(run_id).fetch_optional(&mut **tx).await.map_err(db_error)?;
+    if state.as_deref().is_some_and(|state| matches!(state, "done" | "failed")) {
+        return Err(validation("manual LLM job belongs to a terminal execution"));
+    }
+    Ok(())
+}
+
 fn pending_output() -> EditorialDraftGenerateOutputPayload {
     EditorialDraftGenerateOutputPayload {
         candidate: None,
@@ -99,6 +115,34 @@ pub async fn enqueue_editorial(
     input: &EditorialDraftGenerateInputPayload,
 ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
     let (task_id, sha256, value) = job_fingerprint(pool, input).await?;
+    let page_key = input.request.as_ref()
+        .and_then(|request| request.editorial_brief.as_ref())
+        .map(|brief| brief.page_node_key.as_str())
+        .filter(|key| !key.trim().is_empty())
+        .ok_or_else(|| validation("manual editorial request requires a page owner"))?;
+    let mut tx = pool.begin().await.map_err(db_error)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(21920, hashtext($1))")
+        .bind(format!("{}:{page_key}", input.run_id))
+        .execute(&mut *tx).await.map_err(db_error)?;
+    let existing: Option<String> = sqlx::query_scalar(
+        "SELECT job_status FROM pipeline.manual_llm_jobs WHERE task_id=$1",
+    )
+    .bind(&task_id).fetch_optional(&mut *tx).await.map_err(db_error)?;
+    if let Some(status) = existing {
+        if status == "superseded" {
+            return Err(validation("editorial request was superseded; use the current page request"));
+        }
+        tx.commit().await.map_err(db_error)?;
+        return read_editorial_result(pool, input).await;
+    }
+    ensure_pending_run(&mut tx, &input.run_id).await?;
+    sqlx::query(
+        "UPDATE pipeline.manual_llm_jobs SET job_status='superseded', updated_at=now()
+         WHERE run_id=$1 AND operation='editorial_draft' AND job_status='pending'
+           AND input_json #>> '{request,editorial_brief,page_node_key}'=$2",
+    )
+    .bind(&input.run_id).bind(page_key)
+    .execute(&mut *tx).await.map_err(db_error)?;
     sqlx::query(
         "INSERT INTO pipeline.manual_llm_jobs
          (task_id, schema_version, run_id, operation, input_sha256, input_json)
@@ -111,9 +155,10 @@ pub async fn enqueue_editorial(
     .bind(MANUAL_OPERATION)
     .bind(&sha256)
     .bind(Json(value))
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(db_error)?;
+    tx.commit().await.map_err(db_error)?;
     // If the response was already submitted, return the finished typed result.
     read_editorial_result(pool, input).await
 }
@@ -125,6 +170,11 @@ pub async fn next_editorial(
         "SELECT task_id, schema_version, input_sha256, operation, input_json
          FROM pipeline.manual_llm_jobs
          WHERE job_status = 'pending' AND operation = $1
+           AND NOT EXISTS (
+               SELECT 1 FROM pipeline.execution_runs r
+               WHERE r.run_id::text = pipeline.manual_llm_jobs.run_id
+                 AND r.status IN ('done','failed')
+           )
          ORDER BY created_at, task_id LIMIT 1",
     )
     .bind(MANUAL_OPERATION)
@@ -240,6 +290,7 @@ pub async fn submit_editorial(
     if state != "pending" {
         return Err(validation("manual LLM task is not pending"));
     }
+    ensure_pending_run(&mut tx, &run_id).await?;
     let input: EditorialDraftGenerateInputPayload =
         serde_json::from_value(row.get("input_json"))
             .map_err(|err| validation(format!("stored editorial input is invalid: {err}")))?;
