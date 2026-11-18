@@ -211,6 +211,7 @@ Hard rules:
       - `render_preview_validate`
       - `finalize_publish`
       - `projection_barrier(publish)`
+    - после версионированного редакторского решения `blocked` новая попытка завершается со статусом `blocked:editorial_rework_required`: ни CMS approval, ни публикация не выполняются; повторная редакция требует нового run и нового HITL
   - conditional final phase:
     - `rebuild_detect`
   - current execution plan is branch-sensitive to normalized `run_mode`, scenario, and policy:

@@ -15,6 +15,27 @@ impl PagePublishLoopOutcome {
     }
 }
 
+// A blocked editorial revision must not trap its business run at the same
+// immutable approval gate. A new draft belongs to a new, auditable run; a
+// reopened review is the only non-approval decision that keeps this gate open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorialReviewDisposition {
+    Approved,
+    ReworkRequired,
+    Wait,
+}
+
+fn editorial_review_disposition(
+    decision: &str,
+    terminal_rework_patch: bool,
+) -> EditorialReviewDisposition {
+    match decision {
+        "approved" => EditorialReviewDisposition::Approved,
+        "blocked" if terminal_rework_patch => EditorialReviewDisposition::ReworkRequired,
+        _ => EditorialReviewDisposition::Wait,
+    }
+}
+
 async fn run_page_publish_phases(
     ctx: &mut WorkflowContext<SeoSiteBuildCanonicalCutoverWorkflow>,
     run_id: &str,
@@ -100,8 +121,9 @@ async fn run_page_publish_phases(
         let mut cms_approved: Option<CmsPublishOutputPayload> = None;
         let mut materialized: Option<PublishMaterializeOutputPayload> = None;
         let mut page_blocked = false;
+        let mut editorial_rework_required = false;
 
-        for key in page_keys.iter().copied() {
+        'page_phases: for key in page_keys.iter().copied() {
             ctx.state_mut(|s| s.phase = phase_with_ordinal(key, page_index, page_total));
             match key {
                 SeoPhaseKey::DraftAssemble => {
@@ -394,8 +416,31 @@ async fn run_page_publish_phases(
                                         db_opts(30),
                                     )
                                     .await?;
-                                if approval_decision.decision == "approved" {
-                                    break;
+                                // Temporal records a patch marker for new histories.
+                                // Old histories replay the original wait behavior.
+                                let terminal_rework_patch =
+                                    ctx.patched("seo-editorial-terminal-rework-v1");
+                                match editorial_review_disposition(
+                                    &approval_decision.decision,
+                                    terminal_rework_patch,
+                                ) {
+                                    EditorialReviewDisposition::Approved => break,
+                                    EditorialReviewDisposition::ReworkRequired => {
+                                        page_blocked = true;
+                                        editorial_rework_required = true;
+                                        ctx.state_mut(|s| {
+                                            s.waiting_hitl = false;
+                                            s.resume_requested = false;
+                                            s.paused = false;
+                                            s.phase = format!(
+                                                "blocked:editorial_rework_required:{}/{}",
+                                                page_index + 1,
+                                                page_total
+                                            );
+                                        });
+                                        break 'page_phases;
+                                    }
+                                    EditorialReviewDisposition::Wait => {}
                                 }
                                 ctx.state_mut(|s| {
                                     s.waiting_hitl = true;
@@ -656,14 +701,24 @@ async fn run_page_publish_phases(
         }
 
         if page_blocked {
-            let reason = format!(
-                "{}:page_node_key={}",
-                blocked_publish_gate_status(),
-                page_node.page_node_key,
-            );
+            let reason = if editorial_rework_required {
+                format!(
+                    "blocked:editorial_rework_required:page_node_key={}",
+                    page_node.page_node_key
+                )
+            } else {
+                format!(
+                    "{}:page_node_key={}",
+                    blocked_publish_gate_status(),
+                    page_node.page_node_key,
+                )
+            };
             if first_blocked.is_none() {
                 published_before_block = published_pages;
                 first_blocked = Some(reason);
+            }
+            if editorial_rework_required {
+                break;
             }
         }
     }
@@ -677,4 +732,43 @@ async fn run_page_publish_phases(
         });
     }
     Ok(PagePublishLoopOutcome::Completed(published_pages))
+}
+
+#[cfg(test)]
+mod editorial_review_disposition_tests {
+    use super::*;
+
+    #[test]
+    fn approved_revision_may_continue_to_publication() {
+        assert_eq!(
+            editorial_review_disposition("approved", true),
+            EditorialReviewDisposition::Approved
+        );
+    }
+
+    #[test]
+    fn blocked_revision_ends_the_attempt_for_rework() {
+        assert_eq!(
+            editorial_review_disposition("blocked", true),
+            EditorialReviewDisposition::ReworkRequired
+        );
+    }
+
+    #[test]
+    fn reopened_or_unknown_decision_must_not_publish_or_end_review() {
+        for decision in ["reopened", "", "unexpected"] {
+            assert_eq!(
+                editorial_review_disposition(decision, true),
+                EditorialReviewDisposition::Wait
+            );
+        }
+    }
+
+    #[test]
+    fn old_history_without_patch_still_waits_on_blocked_decision() {
+        assert_eq!(
+            editorial_review_disposition("blocked", false),
+            EditorialReviewDisposition::Wait
+        );
+    }
 }
