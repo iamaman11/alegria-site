@@ -1,11 +1,17 @@
 enum PagePublishLoopOutcome {
     Completed(usize),
-    Blocked { status: String, published_pages: usize },
+    Blocked {
+        status: String,
+        published_pages: usize,
+    },
 }
 
 impl PagePublishLoopOutcome {
     fn blocked(status: String, published_pages: usize) -> Self {
-        Self::Blocked { status, published_pages }
+        Self::Blocked {
+            status,
+            published_pages,
+        }
     }
 }
 
@@ -48,8 +54,15 @@ async fn run_page_publish_phases(
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
-        let page_support = runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
-        match page_admissibility(&page_node, &page_blueprint, &page_support, content_gaps, requires_editorial) {
+        let page_support =
+            runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
+        match page_admissibility(
+            &page_node,
+            &page_blueprint,
+            &page_support,
+            content_gaps,
+            requires_editorial,
+        ) {
             PageAdmissibility::Retired => continue,
             PageAdmissibility::Blocked(detail) => {
                 let reason = format!("{detail}:page_node_key={}", page_node.page_node_key);
@@ -63,13 +76,21 @@ async fn run_page_publish_phases(
             PageAdmissibility::Eligible => {}
         }
         // A target is linkable only after this run has actually finalized it.
-        let page_fragments = factual_fragments.iter()
-            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
-            .cloned().collect::<Vec<_>>();
+        let page_fragments = factual_fragments
+            .iter()
+            .filter(|text| {
+                page_support
+                    .iter()
+                    .any(|support| support.fragment_text.as_str() == text.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let support_bundle = page_support.as_slice();
         let factual_fragments = page_fragments.as_slice();
         let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
-            link_recommendations, &page_node.page_node_key, &published_page_keys,
+            link_recommendations,
+            &page_node.page_node_key,
+            &published_page_keys,
         );
 
         let mut draft_plan: Option<DraftAssembleOutputPayload> = None;
@@ -187,9 +208,13 @@ async fn run_page_publish_phases(
                             }
                             if generated.status != "awaiting_manual" {
                                 return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "manual_llm_result_invalid"),
-                            published_pages,
-                        ));
+                                    block_execution_plan_invariant(
+                                        ctx,
+                                        run_id,
+                                        "manual_llm_result_invalid",
+                                    ),
+                                    published_pages,
+                                ));
                             }
                             ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
                                 .await?;
@@ -201,7 +226,11 @@ async fn run_page_publish_phases(
                     }
                     if generated.candidate.is_none() {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "editorial_llm_candidate_missing"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "editorial_llm_candidate_missing",
+                            ),
                             published_pages,
                         ));
                     }
@@ -216,7 +245,11 @@ async fn run_page_publish_phases(
                     };
                     let Some(editorial_ref) = editorial_candidate.as_ref() else {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "editorial_generation_required"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "editorial_generation_required",
+                            ),
                             published_pages,
                         ));
                     };
@@ -311,7 +344,11 @@ async fn run_page_publish_phases(
                     );
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "cms_request_review_output"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "cms_request_review_output",
+                            ),
                             published_pages,
                         ));
                     };
@@ -505,7 +542,11 @@ async fn run_page_publish_phases(
                     );
                     let Some(materialized_ref) = materialized.as_ref() else {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_output"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_output",
+                            ),
                             published_pages,
                         ));
                     };
@@ -524,7 +565,11 @@ async fn run_page_publish_phases(
                 SeoPhaseKey::RenderPreviewValidate => {
                     let Some(materialized_ref) = materialized.as_ref() else {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_required"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_required",
+                            ),
                             published_pages,
                         ));
                     };
@@ -559,7 +604,11 @@ async fn run_page_publish_phases(
                     };
                     let Some(materialized_ref) = materialized.as_ref() else {
                         return Ok(PagePublishLoopOutcome::blocked(
-                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_required"),
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_required",
+                            ),
                             published_pages,
                         ));
                     };

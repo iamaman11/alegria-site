@@ -894,7 +894,10 @@ impl SeoSiteBuildCanonicalCutoverWorkflow {
         .await?
         {
             PagePublishLoopOutcome::Completed(published_pages) => (published_pages, None),
-            PagePublishLoopOutcome::Blocked { status, published_pages } => (published_pages, Some(status)),
+            PagePublishLoopOutcome::Blocked {
+                status,
+                published_pages,
+            } => (published_pages, Some(status)),
         };
 
         // Rebuild impact belongs to the verified knowledge change, not to the

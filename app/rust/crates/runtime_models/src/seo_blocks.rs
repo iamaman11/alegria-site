@@ -792,7 +792,6 @@ mod page_evidence_selection_tests {
     }
 }
 
-
 #[cfg(test)]
 mod page_admissibility_tests {
     use super::*;
@@ -833,8 +832,16 @@ mod page_admissibility_tests {
             PageAdmissibility::Blocked("page_missing_verified_support:roles=fees".into())
         );
         assert_eq!(
-            page_admissibility(&node("duplicate", "blocked"), &blueprint, &support, &[gap], true),
-            PageAdmissibility::Blocked("page_duplicate_verified_evidence:distinct_verified_evidence".into())
+            page_admissibility(
+                &node("duplicate", "blocked"),
+                &blueprint,
+                &support,
+                &[gap],
+                true
+            ),
+            PageAdmissibility::Blocked(
+                "page_duplicate_verified_evidence:distinct_verified_evidence".into()
+            )
         );
         assert_eq!(
             page_admissibility(&node("old", "deprecated"), &blueprint, &[], &[], true),
