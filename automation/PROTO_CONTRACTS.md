@@ -13,7 +13,7 @@ Generated file. Do not edit manually.
 | `app/contracts/proto/rules.proto` | `alegria.rules.v1` | 11 | 0 | `8eb0f733a0929558c39b0359b583b507f484ad614ee25f74a55eaa40e2601434` |
 | `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 12 | 0 | `7e526dd92504423f29fafaabe53efb07a14be74cfde7fccf59e966e1cbc017b0` |
 | `app/contracts/proto/telemetry.proto` | `alegria.telemetry.v1` | 2 | 0 | `4924ffcaad50a1d1e7b8f97e68caa857b876905c6683f3b12616d2a2bbe45f78` |
-| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 102 | 0 | `45ffaa1ae8023a79ca38df0df6ab98177eb3d1435bffd354321766e23128ceea` |
+| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 102 | 0 | `240f8629aa16e49e8cb9612aae0a22c471a1530d15f05cdece2d5320e9c67987` |
 | `app/analytics_lab/proto/analytics.proto` | `alegria.analytics.v1` | 10 | 1 | `3e3b8b852b9a46fd656d7e14e61f23c2d161f29dbaf5d3281ea760dcbf3ad21e` |
 
 ## Message/Service Index
