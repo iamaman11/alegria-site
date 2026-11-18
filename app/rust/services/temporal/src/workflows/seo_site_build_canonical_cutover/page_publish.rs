@@ -3,6 +3,12 @@ enum PagePublishLoopOutcome {
     Blocked { status: String, published_pages: usize },
 }
 
+impl PagePublishLoopOutcome {
+    fn blocked(status: String, published_pages: usize) -> Self {
+        Self::Blocked { status, published_pages }
+    }
+}
+
 async fn run_page_publish_phases(
     ctx: &mut WorkflowContext<SeoSiteBuildCanonicalCutoverWorkflow>,
     run_id: &str,
@@ -141,8 +147,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::EditorialDraftGenerate => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_assemble_required"),
+                            published_pages,
                         ));
                     };
                     let request = EditorialDraftGenerateInputPayload {
@@ -179,13 +186,10 @@ async fn run_page_publish_phases(
                                 break;
                             }
                             if generated.status != "awaiting_manual" {
-                                return Ok(PagePublishLoopOutcome::Blocked(
-                                    block_execution_plan_invariant(
-                                        ctx,
-                                        run_id,
-                                        "manual_llm_result_invalid",
-                                    ),
-                                ));
+                                return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "manual_llm_result_invalid"),
+                            published_pages,
+                        ));
                             }
                             ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
                                 .await?;
@@ -196,29 +200,24 @@ async fn run_page_publish_phases(
                         });
                     }
                     if generated.candidate.is_none() {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "editorial_llm_candidate_missing",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "editorial_llm_candidate_missing"),
+                            published_pages,
                         ));
                     }
                     editorial_candidate = Some(generated);
                 }
                 SeoPhaseKey::DraftNormalize => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_assemble_required"),
+                            published_pages,
                         ));
                     };
                     let Some(editorial_ref) = editorial_candidate.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "editorial_generation_required",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "editorial_generation_required"),
+                            published_pages,
                         ));
                     };
                     draft = Some(
@@ -246,8 +245,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::ContentContractValidate => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
                         ));
                     };
                     let _ = ctx
@@ -264,8 +264,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::DraftQa => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
                         ));
                     };
                     let qa = ctx
@@ -288,8 +289,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::CmsRequestReview => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
                         ));
                     };
                     cms_requested = Some(
@@ -308,12 +310,9 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "cms_request_review_output",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_request_review_output"),
+                            published_pages,
                         ));
                     };
                     if cms_requested_ref.verdict != "review_requested" {
@@ -330,8 +329,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::HumanApprovalWait => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
                         ));
                     };
                     let approval_input = HumanApprovalWaitInput {
@@ -420,13 +420,15 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::CmsPublishApproved => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
                         ));
                     };
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
                         ));
                     };
                     let approval_lookup_key = format!(
@@ -456,8 +458,9 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(cms_approved_ref) = cms_approved.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "cms_approved_output"),
+                            published_pages,
                         ));
                     };
                     if cms_approved_ref.verdict != "approved" {
@@ -474,8 +477,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::PublishMaterialize => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
                         ));
                     };
                     materialized = Some(
@@ -500,12 +504,9 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "publish_materialize_output",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_output"),
+                            published_pages,
                         ));
                     };
                     if materialized_ref.materialization_status.contains("failed") {
@@ -522,12 +523,9 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::RenderPreviewValidate => {
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "publish_materialize_required",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_required"),
+                            published_pages,
                         ));
                     };
                     let render_validation = ctx
@@ -554,17 +552,15 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::FinalizePublish => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
+                        return Ok(PagePublishLoopOutcome::blocked(
                             block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
                         ));
                     };
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(
-                                ctx,
-                                run_id,
-                                "publish_materialize_required",
-                            ),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "publish_materialize_required"),
+                            published_pages,
                         ));
                     };
                     let render_validation = ctx
