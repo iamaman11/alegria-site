@@ -124,6 +124,8 @@ pub struct SeoSiteBuildRegistrationRequest {
     pub queries: Vec<String>,
     pub query_batch_key: Option<String>,
     pub run_mode: Option<String>,
+    #[serde(default)]
+    pub retained_source_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]

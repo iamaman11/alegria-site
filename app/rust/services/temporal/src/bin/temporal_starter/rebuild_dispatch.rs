@@ -180,6 +180,7 @@ async fn run_rebuild_dispatch(
                     bootstrap_context: false,
                     queries: vec![seed_keyword.clone().unwrap_or_default()],
                     query_batch_key: Some(query_batch_key.clone()),
+                    retained_source_run_id: None,
                     run_mode: Some(workflow.run_mode().to_string()),
                 },
             )

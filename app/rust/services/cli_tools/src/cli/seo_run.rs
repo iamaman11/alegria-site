@@ -50,6 +50,7 @@ async fn register_seo_run_input(
             bootstrap_context,
             queries,
             query_batch_key,
+            retained_source_run_id: None,
             run_mode: Some(
                 run_mode_for_scenario(
                     map_seo_run_kind(scenario),

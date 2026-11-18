@@ -207,6 +207,7 @@ async fn main() -> Result<()> {
             queries,
             source_urls,
             query_batch_key,
+            reuse_corpus_from,
             run_mode,
             wait,
         } => {
@@ -226,6 +227,9 @@ async fn main() -> Result<()> {
                 anyhow::bail!(
                     "Expert migration workflows are diagnostic-only. Set ALLOW_EXPERT_MIGRATION_WORKFLOWS=true for explicit migration diagnostics, or use SeoSiteBuildCanonicalCutoverWorkflow for canonical execution."
                 );
+            }
+            if reuse_corpus_from.is_some() && workflow != WorkflowKind::SeoSiteBuildCanonicalCutover {
+                anyhow::bail!("retained corpus requires the canonical site workflow");
             }
             let wf_id = match workflow_id {
                 Some(v) => v,
@@ -260,6 +264,7 @@ async fn main() -> Result<()> {
                     queries,
                     source_urls,
                     query_batch_key,
+                    reuse_corpus_from,
                     run_mode,
                 )
                 .await?;

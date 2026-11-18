@@ -89,6 +89,9 @@ enum Command {
         source_urls: Vec<String>,
         #[arg(long)]
         query_batch_key: Option<String>,
+        /// Reprocess the exact acquired corpus of a terminal canonical run. No new search or crawl.
+        #[arg(long, conflicts_with_all = ["queries", "source_urls", "query_batch_key"])]
+        reuse_corpus_from: Option<String>,
         #[arg(long, default_value = "publish_with_hitl")]
         run_mode: String,
         /// Await workflow completion, including genuine external HITL decision.

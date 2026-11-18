@@ -469,6 +469,7 @@ mod tests {
             queries: vec!["spain tourist visa".to_string()],
             verified_support: Vec::new(),
             required_page_types: Vec::new(),
+            retained_source_run_id: String::new(),
             run_mode: "publish_with_hitl".to_string(),
         }
     }

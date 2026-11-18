@@ -452,6 +452,8 @@ message SeoSiteBuildInputPayload {
   repeated SeoVerifiedFactSupportState verified_support = 6;
   repeated string required_page_types = 7;
   string run_mode = 8;
+  // Explicit retained acquisition source; empty means normal acquisition.
+  string retained_source_run_id = 9;
 }
 
 message SerpPatternState {

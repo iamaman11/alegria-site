@@ -60,6 +60,7 @@ async fn persist_seo_site_build_input(
     queries: Vec<String>,
     source_urls: Vec<String>,
     query_batch_key: Option<String>,
+    retained_source_run_id: Option<String>,
     run_mode: String,
 ) -> Result<()> {
     // Validate every source URL before modifying the registered run. No
@@ -91,6 +92,7 @@ async fn persist_seo_site_build_input(
             queries,
             query_batch_key,
             run_mode: Some(normalize_run_mode(&run_mode).to_string()),
+            retained_source_run_id,
         },
     )
     .await

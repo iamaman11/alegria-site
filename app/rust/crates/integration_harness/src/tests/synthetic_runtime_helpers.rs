@@ -18,6 +18,7 @@
                 bootstrap_context: true,
                 queries: vec!["spain tourist visa belarus".to_string()],
                 query_batch_key: Some(query_batch_key),
+                retained_source_run_id: None,
                 run_mode: Some(
                     run_mode_for_scenario(SeoScenarioKind::Full, false, false, true).to_string(),
                 ),

@@ -870,6 +870,9 @@ impl AlegriaActivities {
     ) -> Result<SerpIngestOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "serp_ingest", 1, &input, || async {
+            if let Some(retained) = infrastructure::adapters::sqlx_seo_adapter::retained_serp_ingest(&self.pool, &input).await? {
+                return Ok(retained);
+            }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::planning::run_serp_ingest(&repo, &repo, &input).await
         })
@@ -885,6 +888,9 @@ impl AlegriaActivities {
     ) -> Result<CrawlSourcesOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "crawl_sources", 1, &input, || async {
+            if let Some(retained) = infrastructure::adapters::sqlx_seo_adapter::retained_crawl_sources(&self.pool, &input).await? {
+                return Ok(retained);
+            }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::crawl_ingest::run_crawl_sources(&repo, &input).await
         })
