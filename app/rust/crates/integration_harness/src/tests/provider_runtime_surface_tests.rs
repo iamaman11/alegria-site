@@ -878,3 +878,111 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
     wrong.queries.push("unrelated".into());
     assert!(sqlx_seo_adapter::retained_serp_ingest(pool,&wrong).await.is_err());
 }
+
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
+    use contracts::generated::alegria::temporal::v1::{
+        ContentGapState, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
+        OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
+    };
+    use infrastructure::adapters::{
+        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
+    };
+    use primitives::{errors::ErrorClass, seo::ContentGapDetector};
+    use seo_application::registration::register_site_build_input;
+    use seo_ports::SeoSiteBuildRegistrationRequest;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let repo = SqlxSeoRuntimeRepository::new(pool);
+    let site = register_site_build_input(
+        &repo,
+        &SeoSiteBuildRegistrationRequest {
+            run_id: Uuid::new_v4().to_string(),
+            context_key: None, market: "alegria-site".into(), locale: "ru-RU".into(),
+            country_code: "ES".into(), visa_type: "tourist".into(), visa_subtype: None,
+            applicant_profile: "standard".into(), citizenship_code: "BY".into(),
+            bootstrap_context: true, queries: vec!["spain visa".into()],
+            query_batch_key: None, run_mode: Some("publish_with_hitl".into()),
+            retained_source_run_id: None,
+        },
+    ).await.unwrap();
+    let ia_input = IaBuildInputPayload {
+        run_id: site.run_id.clone(), scope: site.scope.clone(), ..Default::default()
+    };
+    let ia = seo_steps::ia_build_step::execute(&ia_input);
+    assert_eq!(ia.page_nodes.len(), 2);
+    sqlx_seo_adapter::persist_ia_build_output(pool, &ia_input, &ia).await.unwrap();
+
+    let reconcile = seo_steps::global_site_reconcile_step::execute(&GlobalSiteReconcileInputPayload {
+        run_id: site.run_id.clone(), scope: site.scope.clone(),
+        page_nodes: ia.page_nodes.clone(), page_blueprints: ia.page_blueprints.clone(),
+        ..Default::default()
+    });
+    let shared = reconcile.content_gaps.into_iter()
+        .filter(|gap| gap.missing_topic == "who_fits")
+        .collect::<Vec<_>>();
+    assert_eq!(shared.len(), 2, "both hubs have the same missing factual role");
+    assert_ne!(shared[0].page_node_key, shared[1].page_node_key);
+    assert_ne!(shared[0].content_gap_key, shared[1].content_gap_key);
+    let scope = shared[0].scope_signature.clone();
+    let mut gaps = shared.clone();
+    gaps.push(ContentGapState {
+        content_gap_key: ContentGapDetector::SerpReliability.key(&scope, "", "who_fits"),
+        scope_signature: scope.clone(), missing_topic: "who_fits".into(),
+        severity: "medium".into(), status: "open".into(),
+        reason_code: ContentGapDetector::SerpReliability.reason().into(),
+        ..Default::default()
+    });
+    gaps.push(ContentGapState {
+        content_gap_key: ContentGapDetector::GraphCoverage.key(&scope, &shared[0].page_node_key, "who_fits"),
+        reason_code: ContentGapDetector::GraphCoverage.reason().into(),
+        ..shared[0].clone()
+    });
+    let req = OpportunityBuildInputPayload {
+        run_id: site.run_id.clone(), scope: site.scope.clone(), ..Default::default()
+    };
+    let output = OpportunityBuildOutputPayload {
+        content_gaps: gaps.clone(), ..Default::default()
+    };
+    for _ in 0..2 {
+        sqlx_seo_adapter::persist_opportunity_build_output(pool, &req, &output).await.unwrap();
+    }
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM site.content_gaps WHERE scope_signature=$1")
+        .bind(&scope).fetch_one(pool).await.unwrap();
+    assert_eq!(count, 4);
+    let mut resolved = shared[0].clone();
+    resolved.status = "resolved".into();
+    sqlx_seo_adapter::persist_opportunity_build_output(pool, &req, &OpportunityBuildOutputPayload {
+        content_gaps: vec![resolved], ..Default::default()
+    }).await.unwrap();
+    for (index, gap) in gaps.iter().enumerate() {
+        let status: String = sqlx::query_scalar("SELECT status FROM site.content_gaps WHERE content_gap_key=$1")
+            .bind(&gap.content_gap_key).fetch_one(pool).await.unwrap();
+        assert_eq!(status, if index == 0 { "resolved" } else { "open" });
+    }
+    // The DB, independently of Rust, must reject duplicate scope-wide owners.
+    let duplicate = sqlx::query(
+        "INSERT INTO site.content_gaps(content_gap_key,scope_signature,missing_topic,detector_version)
+         VALUES('duplicate-scope-key',$1,'who_fits','serp_reliability@1')",
+    ).bind(&scope).execute(pool).await.unwrap_err();
+    assert_eq!(duplicate.as_database_error().unwrap().code().as_deref(), Some("23505"));
+
+    // Closed detector ownership and SQLSTATE classification are fail-closed.
+    let mut invalid = shared[0].clone();
+    invalid.page_node_key.clear();
+    let error = sqlx_seo_adapter::persist_opportunity_build_output(pool, &req, &OpportunityBuildOutputPayload {
+        content_gaps: vec![invalid], ..Default::default()
+    }).await.unwrap_err();
+    assert_eq!(error.class(), ErrorClass::ContractViolation);
+    let mut conflicting = ia.clone();
+    conflicting.page_nodes[0].page_node_key = "different-identity-same-public-path".into();
+    conflicting.page_nodes.truncate(1);
+    let error = sqlx_seo_adapter::persist_ia_build_output(pool, &ia_input, &conflicting)
+        .await.unwrap_err();
+    assert_eq!(error.class(), ErrorClass::ConflictViolation);
+    assert!(error.to_string().contains("SQLSTATE=23505"));
+}
