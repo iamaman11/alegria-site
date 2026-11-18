@@ -20,7 +20,18 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct FakeRepo;
+    enum EvidenceFixture {
+        #[default]
+        Passport,
+        EligibilityOnly,
+    }
+
+    #[derive(Default)]
+    struct FakeRepo {
+        evidence: EvidenceFixture,
+        reconciled: std::sync::Mutex<Option<GlobalSiteReconcileOutputPayload>>,
+        editorial_calls: std::sync::Mutex<Vec<String>>,
+    }
 
     #[async_trait]
     impl GraphCapabilityPort for FakeRepo {
@@ -55,10 +66,14 @@ mod tests {
             &self,
             _request: &VerifiedSupportBundleRequest,
         ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+            let (fragment, support_ref, role_type) = match self.evidence {
+                EvidenceFixture::Passport => ("Passport required", "rule:passport", "document_required"),
+                EvidenceFixture::EligibilityOnly => ("Tourists are eligible", "rule:eligibility", "eligibility_rule"),
+            };
             Ok(vec![SeoVerifiedFactSupportState {
-                fragment_text: "Passport required".to_string(),
-                support_ref: "rule:passport".to_string(),
-                role_type: "document_required".to_string(),
+                fragment_text: fragment.to_string(),
+                support_ref: support_ref.to_string(),
+                role_type: role_type.to_string(),
                 source_label: "Consulate".to_string(),
                 source_tier: "official".to_string(),
                 freshness_class: "fresh".to_string(),
@@ -220,6 +235,7 @@ mod tests {
             _input: &GlobalSiteReconcileInputPayload,
             output: &GlobalSiteReconcileOutputPayload,
         ) -> Result<seo_ports::GlobalNavigationPersistReport, DomainError> {
+            *self.reconciled.lock().unwrap() = Some(output.clone());
             Ok(seo_ports::GlobalNavigationPersistReport {
                 navigation_tree_key: "synthetic-navigation".to_string(),
                 scope_count: 1,
@@ -343,6 +359,8 @@ mod tests {
             &self,
             input: &EditorialDraftGenerateInputPayload,
         ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
+            let brief = input.request.as_ref().unwrap().editorial_brief.as_ref().unwrap();
+            self.editorial_calls.lock().unwrap().push(brief.page_node_key.clone());
             Ok(EditorialDraftGenerateOutputPayload {
                 provider_key: "fake".to_string(),
                 model_key: "fake-model".to_string(),
@@ -476,7 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn scenario_planning_only_uses_shared_plan() {
-        let repo = FakeRepo;
+        let repo = FakeRepo::default();
         let result = execute_site_build_scenario(
             &repo,
             &SeoScenarioRequest {
@@ -499,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn scenario_publish_blocks_without_human_approval() {
-        let repo = FakeRepo;
+        let repo = FakeRepo::default();
         let result = execute_site_build_scenario(
             &repo,
             &SeoScenarioRequest {
@@ -518,8 +536,14 @@ mod tests {
 
     #[tokio::test]
     async fn scenario_incomplete_evidence_blocks_before_editorial_generation() {
+        // This fixture has applicable eligibility evidence, but none of the
+        // documents/fees/timing evidence that creates a focused leaf page.
+        let repo = FakeRepo {
+            evidence: EvidenceFixture::EligibilityOnly,
+            ..Default::default()
+        };
         let result = execute_site_build_scenario(
-            &FakeRepo,
+            &repo,
             &SeoScenarioRequest {
                 scenario: SeoScenarioKind::Full,
                 mode: SeoExecutionMode::SemiAutoOperator,
@@ -546,6 +570,59 @@ mod tests {
                 "draft_assemble" | "editorial_draft_generate"
             )
         }));
+        assert!(repo.editorial_calls.lock().unwrap().is_empty());
+        let reconciled = repo.reconciled.lock().unwrap();
+        let pages = &reconciled.as_ref().unwrap().page_nodes;
+        assert!(!pages.is_empty());
+        assert!(pages.iter().all(|page| page.lifecycle_state == "blocked"));
+        for page in pages {
+            assert!(result.phase_reports.iter().any(|report| {
+                report.phase == "page_admissibility"
+                    && report.page_node_key == page.page_node_key
+                    && report.status == "blocked_publish_gate"
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn scenario_mixed_evidence_only_generates_for_admitted_page() {
+        let repo = FakeRepo::default();
+        let result = execute_site_build_scenario(
+            &repo,
+            &SeoScenarioRequest {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::SemiAutoOperator,
+                policy: SeoRunPolicy::for_semi_auto_operator(false, false, true),
+                output_dir: "/tmp".to_string(),
+                base_url: "https://example.com".to_string(),
+                site_input: sample_site_input(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status, "blocked_publish_gate");
+        assert_eq!(result.published_pages, 0);
+        let reconciled = repo.reconciled.lock().unwrap();
+        let pages = &reconciled.as_ref().unwrap().page_nodes;
+        let eligible: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "planned").collect();
+        assert_eq!(eligible.len(), 1, "only the evidenced document leaf should be admitted");
+        assert_eq!(eligible[0].page_type_key, "requirement_page");
+        assert_eq!(eligible[0].canonical_url_path, "/ru/visa/spain/tourist/documents/");
+        let blocked: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "blocked").collect();
+        assert!(!blocked.is_empty());
+        let calls = repo.editorial_calls.lock().unwrap();
+        assert_eq!(calls.as_slice(), &[eligible[0].page_node_key.clone()]);
+        for page in blocked {
+            assert!(result.phase_reports.iter().any(|report| {
+                report.phase == "page_admissibility"
+                    && report.page_node_key == page.page_node_key
+                    && report.status == "blocked_publish_gate"
+            }));
+            assert!(!result.phase_reports.iter().any(|report| {
+                report.page_node_key == page.page_node_key
+                    && matches!(report.phase.as_str(), "draft_assemble" | "editorial_draft_generate")
+            }));
+        }
     }
 
     #[test]
