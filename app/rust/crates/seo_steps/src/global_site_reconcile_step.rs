@@ -155,7 +155,10 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
     // Planning-only diagnostics without supplied blueprints retain their
     // existing behavior; they cannot manufacture factual readiness.
     if !input.page_blueprints.is_empty() {
-        let mut evidence_owners = BTreeMap::<Vec<String>, String>::new();
+        // Hub and detail pages may cite the same verified facts while serving
+        // different page roles. Only equal evidence *within the same page
+        // type* is a duplicate-page signal.
+        let mut evidence_owners = BTreeMap::<(String, Vec<String>), String>::new();
         for page in &mut page_nodes {
             if !page_is_linkable(page) {
                 continue;
@@ -181,13 +184,14 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
             };
             refs.sort();
             refs.dedup();
+            let evidence_identity = (page.page_type_key.clone(), refs.clone());
             let duplicate = if missing.is_empty() && !refs.is_empty() {
-                evidence_owners.get(&refs).cloned()
+                evidence_owners.get(&evidence_identity).cloned()
             } else {
                 None
             };
             if missing.is_empty() && duplicate.is_none() && !refs.is_empty() {
-                evidence_owners.insert(refs, page.page_node_key.clone());
+                evidence_owners.insert(evidence_identity, page.page_node_key.clone());
                 continue;
             }
             let detector = if duplicate.is_some() {
@@ -475,6 +479,10 @@ mod actual_coverage_tests {
                 page("documents", "doc"),
                 page("duplicate", "doc"),
                 page("cost", "fee"),
+                PageNodeState {
+                    page_type_key: "hub_page".into(),
+                    ..page("summary", "doc")
+                },
             ],
             page_blueprints: vec![blueprint("doc", "documents"), blueprint("fee", "fees")],
             verified_support: vec![SeoVerifiedFactSupportState {
@@ -503,6 +511,10 @@ mod actual_coverage_tests {
             .iter()
             .any(|gap| gap.page_node_key == "duplicate"
                 && gap.reason_code == "page_duplicate_verified_evidence"));
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.page_node_key == "summary" && page.lifecycle_state == "planned"));
         assert!(output
             .link_recommendations
             .iter()
