@@ -974,13 +974,16 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
     // A published root/hub can receive a new review candidate when its only
     // outgoing required recommendation points to a future, unpublished child.
     // The existing live revision stays live and no future URL is fabricated.
-    sqlx::query(
-        "UPDATE site.page_drafts SET qa_verdict='publish_ready',truth_snapshot_ref='verified-truth' WHERE page_draft_key=$1",
-    )
-    .bind(&parent_draft)
-    .execute(pool)
-    .await
-    .unwrap();
+    // A new CMS review must refer to a new immutable page draft; the
+    // published parent revision already owns the original parent_draft.
+    let parent_replacement_draft = format!("cms-link-parent-draft-2-{marker}");
+    sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,draft_revision,body_markdown,qa_verdict,truth_snapshot_ref) VALUES ($1,$2,$3,2,'New parent text','publish_ready','verified-truth')")
+        .bind(&parent_replacement_draft)
+        .bind(&parent_page)
+        .bind(&parent_brief)
+        .execute(pool)
+        .await
+        .unwrap();
     sqlx::query("INSERT INTO site.link_recommendations (link_recommendation_key,scope_signature,source_page_key,target_page_key,required_flag,link_role,score) VALUES ($1,$2,$3,$4,true,'hub_to_child',0.8)")
         .bind(format!("cms-link-parent-future-{marker}"))
         .bind(&scope)
@@ -993,7 +996,7 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
         pool,
         &input,
         &CmsPublishOutputPayload {
-            page_draft_key: parent_draft,
+            page_draft_key: parent_replacement_draft,
             ..Default::default()
         },
     )
