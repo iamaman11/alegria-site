@@ -63,6 +63,10 @@ def main() -> int:
         "published_at",
         "PublishArtifact",
         "site.publish_artifacts",
+        "resolve_required_internal_links",
+        "required_internal_target_not_published",
+        "Json(required_link_payload)",
+        '"section_role": "internal_links"',
     ]:
         if needle not in cms:
             failures.append(f"CMS adapter missing `{needle}`")

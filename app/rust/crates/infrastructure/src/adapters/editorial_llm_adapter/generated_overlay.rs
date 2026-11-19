@@ -185,6 +185,7 @@ fn overlay_typed_claims(
                     text: item.text,
                     question: item.question,
                     source_url: source.source_url.clone(),
+                    evidence_spans: item.evidence_spans,
                 }),
             };
             validate_editorial_claim(&claim, &brief.verified_support).map_err(|err| {

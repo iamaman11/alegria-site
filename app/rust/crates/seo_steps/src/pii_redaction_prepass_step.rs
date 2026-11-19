@@ -148,6 +148,11 @@ pub fn sanitize_claim_ledger(entries: &[ClaimLedgerEntry]) -> Vec<ClaimLedgerEnt
                     text: sanitize_text(&proposal.text),
                     question: sanitize_text(&proposal.question),
                     source_url: sanitize_text(&proposal.source_url),
+                    evidence_spans: proposal
+                        .evidence_spans
+                        .iter()
+                        .map(|span| sanitize_text(span))
+                        .collect(),
                 }
             }),
         })

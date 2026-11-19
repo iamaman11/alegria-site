@@ -878,6 +878,108 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
+async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload() {
+    use contracts::generated::alegria::temporal::v1::{
+        CmsPublishInputPayload, CmsPublishOutputPayload,
+    };
+    use infrastructure::adapters::sqlx_seo_cms_adapter;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let scope = format!("cms-link-scope-{marker}");
+    let blueprint = format!("cms-link-blueprint-{marker}");
+    let parent_page = format!("cms-link-parent-{marker}");
+    let parent_brief = format!("cms-link-parent-brief-{marker}");
+    let parent_draft = format!("cms-link-parent-draft-{marker}");
+    let parent_revision = format!("cms-link-parent-revision-{marker}");
+    let tourist_page = format!("cms-link-tourist-{marker}");
+    let tourist_brief = format!("cms-link-tourist-brief-{marker}");
+    let tourist_draft = format!("cms-link-tourist-draft-{marker}");
+    let parent_path = format!("/ru/visa/{marker}/");
+    let tourist_path = format!("/ru/visa/{marker}/tourist/");
+
+    sqlx::query("INSERT INTO site.site_scopes (scope_signature,locale) VALUES ($1,'ru')")
+        .bind(&scope).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.page_blueprints (blueprint_key,page_type_key,dominant_intent) VALUES ($1,'country_hub_page','informational')")
+        .bind(&blueprint).execute(pool).await.unwrap();
+    for (page, path, slug) in [
+        (&parent_page, &parent_path, "parent"),
+        (&tourist_page, &tourist_path, "tourist"),
+    ] {
+        sqlx::query("INSERT INTO site.page_nodes (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path) VALUES ($1,$2,$3,'country_hub_page','informational',$4,$5)")
+            .bind(page).bind(&scope).bind(&blueprint).bind(slug).bind(path)
+            .execute(pool).await.unwrap();
+    }
+    sqlx::query("INSERT INTO site.page_briefs (page_brief_key,page_node_key,blueprint_key,title) VALUES ($1,$2,$3,'Parent page')")
+        .bind(&parent_brief).bind(&parent_page).bind(&blueprint).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,body_markdown) VALUES ($1,$2,$3,'Parent text')")
+        .bind(&parent_draft).bind(&parent_page).bind(&parent_brief).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.cms_page_revisions (revision_id,page_node_key,page_draft_key,page_brief_key,title,h1,blueprint_key,revision_status) VALUES ($1,$2,$3,$4,'Виза в Испанию','Виза в Испанию',$5,'published')")
+        .bind(&parent_revision).bind(&parent_page).bind(&parent_draft).bind(&parent_brief)
+        .bind(&blueprint).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.cms_pages (page_node_key,scope_signature,canonical_url_path,locale_code,page_type_key,dominant_intent_key,cms_document_id,current_revision_id,current_status,published_at) VALUES ($1,$2,$3,'ru','country_hub_page','informational',$4,$5,'published',now())")
+        .bind(&parent_page).bind(&scope).bind(&parent_path)
+        .bind(format!("cms-doc-{marker}")).bind(&parent_revision)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.page_briefs (page_brief_key,page_node_key,blueprint_key,title) VALUES ($1,$2,$3,'Tourist page')")
+        .bind(&tourist_brief).bind(&tourist_page).bind(&blueprint).execute(pool).await.unwrap();
+    let manifest = serde_json::json!({
+        "content_blocks": [{"block_type":"intro","section_role":"intro","markdown":"Текст туристической страницы"}],
+        "claim_ledger": []
+    });
+    sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,body_markdown,qa_verdict,truth_snapshot_ref,traceability_manifest) VALUES ($1,$2,$3,'Текст туристической страницы','publish_ready','verified-truth',$4)")
+        .bind(&tourist_draft).bind(&tourist_page).bind(&tourist_brief).bind(manifest)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.link_recommendations (link_recommendation_key,scope_signature,source_page_key,target_page_key,required_flag,link_role,score) VALUES ($1,$2,$3,$4,true,'contextual',0.9)")
+        .bind(format!("cms-link-{marker}")).bind(&scope).bind(&tourist_page)
+        .bind(&parent_page).execute(pool).await.unwrap();
+
+    let input = CmsPublishInputPayload {
+        run_id: Uuid::new_v4().to_string(),
+        publish_mode: "publish_with_hitl".into(),
+        ..Default::default()
+    };
+    let planned = CmsPublishOutputPayload {
+        page_draft_key: tourist_draft,
+        ..Default::default()
+    };
+    let result = sqlx_seo_cms_adapter::persist_cms_publish_output(pool, &input, &planned)
+        .await.unwrap();
+    assert_eq!(result.verdict, "review_requested");
+    assert!(result.blocking_reasons.is_empty());
+    let (body, links): (serde_json::Value, serde_json::Value) = sqlx::query_as(
+        "SELECT body_payload,required_link_payload FROM site.cms_page_revisions WHERE revision_id=$1",
+    ).bind(&result.revision_id).fetch_one(pool).await.unwrap();
+    let expected = format!("[Виза в Испанию]({parent_path})");
+    assert!(body["markdown"].as_str().unwrap().contains(&expected));
+    assert!(body["content_blocks"].as_array().unwrap().iter().any(|block| {
+        block["section_role"] == "internal_links"
+            && block["markdown"].as_str().unwrap().contains(&expected)
+    }));
+    assert_eq!(links.as_array().unwrap().len(), 1);
+    assert_eq!(links[0]["target_page_key"], parent_page);
+    assert_eq!(links[0]["canonical_url_path"], parent_path);
+
+    // When the target loses its published state, a fresh draft must block;
+    // a required URL can never be invented from an unpublished page node.
+    sqlx::query("UPDATE site.cms_pages SET current_status='review_required' WHERE page_node_key=$1")
+        .bind(&parent_page).execute(pool).await.unwrap();
+    let next_draft = format!("cms-link-tourist-draft-2-{marker}");
+    sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,draft_revision,body_markdown,qa_verdict,truth_snapshot_ref) VALUES ($1,$2,$3,2,'Fresh content','publish_ready','verified-truth')")
+        .bind(&next_draft).bind(&tourist_page).bind(&tourist_brief)
+        .execute(pool).await.unwrap();
+    let blocked = sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool, &input,
+        &CmsPublishOutputPayload { page_draft_key: next_draft, ..Default::default() },
+    ).await.unwrap();
+    assert_eq!(blocked.verdict, "blocked");
+    assert!(blocked.blocking_reasons.contains(&"required_internal_target_not_published".to_string()));
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
 async fn changed_editorial_request_supersedes_only_pending_same_page_task() {
     use infrastructure::adapters::manual_llm_queue::{self, ManualLlmSubmission};
     let pg = PostgresHarness::start().await.unwrap();

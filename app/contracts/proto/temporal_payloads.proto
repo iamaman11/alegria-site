@@ -339,6 +339,10 @@ message EditorialClaimProposal {
   string text = 1;
   string question = 2;
   string source_url = 3;
+  // Verbatim, contiguous excerpts from the already-verified fragment. A
+  // composite source may contain fees for other citizenships; selecting
+  // exact applicable spans preserves numeric evidence without copying them.
+  repeated string evidence_spans = 4;
 }
 
 message RenderedContentBlock {

@@ -28,8 +28,12 @@ pub async fn persist_cms_publish_output(
     if count_active_cannibalization(pool, &row.page_node_key).await? > 0 {
         blockers.push("active_cannibalization_conflict".to_string());
     }
-    if count_required_links(pool, &row.page_node_key).await? == 0 {
+    let required_link_count = count_required_links(pool, &row.page_node_key).await?;
+    let resolved_links = resolve_required_internal_links(pool, &row.page_node_key).await?;
+    if required_link_count == 0 {
         blockers.push("required_link_obligations_unsatisfied".to_string());
+    } else if resolved_links.len() as i64 != required_link_count {
+        blockers.push("required_internal_target_not_published".to_string());
     }
     if count_canonical_conflicts(pool, &row).await? > 0 {
         blockers.push("canonical_url_conflict".to_string());
@@ -69,6 +73,45 @@ pub async fn persist_cms_publish_output(
     } else {
         false
     };
+    // Materialize structural links from exact published CMS targets, never
+    // from LLM-supplied URLs or opaque page keys. The static renderer prefers
+    // content_blocks over markdown, so both must carry the real links.
+    let link_markdown = resolved_links
+        .iter()
+        .map(|link| format!("- [{}]({})", link.title, link.canonical_url_path))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body_markdown = if link_markdown.is_empty() {
+        row.body_markdown.clone()
+    } else {
+        format!("{}\n\n## Связанные страницы\n\n{}\n", row.body_markdown.trim_end(), link_markdown)
+    };
+    let mut content_blocks = row
+        .traceability_manifest
+        .get("content_blocks")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if !link_markdown.is_empty() {
+        content_blocks.push(json!({
+            "block_type": "related_links",
+            "section_role": "internal_links",
+            "heading": "Связанные страницы",
+            "markdown": link_markdown,
+            "support_refs": [],
+            "traceability_label": "canonical_published_target",
+            "required": true,
+        }));
+    }
+    let required_link_payload = resolved_links
+        .iter()
+        .map(|link| json!({
+            "target_page_key": link.target_page_key,
+            "canonical_url_path": link.canonical_url_path,
+            "label": link.title,
+            "link_role": link.link_role,
+        }))
+        .collect::<Vec<_>>();
     if input.publish_mode == "approved_publish" && !valid_human_approval {
         blockers.push("missing_persisted_human_approval".to_string());
     }
@@ -140,12 +183,8 @@ pub async fn persist_cms_publish_output(
     .bind(&row.meta_description)
     .bind(&row.title)
     .bind(Json(json!({
-        "markdown": row.body_markdown.clone(),
-        "content_blocks": row
-            .traceability_manifest
-            .get("content_blocks")
-            .cloned()
-            .unwrap_or_else(|| json!([])),
+        "markdown": body_markdown,
+        "content_blocks": content_blocks,
         "claim_ledger": row
             .traceability_manifest
             .get("claim_ledger")
@@ -157,7 +196,7 @@ pub async fn persist_cms_publish_output(
         "headline": row.title.clone(),
         "url": row.canonical_url_path.clone(),
     })))
-    .bind(Json(json!([])))
+    .bind(Json(required_link_payload))
     .bind(Json(json!({
         "truth_snapshot_ref": row.truth_snapshot_ref.clone(),
         "page_draft_key": row.page_draft_key.clone(),

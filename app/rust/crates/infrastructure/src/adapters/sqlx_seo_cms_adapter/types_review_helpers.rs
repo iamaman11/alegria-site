@@ -213,7 +213,7 @@ async fn count_active_cannibalization(
 async fn count_required_links(pool: &PgPool, page_node_key: &str) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(*)::bigint
+        SELECT count(DISTINCT target_page_key)::bigint
         FROM site.link_recommendations
         WHERE source_page_key = $1
           AND required_flag = true
@@ -224,6 +224,64 @@ async fn count_required_links(pool: &PgPool, page_node_key: &str) -> Result<i64,
     .fetch_one(pool)
     .await
     .map_err(classify_sqlx)
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedInternalLink {
+    target_page_key: String,
+    canonical_url_path: String,
+    title: String,
+    link_role: String,
+}
+
+async fn resolve_required_internal_links(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<Vec<ResolvedInternalLink>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT DISTINCT ON (l.target_page_key)
+               l.target_page_key, l.link_role, p.canonical_url_path, r.title
+        FROM site.link_recommendations l
+        JOIN site.cms_pages p ON p.page_node_key = l.target_page_key
+                             AND p.current_status = 'published'
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+                                      AND r.revision_status = 'published'
+        WHERE l.source_page_key = $1
+          AND l.required_flag = true
+          AND l.status IN ('candidate','accepted','applied')
+        ORDER BY l.target_page_key, l.score DESC, l.link_recommendation_key
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    rows.into_iter()
+        .map(|row| {
+            let path: String = row.get("canonical_url_path");
+            if !path.starts_with('/')
+                || path.starts_with("//")
+                || path.chars().any(|ch| {
+                    ch.is_whitespace() || ch.is_control() || matches!(ch, '[' | ']' | '(' | ')' | '<' | '>')
+                })
+            {
+                return Err(validation_failure("required internal target has unsafe canonical URL"));
+            }
+            let original_title: String = row.get("title");
+            let label = original_title
+                .chars()
+                .filter(|ch| !ch.is_control() && !matches!(ch, '[' | ']' | '(' | ')' | '<' | '>' | '*' | '`'))
+                .take(110)
+                .collect::<String>();
+            Ok(ResolvedInternalLink {
+                target_page_key: row.get("target_page_key"),
+                canonical_url_path: path,
+                title: if label.trim().is_empty() { "Связанная страница".into() } else { label },
+                link_role: row.get("link_role"),
+            })
+        })
+        .collect()
 }
 
 async fn count_canonical_conflicts(

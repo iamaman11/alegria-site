@@ -484,6 +484,7 @@ mod typed_claim_qa_tests {
                 text: "Обычно решение принимается за 15 дней.".into(),
                 source_url: source.source_url.clone(),
                 question: String::new(),
+                evidence_spans: Vec::new(),
             }),
             ..Default::default()
         };

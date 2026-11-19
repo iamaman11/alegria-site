@@ -54,6 +54,8 @@ pub struct GeneratedEditorialClaim {
     text: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     question: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    evidence_spans: Vec<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

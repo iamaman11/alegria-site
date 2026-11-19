@@ -443,6 +443,7 @@ pub enum EditorialClaimError {
     EvidenceMismatch,
     InvalidSourceUrl,
     NumericEvidenceMismatch,
+    InvalidEvidenceSpan,
 }
 
 fn plain_editorial_text(text: &str) -> bool {
@@ -521,7 +522,39 @@ pub fn validate_editorial_claim(
     if !safe_verified_source_url(&proposal.source_url) {
         return Err(EditorialClaimError::InvalidSourceUrl);
     }
-    let source_numbers = numeric_tokens(&source.fragment_text);
+    // The historical contract requires every number from the exact verified
+    // quote. A composite quote can include fees for unrelated citizenships.
+    // Explicitly selected spans are accepted only when they are complete,
+    // disjoint lines/paragraphs inside that same immutable quote. This does
+    // not permit a model to invent, alter, or silently drop numeric evidence.
+    let source_numbers = if proposal.evidence_spans.is_empty() {
+        numeric_tokens(&source.fragment_text)
+    } else {
+        if proposal.evidence_spans.len() > 8 {
+            return Err(EditorialClaimError::InvalidEvidenceSpan);
+        }
+        let quote = source.fragment_text.as_str();
+        let mut ranges = Vec::new();
+        let mut selected = std::collections::BTreeSet::new();
+        for span in &proposal.evidence_spans {
+            if span.trim() != span || span.chars().count() < 12 || span.contains('\r') {
+                return Err(EditorialClaimError::InvalidEvidenceSpan);
+            }
+            let start = quote
+                .find(span)
+                .ok_or(EditorialClaimError::InvalidEvidenceSpan)?;
+            let end = start + span.len();
+            if (start != 0 && quote.as_bytes()[start - 1] != b'\n')
+                || (end != quote.len() && quote.as_bytes()[end] != b'\n')
+                || ranges.iter().any(|(lo, hi)| start < *hi && end > *lo)
+            {
+                return Err(EditorialClaimError::InvalidEvidenceSpan);
+            }
+            ranges.push((start, end));
+            selected.extend(numeric_tokens(span));
+        }
+        selected
+    };
     if numeric_tokens(&proposal.text) != source_numbers
         || !numeric_tokens(&proposal.question).is_subset(&source_numbers)
     {
@@ -596,6 +629,7 @@ mod localized_claim_tests {
                 text: "Обычно решение принимается за 15 дней.".into(),
                 source_url: source.source_url.clone(),
                 question: String::new(),
+                evidence_spans: Vec::new(),
             }),
             ..Default::default()
         };
@@ -611,6 +645,44 @@ mod localized_claim_tests {
         assert!(rendered.contains("[Источник](https://example.org/official)"));
         assert!(!rendered.contains(&source.fragment_text));
         assert_eq!(claim.fragment_text, source.fragment_text);
+    }
+
+    #[test]
+    fn composite_fee_uses_exact_applicable_spans_without_unrelated_rate() {
+        let (mut claim, mut source) = sample();
+        source.role_type = "fee_item".into();
+        source.fragment_text = concat!(
+            "EUR 35 for applicants from Armenia, Azerbaijan, and Belarus\n",
+            "EUR 67,50 for applicants from Cabo Verde.\n",
+            "An additional fee may apply at visa service centres.\n",
+            "The visa fee can be waived for specific categories."
+        )
+        .into();
+        claim.source_section_key = "fees".into();
+        claim.fragment_text = source.fragment_text.clone();
+        let proposal = claim.editorial_proposal.as_mut().unwrap();
+        proposal.text = "Для заявителей из Беларуси сбор EUR 35; сервисный сбор возможен отдельно, для некоторых категорий есть освобождение.".into();
+        proposal.evidence_spans = vec![
+            "EUR 35 for applicants from Armenia, Azerbaijan, and Belarus".into(),
+            "An additional fee may apply at visa service centres.".into(),
+            "The visa fee can be waived for specific categories.".into(),
+        ];
+        assert_eq!(validate_editorial_claim(&claim, &[source.clone()]), Ok(()));
+
+        claim.editorial_proposal.as_mut().unwrap().evidence_spans[0] = "EUR 35".into();
+        assert_eq!(
+            validate_editorial_claim(&claim, &[source.clone()]),
+            Err(EditorialClaimError::InvalidEvidenceSpan)
+        );
+        claim.editorial_proposal.as_mut().unwrap().evidence_spans[0] =
+            "EUR 35 for applicants from Armenia, Azerbaijan, and Belarus".into();
+        claim.editorial_proposal.as_mut().unwrap().evidence_spans.push(
+            "EUR 67,50 for applicants from Cabo Verde.".into(),
+        );
+        assert_eq!(
+            validate_editorial_claim(&claim, &[source]),
+            Err(EditorialClaimError::NumericEvidenceMismatch)
+        );
     }
 
     #[test]
