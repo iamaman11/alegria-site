@@ -210,14 +210,28 @@ async fn count_active_cannibalization(
     .map_err(classify_sqlx)
 }
 
-async fn count_required_links(pool: &PgPool, page_node_key: &str) -> Result<i64, DomainError> {
+// Candidate graph edges describe future page planning, not immediately
+// enforceable publication obligations. Only accepted/applied required edges
+// may block publication when their CMS targets are not yet live.
+async fn count_unpublished_mandatory_links(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(DISTINCT target_page_key)::bigint
-        FROM site.link_recommendations
-        WHERE source_page_key = $1
-          AND required_flag = true
-          AND status IN ('candidate','accepted','applied')
+        SELECT count(DISTINCT l.target_page_key)::bigint
+        FROM site.link_recommendations l
+        WHERE l.source_page_key = $1
+          AND l.required_flag = true
+          AND l.status IN ('accepted','applied')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM site.cms_pages p
+              JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+              WHERE p.page_node_key = l.target_page_key
+                AND p.current_status = 'published'
+                AND r.revision_status = 'published'
+          )
         "#,
     )
     .bind(page_node_key)

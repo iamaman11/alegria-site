@@ -934,6 +934,16 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
     sqlx::query("INSERT INTO site.link_recommendations (link_recommendation_key,scope_signature,source_page_key,target_page_key,required_flag,link_role,score) VALUES ($1,$2,$3,$4,true,'contextual',0.9)")
         .bind(format!("cms-link-{marker}")).bind(&scope).bind(&tourist_page)
         .bind(&parent_page).execute(pool).await.unwrap();
+    // Planning creates required candidate edges to child pages which do not
+    // have CMS revisions yet. They are not accepted publication obligations.
+    let future_child = format!("cms-link-unpublished-child-{marker}");
+    let future_path = format!("{tourist_path}documents/");
+    sqlx::query("INSERT INTO site.page_nodes (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path) VALUES ($1,$2,$3,'country_hub_page','informational','documents',$4)")
+        .bind(&future_child).bind(&scope).bind(&blueprint).bind(&future_path)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.link_recommendations (link_recommendation_key,scope_signature,source_page_key,target_page_key,required_flag,link_role,score) VALUES ($1,$2,$3,$4,true,'hub_to_child',0.8)")
+        .bind(format!("cms-link-future-{marker}")).bind(&scope).bind(&tourist_page)
+        .bind(&future_child).execute(pool).await.unwrap();
 
     let input = CmsPublishInputPayload {
         run_id: Uuid::new_v4().to_string(),
@@ -961,10 +971,12 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
     assert_eq!(links[0]["target_page_key"], parent_page);
     assert_eq!(links[0]["canonical_url_path"], parent_path);
 
-    // When the target loses its published state, a fresh draft must block;
+    // After explicit acceptance, an unpublished required target must block;
     // a required URL can never be invented from an unpublished page node.
     sqlx::query("UPDATE site.cms_pages SET current_status='review_required' WHERE page_node_key=$1")
         .bind(&parent_page).execute(pool).await.unwrap();
+    sqlx::query("UPDATE site.link_recommendations SET status='accepted' WHERE source_page_key=$1 AND target_page_key=$2")
+        .bind(&tourist_page).bind(&parent_page).execute(pool).await.unwrap();
     let next_draft = format!("cms-link-tourist-draft-2-{marker}");
     sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,draft_revision,body_markdown,qa_verdict,truth_snapshot_ref) VALUES ($1,$2,$3,2,'Fresh content','publish_ready','verified-truth')")
         .bind(&next_draft).bind(&tourist_page).bind(&tourist_brief)

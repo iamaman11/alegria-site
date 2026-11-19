@@ -28,11 +28,11 @@ pub async fn persist_cms_publish_output(
     if count_active_cannibalization(pool, &row.page_node_key).await? > 0 {
         blockers.push("active_cannibalization_conflict".to_string());
     }
-    let required_link_count = count_required_links(pool, &row.page_node_key).await?;
     let resolved_links = resolve_required_internal_links(pool, &row.page_node_key).await?;
-    if required_link_count == 0 {
+    if resolved_links.is_empty() {
         blockers.push("required_link_obligations_unsatisfied".to_string());
-    } else if resolved_links.len() as i64 != required_link_count {
+    }
+    if count_unpublished_mandatory_links(pool, &row.page_node_key).await? > 0 {
         blockers.push("required_internal_target_not_published".to_string());
     }
     if count_canonical_conflicts(pool, &row).await? > 0 {
