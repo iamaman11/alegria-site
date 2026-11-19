@@ -971,6 +971,53 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
     assert_eq!(links[0]["target_page_key"], parent_page);
     assert_eq!(links[0]["canonical_url_path"], parent_path);
 
+    // A published root/hub can receive a new review candidate when its only
+    // outgoing required recommendation points to a future, unpublished child.
+    // The existing live revision stays live and no future URL is fabricated.
+    sqlx::query(
+        "UPDATE site.page_drafts SET qa_verdict='publish_ready',truth_snapshot_ref='verified-truth' WHERE page_draft_key=$1",
+    )
+    .bind(&parent_draft)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO site.link_recommendations (link_recommendation_key,scope_signature,source_page_key,target_page_key,required_flag,link_role,score) VALUES ($1,$2,$3,$4,true,'hub_to_child',0.8)")
+        .bind(format!("cms-link-parent-future-{marker}"))
+        .bind(&scope)
+        .bind(&parent_page)
+        .bind(&future_child)
+        .execute(pool)
+        .await
+        .unwrap();
+    let hub = sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &input,
+        &CmsPublishOutputPayload {
+            page_draft_key: parent_draft,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(hub.verdict, "review_requested");
+    assert!(hub.blocking_reasons.is_empty());
+    let hub_links: serde_json::Value = sqlx::query_scalar(
+        "SELECT required_link_payload FROM site.cms_page_revisions WHERE revision_id=$1",
+    )
+    .bind(&hub.revision_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(hub_links, serde_json::json!([]));
+    let live_hub: String = sqlx::query_scalar(
+        "SELECT current_revision_id FROM site.cms_pages WHERE page_node_key=$1",
+    )
+    .bind(&parent_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(live_hub, parent_revision);
+
     // After explicit acceptance, an unpublished required target must block;
     // a required URL can never be invented from an unpublished page node.
     sqlx::query("UPDATE site.cms_pages SET current_status='review_required' WHERE page_node_key=$1")

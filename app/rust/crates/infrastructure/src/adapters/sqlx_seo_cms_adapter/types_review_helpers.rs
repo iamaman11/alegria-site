@@ -213,6 +213,28 @@ async fn count_active_cannibalization(
 // Candidate graph edges describe future page planning, not immediately
 // enforceable publication obligations. Only accepted/applied required edges
 // may block publication when their CMS targets are not yet live.
+// Required structural links must be planned. Candidate targets that are not
+// yet published are intentionally deferred until their pages go live; they do
+// not become hard obligations until accepted or applied.
+async fn count_required_link_recommendations(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<i64, DomainError> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(DISTINCT target_page_key)::bigint
+        FROM site.link_recommendations
+        WHERE source_page_key = $1
+          AND required_flag = true
+          AND status IN ('candidate','accepted','applied')
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(pool)
+    .await
+    .map_err(classify_sqlx)
+}
+
 async fn count_unpublished_mandatory_links(
     pool: &PgPool,
     page_node_key: &str,

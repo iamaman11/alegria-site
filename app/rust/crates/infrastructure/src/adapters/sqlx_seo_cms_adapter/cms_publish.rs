@@ -29,7 +29,9 @@ pub async fn persist_cms_publish_output(
         blockers.push("active_cannibalization_conflict".to_string());
     }
     let resolved_links = resolve_required_internal_links(pool, &row.page_node_key).await?;
-    if resolved_links.is_empty() {
+    // Require a structural link plan, but do not block a root/hub revision
+    // merely because its first child pages have not been published yet.
+    if count_required_link_recommendations(pool, &row.page_node_key).await? == 0 {
         blockers.push("required_link_obligations_unsatisfied".to_string());
     }
     if count_unpublished_mandatory_links(pool, &row.page_node_key).await? > 0 {
