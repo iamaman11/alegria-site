@@ -4,6 +4,7 @@ use seo_ports::{CmsReviewDecisionPort, CmsReviewDecisionRequest, SeoWorkflowCont
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyHumanReviewDecisionInput {
     pub page_node_key: String,
+    pub revision_id: Option<String>,
     pub actor_role: String,
     pub decision: String,
     pub reason: String,
@@ -21,6 +22,15 @@ fn validate_request(request: &ApplyHumanReviewDecisionInput) -> Result<(), Domai
     if request.page_node_key.trim().is_empty() {
         return Err(DomainError::ValidationFailure {
             message: "page_node_key is required".to_string(),
+        });
+    }
+    if request
+        .revision_id
+        .as_deref()
+        .is_some_and(|revision| revision.trim().is_empty())
+    {
+        return Err(DomainError::ValidationFailure {
+            message: "revision_id must be an exact non-empty review candidate".to_string(),
         });
     }
     if request.actor_role.trim().is_empty() || request.actor_role == "seo_system" {
@@ -52,6 +62,7 @@ where
     let outcome = repo
         .apply_human_review_decision(&CmsReviewDecisionRequest {
             page_node_key: request.page_node_key.clone(),
+            revision_id: request.revision_id.clone(),
             actor_role: request.actor_role.clone(),
             decision: request.decision.clone(),
             reason: request.reason.clone(),
@@ -102,6 +113,7 @@ mod tests {
             &FakeWorkflow,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: "page-1".to_string(),
+                revision_id: Some("revision-1".to_string()),
                 actor_role: "editor".to_string(),
                 decision: "approved".to_string(),
                 reason: "ok".to_string(),
@@ -120,6 +132,7 @@ mod tests {
             &FakeWorkflow,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: "page-1".to_string(),
+                revision_id: Some("revision-1".to_string()),
                 actor_role: "seo_system".to_string(),
                 decision: "approved".to_string(),
                 reason: String::new(),

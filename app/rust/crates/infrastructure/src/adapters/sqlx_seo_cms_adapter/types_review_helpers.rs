@@ -297,22 +297,31 @@ async fn resolve_seo_workflow_id(
     page_node_key: &str,
     revision_id: &str,
 ) -> Result<Option<String>, DomainError> {
-    let row = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        SELECT event_payload ->> 'run_id' AS run_id
-        FROM site.cms_publish_events
-        WHERE page_node_key = $1
-          AND revision_id = $2
-          AND event_type = 'seo_page_review_requested'
-          AND COALESCE(event_payload ->> 'run_id', '') <> ''
-        ORDER BY occurred_at DESC
-        LIMIT 1
+        SELECT DISTINCT e.event_payload ->> 'run_id' AS run_id
+        FROM site.cms_publish_events e
+        JOIN pipeline.execution_runs x
+          ON x.run_id::text = e.event_payload ->> 'run_id'
+         AND x.status NOT IN ('done', 'failed')
+        WHERE e.page_node_key = $1
+          AND e.revision_id = $2
+          AND e.event_type = 'seo_page_review_requested'
+        ORDER BY run_id
+        LIMIT 2
         "#,
     )
     .bind(page_node_key)
     .bind(revision_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     .map_err(classify_sqlx)?;
-    Ok(row.and_then(|row| row.get::<Option<String>, _>("run_id")))
+    if rows.len() > 1 {
+        return Err(validation_failure(
+            "review revision is owned by multiple active workflows",
+        ));
+    }
+    Ok(rows
+        .first()
+        .and_then(|row| row.get::<Option<String>, _>("run_id")))
 }

@@ -4,10 +4,22 @@ async fn cms_review_list(database_url: Option<String>, limit: i64) -> Result<i32
     let rows = sqlx::query(
         r#"
         SELECT p.page_node_key, p.canonical_url_path, p.current_status,
-               r.revision_id, r.title, r.updated_at::text AS updated_at
+               p.current_revision_id, r.revision_id, r.revision_status,
+               r.title, r.updated_at::text AS updated_at
         FROM site.cms_pages p
-        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
-        WHERE p.current_status IN ('review_required','blocked','approved')
+        JOIN site.cms_page_revisions r ON r.page_node_key = p.page_node_key
+        WHERE (r.revision_id = p.current_revision_id
+               AND p.current_status IN ('review_required','blocked','approved'))
+           OR (r.revision_status = 'review_required'
+               AND EXISTS (
+                 SELECT 1 FROM site.cms_publish_events e
+                 JOIN pipeline.execution_runs x
+                   ON x.run_id::text = e.event_payload ->> 'run_id'
+                  AND x.status NOT IN ('done','failed')
+                 WHERE e.page_node_key = p.page_node_key
+                   AND e.revision_id = r.revision_id
+                   AND e.event_type = 'seo_page_review_requested'
+               ))
         ORDER BY r.updated_at DESC
         LIMIT $1
         "#,
@@ -22,7 +34,9 @@ async fn cms_review_list(database_url: Option<String>, limit: i64) -> Result<i32
                 "page_node_key": row.get::<String, _>("page_node_key"),
                 "canonical_url_path": row.get::<String, _>("canonical_url_path"),
                 "current_status": row.get::<String, _>("current_status"),
+                "current_revision_id": row.get::<Option<String>, _>("current_revision_id"),
                 "revision_id": row.get::<String, _>("revision_id"),
+                "revision_status": row.get::<String, _>("revision_status"),
                 "title": row.get::<String, _>("title"),
                 "updated_at": row.get::<String, _>("updated_at"),
             })
@@ -32,21 +46,39 @@ async fn cms_review_list(database_url: Option<String>, limit: i64) -> Result<i32
     Ok(0)
 }
 
-async fn cms_review_show(database_url: Option<String>, page_node_key: &str) -> Result<i32> {
+async fn cms_review_show(
+    database_url: Option<String>,
+    page_node_key: &str,
+    revision_id: Option<&str>,
+) -> Result<i32> {
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
     let row = sqlx::query(
         r#"
         SELECT p.page_node_key, p.scope_signature, p.canonical_url_path, p.current_status,
+               p.current_revision_id,
                r.revision_id, r.title, r.meta_description, r.h1, r.body_payload,
                r.schema_markup_payload, r.required_link_payload, r.traceability_manifest,
                r.revision_status, r.updated_at::text AS updated_at
         FROM site.cms_pages p
-        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+        JOIN site.cms_page_revisions r ON r.page_node_key = p.page_node_key
         WHERE p.page_node_key = $1
+          AND r.revision_id = COALESCE($2, p.current_revision_id)
+          AND (r.revision_id = p.current_revision_id
+               OR (r.revision_status = 'review_required'
+                   AND EXISTS (
+                     SELECT 1 FROM site.cms_publish_events e
+                     JOIN pipeline.execution_runs x
+                       ON x.run_id::text = e.event_payload ->> 'run_id'
+                      AND x.status NOT IN ('done','failed')
+                     WHERE e.page_node_key = p.page_node_key
+                       AND e.revision_id = r.revision_id
+                       AND e.event_type = 'seo_page_review_requested'
+                   )))
         "#,
     )
     .bind(page_node_key)
+    .bind(revision_id)
     .fetch_one(&pool)
     .await?;
     let body: Json<Value> = row.get("body_payload");
@@ -58,6 +90,7 @@ async fn cms_review_show(database_url: Option<String>, page_node_key: &str) -> R
         "scope_signature": row.get::<String, _>("scope_signature"),
         "canonical_url_path": row.get::<String, _>("canonical_url_path"),
         "current_status": row.get::<String, _>("current_status"),
+        "current_revision_id": row.get::<Option<String>, _>("current_revision_id"),
         "revision_id": row.get::<String, _>("revision_id"),
         "revision_status": row.get::<String, _>("revision_status"),
         "title": row.get::<String, _>("title"),

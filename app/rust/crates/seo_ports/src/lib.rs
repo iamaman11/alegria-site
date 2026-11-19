@@ -96,6 +96,9 @@ pub struct GraphCoverageEvaluation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CmsReviewDecisionRequest {
     pub page_node_key: String,
+    /// Exact immutable review candidate. None retains the legacy current-page
+    /// route, which must fail closed if that revision is already published.
+    pub revision_id: Option<String>,
     pub actor_role: String,
     pub decision: String,
     pub reason: String,

@@ -138,7 +138,8 @@ async fn main() -> Result<()> {
         Command::CmsReviewShow {
             database_url,
             page_node_key,
-        } => cms_review_show(database_url, &page_node_key).await?,
+            revision_id,
+        } => cms_review_show(database_url, &page_node_key, revision_id.as_deref()).await?,
         Command::CmsPublishStatus {
             database_url,
             page_node_key,
@@ -196,7 +197,9 @@ async fn main() -> Result<()> {
         }
         Command::CmsApprovePublish {
             database_url,
+            temporal_url,
             page_node_key,
+            revision_id,
             actor_role,
             reason,
             output_dir,
@@ -205,7 +208,9 @@ async fn main() -> Result<()> {
             let _keep_smoke_happy = (&output_dir, &base_url);
             let (decision_key, revision_id, workflow_id) = cms_review_decision(
                 database_url.clone(),
+                temporal_url.as_deref(),
                 &page_node_key,
+                revision_id.as_deref(),
                 &actor_role,
                 "approved",
                 &reason,
@@ -219,13 +224,17 @@ async fn main() -> Result<()> {
         }
         Command::CmsBlock {
             database_url,
+            temporal_url,
             page_node_key,
+            revision_id,
             actor_role,
             reason,
         } => {
             let (decision_key, revision_id, workflow_id) = cms_review_decision(
                 database_url,
+                temporal_url.as_deref(),
                 &page_node_key,
+                revision_id.as_deref(),
                 &actor_role,
                 "blocked",
                 &reason,
@@ -239,13 +248,17 @@ async fn main() -> Result<()> {
         }
         Command::CmsReopen {
             database_url,
+            temporal_url,
             page_node_key,
+            revision_id,
             actor_role,
             reason,
         } => {
             let (decision_key, revision_id, workflow_id) = cms_review_decision(
                 database_url,
+                temporal_url.as_deref(),
                 &page_node_key,
+                revision_id.as_deref(),
                 &actor_role,
                 "reopened",
                 &reason,

@@ -198,6 +198,9 @@ enum Command {
         database_url: Option<String>,
         #[arg(long)]
         page_node_key: String,
+        /// Inspect an immutable pending revision, even when an older one is live.
+        #[arg(long)]
+        revision_id: Option<String>,
     },
     CmsPublishStatus {
         #[arg(long)]
@@ -267,7 +270,12 @@ enum Command {
         #[arg(long)]
         database_url: Option<String>,
         #[arg(long)]
+        temporal_url: Option<String>,
+        #[arg(long)]
         page_node_key: String,
+        /// Required for replacing an already published page.
+        #[arg(long)]
+        revision_id: Option<String>,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]
@@ -281,7 +289,11 @@ enum Command {
         #[arg(long)]
         database_url: Option<String>,
         #[arg(long)]
+        temporal_url: Option<String>,
+        #[arg(long)]
         page_node_key: String,
+        #[arg(long)]
+        revision_id: Option<String>,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]
@@ -291,7 +303,11 @@ enum Command {
         #[arg(long)]
         database_url: Option<String>,
         #[arg(long)]
+        temporal_url: Option<String>,
+        #[arg(long)]
         page_node_key: String,
+        #[arg(long)]
+        revision_id: Option<String>,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]

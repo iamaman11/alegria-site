@@ -7,6 +7,8 @@ CMS = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter.r
 SCHEMA = ROOT / "app/db/schema.sql"
 STATIC = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs"
 CLI_STATIC = ROOT / "app/rust/services/cli_tools/src/cli/static_site.rs"
+CMS_REVIEW_DECISION = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs"
+CMS_REVIEW_INSPECT = ROOT / "app/rust/services/cli_tools/src/cli/cms_inspect.rs"
 
 
 def read_file_resolved(path: Path) -> str:
@@ -31,6 +33,8 @@ def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     static = STATIC.read_text(encoding="utf-8")
     cli_static = CLI_STATIC.read_text(encoding="utf-8")
+    review_decision = CMS_REVIEW_DECISION.read_text(encoding="utf-8")
+    review_inspect = CMS_REVIEW_INSPECT.read_text(encoding="utf-8")
     if "static_site_builder_adapter::build_static_site(" not in cli_static:
         failures.append("headless CLI does not delegate to canonical shared renderer")
     if "fn render_page(" in cli_static or "fn build_static_artifacts(" in cli_static:
@@ -62,6 +66,20 @@ def main() -> int:
     ]:
         if needle not in cms:
             failures.append(f"CMS adapter missing `{needle}`")
+    for needle in [
+        "r.revision_id = COALESCE($2, p.current_revision_id)",
+        "r.revision_status = 'review_required'",
+        "exact review_required revision not found",
+    ]:
+        if needle not in review_decision:
+            failures.append(f"revision-bound human HITL missing `{needle}`")
+    for needle in [
+        "site.cms_publish_events",
+        "pipeline.execution_runs",
+        "r.revision_id = COALESCE($2, p.current_revision_id)",
+    ]:
+        if needle not in review_inspect:
+            failures.append(f"live-pointer-safe review inspection missing `{needle}`")
     for needle in [
         "render_content_blocks",
         "content-block--",
