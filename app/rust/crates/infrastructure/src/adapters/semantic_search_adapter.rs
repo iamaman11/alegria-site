@@ -19,6 +19,24 @@ pub enum VoyageSearchSurface {
     Contextualized,
 }
 
+/// Provider truncation is forbidden for evidence-bearing retrieval. Only the
+/// non-authoritative rebuild-neighbor advisory may explicitly opt in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RerankInputPolicy {
+    RequireFullInput,
+    AdvisoryAllowProviderTruncation,
+}
+
+impl RerankInputPolicy {
+    fn voyage_options(self, top_k: Option<usize>) -> VoyageRerankOptions {
+        VoyageRerankOptions {
+            top_k,
+            truncation: Some(matches!(self, Self::AdvisoryAllowProviderTruncation)),
+            return_documents: false,
+        }
+    }
+}
+
 impl VoyageSearchSurface {
     fn default_model(self) -> &'static str {
         match self {
@@ -42,6 +60,16 @@ pub async fn rerank_records(
     query: &str,
     records: Vec<SearchResultRecord>,
     top_k: Option<usize>,
+) -> Result<Vec<SearchResultRecord>> {
+    rerank_records_with_input_policy(query, records, top_k, RerankInputPolicy::RequireFullInput)
+        .await
+}
+
+pub async fn rerank_records_with_input_policy(
+    query: &str,
+    records: Vec<SearchResultRecord>,
+    top_k: Option<usize>,
+    input_policy: RerankInputPolicy,
 ) -> Result<Vec<SearchResultRecord>> {
     if records.len() <= 1 {
         return Ok(records);
@@ -82,17 +110,9 @@ pub async fn rerank_records(
         .iter()
         .map(|(_, document)| *document)
         .collect::<Vec<_>>();
+    let options = input_policy.voyage_options(top_k);
     let reranked = voyage
-        .rerank(
-            query,
-            &documents,
-            &VoyageRerankOptions {
-                top_k,
-                truncation: Some(false),
-                return_documents: false,
-            },
-            None,
-        )
+        .rerank(query, &documents, &options, None)
         .await?;
     if reranked.is_empty() {
         return Err(anyhow!(
@@ -206,6 +226,19 @@ pub async fn search_by_text_with_surface(
 #[cfg(test)]
 mod retrieval_payload_policy_tests {
     use super::*;
+
+    #[test]
+    fn rerank_requires_full_input_unless_advisory_policy_explicitly_opts_in() {
+        let strict = RerankInputPolicy::RequireFullInput.voyage_options(Some(8));
+        assert_eq!(strict.top_k, Some(8));
+        assert_eq!(strict.truncation, Some(false));
+        assert!(!strict.return_documents);
+
+        let advisory = RerankInputPolicy::AdvisoryAllowProviderTruncation.voyage_options(Some(8));
+        assert_eq!(advisory.top_k, Some(8));
+        assert_eq!(advisory.truncation, Some(true));
+        assert!(!advisory.return_documents);
+    }
 
     #[test]
     fn synthetic_probe_or_missing_identity_never_becomes_search_evidence() {

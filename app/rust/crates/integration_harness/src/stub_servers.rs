@@ -296,7 +296,44 @@ async fn serve_voyage_rerank(Json(body): Json<Value>) -> Json<Value> {
     Json(serde_json::json!({"data": data}))
 }
 
+async fn serve_voyage_rerank_with_overflow_guard(
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    // Emulate the provider rejecting an oversized query or candidate unless
+    // truncation was explicitly enabled for that request.
+    let oversized_query = body
+        .get("query")
+        .and_then(Value::as_str)
+        .is_some_and(|query| query.len() > 8_000);
+    let oversized_document = body
+        .get("documents")
+        .and_then(Value::as_array)
+        .is_some_and(|documents| {
+            documents
+                .iter()
+                .any(|document| document.as_str().is_some_and(|text| text.len() > 8_000))
+        });
+    if (oversized_query || oversized_document) && body.get("truncation") != Some(&Value::Bool(true))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"detail": "rerank input exceeds context without truncation"})),
+        );
+    }
+    (StatusCode::OK, serve_voyage_rerank(Json(body)).await)
+}
+
 pub async fn spawn_voyage_contract_stub() -> Result<StubServerHandle> {
+    spawn_voyage_contract_stub_with_guard(false).await
+}
+
+pub async fn spawn_voyage_rerank_overflow_stub() -> Result<StubServerHandle> {
+    spawn_voyage_contract_stub_with_guard(true).await
+}
+
+async fn spawn_voyage_contract_stub_with_guard(
+    reject_oversized_unless_truncated: bool,
+) -> Result<StubServerHandle> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .context("bind Voyage contract stub listener failed")?;
@@ -307,7 +344,14 @@ pub async fn spawn_voyage_contract_stub() -> Result<StubServerHandle> {
             "/v1/contextualizedembeddings",
             any(serve_voyage_contextualized),
         )
-        .route("/v1/rerank", any(serve_voyage_rerank));
+        .route(
+            "/v1/rerank",
+            if reject_oversized_unless_truncated {
+                any(serve_voyage_rerank_with_overflow_guard)
+            } else {
+                any(serve_voyage_rerank)
+            },
+        );
     let (tx, rx) = oneshot::channel::<()>();
     let task = tokio::spawn(async move {
         let server = axum::serve(listener, app).with_graceful_shutdown(async {

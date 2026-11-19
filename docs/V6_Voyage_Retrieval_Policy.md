@@ -65,6 +65,13 @@ Historical defaults such as `voyage-3-large` and `voyage-multilingual-2` are not
   - `input_type` omitted
 - truth- and draft-adjacent evidence text:
   - `truncation=false`
+- semantic rebuild-neighbor widening only:
+  - the non-authoritative rerank may explicitly set `truncation=true` to stay
+    within Voyage's query/document token budget; the original candidate
+    payload is never truncated or promoted to verified truth
+  - the rebuild reason records `rerank_input_policy=advisory_provider_truncation_allowed`
+  - all other shared retrieval/rerank callers retain `truncation=false` and
+    fail closed on oversized evidence instead of silently shortening it
 - primary quality vectors:
   - `output_dimension=1024`
   - `output_dtype=float`

@@ -1,3 +1,54 @@
+#[tokio::test]
+#[serial]
+async fn oversized_rebuild_rerank_uses_only_explicit_advisory_truncation() {
+    use infrastructure::adapters::semantic_search_adapter::{
+        rerank_records, rerank_records_with_input_policy, RerankInputPolicy, SearchResultRecord,
+    };
+
+    let stub = stub_servers::spawn_voyage_rerank_overflow_stub()
+        .await
+        .unwrap();
+    let _env = env_overrides::EnvOverrideGuard::apply([
+        ("VOYAGE_API_KEY".to_string(), "rerank-overflow-stub".to_string()),
+        (
+            "VOYAGE_API_BASE_URL".to_string(),
+            format!("{}/v1", stub.base_url),
+        ),
+    ]);
+    let query = "changed-truth-key ".repeat(9_000);
+    let full_document = "official page content ".repeat(9_000);
+    let records = vec![
+        SearchResultRecord {
+            entity_key: "first".to_string(),
+            score: 0.5,
+            payload: BTreeMap::from([("retrieval_text".to_string(), full_document.clone())]),
+        },
+        SearchResultRecord {
+            entity_key: "second".to_string(),
+            score: 0.4,
+            payload: BTreeMap::from([("retrieval_text".to_string(), "other page".to_string())]),
+        },
+    ];
+
+    let strict_error = rerank_records(&query, records.clone(), Some(2))
+        .await
+        .unwrap_err();
+    assert!(strict_error.to_string().contains("400 Bad Request"));
+
+    let reranked = rerank_records_with_input_policy(
+        &query,
+        records,
+        Some(2),
+        RerankInputPolicy::AdvisoryAllowProviderTruncation,
+    )
+    .await
+    .unwrap();
+    assert_eq!(reranked.len(), 2);
+    assert_eq!(reranked[0].entity_key, "first");
+    assert_eq!(reranked[0].payload["retrieval_text"], full_document);
+    assert_eq!(reranked[0].score, 1.0);
+}
+
 async fn temporal_step_multiset(pool: &sqlx::PgPool, run_id: &str) -> BTreeMap<String, usize> {
     let allowed = [
         "serp_ingest",
