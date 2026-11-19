@@ -676,9 +676,12 @@ mod localized_claim_tests {
         );
         claim.editorial_proposal.as_mut().unwrap().evidence_spans[0] =
             "EUR 35 for applicants from Armenia, Azerbaijan, and Belarus".into();
-        claim.editorial_proposal.as_mut().unwrap().evidence_spans.push(
-            "EUR 67,50 for applicants from Cabo Verde.".into(),
-        );
+        claim
+            .editorial_proposal
+            .as_mut()
+            .unwrap()
+            .evidence_spans
+            .push("EUR 67,50 for applicants from Cabo Verde.".into());
         assert_eq!(
             validate_editorial_claim(&claim, &[source]),
             Err(EditorialClaimError::NumericEvidenceMismatch)
