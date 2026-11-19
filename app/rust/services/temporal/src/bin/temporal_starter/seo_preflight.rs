@@ -1,3 +1,65 @@
+// Collection existence is a physical Qdrant property. The global SQL point
+// ledger is only one source of materialization evidence; the canonical
+// workflow separately performs exact run-scoped Qdrant/producer readback.
+fn classify_retrieval_collection_gaps(
+    statuses: &[SeoPreflightCollectionReport],
+) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let missing = statuses
+        .iter()
+        .filter(|status| !status.qdrant_collection_exists)
+        .map(|status| status.collection_name.clone())
+        .collect();
+    let stale = statuses
+        .iter()
+        .filter(|status| status.projection_complete && !status.fresh)
+        .map(|status| status.collection_name.clone())
+        .collect();
+    let incomplete = statuses
+        .iter()
+        .filter(|status| status.qdrant_collection_exists && !status.projection_complete)
+        .map(|status| status.collection_name.clone())
+        .collect();
+    (missing, stale, incomplete)
+}
+
+#[cfg(test)]
+mod retrieval_collection_classification_tests {
+    use super::*;
+
+    fn status(
+        name: &str,
+        qdrant_exists: bool,
+        point_count: i64,
+        fresh: bool,
+    ) -> SeoPreflightCollectionReport {
+        SeoPreflightCollectionReport {
+            collection_name: name.to_string(),
+            exists: qdrant_exists,
+            fresh,
+            projection_complete: point_count > 0,
+            point_count,
+            last_materialized_at: None,
+            last_source_change_at: None,
+            lag_seconds: None,
+            qdrant_collection_exists: qdrant_exists,
+        }
+    }
+
+    #[test]
+    fn physical_collection_and_materialization_are_distinct() {
+        let statuses = vec![
+            status("missing", false, 0, false),
+            status("present_without_sql_ledger", true, 0, false),
+            status("stale_materialized", true, 1, false),
+            status("ready", true, 1, true),
+        ];
+        let (missing, stale, incomplete) = classify_retrieval_collection_gaps(&statuses);
+        assert_eq!(missing, ["missing"]);
+        assert_eq!(stale, ["stale_materialized"]);
+        assert_eq!(incomplete, ["present_without_sql_ledger"]);
+    }
+}
+
 async fn run_seo_preflight(
     database_url: Option<String>,
     context_key: Option<String>,
@@ -182,7 +244,7 @@ async fn run_seo_preflight(
                 .unwrap_or(false);
             SeoPreflightCollectionReport {
                 collection_name: status.collection_name,
-                exists: status.point_count > 0,
+                exists: qdrant_collection_exists,
                 fresh: status
                     .lag_seconds
                     .map(|lag| lag * 1000 <= projection_max_lag_ms.max(0))
@@ -308,21 +370,8 @@ async fn run_seo_preflight(
     let graph_query_required = env_flag("GRAPH_QUERY_REQUIRED");
     let graph_gds_required = env_flag("GRAPH_GDS_REQUIRED");
 
-    let missing_collections = required_collection_statuses
-        .iter()
-        .filter(|status| !status.exists || !status.qdrant_collection_exists)
-        .map(|status| status.collection_name.clone())
-        .collect::<Vec<_>>();
-    let stale_collections = required_collection_statuses
-        .iter()
-        .filter(|status| status.exists && !status.fresh)
-        .map(|status| status.collection_name.clone())
-        .collect::<Vec<_>>();
-    let incomplete_collections = required_collection_statuses
-        .iter()
-        .filter(|status| status.exists && !status.projection_complete)
-        .map(|status| status.collection_name.clone())
-        .collect::<Vec<_>>();
+    let (missing_collections, stale_collections, incomplete_collections) =
+        classify_retrieval_collection_gaps(&required_collection_statuses);
     let missing_graph_projections = required_graph_projections
         .iter()
         .filter(|status| !status.exists)
@@ -384,7 +433,7 @@ async fn run_seo_preflight(
             stale_collections.join(",")
         )),
         "blocked_projection_incomplete" => Some(format!(
-            "projection backlog or incomplete retrieval collections block the required retrieval contract: projection_blocked={} incomplete=[{}]",
+            "global SQL point-ledger cannot certify required retrieval projections: projection_blocked={} unverified=[{}]; use run-scoped Temporal gates for exact Qdrant points and valid-empty producers",
             projection_blocked,
             incomplete_collections.join(",")
         )),
