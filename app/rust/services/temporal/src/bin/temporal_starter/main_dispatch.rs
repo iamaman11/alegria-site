@@ -20,12 +20,19 @@ fn report_workflow_completion(
             .get("published_pages")
             .and_then(|n| n.parse::<u32>().ok())
             .unwrap_or_default();
-        let verified = fields
+        let newly_verified = fields
             .get("truth_verified")
             .and_then(|n| n.parse::<u32>().ok())
             .unwrap_or_default();
-        if published_pages == 0 || verified == 0 {
-            anyhow::bail!("canonical workflow completed without published pages or verified truth");
+        // Rework can reuse an already VERIFIED support bundle without
+        // extracting any new rules. Both paths still require published pages
+        // and nonempty verified truth; a new run with neither fails closed.
+        let verified_support = fields
+            .get("support_bundle")
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or_default();
+        if published_pages == 0 || (newly_verified == 0 && verified_support == 0) {
+            anyhow::bail!("canonical workflow completed without published pages or verified support");
         }
     }
     println!(
@@ -422,10 +429,24 @@ mod tests {
             true
         )
         .is_ok());
+        // A canonical rework run may reuse seven previously verified facts
+        // while correctly reporting zero *new* fact verifications.
+        let reused = format!(
+            "seo_site_build_canonical_cutover_ok run_id={id} support_bundle=7 ia_pages=5 published_pages=5 truth_verified=0"
+        );
+        assert!(report_workflow_completion(
+            "SeoSiteBuildCanonicalCutoverWorkflow",
+            id,
+            &reused,
+            true
+        )
+        .is_ok());
         for result in [
             format!("seo_site_build_canonical_cutover_ok run_id=wrong ia_pages=1 published_pages=1 truth_verified=2"),
             format!("seo_site_build_canonical_cutover_ok run_id={id} ia_pages=1 published_pages=0 truth_verified=2"),
             format!("seo_site_build_canonical_cutover_ok run_id={id} ia_pages=1 published_pages=1 truth_verified=0"),
+            format!("seo_site_build_canonical_cutover_ok run_id={id} support_bundle=0 published_pages=5 truth_verified=0"),
+            format!("seo_site_build_canonical_cutover_ok run_id={id} support_bundle=7 published_pages=0 truth_verified=0"),
             "blocked:incomplete_verified_truth".to_string(),
         ] {
             assert!(report_workflow_completion(
