@@ -111,9 +111,7 @@ pub async fn rerank_records_with_input_policy(
         .map(|(_, document)| *document)
         .collect::<Vec<_>>();
     let options = input_policy.voyage_options(top_k);
-    let reranked = voyage
-        .rerank(query, &documents, &options, None)
-        .await?;
+    let reranked = voyage.rerank(query, &documents, &options, None).await?;
     if reranked.is_empty() {
         return Err(anyhow!(
             "Voyage rerank returned no records for {} input records",

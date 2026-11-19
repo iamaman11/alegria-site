@@ -305,14 +305,14 @@ async fn serve_voyage_rerank_with_overflow_guard(
         .get("query")
         .and_then(Value::as_str)
         .is_some_and(|query| query.len() > 8_000);
-    let oversized_document = body
-        .get("documents")
-        .and_then(Value::as_array)
-        .is_some_and(|documents| {
-            documents
-                .iter()
-                .any(|document| document.as_str().is_some_and(|text| text.len() > 8_000))
-        });
+    let oversized_document =
+        body.get("documents")
+            .and_then(Value::as_array)
+            .is_some_and(|documents| {
+                documents
+                    .iter()
+                    .any(|document| document.as_str().is_some_and(|text| text.len() > 8_000))
+            });
     if (oversized_query || oversized_document) && body.get("truncation") != Some(&Value::Bool(true))
     {
         return (
