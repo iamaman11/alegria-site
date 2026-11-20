@@ -1,6 +1,6 @@
 {
   "fixture_id": "competitor_claim_non_verified",
-  "description": "Commercial or competitor-only claims must not become verified visa truth.",
+  "description": "An agency's own service charge is not evidence of a consular fee; no promotion before source governance.",
   "run_mode": "dry_run",
   "business_scope": {
     "truth_identity_tuple": "ES|tourist||BY",
@@ -71,7 +71,7 @@
   "expected_outcomes": {
     "verified_rule_set": [],
     "needs_hitl_set": [
-      "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|single_source_requires_corroboration; source_tiers=low_trust; authority_classes=agency"
+      "consular_fee|{\"amount\":250.0,\"currency\":\"EUR\"}|candidate_validation_requires_hitl"
     ],
     "rejected_set": [],
     "contradiction_groups": [],

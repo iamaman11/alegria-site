@@ -86,6 +86,7 @@ async fn run_planning_phase<
                 repo,
                 repo,
                 &IaBuildInputPayload {
+                    verified_support: state.verified_support.clone(),
                     run_id,
                     scope: request.site_input.scope.clone(),
                     keyword_clusters: opportunities.keyword_clusters.clone(),
@@ -131,6 +132,8 @@ async fn run_planning_phase<
                 repo,
                 repo,
                 &GlobalSiteReconcileInputPayload {
+                    page_blueprints: ia.page_blueprints.clone(),
+                    verified_support: state.verified_support.clone(),
                     run_id,
                     scope: request.site_input.scope.clone(),
                     page_nodes: ia.page_nodes.clone(),
@@ -169,19 +172,9 @@ fn page_nodes_and_links(
     ),
     DomainError,
 > {
-    let ia = require_state_ref(&state.ia, "ia_build_required")?;
-    let links = require_state_ref(&state.links, "link_recommend_required")?;
     let reconciled = require_state_ref(&state.reconciled, "global_site_reconcile_required")?;
-    let page_nodes = if reconciled.page_nodes.is_empty() {
-        ia.page_nodes.clone()
-    } else {
-        reconciled.page_nodes.clone()
-    };
-    let link_recommendations = if reconciled.link_recommendations.is_empty() {
-        links.link_recommendations.clone()
-    } else {
-        reconciled.link_recommendations.clone()
-    };
-    Ok((page_nodes, link_recommendations))
+    // Empty reconciled results are authoritative; do not resurrect discarded
+    // pages or unsafe links from the preliminary planning output.
+    Ok((reconciled.page_nodes.clone(), reconciled.link_recommendations.clone()))
 }
 

@@ -3,10 +3,10 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use seo_ports::{
-        GlobalNavigationPersistReport, GraphCoverageEvaluation, GraphNeighborhoodHit,
-        GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult, PlanningRepository,
-        RebuildDependencyEvidence, SemanticLinkCandidate, SemanticLinkSearchPort, SerpSearchPort,
-        GraphCapabilityPort,
+        GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
+        GraphNeighborhoodHit, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
+        PlanningRepository, RebuildDependencyEvidence, SemanticLinkCandidate,
+        SemanticLinkSearchPort, SerpSearchPort,
     };
     use std::sync::Mutex;
 
@@ -28,6 +28,14 @@ mod tests {
             _scope_signature: &str,
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(runtime_models::GraphPlanningContext::default())
+        }
+
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
         }
 
         async fn persist_serp_ingest_output(
@@ -60,9 +68,9 @@ mod tests {
         async fn persist_opportunity_build_output(
             &self,
             _input: &OpportunityBuildInputPayload,
-            _output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
-            Ok(())
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+            Ok(output.clone())
         }
 
         async fn persist_ia_build_output(
@@ -135,8 +143,9 @@ mod tests {
 
     #[async_trait]
     impl SerpSearchPort for FakeSerpSearchPort {
-        async fn fetch_google_organic_live_advanced(
+        async fn fetch_google_organic_standard(
             &self,
+            _run_id: &str,
             _locale: Option<&str>,
             _query: &str,
         ) -> Result<Option<OrganicSerpResponse>, DomainError> {
@@ -228,6 +237,14 @@ mod tests {
             Ok(self.graph_context.clone())
         }
 
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
+        }
+
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -259,10 +276,10 @@ mod tests {
             &self,
             input: &OpportunityBuildInputPayload,
             output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
             *self.opportunity_input.lock().unwrap() = Some(input.clone());
             *self.opportunity_output.lock().unwrap() = Some(output.clone());
-            Ok(())
+            Ok(output.clone())
         }
 
         async fn persist_ia_build_output(
@@ -489,6 +506,8 @@ mod tests {
             &repo,
             &FakeSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
+                page_blueprints: Vec::new(),
+                verified_support: Vec::new(),
                 run_id: "run-2".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -568,6 +587,7 @@ mod tests {
             &repo,
             &OverlapSemanticSearchPort,
             &IaBuildInputPayload {
+                verified_support: Vec::new(),
                 run_id: "run-ia".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {
@@ -623,6 +643,8 @@ mod tests {
             &repo,
             &OverlapSemanticSearchPort,
             &GlobalSiteReconcileInputPayload {
+                page_blueprints: Vec::new(),
+                verified_support: Vec::new(),
                 run_id: "run-global".to_string(),
                 scope: Some(
                     contracts::generated::alegria::temporal::v1::SeoScopePayload {

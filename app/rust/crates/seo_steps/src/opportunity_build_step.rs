@@ -6,6 +6,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature};
+use primitives::seo::ContentGapDetector;
 
 fn topic_tokens(value: &str) -> BTreeSet<String> {
     value
@@ -70,13 +71,44 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
     let mut seen_cluster_families = BTreeSet::new();
     let mut cluster_topics_by_family: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
+    // A cluster_ref is an internal family identity, never a human search query.
+    // Pick the same representative real SERP phrase regardless of input order.
+    let mut representative_queries = BTreeMap::<(String, String), (String, f64)>::new();
     for pattern in &input.serp_patterns {
         let scope = if pattern.scope_signature.is_empty() {
             fallback_scope.clone()
         } else {
             pattern.scope_signature.clone()
         };
-        let seed_keyword = pattern.query.trim().to_ascii_lowercase();
+        let query = pattern.query.trim().to_lowercase();
+        if query.is_empty() {
+            continue;
+        }
+        let topic_signal = best_topic_family(&query, graph_context);
+        let family = cluster_ref_from_evidence(&pattern.evidence_ref)
+            .unwrap_or_else(|| seed_or_topic_key(&query, topic_signal));
+        match representative_queries.entry((scope, family)) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((query, pattern.reliability_score));
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let (best_query, best_score) = entry.get();
+                if pattern.reliability_score > *best_score
+                    || (pattern.reliability_score == *best_score && query < *best_query)
+                {
+                    entry.insert((query, pattern.reliability_score));
+                }
+            }
+        }
+    }
+
+    for pattern in &input.serp_patterns {
+        let scope = if pattern.scope_signature.is_empty() {
+            fallback_scope.clone()
+        } else {
+            pattern.scope_signature.clone()
+        };
+        let seed_keyword = pattern.query.trim().to_lowercase();
         if seed_keyword.is_empty() {
             continue;
         }
@@ -126,7 +158,10 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
         keyword_clusters.push(KeywordClusterState {
             cluster_key: cluster_key.clone(),
             scope_signature: scope.clone(),
-            seed_keyword: family_key.clone(),
+            seed_keyword: representative_queries
+                .get(&(scope.clone(), family_key.clone()))
+                .map(|(query, _)| query.clone())
+                .unwrap_or_else(|| seed_keyword.clone()),
             dominant_intent: if pattern.dominant_intent.is_empty() {
                 "informational".to_string()
             } else {
@@ -147,22 +182,19 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
             support_refs,
         });
         if pattern.reliability_score < 0.5 {
+            let detector = ContentGapDetector::SerpReliability;
+            let missing_topic = representative_queries
+                .get(&(scope.clone(), family_key.clone()))
+                .map(|(query, _)| query.clone())
+                .unwrap_or_else(|| seed_keyword.clone());
             content_gaps.push(ContentGapState {
-                content_gap_key: artifact_key(
-                    "content_gap",
-                    &[
-                        &scope,
-                        &family_key,
-                        "low_reliability_serp",
-                        "seo_content_gap@1",
-                    ],
-                ),
+                content_gap_key: detector.key(&scope, "", &missing_topic),
                 scope_signature: scope.clone(),
                 page_node_key: String::new(),
-                missing_topic: family_key.clone(),
+                missing_topic,
                 severity: "medium".to_string(),
                 status: "open".to_string(),
-                reason_code: "low_reliability_serp".to_string(),
+                reason_code: detector.reason().to_string(),
                 topic_keys: Vec::new(),
                 triple_refs: Vec::new(),
                 graph_confidence: pattern.reliability_score,
@@ -178,26 +210,33 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
     if let Some(graph_context) = graph_context {
         for signal in &graph_context.coverage_signals {
             for missing_topic in &signal.missing_topic_keys {
-                let gap_key = artifact_key(
-                    "content_gap",
-                    &[
-                        &fallback_scope,
-                        missing_topic,
-                        "graph_missing_topic_coverage",
-                        "seo_content_gap@1",
-                    ],
-                );
+                let detector = ContentGapDetector::GraphCoverage;
+                if !detector.valid_owner(&signal.page_node_key) || missing_topic.trim().is_empty() {
+                    continue;
+                }
+                let scope = graph_context
+                    .page_nodes
+                    .iter()
+                    .find(|page| page.page_node_key == signal.page_node_key)
+                    .map(|page| page.scope_signature.as_str())
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| {
+                        (!graph_context.scope_signature.is_empty())
+                            .then_some(graph_context.scope_signature.as_str())
+                    })
+                    .unwrap_or(&fallback_scope);
+                let gap_key = detector.key(scope, &signal.page_node_key, missing_topic);
                 if !seen_gap_keys.insert(gap_key.clone()) {
                     continue;
                 }
                 content_gaps.push(ContentGapState {
                     content_gap_key: gap_key,
-                    scope_signature: fallback_scope.clone(),
+                    scope_signature: scope.to_string(),
                     page_node_key: signal.page_node_key.clone(),
                     missing_topic: missing_topic.clone(),
                     severity: "high".to_string(),
                     status: "open".to_string(),
-                    reason_code: "graph_missing_topic_coverage".to_string(),
+                    reason_code: detector.reason().to_string(),
                     topic_keys: vec![missing_topic.clone()],
                     triple_refs: graph_context
                         .triple_signals
@@ -212,8 +251,68 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
         }
     }
 
+    // The same real query can appear under more than one internal SERP/Voyage
+    // family. The database owns one natural keyword identity per scope/query,
+    // regardless of how many technical cluster_ref values suggested it.
+    // Merge their evidence before persistence; keep the winner deterministic
+    // even when provider rows arrive in a different order.
+    // The persistence owner also fixes the market/locale/country/type/profile
+    // for this input; its natural UNIQUE key does not include scope_signature.
+    let mut by_keyword = BTreeMap::<(String, u32), KeywordClusterState>::new();
+    for candidate in keyword_clusters {
+        let natural = (candidate.seed_keyword.clone(), candidate.cluster_version);
+        match by_keyword.entry(natural) {
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(candidate);
+            }
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                let previous = entry.get();
+                let higher_confidence = candidate
+                    .graph_confidence
+                    .total_cmp(&previous.graph_confidence)
+                    .is_gt();
+                let same_confidence = candidate
+                    .graph_confidence
+                    .total_cmp(&previous.graph_confidence)
+                    .is_eq();
+                let mut merged = if higher_confidence
+                    || (same_confidence && candidate.cluster_key < previous.cluster_key)
+                {
+                    candidate.clone()
+                } else {
+                    previous.clone()
+                };
+                merged
+                    .topic_keys
+                    .extend(previous.topic_keys.iter().cloned());
+                merged
+                    .topic_keys
+                    .extend(candidate.topic_keys.iter().cloned());
+                merged.topic_keys.sort();
+                merged.topic_keys.dedup();
+                merged
+                    .triple_refs
+                    .extend(previous.triple_refs.iter().cloned());
+                merged
+                    .triple_refs
+                    .extend(candidate.triple_refs.iter().cloned());
+                merged.triple_refs.sort();
+                merged.triple_refs.dedup();
+                merged
+                    .support_refs
+                    .extend(previous.support_refs.iter().cloned());
+                merged
+                    .support_refs
+                    .extend(candidate.support_refs.iter().cloned());
+                merged.support_refs.sort();
+                merged.support_refs.dedup();
+                entry.insert(merged);
+            }
+        }
+    }
+
     OpportunityBuildOutputPayload {
-        keyword_clusters,
+        keyword_clusters: by_keyword.into_values().collect(),
         content_gaps,
     }
 }
@@ -260,6 +359,87 @@ mod tests {
         assert_eq!(
             output.keyword_clusters[0].reason_code,
             "graph_topic_family_merge"
+        );
+    }
+
+    #[test]
+    fn distinct_serp_families_cannot_duplicate_one_real_keyword() {
+        use contracts::generated::alegria::temporal::v1::SerpPatternState;
+
+        let patterns = vec![
+            SerpPatternState {
+                scope_signature: "same-scope".into(),
+                query: "Виза в Испанию для белорусов".into(),
+                dominant_intent: "informational".into(),
+                evidence_ref: "cluster_ref:family-one".into(),
+                reliability_score: 0.6,
+                ..Default::default()
+            },
+            SerpPatternState {
+                scope_signature: "same-scope".into(),
+                query: "виза в испанию для белорусов".into(),
+                dominant_intent: "commercial".into(),
+                evidence_ref: "cluster_ref:family-two".into(),
+                reliability_score: 0.9,
+                ..Default::default()
+            },
+        ];
+        let result = execute(&OpportunityBuildInputPayload {
+            serp_patterns: patterns.clone(),
+            ..Default::default()
+        });
+        let reversed = execute(&OpportunityBuildInputPayload {
+            serp_patterns: patterns.into_iter().rev().collect(),
+            ..Default::default()
+        });
+        assert_eq!(result.keyword_clusters.len(), 1);
+        assert_eq!(result.keyword_clusters, reversed.keyword_clusters);
+        assert_eq!(result.keyword_clusters[0].dominant_intent, "commercial");
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            "виза в испанию для белорусов"
+        );
+    }
+
+    #[test]
+    fn cluster_reference_is_not_exposed_as_keyword_and_ranking_is_stable() {
+        fn build(patterns: Vec<(&str, f64)>) -> OpportunityBuildOutputPayload {
+            execute(&OpportunityBuildInputPayload {
+                serp_patterns: patterns.into_iter().map(|(query, score)| {
+                    contracts::generated::alegria::temporal::v1::SerpPatternState {
+                        scope_signature: "scope".to_string(),
+                        query: query.to_string(),
+                        dominant_intent: "informational".to_string(),
+                        reliability_score: score,
+                        evidence_ref: "cluster_ref:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".into(),
+                        ..Default::default()
+                    }
+                }).collect(),
+                ..Default::default()
+            })
+        }
+        let queries = vec![
+            ("туристическая виза в Испанию", 0.78),
+            ("виза в Испанию для белорусов документы", 0.92),
+        ];
+        let result = build(queries.clone());
+        let reversed = build(queries.into_iter().rev().collect());
+        assert_eq!(result.keyword_clusters.len(), 1);
+        assert_eq!(
+            result.keyword_clusters[0].cluster_key,
+            reversed.keyword_clusters[0].cluster_key
+        );
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            reversed.keyword_clusters[0].seed_keyword
+        );
+        assert_eq!(
+            result.keyword_clusters[0].seed_keyword,
+            "виза в испанию для белорусов документы"
+        );
+        assert_ne!(
+            result.keyword_clusters[0].seed_keyword,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
     }
 

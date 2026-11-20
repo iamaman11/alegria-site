@@ -227,11 +227,17 @@ pub(crate) async fn raw_evidence_register_impl(
         .map(|section| section.page_id)
         .collect::<BTreeSet<_>>()
         .len();
-    let unique_source_count = sections
-        .iter()
-        .map(|section| section.source_url.clone())
-        .collect::<BTreeSet<_>>()
-        .len();
+    // Source governance must exist before truth_adjudication reads it.
+    // The prior "register" phase only counted URLs, leaving newly crawled
+    // official sources absent from the authoritative kb.sources registry.
+    // Register each observed source once; this never verifies its claims.
+    let mut source_keys = BTreeSet::new();
+    for section in &sections {
+        if source_keys.insert(section.source_url.clone()) {
+            raw_crawl_adapter::ensure_source(&acts.pool, section).await?;
+        }
+    }
+    let unique_source_count = source_keys.len();
     let evidence_refs = sections
         .iter()
         .map(|section| format!("raw.section:{}", section.id))

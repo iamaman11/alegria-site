@@ -39,6 +39,7 @@ mod tests {
                 queries: request.queries.clone(),
                 verified_support: Vec::new(),
                 required_page_types: Vec::new(),
+                retained_source_run_id: request.retained_source_run_id.clone().unwrap_or_default(),
                 run_mode: request.run_mode.clone().unwrap_or_default(),
             })
         }
@@ -62,6 +63,7 @@ mod tests {
                 bootstrap_context: true,
                 queries: vec!["spain tourist visa".to_string()],
                 query_batch_key: Some("batch-1".to_string()),
+                retained_source_run_id: None,
                 run_mode: Some("publish_with_hitl".to_string()),
             },
         )

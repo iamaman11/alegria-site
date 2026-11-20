@@ -14,12 +14,24 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
         &self,
         request: &SeoSiteBuildRegistrationRequest,
     ) -> Result<SeoSiteBuildInputPayload, DomainError> {
-        let non_empty_queries = request
+        let mut non_empty_queries = request
             .queries
             .iter()
             .map(|query| query.trim().to_string())
             .filter(|query| !query.is_empty())
             .collect::<Vec<_>>();
+        let source = if let Some(source_id) = request.retained_source_run_id.as_deref() {
+            if source_id == request.run_id || request.query_batch_key.is_some() || !non_empty_queries.is_empty() {
+                return Err(DomainError::ValidationFailure {
+                    message: "retained corpus requires a new run and its original queries/batch".to_string(),
+                });
+            }
+            let prior = sqlx_seo_adapter::load_terminal_retained_source(self.pool, source_id).await?;
+            non_empty_queries = prior.queries.clone();
+            Some(prior)
+        } else {
+            None
+        };
         if non_empty_queries.is_empty() {
             return Err(DomainError::ValidationFailure {
                 message: "SeoSiteBuildWorkflow requires at least one --query".to_string(),
@@ -100,11 +112,15 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
             queries: non_empty_queries,
             verified_support: Vec::new(),
             required_page_types: Vec::new(),
+            retained_source_run_id: request.retained_source_run_id.clone().unwrap_or_default(),
             run_mode: request
                 .run_mode
                 .clone()
                 .unwrap_or_else(|| "publish_with_hitl".to_string()),
         };
+        if let Some(prior) = source.as_ref() {
+            sqlx_seo_adapter::verify_retained_scope(&input, prior)?;
+        }
         sqlx_seo_adapter::upsert_seo_site_build_input(self.pool, &input).await?;
         Ok(input)
     }

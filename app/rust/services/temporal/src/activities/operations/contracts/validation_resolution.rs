@@ -49,6 +49,12 @@ pub struct ValidatedTruthCandidateRecord {
     pub span_start: usize,
     pub span_end: usize,
     pub source_snapshot_hash: String,
+    #[serde(default)]
+    pub provider_key: String,
+    #[serde(default)]
+    pub model_key: String,
+    #[serde(default)]
+    pub prompt_version: String,
     pub freshness_class: String,
     pub completeness_class: String,
     pub epistemic_status: String,

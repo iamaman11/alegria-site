@@ -287,12 +287,14 @@ impl AlegriaActivities {
         _ctx: ActivityContext,
         input: operations::ProjectionSyncInput,
     ) -> Result<operations::ProjectionSyncOutput, ActivityError> {
-        let run_id = input.run_id.clone();
-        let step_name = input.step_name.clone();
-        self.execute_step(&run_id, &step_name, 1, &input, || async {
-            operations::projection_sync_impl(self.as_ref(), &input).await
-        })
-        .await
+        // A projection sync drains mutable outbox state, unlike an immutable
+        // calculation: a later replay can add new source-revision events with
+        // the same run_id and step_name. Reusing a completed step result would
+        // skip those events and let the strict graph preflight race materialization.
+        // Temporal owns activity replay; the outbox receipt owns idempotency.
+        operations::projection_sync_impl(self.as_ref(), &input)
+            .await
+            .map_err(|err| Self::activity_error_from_domain(&err))
     }
 
     #[allow(dead_code)]
@@ -653,6 +655,7 @@ impl AlegriaActivities {
         for section in sections.iter().filter(|s| allowed.contains(&s.id)) {
             let extraction_input =
                 infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionInput {
+                    revision: infrastructure::adapters::truth_extraction_llm_adapter::TruthExtractionRevision::AtomicCoverage,
                     context_key: input.context_key.clone(),
                     raw_section_id: section.id,
                     source_url: section.source_url.clone(),
@@ -700,7 +703,11 @@ impl AlegriaActivities {
         input: operations::CandidateValidationInput,
     ) -> Result<operations::CandidateValidationOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "candidate_validation", 1, &input, || async {
+        // The fee-evidence validator now distinguishes actual consular payments
+        // from insurance coverage and service charges. Replay must read the
+        // preserved source/manual LLM jobs through this v2 gate rather than
+        // silently returning the pre-fix v1 step result.
+        self.execute_step(&run_id, "candidate_validation", 2, &input, || async {
             operations::candidate_validation_impl(self.as_ref(), &input).await
         })
         .await
@@ -756,7 +763,10 @@ impl AlegriaActivities {
         input: operations::ContradictionGateSweepInput,
     ) -> Result<operations::ContradictionGateSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "contradiction_gate", 1, &input, || async {
+        // v2 compares identical typed attributes instead of treating distinct
+        // fields of one rule as a critical contradiction. Replay the saved
+        // candidate evidence through this corrected gate, not v1 cached output.
+        self.execute_step(&run_id, "contradiction_gate", 2, &input, || async {
             operations::contradiction_gate_sweep_impl(self.as_ref(), &input).await
         })
         .await
@@ -770,7 +780,10 @@ impl AlegriaActivities {
         input: operations::TruthAdjudicationSweepInput,
     ) -> Result<operations::TruthAdjudicationSweepOutput, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "truth_adjudication", 1, &input, || async {
+        // Governance changed after the first live run. A reset must not reuse
+        // the old v1 successful adjudication ledger/output instead of applying
+        // the corrected policy to preserved source and LLM evidence.
+        self.execute_step(&run_id, "truth_adjudication", 2, &input, || async {
             operations::truth_adjudication_sweep_impl(self.as_ref(), &input).await
         })
         .await
@@ -857,6 +870,9 @@ impl AlegriaActivities {
     ) -> Result<SerpIngestOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "serp_ingest", 1, &input, || async {
+            if let Some(retained) = infrastructure::adapters::sqlx_seo_adapter::retained_serp_ingest(&self.pool, &input).await? {
+                return Ok(retained);
+            }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::planning::run_serp_ingest(&repo, &repo, &input).await
         })
@@ -872,6 +888,9 @@ impl AlegriaActivities {
     ) -> Result<CrawlSourcesOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "crawl_sources", 1, &input, || async {
+            if let Some(retained) = infrastructure::adapters::sqlx_seo_adapter::retained_crawl_sources(&self.pool, &input).await? {
+                return Ok(retained);
+            }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::crawl_ingest::run_crawl_sources(&repo, &input).await
         })
@@ -920,7 +939,7 @@ impl AlegriaActivities {
         input: OpportunityBuildInputPayload,
     ) -> Result<OpportunityBuildOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "opportunity_build", 1, &input, || async {
+        self.execute_step(&run_id, "opportunity_build", 2, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::planning::run_opportunity_build(&repo, &repo, &input).await
         })
@@ -1213,7 +1232,8 @@ impl AlegriaActivities {
         input: PublishMaterializeInputPayload,
     ) -> Result<PublishMaterializeOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "publish_materialize", 1, &input, || async {
+        // v2 resolves runtime settings before validation; do not replay cached v1 failures.
+        self.execute_step(&run_id, "publish_materialize", 2, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             let persisted =
                 seo_application::review_publish::run_publish_materialize(&repo, &input).await?;
@@ -1281,7 +1301,9 @@ impl AlegriaActivities {
         input: FinalizePublishInputPayload,
     ) -> Result<FinalizePublishOutputPayload, ActivityError> {
         let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "finalize_publish", 1, &input, || async {
+        // v3 reconciles an externally verified pending first release; never
+        // reuse the v2 blocked receipt after deploying the recovery fix.
+        self.execute_step(&run_id, "finalize_publish", 3, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
             seo_application::review_publish::run_finalize_publish(&repo, &input).await
         })

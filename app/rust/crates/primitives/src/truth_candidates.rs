@@ -383,11 +383,36 @@ pub fn validate_truth_candidate(
         rejected = true;
     }
 
+    // Economic claims must retain their *kind* and the quoted monetary
+    // value, not just a matching number somewhere in the source section.
+    // This also applies to typed manual LLM proposals, not only the
+    // deterministic procedural extractor.
+    if let Some((invalid, code, explanation)) = consular_fee_evidence_issue(candidate) {
+        if invalid {
+            reject(&mut issues, code, explanation);
+            rejected = true;
+        } else {
+            needs_hitl(&mut issues, code, explanation);
+        }
+    }
+
     if rejected {
         return TruthCandidateValidationResult {
             epistemic_status: "rejected".to_string(),
             issues,
         };
+    }
+
+    // Exact substring equality alone is insufficient to prove an asserted
+    // claim. Isolated numbers, one-word titles and keywords require a
+    // substantive source quotation before any automatic adjudication.
+    let quote = candidate.evidence_quote.trim();
+    if quote.chars().count() < 20 || quote.split_whitespace().count() < 3 {
+        needs_hitl(
+            &mut issues,
+            "evidence_fragment_requires_context",
+            "the cited span is too short to support a standalone factual claim",
+        );
     }
 
     // Only the exact applicant_profile predicate is representable by the
@@ -624,6 +649,164 @@ pub fn adjudicate_truth_candidates(
     }
 }
 
+// Consular fee, service charges and insurance *coverage* are distinct
+// monetary facts. A source quotation must substantiate the actual amount;
+// "30.000 €" is thirty thousand, not thirty or zero. This is a validation
+// guard, not a replacement for source provenance, scope, or adjudication.
+fn consular_fee_evidence_issue(
+    candidate: &TruthCandidateRuntime,
+) -> Option<(bool, &'static str, &'static str)> {
+    if candidate.role != "FEE_ITEM" || candidate.concept_canonical_key != "consular_fee" {
+        return None;
+    }
+    let quote = candidate.evidence_quote.to_lowercase();
+    let mentions_other_kind = [
+        "insurance coverage",
+        "insurance policy",
+        "travel insurance",
+        "medical insurance",
+        "страхов",
+        "страховк",
+        "полис",
+        "cobertura",
+        "seguro médico",
+        "service fee",
+        "service charge",
+        "agency fee",
+        "agency charge",
+        "сервисный сбор",
+        "сервисного сбора",
+        "сбор за услуги",
+        "плата за услуги",
+        "tasa de servicio",
+    ]
+    .iter()
+    .any(|phrase| quote.contains(phrase));
+    if mentions_other_kind {
+        let mentions_consular = [
+            "consular fee",
+            "visa fee",
+            "visa application fee",
+            "консульск",
+            "визовый сбор",
+            "визового сбора",
+            "tasa consular",
+            "tasa de visado",
+        ]
+        .iter()
+        .any(|phrase| quote.contains(phrase));
+        return Some(if mentions_consular {
+            (
+                false,
+                "mixed_fee_kind_requires_hitl",
+                "quotation mixes a consular fee with another monetary obligation",
+            )
+        } else {
+            (
+                true,
+                "incorrect_consular_fee_kind",
+                "quotation describes insurance coverage or a service charge, not a consular fee",
+            )
+        });
+    }
+
+    let params = candidate.params.as_object()?;
+    let amount = match params.get("amount")? {
+        TruthParamValue::Integer(value) => *value as f64,
+        TruthParamValue::Decimal(value) => *value,
+        _ => return None,
+    };
+    if !matches!(params.get("currency"), Some(TruthParamValue::Text(currency))
+        if currency.eq_ignore_ascii_case("EUR"))
+    {
+        return None;
+    }
+
+    // Match currency-bound numbers only. Do not match a substring of a larger
+    // number or infer amounts from unrelated dates and duration figures.
+    static EUR_AMOUNT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let expression = EUR_AMOUNT.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)(?:€\s*(?P<leading>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)|(?P<trailing>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?)\s*(?:€|EUR\b|euros?\b|евро\b)|(?:EUR\b|euros?\b|евро\b)\s*(?P<prefixed>[0-9]+(?:[.,\s][0-9]{3})*(?:[.,][0-9]{1,2})?))",
+        )
+        .expect("valid fixed euro-evidence pattern")
+    });
+    let amounts = expression
+        .captures_iter(&quote)
+        .filter_map(|captures| {
+            captures
+                .name("leading")
+                .or_else(|| captures.name("trailing"))
+                .or_else(|| captures.name("prefixed"))
+        })
+        .map(|capture| capture.as_str())
+        .collect::<Vec<_>>();
+    if amounts.is_empty() {
+        return Some((
+            false,
+            "consular_fee_amount_not_quoted",
+            "quotation does not contain an explicit euro amount for this fee",
+        ));
+    }
+    if amounts.iter().any(|value| {
+        let digits = value
+            .chars()
+            .filter(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        digits.len() >= 3 && digits.starts_with('0') && digits.chars().all(|ch| ch == '0')
+    }) {
+        return Some((
+            true,
+            "truncated_money_evidence",
+            "quotation contains an ambiguous all-zero monetary fragment",
+        ));
+    }
+    if !amount.is_finite()
+        || amount < 0.0
+        || !amounts.iter().any(|text| {
+            euro_money_value(text).is_some_and(|quoted| (quoted - amount).abs() < 0.000001)
+        })
+    {
+        return Some((
+            true,
+            "consular_fee_amount_mismatch",
+            "claimed euro fee does not equal any complete currency-bound amount in the quotation",
+        ));
+    }
+    None
+}
+
+fn euro_money_value(source: &str) -> Option<f64> {
+    let compact = source
+        .chars()
+        .filter(|ch| !ch.is_whitespace())
+        .collect::<String>();
+    let decimal_index = compact.rfind([',', '.']).filter(|index| {
+        let digits_after = compact.len() - index - 1;
+        digits_after == 1 || digits_after == 2
+    });
+    let (whole, fraction) = if let Some(index) = decimal_index {
+        (&compact[..index], Some(&compact[index + 1..]))
+    } else {
+        (compact.as_str(), None)
+    };
+    let integral = whole
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    if integral.is_empty() {
+        return None;
+    }
+    let value = integral.parse::<f64>().ok()?;
+    match fraction {
+        Some(value_fraction) => Some(
+            value
+                + value_fraction.parse::<f64>().ok()? / (10_f64.powi(value_fraction.len() as i32)),
+        ),
+        None => Some(value),
+    }
+}
+
 fn is_allowed_role(role: &str) -> bool {
     matches!(
         role.trim().to_ascii_uppercase().as_str(),
@@ -793,6 +976,122 @@ mod tests {
             is_range: false,
             is_incomplete: false,
             uncertainty_flags: Vec::new(),
+        }
+    }
+
+    fn with_fee_quote(quote: &str, amount: f64) -> TruthCandidateRuntime {
+        let mut candidate = base_candidate();
+        candidate.evidence_quote = quote.to_string();
+        candidate.raw_mention = quote.to_string();
+        candidate.span_end = quote.len();
+        candidate.params = obj(vec![
+            ("amount", TruthParamValue::Decimal(amount)),
+            ("currency", TruthParamValue::Text("EUR".to_string())),
+        ]);
+        candidate
+    }
+
+    #[test]
+    fn consular_fee_must_not_be_inferred_from_insurance_or_service_charge() {
+        for (quote, amount) in [
+            ("Travel insurance with medical coverage of 30.000 €", 30.0),
+            ("Сервисный сбор составляет 34 евро", 34.0),
+            ("Страховка должна иметь покрытие 30 000 евро", 30_000.0),
+        ] {
+            let candidate = with_fee_quote(quote, amount);
+            let result = validate_truth_candidate(&candidate, quote);
+            assert_eq!(result.epistemic_status, "rejected", "{quote}");
+            assert!(
+                result
+                    .issues
+                    .iter()
+                    .any(|issue| { issue.code == "incorrect_consular_fee_kind" }),
+                "{quote}"
+            );
+        }
+    }
+
+    #[test]
+    fn fee_quote_must_support_full_amount_not_truncated_digits() {
+        for (quote, amount, expected) in [
+            (
+                "Consular fee is 30.000 €",
+                30.0,
+                "consular_fee_amount_mismatch",
+            ),
+            ("Visa fee is 000 евро", 0.0, "truncated_money_evidence"),
+            ("Visa fee is €90", 35.0, "consular_fee_amount_mismatch"),
+            ("Visa fee is EUR 350", 35.0, "consular_fee_amount_mismatch"),
+        ] {
+            let candidate = with_fee_quote(quote, amount);
+            let result = validate_truth_candidate(&candidate, quote);
+            assert_eq!(result.epistemic_status, "rejected", "{quote}");
+            assert!(
+                result.issues.iter().any(|issue| issue.code == expected),
+                "{quote}"
+            );
+        }
+    }
+
+    #[test]
+    fn fee_quote_accepts_real_amounts_and_keeps_conditions_for_review() {
+        for (quote, amount) in [
+            ("Consular fee is 35 EUR", 35.0),
+            ("Visa fee is EUR 35 for Belarusian adults", 35.0),
+            ("The visa fee is reduced to EUR 35", 35.0),
+            ("Consular fee EUR 67,50", 67.5),
+            ("Visa fee is €35 for applicants from Belarus", 35.0),
+            (
+                "Visa fees are €90 for adults and €35 for applicants from Belarus",
+                35.0,
+            ),
+            ("Consular fee is 67,50 euros", 67.5),
+            ("Consular fee is 30.000 €", 30_000.0),
+        ] {
+            let candidate = with_fee_quote(quote, amount);
+            let result = validate_truth_candidate(&candidate, quote);
+            assert_eq!(result.epistemic_status, "structured", "{quote}");
+        }
+        let mut conditional = with_fee_quote("Visa fee is €35 for applicants from Belarus", 35.0);
+        conditional.unresolved_applicability = true;
+        conditional.is_incomplete = true;
+        let result =
+            validate_truth_candidate(&conditional, "Visa fee is €35 for applicants from Belarus");
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "candidate_marked_incomplete"));
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "additional_applicability_requires_hitl"));
+    }
+
+    #[test]
+    fn mixed_consular_and_service_fee_needs_review_not_false_rejection() {
+        let quote = "Consular fee is €35, plus a separate service fee of €10";
+        let result = validate_truth_candidate(&with_fee_quote(quote, 35.0), quote);
+        assert_eq!(result.epistemic_status, "needs_hitl");
+        assert!(result
+            .issues
+            .iter()
+            .any(|issue| issue.code == "mixed_fee_kind_requires_hitl"));
+    }
+
+    #[test]
+    fn isolated_number_or_keyword_never_becomes_structured() {
+        for snippet in ["35", "паспорт", "Консульский сбор"] {
+            let mut candidate = base_candidate();
+            candidate.raw_mention = snippet.to_string();
+            candidate.evidence_quote = snippet.to_string();
+            candidate.span_end = snippet.len();
+            let result = validate_truth_candidate(&candidate, snippet);
+            assert_eq!(result.epistemic_status, "needs_hitl");
+            assert!(result
+                .issues
+                .iter()
+                .any(|issue| { issue.code == "evidence_fragment_requires_context" }));
         }
     }
 

@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use infrastructure::adapters::temporalio_sdk_adapter::{
-    connect_client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowGetResultOptions,
+    connect_client, Client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowClientStatus,
+    WorkflowDescribeOptions, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
 };
 use infrastructure::adapters::{
-    neo4rs_adapter, qdrant_client_adapter,
+    dataforseo_serp_adapter, neo4rs_adapter, qdrant_client_adapter,
+    sqlx_execution_runs_adapter, sqlx_serp_adapter,
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
     sqlx_seo_adapter,
@@ -81,8 +83,15 @@ enum Command {
         /// SEO query batch. Repeat --query for multiple fixed queries.
         #[arg(long = "query")]
         queries: Vec<String>,
+        /// Verified primary URLs for the SAME canonical source crawl.
+        /// Repeat --source-url; these never acquire a fabricated SERP rank.
+        #[arg(long = "source-url")]
+        source_urls: Vec<String>,
         #[arg(long)]
         query_batch_key: Option<String>,
+        /// Reprocess the exact acquired corpus of a terminal canonical run. No new search or crawl.
+        #[arg(long, conflicts_with_all = ["queries", "source_urls", "query_batch_key"])]
+        reuse_corpus_from: Option<String>,
         #[arg(long, default_value = "publish_with_hitl")]
         run_mode: String,
         /// Await workflow completion, including genuine external HITL decision.
@@ -168,6 +177,11 @@ enum Command {
     WorkflowWait {
         #[arg(long)]
         workflow_id: String,
+    },
+    /// Compare unfinished business runs with Temporal and close only verified terminal runs.
+    RunReconcile {
+        #[arg(long)]
+        database_url: Option<String>,
     },
 }
 

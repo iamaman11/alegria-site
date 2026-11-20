@@ -68,7 +68,7 @@ pub async fn load_seo_site_build_input(
 
     let blob = sqlx::query(
         r#"
-        SELECT payload_type, payload_bytes
+        SELECT payload_type, payload_bytes, payload_hash
         FROM pipeline.execution_run_blobs
         WHERE run_id = $1
           AND field_name = 'input_payload'
@@ -88,6 +88,10 @@ pub async fn load_seo_site_build_input(
         )));
     }
     let payload_bytes: Vec<u8> = blob.get("payload_bytes");
+    let payload_hash: String = blob.get("payload_hash");
+    if primitives::hash::blake3_hex(&payload_bytes) != payload_hash {
+        return Err(contract_violation("registered site input hash mismatch"));
+    }
     let mut input = SeoSiteBuildInputPayload::decode_payload_bytes(&payload_bytes)?;
     if input.run_id != run_id {
         return Err(validation_failure(
@@ -365,7 +369,9 @@ pub async fn load_graph_planning_context(
             let missing_topic_keys = content_gaps
                 .iter()
                 .filter(|gap| {
-                    gap.page_node_key == page.page_node_key || gap.page_node_key.is_empty()
+                    matches!(gap.status.as_str(), "open" | "accepted")
+                        && !matches!(gap.reason_code.as_str(), "page_missing_verified_support" | "page_duplicate_verified_evidence")
+                        && (gap.page_node_key == page.page_node_key || gap.page_node_key.is_empty())
                 })
                 .map(|gap| gap.missing_topic.clone())
                 .collect::<Vec<_>>();
@@ -433,4 +439,3 @@ pub async fn load_section_templates(
     }
     Ok(templates)
 }
-

@@ -234,6 +234,7 @@ async fn register_truth_certification_input(
             bootstrap_context: true,
             queries: vec![query],
             query_batch_key: Some(query_batch_key),
+            retained_source_run_id: None,
             run_mode: Some(run_mode),
         },
     )

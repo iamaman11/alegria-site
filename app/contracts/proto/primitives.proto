@@ -12,7 +12,8 @@ service PrimitivesService {
   rpc NormalizeKey    (NormalizeRequest) returns (NormalizeResponse);
   // stable_rule_instance_id: join(parts, "|") → blake3_hex
   rpc StableId        (StableIdRequest)  returns (StableIdResponse);
-  // url_norm: нормализация URL (схема + хост + путь, без query/fragment)
+  // url_norm: хост без www + путь + query; схема и fragment не входят в ключ.
+  // Query обязателен: index.aspx?scs=Schengen и ?scs=National — разные документы.
   rpc NormalizeUrl    (UrlRequest)       returns (UrlResponse);
   // Health check (Circuit Breaker в Python-клиенте)
   rpc Ping            (PingRequest)      returns (PingResponse);

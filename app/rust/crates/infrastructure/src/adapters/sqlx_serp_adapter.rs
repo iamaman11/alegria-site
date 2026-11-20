@@ -75,7 +75,10 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
              VALUES ($1, $2, $3, 'top10', $4, $5, $6, $7, 'pending', now(), $8)
              ON CONFLICT (url_norm) DO UPDATE
              SET status = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.status
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN 'processing'
+                     WHEN serp.crawl_queue.status = 'done'
+                          AND serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id THEN 'done'
                      ELSE 'pending'
                  END,
                  source_domain = CASE
@@ -87,20 +90,38 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
                      ELSE serp.crawl_queue.dtype
                  END,
                  first_seen_run_id = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_run_id
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.first_seen_run_id
                      ELSE EXCLUDED.first_seen_run_id
                  END,
                  first_seen_job_id = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.first_seen_job_id
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.first_seen_job_id
                      ELSE EXCLUDED.first_seen_job_id
                  END,
                  query_batch_key = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.query_batch_key
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.query_batch_key
                      ELSE EXCLUDED.query_batch_key
                  END,
                  next_attempt_at = CASE
-                     WHEN serp.crawl_queue.status IN ('done','processing') THEN serp.crawl_queue.next_attempt_at
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.next_attempt_at
+                     WHEN serp.crawl_queue.status = 'done'
+                          AND serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                     THEN serp.crawl_queue.next_attempt_at
                      ELSE now()
+                 END,
+                 locked_until = CASE
+                     WHEN serp.crawl_queue.status = 'processing'
+                          AND serp.crawl_queue.locked_until > now() THEN serp.crawl_queue.locked_until
+                     ELSE NULL
+                 END,
+                 crawl_attempt_count = CASE
+                     WHEN serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                          AND serp.crawl_queue.status IN ('done', 'processing')
+                     THEN serp.crawl_queue.crawl_attempt_count
+                     ELSE 0
                  END,
                  notes = EXCLUDED.notes",
         )
@@ -124,6 +145,105 @@ pub async fn save_dataforseo_organic_results_and_enqueue(
     }
     tx.commit().await.context("commit serp organic tx")?;
     Ok(written)
+}
+
+/// The same canonical crawl queue accepts explicit operator-selected sources
+/// alongside genuine DataForSEO top-10 results. No fabricated SERP entry is
+/// written; the run and batch provenance are persisted before Temporal starts.
+pub async fn enqueue_operator_source_for_run(
+    pool: &PgPool,
+    run_id: &str,
+    query_batch_key: &str,
+    raw_url: &str,
+) -> Result<()> {
+    let (url, normalized, domain, tier) =
+        super::dataforseo_serp_adapter::operator_source_identity(raw_url)
+            .context("operator source must be a direct, public HTTPS URL")?;
+    let source_job_id = format!(
+        "operator-source-{}",
+        primitives::hash::content_hash_v1(&format!("{run_id}|{query_batch_key}|{normalized}"))
+    );
+    sqlx::query(
+        "INSERT INTO serp.crawl_queue
+         (url, url_norm, source_domain, source_type, dtype, first_seen_run_id,
+          first_seen_job_id, query_batch_key, status, next_attempt_at, notes)
+         VALUES ($1, $2, $3, 'operator', $4, $5, $6, $7, 'pending',
+                 now(), 'explicit_operator_source')
+         ON CONFLICT (url_norm) DO UPDATE
+         SET source_type = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.source_type
+                 ELSE EXCLUDED.source_type
+             END,
+             url = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.url
+                 ELSE EXCLUDED.url
+             END,
+             status = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now() THEN 'processing'
+                 WHEN serp.crawl_queue.status = 'done'
+                      AND serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                 THEN 'done'
+                 ELSE 'pending'
+             END,
+             first_seen_run_id = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.first_seen_run_id
+                 ELSE EXCLUDED.first_seen_run_id
+             END,
+             first_seen_job_id = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.first_seen_job_id
+                 ELSE EXCLUDED.first_seen_job_id
+             END,
+             query_batch_key = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.query_batch_key
+                 ELSE EXCLUDED.query_batch_key
+             END,
+             next_attempt_at = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.next_attempt_at
+                 ELSE now()
+             END,
+             locked_until = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.locked_until
+                 ELSE NULL
+             END,
+             crawl_attempt_count = CASE
+                 WHEN serp.crawl_queue.first_seen_run_id = EXCLUDED.first_seen_run_id
+                      AND serp.crawl_queue.status IN ('done', 'processing')
+                 THEN serp.crawl_queue.crawl_attempt_count
+                 ELSE 0
+             END,
+             notes = CASE
+                 WHEN serp.crawl_queue.status = 'processing'
+                      AND serp.crawl_queue.locked_until > now()
+                 THEN serp.crawl_queue.notes
+                 ELSE EXCLUDED.notes
+             END",
+    )
+    .bind(&url)
+    .bind(&normalized)
+    .bind(&domain)
+    .bind(&tier)
+    .bind(run_id)
+    .bind(&source_job_id)
+    .bind(query_batch_key)
+    .execute(pool)
+    .await
+    .context("enqueue operator source in canonical run crawl queue")?;
+    Ok(())
 }
 
 pub async fn enqueue_crawl(pool: &PgPool, url_norm: &str, priority: i32) -> Result<()> {

@@ -4,6 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature, slug};
+use runtime_models::seo_blocks::is_opaque_topic_identifier;
 
 fn locale_lang(locale: &str) -> String {
     locale
@@ -14,8 +15,33 @@ fn locale_lang(locale: &str) -> String {
         .to_ascii_lowercase()
 }
 
+// A stable storage identifier is never a publishable topic. Use the
+// shared slug policy for both IA and the final publication gate.
+fn semantic_keyword<'a>(seed: &'a str, topic_keys: &'a [String]) -> Option<&'a str> {
+    if !seed.trim().is_empty() && !is_opaque_topic_identifier(seed) {
+        return Some(seed);
+    }
+    topic_keys
+        .iter()
+        .map(String::as_str)
+        .find(|topic| !topic.trim().is_empty() && !is_opaque_topic_identifier(topic))
+}
+
+fn multi_section_demand(seed: &str) -> bool {
+    let text = seed.to_lowercase();
+    [
+        ["document", "requirement", "документ"],
+        ["cost", "fee", "стоим"],
+        ["time", "processing", "срок"],
+    ]
+    .iter()
+    .filter(|terms| terms.iter().any(|term| text.contains(*term)))
+    .count()
+        > 1
+}
+
 fn page_type_for_keyword(seed_keyword: &str) -> &'static str {
-    let query = seed_keyword.to_ascii_lowercase();
+    let query = seed_keyword.to_lowercase();
     if query.contains("document") || query.contains("requirements") || query.contains("документ")
     {
         "requirement_page"
@@ -51,11 +77,11 @@ fn country_slug(country_code: &str) -> String {
 
 fn page_type_path_segment(page_type: &str, canonical_slug: &str) -> String {
     match page_type {
-        "requirement_page" => "requirements".to_string(),
-        "fee_page" => "fees".to_string(),
-        "timeline_page" => "processing-times".to_string(),
-        "faq_page" => "faq".to_string(),
-        "checklist_page" => "checklist".to_string(),
+        "requirement_page" => format!("requirements/{canonical_slug}"),
+        "fee_page" => format!("fees/{canonical_slug}"),
+        "timeline_page" => format!("processing-times/{canonical_slug}"),
+        "faq_page" => format!("faq/{canonical_slug}"),
+        "checklist_page" => format!("checklist/{canonical_slug}"),
         "troubleshooting_page" => format!("problems/{canonical_slug}"),
         "comparison_page" => format!("compare/{canonical_slug}"),
         "supporting_editorial" => format!("guides/{canonical_slug}"),
@@ -65,6 +91,13 @@ fn page_type_path_segment(page_type: &str, canonical_slug: &str) -> String {
 
 fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
     let roles: &[&str] = match page_type {
+        "country_hub_page" => &[
+            "overview",
+            "who_fits",
+            "where_to_apply",
+            "related_pages",
+            "cta_disclaimer",
+        ],
         "fee_page" => &["overview", "fees", "faq", "related_pages", "cta_disclaimer"],
         "timeline_page" => &[
             "overview",
@@ -76,10 +109,7 @@ fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
         ],
         "requirement_page" | "checklist_page" => &[
             "overview",
-            "who_fits",
             "documents",
-            "process",
-            "where_to_apply",
             "faq",
             "related_pages",
             "cta_disclaimer",
@@ -256,13 +286,31 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         };
         let graph_confidence = cluster.graph_confidence;
         let ambiguous_topic_family = cluster.topic_keys.len() > 1 && graph_confidence < 0.6;
+        // Source-discovery operators must never become publishable landing pages.
+        let source_discovery_query = cluster
+            .seed_keyword
+            .split_whitespace()
+            .any(|term| term.to_ascii_lowercase().starts_with("site:"));
         let topic_family_key = if cluster.topic_keys.is_empty() {
             cluster.seed_keyword.clone()
         } else {
             cluster.topic_keys.join("|")
         };
-        let canonical_slug = slug(&cluster.seed_keyword);
-        let page_type_key = page_type_for_keyword(&cluster.seed_keyword).to_string();
+        let semantic_seed = semantic_keyword(&cluster.seed_keyword, &cluster.topic_keys);
+        // Broad multi-section demand belongs to the existing hub.
+        if !input.verified_support.is_empty()
+            && !source_discovery_query
+            && semantic_seed.is_some_and(multi_section_demand)
+        {
+            continue;
+        }
+        let canonical_slug = semantic_seed
+            .map(slug)
+            .unwrap_or_else(|| "needs-editorial-review".to_string());
+        let page_type_key = semantic_seed
+            .map(page_type_for_keyword)
+            .unwrap_or("detail_page")
+            .to_string();
         let path_segment = page_type_path_segment(&page_type_key, &canonical_slug);
         let canonical_url_path = format!("{canonical_prefix}/{path_segment}/");
         let dominant_intent = if cluster.dominant_intent.is_empty() {
@@ -334,7 +382,10 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             dominant_intent,
             canonical_slug,
             canonical_url_path,
-            lifecycle_state: if ambiguous_topic_family {
+            lifecycle_state: if ambiguous_topic_family
+                || source_discovery_query
+                || semantic_seed.is_none()
+            {
                 "blocked".to_string()
             } else {
                 "planned".to_string()
@@ -347,6 +398,62 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         });
     }
 
+    // Evidence-derived plans are not fabricated SERP keywords or ranks.
+    for (page_type, factual_section, route) in [
+        ("requirement_page", "documents", "documents"),
+        ("fee_page", "fees", "fees"),
+        ("timeline_page", "timing", "processing-times"),
+    ] {
+        if page_nodes
+            .iter()
+            .any(|page| page.page_type_key == page_type && page.lifecycle_state == "planned")
+            || !input.verified_support.iter().any(|entry| {
+                entry.freshness_class == "fresh"
+                    && !entry.support_ref.trim().is_empty()
+                    && !entry.fragment_text.trim().is_empty()
+                    && runtime_models::seo_blocks::role_matches_section(
+                        &entry.role_type,
+                        factual_section,
+                    )
+            })
+        {
+            continue;
+        }
+        let blueprint_key = push_blueprint(
+            &mut page_blueprints,
+            page_type,
+            "informational",
+            "visa_scope",
+            "visa_type_leaf",
+        );
+        let page_node_key = artifact_key(
+            "page_node",
+            &[&fallback_scope, page_type, "informational", route],
+        );
+        let canonical_url_path = format!("{canonical_prefix}/{route}/");
+        if page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path == canonical_url_path)
+        {
+            continue;
+        }
+        page_nodes.push(PageNodeState {
+            page_node_key,
+            scope_signature: fallback_scope.clone(),
+            keyword_cluster_key: String::new(),
+            blueprint_key,
+            page_type_key: page_type.into(),
+            dominant_intent: "informational".into(),
+            canonical_slug: route.into(),
+            canonical_url_path,
+            lifecycle_state: "planned".into(),
+            parent_page_node_key: hub_page_node_key.clone(),
+            hierarchy_depth: 4,
+            menu_group: format!("visa:{country_segment}"),
+            breadcrumb_policy: "path_segments".into(),
+            canonical_url_family: "visa_type_leaf".into(),
+        });
+    }
     IaBuildOutputPayload {
         page_nodes,
         page_blueprints,
@@ -361,6 +468,7 @@ mod tests {
     #[test]
     fn duplicate_topic_family_does_not_create_duplicate_page_nodes() {
         let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
             scope: Some(
                 contracts::generated::alegria::temporal::v1::SeoScopePayload {
                     locale: "ru-RU".to_string(),
@@ -402,8 +510,148 @@ mod tests {
     }
 
     #[test]
+    fn unicode_keyword_produces_human_slug_and_research_query_is_blocked() {
+        let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    locale: "ru-RU".into(),
+                    country_code: "ES".into(),
+                    visa_type: "tourist".into(),
+                    scope_signature: "scope".into(),
+                    ..Default::default()
+                },
+            ),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-1".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "Стоимость визы в Испанию для белорусов".into(),
+                    ..Default::default()
+                },
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-2".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "site:exteriores.gob.es визовая страница".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let fee = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-1")
+            .unwrap();
+        assert_eq!(fee.page_type_key, "fee_page");
+        assert!(fee.canonical_url_path.contains("/fees/"));
+        assert_eq!(fee.lifecycle_state, "planned");
+        assert!(fee.canonical_slug.contains("стоимость"));
+        let source = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-2")
+            .unwrap();
+        assert_eq!(source.lifecycle_state, "blocked");
+    }
+
+    #[test]
+    fn specialized_pages_keep_distinct_canonical_paths_per_topic() {
+        let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
+            scope: Some(
+                contracts::generated::alegria::temporal::v1::SeoScopePayload {
+                    locale: "ru-RU".into(),
+                    country_code: "ES".into(),
+                    visa_type: "tourist".into(),
+                    scope_signature: "scope".into(),
+                    ..Default::default()
+                },
+            ),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-documents".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "Документы на туристическую визу".into(),
+                    dominant_intent: "informational".into(),
+                    ..Default::default()
+                },
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-requirements".into(),
+                    scope_signature: "scope".into(),
+                    seed_keyword: "Visa requirements for tourists".into(),
+                    dominant_intent: "informational".into(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let pages = output
+            .page_nodes
+            .iter()
+            .filter(|node| node.page_type_key == "requirement_page")
+            .collect::<Vec<_>>();
+        assert_eq!(pages.len(), 2);
+        assert_ne!(pages[0].canonical_url_path, pages[1].canonical_url_path);
+        assert!(pages
+            .iter()
+            .all(|page| page.canonical_url_path.contains("/requirements/")));
+        assert!(output.cannibalization_conflicts.is_empty());
+    }
+
+    #[test]
+    fn opaque_seed_uses_existing_semantic_topic_for_url() {
+        let digest = "f".repeat(64);
+        let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-opaque".to_string(),
+                    seed_keyword: digest.clone(),
+                    topic_keys: vec!["visa_refusal_appeal".to_string()],
+                    graph_confidence: 0.9,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let page = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-opaque")
+            .unwrap();
+        assert!(!page.canonical_url_path.contains(&digest));
+        assert!(page.canonical_slug.contains("visa"));
+        assert_eq!(page.lifecycle_state, "planned");
+    }
+
+    #[test]
+    fn opaque_seed_without_semantic_topic_cannot_be_planned_for_publication() {
+        let digest = "a".repeat(64);
+        let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
+            keyword_clusters: vec![
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: "cluster-unresolved".to_string(),
+                    seed_keyword: digest.clone(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        let page = output
+            .page_nodes
+            .iter()
+            .find(|node| node.keyword_cluster_key == "cluster-unresolved")
+            .unwrap();
+        assert!(!page.canonical_url_path.contains(&digest));
+        assert_eq!(page.lifecycle_state, "blocked");
+    }
+
+    #[test]
     fn ambiguous_topic_family_is_blocked() {
         let output = execute(&IaBuildInputPayload {
+            verified_support: Vec::new(),
             scope: Some(
                 contracts::generated::alegria::temporal::v1::SeoScopePayload {
                     locale: "ru-RU".to_string(),
@@ -429,5 +677,60 @@ mod tests {
         assert!(output.page_nodes.iter().any(
             |page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"
         ));
+    }
+}
+
+#[cfg(test)]
+mod evidence_derived_ia_tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::{
+        KeywordClusterState, SeoScopePayload, SeoVerifiedFactSupportState,
+    };
+
+    #[test]
+    fn broad_query_becomes_hub_and_evidence_creates_readable_focused_paths() {
+        let support = |role: &str| SeoVerifiedFactSupportState {
+            support_ref: role.into(),
+            role_type: role.into(),
+            fragment_text: "Verified example".into(),
+            freshness_class: "fresh".into(),
+            ..Default::default()
+        };
+        let output = execute(&IaBuildInputPayload {
+            scope: Some(SeoScopePayload {
+                country_code: "ES".into(),
+                visa_type: "tourist".into(),
+                locale: "ru-RU".into(),
+                ..Default::default()
+            }),
+            keyword_clusters: vec![KeywordClusterState {
+                seed_keyword: "виза документы стоимость сроки".into(),
+                cluster_key: "cluster".into(),
+                ..Default::default()
+            }],
+            verified_support: vec![
+                support("document_required"),
+                support("fee_item"),
+                support("timeline_item"),
+            ],
+            ..Default::default()
+        });
+        assert_eq!(output.page_nodes.len(), 5);
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/documents/")));
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/fees/")));
+        assert!(output
+            .page_nodes
+            .iter()
+            .any(|page| page.canonical_url_path.ends_with("/processing-times/")));
+        assert!(!output
+            .page_nodes
+            .iter()
+            .any(|page| page.keyword_cluster_key == "cluster"));
     }
 }

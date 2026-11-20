@@ -289,6 +289,7 @@ message SeoVerifiedFactSupportState {
   string freshness_class = 6;
   string observed_at = 7;
   string valid_until = 8;
+  string source_url = 9;
 }
 
 message SourceContextChunkState {
@@ -330,6 +331,18 @@ message ClaimLedgerEntry {
   repeated string support_refs = 5;
   string validation_verdict = 6;
   string source_section_key = 7;
+  // Proposed localized presentation. Exact source evidence stays in fragment_text.
+  EditorialClaimProposal editorial_proposal = 8;
+}
+
+message EditorialClaimProposal {
+  string text = 1;
+  string question = 2;
+  string source_url = 3;
+  // Verbatim, contiguous excerpts from the already-verified fragment. A
+  // composite source may contain fees for other citizenships; selecting
+  // exact applicable spans preserves numeric evidence without copying them.
+  repeated string evidence_spans = 4;
 }
 
 message RenderedContentBlock {
@@ -391,6 +404,8 @@ message EditorialBrief {
   repeated LinkRecommendationState required_links = 8;
   string truth_snapshot_ref = 9;
   repeated SourceContextChunkState source_context_chunks = 10;
+  string locale_code = 11;
+  string canonical_url_path = 12;
 }
 
 message LlmDraftRequest {
@@ -415,6 +430,8 @@ message LlmDraftCandidate {
   string faq_json = 10;
   string schema_markup_json = 11;
   string status = 12;
+  string seo_title = 13;
+  string seo_meta_description = 14;
 }
 
 message EditorialDraftGenerateInputPayload {
@@ -439,6 +456,8 @@ message SeoSiteBuildInputPayload {
   repeated SeoVerifiedFactSupportState verified_support = 6;
   repeated string required_page_types = 7;
   string run_mode = 8;
+  // Explicit retained acquisition source; empty means normal acquisition.
+  string retained_source_run_id = 9;
 }
 
 message SerpPatternState {
@@ -607,6 +626,7 @@ message DraftState {
   string llm_provider_key = 15;
   string llm_model_key = 16;
   string generation_request_key = 17;
+  string editorial_locale = 18;
 }
 
 message SerpIngestInputPayload {
@@ -628,6 +648,8 @@ message CrawlSourcesInputPayload {
   string query_batch_key = 2;
   uint32 limit = 3;
   bool emit_qdrant = 4;
+  // Stable ordinal for distinct, idempotent Temporal crawl activity batches.
+  uint32 sweep_index = 5;
 }
 
 message CrawlSourcesOutputPayload {
@@ -680,6 +702,8 @@ message GlobalSiteReconcileInputPayload {
   repeated LinkRecommendationState link_recommendations = 4;
   string reconcile_reason = 5;
   GraphPlanningContextState graph_context = 6;
+  repeated PageBlueprintState page_blueprints = 7;
+  repeated SeoVerifiedFactSupportState verified_support = 8;
 }
 
 message GlobalSiteReconcileOutputPayload {
@@ -723,6 +747,8 @@ message IaBuildInputPayload {
   SeoScopePayload scope = 2;
   repeated KeywordClusterState keyword_clusters = 3;
   GraphPlanningContextState graph_context = 4;
+  // Applicable verified facts, never SERP or unverified source fragments.
+  repeated SeoVerifiedFactSupportState verified_support = 5;
 }
 
 message IaBuildOutputPayload {
@@ -777,6 +803,7 @@ message DraftNormalizeInputPayload {
 message DraftNormalizeOutputPayload {
   DraftState draft = 1;
   ContentBlockPlanState content_block_plan = 2;
+  PageBriefState page_brief = 3;
 }
 
 message ContentContractValidateInputPayload {
@@ -796,6 +823,7 @@ message DraftQaInputPayload {
   DraftState draft = 2;
   repeated string supported_fragments = 3;
   repeated LinkRecommendationState required_links = 4;
+  repeated SeoVerifiedFactSupportState verified_support = 5;
 }
 
 message DraftQaOutputPayload {

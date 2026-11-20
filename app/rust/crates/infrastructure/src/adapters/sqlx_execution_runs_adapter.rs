@@ -249,3 +249,31 @@ pub async fn advance_execution_run_typed<T: RuntimeProtoPayload>(
     )
     .await
 }
+
+/// Set a business run terminal only if the canonical Temporal readback proved
+/// terminal status. This conditional update never reopens a finished run.
+pub async fn reconcile_terminal_execution_run(
+    pool: &PgPool,
+    run_id: &str,
+    terminal_status: &str,
+) -> std::result::Result<bool, DomainError> {
+    if !matches!(terminal_status, "done" | "failed") {
+        return Err(contract_violation("terminal status must be done or failed"));
+    }
+    let id = Uuid::parse_str(run_id)
+        .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
+    let affected = sqlx::query(
+        "UPDATE pipeline.execution_runs
+         SET status = $2, updated_at = now()
+         WHERE run_id = $1 AND workflow_run_id = $3
+           AND workflow_type = 'seo_site_build'
+           AND status NOT IN ('done','failed')",
+    )
+    .bind(id)
+    .bind(terminal_status)
+    .bind(run_id)
+    .execute(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok(affected.rows_affected() == 1)
+}

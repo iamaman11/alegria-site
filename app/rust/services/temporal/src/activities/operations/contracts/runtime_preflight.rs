@@ -61,6 +61,10 @@ pub struct SeoPreflightInput {
     pub run_id: String,
     pub context_key: String,
     pub scope: SeoScopePayload,
+    /// Exact immutable source snapshots acquired (or retained) by this run.
+    /// A materialization gate must fail closed if this list is absent.
+    #[serde(default)]
+    pub raw_page_ids: Vec<i64>,
     pub projection_max_lag_ms: i64,
     /// Only check materialization after the run has produced its derived data.
     #[serde(default)]

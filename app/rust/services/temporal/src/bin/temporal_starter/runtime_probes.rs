@@ -58,12 +58,25 @@ async fn persist_seo_site_build_input(
     citizenship_code: String,
     bootstrap_context: bool,
     queries: Vec<String>,
+    source_urls: Vec<String>,
     query_batch_key: Option<String>,
+    retained_source_run_id: Option<String>,
     run_mode: String,
 ) -> Result<()> {
+    // Validate every source URL before modifying the registered run. No
+    // source may silently become an official fact or a synthetic SERP rank.
+    if source_urls.len() > 25 {
+        anyhow::bail!("at most 25 explicit source URLs are allowed per run");
+    }
+    let mut sources = std::collections::BTreeMap::new();
+    for source in &source_urls {
+        let (url, identity, _, _) = dataforseo_serp_adapter::operator_source_identity(source)
+            .with_context(|| format!("invalid --source-url: {source}"))?;
+        sources.insert(identity, url);
+    }
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
-    register_site_build_input(
+    let site_input = register_site_build_input(
         &repo,
         &SeoSiteBuildRegistrationRequest {
             run_id: run_id.to_string(),
@@ -79,10 +92,28 @@ async fn persist_seo_site_build_input(
             queries,
             query_batch_key,
             run_mode: Some(normalize_run_mode(&run_mode).to_string()),
+            retained_source_run_id,
         },
     )
     .await
     .map_err(|err| anyhow::anyhow!("{err}"))?;
+    for source in sources.values() {
+        sqlx_serp_adapter::enqueue_operator_source_for_run(
+            &pool,
+            run_id,
+            &site_input.query_batch_key,
+            source,
+        )
+        .await?;
+    }
+    if !sources.is_empty() {
+        println!(
+            "CANONICAL_CRAWL_SOURCES run_id={} explicit_source_count={} real_serp_query_count={}",
+            run_id,
+            sources.len(),
+            site_input.queries.len()
+        );
+    }
     Ok(())
 }
 
@@ -124,6 +155,29 @@ fn required_graph_projections() -> [&'static str; 7] {
         "link_recommendation",
         "page_brief",
     ]
+}
+
+fn manual_llm_configured() -> bool {
+    is_chat_manual_provider(&env::var("SEO_LLM_PROVIDER").unwrap_or_default())
+        && is_chat_manual_provider(&env::var("SEO_TRUTH_LLM_PROVIDER").unwrap_or_default())
+}
+
+fn is_chat_manual_provider(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("chat_manual")
+}
+
+#[cfg(test)]
+mod manual_llm_readiness_tests {
+    use super::is_chat_manual_provider;
+
+    #[test]
+    fn only_explicit_chat_manual_is_treated_as_manual_provider() {
+        assert!(is_chat_manual_provider("chat_manual"));
+        assert!(is_chat_manual_provider(" chat_manual "));
+        assert!(!is_chat_manual_provider("deterministic"));
+        assert!(!is_chat_manual_provider(""));
+        assert!(!is_chat_manual_provider("chat"));
+    }
 }
 
 fn llm_configured() -> bool {
@@ -189,15 +243,9 @@ async fn probe_neo4j_capabilities() -> Neo4jCapabilityProbe {
         }
     };
 
-    match tokio::time::timeout(
-        Duration::from_secs(3),
-        neo4rs_adapter::run_cypher(&graph, "RETURN 1 AS ok"),
-    )
-    .await
-    {
-        Ok(Ok(())) => probe.graph_query_ready = true,
-        Ok(Err(err)) => probe.errors.push(format!("neo4j_query:{err}")),
-        Err(_) => probe.errors.push("neo4j_query:timeout".to_string()),
+    match neo4rs_adapter::probe_ready_query(&graph).await {
+        Ok(()) => probe.graph_query_ready = true,
+        Err(err) => probe.errors.push(format!("neo4j_query:{err}")),
     }
 
     let gds_queries = [

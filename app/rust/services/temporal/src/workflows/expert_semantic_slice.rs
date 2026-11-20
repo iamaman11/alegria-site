@@ -85,7 +85,7 @@ impl ExpertSemanticSliceWorkflow {
                     scope: site_input.scope.clone(),
                     queries: site_input.queries.clone(),
                 },
-                db_opts(30),
+                db_opts(1800),
             )
             .await?;
         ctx.wait_condition(|s| !s.paused).await?;
@@ -99,6 +99,7 @@ impl ExpertSemanticSliceWorkflow {
                     query_batch_key: ingest.query_batch_key.clone(),
                     limit: 25,
                     emit_qdrant: true,
+                    sweep_index: 0,
                 },
                 db_opts(120),
             )

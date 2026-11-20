@@ -6,5 +6,6 @@ include!("sqlx_seo_adapter/verified_support.rs");
 include!("sqlx_seo_adapter/scope_bootstrap.rs");
 include!("sqlx_seo_adapter/navigation_persistence.rs");
 include!("sqlx_seo_adapter/graph_context.rs");
+include!("sqlx_seo_adapter/retained_corpus.rs");
 include!("sqlx_seo_adapter/planning_persistence.rs");
 include!("sqlx_seo_adapter/draft_publish_rebuild_persistence.rs");

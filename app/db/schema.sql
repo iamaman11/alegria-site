@@ -65,6 +65,19 @@ CREATE TABLE IF NOT EXISTS kb.concepts (
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Canonical ontology vocabulary only; not visa claims or verified facts.
+-- One owner on fresh installation; idempotent against existing databases.
+INSERT INTO kb.concepts (concept_key, concept_type, label_ru, status) VALUES
+  ('consular_fee', 'fee', 'Консульский сбор', 'active'),
+  ('passport', 'document', 'Паспорт', 'active'),
+  ('medical_insurance', 'document', 'Медицинская страховка', 'active'),
+  ('schengen_visa_application_form', 'document', 'Анкета на шенгенскую визу', 'active'),
+  ('standard_processing_time', 'timeline', 'Стандартный срок рассмотрения', 'active'),
+  ('standard_tourist_eligibility', 'rule', 'Стандартные условия туристической визы', 'active'),
+  ('standard_application_process', 'process', 'Порядок подачи заявления', 'active'),
+  ('standard_application_channel', 'location', 'Канал подачи заявления', 'active')
+ON CONFLICT (concept_key) DO NOTHING;
+
 -- ----------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS kb.concept_aliases (
@@ -413,9 +426,10 @@ CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_aggregate
 CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_target_run_status
     ON system.sync_outbox(target_system, run_id, status);
 
--- Idempotency guard: prevents duplicate logical events on activity retries.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_dedup
-    ON system.sync_outbox(aggregate_key, event_type, payload_hash);
+-- A projection revision may have identical lookup payload bytes but different
+-- canonical SQL content. Payload-byte uniqueness would discard that revision.
+-- The existing logical idempotency index below is the sole deduplication owner.
+DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_idempotency
     ON system.sync_outbox(aggregate_key, event_type, idempotency_key)
@@ -778,7 +792,8 @@ CREATE TABLE IF NOT EXISTS site.content_gaps (
                        CHECK (status IN ('open','accepted','resolved','rejected','deprecated')),
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (scope_signature, missing_topic, detector_version)
+    CONSTRAINT content_gaps_owner_topic_detector_key
+        UNIQUE NULLS NOT DISTINCT (scope_signature, page_node_key, missing_topic, detector_version)
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_content_gaps_scope
@@ -863,7 +878,7 @@ CREATE TABLE IF NOT EXISTS site.page_drafts (
     assembly_version     TEXT NOT NULL DEFAULT 'seo_draft_assemble@1',
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (page_node_key, page_brief_key, draft_revision)
+    CONSTRAINT page_drafts_run_revision_uq UNIQUE (page_node_key, page_brief_key, truth_snapshot_ref, draft_revision)
 );
 
 CREATE INDEX IF NOT EXISTS idx_site_page_drafts_node_verdict
@@ -1054,7 +1069,7 @@ CREATE TABLE IF NOT EXISTS site.seo_hitl_tasks (
     task_type              TEXT NOT NULL
                            CHECK (task_type IN (
                                'cannibalization_conflict','unsafe_serp_pattern',
-                               'unsupported_factual_fragment','registry_change',
+                               'unsupported_factual_fragment','truth_candidate_review','registry_change',
                                'rebuild_suppression','canonical_url_conflict',
                                'publish_gate_blocker'
                            )),
@@ -1123,7 +1138,8 @@ CREATE TABLE IF NOT EXISTS raw.pages (
     processed       BOOLEAN DEFAULT false
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_pages_url_date ON raw.pages (url, CAST(snapshot_at AT TIME ZONE 'UTC' AS DATE));
+-- Immutable evidence: every same-day re-fetch is a new snapshot, never an UPDATE.
+CREATE INDEX IF NOT EXISTS idx_raw_pages_url_snapshot ON raw.pages (url, snapshot_at DESC);
 
 COMMENT ON COLUMN raw.pages.content_hash IS
     'blake3(raw_html), hex64. Source: primitives::hash::content_hash_v1';
@@ -1859,7 +1875,7 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     operation TEXT NOT NULL CHECK (operation IN ('editorial_draft', 'truth_candidates')),
     input_sha256 TEXT NOT NULL CHECK (input_sha256 ~ '^[a-f0-9]{64}$'),
     input_json JSONB NOT NULL,
-    job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed')),
+    job_status TEXT NOT NULL DEFAULT 'pending' CHECK (job_status IN ('pending', 'completed', 'superseded')),
     response_json JSONB,
     output_json JSONB,
     model_key TEXT,
@@ -1867,7 +1883,7 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (run_id, operation, input_sha256),
     CHECK (
-        (job_status = 'pending' AND response_json IS NULL AND output_json IS NULL)
+        (job_status IN ('pending', 'superseded') AND response_json IS NULL AND output_json IS NULL)
         OR
         (job_status = 'completed' AND response_json IS NOT NULL AND output_json IS NOT NULL
          AND model_key IS NOT NULL)
@@ -1875,5 +1891,11 @@ CREATE TABLE IF NOT EXISTS pipeline.manual_llm_jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_manual_llm_jobs_pending
     ON pipeline.manual_llm_jobs (created_at, task_id) WHERE job_status = 'pending';
+
+CREATE UNIQUE INDEX IF NOT EXISTS manual_llm_one_pending_editorial_owner
+    ON pipeline.manual_llm_jobs
+    (run_id, (input_json #>> '{request,editorial_brief,page_node_key}'))
+    WHERE operation = 'editorial_draft' AND job_status = 'pending'
+      AND nullif(input_json #>> '{request,editorial_brief,page_node_key}', '') IS NOT NULL;
 
 COMMIT;

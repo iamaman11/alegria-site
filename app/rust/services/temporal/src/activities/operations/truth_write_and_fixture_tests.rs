@@ -10,6 +10,7 @@ enum SemanticTruthWriteOutcome<'a> {
 
 fn semantic_truth_write_outcome<'a>(
     candidates: &[&'a TruthAdjudicationCandidateDecision],
+    source_registry: &BTreeMap<String, SourceGovernanceRecord>,
 ) -> Result<SemanticTruthWriteOutcome<'a>, DomainError> {
     if candidates.is_empty() {
         return Err(DomainError::ValidationFailure {
@@ -33,10 +34,62 @@ fn semantic_truth_write_outcome<'a>(
         }
     }
 
-    // The policy should not produce mixed verified/HITL verdicts, but the
-    // write boundary must fail closed even against stale/forged activity data.
-    if unresolved {
+    // A weak repetition may remain on HITL while the SAME claim is confirmed
+    // by at least two distinct primary authorities. Apply the same narrow,
+    // registry-backed exception as adjudication; any other unresolved claim,
+    // contradicted value or rejected human review still vetoes the projection.
+    if candidates.iter().any(|candidate| {
+        candidate.decision == "rejected"
+            && candidate.adjudication_reason == "human_rejected_exact_source_evidence"
+    }) {
         return Ok(SemanticTruthWriteOutcome::Disputed);
+    }
+    if unresolved {
+        let same_verified_claim = verified
+            .first()
+            .map(|first| {
+                verified.iter().all(|candidate| {
+                    candidate.params.stable_signature() == first.params.stable_signature()
+                        && candidate.scope.stable_signature() == first.scope.stable_signature()
+                })
+            })
+            .unwrap_or(false);
+        let groups = verified
+            .iter()
+            .filter_map(|candidate| {
+                source_registry.get(&candidate.source_key).and_then(|source| {
+                    if source.authority_class == "primary_authority"
+                        && source.trust_level >= 5
+                        && !source.independence_group_key.trim().is_empty()
+                    {
+                        Some(source.independence_group_key.clone())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect::<BTreeSet<_>>();
+        let unresolved_are_identical_weak_repetitions = verified.first().is_some_and(|first| {
+            candidates.iter().filter(|candidate| {
+                !(candidate.decision == "verified"
+                    && candidate.publish_admissibility == "admissible")
+            }).all(|candidate| {
+                candidate.decision == "needs_hitl"
+                    && candidate.publish_admissibility == "needs_hitl"
+                    && candidate.adjudication_reason == "candidate_validation_requires_hitl"
+                    && candidate.params.stable_signature() == first.params.stable_signature()
+                    && candidate.scope.stable_signature() == first.scope.stable_signature()
+                    && source_registry.get(&candidate.source_key).is_some_and(|source| {
+                        source.authority_class == "forum" && source.trust_level <= 1
+                    })
+            })
+        });
+        if !same_verified_claim
+            || groups.len() < 2
+            || !unresolved_are_identical_weak_repetitions
+        {
+            return Ok(SemanticTruthWriteOutcome::Disputed);
+        }
     }
 
     if !verified.is_empty() {
@@ -76,6 +129,8 @@ pub(crate) async fn verified_truth_write_impl(
     let mut suppressed_scoped_projection_ids = Vec::new();
     let mut verified_rule_count = 0usize;
     let mut demoted_rule_count = 0usize;
+    // A source-evidence collision must preserve the already persisted ID.
+    let mut persisted_candidate_ids = BTreeMap::<String, String>::new();
     let mut semantic_candidates =
         BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
     for decision in &input.truth_adjudication.decisions {
@@ -90,9 +145,28 @@ pub(crate) async fn verified_truth_write_impl(
             .or_default()
             .push(decision);
     }
+    // One read-only authority registry for this write, shared with the
+    // corrected adjudication policy; never trust source-tier labels alone.
+    let source_registry = load_source_registry_entries(&acts.pool)
+        .await?
+        .into_iter()
+        .map(|(source_key, record)| {
+            (source_key, SourceGovernanceRecord {
+                source_type: record.source_type,
+                trust_level: record.trust_level,
+                authority_class: record.authority_class,
+                independence_group_key: record.independence_group_key,
+                freshness_ttl_days: record.freshness_ttl_days,
+                override_eligible: record.override_eligible,
+            })
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut semantic_outcomes = BTreeMap::new();
     for (slot_id, candidates) in &semantic_candidates {
-        semantic_outcomes.insert(slot_id.clone(), semantic_truth_write_outcome(candidates)?);
+        semantic_outcomes.insert(
+            slot_id.clone(),
+            semantic_truth_write_outcome(candidates, &source_registry)?,
+        );
     }
 
     let source_section_ids = input
@@ -186,7 +260,8 @@ pub(crate) async fn verified_truth_write_impl(
             SemanticTruthWriteOutcome::Rejected(_) => "rejected",
             _ => decision.decision.as_str(),
         };
-        sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
+        let persisted_candidate_id =
+            sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication(
             &acts.pool,
             &sqlx_seo_adapter::VerifiedTruthCandidateWrite {
                 rule_candidate_id: decision.rule_candidate_id.clone(),
@@ -205,11 +280,28 @@ pub(crate) async fn verified_truth_write_impl(
                 span_end,
                 source_key: decision.source_key.clone(),
                 source_snapshot_hash: decision.source_snapshot_hash.clone(),
+                provider_key: decision.provider_key.clone(),
+                model_key: decision.model_key.clone(),
+                prompt_version: decision.prompt_version.clone(),
                 epistemic_status: candidate_status.to_string(),
             },
         )
         .await?;
+        persisted_candidate_ids.insert(
+            decision.rule_candidate_id.clone(),
+            persisted_candidate_id,
+        );
     }
+
+    // The persisted candidate projection is the canonical input for HITL.
+    // This also repairs older unresolved candidates in the same context.
+    // A human decision never changes the verifier's candidate status.
+    infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+        &acts.pool,
+        &input.context_key,
+        &input.run_id,
+    )
+    .await?;
 
     // Exactly one verdict and one outbox event per semantic slot. A rejected
     // source cannot demote a verified fact backed by independent sources.
@@ -230,7 +322,15 @@ pub(crate) async fn verified_truth_write_impl(
                         scope: truth_param_value_to_json_local(&decision.scope),
                         source_key: decision.source_key.clone(),
                         confidence: decision.confidence,
-                        rule_candidate_id: decision.rule_candidate_id.clone(),
+                        rule_candidate_id: persisted_candidate_ids
+                            .get(&decision.rule_candidate_id)
+                            .ok_or_else(|| DomainError::ValidationFailure {
+                                message: format!(
+                                    "verified candidate {} was not persisted",
+                                    decision.rule_candidate_id
+                                ),
+                            })?
+                            .clone(),
                         evidence_section_id: decision.section_id,
                         evidence_quote: decision.evidence_quote.clone(),
                         span_start: decision.span_start.max(0) as i32,
@@ -353,6 +453,9 @@ mod tests {
             span_start: 0,
             span_end: 12,
             source_snapshot_hash: "snapshot".to_string(),
+            provider_key: "deterministic".to_string(),
+            model_key: "cutover-runtime".to_string(),
+            prompt_version: "cutover@1".to_string(),
             decision: decision.to_string(),
             publish_admissibility: match decision {
                 "verified" => "admissible",
@@ -374,7 +477,7 @@ mod tests {
             vec![&official, &corroborating, &fabricated],
             vec![&fabricated, &corroborating, &official],
         ] {
-            match semantic_truth_write_outcome(&order).unwrap() {
+            match semantic_truth_write_outcome(&order, &BTreeMap::new()).unwrap() {
                 SemanticTruthWriteOutcome::Verified(candidate) => {
                     assert_eq!(candidate.rule_candidate_id, "official");
                 }
@@ -390,11 +493,77 @@ mod tests {
         let unresolved = candidate_verdict("unresolved", "needs_hitl", 120, 0.91);
         let inconsistent = candidate_verdict("inconsistent", "verified", 120, 0.98);
         assert!(matches!(
-            semantic_truth_write_outcome(&[&official, &corroborating, &unresolved]).unwrap(),
+            semantic_truth_write_outcome(&[&official, &corroborating, &unresolved], &BTreeMap::new()).unwrap(),
             SemanticTruthWriteOutcome::Disputed
         ));
         assert!(matches!(
-            semantic_truth_write_outcome(&[&official, &corroborating, &inconsistent]).unwrap(),
+            semantic_truth_write_outcome(&[&official, &corroborating, &inconsistent], &BTreeMap::new()).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+    }
+
+    #[test]
+    fn independent_official_verification_survives_only_identical_forum_hitl() {
+        let first = candidate_verdict("first", "verified", 80, 0.98);
+        let second = candidate_verdict("second", "verified", 80, 0.96);
+        let mut forum = candidate_verdict("forum", "needs_hitl", 80, 0.6);
+        forum.adjudication_reason = "candidate_validation_requires_hitl".to_string();
+        forum.source_tier = "low_trust".to_string();
+        let registry = BTreeMap::from([
+            (first.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "primary_authority".to_string(),
+                trust_level: 5,
+                independence_group_key: "official-first".to_string(),
+                ..SourceGovernanceRecord::default()
+            }),
+            (second.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "primary_authority".to_string(),
+                trust_level: 5,
+                independence_group_key: "official-second".to_string(),
+                ..SourceGovernanceRecord::default()
+            }),
+            (forum.source_key.clone(), SourceGovernanceRecord {
+                authority_class: "forum".to_string(),
+                trust_level: 1,
+                ..SourceGovernanceRecord::default()
+            }),
+        ]);
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &forum], &registry).unwrap(),
+            SemanticTruthWriteOutcome::Verified(candidate)
+                if candidate.rule_candidate_id == "first"
+        ));
+        forum.params = TruthParamValue::object([
+            ("amount", TruthParamValue::Integer(120)),
+        ]);
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &forum], &registry).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        forum.params = first.params.clone();
+        let mut same_owner = registry.clone();
+        same_owner.get_mut(&second.source_key).unwrap().independence_group_key =
+            "official-first".to_string();
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &forum], &same_owner).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        forum.adjudication_reason = "resolution_loop_requires_hitl".to_string();
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &forum], &registry).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        forum.adjudication_reason = "candidate_validation_requires_hitl".to_string();
+        forum.source_key = first.source_key.clone();
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &forum], &registry).unwrap(),
+            SemanticTruthWriteOutcome::Disputed
+        ));
+        forum.source_key = "https://example.gov/forum".to_string();
+        let mut review_rejected = candidate_verdict("review-rejected", "rejected", 80, 0.8);
+        review_rejected.adjudication_reason = "human_rejected_exact_source_evidence".to_string();
+        assert!(matches!(
+            semantic_truth_write_outcome(&[&first, &second, &review_rejected], &registry).unwrap(),
             SemanticTruthWriteOutcome::Disputed
         ));
     }
@@ -402,14 +571,14 @@ mod tests {
     #[test]
     fn all_rejected_identity_is_demoted_once_and_unknown_status_fails_closed() {
         let rejected = candidate_verdict("rejected", "rejected", 80, 0.1);
-        match semantic_truth_write_outcome(&[&rejected]).unwrap() {
+        match semantic_truth_write_outcome(&[&rejected], &BTreeMap::new()).unwrap() {
             SemanticTruthWriteOutcome::Rejected(candidate) => {
                 assert_eq!(candidate.rule_candidate_id, "rejected");
             }
             _ => panic!("all rejected evidence must demote the slot"),
         }
         let unexpected = candidate_verdict("unknown", "approved", 80, 1.0);
-        assert!(semantic_truth_write_outcome(&[&unexpected]).is_err());
+        assert!(semantic_truth_write_outcome(&[&unexpected], &BTreeMap::new()).is_err());
     }
 
     use std::fs;

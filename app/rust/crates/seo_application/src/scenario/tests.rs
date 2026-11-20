@@ -11,17 +11,27 @@ mod tests {
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
-        CrawlIngestRepository, GraphCoverageEvaluation, GraphNeighborhoodHit, GraphReasoningPort,
-        OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
+        CrawlIngestRepository, GraphCapabilityPort, GraphCoverageEvaluation, GraphNeighborhoodHit,
+        GraphReasoningPort, OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
         RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
         SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
-        GraphCapabilityPort,
     };
 
     #[derive(Default)]
-    struct FakeRepo;
+    enum EvidenceFixture {
+        #[default]
+        Passport,
+        EligibilityOnly,
+    }
+
+    #[derive(Default)]
+    struct FakeRepo {
+        evidence: EvidenceFixture,
+        reconciled: std::sync::Mutex<Option<GlobalSiteReconcileOutputPayload>>,
+        editorial_calls: std::sync::Mutex<Vec<String>>,
+    }
 
     #[async_trait]
     impl GraphCapabilityPort for FakeRepo {
@@ -56,15 +66,20 @@ mod tests {
             &self,
             _request: &VerifiedSupportBundleRequest,
         ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+            let (fragment, support_ref, role_type) = match self.evidence {
+                EvidenceFixture::Passport => ("Passport required", "rule:passport", "document_required"),
+                EvidenceFixture::EligibilityOnly => ("Tourists are eligible", "rule:eligibility", "eligibility_rule"),
+            };
             Ok(vec![SeoVerifiedFactSupportState {
-                fragment_text: "Passport required".to_string(),
-                support_ref: "rule:passport".to_string(),
-                role_type: "document_required".to_string(),
+                fragment_text: fragment.to_string(),
+                support_ref: support_ref.to_string(),
+                role_type: role_type.to_string(),
                 source_label: "Consulate".to_string(),
                 source_tier: "official".to_string(),
                 freshness_class: "fresh".to_string(),
                 observed_at: String::new(),
                 valid_until: String::new(),
+                source_url: String::new(),
             }])
         }
     }
@@ -116,8 +131,9 @@ mod tests {
 
     #[async_trait]
     impl SerpSearchPort for FakeRepo {
-        async fn fetch_google_organic_live_advanced(
+        async fn fetch_google_organic_standard(
             &self,
+            _run_id: &str,
             _locale: Option<&str>,
             _query: &str,
         ) -> Result<Option<OrganicSerpResponse>, DomainError> {
@@ -161,6 +177,14 @@ mod tests {
             Ok(runtime_models::GraphPlanningContext::default())
         }
 
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
+        }
+
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -188,9 +212,9 @@ mod tests {
         async fn persist_opportunity_build_output(
             &self,
             _input: &OpportunityBuildInputPayload,
-            _output: &OpportunityBuildOutputPayload,
-        ) -> Result<(), DomainError> {
-            Ok(())
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+            Ok(output.clone())
         }
         async fn persist_ia_build_output(
             &self,
@@ -211,6 +235,7 @@ mod tests {
             _input: &GlobalSiteReconcileInputPayload,
             output: &GlobalSiteReconcileOutputPayload,
         ) -> Result<seo_ports::GlobalNavigationPersistReport, DomainError> {
+            *self.reconciled.lock().unwrap() = Some(output.clone());
             Ok(seo_ports::GlobalNavigationPersistReport {
                 navigation_tree_key: "synthetic-navigation".to_string(),
                 scope_count: 1,
@@ -334,6 +359,8 @@ mod tests {
             &self,
             input: &EditorialDraftGenerateInputPayload,
         ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
+            let brief = input.request.as_ref().unwrap().editorial_brief.as_ref().unwrap();
+            self.editorial_calls.lock().unwrap().push(brief.page_node_key.clone());
             Ok(EditorialDraftGenerateOutputPayload {
                 provider_key: "fake".to_string(),
                 model_key: "fake-model".to_string(),
@@ -355,6 +382,8 @@ mod tests {
                     faq_json: "[]".to_string(),
                     schema_markup_json: "{}".to_string(),
                     status: "selected".to_string(),
+                    seo_title: String::new(),
+                    seo_meta_description: String::new(),
                 }),
             })
         }
@@ -380,6 +409,13 @@ mod tests {
 
     #[async_trait]
     impl PublishArtifactRepository for FakeRepo {
+        fn resolve_publish_materialize_input(
+            &self,
+            input: &PublishMaterializeInputPayload,
+        ) -> PublishMaterializeInputPayload {
+            input.clone()
+        }
+
         async fn persist_publish_materialize_output(
             &self,
             _input: &PublishMaterializeInputPayload,
@@ -451,13 +487,14 @@ mod tests {
             queries: vec!["spain tourist visa".to_string()],
             verified_support: Vec::new(),
             required_page_types: Vec::new(),
+            retained_source_run_id: String::new(),
             run_mode: "publish_with_hitl".to_string(),
         }
     }
 
     #[tokio::test]
     async fn scenario_planning_only_uses_shared_plan() {
-        let repo = FakeRepo;
+        let repo = FakeRepo::default();
         let result = execute_site_build_scenario(
             &repo,
             &SeoScenarioRequest {
@@ -480,7 +517,7 @@ mod tests {
 
     #[tokio::test]
     async fn scenario_publish_blocks_without_human_approval() {
-        let repo = FakeRepo;
+        let repo = FakeRepo::default();
         let result = execute_site_build_scenario(
             &repo,
             &SeoScenarioRequest {
@@ -495,6 +532,97 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.status, "blocked_publish_gate");
+    }
+
+    #[tokio::test]
+    async fn scenario_incomplete_evidence_blocks_before_editorial_generation() {
+        // This fixture has applicable eligibility evidence, but none of the
+        // documents/fees/timing evidence that creates a focused leaf page.
+        let repo = FakeRepo {
+            evidence: EvidenceFixture::EligibilityOnly,
+            ..Default::default()
+        };
+        let result = execute_site_build_scenario(
+            &repo,
+            &SeoScenarioRequest {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::SemiAutoOperator,
+                policy: SeoRunPolicy::for_semi_auto_operator(false, false, true),
+                output_dir: "/tmp".to_string(),
+                base_url: "https://example.com".to_string(),
+                site_input: sample_site_input(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status, "blocked_publish_gate");
+        assert_eq!(result.published_pages, 0);
+        assert!(result.phase_reports.iter().any(|report| {
+            report.phase == "page_admissibility"
+                && report
+                    .detail
+                    .starts_with("page_missing_verified_support:roles=")
+                && report.detail.contains("fees")
+        }));
+        assert!(!result.phase_reports.iter().any(|report| {
+            matches!(
+                report.phase.as_str(),
+                "draft_assemble" | "editorial_draft_generate"
+            )
+        }));
+        assert!(repo.editorial_calls.lock().unwrap().is_empty());
+        let reconciled = repo.reconciled.lock().unwrap();
+        let pages = &reconciled.as_ref().unwrap().page_nodes;
+        assert!(!pages.is_empty());
+        assert!(pages.iter().all(|page| page.lifecycle_state == "blocked"));
+        for page in pages {
+            assert!(result.phase_reports.iter().any(|report| {
+                report.phase == "page_admissibility"
+                    && report.page_node_key == page.page_node_key
+                    && report.status == "blocked_publish_gate"
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn scenario_mixed_evidence_only_generates_for_admitted_page() {
+        let repo = FakeRepo::default();
+        let result = execute_site_build_scenario(
+            &repo,
+            &SeoScenarioRequest {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::SemiAutoOperator,
+                policy: SeoRunPolicy::for_semi_auto_operator(false, false, true),
+                output_dir: "/tmp".to_string(),
+                base_url: "https://example.com".to_string(),
+                site_input: sample_site_input(),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.status, "blocked_publish_gate");
+        assert_eq!(result.published_pages, 0);
+        let reconciled = repo.reconciled.lock().unwrap();
+        let pages = &reconciled.as_ref().unwrap().page_nodes;
+        let eligible: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "planned").collect();
+        assert_eq!(eligible.len(), 1, "only the evidenced document leaf should be admitted");
+        assert_eq!(eligible[0].page_type_key, "requirement_page");
+        assert_eq!(eligible[0].canonical_url_path, "/ru/visa/spain/tourist/documents/");
+        let blocked: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "blocked").collect();
+        assert!(!blocked.is_empty());
+        let calls = repo.editorial_calls.lock().unwrap();
+        assert_eq!(calls.as_slice(), &[eligible[0].page_node_key.clone()]);
+        for page in blocked {
+            assert!(result.phase_reports.iter().any(|report| {
+                report.phase == "page_admissibility"
+                    && report.page_node_key == page.page_node_key
+                    && report.status == "blocked_publish_gate"
+            }));
+            assert!(!result.phase_reports.iter().any(|report| {
+                report.page_node_key == page.page_node_key
+                    && matches!(report.phase.as_str(), "draft_assemble" | "editorial_draft_generate")
+            }));
+        }
     }
 
     #[test]

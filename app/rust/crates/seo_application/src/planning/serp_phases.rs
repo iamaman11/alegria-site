@@ -14,7 +14,7 @@ pub async fn run_serp_ingest<R: PlanningRepository, S: SerpSearchPort>(
         .enumerate()
     {
         let Some(response) = search_port
-            .fetch_google_organic_live_advanced(locale, query)
+            .fetch_google_organic_standard(&input.run_id, locale, query)
             .await?
         else {
             continue;

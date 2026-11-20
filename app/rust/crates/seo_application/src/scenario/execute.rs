@@ -129,6 +129,11 @@ where
     let mut published_pages = 0u32;
     let page_keys = page_phase_keys(&plan);
     let ia = require_state_ref(&state.ia, "ia_build_required")?;
+    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    let gaps = &require_state_ref(&state.reconciled, "global_site_reconcile_required")?.content_gaps;
+    let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
+    let mut support_blocked = false;
+    let mut published_page_keys = std::collections::BTreeSet::new();
     for page_node in page_nodes.iter().cloned() {
         let page_blueprint = ia
             .page_blueprints
@@ -136,11 +141,30 @@ where
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
-        let required_links = link_recommendations
+        let page_support =
+            runtime_models::seo_blocks::page_verified_support(&page_blueprint, &state.verified_support);
+        match page_admissibility(&page_node, &page_blueprint, &page_support, gaps, requires_editorial) {
+            PageAdmissibility::Retired => continue,
+            PageAdmissibility::Blocked(reason) => {
+                support_blocked = true;
+                phase_reports.push(phase_report(
+                    "page_admissibility",
+                    blocked_publish_gate_status(),
+                    &page_node.page_node_key,
+                    reason,
+                ));
+                continue;
+            }
+            PageAdmissibility::Eligible => {}
+        }
+        let page_fragments = factual_fragments
             .iter()
-            .filter(|link| link.required_flag && link.source_page_key == page_node.page_node_key)
+            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
             .cloned()
             .collect::<Vec<_>>();
+        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+            &link_recommendations, &page_node.page_node_key, &published_page_keys,
+        );
         let mut page_state = PageState::default();
         cursor = SeoExecutionCursor {
             segment: Some(SeoExecutionSegment::PerPage),
@@ -157,8 +181,8 @@ where
                         &page_node,
                         &page_blueprint,
                         &required_links,
-                        &factual_fragments,
-                        &state.verified_support,
+                        &page_fragments,
+                        &page_support,
                         &mut page_state,
                         input.key,
                         &mut phase_reports,
@@ -170,6 +194,7 @@ where
                     }
                     if input.key == SeoPhaseKey::FinalizePublish {
                         published_pages += 1;
+                        published_page_keys.insert(page_node.page_node_key.clone());
                     }
                 }
             }
@@ -178,6 +203,10 @@ where
         if scenario_status.starts_with("blocked") || scenario_status == "hitl_required" {
             break;
         }
+    }
+
+    if support_blocked && scenario_status == "done" {
+        scenario_status = blocked_publish_gate_status().to_string();
     }
 
     cursor = SeoExecutionCursor {

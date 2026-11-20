@@ -127,6 +127,7 @@ async fn run_page_phase<
                     draft: draft.draft.clone(),
                     supported_fragments: factual_fragments.to_vec(),
                     required_links: required_links.to_vec(),
+                    verified_support: verified_support.to_vec(),
                 },
             )
             .await?;

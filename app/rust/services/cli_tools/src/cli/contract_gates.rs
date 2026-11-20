@@ -57,16 +57,26 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     }
 
     // ---------------------------------------------------------------------
-    // R102: outbox dedup protection must be present in schema and use-case SQL.
+    // R102: logical revision is the outbox identity. A graph lookup payload
+    // may be byte-identical across two distinct revisions of the SQL row.
     // ---------------------------------------------------------------------
     let schema_sql = root.join("app/db/schema.sql");
     if schema_sql.exists() {
         let schema = read_text(&schema_sql)?;
-        if !schema.contains("idx_sync_outbox_dedup") {
+        let migration =
+            root.join("app/db/migrations/20261116_0001_outbox_revision_idempotency.sql");
+        let migrated = migration.exists()
+            && read_text(&migration)?
+                .contains("DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;");
+        if !schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_idempotency")
+            || !schema.contains("DROP INDEX IF EXISTS system.idx_sync_outbox_dedup;")
+            || schema.contains("CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_dedup")
+            || !migrated
+        {
             findings.push(Finding {
-                level: "warn",
+                level: "error",
                 code: "R102",
-                message: "schema.sql missing unique dedup index idx_sync_outbox_dedup".to_string(),
+                message: "outbox requires revision-keyed idempotency and a migration dropping legacy payload-hash uniqueness".to_string(),
             });
         }
     }

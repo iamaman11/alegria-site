@@ -1,6 +1,39 @@
 enum PagePublishLoopOutcome {
     Completed(usize),
-    Blocked(String),
+    Blocked {
+        status: String,
+        published_pages: usize,
+    },
+}
+
+impl PagePublishLoopOutcome {
+    fn blocked(status: String, published_pages: usize) -> Self {
+        Self::Blocked {
+            status,
+            published_pages,
+        }
+    }
+}
+
+// A blocked editorial revision must not trap its business run at the same
+// immutable approval gate. A new draft belongs to a new, auditable run; a
+// reopened review is the only non-approval decision that keeps this gate open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditorialReviewDisposition {
+    Approved,
+    ReworkRequired,
+    Wait,
+}
+
+fn editorial_review_disposition(
+    decision: &str,
+    terminal_rework_patch: bool,
+) -> EditorialReviewDisposition {
+    match decision {
+        "approved" => EditorialReviewDisposition::Approved,
+        "blocked" if terminal_rework_patch => EditorialReviewDisposition::ReworkRequired,
+        _ => EditorialReviewDisposition::Wait,
+    }
 }
 
 async fn run_page_publish_phases(
@@ -10,27 +43,77 @@ async fn run_page_publish_phases(
     page_nodes: &[PageNodeState],
     page_blueprints: &[PageBlueprintState],
     link_recommendations: &[LinkRecommendationState],
+    content_gaps: &[contracts::generated::alegria::temporal::v1::ContentGapState],
     support_bundle: &[SeoVerifiedFactSupportState],
     factual_fragments: &[String],
     context_key: &str,
     applicant_profile: &str,
     scope: &SeoScopePayload,
+    raw_page_ids: &[i64],
 ) -> WorkflowResult<PagePublishLoopOutcome> {
-    let page_total = page_nodes.len();
+    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    let active_pages = page_nodes
+        .iter()
+        .filter(|node| node.lifecycle_state != "deprecated")
+        .collect::<Vec<_>>();
+    let page_total = active_pages.len();
+    if page_total == 0 {
+        return Ok(PagePublishLoopOutcome::Blocked {
+            status: block_execution_plan_invariant(ctx, run_id, "no_publishable_pages"),
+            published_pages: 0,
+        });
+    }
     let page_keys = page_phase_keys(plan);
+    let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
     let mut published_pages = 0usize;
+    let mut published_page_keys = std::collections::BTreeSet::new();
+    let mut first_blocked: Option<String> = None;
+    let mut published_before_block = 0usize;
 
-    for (page_index, page_node) in page_nodes.iter().cloned().enumerate() {
+    for (page_index, page_node) in active_pages.into_iter().cloned().enumerate() {
         let page_blueprint = page_blueprints
             .iter()
             .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
             .cloned()
             .unwrap_or_default();
-        let required_links: Vec<_> = link_recommendations
+        let page_support =
+            runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
+        match page_admissibility(
+            &page_node,
+            &page_blueprint,
+            &page_support,
+            content_gaps,
+            requires_editorial,
+        ) {
+            PageAdmissibility::Retired => continue,
+            PageAdmissibility::Blocked(detail) => {
+                let reason = format!("{detail}:page_node_key={}", page_node.page_node_key);
+                ctx.state_mut(|state| state.phase = reason.clone());
+                if first_blocked.is_none() {
+                    published_before_block = published_pages;
+                    first_blocked = Some(reason);
+                }
+                continue;
+            }
+            PageAdmissibility::Eligible => {}
+        }
+        // A target is linkable only after this run has actually finalized it.
+        let page_fragments = factual_fragments
             .iter()
-            .filter(|link| link.required_flag && link.source_page_key == page_node.page_node_key)
+            .filter(|text| {
+                page_support
+                    .iter()
+                    .any(|support| support.fragment_text.as_str() == text.as_str())
+            })
             .cloned()
-            .collect();
+            .collect::<Vec<_>>();
+        let support_bundle = page_support.as_slice();
+        let factual_fragments = page_fragments.as_slice();
+        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+            link_recommendations,
+            &page_node.page_node_key,
+            &published_page_keys,
+        );
 
         let mut draft_plan: Option<DraftAssembleOutputPayload> = None;
         let mut editorial_candidate: Option<EditorialDraftGenerateOutputPayload> = None;
@@ -39,8 +122,9 @@ async fn run_page_publish_phases(
         let mut cms_approved: Option<CmsPublishOutputPayload> = None;
         let mut materialized: Option<PublishMaterializeOutputPayload> = None;
         let mut page_blocked = false;
+        let mut editorial_rework_required = false;
 
-        for key in page_keys.iter().copied() {
+        'page_phases: for key in page_keys.iter().copied() {
             ctx.state_mut(|s| s.phase = phase_with_ordinal(key, page_index, page_total));
             match key {
                 SeoPhaseKey::DraftAssemble => {
@@ -92,6 +176,7 @@ async fn run_page_publish_phases(
                                 run_id: run_id.to_string(),
                                 context_key: context_key.to_string(),
                                 scope: scope.clone(),
+                                raw_page_ids: raw_page_ids.to_vec(),
                                 projection_max_lag_ms: 300_000,
                                 require_materialized_projections: true,
                                 enforce_required_contract: true,
@@ -107,11 +192,10 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::EditorialDraftGenerate => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_assemble_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_assemble_required"),
+                            published_pages,
+                        ));
                     };
                     let request = EditorialDraftGenerateInputPayload {
                         run_id: run_id.to_string(),
@@ -133,8 +217,9 @@ async fn run_page_publish_phases(
                             s.phase = format!("llm_wait:page:{}/{}", page_index + 1, page_total);
                         });
                         loop {
-                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready).await?;
-                            ctx.state_mut(|s| s.llm_result_ready = false);
+                            // The durable LLM task is authoritative. A result
+                            // saved before Reset/Replay must not require a new
+                            // signal, and a signal is never evidence of success.
                             generated = ctx
                                 .start_activity(
                                     AlegriaActivities::load_manual_editorial_result,
@@ -146,38 +231,51 @@ async fn run_page_publish_phases(
                                 break;
                             }
                             if generated.status != "awaiting_manual" {
-                                return Ok(PagePublishLoopOutcome::Blocked(
+                                return Ok(PagePublishLoopOutcome::blocked(
                                     block_execution_plan_invariant(
-                                        ctx, run_id, "manual_llm_result_invalid",
+                                        ctx,
+                                        run_id,
+                                        "manual_llm_result_invalid",
                                     ),
+                                    published_pages,
                                 ));
                             }
+                            ctx.wait_condition(|s| !s.paused && s.llm_result_ready)
+                                .await?;
+                            ctx.state_mut(|s| s.llm_result_ready = false);
                         }
                         ctx.state_mut(|s| {
                             s.phase = phase_with_ordinal(key, page_index, page_total)
                         });
                     }
                     if generated.candidate.is_none() {
-                        return Ok(PagePublishLoopOutcome::Blocked(
-                            block_execution_plan_invariant(ctx, run_id, "editorial_llm_candidate_missing"),
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "editorial_llm_candidate_missing",
+                            ),
+                            published_pages,
                         ));
                     }
                     editorial_candidate = Some(generated);
                 }
                 SeoPhaseKey::DraftNormalize => {
                     let Some(draft_plan_ref) = draft_plan.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_assemble_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_assemble_required"),
+                            published_pages,
+                        ));
                     };
                     let Some(editorial_ref) = editorial_candidate.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "editorial_generation_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "editorial_generation_required",
+                            ),
+                            published_pages,
+                        ));
                     };
                     draft = Some(
                         ctx.start_activity(
@@ -204,11 +302,10 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::ContentContractValidate => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_normalize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
+                        ));
                     };
                     let _ = ctx
                         .start_activity(
@@ -224,11 +321,10 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::DraftQa => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_normalize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
+                        ));
                     };
                     let qa = ctx
                         .start_activity(
@@ -238,23 +334,22 @@ async fn run_page_publish_phases(
                                 draft: draft_ref.draft.clone(),
                                 supported_fragments: factual_fragments.to_vec(),
                                 required_links: required_links.clone(),
+                                verified_support: support_bundle.to_vec(),
                             },
                             db_opts(30),
                         )
                         .await?;
-                    if let Some(draft_state) =
-                        draft.as_mut().and_then(|state| state.draft.as_mut())
+                    if let Some(draft_state) = draft.as_mut().and_then(|state| state.draft.as_mut())
                     {
                         draft_state.qa_verdict = qa.verdict;
                     }
                 }
                 SeoPhaseKey::CmsRequestReview => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_normalize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
+                        ));
                     };
                     cms_requested = Some(
                         ctx.start_activity(
@@ -272,11 +367,14 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_request_review_output",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "cms_request_review_output",
+                            ),
+                            published_pages,
+                        ));
                     };
                     if cms_requested_ref.verdict != "review_requested" {
                         page_blocked = true;
@@ -292,11 +390,10 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::HumanApprovalWait => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_request_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
+                        ));
                     };
                     let approval_input = HumanApprovalWaitInput {
                         run_id: run_id.to_string(),
@@ -312,7 +409,8 @@ async fn run_page_publish_phases(
                                 s.phase = phase_with_ordinal(key, page_index, page_total);
                             });
                             loop {
-                                ctx.wait_condition(|s| !s.paused && s.resume_requested).await?;
+                                ctx.wait_condition(|s| !s.paused && s.resume_requested)
+                                    .await?;
                                 let approval_decision: CmsApprovalDecision = ctx
                                     .start_activity(
                                         AlegriaActivities::run_human_approval_wait_step,
@@ -320,8 +418,31 @@ async fn run_page_publish_phases(
                                         db_opts(30),
                                     )
                                     .await?;
-                                if approval_decision.decision == "approved" {
-                                    break;
+                                // Temporal records a patch marker for new histories.
+                                // Old histories replay the original wait behavior.
+                                let terminal_rework_patch =
+                                    ctx.patched("seo-editorial-terminal-rework-v1");
+                                match editorial_review_disposition(
+                                    &approval_decision.decision,
+                                    terminal_rework_patch,
+                                ) {
+                                    EditorialReviewDisposition::Approved => break,
+                                    EditorialReviewDisposition::ReworkRequired => {
+                                        page_blocked = true;
+                                        editorial_rework_required = true;
+                                        ctx.state_mut(|s| {
+                                            s.waiting_hitl = false;
+                                            s.resume_requested = false;
+                                            s.paused = false;
+                                            s.phase = format!(
+                                                "blocked:editorial_rework_required:{}/{}",
+                                                page_index + 1,
+                                                page_total
+                                            );
+                                        });
+                                        break 'page_phases;
+                                    }
+                                    EditorialReviewDisposition::Wait => {}
                                 }
                                 ctx.state_mut(|s| {
                                     s.waiting_hitl = true;
@@ -383,18 +504,16 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::CmsPublishApproved => {
                     let Some(draft_ref) = draft.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "draft_normalize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "draft_normalize_required"),
+                            published_pages,
+                        ));
                     };
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_request_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
+                        ));
                     };
                     let approval_lookup_key = format!(
                         "{}|{}|{}",
@@ -423,11 +542,10 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(cms_approved_ref) = cms_approved.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_approved_output",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_approved_output"),
+                            published_pages,
+                        ));
                     };
                     if cms_approved_ref.verdict != "approved" {
                         page_blocked = true;
@@ -443,11 +561,10 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::PublishMaterialize => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_request_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
+                        ));
                     };
                     materialized = Some(
                         ctx.start_activity(
@@ -458,12 +575,11 @@ async fn run_page_publish_phases(
                                 revision_id: cms_requested_ref.revision_id.clone(),
                                 cms_document_id: cms_requested_ref.cms_document_id.clone(),
                                 canonical_url_path: page_node.canonical_url_path.clone(),
-                                publish_artifact: cms_requested_ref
-                                    .publish_artifact
-                                    .clone()
-                                    .or(cms_approved.as_ref().and_then(|approved| {
-                                        approved.publish_artifact.clone()
-                                    })),
+                                publish_artifact: cms_requested_ref.publish_artifact.clone().or(
+                                    cms_approved
+                                        .as_ref()
+                                        .and_then(|approved| approved.publish_artifact.clone()),
+                                ),
                                 output_dir: String::new(),
                                 base_url: String::new(),
                             },
@@ -472,11 +588,14 @@ async fn run_page_publish_phases(
                         .await?,
                     );
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "publish_materialize_output",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_output",
+                            ),
+                            published_pages,
+                        ));
                     };
                     if materialized_ref.materialization_status.contains("failed") {
                         page_blocked = true;
@@ -492,11 +611,14 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::RenderPreviewValidate => {
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "publish_materialize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_required",
+                            ),
+                            published_pages,
+                        ));
                     };
                     let render_validation = ctx
                         .start_activity(
@@ -522,18 +644,20 @@ async fn run_page_publish_phases(
                 }
                 SeoPhaseKey::FinalizePublish => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "cms_request_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(ctx, run_id, "cms_request_required"),
+                            published_pages,
+                        ));
                     };
                     let Some(materialized_ref) = materialized.as_ref() else {
-                        return Ok(PagePublishLoopOutcome::Blocked(block_execution_plan_invariant(
-                            ctx,
-                            run_id,
-                            "publish_materialize_required",
-                        )));
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "publish_materialize_required",
+                            ),
+                            published_pages,
+                        ));
                     };
                     let render_validation = ctx
                         .start_activity(
@@ -560,6 +684,7 @@ async fn run_page_publish_phases(
                         .await?;
                     if finalized.verdict == "published" {
                         published_pages += 1;
+                        published_page_keys.insert(page_node.page_node_key.clone());
                     } else {
                         page_blocked = true;
                         ctx.state_mut(|s| {
@@ -578,14 +703,74 @@ async fn run_page_publish_phases(
         }
 
         if page_blocked {
-            return Ok(PagePublishLoopOutcome::Blocked(format!(
-                "{}:page_node_key={}:published_before_block={}",
-                blocked_publish_gate_status(),
-                page_node.page_node_key,
-                published_pages
-            )));
+            let reason = if editorial_rework_required {
+                format!(
+                    "blocked:editorial_rework_required:page_node_key={}",
+                    page_node.page_node_key
+                )
+            } else {
+                format!(
+                    "{}:page_node_key={}",
+                    blocked_publish_gate_status(),
+                    page_node.page_node_key,
+                )
+            };
+            if first_blocked.is_none() {
+                published_before_block = published_pages;
+                first_blocked = Some(reason);
+            }
+            if editorial_rework_required {
+                break;
+            }
         }
     }
 
+    if let Some(reason) = first_blocked {
+        return Ok(PagePublishLoopOutcome::Blocked {
+            status: format!(
+                "{reason}:published_before_block={published_before_block}:published_pages={published_pages}",
+            ),
+            published_pages,
+        });
+    }
     Ok(PagePublishLoopOutcome::Completed(published_pages))
+}
+
+#[cfg(test)]
+mod editorial_review_disposition_tests {
+    use super::*;
+
+    #[test]
+    fn approved_revision_may_continue_to_publication() {
+        assert_eq!(
+            editorial_review_disposition("approved", true),
+            EditorialReviewDisposition::Approved
+        );
+    }
+
+    #[test]
+    fn blocked_revision_ends_the_attempt_for_rework() {
+        assert_eq!(
+            editorial_review_disposition("blocked", true),
+            EditorialReviewDisposition::ReworkRequired
+        );
+    }
+
+    #[test]
+    fn reopened_or_unknown_decision_must_not_publish_or_end_review() {
+        for decision in ["reopened", "", "unexpected"] {
+            assert_eq!(
+                editorial_review_disposition(decision, true),
+                EditorialReviewDisposition::Wait
+            );
+        }
+    }
+
+    #[test]
+    fn old_history_without_patch_still_waits_on_blocked_decision() {
+        assert_eq!(
+            editorial_review_disposition("blocked", false),
+            EditorialReviewDisposition::Wait
+        );
+    }
 }

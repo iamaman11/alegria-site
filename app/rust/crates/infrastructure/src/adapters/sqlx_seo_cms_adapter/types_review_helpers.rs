@@ -39,12 +39,6 @@ struct PublishDraftRow {
     traceability_manifest: serde_json::Value,
 }
 
-#[derive(Debug, Clone)]
-struct SeoPublishRuntimeConfig {
-    output_dir: String,
-    base_url: String,
-}
-
 fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
     value.encode_to_vec()
 }
@@ -78,24 +72,65 @@ fn hitl_task_type(blocker: &str) -> &'static str {
     }
 }
 
-fn seo_publish_runtime_config(input: &PublishMaterializeInputPayload) -> SeoPublishRuntimeConfig {
-    let output_dir = if input.output_dir.trim().is_empty() {
-        std::env::var("SEO_STATIC_OUTPUT_DIR")
-            .unwrap_or_else(|_| "app/rust/dist/static-site".to_string())
-    } else {
-        input.output_dir.clone()
-    };
-    let base_url = if input.base_url.trim().is_empty() {
-        std::env::var("SEO_STATIC_BASE_URL").unwrap_or_else(|_| "https://example.com".to_string())
-    } else {
-        input.base_url.clone()
-    };
-    SeoPublishRuntimeConfig {
-        output_dir,
-        base_url,
-    }
+pub fn resolve_publish_materialize_input(
+    input: &PublishMaterializeInputPayload,
+) -> PublishMaterializeInputPayload {
+    resolve_publish_settings(
+        input,
+        std::env::var("SEO_STATIC_OUTPUT_DIR").ok(),
+        std::env::var("SEO_STATIC_BASE_URL").ok(),
+    )
 }
 
+fn resolve_publish_settings(
+    input: &PublishMaterializeInputPayload,
+    configured_output_dir: Option<String>,
+    configured_base_url: Option<String>,
+) -> PublishMaterializeInputPayload {
+    let mut resolved = input.clone();
+    if resolved.output_dir.trim().is_empty() {
+        resolved.output_dir = configured_output_dir.unwrap_or_default();
+    }
+    if resolved.base_url.trim().is_empty() {
+        resolved.base_url = configured_base_url.unwrap_or_default();
+    }
+    resolved
+}
+
+#[cfg(test)]
+mod publish_runtime_config_tests {
+    use super::*;
+
+    #[test]
+    fn omitted_settings_resolve_and_explicit_settings_win() {
+        let input = PublishMaterializeInputPayload {
+            page_node_key: "page".to_string(),
+            ..Default::default()
+        };
+        let resolved = resolve_publish_settings(
+            &input,
+            Some("/configured/site".to_string()),
+            Some("https://configured.example".to_string()),
+        );
+        assert_eq!(resolved.output_dir, "/configured/site");
+        assert_eq!(resolved.base_url, "https://configured.example");
+        assert_eq!(resolved.page_node_key, input.page_node_key);
+        let explicit = resolve_publish_settings(
+            &resolved,
+            Some("/other".to_string()),
+            Some("https://other.example".to_string()),
+        );
+        assert_eq!(explicit, resolved);
+    }
+
+    #[test]
+    fn missing_settings_do_not_fall_back_to_a_placeholder_site() {
+        let resolved =
+            resolve_publish_settings(&PublishMaterializeInputPayload::default(), None, None);
+        assert!(resolved.output_dir.is_empty());
+        assert!(resolved.base_url.is_empty());
+    }
+}
 async fn load_publish_draft(
     pool: &PgPool,
     page_draft_key: &str,
@@ -110,8 +145,8 @@ async fn load_publish_draft(
             d.body_markdown,
             d.qa_verdict,
             d.truth_snapshot_ref,
-            b.title,
-            b.meta_description,
+            COALESCE(d.traceability_manifest->>'seo_title', b.title) AS title,
+            COALESCE(d.traceability_manifest->>'seo_meta_description', b.meta_description) AS meta_description,
             b.blueprint_key,
             p.scope_signature,
             COALESCE(NULLIF(scope.locale, ''), 'und') AS locale_code,
@@ -175,10 +210,19 @@ async fn count_active_cannibalization(
     .map_err(classify_sqlx)
 }
 
-async fn count_required_links(pool: &PgPool, page_node_key: &str) -> Result<i64, DomainError> {
+// Candidate graph edges describe future page planning, not immediately
+// enforceable publication obligations. Only accepted/applied required edges
+// may block publication when their CMS targets are not yet live.
+// Required structural links must be planned. Candidate targets that are not
+// yet published are intentionally deferred until their pages go live; they do
+// not become hard obligations until accepted or applied.
+async fn count_required_link_recommendations(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
         r#"
-        SELECT count(*)::bigint
+        SELECT count(DISTINCT target_page_key)::bigint
         FROM site.link_recommendations
         WHERE source_page_key = $1
           AND required_flag = true
@@ -189,6 +233,91 @@ async fn count_required_links(pool: &PgPool, page_node_key: &str) -> Result<i64,
     .fetch_one(pool)
     .await
     .map_err(classify_sqlx)
+}
+
+async fn count_unpublished_mandatory_links(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<i64, DomainError> {
+    sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(DISTINCT l.target_page_key)::bigint
+        FROM site.link_recommendations l
+        WHERE l.source_page_key = $1
+          AND l.required_flag = true
+          AND l.status IN ('accepted','applied')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM site.cms_pages p
+              JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+              WHERE p.page_node_key = l.target_page_key
+                AND p.current_status = 'published'
+                AND r.revision_status = 'published'
+          )
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_one(pool)
+    .await
+    .map_err(classify_sqlx)
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedInternalLink {
+    target_page_key: String,
+    canonical_url_path: String,
+    title: String,
+    link_role: String,
+}
+
+async fn resolve_required_internal_links(
+    pool: &PgPool,
+    page_node_key: &str,
+) -> Result<Vec<ResolvedInternalLink>, DomainError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT DISTINCT ON (l.target_page_key)
+               l.target_page_key, l.link_role, p.canonical_url_path, r.title
+        FROM site.link_recommendations l
+        JOIN site.cms_pages p ON p.page_node_key = l.target_page_key
+                             AND p.current_status = 'published'
+        JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+                                      AND r.revision_status = 'published'
+        WHERE l.source_page_key = $1
+          AND l.required_flag = true
+          AND l.status IN ('candidate','accepted','applied')
+        ORDER BY l.target_page_key, l.score DESC, l.link_recommendation_key
+        "#,
+    )
+    .bind(page_node_key)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    rows.into_iter()
+        .map(|row| {
+            let path: String = row.get("canonical_url_path");
+            if !path.starts_with('/')
+                || path.starts_with("//")
+                || path.chars().any(|ch| {
+                    ch.is_whitespace() || ch.is_control() || matches!(ch, '[' | ']' | '(' | ')' | '<' | '>')
+                })
+            {
+                return Err(validation_failure("required internal target has unsafe canonical URL"));
+            }
+            let original_title: String = row.get("title");
+            let label = original_title
+                .chars()
+                .filter(|ch| !ch.is_control() && !matches!(ch, '[' | ']' | '(' | ')' | '<' | '>' | '*' | '`'))
+                .take(110)
+                .collect::<String>();
+            Ok(ResolvedInternalLink {
+                target_page_key: row.get("target_page_key"),
+                canonical_url_path: path,
+                title: if label.trim().is_empty() { "Связанная страница".into() } else { label },
+                link_role: row.get("link_role"),
+            })
+        })
+        .collect()
 }
 
 async fn count_canonical_conflicts(
@@ -223,40 +352,6 @@ fn approval_decision_valid(
         && decision.revision_id == revision_id
         && !decision.actor_role.trim().is_empty()
         && decision.actor_role != "seo_system"
-}
-
-async fn persist_approval_decision(
-    pool: &PgPool,
-    decision: &CmsApprovalDecision,
-) -> Result<(), DomainError> {
-    sqlx::query(
-        r#"
-        INSERT INTO site.cms_approval_decisions
-            (decision_key, page_node_key, revision_id, actor_role, decision, reason,
-             decided_at, decision_payload)
-        VALUES ($1, $2, $3, $4, $5, $6,
-                COALESCE(NULLIF($7, '')::timestamptz, now()), $8)
-        ON CONFLICT (decision_key) DO UPDATE
-        SET decision = EXCLUDED.decision,
-            reason = EXCLUDED.reason,
-            decision_payload = EXCLUDED.decision_payload
-        "#,
-    )
-    .bind(&decision.decision_key)
-    .bind(&decision.page_node_key)
-    .bind(&decision.revision_id)
-    .bind(&decision.actor_role)
-    .bind(&decision.decision)
-    .bind(&decision.reason)
-    .bind(&decision.decided_at)
-    .bind(Json(json!({
-        "actor_role": decision.actor_role.clone(),
-        "reason": decision.reason.clone(),
-    })))
-    .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
 }
 
 pub async fn load_latest_approval_decision(
@@ -296,23 +391,31 @@ async fn resolve_seo_workflow_id(
     page_node_key: &str,
     revision_id: &str,
 ) -> Result<Option<String>, DomainError> {
-    let row = sqlx::query(
+    let rows = sqlx::query(
         r#"
-        SELECT event_payload ->> 'run_id' AS run_id
-        FROM site.cms_publish_events
-        WHERE page_node_key = $1
-          AND revision_id = $2
-          AND event_type = 'seo_page_review_requested'
-          AND COALESCE(event_payload ->> 'run_id', '') <> ''
-        ORDER BY occurred_at DESC
-        LIMIT 1
+        SELECT DISTINCT e.event_payload ->> 'run_id' AS run_id
+        FROM site.cms_publish_events e
+        JOIN pipeline.execution_runs x
+          ON x.run_id::text = e.event_payload ->> 'run_id'
+         AND x.status NOT IN ('done', 'failed')
+        WHERE e.page_node_key = $1
+          AND e.revision_id = $2
+          AND e.event_type = 'seo_page_review_requested'
+        ORDER BY run_id
+        LIMIT 2
         "#,
     )
     .bind(page_node_key)
     .bind(revision_id)
-    .fetch_optional(pool)
+    .fetch_all(pool)
     .await
     .map_err(classify_sqlx)?;
-    Ok(row.and_then(|row| row.get::<Option<String>, _>("run_id")))
+    if rows.len() > 1 {
+        return Err(validation_failure(
+            "review revision is owned by multiple active workflows",
+        ));
+    }
+    Ok(rows
+        .first()
+        .and_then(|row| row.get::<Option<String>, _>("run_id")))
 }
-

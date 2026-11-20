@@ -64,7 +64,7 @@ docker compose logs -f temporal-worker
 
 ## 3. Критично для workflow-изменений
 
-- Если меняете логику уже запущенного workflow-типа, используйте versioning-дисциплину: новый workflow type, новая task queue или отдельный rollout-процесс с worker routing.
+- Если меняете логику уже запущенного workflow-типа, используйте versioning-дисциплину: новый workflow type, новая task queue, отдельный rollout с worker routing либо явный SDK patch-marker с сохранением старой ветки и проверкой replay.
 - Для changes только в activity-коде обычно достаточно перезапуска worker.
 - `WORKER_BUILD_ID` обязателен для Docker worker. Новый release = новый build id.
 - В текущем runtime `WORKER_BUILD_ID` используется как обязательная identity/traceability-метка worker-а.
@@ -81,9 +81,18 @@ docker compose logs -f temporal-worker
 ### Когда обязателен новый `workflow type`
 
 - меняется порядок workflow commands;
-- меняется ветвление state machine;
+- меняется ветвление state machine без версионированного SDK patch-marker и подтверждённого replay;
 - меняется signal payload semantics;
 - старый history не может безопасно replay на новом коде.
+
+### Редакторский возврат `blocked`
+
+- Для новой редакции уже **опубликованной** страницы live CMS pointer остаётся на прежнем релизе. `cli_tools cms-review-list` перечисляет отдельно ожидающую ревизию с её точным `revision_id`; `cli_tools cms-review-show --page-node-key <key> --revision-id <revision>` показывает её неизменяемый текст. Не считать опубликованную текущую ревизию объектом новой проверки.
+- Подлинное решение редактора передаётся только с точным `--revision-id <revision>` в `cms-approve-publish` / `cms-block` и с действующим `--temporal-url http://alegria_temporal:7233` при вызове внутри Worker. Приложение проверяет, что ревизия находится в `review_required` и связана с активным каноническим workflow. Отсутствующий или устаревший идентификатор не может одобрить опубликованную старую ревизию. Передавать фактическую роль редактора, не подменять его решение системой или автоматическим тестом.
+- `cms-block` сохраняет решение редактора и причину; оно **не** утверждает страницу и не меняет уже сохранённую ревизию.
+- В новых Temporal histories marker `seo-editorial-terminal-rework-v1` завершает попытку со статусом `blocked:editorial_rework_required` без публикации; повторный черновик создаётся отдельным новым run после штатной проверки отсутствия активного business run.
+- `cms-reopen` оставляет ту же ревизию в HITL-ожидании; `cms-approve-publish` требует отдельного явного решения.
+- Для старых histories без patch-marker сохраняется прежняя ветка ожидания. Нельзя переключать их на новое поведение без replay/rollout-проверки; существующий активный workflow не отменять автоматически.
 
 ### Rollback / drain policy
 

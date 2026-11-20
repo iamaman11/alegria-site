@@ -96,6 +96,9 @@ pub struct GraphCoverageEvaluation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CmsReviewDecisionRequest {
     pub page_node_key: String,
+    /// Exact immutable review candidate. None retains the legacy current-page
+    /// route, which must fail closed if that revision is already published.
+    pub revision_id: Option<String>,
     pub actor_role: String,
     pub decision: String,
     pub reason: String,
@@ -124,6 +127,8 @@ pub struct SeoSiteBuildRegistrationRequest {
     pub queries: Vec<String>,
     pub query_batch_key: Option<String>,
     pub run_mode: Option<String>,
+    #[serde(default)]
+    pub retained_source_run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -208,8 +213,9 @@ pub trait RebuildRepository: Send + Sync {
 
 #[async_trait]
 pub trait SerpSearchPort: Send + Sync {
-    async fn fetch_google_organic_live_advanced(
+    async fn fetch_google_organic_standard(
         &self,
+        run_id: &str,
         locale: Option<&str>,
         query: &str,
     ) -> Result<Option<OrganicSerpResponse>, DomainError>;
@@ -300,7 +306,14 @@ pub trait PlanningRepository: Send + Sync {
         &self,
         input: &OpportunityBuildInputPayload,
         output: &OpportunityBuildOutputPayload,
-    ) -> Result<(), DomainError>;
+    ) -> Result<OpportunityBuildOutputPayload, DomainError>;
+
+    /// The same keyword cluster retains one page identity when its URL changes.
+    async fn existing_page_owners_by_cluster(
+        &self,
+        scope_signature: &str,
+        cluster_keys: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError>;
 
     async fn persist_ia_build_output(
         &self,
@@ -395,6 +408,13 @@ pub trait SeoWorkflowControlPort: Send + Sync {
 
 #[async_trait]
 pub trait PublishArtifactRepository: Send + Sync {
+    /// Resolve deployment-only settings before the pure materialization gate.
+    /// Unconfigured values stay empty so the gate fails closed.
+    fn resolve_publish_materialize_input(
+        &self,
+        input: &PublishMaterializeInputPayload,
+    ) -> PublishMaterializeInputPayload;
+
     async fn persist_publish_materialize_output(
         &self,
         input: &PublishMaterializeInputPayload,

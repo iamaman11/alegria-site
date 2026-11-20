@@ -49,6 +49,49 @@ def monotonic_no_truth_projection_block(baseline: dict, current: dict) -> bool:
     )
 
 
+def monotonic_competitor_candidate_review(fixture_id: str, baseline: dict, current: dict) -> bool:
+    """Accept one explicitly reviewed tightening of candidate validation.
+
+    An agency's service charge cannot establish a consular fee. The newer
+    validator holds the claim for human review *before* source corroboration,
+    whereas the historical baseline held it during source governance.
+    Neither outcome may verify the fee, draft it, or publish it.
+    """
+    if fixture_id != "competitor_claim_non_verified":
+        return False
+    previous = baseline.get("needs_hitl_set")
+    latest = current.get("needs_hitl_set")
+    legacy_reason = (
+        "|single_source_requires_corroboration; "
+        "source_tiers=low_trust; authority_classes=agency"
+    )
+    if (
+        not isinstance(previous, list)
+        or len(previous) != 1
+        or not isinstance(previous[0], str)
+        or not previous[0].endswith(legacy_reason)
+        or latest != [
+            previous[0][: -len(legacy_reason)] + "|candidate_validation_requires_hitl"
+        ]
+    ):
+        return False
+    # The live fixture's source governance must still identify an agency.
+    source_records = current.get("source_governance_snapshot", [])
+    if not isinstance(source_records, list) or not any(
+        isinstance(record, str) and "|niche_agency|agency|" in record
+        for record in source_records
+    ):
+        return False
+    return (
+        baseline.get("verified_rule_set") == current.get("verified_rule_set") == []
+        and baseline.get("rejected_set") == current.get("rejected_set") == []
+        and current.get("draft_verdict") == "blocked"
+        and current.get("publish_verdict") == "not_attempted"
+        and current.get("projection_verdict") == "blocked"
+        and current.get("rebuild_impact_emitted") is False
+    )
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print("usage: check_truth_certification_regression.py <current-report-path>")
@@ -88,6 +131,10 @@ def main() -> int:
                 continue
             if field == "projection_verdict" and monotonic_no_truth_projection_block(
                 baseline_fixture, current_fixture
+            ):
+                continue
+            if field == "needs_hitl_set" and monotonic_competitor_candidate_review(
+                fixture_id, baseline_fixture, current_fixture
             ):
                 continue
             failures.append(f"{fixture_id}: {field} drifted from accepted baseline")

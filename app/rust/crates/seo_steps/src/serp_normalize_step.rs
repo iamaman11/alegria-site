@@ -14,7 +14,7 @@ pub fn execute(input: &SerpNormalizeInputPayload) -> SerpNormalizeOutputPayload 
     let mut seen = std::collections::BTreeSet::new();
     let mut serp_patterns = Vec::new();
     for query in &input.queries {
-        let normalized_query = query.trim().to_ascii_lowercase();
+        let normalized_query = query.trim().to_lowercase();
         if normalized_query.is_empty() || !seen.insert(normalized_query.clone()) {
             continue;
         }

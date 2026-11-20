@@ -71,6 +71,35 @@ pub async fn load_raw_sections_by_ids(
         .collect())
 }
 
+// Voyage contextualized embeddings do not support truncation; each API
+// example must fit its context window. Keep all sections in source order.
+fn contextual_section_groups(texts: &[String]) -> Result<Vec<Vec<&str>>, primitives::errors::DomainError> {
+    let mut groups = Vec::new();
+    let mut current = Vec::new();
+    let mut bytes = 0usize;
+    for text in texts {
+        if text.len() > MAX_RAW_SECTION_BYTES {
+            return Err(primitives::errors::DomainError::InfraUnavailable {
+                message: format!(
+                    "raw section exceeds Voyage-safe byte limit ({} > {}); recrawl to split it",
+                    text.len(), MAX_RAW_SECTION_BYTES
+                ),
+            });
+        }
+        if bytes + text.len() > MAX_CONTEXTUAL_GROUP_BYTES && !current.is_empty() {
+            groups.push(current);
+            current = Vec::new();
+            bytes = 0;
+        }
+        current.push(text.as_str());
+        bytes += text.len();
+    }
+    if !current.is_empty() {
+        groups.push(current);
+    }
+    Ok(groups)
+}
+
 pub async fn emit_raw_section_qdrant_events(
     pool: &PgPool,
     run_id: &str,
@@ -126,7 +155,7 @@ pub async fn emit_raw_section_qdrant_events(
     let contextual_vectors = if texts.is_empty() {
         Vec::new()
     } else {
-        let grouped = vec![texts.iter().map(String::as_str).collect::<Vec<_>>()];
+        let grouped = contextual_section_groups(&texts)?;
         VoyageClient::new(voyage_api_key, voyage_context_model.clone())
             .contextualized_embed(
                 &grouped,
@@ -134,7 +163,7 @@ pub async fn emit_raw_section_qdrant_events(
                     input_type: Some(VoyageInputType::Document),
                     output_dimension: Some(DEFAULT_VOYAGE_DIMENSION),
                     output_dtype: Some(VoyageOutputDtype::Float),
-                    truncation: Some(true),
+                    truncation: Some(false),
                 },
                 Some(&voyage_context_model),
             )
@@ -143,8 +172,8 @@ pub async fn emit_raw_section_qdrant_events(
                 message: format!("Voyage contextualized raw section embedding failed: {err}"),
             })?
             .into_iter()
-            .next()
-            .unwrap_or_default()
+            .flatten()
+            .collect::<Vec<_>>()
     };
     if standard_vectors.len() != texts.len() {
         return Err(primitives::errors::DomainError::InfraUnavailable {
@@ -417,6 +446,37 @@ mod tests {
             }
         });
         Ok(format!("http://{}", addr))
+    }
+
+    #[test]
+    fn oversized_multilingual_section_keeps_every_byte_and_bounded_contexts() {
+        let original = "Виза 🧾 документы и срок рассмотрения.\\n".repeat(1_200);
+        let section = HtmlSection {
+            heading_path: "Документы".to_string(),
+            heading_level: 2,
+            content_md: original.clone(),
+            content_hash: content_hash_v1(&original),
+            ..Default::default()
+        };
+        let parts = bounded_raw_sections(vec![section]);
+        assert!(parts.len() > 1);
+        assert!(parts.iter().all(|part| part.content_md.len() <= MAX_RAW_SECTION_BYTES));
+        assert_eq!(
+            parts.iter().map(|part| part.content_md.as_str()).collect::<String>(),
+            original
+        );
+        for (index, part) in parts.iter().enumerate() {
+            assert_eq!(part.section_order, index);
+            assert_eq!(part.heading_path, "Документы");
+            assert_eq!(part.content_hash, content_hash_v1(&part.content_md));
+        }
+        let texts = parts.iter().map(|part| part.content_md.clone()).collect::<Vec<_>>();
+        let groups = contextual_section_groups(&texts).expect("bounded contextual groups");
+        assert!(groups.len() > 1);
+        assert!(groups.iter().all(|group| {
+            group.iter().map(|chunk| chunk.len()).sum::<usize>() <= MAX_CONTEXTUAL_GROUP_BYTES
+        }));
+        assert_eq!(groups.iter().map(Vec::len).sum::<usize>(), parts.len());
     }
 
     #[tokio::test]

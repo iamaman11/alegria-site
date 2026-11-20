@@ -31,8 +31,9 @@ pub async fn run_publish_materialize<P: PublishArtifactRepository>(
     repo: &P,
     input: &PublishMaterializeInputPayload,
 ) -> Result<PublishMaterializeOutputPayload, DomainError> {
-    let output = seo_steps::publish_materialize_step::execute(input);
-    repo.persist_publish_materialize_output(input, &output)
+    let resolved = repo.resolve_publish_materialize_input(input);
+    let output = seo_steps::publish_materialize_step::execute(&resolved);
+    repo.persist_publish_materialize_output(&resolved, &output)
         .await
 }
 
@@ -92,6 +93,20 @@ mod tests {
 
     #[async_trait]
     impl PublishArtifactRepository for FakePublishRepo {
+        fn resolve_publish_materialize_input(
+            &self,
+            input: &PublishMaterializeInputPayload,
+        ) -> PublishMaterializeInputPayload {
+            let mut resolved = input.clone();
+            if resolved.output_dir.trim().is_empty() {
+                resolved.output_dir = "/configured/static-site".to_string();
+            }
+            if resolved.base_url.trim().is_empty() {
+                resolved.base_url = "https://configured.example".to_string();
+            }
+            resolved
+        }
+
         async fn persist_publish_materialize_output(
             &self,
             _input: &PublishMaterializeInputPayload,
@@ -144,6 +159,25 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(decision.decision, "approved");
+    }
+
+    #[tokio::test]
+    async fn review_publish_resolves_runtime_before_materialize_gate() {
+        let repo = FakePublishRepo;
+        let output = run_publish_materialize(
+            &repo,
+            &PublishMaterializeInputPayload {
+                run_id: "run-1".to_string(),
+                page_node_key: "page-1".to_string(),
+                revision_id: "rev-1".to_string(),
+                canonical_url_path: "/visa/spain".to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.materialization_status, "ready_to_build");
+        assert!(output.blocking_reasons.is_empty());
     }
 
     #[tokio::test]

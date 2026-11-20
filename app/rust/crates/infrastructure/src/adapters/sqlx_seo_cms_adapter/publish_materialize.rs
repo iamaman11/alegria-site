@@ -3,7 +3,13 @@ pub async fn persist_publish_materialize_output(
     input: &PublishMaterializeInputPayload,
     planned: &PublishMaterializeOutputPayload,
 ) -> Result<PublishMaterializeOutputPayload, DomainError> {
-    let runtime = seo_publish_runtime_config(input);
+    // The application validates the resolved input before any filesystem side effect.
+    if !planned.blocking_reasons.is_empty() {
+        return Ok(PublishMaterializeOutputPayload {
+            materialization_status: "build_failed".to_string(),
+            ..planned.clone()
+        });
+    }
     let mut artifact = planned.publish_artifact.clone().unwrap_or_default();
     if artifact.artifact_key.trim().is_empty() {
         artifact.artifact_key = primitives::seo::seo_artifact_key(
@@ -20,7 +26,7 @@ pub async fn persist_publish_materialize_output(
         "{}|{}|{}|candidate_release@1",
         input.run_id, input.page_node_key, input.revision_id
     ));
-    let public_output_dir = Path::new(&runtime.output_dir);
+    let public_output_dir = Path::new(&input.output_dir);
     let default_release_root = public_output_dir
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -42,7 +48,7 @@ pub async fn persist_publish_materialize_output(
     let build = match static_site_builder_adapter::build_static_site_candidate_incremental(
         pool,
         &candidate_output_dir,
-        &runtime.base_url,
+        &input.base_url,
         &input.page_node_key,
         &input.revision_id,
     )
@@ -58,8 +64,8 @@ pub async fn persist_publish_materialize_output(
                 "release_id": release_id,
                 "run_id": input.run_id,
                 "candidate_output_dir": candidate_output_dir,
-                "public_output_dir": runtime.output_dir,
-                "base_url": runtime.base_url,
+                "public_output_dir": input.output_dir,
+                "base_url": input.base_url,
                 "page_node_key": input.page_node_key,
                 "revision_id": input.revision_id,
                 "candidate_build_error": err.to_string(),
@@ -136,8 +142,8 @@ pub async fn persist_publish_materialize_output(
         "release_id": release_id,
         "run_id": input.run_id,
         "candidate_output_dir": build.output_dir,
-        "public_output_dir": runtime.output_dir,
-        "base_url": runtime.base_url,
+        "public_output_dir": input.output_dir,
+        "base_url": input.base_url,
         "artifact_count": build.artifacts.len(),
         "page_count": preview_pages.len(),
         "page_node_key": input.page_node_key,
@@ -175,7 +181,7 @@ pub async fn persist_publish_materialize_output(
         "release_id": release_id,
         "run_id": input.run_id,
         "candidate_output_dir": artifact.artifact_uri.clone(),
-        "public_output_dir": runtime.output_dir,
+        "public_output_dir": input.output_dir,
         "page_count": preview_pages.len(),
         "page_node_key": input.page_node_key,
         "revision_id": input.revision_id,

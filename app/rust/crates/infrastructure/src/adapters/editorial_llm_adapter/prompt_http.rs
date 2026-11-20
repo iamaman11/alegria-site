@@ -1,3 +1,23 @@
+pub fn editorial_allowed_support(
+    brief: &contracts::generated::alegria::temporal::v1::EditorialBrief,
+) -> BTreeMap<String, Vec<Value>> {
+    planned_content_blocks(
+        &brief.section_templates,
+        &brief.verified_support,
+        &brief.required_links,
+    )
+    .into_iter()
+    .filter(|block| factual_role(&block.section_role))
+    .map(|block| {
+        let entries = supports_for_role(&brief.verified_support, &block.section_role)
+            .into_iter()
+            .map(|s| json!({"support_ref":s.support_ref,"fragment_text":s.fragment_text}))
+            .collect::<Vec<_>>();
+        (block.section_role, entries)
+    })
+    .collect()
+}
+
 fn prompt_from_input(input: &EditorialDraftGenerateInputPayload) -> Result<String, DomainError> {
     let Some(request) = input.request.as_ref() else {
         return Err(DomainError::ValidationFailure {
@@ -9,18 +29,25 @@ fn prompt_from_input(input: &EditorialDraftGenerateInputPayload) -> Result<Strin
             message: "editorial draft generation requires EditorialBrief".to_string(),
         });
     };
+    let typed = request.output_contract == "llm_draft_candidate@2";
     let roles = planned_content_blocks(
         &brief.section_templates,
         &brief.verified_support,
         &brief.required_links,
     )
     .into_iter()
-    .filter(|block| !block.deterministic_only || block.section_role == "cta_disclaimer")
+    .filter(|block| {
+        if typed {
+            factual_role(&block.section_role)
+        } else {
+            !block.deterministic_only || block.section_role == "cta_disclaimer"
+        }
+    })
     .map(|block| {
         let supports = supports_for_role(&brief.verified_support, &block.section_role);
         let support_lines = supports
             .iter()
-            .take(8)
+            .take(if typed { usize::MAX } else { 8 })
             .map(|support| {
                 format!(
                     "- [{}] {}",
@@ -62,19 +89,37 @@ fn prompt_from_input(input: &EditorialDraftGenerateInputPayload) -> Result<Strin
             .collect::<Vec<_>>()
             .join("\n");
 
+    let instructions = if typed {
+        "Return JSON exactly {claims: {section_role: [{support_ref, text, question?, evidence_spans?}]}, metadata: {title, description}} with quoted JSON keys. Use the requested locale. Each entry paraphrases only its exact allowed support, preserves all scope, conditions, exceptions, and ASCII numeric values. For a composite quote containing tariffs for unrelated countries, optionally provide evidence_spans as non-overlapping, complete verbatim lines or paragraphs from that very support quotation; include all relevant conditions and exceptions, omit unrelated tariff lines. Numeric values in text must exactly equal those in the selected spans. Without evidence_spans all numbers in the full quote remain mandatory. One entry per support ref; cover every support ref in each direct factual section. Overview and FAQ may select a subset. FAQ requires one question ending in '?'; no question in other sections. Text and questions must be plain text, without Markdown, HTML or URLs. Source links are resolved by the application. No invented facts, no external context as proof. Title 15-110 and description 45-190 characters. No prose outside JSON."
+    } else {
+        "Return a JSON object with two top-level keys: sections (role -> markdown) and metadata (title 15-110 chars, description 45-190 chars).\nDo not include any prose outside JSON. Do not invent facts. Paraphrase only the supplied support lines.\nSupplemental source context is for topic coverage and structure only; do not treat it as factual proof.\nDo not mention support refs explicitly in the final text. Keep each section concise and expert."
+    };
+    // One machine-readable representation of the same allowed evidence.
+    // Strings are JSON escaped, so multiline evidence cannot change its role.
+    let allowed = if typed {
+        let map = editorial_allowed_support(brief);
+        format!(
+            "ALLOWED_CLAIMS_JSON: {}\n",
+            serde_json::to_string(&map).map_err(|err| DomainError::ValidationFailure {
+                message: format!("serialize editorial support: {err}")
+            })?
+        )
+    } else {
+        String::new()
+    };
     Ok(format!(
-        "Return a JSON object with one top-level key `sections` mapping section_role -> markdown body.\n\
-Do not include any prose outside JSON. Do not invent facts. Paraphrase only the supplied support lines.\n\
-Supplemental source context is for topic coverage and structure only; do not treat it as factual proof.\n\
-Do not mention support refs explicitly in the final text. Keep each section concise and expert.\n\
-Page node: {}\nTarget audience: {}\nExpertise goal: {}\nPrompt version: {}\n\n{}",
+        "{}\nPage node: {}\nEditorial locale: {}\nCanonical URL path: {}\nTarget audience: {}\nExpertise goal: {}\nPrompt version: {}\n{}\n{}",
+        instructions,
         brief.page_node_key,
+        brief.locale_code,
+        brief.canonical_url_path,
         brief.target_audience,
         brief.expertise_goal,
         request.prompt_version,
+        allowed,
         format!(
             "{}\nSUPPLEMENTAL_SOURCE_CONTEXT:\n{}",
-            roles,
+            if typed { "" } else { &roles },
             if source_context.is_empty() {
                 "- none"
             } else {

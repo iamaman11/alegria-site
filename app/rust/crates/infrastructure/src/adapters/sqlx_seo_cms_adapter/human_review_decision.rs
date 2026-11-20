@@ -7,17 +7,27 @@ pub async fn apply_human_review_decision(
         return Err(validation_failure("human actor_role is required"));
     }
 
+    // The live pointer intentionally stays on the published revision while a
+    // replacement waits for review. Never let a page-key-only decision select
+    // that published revision or silently choose an older review candidate.
     let row = sqlx::query(
         r#"
-        SELECT p.page_node_key, p.current_revision_id AS revision_id
+        SELECT r.revision_id
         FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.page_node_key = p.page_node_key
         WHERE p.page_node_key = $1
+          AND r.revision_id = COALESCE($2, p.current_revision_id)
+          AND r.revision_status = 'review_required'
         "#,
     )
     .bind(&request.page_node_key)
-    .fetch_one(pool)
+    .bind(request.revision_id.as_deref())
+    .fetch_optional(pool)
     .await
-    .map_err(classify_sqlx)?;
+    .map_err(classify_sqlx)?
+    .ok_or_else(|| validation_failure(
+        "exact review_required revision not found; specify --revision-id for a published page"
+    ))?;
     let revision_id: String = row.get("revision_id");
     // Reject reviews not associated with a real canonical Temporal workflow
     // before changing any CMS decision or HITL row.

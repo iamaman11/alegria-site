@@ -153,10 +153,6 @@ if ($oldSha -eq $Commit) {
         exit 0
     }
 }
-# Staging only: do not change the worker while business runs are active.
-$count = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c 'SELECT count(*) FROM pipeline.execution_runs;' | Out-String).Trim()
-Assert-Exit 'business-run safety check'
-if ($count -ne '0') { throw "Run history is nonempty ($count): require explicit drain plan" }
 $rollbackTag = $project + '-' + $Service + ':rollback-' + $oldSha.Substring(0,12)
 # Preserve the previous image BEFORE building :latest. A preparatory build may
 # already have displaced its tag, leaving only the still-running old container.
@@ -172,7 +168,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Output "ROLLBACK_RECOVERY=REBUILD_PREVIOUS_SOURCE PREVIOUS_SHA=$oldSha"
     & $docker @previousArgs config --quiet
     Assert-Exit 'previous Compose config'
-    & $docker @previousArgs build $Service
+    & $docker @previousArgs build --quiet $Service
     Assert-Exit 'rebuild previous image'
     $recoveredImage = $project + '-' + $Service + ':latest'
     # Create, but never run, a disposable verifier. No provider secret is copied
@@ -218,7 +214,7 @@ $rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Ou
 Assert-Exit 'rollback guard: verified image absent'
 if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
-& $docker @newArgs build $Service
+& $docker @newArgs build --quiet $Service
 Assert-Exit "build $Service"
 $latestTag = $project + '-' + $Service + ':latest'
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
@@ -228,6 +224,16 @@ Assert-Exit 'inspect newly built image'
 if (-not $newImage) {
     throw 'Candidate build has no verifiable image ID'
 }
+
+# Reconcile terminal executions through the already-running canonical Rust
+# worker, without creating/attaching a second Compose container on Windows.
+# The accepted installed worker owns the same stable Temporal readback CLI.
+& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter --temporal-url http://alegria_temporal:7233 run-reconcile
+Assert-Exit 'Temporal terminal-run reconciliation'
+# Only genuinely active or unrecognised runs may block replacement.
+$activeCount = (& $docker exec alegria_postgres psql -U postgres -d alegria -t -A -c "SELECT count(*) FROM pipeline.execution_runs WHERE status NOT IN ('done','failed');" | Out-String).Trim()
+Assert-Exit 'active business-run safety check'
+if ($activeCount -ne '0') { throw "Active business runs ($activeCount): require explicit drain plan" }
 
 function Test-Docker-Engine-Ready {
     try {
@@ -263,7 +269,7 @@ function Test-Worker-Metrics {
         return ($response.StatusCode -eq 200)
     } catch { return $false }
 }
-function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
+function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 90) {
     # Docker Desktop Hyper-V may restart while Compose is waiting. Command exit
     # -1 is not proof of a failed container start or a successful rollback.
     $lastReady = $false
@@ -314,7 +320,27 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
     } catch {
         Write-Warning 'Compose create raised an exception; reconciling actual container state'
     }
-    if ($createExit -ne 0) { return $createExit }
+    if ($createExit -ne 0) {
+        # Compose may return nonzero after it has already recreated the target.
+        # Start only the exact candidate from this checkout and effective config;
+        # never start an unowned/stale container as a side effect of recovery.
+        $created = $null
+        for ($probe = 0; $probe -lt 5; $probe++) {
+            $created = Read-Worker-Observed
+            if ($null -ne $created) { break }
+            if ($probe -lt 4) { Start-Sleep -Seconds 2 }
+        }
+        $ownedCandidate = Test-Staging-Identity -Observed $created -ExpectedImage $newImage `
+            -ExpectedProject $project -ExpectedCheckout $root `
+            -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
+            -ExpectedEnvironment $expectedEnvironment
+        if (-not $ownedCandidate -or $created.State -notin @('created','exited','running')) {
+            Write-Warning "Compose recreate exit $createExit; exact candidate not verified for safe start"
+            return $createExit
+        }
+        Write-Warning "Compose recreate exit $createExit after exact candidate was created"
+        if ($created.State -eq 'running') { return $createExit }
+    }
     try {
         # Docker Desktop may leave the native CLI waiting even after it has
         # accepted the start. Bound the CLI, then trust only engine readback.
@@ -323,11 +349,14 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
             $startInfo.FileName = $docker
             $startInfo.ArgumentList.Add('start')
             $startInfo.ArgumentList.Add($target)
-            $startInfo.UseShellExecute = $true
+            $startInfo.UseShellExecute = $false
             $startInfo.CreateNoWindow = $true
             $startProcess = [System.Diagnostics.Process]::Start($startInfo)
             if ($startProcess.WaitForExit(20000)) {
-                return [int]$startProcess.ExitCode
+                $startExitCode = [int]$startProcess.ExitCode
+                # Keep Compose's original error visible even if Docker start succeeds.
+                if ($createExit -ne 0 -and $startExitCode -eq 0) { return $createExit }
+                return $startExitCode
             }
             try { $startProcess.Kill($true) } catch {}
             Write-Warning "Native Docker start timed out (attempt $attempt/2); checking engine after retry"
@@ -344,6 +373,7 @@ if ($startExit -ne 0) {
     Write-Warning "Worker create/start returned exit $startExit; checking Docker engine and exact deployed identity before rollback"
 }
 $decision = Wait-Worker-Reconciliation -StartExit $startExit
+Write-Output "RECONCILIATION=$decision START_EXIT=$startExit"
 if ($decision -eq 'DEPLOYED') {
     Write-Output "DEPLOYED=$Service COMMIT=$Commit PROJECT=$project IMAGE=$newImage"
     exit 0

@@ -135,7 +135,7 @@ impl SeoSiteBuildWorkflow {
                                         scope: scope.clone(),
                                         queries: site_input.queries.clone(),
                                     },
-                                    db_opts(30),
+                                    db_opts(1800),
                                 )
                                 .await?,
                             );
@@ -150,6 +150,7 @@ impl SeoSiteBuildWorkflow {
                                         query_batch_key: ingest_ref.query_batch_key.clone(),
                                         limit: 25,
                                         emit_qdrant: true,
+                                        sweep_index: 0,
                                     },
                                     db_opts(120),
                                 )
@@ -248,6 +249,7 @@ impl SeoSiteBuildWorkflow {
                                 ctx.start_activity(
                                     AlegriaActivities::run_ia_build_step,
                                     IaBuildInputPayload {
+                                        verified_support: Vec::new(),
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         keyword_clusters: opportunities_ref
@@ -283,6 +285,8 @@ impl SeoSiteBuildWorkflow {
                                 ctx.start_activity(
                                     AlegriaActivities::run_global_site_reconcile_step,
                                     GlobalSiteReconcileInputPayload {
+                                        page_blueprints: Vec::new(),
+                                        verified_support: Vec::new(),
                                         run_id: run_id.clone(),
                                         scope: scope.clone(),
                                         page_nodes: ia_ref.page_nodes.clone(),
@@ -457,6 +461,7 @@ impl SeoSiteBuildWorkflow {
                                             draft: draft_ref.draft.clone(),
                                             supported_fragments: factual_fragments.clone(),
                                             required_links: required_links.clone(),
+                                            verified_support: verified_support.clone(),
                                         },
                                         db_opts(30),
                                     )

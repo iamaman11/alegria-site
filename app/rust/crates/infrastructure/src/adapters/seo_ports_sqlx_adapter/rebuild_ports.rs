@@ -67,11 +67,19 @@ impl RebuildRepository for SqlxSeoRuntimeRepository<'_> {
             .map_err(|err| DomainError::InfraUnavailable {
                 message: format!("semantic rebuild widening retrieval failed: {err}"),
             })?;
-        let reranked = semantic_search_adapter::rerank_records(&query, candidates, Some(8))
-            .await
-            .map_err(|err| DomainError::InfraUnavailable {
-                message: format!("semantic rebuild widening rerank failed: {err}"),
-            })?;
+        // This only widens rebuild advisories; it never certifies truth or
+        // modifies the underlying retrieved evidence. Long, accumulated truth
+        // keys must not stall this lane at the provider's rerank token limit.
+        let reranked = semantic_search_adapter::rerank_records_with_input_policy(
+            &query,
+            candidates,
+            Some(8),
+            semantic_search_adapter::RerankInputPolicy::AdvisoryAllowProviderTruncation,
+        )
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("semantic rebuild widening rerank failed: {err}"),
+        })?;
         let page_node_set = page_nodes
             .iter()
             .map(|node| node.page_node_key.as_str())
@@ -91,6 +99,7 @@ impl RebuildRepository for SqlxSeoRuntimeRepository<'_> {
                 reason_package: json!({
                     "semantic_neighbor_widening": true,
                     "collection": "editorial_topics_4",
+                    "rerank_input_policy": "advisory_provider_truncation_allowed",
                     "score": candidate.score,
                     "matched_from": query,
                 }),

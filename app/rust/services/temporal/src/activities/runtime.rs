@@ -263,8 +263,9 @@ impl AlegriaActivities {
                 Ok(output)
             }
             Err(err) => {
-                let domain = Self::classify_error_message(&err.to_string());
-                let error_class = domain.class();
+                // The operation already returns a typed DomainError. Never infer its
+                // class from a formatted message or turn conflicts into retries.
+                let error_class = err.class();
                 let _ = pipeline_storage::fail_step_execution(
                     &self.pool,
                     run_id,
@@ -319,7 +320,7 @@ impl AlegriaActivities {
                     .await;
                 }
                 timer.record_failure(error_class.as_str());
-                Err(Self::activity_error_from_domain(&domain))
+                Err(Self::activity_error_from_domain(&err))
             }
         }
     }

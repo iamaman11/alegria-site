@@ -71,6 +71,7 @@ mod tests {
                 query_batch_key: "batch-1".to_string(),
                 limit: 25,
                 emit_qdrant: false,
+                sweep_index: 0,
             },
         )
         .await

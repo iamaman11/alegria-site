@@ -1,7 +1,8 @@
 use anyhow::{anyhow, Result};
 
 pub use temporalio_client::{
-    Client, ClientOptions, Connection, ConnectionOptions, WorkflowListOptions,
+    Client, ClientOptions, Connection, ConnectionOptions, WorkflowDescribeOptions,
+    WorkflowExecutionStatus as WorkflowClientStatus, WorkflowListOptions,
 };
 pub use temporalio_client::{
     UntypedQuery, UntypedSignal, UntypedUpdate, UntypedWorkflow, WorkflowExecuteUpdateOptions,

@@ -40,6 +40,7 @@ fn support(
         freshness_class: "fresh".to_string(),
         observed_at: "2026-05-06T00:00:00Z".to_string(),
         valid_until: "2027-05-06T00:00:00Z".to_string(),
+        source_url: String::new(),
     }
 }
 
@@ -72,12 +73,15 @@ fn llm_candidate(
                 support_refs: vec![support.support_ref.clone()],
                 validation_verdict: "supported".to_string(),
                 source_section_key: support.role_type.clone(),
+                editorial_proposal: None,
             })
             .collect(),
         content_blocks: Vec::new(),
         faq_json: String::new(),
         schema_markup_json: String::new(),
         status: "ready".to_string(),
+        seo_title: String::new(),
+        seo_meta_description: String::new(),
     }
 }
 
@@ -124,6 +128,7 @@ fn seo_steps_form_publish_ready_pipeline() {
     assert!(opportunities.content_gaps.is_empty());
 
     let ia = crate::ia_build_step::execute(&IaBuildInputPayload {
+        verified_support: Vec::new(),
         run_id: run_id.clone(),
         scope: Some(scope),
         keyword_clusters: opportunities.keyword_clusters,
@@ -175,7 +180,6 @@ fn seo_steps_form_publish_ready_pipeline() {
         .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
         .cloned()
         .expect("blueprint for page node");
-    let fragments = Vec::new();
     let verified_support = vec![
         support(
             "Required document: passport.",
@@ -214,6 +218,12 @@ fn seo_steps_form_publish_ready_pipeline() {
             "Official consular route",
         ),
     ];
+    // QA must receive the actual source-backed fragments, not an empty
+    // placeholder list: only these exact strings are eligible evidence.
+    let fragments = verified_support
+        .iter()
+        .map(|support| support.fragment_text.clone())
+        .collect::<Vec<_>>();
     let required_links: Vec<_> = links
         .link_recommendations
         .iter()
@@ -288,8 +298,9 @@ fn seo_steps_form_publish_ready_pipeline() {
     let qa = crate::draft_qa_step::execute(&DraftQaInputPayload {
         run_id: run_id.clone(),
         draft: draft_state.clone(),
-        supported_fragments: fragments,
+        supported_fragments: fragments.clone(),
         required_links,
+        verified_support: verified_support.clone(),
     });
     assert_eq!(qa.verdict, "publish_ready");
     assert!(qa.blocking_reasons.is_empty());
@@ -327,8 +338,9 @@ fn seo_steps_form_publish_ready_pipeline() {
     let qa_without_links = crate::draft_qa_step::execute(&DraftQaInputPayload {
         run_id: run_id.clone(),
         draft: draft_without_links.draft,
-        supported_fragments: Vec::new(),
+        supported_fragments: fragments,
         required_links: Vec::new(),
+        verified_support: verified_support.clone(),
     });
     assert_eq!(qa_without_links.verdict, "publish_ready");
     assert!(!qa_without_links

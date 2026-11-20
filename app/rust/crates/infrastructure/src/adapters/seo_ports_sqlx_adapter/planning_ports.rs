@@ -81,8 +81,45 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         &self,
         input: &OpportunityBuildInputPayload,
         output: &OpportunityBuildOutputPayload,
-    ) -> Result<(), DomainError> {
+    ) -> Result<OpportunityBuildOutputPayload, DomainError> {
         sqlx_seo_adapter::persist_opportunity_build_output(self.pool, input, output).await
+    }
+
+    async fn existing_page_owners_by_cluster(
+        &self,
+        scope_signature: &str,
+        cluster_keys: &[String],
+    ) -> Result<Vec<(String, String)>, DomainError> {
+        if cluster_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = sqlx::query(
+            "SELECT keyword_cluster_key, page_node_key
+             FROM site.page_nodes
+             WHERE scope_signature = $1 AND keyword_cluster_key = ANY($2)
+               AND lifecycle_state <> 'deprecated'
+             ORDER BY keyword_cluster_key, created_at",
+        )
+        .bind(scope_signature)
+        .bind(cluster_keys)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|error| DomainError::InfraUnavailable {
+            message: format!("read canonical page ownership: {error}"),
+        })?;
+        let mut owners = std::collections::BTreeMap::<String, String>::new();
+        for row in rows {
+            let cluster: String = row.get("keyword_cluster_key");
+            let page: String = row.get("page_node_key");
+            if let Some(previous) = owners.insert(cluster.clone(), page.clone()) {
+                if previous != page {
+                    return Err(DomainError::ConflictViolation {
+                        message: format!("multiple active pages own keyword cluster {cluster}"),
+                    });
+                }
+            }
+        }
+        Ok(owners.into_iter().collect())
     }
 
     async fn persist_ia_build_output(
@@ -109,6 +146,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         sqlx_seo_adapter::persist_ia_build_output(
             self.pool,
             &IaBuildInputPayload {
+                verified_support: Vec::new(),
                 run_id: input.run_id.clone(),
                 scope: input.scope.clone(),
                 keyword_clusters: Vec::new(),
@@ -121,6 +159,51 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
         )
         .await?;
+        let mut links = output.link_recommendations.clone();
+        let mut gaps = output.content_gaps.clone();
+        // Reconcile historical plans through the same persistence owners.
+        // Preserve unrelated scopes, manual decisions and published dependencies
+        // outside this run's evaluated plan.
+        if let Some(context) = input.graph_context.as_ref() {
+            let keys = output.page_nodes.iter().map(|node| node.page_node_key.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            let link_keys = links.iter().map(|link| link.link_recommendation_key.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            for prior in &context.link_recommendations {
+                if matches!(prior.status.as_str(), "candidate" | "accepted")
+                    && keys.contains(prior.source_page_key.as_str())
+                    && keys.contains(prior.target_page_key.as_str())
+                    && !link_keys.contains(&prior.link_recommendation_key)
+                {
+                    let mut expired = prior.clone();
+                    expired.status = "expired".into();
+                    links.push(expired);
+                }
+            }
+            if !input.page_blueprints.is_empty() {
+                use primitives::seo::ContentGapDetector;
+                let identity = |gap: &contracts::generated::alegria::temporal::v1::ContentGapState| {
+                    ContentGapDetector::from_reason(&gap.reason_code)
+                        .map(|detector| detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic))
+                };
+                let gap_keys = gaps.iter().filter_map(identity)
+                    .collect::<std::collections::BTreeSet<_>>();
+                for prior in &context.content_gaps {
+                    if prior.status == "open"
+                        && matches!(prior.reason_code.as_str(),
+                            "page_missing_verified_support" | "page_duplicate_verified_evidence")
+                        && identity(prior).is_some_and(|key| !gap_keys.contains(&key))
+                        && output.page_nodes.iter().any(|page|
+                            page.page_node_key == prior.page_node_key
+                            && !matches!(page.lifecycle_state.as_str(), "blocked" | "deprecated" | "stale"))
+                    {
+                        let mut resolved = prior.clone();
+                        resolved.status = "resolved".into();
+                        gaps.push(resolved);
+                    }
+                }
+            }
+        }
         sqlx_seo_adapter::persist_link_recommend_output(
             self.pool,
             &LinkRecommendInputPayload {
@@ -130,7 +213,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 graph_context: None,
             },
             &LinkRecommendOutputPayload {
-                link_recommendations: output.link_recommendations.clone(),
+                link_recommendations: links,
             },
         )
         .await?;
@@ -144,11 +227,14 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
             &OpportunityBuildOutputPayload {
                 keyword_clusters: Vec::new(),
-                content_gaps: output.content_gaps.clone(),
+                content_gaps: gaps,
             },
         )
         .await?;
         let scope = input.scope.as_ref().cloned().unwrap_or_default();
+        let current_keys = output.page_nodes.iter().map(|page| page.page_node_key.clone()).collect::<Vec<_>>();
+        sqlx_seo_adapter::retire_opaque_unpublished_plans(self.pool, &input.run_id,
+            &scope.scope_signature, &current_keys).await?;
         let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages(
             self.pool,
             &scope.market,
@@ -165,4 +251,3 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         })
     }
 }
-

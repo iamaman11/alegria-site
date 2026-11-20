@@ -44,11 +44,20 @@ def main() -> int:
         if needle not in serp_adapter:
             failures.append(f"serp adapter missing `{needle}`")
 
+    # Production source authority is derived from the actual URL hostname,
+    # never from an arbitrary SERP domain hint or a URL path/query substring.
+    # The Rust regression tests exercise official, delegated and spoofed hosts.
     for needle in [
-        "classify_domain_tier(",
+        "fn classify_domain_tier(raw_url: &str)",
+        "url.host_str()",
+        "direct_public_https_url(final_url)?",
+        "result.source_tier = classify_domain_tier(&url);",
         'assert_eq!(parsed[0].source_tier, "low_trust")',
-        'classify_domain_tier("www.mfa.gov.by"',
-        'classify_domain_tier("reddit.com"',
+        "fn classifies_domain_tiers()",
+        "fn untrusted_domain_substrings_and_paths_never_gain_official_tier()",
+        "fn local_stub_keeps_simulated_source_identity_without_leaking_to_https()",
+        'classify_domain_tier("https://www.mfa.gov.by/visa")',
+        'classify_domain_tier("https://reddit.com/r/visas")',
     ]:
         if needle not in dataforseo_adapter:
             failures.append(f"dataforseo adapter missing `{needle}`")

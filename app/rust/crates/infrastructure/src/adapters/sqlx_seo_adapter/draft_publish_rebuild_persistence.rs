@@ -1,4 +1,3 @@
-
 pub async fn persist_draft_assemble_output(
     pool: &PgPool,
     run_id: &str,
@@ -63,21 +62,21 @@ pub async fn persist_draft_assemble_output(
 
     if let Some(draft) = output.draft.as_ref() {
         non_empty(&draft.page_draft_key, "page_draft_key")?;
-        sqlx::query(
+        let draft_write = sqlx::query(
             r#"
             INSERT INTO site.page_drafts
                 (page_draft_key, page_node_key, page_brief_key, draft_revision,
                  body_markdown, traceability_manifest, qa_verdict, qa_blockers,
                  truth_snapshot_ref, assembly_version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'seo_draft_assemble@1')
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'seo_draft_assemble@4')
             ON CONFLICT (page_draft_key) DO UPDATE
-            SET body_markdown      = EXCLUDED.body_markdown,
-                traceability_manifest = EXCLUDED.traceability_manifest,
-                qa_verdict         = EXCLUDED.qa_verdict,
-                qa_blockers        = EXCLUDED.qa_blockers,
-                truth_snapshot_ref = EXCLUDED.truth_snapshot_ref,
-                assembly_version   = EXCLUDED.assembly_version,
-                updated_at         = now()
+            SET page_draft_key = EXCLUDED.page_draft_key
+            WHERE site.page_drafts.page_node_key = EXCLUDED.page_node_key
+              AND site.page_drafts.page_brief_key = EXCLUDED.page_brief_key
+              AND site.page_drafts.draft_revision = EXCLUDED.draft_revision
+              AND site.page_drafts.body_markdown = EXCLUDED.body_markdown
+              AND site.page_drafts.traceability_manifest = EXCLUDED.traceability_manifest
+              AND site.page_drafts.truth_snapshot_ref = EXCLUDED.truth_snapshot_ref
             "#,
         )
         .bind(&draft.page_draft_key)
@@ -94,6 +93,9 @@ pub async fn persist_draft_assemble_output(
             "llm_provider_key": draft.llm_provider_key.clone(),
             "llm_model_key": draft.llm_model_key.clone(),
             "generation_request_key": draft.generation_request_key.clone(),
+            "editorial_locale": draft.editorial_locale.clone(),
+            "seo_title": output.page_brief.as_ref().map(|brief| brief.title.as_str()),
+            "seo_meta_description": output.page_brief.as_ref().map(|brief| brief.meta_description.as_str()),
         })))
         .bind(&draft.qa_verdict)
         .bind(Json(json!([])))
@@ -102,6 +104,11 @@ pub async fn persist_draft_assemble_output(
         .await
         .map_err(classify_sqlx)?;
 
+        if draft_write.rows_affected() != 1 {
+            return Err(validation_failure(
+                "immutable page draft changed during replay",
+            ));
+        }
         set_page_lifecycle(pool, &draft.page_node_key, "draft_ready", "draft_assembled").await?;
 
         for claim in &draft.claim_ledger {
@@ -275,7 +282,7 @@ pub async fn persist_draft_normalize_output(
 ) -> Result<(), DomainError> {
     upsert_runtime_blob(pool, &input.run_id, "draft_normalize_output", output).await?;
     let output_as_assemble = DraftAssembleOutputPayload {
-        page_brief: None,
+        page_brief: output.page_brief.clone(),
         draft: output.draft.clone(),
         editorial_brief: None,
         llm_request: None,

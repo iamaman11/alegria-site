@@ -5,32 +5,25 @@ pub async fn claim_pending_crawl_batch(
     limit: i64,
 ) -> std::result::Result<Vec<CrawlQueueItem>, primitives::errors::DomainError> {
     let rows = sqlx::query(
-        "WITH per_domain AS (
-             SELECT DISTINCT ON (coalesce(nullif(source_domain, ''), url_norm))
-                    url_norm,
-                    first_seen_at,
-                    CASE
-                        WHEN dtype IN ('official', 'government') THEN 0
-                        WHEN dtype IN ('vfs', 'delegated_authority', 'official_publisher') THEN 1
-                        WHEN dtype IN ('agency', 'editorial') THEN 3
-                        WHEN dtype IN ('forum') THEN 4
-                        ELSE 2
-                    END AS source_priority
+        "WITH candidates AS (
+             SELECT url_norm
              FROM serp.crawl_queue
-             WHERE status = 'pending'
+             WHERE (status = 'pending'
+                    OR (status = 'processing' AND locked_until IS NOT NULL AND locked_until <= now()))
                AND ($2 = '' OR first_seen_run_id = $2)
                AND ($3 = '' OR query_batch_key = $3)
                AND next_attempt_at <= now()
                AND (locked_until IS NULL OR locked_until <= now())
-             ORDER BY coalesce(nullif(source_domain, ''), url_norm), source_priority, first_seen_at
-         ),
-         candidates AS (
-             SELECT q.url_norm
-             FROM serp.crawl_queue q
-             JOIN per_domain d ON d.url_norm = q.url_norm
-             ORDER BY d.source_priority, q.first_seen_at
+             ORDER BY CASE
+                          WHEN dtype IN ('official', 'government') THEN 0
+                          WHEN dtype IN ('vfs', 'delegated_authority', 'official_publisher') THEN 1
+                          WHEN dtype IN ('agency', 'editorial') THEN 3
+                          WHEN dtype = 'forum' THEN 4
+                          ELSE 2
+                      END,
+                      first_seen_at, url_norm
              LIMIT $1
-             FOR UPDATE OF q SKIP LOCKED
+             FOR UPDATE SKIP LOCKED
          )
          UPDATE serp.crawl_queue q
          SET status = 'processing',
@@ -60,6 +53,32 @@ pub async fn claim_pending_crawl_batch(
             attempt_count: row.get("crawl_attempt_count"),
         })
         .collect())
+}
+
+/// Unresolved URLs for this run, including delayed retries and outstanding leases.
+/// No queued document is silently treated as completed.
+pub async fn crawl_queue_backlog(
+    pool: &PgPool,
+    run_id: &str,
+    query_batch_key: &str,
+) -> std::result::Result<(i64, i64), primitives::errors::DomainError> {
+    let row = sqlx::query(
+        "SELECT count(*) FILTER (
+                    WHERE (status = 'pending'
+                           OR (status = 'processing' AND locked_until IS NOT NULL AND locked_until <= now()))
+                      AND next_attempt_at <= now()
+                      AND (locked_until IS NULL OR locked_until <= now())
+                ) AS ready_count,
+                count(*) FILTER (WHERE status IN ('pending', 'processing')) AS unresolved_count
+         FROM serp.crawl_queue
+         WHERE first_seen_run_id = $1 AND query_batch_key = $2",
+    )
+    .bind(run_id)
+    .bind(query_batch_key)
+    .fetch_one(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok((row.get("ready_count"), row.get("unresolved_count")))
 }
 
 pub async fn fetch_html(url: &str) -> Result<FetchedHtml> {
@@ -180,6 +199,137 @@ pub async fn evaluate_robots_policy(source_url: &str) -> Result<RobotsDecisionTr
     Ok(trace)
 }
 
+// Preserve the complete crawled HTML and all section text, but never send a
+// single unbounded HTML section to the Voyage embedding API. A long section
+// becomes ordered raw.sections with the same heading provenance.
+fn bounded_raw_sections(sections: Vec<HtmlSection>) -> Vec<HtmlSection> {
+    let mut bounded = Vec::new();
+    for section in sections {
+        let text = section.content_md.as_str();
+        if text.is_empty() {
+            let mut part = section.clone();
+            part.section_order = bounded.len();
+            bounded.push(part);
+            continue;
+        }
+        let mut start = 0;
+        while start < text.len() {
+            let mut end = (start + MAX_RAW_SECTION_BYTES).min(text.len());
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end < text.len() {
+                // Prefer a word boundary without omitting whitespace or text.
+                if let Some((offset, separator)) = text[start..end]
+                    .char_indices()
+                    .rev()
+                    .find(|(offset, ch)| *offset >= MAX_RAW_SECTION_BYTES / 2 && ch.is_whitespace())
+                {
+                    end = start + offset + separator.len_utf8();
+                }
+            }
+            let chunk = &text[start..end];
+            let mut part = section.clone();
+            part.section_order = bounded.len();
+            part.content_md = chunk.to_string();
+            part.content_hash = content_hash_v1(chunk);
+            bounded.push(part);
+            start = end;
+        }
+    }
+    bounded
+}
+
+/// Re-extract only a persisted HTTP snapshot that currently has no semantic
+/// sections. This is a repair of source-derived data, not a new crawl or a
+/// change to the raw HTML, snapshot identity, or verified truth.
+pub async fn recover_empty_raw_sections(
+    pool: &PgPool,
+    page_id: i64,
+) -> std::result::Result<usize, primitives::errors::DomainError> {
+    if page_id <= 0 {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: "raw page_id must be positive".to_string(),
+        });
+    }
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let row = sqlx::query(
+        "SELECT url, raw_html, content_hash,
+                COALESCE(status_code, 0)::integer AS status_code
+         FROM raw.pages WHERE id = $1 FOR UPDATE",
+    )
+    .bind(page_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?
+    .ok_or_else(|| primitives::errors::DomainError::ValidationFailure {
+        message: format!("persisted raw page not found: {page_id}"),
+    })?;
+    let status_code: i32 = row.get("status_code");
+    let source_url: String = row.get("url");
+    let html: Option<String> = row.get("raw_html");
+    let hash: Option<String> = row.get("content_hash");
+    let html = html.ok_or_else(|| primitives::errors::DomainError::ValidationFailure {
+        message: format!("raw page has no stored HTML: {page_id}"),
+    })?;
+    let hash_matches = hash
+        .as_deref()
+        .is_some_and(|saved| !saved.is_empty() && saved == content_hash_v1(&html));
+    if status_code != 200 || html.is_empty() || !hash_matches {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: format!("raw page HTTP/HTML/hash guard rejected: {page_id}"),
+        });
+    }
+    let existing: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM raw.sections WHERE page_id = $1")
+            .bind(page_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?;
+    if existing > 0 {
+        // No deletes or recomputation of existing evidence.
+        tx.commit().await.map_err(classify_sqlx)?;
+        return Ok(0);
+    }
+    let sections = bounded_raw_sections(extract_sections_typed(&html, &source_url));
+    if sections.is_empty() {
+        return Err(primitives::errors::DomainError::ValidationFailure {
+            message: format!("no visible article sections in saved HTML: {page_id}"),
+        });
+    }
+    for section in &sections {
+        sqlx::query(
+            "INSERT INTO raw.sections
+             (page_id, heading_path, heading_level, section_order, section_type, content_md, content_hash)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(page_id)
+        .bind(&section.heading_path)
+        .bind(section.heading_level as i16)
+        .bind(section.section_order as i32)
+        .bind(&section.section_type)
+        .bind(&section.content_md)
+        .bind(&section.content_hash)
+        .execute(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
+    sqlx::query(
+        "UPDATE raw.pages
+         SET content = jsonb_set(COALESCE(content, '{}'::jsonb), '{section_count}',
+                                 to_jsonb($2::integer), true),
+             processed = false
+         WHERE id = $1",
+    )
+    .bind(page_id)
+    .bind(sections.len() as i32)
+    .execute(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(sections.len())
+}
+
 pub async fn save_crawled_html(
     pool: &PgPool,
     source_url: &str,
@@ -193,7 +343,7 @@ pub async fn save_crawled_html(
     robots_trace: &RobotsDecisionTrace,
 ) -> std::result::Result<SavedRawPage, primitives::errors::DomainError> {
     let meta = extract_meta_typed(raw_html);
-    let sections = extract_sections_typed(raw_html, source_url);
+    let sections = bounded_raw_sections(extract_sections_typed(raw_html, source_url));
     let content_hash = content_hash_v1(raw_html);
     let domain = if source_domain.trim().is_empty() {
         domain_norm(source_url)
@@ -206,7 +356,7 @@ pub async fn save_crawled_html(
         dtype.trim()
     };
     let content = json!({
-        "extractor": "primitives::html_sections@1",
+        "extractor": "primitives::html_sections@2",
         "source_url": source_url,
         "final_url": final_url,
         "redirect_chain": redirect_chain,
@@ -230,102 +380,38 @@ pub async fn save_crawled_html(
     let robots_trace_json = Json(robots_trace.clone());
     let source_observation_json = Json(trace_json.clone());
 
+    // A source snapshot is immutable evidence. Even a same-day re-fetch must
+    // create a new page and sections: VERIFIED rules and graph projections may
+    // hold foreign keys to the original raw.sections rows. Never rewrite them.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    let existing = sqlx::query(
-        "SELECT id
-         FROM raw.pages
-         WHERE url = $1
-           AND CAST(snapshot_at AT TIME ZONE 'UTC' AS DATE) = CAST(now() AT TIME ZONE 'UTC' AS DATE)
-         ORDER BY id DESC
-         LIMIT 1",
+    let page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages
+         (url, domain, dtype, status_code, content_type, crawled_at, final_url, redirect_chain, robots_trace,
+          source_observation, title, meta_desc, canonical, word_count, content, raw_html, raw_html_bytes,
+          content_hash, processed)
+         VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, false)
+         RETURNING id",
     )
     .bind(source_url)
-    .fetch_optional(&mut *tx)
+    .bind(&domain)
+    .bind(dtype)
+    .bind(status_code as i16)
+    .bind(content_type)
+    .bind(final_url)
+    .bind(redirect_chain_json)
+    .bind(robots_trace_json)
+    .bind(source_observation_json)
+    .bind(&meta.title)
+    .bind(&meta.meta_desc)
+    .bind(&meta.canonical)
+    .bind(meta.word_count as i32)
+    .bind(Json(content.clone()))
+    .bind(raw_html)
+    .bind(raw_html.len() as i32)
+    .bind(&content_hash)
+    .fetch_one(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
-
-    let page_id = if let Some(row) = existing {
-        let page_id: i64 = row.get("id");
-        sqlx::query(
-            "UPDATE raw.pages
-             SET domain = $2,
-                 dtype = $3,
-                 status_code = $4,
-                 content_type = $5,
-                 crawled_at = now(),
-                 final_url = $6,
-                 redirect_chain = $7,
-                 robots_trace = $8,
-                 source_observation = $9,
-                 title = $10,
-                 meta_desc = $11,
-                 canonical = $12,
-                 word_count = $13,
-                 content = $14,
-                 raw_html = $15,
-                 raw_html_bytes = $16,
-                 content_hash = $17,
-                 processed = false
-             WHERE id = $1",
-        )
-        .bind(page_id)
-        .bind(&domain)
-        .bind(dtype)
-        .bind(status_code as i16)
-        .bind(content_type)
-        .bind(final_url)
-        .bind(redirect_chain_json.clone())
-        .bind(robots_trace_json.clone())
-        .bind(source_observation_json.clone())
-        .bind(&meta.title)
-        .bind(&meta.meta_desc)
-        .bind(&meta.canonical)
-        .bind(meta.word_count as i32)
-        .bind(Json(content.clone()))
-        .bind(raw_html)
-        .bind(raw_html.len() as i32)
-        .bind(&content_hash)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
-        page_id
-    } else {
-        let row = sqlx::query(
-            "INSERT INTO raw.pages
-             (url, domain, dtype, status_code, content_type, crawled_at, final_url, redirect_chain, robots_trace,
-              source_observation, title, meta_desc, canonical, word_count, content, raw_html, raw_html_bytes,
-              content_hash, processed)
-             VALUES ($1, $2, $3, $4, $5, now(), $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, false)
-             RETURNING id",
-        )
-        .bind(source_url)
-        .bind(&domain)
-        .bind(dtype)
-        .bind(status_code as i16)
-        .bind(content_type)
-        .bind(final_url)
-        .bind(redirect_chain_json.clone())
-        .bind(robots_trace_json.clone())
-        .bind(source_observation_json.clone())
-        .bind(&meta.title)
-        .bind(&meta.meta_desc)
-        .bind(&meta.canonical)
-        .bind(meta.word_count as i32)
-        .bind(Json(content.clone()))
-        .bind(raw_html)
-        .bind(raw_html.len() as i32)
-        .bind(&content_hash)
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
-        row.get("id")
-    };
-
-    sqlx::query("DELETE FROM raw.sections WHERE page_id = $1")
-        .bind(page_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(classify_sqlx)?;
 
     for section in &sections {
         sqlx::query(

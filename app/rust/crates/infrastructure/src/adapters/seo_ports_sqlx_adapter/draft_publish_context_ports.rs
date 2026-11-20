@@ -89,6 +89,13 @@ impl CmsReviewDecisionPort for SqlxSeoRuntimeRepository<'_> {
 
 #[async_trait]
 impl PublishArtifactRepository for SqlxSeoRuntimeRepository<'_> {
+    fn resolve_publish_materialize_input(
+        &self,
+        input: &PublishMaterializeInputPayload,
+    ) -> PublishMaterializeInputPayload {
+        sqlx_seo_cms_adapter::resolve_publish_materialize_input(input)
+    }
+
     async fn persist_publish_materialize_output(
         &self,
         input: &PublishMaterializeInputPayload,

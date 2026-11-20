@@ -21,10 +21,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     assert!(!source_servers.is_empty());
     let infra = InfraHarness::start().await.unwrap();
     let voyage_stub = stub_servers::spawn_voyage_contract_stub().await.unwrap();
-    let serp_stub = stub_servers::spawn_json_sequence_stub(
-        "/v3/serp/google/organic/live/advanced",
-        vec![serp_responses[0].1.clone()],
-    )
+    let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_responses[0].1.clone()])
     .await
     .unwrap();
     let truth_stub = stub_servers::spawn_json_sequence_stub(
@@ -33,16 +30,13 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     )
     .await
     .unwrap();
-    let editorial_stub = stub_servers::spawn_json_sequence_stub(
-        "/v1/chat/completions",
-        truth_certification_editorial_sequence(std::slice::from_ref(&fixture)),
-    )
+    let editorial_stub = stub_servers::spawn_editorial_fixture_stub(None)
     .await
     .unwrap();
     let mut worker_env = infra.runtime_env();
     worker_env.extend(truth_certification_env(
         &format!(
-            "{}/v3/serp/google/organic/live/advanced",
+            "{}/v3/serp/google/organic/task_post",
             serp_stub.base_url
         ),
         &format!("{}/v1/chat/completions", truth_stub.base_url),
@@ -101,6 +95,15 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     // Before editorial generation, prove that the same Temporal run waits
     // for every raw-section truth proposal in the same durable inbox.
     // An explicit empty candidate array is valid but cannot create verified truth.
+    // Drive the manual path with the same evidence-bearing proposals as the
+    // certified happy path, not a passport-only subset that can leave fee/time
+    // unresolved and correctly block the subsequent editorial phase.
+    let truth_fixture_candidates = fixture.model_stub_inputs.extraction_responses[0]
+        .get("candidates")
+        .and_then(serde_json::Value::as_array)
+        .expect("certified happy path provides direct source proposals")
+        .clone();
+    assert_eq!(truth_fixture_candidates.len(), 3);
     let truth_pool = infra.postgres.pool.clone();
     let truth_run = run_id.clone();
     let truth_temporal = infra.temporal.temporal_url.clone();
@@ -122,31 +125,24 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
                     job.payload["context_key"].as_str().unwrap().is_empty(),
                     false
                 );
-                // One real, byte-anchored source claim must pass the
-                // *canonical* validator, not just the JSON inbox parser.
+                // Re-anchor each certified proposal to this *actual* raw
+                // section. Missing source quotes cannot become candidates.
+                // The normal manual inbox and canonical validator still
+                // verify each byte span and all candidate fields.
                 let raw_text = job.payload["raw_text"].as_str().unwrap();
                 let section_id = job.payload["raw_section_id"].as_i64().unwrap();
-                let quote = "Passport is required for the visa application.";
-                let candidates = raw_text
-                    .find(quote)
-                    .map(|start| {
-                        vec![serde_json::json!({
-                            "role": "DOCUMENT_REQUIRED",
-                            "concept_canonical_key": "passport",
-                            "raw_mention": quote,
-                            "params": {"severity": "mandatory", "subtype": "passport"},
-                            "scope": {},
-                            "severity": "mandatory",
-                            "alternatives": [],
-                            "derivation_type": "direct",
-                            "confidence": 0.95,
-                            "evidence_section_id": section_id,
-                            "evidence_quote": quote,
-                            "span_start": start,
-                            "span_end": start + quote.len(),
-                        })]
+                let candidates = truth_fixture_candidates
+                    .iter()
+                    .filter_map(|fixture_candidate| {
+                        let quote = fixture_candidate.get("evidence_quote")?.as_str()?;
+                        let start = raw_text.find(quote)?;
+                        let mut candidate = fixture_candidate.clone();
+                        candidate["evidence_section_id"] = serde_json::json!(section_id);
+                        candidate["span_start"] = serde_json::json!(start);
+                        candidate["span_end"] = serde_json::json!(start + quote.len());
+                        Some(candidate)
                     })
-                    .unwrap_or_default();
+                    .collect::<Vec<_>>();
                 let submission: manual_llm_queue::ManualTruthSubmission =
                     serde_json::from_value(serde_json::json!({
                         "task_id": job.task_id,
@@ -165,7 +161,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         }
     });
     let first: ManualLlmJob<EditorialDraftGenerateInputPayload> =
-        timeout(Duration::from_secs(180), async {
+        match timeout(Duration::from_secs(180), async {
             loop {
                 if let Some(job) = manual_llm_queue::next_editorial(&infra.postgres.pool)
                     .await
@@ -177,7 +173,71 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             }
         })
         .await
-        .expect("canonical Temporal workflow did not enqueue a manual editorial job");
+        {
+            Ok(job) => job,
+            Err(_) => {
+                // Report the *actual* failure boundary rather than treating every
+                // missing editorial task as a slow LLM or raising the timeout.
+                let steps = certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                let verified_facts: Result<i64, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT count(*)::bigint FROM verified.rule_instances
+                     WHERE context_key = $1 AND status = 'verified'",
+                )
+                .bind(&input.context_key)
+                .fetch_one(&infra.postgres.pool)
+                .await;
+                let verified_vectors: Result<i64, sqlx::Error> = sqlx::query_scalar(
+                    "SELECT count(*)::bigint FROM kb.qdrant_points
+                     WHERE collection_name = 'verified_rules_4'",
+                )
+                .fetch_one(&infra.postgres.pool)
+                .await;
+                let jobs = sqlx::query(
+                    "SELECT operation, job_status, count(*)::bigint AS total
+                     FROM pipeline.manual_llm_jobs
+                     WHERE run_id = $1
+                     GROUP BY operation, job_status
+                     ORDER BY operation, job_status",
+                )
+                .bind(&run_id)
+                .fetch_all(&infra.postgres.pool)
+                .await
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| format!(
+                            "{}:{}:{}",
+                            row.get::<String, _>("operation"),
+                            row.get::<String, _>("job_status"),
+                            row.get::<i64, _>("total")
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                });
+                let run_status: Result<Option<String>, sqlx::Error> =
+                    sqlx::query_scalar("SELECT status FROM pipeline.execution_runs WHERE run_id = $1")
+                        .bind(Uuid::parse_str(&run_id).expect("registered run is a UUID"))
+                        .fetch_optional(&infra.postgres.pool)
+                        .await;
+                let terminal = timeout(
+                    Duration::from_secs(2),
+                    handle.get_result(WorkflowGetResultOptions::default()),
+                )
+                .await;
+                let temporal = match terminal {
+                    Ok(Ok(_)) => "completed_without_editorial".to_string(),
+                    Ok(Err(error)) => format!("failed: {error}"),
+                    Err(_) => "not_terminal".to_string(),
+                };
+                panic!(
+                    "canonical Temporal workflow did not enqueue a manual editorial job: \
+                     run_id={run_id}; execution_run={run_status:?}; \
+                     workflow={temporal}; truth_driver_finished={}; \
+                     verified_facts={verified_facts:?}; verified_vectors={verified_vectors:?}; \
+                     manual_jobs={jobs:?}; last_steps=\n{steps}",
+                    truth_driver.is_finished(),
+                );
+            }
+        };
     assert_eq!(first.payload.run_id, run_id);
     assert_eq!(first.operation, "editorial_draft");
     assert!(
@@ -232,26 +292,14 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             .as_ref()
             .and_then(|request| request.editorial_brief.as_ref())
             .expect("canonical workflow created editorial brief");
-        let role = brief
-            .section_templates
-            .iter()
-            .find(|section| section.required)
-            .expect("at least one required editorial section")
-            .section_role
-            .clone();
-        let supported_text = brief
-            .verified_support
-            .first()
-            .expect("manual editorial requires verified evidence")
-            .fragment_text
-            .clone();
-        let mut sections = serde_json::Map::new();
-        sections.insert(role, serde_json::json!(supported_text));
+        assert_eq!(job.payload.request.as_ref().unwrap().output_contract, "llm_draft_candidate@2");
+        let allowed = infrastructure::adapters::editorial_llm_adapter::editorial_allowed_support(brief);
+        let editorial = stub_servers::editorial_fixture_claims(&serde_json::to_value(allowed).unwrap()).unwrap();
         let response = serde_json::json!({
             "task_id": job.task_id,
             "schema_version": job.schema_version,
             "input_sha256": job.input_sha256,
-            "response": {"sections": sections}
+            "response": editorial
         });
         serde_json::from_value::<ManualLlmSubmission>(response).unwrap()
     };

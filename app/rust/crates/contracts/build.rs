@@ -3,6 +3,21 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = prost_build::Config::new();
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
+    config.field_attribute(
+        ".alegria.temporal.v1.SeoSiteBuildInputPayload.retained_source_run_id",
+        "#[serde(default, skip_serializing_if = \"String::is_empty\")]",
+    );
+
+    for field in [
+        ".alegria.temporal.v1.IaBuildInputPayload.verified_support",
+        ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.page_blueprints",
+        ".alegria.temporal.v1.GlobalSiteReconcileInputPayload.verified_support",
+    ] {
+        config.field_attribute(
+            field,
+            "#[serde(default, skip_serializing_if = \"Vec::is_empty\")]",
+        );
+    }
 
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let proto_dir = manifest_dir.join("../../../contracts/proto");

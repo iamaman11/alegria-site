@@ -12,7 +12,7 @@ import subprocess
 
 from deploy_seo_static_cloudflare import (
     CLOUD_CONFIG, EXPECTED_ACCOUNT, EXPECTED_ORIGIN, preflight,
-    prepare_public_assets, run_cf_deploy, validate_release,
+    prepare_public_assets, run_cf_deploy, validate_release, verify_with_retry,
 )
 
 
@@ -123,6 +123,39 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
             self.assertFalse((public / "alegria-static-manifest.json").exists())
             self.assertFalse((public / ".alegria_static_site").exists())
 
+    def test_nested_first_page_uploads_without_synthetic_homepage(self) -> None:
+        route = "/ru/visa/spain/"
+        page = self.release / "ru/visa/spain/index.html"
+        page.parent.mkdir(parents=True)
+        html = (self.release / "index.html").read_text(encoding="utf-8")
+        page.write_text(html.replace(f'{EXPECTED_ORIGIN}/"', f'{EXPECTED_ORIGIN}{route.rstrip("/")}"'), encoding="utf-8")
+        (self.release / "index.html").unlink()
+        sitemap = self.release / "sitemap.xml"
+        sitemap.write_text(sitemap.read_text(encoding="utf-8").replace(
+            f"<loc>{EXPECTED_ORIGIN}/</loc>", f"<loc>{EXPECTED_ORIGIN}{route.rstrip('/')}</loc>"
+        ), encoding="utf-8")
+        self.manifest["pages"][0]["canonical_url_path"] = route
+        self.persist_manifest()
+        preflight(validate_release(self.release, root=self.root, expected_origin=EXPECTED_ORIGIN))
+        with tempfile.TemporaryDirectory() as directory:
+            public = prepare_public_assets(self.release, Path(directory) / "public")
+            self.assertEqual(
+                {p.relative_to(public).as_posix() for p in public.rglob("*") if p.is_file()},
+                {"ru/visa/spain/index.html", "robots.txt", "sitemap.xml"},
+            )
+            self.assertEqual((public / "ru/visa/spain/index.html").read_bytes(), page.read_bytes())
+            self.assertFalse((public / "index.html").exists())
+
+    def test_unlisted_or_missing_public_asset_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            (self.release / "unlisted.html").write_text("not approved", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly match"):
+                prepare_public_assets(self.release, Path(directory) / "extra")
+            (self.release / "unlisted.html").unlink()
+            (self.release / "index.html").unlink()
+            with self.assertRaisesRegex(ValueError, "exactly match"):
+                prepare_public_assets(self.release, Path(directory) / "missing")
+
     def test_native_cf_build_prebuilt_deploy_only(self) -> None:
         commands = []
         with tempfile.TemporaryDirectory() as directory:
@@ -222,6 +255,22 @@ class CloudflareStaticDeploymentSmoke(unittest.TestCase):
                     self.assertFalse(run_cf_deploy(Path("/usr/bin/cf"), self.release))
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0][1], "build")
+
+    def test_readback_retries_without_upload(self) -> None:
+        report = {"published_page_count": 1}
+        with mock.patch("deploy_seo_static_cloudflare.verify", side_effect=[ValueError("not ready"), report]) as readback:
+            with mock.patch("deploy_seo_static_cloudflare.time.sleep") as sleep:
+                self.assertEqual(verify_with_retry(self.release), report)
+                self.assertEqual(readback.call_count, 2)
+                sleep.assert_called_once_with(1)
+
+    def test_readback_failure_is_bounded_and_not_accepted(self) -> None:
+        with mock.patch("deploy_seo_static_cloudflare.verify", side_effect=ValueError("mismatch")) as readback:
+            with mock.patch("deploy_seo_static_cloudflare.time.sleep") as sleep:
+                with self.assertRaisesRegex(ValueError, "mismatch"):
+                    verify_with_retry(self.release)
+                self.assertEqual(readback.call_count, 3)
+                self.assertEqual(sleep.call_count, 2)
 
     def test_failed_cf_build_never_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

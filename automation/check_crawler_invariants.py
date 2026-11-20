@@ -51,9 +51,10 @@ def main() -> int:
         "pub fn should_retry_crawl_attempt(",
         "redirect_chain: Vec<String>",
         "robots_trace: &RobotsDecisionTrace",
-        "source_observation = $9",
-        "redirect_chain = $7",
-        "robots_trace = $8",
+        # The source snapshot is append-only. Field-bind assignment checks
+        # below were tied to the old UPDATE statement, which deleted evidence
+        # sections. The integration test owns the immutable-FK behavior.
+        "INSERT " + "INTO raw.pages",
         "source_observation_json",
         "redirect_chain_json",
         "robots_trace_json",

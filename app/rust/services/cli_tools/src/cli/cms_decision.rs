@@ -1,6 +1,8 @@
 async fn cms_review_decision(
     database_url: Option<String>,
+    temporal_url: Option<&str>,
     page_node_key: &str,
+    revision_id: Option<&str>,
     actor_role: &str,
     decision: &str,
     reason: &str,
@@ -9,7 +11,7 @@ async fn cms_review_decision(
     let pool = connect_pg(&database_url).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
     let workflow = TemporalSeoWorkflowControlAdapter::new(
-        default_temporal_url(),
+        temporal_url.map(str::to_string).unwrap_or_else(default_temporal_url),
         format!("alegria-cli-tools@{}", std::process::id()),
         default_temporal_namespace(),
     );
@@ -18,6 +20,7 @@ async fn cms_review_decision(
         &workflow,
         &ApplyHumanReviewDecisionInput {
             page_node_key: page_node_key.to_string(),
+            revision_id: revision_id.map(str::to_string),
             actor_role: actor_role.to_string(),
             decision: decision.to_string(),
             reason: reason.to_string(),

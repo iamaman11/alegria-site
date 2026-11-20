@@ -29,6 +29,33 @@ pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
     let mut blockers = Vec::new();
     let mut seen_roles = BTreeSet::new();
 
+    // Non-empty refs are not evidence: require the same source-backed
+    // identity in both the supported claim ledger and traceability manifest.
+    let ledger_refs = draft
+        .claim_ledger
+        .iter()
+        .filter(|claim| {
+            claim.validation_verdict == "supported"
+                && matches!(
+                    claim.traceability_label.as_str(),
+                    "verified_fact" | "verified_summary"
+                )
+        })
+        .flat_map(|claim| claim.support_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let trace_refs = draft
+        .traceability_entries
+        .iter()
+        .filter(|entry| {
+            entry.validation_verdict == "supported"
+                && matches!(
+                    entry.traceability_label.as_str(),
+                    "verified_fact" | "verified_summary"
+                )
+        })
+        .flat_map(|entry| entry.support_refs.iter().cloned())
+        .collect::<BTreeSet<_>>();
+
     for block in &draft.content_blocks {
         if !seen_roles.insert(block.section_role.clone()) {
             blockers.push(blocker(
@@ -49,10 +76,30 @@ pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
                 "Populate every required content block before publish gate.",
             ));
         }
-        if factual_role(&block.section_role) && block.required && block.support_refs.is_empty() {
+        if factual_role(&block.section_role) && block.required {
+            if block.support_refs.is_empty() {
+                blockers.push(blocker(
+                    "unsupported_factual_content_block",
+                    "Attach verified support refs to every required factual content block.",
+                ));
+            } else if block.support_refs.iter().any(|support_ref| {
+                support_ref.trim().is_empty()
+                    || !ledger_refs.contains(support_ref)
+                    || !trace_refs.contains(support_ref)
+            }) {
+                blockers.push(blocker(
+                    "unmatched_factual_support_ref",
+                    "Resolve every factual block reference against supported claims and traceability.",
+                ));
+            }
+        }
+        if block
+            .markdown
+            .contains("Verified source-backed structured content")
+        {
             blockers.push(blocker(
-                "unsupported_factual_content_block",
-                "Attach verified support refs to every required factual content block.",
+                "placeholder_factual_content",
+                "Replace placeholder prose with actual verified evidence before publishing.",
             ));
         }
     }
@@ -91,6 +138,7 @@ pub fn execute(
         draft: input.draft.clone(),
         supported_fragments: Vec::new(),
         required_links: input.required_links.clone(),
+        verified_support: Vec::new(),
     });
     let mut blocking_reasons = blockers
         .iter()
@@ -154,12 +202,91 @@ mod tests {
             }),
             supported_fragments: Vec::new(),
             required_links: Vec::new(),
+            verified_support: Vec::new(),
         };
 
         let blockers = validate(&input);
         assert!(blockers
             .iter()
             .any(|blocker| blocker.reason_code == "content_block_type_mismatch"));
+    }
+
+    #[test]
+    fn rejects_support_refs_not_present_in_supported_manifest() {
+        use contracts::generated::alegria::temporal::v1::{
+            ClaimLedgerEntry, SeoTraceabilityEntryState,
+        };
+
+        let input = DraftQaInputPayload {
+            draft: Some(DraftState {
+                content_blocks: vec![block("overview", "prose", true)],
+                claim_ledger: vec![ClaimLedgerEntry {
+                    support_refs: vec!["rule:2".to_string()],
+                    validation_verdict: "supported".to_string(),
+                    traceability_label: "verified_fact".to_string(),
+                    ..ClaimLedgerEntry::default()
+                }],
+                traceability_entries: vec![SeoTraceabilityEntryState {
+                    support_refs: vec!["rule:2".to_string()],
+                    validation_verdict: "supported".to_string(),
+                    traceability_label: "verified_fact".to_string(),
+                    ..SeoTraceabilityEntryState::default()
+                }],
+                ..DraftState::default()
+            }),
+            ..DraftQaInputPayload::default()
+        };
+        let blockers = validate(&input);
+        assert!(blockers
+            .iter()
+            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
+    }
+
+    #[test]
+    fn accepts_exact_manifest_binding_without_unmatched_ref() {
+        use contracts::generated::alegria::temporal::v1::{
+            ClaimLedgerEntry, SeoTraceabilityEntryState,
+        };
+
+        let input = DraftQaInputPayload {
+            draft: Some(DraftState {
+                content_blocks: vec![block("overview", "prose", true)],
+                claim_ledger: vec![ClaimLedgerEntry {
+                    support_refs: vec!["rule:1".to_string()],
+                    validation_verdict: "supported".to_string(),
+                    traceability_label: "verified_fact".to_string(),
+                    ..ClaimLedgerEntry::default()
+                }],
+                traceability_entries: vec![SeoTraceabilityEntryState {
+                    support_refs: vec!["rule:1".to_string()],
+                    validation_verdict: "supported".to_string(),
+                    traceability_label: "verified_fact".to_string(),
+                    ..SeoTraceabilityEntryState::default()
+                }],
+                ..DraftState::default()
+            }),
+            ..DraftQaInputPayload::default()
+        };
+        let blockers = validate(&input);
+        assert!(!blockers
+            .iter()
+            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
+    }
+
+    #[test]
+    fn rejects_placeholder_even_with_a_support_ref() {
+        let mut placeholder = block("overview", "prose", true);
+        placeholder.markdown = "Verified source-backed structured content".to_string();
+        let input = DraftQaInputPayload {
+            draft: Some(DraftState {
+                content_blocks: vec![placeholder],
+                ..DraftState::default()
+            }),
+            ..DraftQaInputPayload::default()
+        };
+        assert!(validate(&input)
+            .iter()
+            .any(|b| b.reason_code == "placeholder_factual_content"));
     }
 
     #[test]
@@ -175,6 +302,7 @@ mod tests {
             }),
             supported_fragments: Vec::new(),
             required_links: Vec::new(),
+            verified_support: Vec::new(),
         };
 
         let blockers = validate(&input);

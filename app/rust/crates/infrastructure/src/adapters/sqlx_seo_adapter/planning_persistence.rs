@@ -274,10 +274,14 @@ pub async fn persist_serp_normalize_output(
             .map_err(classify_sqlx)?;
         }
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "serp_pattern",
             &pattern.serp_pattern_key,
             &pattern.scope_signature,
+            &format!(
+                "{}|{}|{}|{}",
+                pattern.query, pattern.pattern_type, pattern.dominant_intent, pattern.status
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -309,7 +313,7 @@ pub async fn persist_opportunity_build_output(
     pool: &PgPool,
     input: &OpportunityBuildInputPayload,
     output: &OpportunityBuildOutputPayload,
-) -> Result<(), DomainError> {
+) -> Result<OpportunityBuildOutputPayload, DomainError> {
     let fallback_scope_signature = input
         .scope
         .as_ref()
@@ -317,8 +321,47 @@ pub async fn persist_opportunity_build_output(
         .unwrap_or("default");
     let scope = scope_fields(input.scope.as_ref(), fallback_scope_signature);
 
+    // Technical SERP family keys can change between retained-corpus passes.
+    // The existing natural-key owner must survive: page nodes and graph edges
+    // may already reference it. Resolve before persisting *and* before handing
+    // the output to downstream IA, rather than weakening the UNIQUE constraint.
+    let mut canonical = output.clone();
+    for cluster in &mut canonical.keyword_clusters {
+        non_empty(&cluster.cluster_key, "cluster_key")?;
+        non_empty(&cluster.seed_keyword, "seed_keyword")?;
+        let existing: Vec<String> = sqlx::query_scalar(
+            r#"
+            SELECT cluster_key FROM site.keyword_clusters
+            WHERE market = $1 AND locale = $2
+              AND country_code IS NOT DISTINCT FROM $3
+              AND visa_type IS NOT DISTINCT FROM $4
+              AND applicant_profile IS NOT DISTINCT FROM $5
+              AND seed_keyword = $6 AND cluster_version = $7
+            ORDER BY cluster_key LIMIT 2
+            "#,
+        )
+        .bind(&scope.market)
+        .bind(&scope.locale)
+        .bind(&scope.country_code)
+        .bind(&scope.visa_type)
+        .bind(&scope.applicant_profile)
+        .bind(&cluster.seed_keyword)
+        .bind(cluster.cluster_version as i32)
+        .fetch_all(pool)
+        .await
+        .map_err(classify_sqlx)?;
+        if existing.len() > 1 {
+            return Err(contract_violation(
+                "ambiguous existing keyword natural owner; refuse to reassign references",
+            ));
+        }
+        if let Some(owner_key) = existing.first() {
+            cluster.cluster_key = owner_key.clone();
+        }
+    }
+
     let mut projection_events = Vec::new();
-    for cluster in &output.keyword_clusters {
+    for cluster in &canonical.keyword_clusters {
         non_empty(&cluster.cluster_key, "cluster_key")?;
         non_empty(&cluster.seed_keyword, "seed_keyword")?;
         let cluster_scope = if cluster.scope_signature.trim().is_empty() {
@@ -371,10 +414,17 @@ pub async fn persist_opportunity_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "keyword_cluster",
             &cluster.cluster_key,
             cluster_scope,
+            &format!(
+                "{}|{}|{}|{}",
+                cluster.seed_keyword,
+                cluster.dominant_intent,
+                cluster.status,
+                cluster.cluster_version
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -437,28 +487,39 @@ pub async fn persist_opportunity_build_output(
     }
 
     for gap in &output.content_gaps {
+        use primitives::seo::ContentGapDetector;
         non_empty(&gap.content_gap_key, "content_gap_key")?;
-        sqlx::query(
+        non_empty(&gap.scope_signature, "gap scope_signature")?;
+        non_empty(&gap.missing_topic, "gap missing_topic")?;
+        let detector = ContentGapDetector::from_reason(&gap.reason_code)
+            .ok_or_else(|| contract_violation("unknown content gap detector"))?;
+        if !detector.valid_owner(&gap.page_node_key) {
+            return Err(contract_violation("content gap detector has invalid owner"));
+        }
+        // The natural identity is the authority, including NULL page ownership.
+        // A migrated legacy record retains its original projection identity.
+        let canonical_key = detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic);
+        let persisted_key: String = sqlx::query_scalar(
             r#"
             INSERT INTO site.content_gaps
                 (content_gap_key, scope_signature, page_node_key, missing_topic,
                  severity, detector_version, status, reason_payload, reason_version)
-            VALUES ($1, $2, $3, $4, $5, 'seo_content_gap@1', $6, $7, 'graph_planning@1')
-            ON CONFLICT (content_gap_key) DO UPDATE
-            SET page_node_key = EXCLUDED.page_node_key,
-                missing_topic = EXCLUDED.missing_topic,
-                severity      = EXCLUDED.severity,
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'graph_planning@1')
+            ON CONFLICT (scope_signature, page_node_key, missing_topic, detector_version) DO UPDATE
+            SET severity      = EXCLUDED.severity,
                 reason_payload = EXCLUDED.reason_payload,
                 reason_version = EXCLUDED.reason_version,
                 status        = EXCLUDED.status,
                 updated_at    = now()
+            RETURNING content_gap_key
             "#,
         )
-        .bind(&gap.content_gap_key)
+        .bind(&canonical_key)
         .bind(&gap.scope_signature)
         .bind(blank_as_none(&gap.page_node_key))
         .bind(&gap.missing_topic)
         .bind(&gap.severity)
+        .bind(detector.version())
         .bind(&gap.status)
         .bind(Json(graph_reason_payload(
             &gap.reason_code,
@@ -467,20 +528,21 @@ pub async fn persist_opportunity_build_output(
             &gap.support_refs,
             gap.graph_confidence,
         )))
-        .execute(pool)
+        .fetch_one(pool)
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "content_gap",
-            &gap.content_gap_key,
+            &persisted_key,
             &gap.scope_signature,
+            &format!("{}|{}|{}", gap.missing_topic, gap.severity, gap.status),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
             "seo_content_gaps",
             "content_gap",
-            &gap.content_gap_key,
+            &persisted_key,
             &gap.scope_signature,
             &format!("{} {} {}", gap.missing_topic, gap.severity, gap.status),
             HashMap::from([
@@ -492,7 +554,7 @@ pub async fn persist_opportunity_build_output(
     }
 
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
-    Ok(())
+    Ok(canonical)
 }
 
 pub async fn persist_ia_build_output(
@@ -535,10 +597,18 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "page_blueprint",
             &blueprint.blueprint_key,
             "",
+            &format!(
+                "{}|{}|{}|{}|{:?}",
+                blueprint.page_type_key,
+                blueprint.dominant_intent,
+                blueprint.scope_class,
+                blueprint.title_pattern,
+                blueprint.required_sections
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -565,6 +635,17 @@ pub async fn persist_ia_build_output(
         ));
     }
 
+    // Published URLs are durable public identities; a new plan must not rename
+    // a committed CMS page. Publication itself owns its revision and status.
+    for page in &output.page_nodes {
+        let published_path: Option<String> = sqlx::query_scalar(
+            "SELECT canonical_url_path FROM site.cms_pages WHERE page_node_key=$1 AND published_at IS NOT NULL",
+        )
+        .bind(&page.page_node_key).fetch_optional(pool).await.map_err(classify_sqlx)?;
+        if published_path.as_ref().is_some_and(|path| path != &page.canonical_url_path) {
+            return Err(validation_failure("IA cannot rename a committed public page"));
+        }
+    }
     for page in &output.page_nodes {
         non_empty(&page.page_node_key, "page_node_key")?;
         sqlx::query(
@@ -734,10 +815,19 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "page_node",
             &page.page_node_key,
             &page.scope_signature,
+            &format!(
+                "{}|{}|{}|{}|{}|{}",
+                page.canonical_url_path,
+                page.page_type_key,
+                page.dominant_intent,
+                page.lifecycle_state,
+                page.keyword_cluster_key,
+                page.blueprint_key
+            ),
         ));
         projection_events.push(seo_qdrant_projection_event(
             &input.run_id,
@@ -795,14 +885,57 @@ pub async fn persist_ia_build_output(
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "cannibalization_conflict",
             &conflict.conflict_key,
             &conflict.scope_signature,
+            &format!(
+                "{}|{}|{}",
+                conflict.conflict_reason, conflict.severity, conflict.status
+            ),
         ));
     }
 
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    Ok(())
+}
+
+/// Retire only invalid, unpublished legacy plans within the reconciled scope.
+/// Keep their identity for diagnosis; never delete pages, evidence or CMS revisions.
+pub async fn retire_opaque_unpublished_plans(
+    pool: &PgPool, run_id: &str, scope: &str, current_keys: &[String],
+) -> Result<(), DomainError> {
+    if scope.trim().is_empty() || current_keys.is_empty() {
+        return Ok(());
+    }
+    let rows = sqlx::query(
+        "SELECT page_node_key, canonical_slug, canonical_url_path FROM site.page_nodes p
+         WHERE scope_signature=$1 AND NOT(page_node_key=ANY($2))
+           AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
+           AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
+    ).bind(scope).bind(current_keys).fetch_all(pool).await.map_err(classify_sqlx)?;
+    let mut events = Vec::new();
+    for row in rows {
+        let key: String = row.get("page_node_key");
+        let slug: String = row.get("canonical_slug");
+        let path: String = row.get("canonical_url_path");
+        if !runtime_models::seo_blocks::is_opaque_topic_identifier(&slug)
+            && !path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier) {
+            continue;
+        }
+        let result = sqlx::query(
+            "UPDATE site.page_nodes p SET lifecycle_state='deprecated', updated_at=now()
+             WHERE page_node_key=$1 AND scope_signature=$2
+               AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
+               AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
+        ).bind(&key).bind(scope).execute(pool).await.map_err(classify_sqlx)?;
+        if result.rows_affected() != 0 {
+            events.push(seo_graph_projection_event_with_revision(
+                "page_node", &key, scope, "deprecated:opaque_legacy_plan",
+            ));
+        }
+    }
+    emit_projection_events_for_run(pool, run_id, events).await?;
     Ok(())
 }
 
@@ -877,10 +1010,20 @@ pub async fn persist_link_recommend_output(
             .map_err(classify_sqlx)?;
         }
 
-        projection_events.push(seo_graph_projection_event(
+        projection_events.push(seo_graph_projection_event_with_revision(
             "link_recommendation",
             &link.link_recommendation_key,
             &link.scope_signature,
+            &format!(
+                "{}|{}|{}|{}|{}|{}|{}",
+                link.source_page_key,
+                link.target_page_key,
+                link.link_role,
+                link.anchor_strategy,
+                link.required_flag,
+                link.score,
+                link.status
+            ),
         ));
     }
     emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;

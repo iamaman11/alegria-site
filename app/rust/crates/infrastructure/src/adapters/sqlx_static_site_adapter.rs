@@ -66,7 +66,7 @@ async fn load_snapshot_links(
     }
     let link_rows = sqlx::query(
         r#"
-        SELECT
+        SELECT DISTINCT ON (l.source_page_key, l.target_page_key)
             l.source_page_key,
             l.target_page_key,
             l.link_role,
@@ -74,8 +74,9 @@ async fn load_snapshot_links(
         FROM site.link_recommendations l
         WHERE l.source_page_key = ANY($1)
           AND l.target_page_key = ANY($1)
+          AND l.source_page_key <> l.target_page_key
           AND l.status IN ('candidate', 'accepted', 'applied')
-        ORDER BY l.required_flag DESC, l.score DESC, l.target_page_key
+        ORDER BY l.source_page_key, l.target_page_key, l.required_flag DESC, l.score DESC, l.link_recommendation_key
         "#,
     )
     .bind(page_keys)

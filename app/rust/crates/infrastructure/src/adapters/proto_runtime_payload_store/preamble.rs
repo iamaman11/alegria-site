@@ -98,6 +98,23 @@ pub(crate) fn infra_unavailable(message: impl Into<String>) -> DomainError {
 pub(crate) fn classify_sqlx(err: sqlx::Error) -> DomainError {
     match err {
         sqlx::Error::RowNotFound => validation_failure("expected row was not found"),
+        sqlx::Error::Database(db) => {
+            let code = db.code().map(|code| code.into_owned()).unwrap_or_default();
+            let message = format!(
+                "PostgreSQL SQLSTATE={code} constraint={}: {}",
+                db.constraint().unwrap_or("-"),
+                db.message()
+            );
+            match code.as_str() {
+                "23505" | "23P01" => DomainError::ConflictViolation { message },
+                "23503" => DomainError::ForeignKeyViolation { message },
+                "23502" | "23514" | "22001" | "22P02" => {
+                    DomainError::ValidationFailure { message }
+                }
+                _ if code.starts_with("42") => DomainError::ContractViolation { message },
+                _ => infra_unavailable(message),
+            }
+        }
         other => infra_unavailable(other.to_string()),
     }
 }

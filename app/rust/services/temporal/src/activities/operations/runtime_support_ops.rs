@@ -266,9 +266,7 @@ fn optional_projection_valid_empty(
     let completed = |step: &str| completed_steps.iter().any(|name| name == step);
     match name {
         "content_gap" => completed("opportunity_build") && completed("global_site_reconcile"),
-        "link_recommendation" => {
-            completed("link_recommend") && completed("global_site_reconcile")
-        }
+        "link_recommendation" => completed("link_recommend") && completed("global_site_reconcile"),
         _ => false,
     }
 }
@@ -322,13 +320,70 @@ pub(crate) async fn seo_preflight_impl(
     let collection_statuses =
         sqlx_seo_adapter::read_qdrant_collection_statuses(&acts.pool, &required_collections)
             .await?;
+    // The two raw collections store immutable section embeddings. Their age
+    // is not a freshness signal. A retained run reuses the original outbox
+    // receipts; certify its exact acquired sections in the live provider.
+    let raw_chunk_readback = if input.require_materialized_projections {
+        let expected =
+            sqlx_seo_adapter::read_run_raw_chunk_points(&acts.pool, &input.raw_page_ids).await?;
+        let mut verified = std::collections::BTreeMap::<String, bool>::new();
+        for collection in ["raw_chunks_4", "raw_chunks_ctx"] {
+            let points = expected
+                .iter()
+                .filter(|point| point.collection_name == collection)
+                .map(|point| qdrant_client_adapter::RawChunkReadbackPoint {
+                    point_id: point.point_id.clone(),
+                    section_id: point.section_id.clone(),
+                    content_hash: point.content_hash.clone(),
+                })
+                .collect::<Vec<_>>();
+            let fresh = match qdrant_client_adapter::verify_raw_chunk_readback(collection, &points)
+                .await
+            {
+                Ok(fresh) => fresh,
+                Err(error) => {
+                    tracing::warn!(collection, error = %error, "raw Qdrant evidence readback failed");
+                    false
+                }
+            };
+            verified.insert(collection.to_owned(), fresh);
+        }
+        let verified_points = sqlx_seo_adapter::read_run_verified_rule_points(
+            &acts.pool,
+            &input.run_id,
+            &input.context_key,
+        )
+        .await?;
+        let expected = verified_points
+            .iter()
+            .map(|point| qdrant_client_adapter::VerifiedRuleReadbackPoint {
+                point_id: point.point_id.clone(),
+                rule_instance_id: point.rule_instance_id.clone(),
+                context_key: point.context_key.clone(),
+                concept_key: point.concept_key.clone(),
+                source_key: point.source_key.clone(),
+            })
+            .collect::<Vec<_>>();
+        let fresh = match qdrant_client_adapter::verify_verified_rule_readback(&expected).await {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                tracing::warn!(error = %error, "verified fact Qdrant readback failed");
+                false
+            }
+        };
+        verified.insert("verified_rules_4".to_string(), fresh);
+        verified
+    } else {
+        std::collections::BTreeMap::new()
+    };
     let required_collection_statuses = collection_statuses
         .into_iter()
         .map(|status| {
             // Scope-dependent SEO collections are certified by the Qdrant
             // provider, NOT by the global kb.qdrant_points SQL ledger.
             let current_run_count = scoped_point_counts.get(&status.collection_name).copied();
-            let point_count = effective_collection_point_count(status.point_count, current_run_count);
+            let point_count =
+                effective_collection_point_count(status.point_count, current_run_count);
             let current_run_verified = current_run_count.is_some();
             // Empty collection != missing collection. This narrow exception
             // requires a real provider readback and a completed run producer;
@@ -342,7 +397,9 @@ pub(crate) async fn seo_preflight_impl(
                 && optional_retrieval_valid_empty(&status.collection_name, &completed_producers);
             SeoPreflightCollectionStatus {
                 exists: point_count > 0 || valid_empty,
-                fresh: if valid_empty {
+                fresh: if let Some(raw_verified) = raw_chunk_readback.get(&status.collection_name) {
+                    *raw_verified
+                } else if valid_empty {
                     true
                 } else if current_run_verified {
                     // These points carry this run's identity in Qdrant.
@@ -390,6 +447,16 @@ pub(crate) async fn seo_preflight_impl(
     } else {
         Default::default()
     };
+    let run_graph_source_synced = if input.require_materialized_projections {
+        sqlx_seo_adapter::read_run_graph_source_synced(
+            &acts.pool,
+            &input.run_id,
+            &scope.scope_signature,
+        )
+        .await?
+    } else {
+        false
+    };
     let graph_projection_statuses = sqlx_seo_adapter::read_graph_projection_statuses_for_scope(
         &acts.pool,
         &required_graph_projection_names,
@@ -425,11 +492,15 @@ pub(crate) async fn seo_preflight_impl(
                 projection_name: status.artifact_name,
                 materialization_outcome: materialization_outcome.to_string(),
                 exists: source_count > 0 && actual_count > 0,
-                fresh: valid_empty
-                    || status
-                        .lag_seconds
-                        .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
-                        .unwrap_or(false),
+                fresh: if input.require_materialized_projections {
+                    valid_empty || (complete && run_graph_source_synced)
+                } else {
+                    valid_empty
+                        || status
+                            .lag_seconds
+                            .map(|lag| lag * 1000 <= input.projection_max_lag_ms.max(0))
+                            .unwrap_or(false)
+                },
                 projection_complete: valid_empty || complete,
                 point_count: actual_count,
                 last_materialized_at: status.last_materialized_at,
@@ -441,17 +512,13 @@ pub(crate) async fn seo_preflight_impl(
     // A page brief is produced by draft_assemble, *after* IA planning.
     // Do not demand it at the post-planning gate; require it at the
     // per-page post-draft gate before editorial/publish.
-    let applicable_graph_projections = required_graph_projection_statuses
-        .iter()
-        .filter(|status| {
-            graph_projection_due_at_gate(&status.projection_name, input.require_page_brief_projection)
-        });
-    let graph_projection_contract_ready = applicable_graph_projections
-        .clone()
-        .all(|status| {
-            status.projection_complete
-                && (status.exists || status.materialization_outcome == "valid_empty")
-        });
+    let applicable_graph_projections = required_graph_projection_statuses.iter().filter(|status| {
+        graph_projection_due_at_gate(&status.projection_name, input.require_page_brief_projection)
+    });
+    let graph_projection_contract_ready = applicable_graph_projections.clone().all(|status| {
+        status.projection_complete
+            && (status.exists || status.materialization_outcome == "valid_empty")
+    });
 
     let projection_statuses = sqlx_seo_adapter::read_projection_sync_status(&acts.pool).await?;
     let projection_blocked = projection_statuses.iter().any(|status| {
@@ -493,9 +560,18 @@ pub(crate) async fn seo_preflight_impl(
 
     if input.enforce_required_contract {
         let missing = missing_required_contract_flags(&[
-            ("RETRIEVAL_CAPABILITY_REQUIRED", retrieval_capability_required),
-            ("CANONICAL_VECTOR_RETRIEVAL_REQUIRED", canonical_vector_retrieval_required),
-            ("CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED", contextual_raw_chunk_retrieval_required),
+            (
+                "RETRIEVAL_CAPABILITY_REQUIRED",
+                retrieval_capability_required,
+            ),
+            (
+                "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
+                canonical_vector_retrieval_required,
+            ),
+            (
+                "CONTEXTUAL_RAW_CHUNK_RETRIEVAL_REQUIRED",
+                contextual_raw_chunk_retrieval_required,
+            ),
             ("VOYAGE_RERANK_REQUIRED", voyage_rerank_required),
             ("GRAPH_CAPABILITY_REQUIRED", graph_capability_required),
             ("NEO4J_SYNC_REQUIRED", neo4j_sync_required),
@@ -740,15 +816,30 @@ mod canonical_production_contract_tests {
             "link_recommend".to_string(),
             "global_site_reconcile".to_string(),
         ];
-        assert!(optional_projection_valid_empty("content_gap", 0, 0, &completed));
+        assert!(optional_projection_valid_empty(
+            "content_gap",
+            0,
+            0,
+            &completed
+        ));
         assert!(optional_projection_valid_empty(
             "link_recommendation",
             0,
             0,
             &completed
         ));
-        assert!(!optional_projection_valid_empty("page_node", 0, 0, &completed));
-        assert!(!optional_projection_valid_empty("content_gap", 1, 0, &completed));
+        assert!(!optional_projection_valid_empty(
+            "page_node",
+            0,
+            0,
+            &completed
+        ));
+        assert!(!optional_projection_valid_empty(
+            "content_gap",
+            1,
+            0,
+            &completed
+        ));
         assert!(!optional_projection_valid_empty(
             "content_gap",
             0,

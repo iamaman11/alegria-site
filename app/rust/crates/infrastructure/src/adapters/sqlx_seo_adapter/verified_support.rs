@@ -1,67 +1,28 @@
-fn json_text<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
-    value.get(key).and_then(serde_json::Value::as_str)
+// The verified source quotation is the only factual prose that can be
+// published without a separate semantic editorial validation. Do not
+// manufacture amounts, currencies or durations from optional params.
+fn verified_support_fragment(evidence_quote: &str) -> String {
+    evidence_quote.trim().to_string()
 }
 
-fn verified_support_fragment(
-    role_type: &str,
-    concept_label: &str,
-    params: &serde_json::Value,
-) -> String {
-    match role_type {
-        "document_required" | "must_provide" | "form_required" => {
-            let mut fragment = format!("Required document: {concept_label}.");
-            if json_text(params, "subtype").is_some_and(|v| !v.trim().is_empty()) {
-                fragment = format!(
-                    "Required document: {concept_label} ({}) .",
-                    json_text(params, "subtype").unwrap_or_default()
-                );
-            }
-            fragment.replace(" )", ")")
-        }
-        "fee_item" | "must_pay" => {
-            let amount = params
-                .get("amount")
-                .and_then(serde_json::Value::as_f64)
-                .unwrap_or(0.0);
-            let currency = json_text(params, "currency").unwrap_or("EUR");
-            if amount > 0.0 {
-                format!("Fee item: {amount:.2} {currency} for {concept_label}.")
-            } else {
-                format!("Fee item: {concept_label}.")
-            }
-        }
-        "timeline_item" | "timeline" => {
-            let days = params
-                .get("days")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or_default();
-            if days > 0 {
-                format!("Processing timeline: {concept_label} takes {days} days.")
-            } else {
-                format!("Processing timeline: {concept_label}.")
-            }
-        }
-        "where_to_apply" => {
-            let channel = json_text(params, "channel").unwrap_or("official route");
-            let location = json_text(params, "location_key").unwrap_or(concept_label);
-            format!("Where to apply: {location} via {channel}.")
-        }
-        "appointment_rule" => format!("Appointment rule: {concept_label}."),
-        "eligibility_rule" | "must_satisfy" => format!("Eligibility rule: {concept_label}."),
-        "step" => {
-            let idx = params
-                .get("step_index")
-                .and_then(serde_json::Value::as_i64)
-                .unwrap_or_default();
-            if idx > 0 {
-                format!("Application step {idx}: {concept_label}.")
-            } else {
-                format!("Application step: {concept_label}.")
-            }
-        }
-        "allows" => format!("Allowed condition: {concept_label}."),
-        "forbids" => format!("Forbidden condition: {concept_label}."),
-        _ => format!("Verified rule: {concept_label}."),
+#[cfg(test)]
+mod verified_fragment_tests {
+    use super::verified_support_fragment;
+
+    #[test]
+    fn preserves_source_quote_without_inferred_fee_or_timing_values() {
+        let quote = "The processing period depends on the responsible authority.";
+        assert_eq!(verified_support_fragment(quote), quote);
+        assert!(!verified_support_fragment(quote).contains("days"));
+    }
+
+    #[test]
+    fn does_not_add_currency_or_document_requirements() {
+        let quote = "An additional service charge may apply.";
+        let fragment = verified_support_fragment(quote);
+        assert_eq!(fragment, quote);
+        assert!(!fragment.contains("EUR"));
+        assert!(!fragment.contains("Required document"));
     }
 }
 
@@ -78,11 +39,13 @@ async fn resolve_verified_fact_support(
             r.concept_key,
             r.role_type,
             r.params,
+            r.evidence_quote,
             r.effective_from::text AS effective_from,
             r.effective_to::text AS effective_to,
             COALESCE(r.freshness_class, 'unknown') AS freshness_class,
             COALESCE(c.label_ru, c.concept_key, r.concept_key) AS concept_label,
             COALESCE(s.source_label, '') AS source_label,
+            COALESCE(NULLIF(evidence_page.final_url, ''), evidence_page.url) AS source_url,
             COALESCE(s.source_type, 'editorial') AS source_type,
             COALESCE(s.trust_level, 3) AS trust_level,
             EXISTS (
@@ -160,6 +123,8 @@ async fn resolve_verified_fact_support(
         FROM verified.rule_instances r
         LEFT JOIN kb.concepts c ON c.concept_key = r.concept_key
         LEFT JOIN kb.sources s ON s.source_key = r.source_key
+        JOIN raw.sections evidence_section ON evidence_section.id = r.evidence_section_id
+        JOIN raw.pages evidence_page ON evidence_page.id = evidence_section.page_id
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND COALESCE(r.publish_admissibility, 'not_admissible') = 'admissible'
@@ -236,10 +201,7 @@ async fn resolve_verified_fact_support(
         let params: Json<serde_json::Value> = row.get("params");
         let role_type: String = row.get("role_type");
         let concept_key: String = row.get("concept_key");
-        semantic_key_by_id.insert(
-            rule_instance_id.clone(),
-            (role_type.clone(), concept_key),
-        );
+        semantic_key_by_id.insert(rule_instance_id.clone(), (role_type.clone(), concept_key));
         let concept_label: String = row.get("concept_label");
         let source_type: String = row.get("source_type");
         let trust_level: i32 = row.get("trust_level");
@@ -255,10 +217,11 @@ async fn resolve_verified_fact_support(
             .unwrap_or_default();
         let freshness_class: String = row.get("freshness_class");
         let support = SeoVerifiedFactSupportState {
-            fragment_text: verified_support_fragment(&role_type, &concept_label, &params.0),
+            fragment_text: verified_support_fragment(&row.get::<String, _>("evidence_quote")),
             support_ref: rule_instance_id.clone(),
             role_type,
             source_label: row.get("source_label"),
+            source_url: row.get("source_url"),
             source_tier: source_tier.to_string(),
             freshness_class,
             observed_at: row
@@ -282,10 +245,7 @@ async fn resolve_verified_fact_support(
             support,
         ));
     }
-    let mut resolution = applicability::resolve_support_candidates(
-        applicant_profile,
-        candidates,
-    );
+    let mut resolution = applicability::resolve_support_candidates(applicant_profile, candidates);
     // The public page has one value per semantic rule. A global and a
     // profile-scoped rule for the same concept cannot both be silently
     // presented as independent universal facts.
@@ -304,13 +264,17 @@ async fn resolve_verified_fact_support(
         .flat_map(|(_, ids)| ids)
         .collect::<BTreeSet<_>>();
     if !overlaps.is_empty() {
-        resolution.included.retain(|support| !overlaps.contains(&support.support_ref));
+        resolution
+            .included
+            .retain(|support| !overlaps.contains(&support.support_ref));
         for rule_instance_id in overlaps {
-            resolution.unresolved_rules.push(applicability::SupportResolutionDiagnostic {
-                rule_instance_id,
-                reason_code: "overlapping_profile_and_global_truth".to_string(),
-                detail: json!({"applicant_profile": applicant_profile}),
-            });
+            resolution
+                .unresolved_rules
+                .push(applicability::SupportResolutionDiagnostic {
+                    rule_instance_id,
+                    reason_code: "overlapping_profile_and_global_truth".to_string(),
+                    detail: json!({"applicant_profile": applicant_profile}),
+                });
         }
     }
     Ok(resolution)

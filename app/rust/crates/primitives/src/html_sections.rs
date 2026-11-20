@@ -73,6 +73,16 @@ fn is_heading(name: &str) -> bool {
 
 /// Recursively collect all text leaves from a node subtree.
 fn collect_text_dfs(node: NodeRef<Node>, parts: &mut Vec<String>) {
+    // A crawled HTML snapshot retains every byte, but SEO knowledge must not
+    // turn JavaScript, CSS or inert DOM templates into evidence or embeddings.
+    if let Node::Element(element) = node.value() {
+        if matches!(
+            element.name(),
+            "script" | "style" | "template" | "svg" | "iframe" | "canvas"
+        ) {
+            return;
+        }
+    }
     for child in node.children() {
         match child.value() {
             Node::Text(t) => {
@@ -116,6 +126,80 @@ fn collect_siblings_text(document: &Html, node_id: ego_tree::NodeId) -> String {
             _ => {}
         }
         cur = sibling.next_sibling();
+    }
+    parts.join("\n")
+}
+
+/// Headings in real official pages are often nested in a title/header
+/// wrapper, while the substantive article is the NEXT sibling of that
+/// wrapper. The heading's own sibling text then contains only a subtitle.
+/// Lift one level only for an explicit header wrapper: never scan an entire
+/// body, main, navigation sidebar, or neighboring article for legal evidence.
+fn collect_wrapped_heading_body(document: &Html, heading_id: ego_tree::NodeId) -> String {
+    let Some(heading) = document.tree.get(heading_id) else {
+        return String::new();
+    };
+    let Some(wrapper) = heading.parent() else {
+        return String::new();
+    };
+    let Node::Element(element) = wrapper.value() else {
+        return String::new();
+    };
+    let header_class = element.attr("class").unwrap_or("").to_ascii_lowercase();
+    // EC Drupal/ECL articles wrap their H2 in a plain div.ecl and put
+    // substantive paragraphs in the next div.ecl. A dated H1 elsewhere
+    // on the page can already create a tiny section, so the whole-document
+    // empty-sections fallback never fires. Only lift these ECL headings when
+    // they belong to a real article; never lift navigation or sidebar text.
+    let mut ancestor = wrapper.parent();
+    let mut inside_article = false;
+    while let Some(parent) = ancestor {
+        if matches!(parent.value(), Node::Element(el) if el.name() == "article") {
+            inside_article = true;
+            break;
+        }
+        ancestor = parent.parent();
+    }
+    let ecl_article_heading = inside_article
+        && element.name() == "div"
+        && header_class.split_whitespace().any(|class| class == "ecl")
+        && matches!(
+            heading.value(),
+            Node::Element(el)
+                if el
+                    .attr("class")
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .any(|class| class.starts_with("ecl-u-type-heading-"))
+        );
+    let is_header_wrapper = element.name() == "header"
+        || header_class.split_whitespace().any(|class| {
+            class.contains("header") || class.contains("heading") || class.ends_with("title")
+        })
+        || ecl_article_heading;
+    if !is_header_wrapper {
+        return String::new();
+    }
+
+    fn has_heading(node: NodeRef<Node>) -> bool {
+        if let Node::Element(element) = node.value() {
+            if is_heading(element.name()) {
+                return true;
+            }
+        }
+        node.children().any(has_heading)
+    }
+
+    let mut parts = Vec::new();
+    let mut next = wrapper.next_sibling();
+    while let Some(sibling) = next {
+        // Never attach the following heading's content to this heading,
+        // including when another article is nested in its own DIV.
+        if has_heading(sibling) {
+            break;
+        }
+        collect_text_dfs(sibling, &mut parts);
+        next = sibling.next_sibling();
     }
     parts.join("\n")
 }
@@ -174,6 +258,146 @@ pub fn extract_meta_typed(html: &str) -> HtmlMeta {
     }
 }
 
+/// Some official sites put the H1 in a title wrapper and the actual article
+/// in the wrapper's *sibling*, not next to the H1 itself. If the heading
+/// traversal yielded no usable sections, recover visible article text from a
+/// semantic main-content container. Never fall back to all DOM text here:
+/// navigation and footers are not legal evidence.
+fn fallback_main_article_text(document: &Html) -> Option<String> {
+    for css in [
+        "main .single__text",
+        "main article",
+        "article",
+        "[role='main'] .single__text",
+        ".ms-rtestate-field",
+        "main",
+        "[role='main']",
+    ] {
+        let selector = Selector::parse(css).ok()?;
+        for element in document.select(&selector) {
+            let node = document.tree.get(element.id())?;
+            let mut parts = Vec::new();
+            collect_text_dfs(node, &mut parts);
+            let text = parts.join("\n").trim().to_string();
+            if !text.is_empty() {
+                return Some(text);
+            }
+        }
+    }
+    None
+}
+
+/// The factual body of an official legal document can use only styled
+/// paragraphs, while its footer has the page's only H2 headings. Restrict
+/// extraction to the published document subtree, never page-wide navigation.
+fn append_scoped_legal_document_paragraphs(document: &Html, sections: &mut Vec<HtmlSection>) {
+    let doc_selector = Selector::parse("#document1 .contentWrapper .content").unwrap();
+    let paragraph_selector = Selector::parse("p").unwrap();
+    let heading_selector = Selector::parse("h1, h2, h3, h4").unwrap();
+    let mut part_number = 1;
+    for document_body in document.select(&doc_selector) {
+        // Headed documents are already owned by the ordinary extractor.
+        if document_body.select(&heading_selector).next().is_some() {
+            continue;
+        }
+        let mut chunk = String::new();
+        let flush =
+            |chunk: &mut String, part_number: &mut usize, sections: &mut Vec<HtmlSection>| {
+                if chunk.is_empty() {
+                    return;
+                }
+                let content = std::mem::take(chunk);
+                let hash = content_hash_v1(&content);
+                sections.push(HtmlSection {
+                    heading_path: format!("Legal document body / part {}", part_number),
+                    heading_level: 0,
+                    section_order: sections.len(),
+                    section_type: "other".to_string(),
+                    content_md: content,
+                    content_hash: hash,
+                });
+                *part_number += 1;
+            };
+        for paragraph in document_body.select(&paragraph_selector) {
+            let Some(node) = document.tree.get(paragraph.id()) else {
+                continue;
+            };
+            let mut parts = Vec::new();
+            collect_text_dfs(node, &mut parts);
+            let text = parts
+                .join(" ")
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if text.is_empty() {
+                continue;
+            }
+            if !chunk.is_empty() && chunk.len() + text.len() + 1 > 2800 {
+                flush(&mut chunk, &mut part_number, sections);
+            }
+            if !chunk.is_empty() {
+                chunk.push('\n');
+            }
+            chunk.push_str(&text);
+        }
+        flush(&mut chunk, &mut part_number, sections);
+    }
+}
+/// Recover a substantive, visibly titled article whose template uses a
+/// styled paragraph instead of an H1-H4. A neighboring sidebar heading must
+/// not make that article disappear. Stay within the article body: no page-wide
+/// text scan, navigation, footer or unrelated sidebar evidence.
+fn append_titled_headingless_articles(document: &Html, sections: &mut Vec<HtmlSection>) {
+    let wrapper_selector = Selector::parse(".single__detail-Wrapper").unwrap();
+    let title_selector = Selector::parse(".section__header-title").unwrap();
+    let body_selector = Selector::parse(".single__text").unwrap();
+    let heading_selector = Selector::parse("h1, h2, h3, h4").unwrap();
+
+    for wrapper in document.select(&wrapper_selector) {
+        let Some(body) = wrapper.select(&body_selector).next() else {
+            continue;
+        };
+        // Ordinary heading-based extraction owns articles with actual headings.
+        if body.select(&heading_selector).next().is_some() {
+            continue;
+        }
+        let Some(title) = wrapper.select(&title_selector).next() else {
+            continue;
+        };
+        let heading = title
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
+        if heading.is_empty() {
+            continue;
+        }
+        let Some(body_node) = document.tree.get(body.id()) else {
+            continue;
+        };
+        let mut parts = Vec::new();
+        collect_text_dfs(body_node, &mut parts);
+        let content = parts.join("\n").trim().to_string();
+        if content.is_empty()
+            || sections
+                .iter()
+                .any(|section| section.content_md.contains(&content))
+        {
+            continue;
+        }
+        let hash = content_hash_v1(&content);
+        sections.push(HtmlSection {
+            heading_path: heading.clone(),
+            heading_level: heading_level(title.value().name()),
+            section_order: sections.len(),
+            section_type: identify_section_type(&heading).to_string(),
+            content_md: content,
+            content_hash: hash,
+        });
+    }
+}
+
 /// Extract sections from HTML.
 pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
     let document = Html::parse_document(html);
@@ -210,7 +434,14 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
             if heading_text.is_empty() {
                 continue;
             }
-            let content = collect_siblings_text(&document, *node_id);
+            let mut content = collect_siblings_text(&document, *node_id);
+            let wrapped_body = collect_wrapped_heading_body(&document, *node_id);
+            if !wrapped_body.is_empty() {
+                if !content.is_empty() {
+                    content.push('\n');
+                }
+                content.push_str(&wrapped_body);
+            }
             if content.is_empty() {
                 continue;
             }
@@ -228,5 +459,361 @@ pub fn extract_sections_typed(html: &str, _url: &str) -> Vec<HtmlSection> {
         }
     }
 
+    // Also recover semantically scoped, headingless article bodies even when
+    // a sidebar H2 already produced an unrelated section.
+    append_titled_headingless_articles(&document, &mut sections);
+    append_scoped_legal_document_paragraphs(&document, &mut sections);
+
+    // An H1 nested in a title wrapper can have no direct sibling text even
+    // though a real article follows in main. Preserve its heading provenance
+    // and only include the scoped visible article, never script/nav/footer.
+    if sections.is_empty() && !headings.is_empty() {
+        if let Some(text) = fallback_main_article_text(&document) {
+            let (tag, heading, _) = headings
+                .iter()
+                .find(|(tag, heading, _)| tag == "h1" && !heading.is_empty())
+                .or_else(|| headings.iter().find(|(_, heading, _)| !heading.is_empty()))
+                .expect("nonempty headings or no scoped article");
+            let hash = content_hash_v1(&text);
+            sections.push(HtmlSection {
+                heading_path: heading.clone(),
+                heading_level: heading_level(tag),
+                section_order: 0,
+                section_type: identify_section_type(heading).to_string(),
+                content_md: text,
+                content_hash: hash,
+            });
+        }
+    }
+
     sections
+}
+
+#[cfg(test)]
+mod visible_text_tests {
+    use super::*;
+
+    #[test]
+    fn skip_inert_dom_for_heading_sections_and_word_count() {
+        let html = r#"<html><head>
+            <title>Tourist visa guide</title>
+            <script>window.WIZ_global_data = {"巨大":"do not embed"};</script>
+            <style>body { display: none; } totally_inert_css</style>
+            </head><body>
+            <h1>Документы для визы</h1>
+            <section><p>Паспорт и подтверждение проживания.</p>
+              <script>secret_script_payload_123</script>
+              <template>unrendered_template_payload_123</template>
+            </section>
+            </body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/visa");
+        assert_eq!(sections.len(), 1);
+        assert!(sections[0].content_md.contains("Паспорт и подтверждение"));
+        assert!(!sections[0].content_md.contains("secret_script_payload"));
+        assert!(!sections[0].content_md.contains("unrendered_template"));
+        let meta = extract_meta_typed(html);
+        assert_eq!(meta.title, "Tourist visa guide");
+        assert!(meta.word_count > 0);
+        assert!(
+            meta.word_count < 30,
+            "scripts/styles must not inflate word count"
+        );
+    }
+
+    #[test]
+    fn wrapped_official_heading_recovers_only_article_body() {
+        // Real Spanish consular pages wrap the H1 in a distinct title DIV;
+        // the next sibling of that wrapper contains the substantive content.
+        let html = r#"<html lang="ru"><body>
+          <nav><a>Главная Страница меню, не доказательство</a></nav>
+          <main>
+            <div class="section__header-title">
+              <h1>Условия въезда в Испанию</h1>
+            </div>
+            <div class="single__text"><div>
+              <p>Граждане третьих стран могут находиться в Испании до 90 дней.</p>
+              <script>window.fake_rule = "600 дней"</script>
+              <p>Для отдельных случаев действуют дополнительные условия.</p>
+            </div></div>
+          </main>
+          <footer>Услуги и контакты</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://www.exteriores.gob.es/");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading_path, "Условия въезда в Испанию");
+        assert_eq!(sections[0].section_type, "eligibility");
+        assert!(sections[0].content_md.contains("до 90 дней"));
+        assert!(sections[0].content_md.contains("дополнительные условия"));
+        assert!(!sections[0].content_md.contains("Главная Страница"));
+        assert!(!sections[0].content_md.contains("Услуги и контакты"));
+        assert!(!sections[0].content_md.contains("600 дней"));
+        assert_eq!(
+            sections[0].content_hash,
+            content_hash_v1(&sections[0].content_md)
+        );
+    }
+
+    #[test]
+    fn wrapped_eu_faq_heading_retains_real_article_evidence() {
+        // Based on the actual EEAS Drupal card structure: the heading lives
+        // inside text-box-header and its factual paragraphs are in a sibling
+        // card-text, not in the h2's next sibling. Navigation stays separate.
+        let html = r#"<html><body>
+          <nav><h3>On This Page</h3><ul><li>Visa</li><li>Information</li></ul></nav>
+          <main>
+            <div class="card"><div class="card-body">
+              <div class="text-box-header">
+                <h2 class="card-title">Information for EU citizens</h2>
+                <div class="h5 card-subtitle">Travelling to Belarus</div>
+              </div>
+              <div class="card-text"><p>EU citizens travelling to Belarus.</p></div>
+            </div></div>
+            <div class="card"><div class="card-body">
+              <div class="text-box-header">
+                <h2 class="card-title">Information for Schengen Visa Applicants in Belarus</h2>
+                <div class="h5 card-subtitle">Answers to the frequently asked questions</div>
+              </div>
+              <div class="card-text"><div class="field__item">
+                <p>Spain: A Schengen visa application for Spain may be submitted at the Spanish Visa Center in Minsk.</p>
+                <script>window.fake_fee = "1000 EUR"</script>
+              </div></div>
+            </div></div>
+          </main>
+          <footer>Unrelated telephone numbers</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://www.eeas.europa.eu/belarus/");
+        let schengen = sections
+            .iter()
+            .find(|section| {
+                section.heading_path == "Information for Schengen Visa Applicants in Belarus"
+            })
+            .expect("Schengen FAQ heading exists");
+        assert!(schengen
+            .content_md
+            .contains("Answers to the frequently asked questions"));
+        assert!(schengen.content_md.contains("Spanish Visa Center in Minsk"));
+        assert!(!schengen
+            .content_md
+            .contains("EU citizens travelling to Belarus"));
+        assert!(!schengen.content_md.contains("window.fake_fee"));
+        assert!(!schengen.content_md.contains("Unrelated telephone numbers"));
+        assert_eq!(schengen.content_hash, content_hash_v1(&schengen.content_md));
+    }
+
+    #[test]
+    fn european_commission_ecl_article_heading_recovers_exact_policy_body() {
+        // Physical EC page: article H2 is in a plain div.ecl, factual text
+        // in the next div.ecl, whereas the page H1 already yields a date.
+        // Preserve independent heading boundaries, not navigation evidence.
+        let html = r#"<html><body>
+          <nav><h2 class="ecl-u-type-heading-2">Page contents</h2>
+            <p>Menu entry, not legal evidence.</p></nav>
+          <main><h1>Applying for a Schengen visa</h1>
+            <div>2 December 2025</div>
+            <article dir="ltr">
+              <div class="ecl-u-mb-2xl">
+                <div class="ecl"><h2 class="ecl-u-type-heading-2">What is a Schengen visa?</h2></div>
+                <div class="ecl"><p>A <strong>Schengen visa</strong> is an entry permit
+                  for non-EU nationals to make a short visit of up to
+                  <strong>90 days in any 180-day period</strong>.</p></div>
+              </div>
+              <div class="ecl-u-mb-2xl">
+                <div class="ecl"><h2 class="ecl-u-type-heading-2">How long can you stay?</h2></div>
+                <div class="ecl"><p>The short-stay calculator can help
+                  calculate the remaining period.</p></div>
+              </div>
+            </article>
+          </main><footer>Unrelated marketing footer</footer>
+        </body></html>"#;
+        let sections = extract_sections_typed(
+            html,
+            "https://home-affairs.ec.europa.eu/policies/schengen/visa-policy/applying-schengen-visa_en",
+        );
+        let schengen = sections
+            .iter()
+            .find(|section| section.heading_path == "What is a Schengen visa?")
+            .expect("ECL policy evidence must not disappear behind a date-only H1");
+        assert!(schengen
+            .content_md
+            .contains("90 days in any 180-day period"));
+        assert!(!schengen.content_md.contains("short-stay calculator"));
+        assert!(!schengen.content_md.contains("Menu entry"));
+        assert!(!schengen.content_md.contains("marketing footer"));
+        assert_eq!(schengen.content_hash, content_hash_v1(&schengen.content_md));
+        let calculator = sections
+            .iter()
+            .find(|section| section.heading_path == "How long can you stay?")
+            .expect("second ECL heading retains its own section");
+        assert!(calculator.content_md.contains("short-stay calculator"));
+        assert!(!calculator
+            .content_md
+            .contains("90 days in any 180-day period"));
+    }
+
+    #[test]
+    fn eurlex_document_body_is_not_lost_to_footer_headings() {
+        // Physical EUR-Lex structure: the report is inside #document1,
+        // but the h2 headings refer only to unrelated navigation.
+        let html = r#"<html><body>
+            <nav><h2>Need help?</h2><p>Call us for support, not law.</p></nav>
+            <div id="document1"><div class="tabContent"><div class="contentWrapper">
+              <div class="content">
+                <p class="Normal">The European Commission reports on visa policy.</p>
+                <p class="li ListDash1"><span>Belarus: the visa fee is reduced to EUR </span>
+                  <span>35 for adult applicants</span><span> and waived for children under 12.</span>
+                </p>
+                <script>fabricated_visa_fee = "999"</script>
+              </div>
+            </div></div></div>
+            <footer><h2>EU institutions</h2><p>Footer is not legal evidence.</p></footer>
+        </body></html>"#;
+        let sections =
+            extract_sections_typed(html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|section| {
+                section
+                    .heading_path
+                    .starts_with("Legal document body / part")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(legal.len(), 1);
+        assert!(legal[0]
+            .content_md
+            .contains("Belarus: the visa fee is reduced to EUR 35 for adult applicants"));
+        assert!(!legal[0].content_md.contains("Footer is not legal evidence"));
+        assert!(!legal[0].content_md.contains("fabricated_visa_fee"));
+        assert!(!legal[0].content_md.contains("Call us for support"));
+        assert_eq!(legal[0].content_hash, content_hash_v1(&legal[0].content_md));
+    }
+
+    #[test]
+    fn eurlex_long_document_is_split_on_paragraph_boundaries() {
+        let mut html = String::from("<html><body><div id=\"document1\"><div class=\"contentWrapper\"><div class=\"content\">");
+        for n in 0..9 {
+            html.push_str(&format!(
+                "<p>Verified legal paragraph {n}: {}</p>",
+                "documentary evidence ".repeat(30)
+            ));
+        }
+        html.push_str(
+            "</div></div></div><footer><h2>Links</h2><p>Unrelated</p></footer></body></html>",
+        );
+        let sections =
+            extract_sections_typed(&html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|section| {
+                section
+                    .heading_path
+                    .starts_with("Legal document body / part")
+            })
+            .collect::<Vec<_>>();
+        assert!(legal.len() >= 2);
+        let joined = legal
+            .iter()
+            .map(|section| section.content_md.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for n in 0..9 {
+            assert!(joined.contains(&format!("Verified legal paragraph {n}:")));
+        }
+        assert!(!joined.contains("Unrelated"));
+    }
+    #[test]
+    fn eurlex_multipart_document_keeps_later_fee_provisions() {
+        let html = r#"<html><body>
+          <div id="document1">
+            <div class="contentWrapper"><div class="content">
+              <p>European Commission cover page.</p>
+            </div></div>
+            <div class="contentWrapper"><div class="content">
+              <p>Applicable legal provisions.</p>
+              <p>Belarus: EUR 35 for adult applicants with exceptions.</p>
+            </div></div>
+          </div>
+          <footer><h2>EU institutions</h2><p>Unrelated list of offices.</p></footer>
+        </body></html>"#;
+        let sections =
+            extract_sections_typed(html, "https://eur-lex.europa.eu/legal-content/EN/TXT/");
+        let legal = sections
+            .iter()
+            .filter(|s| s.heading_path.starts_with("Legal document body / part"))
+            .collect::<Vec<_>>();
+        assert_eq!(legal.len(), 2);
+        assert_eq!(legal[0].heading_path, "Legal document body / part 1");
+        assert_eq!(legal[1].heading_path, "Legal document body / part 2");
+        assert!(legal[1].content_md.contains("Belarus: EUR 35"));
+        assert!(!legal[1].content_md.contains("Unrelated list"));
+    }
+    #[test]
+    fn titled_article_without_h_tags_is_not_lost_to_sidebar_heading() {
+        // The official consular page uses a styled paragraph title and
+        // .single__text for its substantive body, with an H2 in the sidebar.
+        let html = r#"<html><body>
+            <nav><h2>Navigation</h2><p>Navigation only</p></nav>
+            <div class="row"><div class="col-12 col-md-8">
+              <section class="body__detail-Wrapper">
+                <div class="single__detail-Wrapper">
+                  <h1 class="section__header-title hide">Consular services</h1>
+                </div>
+              </section>
+              <section class="body__detail-Wrapper">
+                <div class="single__detail-Wrapper">
+                  <p class="section__header-title">Where to submit an application</p>
+                  <div class="single__text">
+                    <p>Visa application centre</p>
+                    <p><strong>Minsk</strong></p>
+                    <p>8 Tolstoi Street</p>
+                    <p>Applications accepted on weekdays.</p>
+                    <script>fake_evidence = "another location"</script>
+                  </div>
+                </div>
+              </section>
+            </div><div class="aside-right">
+              <aside><h2>More information</h2><p>Unrelated prize news</p></aside>
+            </div></div>
+        </body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/consular");
+        let article = sections
+            .iter()
+            .find(|section| section.heading_path == "Where to submit an application")
+            .expect("visible article must survive an unrelated sidebar H2");
+        assert!(article.content_md.contains("Minsk"));
+        assert!(article.content_md.contains("8 Tolstoi Street"));
+        assert!(!article.content_md.contains("Unrelated prize news"));
+        assert!(!article.content_md.contains("Navigation only"));
+        assert!(!article.content_md.contains("fake_evidence"));
+        assert_eq!(article.content_hash, content_hash_v1(&article.content_md));
+    }
+
+    #[test]
+    fn titled_article_with_actual_headings_is_not_duplicated() {
+        let html = r#"<html><body><div class="single__detail-Wrapper">
+            <p class="section__header-title">Visa application</p>
+            <div class="single__text">
+              <h2>Required documents</h2><p>Valid passport and travel insurance</p>
+            </div>
+        </div></body></html>"#;
+        let sections = extract_sections_typed(html, "https://example.org/visa");
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].heading_path, "Required documents");
+        assert!(sections[0].content_md.contains("Valid passport"));
+    }
+
+    #[test]
+    fn headingless_html_keeps_visible_content_without_javascript() {
+        let html = r#"<html><body>
+            <script>window.WIZ_global_data = "a very long invisible payload";</script>
+            <style>.content { color: red }</style>
+            <p>Для туристов из Беларуси полезно проверить актуальные правила.</p>
+            <svg><text>svg_internal_string</text></svg>
+            </body></html>"#;
+        let parts = extract_sections_typed(html, "https://example.org/");
+        assert_eq!(parts.len(), 1);
+        assert!(parts[0].content_md.contains("туристов из Беларуси"));
+        assert!(!parts[0].content_md.contains("WIZ_global_data"));
+        assert!(!parts[0].content_md.contains("svg_internal_string"));
+        assert_eq!(parts[0].content_hash, content_hash_v1(&parts[0].content_md));
+    }
 }

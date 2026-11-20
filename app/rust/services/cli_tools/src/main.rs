@@ -3,6 +3,7 @@ include!("cli/report_helpers.rs");
 include!("cli/seo_run.rs");
 include!("cli/contract_gates.rs");
 include!("cli/static_site.rs");
+include!("cli/truth_hitl.rs");
 include!("cli/cms_inspect.rs");
 include!("cli/release_cutover.rs");
 include!("cli/cms_decision.rs");

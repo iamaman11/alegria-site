@@ -49,12 +49,27 @@ def main() -> int:
             failures.append(f"cms_publish_step can silently publish via `{needle}`")
 
     for needle in [
-        "PagePublishLoopOutcome::Blocked(format!(",
+        "PagePublishLoopOutcome::Blocked {",
         "published_before_block",
+        "published_pages,",
         "blocked_publish_gate_status()",
+        "PageAdmissibility::Blocked(detail)",
+        "first_blocked = Some(reason)",
+        "if let Some(reason) = first_blocked",
     ]:
         if needle not in page_publish:
             failures.append(f"canonical page publish loop missing blocker propagation `{needle}`")
+
+    # Check both the pre-editorial rejection and the aggregate return; a
+    # rejected current page cannot be mistaken for retired history.
+    pre_editorial = page_publish.split("PageAdmissibility::Blocked(detail)", 1)[-1].split(
+        "PageAdmissibility::Eligible", 1
+    )[0]
+    aggregate = page_publish.split("if let Some(reason) = first_blocked", 1)[-1]
+    if "first_blocked = Some(reason)" not in pre_editorial or "continue;" not in pre_editorial:
+        failures.append("pre-editorial blockers must survive skipped page work")
+    if "PagePublishLoopOutcome::Blocked {" not in aggregate or "published_pages," not in aggregate:
+        failures.append("aggregate outcome must preserve blockers and actual publication count")
 
     if "if page_blocked {\n            continue;" in page_publish:
         failures.append(

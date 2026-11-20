@@ -53,6 +53,12 @@ pub struct TruthAdjudicationCandidateDecision {
     pub span_start: usize,
     pub span_end: usize,
     pub source_snapshot_hash: String,
+    #[serde(default)]
+    pub provider_key: String,
+    #[serde(default)]
+    pub model_key: String,
+    #[serde(default)]
+    pub prompt_version: String,
     pub decision: String,
     pub publish_admissibility: String,
     pub verification_method: String,

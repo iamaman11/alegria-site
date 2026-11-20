@@ -199,14 +199,19 @@ pub struct VerifiedTruthCandidateWrite {
     pub span_end: i32,
     pub source_key: String,
     pub source_snapshot_hash: String,
+    pub provider_key: String,
+    pub model_key: String,
+    pub prompt_version: String,
     pub epistemic_status: String,
 }
 
 pub async fn upsert_extracted_rule_candidate_from_adjudication(
     pool: &PgPool,
     candidate: &VerifiedTruthCandidateWrite,
-) -> Result<(), DomainError> {
-    sqlx::query(
+) -> Result<String, DomainError> {
+    // Keep primary-key replay idempotent. Reconcile a second extractor ID
+    // for the same unique source evidence after detecting that exact conflict.
+    let insert = sqlx::query(
         "INSERT INTO extracted.rule_candidates (
              rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
              raw_mention, params, scope, severity, applies_to_profiles, exceptions_raw,
@@ -218,7 +223,7 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
          VALUES (
              $1, $2, $3, $4, $5, $6, $7, $19, $8, '[]'::jsonb,
              '', '', '[]'::jsonb, '', 'direct', $9, false, $10, $11, $12,
-             $13, $14, $15, $16, $17, 'deterministic', 'cutover-runtime', 'cutover@1', $18, '[]'::jsonb
+             $13, $14, $15, $16, $17, $20, $21, $22, $18, '[]'::jsonb
          )
          ON CONFLICT (rule_candidate_id) DO UPDATE
          SET role = EXCLUDED.role,
@@ -261,10 +266,104 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.source_snapshot_hash)
     .bind(&candidate.epistemic_status)
     .bind(Json::<Value>(candidate.scope.clone()))
+    .bind(&candidate.provider_key)
+    .bind(&candidate.model_key)
+    .bind(&candidate.prompt_version)
     .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
+    .await;
+
+    match insert {
+        Ok(_) => Ok(candidate.rule_candidate_id.clone()),
+        Err(sqlx::Error::Database(ref db))
+            if db.is_unique_violation()
+                && db.constraint()
+                    == Some("rule_candidates_raw_section_id_role_concept_canonical_key_e_key") =>
+        {
+            // One evidence key can have multiple extractor proposals but only
+            // ONE durable SQL identity. Keep existing HITL and verified FKs.
+            // A conflicting claim, source, context or rejected review fails closed.
+            let canonical_id: Option<String> = sqlx::query_scalar(
+                r#"
+                UPDATE extracted.rule_candidates AS c
+                SET llm_provider = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $16 ELSE c.llm_provider END,
+                    llm_model = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $17 ELSE c.llm_model END,
+                    prompt_version = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $18 ELSE c.prompt_version END,
+                    confidence = CASE
+                        WHEN $16 = 'chat_manual' OR c.llm_provider <> 'chat_manual'
+                        THEN $15 ELSE c.confidence END,
+                    -- A disagreement in evidence metadata is not a second
+                    -- factual claim. Retain one canonical FK but fail closed:
+                    -- never silently promote a disputed extraction to VERIFIED.
+                    severity = CASE
+                        WHEN c.severity = $12 THEN c.severity
+                        ELSE 'unknown'
+                    END,
+                    is_incomplete = c.is_incomplete OR $14,
+                    epistemic_status = CASE
+                        WHEN c.epistemic_status = 'rejected' OR $19 = 'rejected'
+                            THEN 'rejected'
+                        WHEN c.epistemic_status = 'needs_hitl' OR $19 = 'needs_hitl'
+                            OR c.severity <> $12 OR c.is_incomplete <> $14
+                            THEN 'needs_hitl'
+                        WHEN c.epistemic_status = $19 THEN c.epistemic_status
+                        ELSE 'needs_hitl'
+                    END,
+                    updated_at = now()
+                WHERE c.raw_section_id = $1 AND c.role = $2
+                  AND c.concept_canonical_key = $3
+                  AND c.evidence_quote = $4
+                  AND c.span_start = $5 AND c.span_end = $6
+                  AND c.context_key = $7
+                  AND c.params = $8::jsonb AND c.scope = $9::jsonb
+                  AND c.source_key = $10 AND c.source_snapshot_hash = $11
+                  -- Core fact, source and snapshot must match exactly;
+                  -- advisory severity/completeness can differ across extractors.
+                  AND c.is_numeric = $13
+                  AND NOT EXISTS (
+                      SELECT 1 FROM site.seo_hitl_tasks AS t
+                      WHERE t.blocking_execution_key = c.rule_candidate_id
+                        AND t.scope_signature = c.context_key
+                        AND t.task_type = 'truth_candidate_review'
+                        AND t.queue_state = 'in_review'
+                        AND t.decision_payload->'review'->>'decision' = 'reject'
+                  )
+                RETURNING c.rule_candidate_id
+                "#,
+            )
+            .bind(candidate.section_id)
+            .bind(&candidate.role)
+            .bind(&candidate.concept_canonical_key)
+            .bind(&candidate.evidence_quote)
+            .bind(candidate.span_start)
+            .bind(candidate.span_end)
+            .bind(&candidate.context_key)
+            .bind(Json::<Value>(candidate.params.clone()))
+            .bind(Json::<Value>(candidate.scope.clone()))
+            .bind(&candidate.source_key)
+            .bind(&candidate.source_snapshot_hash)
+            .bind(&candidate.severity)
+            .bind(candidate.is_numeric)
+            .bind(candidate.is_incomplete)
+            .bind(candidate.confidence)
+            .bind(&candidate.provider_key)
+            .bind(&candidate.model_key)
+            .bind(&candidate.prompt_version)
+            .bind(&candidate.epistemic_status)
+            .fetch_optional(pool)
+            .await
+            .map_err(classify_sqlx)?;
+            canonical_id.ok_or_else(|| DomainError::ValidationFailure {
+                message: "duplicate source evidence has incompatible claim, context, snapshot, or rejected human review".to_string(),
+            })
+        }
+        Err(err) => Err(classify_sqlx(err)),
+    }
 }
 
 #[derive(Debug, Clone)]

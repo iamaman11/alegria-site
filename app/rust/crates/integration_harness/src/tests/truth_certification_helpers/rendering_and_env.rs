@@ -43,7 +43,9 @@ async fn render_fixture_source_pages(
         serp_sequence.push((
             fixture.fixture_id.clone(),
             serde_json::json!({
+                "status_code": 20000,
                 "tasks": [{
+                    "status_code": 20000,
                     "result": [{
                         "items": items
                     }]
