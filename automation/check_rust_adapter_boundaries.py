@@ -15,6 +15,7 @@ INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harnes
 DEDICATED_ADAPTER_DIRS = {
     (RUST_ROOT / "crates" / "graph_neo4j").resolve(),
     (RUST_ROOT / "crates" / "http_client").resolve(),
+    (RUST_ROOT / "crates" / "vector_qdrant").resolve(),
 }
 # A standalone gRPC service owns its transport-facing request/response types.
 GRPC_SERVICE_SRC = (RUST_ROOT / "services" / "analytics_svc" / "src").resolve()

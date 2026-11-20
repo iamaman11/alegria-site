@@ -22,7 +22,38 @@ SERVICE_ALLOWED = {
 ADAPTER_ALLOWED = {
     "graph_neo4j": {"anyhow", "neo4rs", "tokio"},
     "http_client": {"anyhow", "reqwest"},
+    "vector_qdrant": {"anyhow", "qdrant-client", "reqwest", "serde_json"},
 }
+FORBIDDEN_TRANSITIVE = {
+    "gsc_sync": {
+        "infrastructure", "sqlx", "neo4rs", "qdrant-client", "temporalio-sdk",
+        "playwright-rs", "rig-core", "rig-vertexai",
+    },
+    "analytics_svc": {
+        "infrastructure", "sqlx", "qdrant-client", "temporalio-sdk",
+        "playwright-rs", "rig-core", "rig-vertexai",
+    },
+}
+
+
+def lock_dependencies(lock_packages: list[dict], root_name: str) -> set[str]:
+    """Conservative closure: include every locked version of a package name."""
+    index: dict[str, list[dict]] = {}
+    for package in lock_packages:
+        index.setdefault(package["name"], []).append(package)
+    seen: set[str] = set()
+    pending = [root_name]
+    while pending:
+        name = pending.pop()
+        if name in seen:
+            continue
+        if name not in index:
+            raise ValueError(f"missing package in Cargo.lock: {name}")
+        seen.add(name)
+        for package in index[name]:
+            for dependency in package.get("dependencies", []):
+                pending.append(dependency.split(" ", 1)[0])
+    return seen
 
 
 def main() -> int:
@@ -48,6 +79,13 @@ def main() -> int:
         for source in (folder / "src").rglob("*.rs"):
             if "infrastructure::" in source.read_text(encoding="utf-8"):
                 raise ValueError(f"{name} still imports infrastructure: {source}")
+
+    lock = tomllib.loads((RUST / "Cargo.lock").read_text(encoding="utf-8"))
+    for name, forbidden in FORBIDDEN_TRANSITIVE.items():
+        actual = lock_dependencies(lock["package"], name)
+        unwanted = actual & forbidden
+        if unwanted:
+            raise ValueError(f"{name} still transitively compiles heavy SDKs: {sorted(unwanted)}")
     print("INDEPENDENT_RUST_MODULE_BOUNDARIES=PASS")
     return 0
 

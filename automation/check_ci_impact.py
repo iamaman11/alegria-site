@@ -18,6 +18,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/primitives": "primitives",
             "app/rust/crates/graph_neo4j": "graph_neo4j",
             "app/rust/crates/http_client": "http_client",
+            "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
             "app/rust/services/analytics_svc": "analytics_svc",
             "app/rust/services/temporal": "temporal_worker",
@@ -27,6 +28,7 @@ class ImpactFixtures(unittest.TestCase):
             "primitives": {"temporal_worker"},
             "graph_neo4j": {"analytics_svc", "temporal_worker"},
             "http_client": {"gsc_sync"},
+            "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
             "analytics_svc": set(),
             "temporal_worker": set(),
@@ -49,6 +51,12 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_http_change_includes_gsc_only(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/http_client/src/lib.rs")["affected_crates"]), {"http_client", "gsc_sync"})
+
+    def test_vector_change_does_not_rebuild_unrelated_analytics_or_gsc(self) -> None:
+        self.assertEqual(
+            set(self.impact("app/rust/crates/vector_qdrant/src/lib.rs")["affected_crates"]),
+            {"vector_qdrant", "temporal_worker"},
+        )
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})

@@ -11,6 +11,7 @@ members = [
   "crates/infrastructure",
   "crates/graph_neo4j",
   "crates/http_client",
+  "crates/vector_qdrant",
   "crates/seo_steps",
   "crates/telemetry",
   "services/temporal",
