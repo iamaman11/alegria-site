@@ -22,7 +22,7 @@ def check() -> None:
     assert "  gate:\n    name: CI\n    if: always()\n" in source
     assert "toJSON(needs)" in source and 'result != "success"' in source
     required = (
-        "architecture-and-rust", "rust-security", "cloudflare-static-build",
+        "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
         "temporal-worker-docker", "stack-temporal-postgres18",
         "stack-storage-graph", "verify", "windows-operator-smoke",
     )
@@ -51,27 +51,29 @@ def check() -> None:
         assert source.count(f"bash automation/measure_ci_phase.sh {phase} ") == 1, (
             f"mandatory {phase} must produce an independent timing and preserve its exit code"
         )
-    architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  rust-security:\n", 1)[0]
+    architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
-    assert "bash automation/ci_verify.sh product" in architecture
+    assert "bash automation/ci_verify.sh product" not in architecture
+    assert "bash automation/ci_verify.sh product" in product
     assert "bash automation/ci_verify.sh product" not in verify
     assert "bash automation/ci_verify.sh contracts" in verify
     assert "bash automation/ci_verify.sh integration" in verify
-    # These owner jobs execute concurrently on separate ephemeral GitHub VMs,
-    # each with its own database. They must not share a database/port or use
-    # one job's mutable state as a hidden input to the other.
-    for owner in (architecture, verify):
+    # All three owners run concurrently on separate ephemeral GitHub VMs.
+    # No phase can read another owner's mutable PostgreSQL state or artifacts.
+    for owner in (architecture, product, verify):
         assert "runs-on: ubuntu-latest" in owner
         assert "    services:\n      postgres:" in owner
         assert "DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci" in owner
         assert "    needs:" not in owner
-    for owner in (architecture, verify):
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in product
+    for owner in (architecture, product, verify):
         assert "CARGO_INCREMENTAL: \"0\"" in owner
         assert "RUSTC_WRAPPER: sccache" in owner
         assert "SCCACHE_GHA_ENABLED: \"true\"" in owner
         assert "uses: mozilla-actions/sccache-action@v0.0.11" in owner
         assert "sccache --show-stats" in owner
-    assert "name: ci-phase-product" in architecture
+    assert "name: ci-phase-product" in product
     assert "name: ci-phase-verify" in verify
     assert "bash automation/audit.sh fast" not in source
     assert "bash automation/audit.sh full" not in source

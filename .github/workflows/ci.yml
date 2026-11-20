@@ -21,8 +21,8 @@ jobs:
     timeout-minutes: 45
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-      # Release-like CI compiles use a shared compiler-object cache, including
-      # the isolated Truth/Outbox/e2e target dirs; local dev stays incremental.
+      # Release-like CI compiles use a shared compiler-object cache;
+      # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
@@ -60,14 +60,6 @@ jobs:
 
       - name: Pin the same stable Rust toolchain as the verify job
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Match the Python runtime used by the original Product/Truth owner
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.15"
-
-      - name: Install audit tools required by the Product/Truth phase
-        run: python -m pip install --disable-pip-version-check ruff==0.17.4
 
       - name: Cache Rust compiler outputs across independent target directories
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -164,11 +156,78 @@ jobs:
             check-fact-verifier-parity --root . \
             --report-json automation/reports/fact_verifier_parity.rust.json
 
-      # This entire established phase used to run serially between Contracts
-      # and Integration in verify. The architecture job already has its own
-      # isolated disposable Postgres and test runner; keep tests intact while
-      # executing both full phases concurrently in separate mandatory jobs.
-      - name: Product and truth invariants (separate disposable CI runner)
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+  # Product/Truth must not wait for the architecture workspace test/compile job.
+  # Its complete prior ci_verify.sh phase stays mandatory on a distinct runner.
+  product-truth:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install native audit/build tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+
+      - name: Pin stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Match the established Product/Truth Python runtime
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install Product/Truth audit tools
+        run: python -m pip install --disable-pip-version-check ruff==0.17.4
+
+      - name: Cache Rust compiler objects across isolated target directories
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Reuse Cargo registry and workspace compilation cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - name: Initialize disposable truth/HITL schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Complete Product and truth invariants
         run: bash automation/measure_ci_phase.sh product bash automation/ci_verify.sh product
 
       - name: Publish Rust compiler cache hit/miss statistics
@@ -488,6 +547,7 @@ jobs:
     if: always()
     needs:
       - architecture-and-rust
+      - product-truth
       - rust-security
       - cloudflare-static-build
       - temporal-worker-docker
@@ -533,7 +593,7 @@ jobs:
           merge_sha = os.environ["MERGE_SHA"]
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
-              "architecture-and-rust", "rust-security", "cloudflare-static-build",
+              "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
               "temporal-worker-docker", "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
