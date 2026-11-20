@@ -298,15 +298,23 @@
     }
 
     fn build_temporal_worker_binary() -> PathBuf {
-        env::var_os("INTEGRATION_TEMPORAL_WORKER_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| nested_worker_binaries().0.clone())
+        if let Some(binary) = env::var_os("INTEGRATION_TEMPORAL_WORKER_BIN") {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=prebuilt");
+            PathBuf::from(binary)
+        } else {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=nested");
+            nested_worker_binaries().0.clone()
+        }
     }
 
     fn build_outbox_worker_binary() -> PathBuf {
-        env::var_os("INTEGRATION_OUTBOX_WORKER_BIN")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| nested_worker_binaries().1.clone())
+        if let Some(binary) = env::var_os("INTEGRATION_OUTBOX_WORKER_BIN") {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=outbox origin=prebuilt");
+            PathBuf::from(binary)
+        } else {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=outbox origin=nested");
+            nested_worker_binaries().1.clone()
+        }
     }
 
     fn spawn_temporal_worker(envs: &BTreeMap<String, String>) -> ChildGuard {

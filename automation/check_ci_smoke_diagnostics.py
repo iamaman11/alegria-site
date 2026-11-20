@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,9 +24,13 @@ class SmokeDiagnosticsContract(unittest.TestCase):
             calls.append(args)
             return SimpleNamespace(returncode=0)
 
-        with patch.object(smoke_manual_llm_queue.subprocess, "run", side_effect=run):
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(smoke_manual_llm_queue.main(), 0)
+        with patch.dict(os.environ, {
+            "INTEGRATION_TEMPORAL_WORKER_BIN": "/dummy/temporal_worker",
+            "INTEGRATION_OUTBOX_WORKER_BIN": "/dummy/outbox_worker",
+        }):
+            with patch.object(smoke_manual_llm_queue.subprocess, "run", side_effect=run):
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(smoke_manual_llm_queue.main(), 0)
         self.assertEqual(len(calls), 3)
         self.assertEqual([call[6] for call in calls], [
             "manual_llm_queue_persists_validates_replays_and_recovers",
@@ -33,13 +40,75 @@ class SmokeDiagnosticsContract(unittest.TestCase):
         self.assertEqual(calls[2][-2:], ["--", "--nocapture"])
 
     def test_manual_inbox_test_failure_propagates(self) -> None:
-        with patch.object(
-            smoke_manual_llm_queue.subprocess,
-            "run",
-            return_value=SimpleNamespace(returncode=17),
-        ) as run:
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(smoke_manual_llm_queue.main(), 17)
+        with patch.dict(os.environ, {
+            "INTEGRATION_TEMPORAL_WORKER_BIN": "/dummy/temporal_worker",
+            "INTEGRATION_OUTBOX_WORKER_BIN": "/dummy/outbox_worker",
+        }):
+            with patch.object(
+                smoke_manual_llm_queue.subprocess,
+                "run",
+                return_value=SimpleNamespace(returncode=17),
+            ) as run:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(smoke_manual_llm_queue.main(), 17)
+        self.assertEqual(run.call_count, 1)
+
+    def test_shared_worker_build_precedes_all_three_real_tests(self) -> None:
+        calls: list[list[str]] = []
+        envs: list[dict[str, str]] = []
+        with tempfile.TemporaryDirectory() as tmp:
+            def run(args, **kwargs):
+                calls.append(args)
+                if args[:2] == ["cargo", "build"]:
+                    binaries = Path(tmp) / "debug"
+                    binaries.mkdir(parents=True)
+                    suffix = ".exe" if os.name == "nt" else ""
+                    for name in ("temporal_worker", "outbox_worker"):
+                        (binaries / f"{name}{suffix}").write_text("test-binary", encoding="utf-8")
+                else:
+                    envs.append(kwargs["env"])
+                return SimpleNamespace(returncode=0)
+
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": tmp}, clear=True):
+                with patch.object(smoke_manual_llm_queue.subprocess, "run", side_effect=run):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(smoke_manual_llm_queue.main(), 0)
+
+        self.assertEqual(len(calls), 4)
+        self.assertEqual(calls[0][:3], ["cargo", "build", "--locked"])
+        self.assertIn("temporal_worker", calls[0])
+        self.assertIn("outbox_worker", calls[0])
+        self.assertEqual(len(envs), 3)
+        suffix = ".exe" if os.name == "nt" else ""
+        for env in envs:
+            temporal = Path(env["INTEGRATION_TEMPORAL_WORKER_BIN"])
+            outbox = Path(env["INTEGRATION_OUTBOX_WORKER_BIN"])
+            self.assertEqual((temporal.parent.name, temporal.name), ("debug", f"temporal_worker{suffix}"))
+            self.assertEqual((outbox.parent.name, outbox.name), ("debug", f"outbox_worker{suffix}"))
+
+    def test_failed_prebuild_never_claims_manual_tests_passed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": tmp}, clear=True):
+                with patch.object(
+                    smoke_manual_llm_queue.subprocess,
+                    "run",
+                    return_value=SimpleNamespace(returncode=23),
+                ) as run:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(smoke_manual_llm_queue.main(), 23)
+        self.assertEqual(run.call_count, 1)
+
+    def test_missing_prebuilt_binaries_is_error_not_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": tmp}, clear=True):
+                with patch.object(
+                    smoke_manual_llm_queue.subprocess,
+                    "run",
+                    return_value=SimpleNamespace(returncode=0),
+                ) as run:
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            self.assertEqual(smoke_manual_llm_queue.main(), 1)
         self.assertEqual(run.call_count, 1)
 
     def test_report_smoke_preserves_three_cargo_commands_and_sqlx_offline(self) -> None:
