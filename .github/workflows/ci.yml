@@ -93,16 +93,19 @@ jobs:
           python3 automation/smoke_integration_harness_image_contract.py
           python3 automation/check_temporal_docker_context.py
 
-      - name: Cache Rust workspace builds
+      # Only this owner publishes dependency sources. Three parallel writers to
+      # the old 5.6-GB Cargo.lock/target key raced on a cache miss in CI #201.
+      # Keep compiler-object reuse in sccache while measuring target-free runs.
+      - name: Cache shared Cargo dependency sources (single writer)
+        id: cargo_registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            app/rust/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
 
       - name: Determine directly changed Rust crates and dependent consumers
         env:
@@ -170,6 +173,18 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job architecture-and-rust --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload Rust cache experiment measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-architecture
+          path: automation/reports/cargo_cache_architecture-and-rust.json
+          if-no-files-found: error
+
   # Product/Truth must not wait for the architecture workspace test/compile job.
   # Its complete prior ci_verify.sh phase stays mandatory on a distinct runner.
   product-truth:
@@ -223,16 +238,19 @@ jobs:
         with:
           version: "v0.16.0"
 
-      - name: Reuse Cargo registry and workspace compilation cache
-        uses: actions/cache@v4
+      # Read-only: the architecture job is the only registry cache writer.
+      # Per-job compilation outputs remain uncached in this A/B leg; sccache
+      # continues to cache compiler objects across the isolated target dirs.
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            app/rust/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
 
       - name: Initialize disposable truth/HITL schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
@@ -244,12 +262,18 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job product-truth --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
       - name: Upload measured Product/Truth phase timing
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ci-phase-product
-          path: automation/reports/ci_phase_timings.jsonl
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/cargo_cache_product-truth.json
           if-no-files-found: ignore
 
   rust-security:
@@ -492,16 +516,16 @@ jobs:
         with:
           version: "v0.16.0"
 
-      - name: Reuse workspace compilation cache in the expensive verify job
-        uses: actions/cache@v4
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            app/rust/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
 
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
@@ -521,12 +545,18 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job verify --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
       - name: Upload measured Contracts/Integration phase timings
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ci-phase-verify
-          path: automation/reports/ci_phase_timings.jsonl
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/cargo_cache_verify.json
           if-no-files-found: ignore
 
       - name: Render consistency report

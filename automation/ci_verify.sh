@@ -19,6 +19,7 @@ if [[ "$PHASE" == "all" || "$PHASE" == "contracts" ]]; then
 
 echo "[0/50] Single CI ownership and aggregate policy"
 python3 automation/check_ci_workflow_contract.py
+python3 automation/check_ci_cargo_cache.py
 
 echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
