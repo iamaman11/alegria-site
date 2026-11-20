@@ -6,9 +6,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 from pathlib import Path
 
+from cargo_feedback import run_cargo
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "app" / "rust"
@@ -37,7 +37,10 @@ def main() -> int:
     for name in changed:
         command.extend(["--package", name])
     print(f"SCOPED_FEEDBACK_CHECK={','.join(changed)}", flush=True)
-    subprocess.run(command, cwd=WORKSPACE, check=True)
+    measurement = run_cargo(command, cwd=WORKSPACE)
+    report_path = ROOT / "automation/reports/scoped_cargo_feedback.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(measurement, indent=2) + "\n", encoding="utf-8")
     print("SCOPED_FEEDBACK=PASS (not a release/merge verdict)")
     return 0
 

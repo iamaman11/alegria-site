@@ -12,8 +12,10 @@ import argparse
 import json
 import re
 import subprocess
+import time
 from pathlib import Path
 
+from cargo_feedback import run_cargo
 from ci_impact import (
     ROOT,
     SCHEMA_VERSION,
@@ -94,10 +96,17 @@ def main() -> int:
     for reason in report["full_scope_reasons"]:
         print(f"  FULL_SCOPE: {reason}", flush=True)
 
+    fmt_started = time.monotonic()
     subprocess.run(["cargo", "fmt", "--all", "--", "--check"], cwd=WORKSPACE, check=True)
+    print(f"DEV_RUST_FMT_SECONDS={time.monotonic() - fmt_started:.3f}", flush=True)
+    measurements = []
     for command in commands_for_report(report, check_only=args.check_only):
         print("DEV_RUST_STEP=" + " ".join(command), flush=True)
-        subprocess.run(command, cwd=WORKSPACE, check=True)
+        measurements.append(run_cargo(command, cwd=WORKSPACE))
+    report_path.with_name("alegria-dev-cargo-timings.json").write_text(
+        json.dumps({"impact": report["analysis"], "measurements": measurements}, indent=2) + "\n",
+        encoding="utf-8",
+    )
     print("DEV_RUST_FEEDBACK=PASS (local only; exact-HEAD CI Gate and Windows acceptance still required)")
     return 0
 

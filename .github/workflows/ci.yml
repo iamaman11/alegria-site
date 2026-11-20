@@ -85,6 +85,8 @@ jobs:
         run: |
           python3 automation/check_ci_phase_timing.py
           python3 automation/check_ci_smoke_diagnostics.py
+          python3 automation/check_ci_merge_provenance.py
+          python3 automation/check_cargo_feedback.py
 
       - name: Integration image boundary
         run: python3 automation/smoke_integration_harness_image_contract.py
@@ -121,7 +123,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: rust-change-impact
-          path: automation/reports/ci_impact.json
+          path: |
+            automation/reports/ci_impact.json
+            automation/reports/scoped_cargo_feedback.json
           if-no-files-found: ignore
 
       - name: Rust workspace tests (includes compile)
@@ -642,6 +646,9 @@ jobs:
               and pr["head"]["sha"] == source_sha and pr["base"]["ref"] == "main"
           ]
           require(len(matches) == 1, "merge commit does not match one accepted PR head")
+          merge_tree = fetch(f"git/commits/{merge_sha}")["tree"]["sha"]
+          source_tree = fetch(f"git/commits/{source_sha}")["tree"]["sha"]
+          require(merge_tree == source_tree, "merge tree differs from fully tested PR source tree")
           runs = fetch(f"actions/runs?head_sha={source_sha}&per_page=100")["workflow_runs"]
           accepted = [
               run for run in runs
