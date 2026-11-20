@@ -201,13 +201,25 @@ impl InfraHarness {
     pub async fn start() -> Result<Self> {
         let started = Instant::now();
         let postgres = PostgresHarness::start().await?;
-        eprintln!("CI_HARNESS_READY stage=postgres elapsed_ms={}", started.elapsed().as_millis());
+        eprintln!(
+            "CI_HARNESS_READY stage=postgres elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let qdrant = QdrantHarness::start().await?;
-        eprintln!("CI_HARNESS_READY stage=qdrant elapsed_ms={}", started.elapsed().as_millis());
+        eprintln!(
+            "CI_HARNESS_READY stage=qdrant elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let neo4j = Neo4jHarness::start().await?;
-        eprintln!("CI_HARNESS_READY stage=neo4j elapsed_ms={}", started.elapsed().as_millis());
+        eprintln!(
+            "CI_HARNESS_READY stage=neo4j elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let temporal = TemporalHarness::start().await?;
-        eprintln!("CI_HARNESS_READY stage=temporal elapsed_ms={}", started.elapsed().as_millis());
+        eprintln!(
+            "CI_HARNESS_READY stage=temporal elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         Ok(Self {
             postgres,
             qdrant,
