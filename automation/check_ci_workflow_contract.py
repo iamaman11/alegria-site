@@ -37,6 +37,10 @@ def check() -> None:
         "Docker image source must be the exact tested PR HEAD, never the synthetic merge"
     )
     assert "name: temporal-worker-image-${{ github.event.pull_request.head.sha }}" in worker
+    assert "uses: actions/attest@v4" in worker
+    assert "subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz" in worker
+    assert "id-token: write" in worker and "attestations: write" in worker
+    assert worker.index("uses: actions/attest@v4") < worker.index("uses: actions/upload-artifact@v7")
     assert "        if: github.event_name == 'push'" in source
     assert "commits/{merge_sha}/pulls" in source
     assert "actions/runs?head_sha={source_sha}" in source

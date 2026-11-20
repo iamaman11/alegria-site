@@ -206,6 +206,11 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -251,6 +256,11 @@ jobs:
           (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
           docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
           printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+
+      - name: Sign SLSA provenance for the exact Worker archive
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz
 
       - name: Upload immutable Worker image from this exact CI run
         uses: actions/upload-artifact@v7

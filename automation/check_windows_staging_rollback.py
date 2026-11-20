@@ -38,6 +38,10 @@ def check(script: str) -> None:
         ". (Join-Path $PSScriptRoot 'windows_staging_image.ps1')",
         "& gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir",
         "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
+        "& gh attestation verify $artifact.Archive -R $repo",
+        "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
+        "Assert-Exit 'verify signed GitHub Worker provenance'",
+        "throw 'GitHub Worker archive has no valid signed provenance'",
         "& $docker image load --input $artifact.Archive",
         "if ($loadedId -cne $artifact.ImageId)",
         "& $docker image tag $artifact.ImageId $latestTag",
@@ -95,6 +99,8 @@ def check(script: str) -> None:
         "Outbox must retain its existing build until its artifact is certified"
     )
     assert before_outbox.index("Read-Staging-Verified-Worker-Image") < before_outbox.index(
+        "& gh attestation verify $artifact.Archive -R $repo"
+    ) < before_outbox.index("Assert-Exit 'verify signed GitHub Worker provenance'") < before_outbox.index(
         "& $docker image load --input $artifact.Archive"
     ) < before_outbox.index("& $docker image tag $artifact.ImageId $latestTag")
     assert "& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter" in script

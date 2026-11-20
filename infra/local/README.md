@@ -54,6 +54,9 @@ For `temporal-worker`, CI builds and smoke-tests the real Docker image once
 for the **accepted PR HEAD**, publishes an immutable per-run artifact for
 that exact source SHA, and Windows **downloads, SHA256-checks, loads, verifies the immutable
 image ID and source labels, then retags it** for the existing Compose project.
+Before Docker load, the installer also requires a valid GitHub Sigstore/SLSA
+attestation for the **archive's bytes**, signed by exactly this repository's
+`.github/workflows/ci.yml` workflow; checksum metadata alone is not trusted.
 No new Windows Rust/Docker compilation occurs on the normal candidate path.
 After merging the PR, deploy by its accepted **PR-head SHA**, not the distinct
 two-parent merge SHA. The `main` gate checks provenance without compiling or

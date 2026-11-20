@@ -227,6 +227,15 @@ if ($Service -eq 'temporal-worker') {
         & gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir
         Assert-Exit 'download CI-verified Worker image'
         $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit
+        # A checksum shipped beside the archive only detects corruption. This
+        # Sigstore check additionally ties those bytes to GitHub's own signed
+        # build provenance for the precise canonical workflow identity.
+        $attestJson = & gh attestation verify $artifact.Archive -R $repo `
+            --signer-workflow "$repo/.github/workflows/ci.yml" --deny-self-hosted-runners --format json
+        Assert-Exit 'verify signed GitHub Worker provenance'
+        if (@(($attestJson | Out-String | ConvertFrom-Json)).Count -lt 1) {
+            throw 'GitHub Worker archive has no valid signed provenance'
+        }
         & $docker image load --input $artifact.Archive | Out-Null
         Assert-Exit 'load verified CI Worker image'
         $imageTag = 'alegria-seo-temporal:ci'
