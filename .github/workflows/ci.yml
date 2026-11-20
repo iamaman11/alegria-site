@@ -89,7 +89,9 @@ jobs:
           python3 automation/check_cargo_feedback.py
 
       - name: Integration image boundary
-        run: python3 automation/smoke_integration_harness_image_contract.py
+        run: |
+          python3 automation/smoke_integration_harness_image_contract.py
+          python3 automation/check_temporal_docker_context.py
 
       - name: Cache Rust workspace builds
         uses: actions/cache@v4
