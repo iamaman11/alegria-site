@@ -32,6 +32,28 @@ $check = @{
 }
 
 Assert-Equal (Test-Staging-Readback -Observed $readback @check) $true 'verified candidate'
+# Docker Compose may report a failure *after* recreating a stopped candidate.
+# Authorize a subsequent start only by exact immutable identity, never by name alone.
+$identityCheck = @{
+    ExpectedImage = $new
+    ExpectedProject = $project
+    ExpectedCheckout = $newRoot
+    ExpectedBuildId = $sha
+}
+$createdCandidate = $readback.Clone()
+$createdCandidate.State = 'created'
+Assert-Equal (Test-Staging-Identity -Observed $createdCandidate @identityCheck) $true 'exact created candidate may be started'
+Assert-Equal (Test-Staging-Readback -Observed $createdCandidate @check) $false 'created candidate is not deployed'
+$wrongCreated = $createdCandidate.Clone()
+$wrongCreated.Image = $old
+Assert-Equal (Test-Staging-Identity -Observed $wrongCreated @identityCheck) $false 'foreign image must not be started'
+$wrongCreated = $createdCandidate.Clone()
+$wrongCreated.Checkout = $oldRoot
+Assert-Equal (Test-Staging-Identity -Observed $wrongCreated @identityCheck) $false 'old checkout must not be started'
+$wrongCreated = $createdCandidate.Clone()
+$wrongCreated.BuildId = 'b' * 40
+Assert-Equal (Test-Staging-Identity -Observed $wrongCreated @identityCheck) $false 'old build id must not be started'
+Assert-Equal (Test-Staging-Identity -Observed $null @identityCheck) $false 'unreadable container must not be started'
 Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $true -OldVerified $false -StartExit 0) 'DEPLOYED' 'normal start'
 Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $true -OldVerified $false -StartExit -1) 'DEPLOYED_AFTER_START_ERROR' 'Docker -1 but exact candidate observed'
 Assert-Equal (Resolve-Staging-Decision -EngineReady $true -NewVerified $true -OldVerified $false -StartExit 125) 'DEPLOYED_AFTER_START_ERROR' 'Docker nonzero but exact candidate observed'
@@ -67,9 +89,13 @@ $withEnvCheck = $check.Clone()
 $withEnvCheck.ExpectedEnvironment = $wanted
 Assert-Equal (Test-Staging-Readback -Observed $withEnv @withEnvCheck) $true 'desired config readback'
 Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $true 'same SHA same environment noop'
+$identityWithEnv = $identityCheck.Clone()
+$identityWithEnv.ExpectedEnvironment = $wanted
+Assert-Equal (Test-Staging-Identity -Observed $withEnv @identityWithEnv) $true 'created candidate matching exact provider configuration'
 $withEnv.Environment = @('DATAFORSEO_LOGIN=example-login', 'CLOUDFLARE_API_TOKEN=old-example-token')
 Assert-Equal (Test-Staging-Readback -Observed $withEnv @withEnvCheck) $false 'stale token rejected'
 Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $false 'same SHA different environment requires recreate'
+Assert-Equal (Test-Staging-Identity -Observed $withEnv @identityWithEnv) $false 'stale provider configuration must not be started'
 $wanted.CLOUDFLARE_API_TOKEN = ''
 $withEnv.Environment = @('DATAFORSEO_LOGIN=example-login', 'CLOUDFLARE_API_TOKEN=')
 Assert-Equal (Test-Staging-EnvironmentMatches -Expected $wanted -Actual $withEnv.Environment) $true 'blank previous secret preserved'

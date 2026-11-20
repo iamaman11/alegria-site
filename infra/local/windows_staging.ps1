@@ -168,7 +168,7 @@ if ($LASTEXITCODE -eq 0) {
     Write-Output "ROLLBACK_RECOVERY=REBUILD_PREVIOUS_SOURCE PREVIOUS_SHA=$oldSha"
     & $docker @previousArgs config --quiet
     Assert-Exit 'previous Compose config'
-    & $docker @previousArgs build $Service
+    & $docker @previousArgs build --quiet $Service
     Assert-Exit 'rebuild previous image'
     $recoveredImage = $project + '-' + $Service + ':latest'
     # Create, but never run, a disposable verifier. No provider secret is copied
@@ -214,7 +214,7 @@ $rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Ou
 Assert-Exit 'rollback guard: verified image absent'
 if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
-& $docker @newArgs build $Service
+& $docker @newArgs build --quiet $Service
 Assert-Exit "build $Service"
 $latestTag = $project + '-' + $Service + ':latest'
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
@@ -269,7 +269,7 @@ function Test-Worker-Metrics {
         return ($response.StatusCode -eq 200)
     } catch { return $false }
 }
-function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 30) {
+function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 90) {
     # Docker Desktop Hyper-V may restart while Compose is waiting. Command exit
     # -1 is not proof of a failed container start or a successful rollback.
     $lastReady = $false
@@ -320,7 +320,27 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
     } catch {
         Write-Warning 'Compose create raised an exception; reconciling actual container state'
     }
-    if ($createExit -ne 0) { return $createExit }
+    if ($createExit -ne 0) {
+        # Compose may return nonzero after it has already recreated the target.
+        # Start only the exact candidate from this checkout and effective config;
+        # never start an unowned/stale container as a side effect of recovery.
+        $created = $null
+        for ($probe = 0; $probe -lt 5; $probe++) {
+            $created = Read-Worker-Observed
+            if ($null -ne $created) { break }
+            if ($probe -lt 4) { Start-Sleep -Seconds 2 }
+        }
+        $ownedCandidate = Test-Staging-Identity -Observed $created -ExpectedImage $newImage `
+            -ExpectedProject $project -ExpectedCheckout $root `
+            -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
+            -ExpectedEnvironment $expectedEnvironment
+        if (-not $ownedCandidate -or $created.State -notin @('created','exited','running')) {
+            Write-Warning "Compose recreate exit $createExit; exact candidate not verified for safe start"
+            return $createExit
+        }
+        Write-Warning "Compose recreate exit $createExit after exact candidate was created"
+        if ($created.State -eq 'running') { return $createExit }
+    }
     try {
         # Docker Desktop may leave the native CLI waiting even after it has
         # accepted the start. Bound the CLI, then trust only engine readback.
@@ -329,11 +349,14 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
             $startInfo.FileName = $docker
             $startInfo.ArgumentList.Add('start')
             $startInfo.ArgumentList.Add($target)
-            $startInfo.UseShellExecute = $true
+            $startInfo.UseShellExecute = $false
             $startInfo.CreateNoWindow = $true
             $startProcess = [System.Diagnostics.Process]::Start($startInfo)
             if ($startProcess.WaitForExit(20000)) {
-                return [int]$startProcess.ExitCode
+                $startExitCode = [int]$startProcess.ExitCode
+                # Keep Compose's original error visible even if Docker start succeeds.
+                if ($createExit -ne 0 -and $startExitCode -eq 0) { return $createExit }
+                return $startExitCode
             }
             try { $startProcess.Kill($true) } catch {}
             Write-Warning "Native Docker start timed out (attempt $attempt/2); checking engine after retry"
@@ -350,6 +373,7 @@ if ($startExit -ne 0) {
     Write-Warning "Worker create/start returned exit $startExit; checking Docker engine and exact deployed identity before rollback"
 }
 $decision = Wait-Worker-Reconciliation -StartExit $startExit
+Write-Output "RECONCILIATION=$decision START_EXIT=$startExit"
 if ($decision -eq 'DEPLOYED') {
     Write-Output "DEPLOYED=$Service COMMIT=$Commit PROJECT=$project IMAGE=$newImage"
     exit 0

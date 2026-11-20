@@ -39,6 +39,34 @@ function Test-Staging-EnvironmentMatches {
     return $true
 }
 
+function Test-Staging-Identity {
+    [CmdletBinding()]
+    param(
+        [AllowNull()][object]$Observed,
+        [string]$ExpectedImage,
+        [string]$ExpectedProject,
+        [string]$ExpectedCheckout,
+        [string]$ExpectedBuildId,
+        [AllowNull()][object]$ExpectedEnvironment
+    )
+    if ($null -eq $Observed) { return $false }
+    if (-not $ExpectedImage -or $Observed.Image -ne $ExpectedImage) { return $false }
+    if (-not $ExpectedProject -or $Observed.Project -ne $ExpectedProject) { return $false }
+    if (-not $ExpectedCheckout -or
+        -not [string]::Equals([string]$Observed.Checkout, $ExpectedCheckout,
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    if ($ExpectedBuildId -and $Observed.BuildId -ne $ExpectedBuildId) {
+        return $false
+    }
+    if ($null -ne $ExpectedEnvironment -and -not
+        (Test-Staging-EnvironmentMatches -Expected $ExpectedEnvironment -Actual $Observed.Environment)) {
+        return $false
+    }
+    return $true
+}
+
 function Test-Staging-Readback {
     [CmdletBinding()]
     param(
@@ -51,23 +79,13 @@ function Test-Staging-Readback {
         [bool]$MetricsOk,
         [AllowNull()][object]$ExpectedEnvironment
     )
-    if ($null -eq $Observed) { return $false }
-    if ($Observed.State -ne 'running') { return $false }
-    if (-not $ExpectedImage -or $Observed.Image -ne $ExpectedImage) { return $false }
-    if (-not $ExpectedProject -or $Observed.Project -ne $ExpectedProject) { return $false }
-    if (-not $ExpectedCheckout -or
-        -not [string]::Equals([string]$Observed.Checkout, $ExpectedCheckout,
-            [System.StringComparison]::OrdinalIgnoreCase)) {
-        return $false
-    }
-    if ($ExpectedBuildId -and $Observed.BuildId -ne $ExpectedBuildId) {
+    if ($null -eq $Observed -or $Observed.State -ne 'running') { return $false }
+    if (-not (Test-Staging-Identity -Observed $Observed -ExpectedImage $ExpectedImage `
+        -ExpectedProject $ExpectedProject -ExpectedCheckout $ExpectedCheckout `
+        -ExpectedBuildId $ExpectedBuildId -ExpectedEnvironment $ExpectedEnvironment)) {
         return $false
     }
     if ($MetricsRequired -and -not $MetricsOk) { return $false }
-    if ($null -ne $ExpectedEnvironment -and -not
-        (Test-Staging-EnvironmentMatches -Expected $ExpectedEnvironment -Actual $Observed.Environment)) {
-        return $false
-    }
     return $true
 }
 
