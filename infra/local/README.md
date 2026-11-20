@@ -50,11 +50,14 @@ The script requires the single exact-commit `ci` workflow's `CI` gate to
 succeed, detects the live project from PostgreSQL's Compose label, preserves
 existing named volumes, and retrieves source only from canonical GitHub.
 
-For `temporal-worker`, CI builds and smoke-tests the real Docker image once,
-publishes an immutable per-run artifact for that precise PR-head or main-merge
-SHA, and Windows **downloads, SHA256-checks, loads, verifies the immutable
+For `temporal-worker`, CI builds and smoke-tests the real Docker image once
+for the **accepted PR HEAD**, publishes an immutable per-run artifact for
+that exact source SHA, and Windows **downloads, SHA256-checks, loads, verifies the immutable
 image ID and source labels, then retags it** for the existing Compose project.
 No new Windows Rust/Docker compilation occurs on the normal candidate path.
+After merging the PR, deploy by its accepted **PR-head SHA**, not the distinct
+two-parent merge SHA. The `main` gate checks provenance without compiling or
+pretending that the PR image was built from the merge commit.
 A missing, expired or mismatched image artifact is a hard NO-GO: never fall back
 to an uncertified local candidate build. The previous worker image is preserved
 under its rollback tag before retagging the candidate. The previous-image

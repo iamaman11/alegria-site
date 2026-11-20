@@ -29,15 +29,14 @@ def check() -> None:
     gate = source.split("  gate:\n", 1)[1]
     for job in required:
         assert f"      - {job}\n" in gate, f"not included in final CI gate: {job}"
-    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", source)) == len(required) - 1, (
-        "seven full validation owners must run on PR only; main must not repeat those validations"
+    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", source)) == len(required), (
+        "every full owner job must run on PR only; main must not repeat heavy builds"
     )
-    # Windows deploys the exact GitHub SHA, including a two-parent main merge.
-    # A PR image cannot impersonate the distinct main source commit. Until an
-    # equivalent content-addressed promotion is independently certified, the
-    # real image owner alone must build/upload for both commit kinds.
-    assert "  temporal-worker-docker:\n    # Main's merge SHA also needs its own immutable image;" in source
-    assert "    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'" in source
+    worker = source.split("  temporal-worker-docker:\n", 1)[1].split("  stack-temporal-postgres18:\n", 1)[0]
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in worker, (
+        "Docker image source must be the exact tested PR HEAD, never the synthetic merge"
+    )
+    assert "name: temporal-worker-image-${{ github.event.pull_request.head.sha }}" in worker
     assert "        if: github.event_name == 'push'" in source
     assert "commits/{merge_sha}/pulls" in source
     assert "actions/runs?head_sha={source_sha}" in source

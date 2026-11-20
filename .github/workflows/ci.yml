@@ -201,9 +201,9 @@ jobs:
           cmp "$public/index.html" "$built"
 
   temporal-worker-docker:
-    # Main's merge SHA also needs its own immutable image; a PR image is
-    # intentionally not relabelled as the subsequent two-parent merge commit.
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    # Build only for the accepted PR HEAD. Main retains its fast provenance
+    # gate and never recompiles/relabels this image after the protected merge.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
@@ -211,10 +211,10 @@ jobs:
         with:
           # PR defaults to a synthetic merge commit, which is not the exact
           # checkout that Windows installs by a requested 40-character SHA.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Build the actual canonical Temporal worker image
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           docker build --progress=plain \
@@ -239,7 +239,7 @@ jobs:
 
       - name: Save the tested Worker image once for Windows no-build deployment
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -255,7 +255,7 @@ jobs:
       - name: Upload immutable Worker image from this exact CI run
         uses: actions/upload-artifact@v7
         with:
-          name: temporal-worker-image-${{ github.event.pull_request.head.sha || github.sha }}
+          name: temporal-worker-image-${{ github.event.pull_request.head.sha }}
           path: ${{ runner.temp }}/temporal-worker-artifact/
           if-no-files-found: error
           compression-level: 0
