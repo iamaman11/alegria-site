@@ -36,6 +36,20 @@ def check() -> None:
     assert "ref: ${{ github.event.pull_request.head.sha }}" in worker, (
         "Docker image source must be the exact tested PR HEAD, never the synthetic merge"
     )
+    # Buildx persists unchanged Docker/Rust layers between exact-HEAD PR runs,
+    # but the loaded runtime image and signed archive remain the real output.
+    assert "uses: docker/setup-buildx-action@v4" in worker
+    assert "uses: docker/build-push-action@v7" in worker
+    assert "test \"$(git rev-parse HEAD)\" = \"$SOURCE_SHA\"" in worker
+    for required_image_input in (
+        "context: .", "file: app/rust/services/temporal/Dockerfile",
+        "push: false", "load: true", "tags: alegria-seo-temporal:ci",
+        "cache-from: type=gha,scope=alegria-temporal-worker",
+        "cache-to: type=gha,scope=alegria-temporal-worker,mode=max",
+        "org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}",
+        "by.alegria.source-head-sha=${{ github.event.pull_request.head.sha }}",
+    ):
+        assert required_image_input in worker, f"missing exact-image Buildx input: {required_image_input}"
     assert "name: temporal-worker-image-${{ github.event.pull_request.head.sha }}" in worker
     assert "uses: actions/attest@v4" in worker
     assert "subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz" in worker

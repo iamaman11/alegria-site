@@ -319,16 +319,27 @@ jobs:
           # PR defaults to a synthetic merge commit, which is not the exact
           # checkout that Windows installs by a requested 40-character SHA.
           ref: ${{ github.event.pull_request.head.sha }}
-      - name: Build the actual canonical Temporal worker image
+      - name: Verify exact PR source before image build
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          docker build --progress=plain \
-            -f app/rust/services/temporal/Dockerfile \
-            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
-            --label "by.alegria.source-head-sha=${SOURCE_SHA}" \
-            -t alegria-seo-temporal:ci .
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the actual canonical Temporal worker image with persistent layers
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/rust/services/temporal/Dockerfile
+          push: false
+          load: true
+          tags: alegria-seo-temporal:ci
+          labels: |
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+            by.alegria.source-head-sha=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=alegria-temporal-worker
+          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
       - name: Verify the runtime image includes its native deploy tools
         run: |
           docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
