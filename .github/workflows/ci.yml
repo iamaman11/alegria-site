@@ -85,6 +85,7 @@ jobs:
         run: |
           python3 automation/check_ci_phase_timing.py
           python3 automation/check_ci_rust_owned_check.py
+          python3 automation/check_truth_worker_build_targets.py
           python3 automation/check_ci_smoke_diagnostics.py
           python3 automation/check_ci_merge_provenance.py
           python3 automation/check_cargo_feedback.py

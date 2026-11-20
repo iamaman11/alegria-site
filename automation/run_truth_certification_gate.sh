@@ -7,24 +7,39 @@ LOG_PATH="$(mktemp /tmp/truth-cert-gate.XXXXXX.log)"
 TARGET_ROOT="${TRUTH_CERT_TARGET_ROOT:-$ROOT_DIR/app/rust/target}"
 NESTED_TARGET_ROOT="${TRUTH_CERT_NESTED_TARGET_ROOT:-$TARGET_ROOT/integration-harness-nested}"
 SUITE_TARGET_DIR="${TRUTH_CERT_SUITE_TARGET_DIR:-$TARGET_ROOT/integration-harness-suite}"
-TEMPORAL_TARGET_DIR="$NESTED_TARGET_ROOT/temporal_worker"
-OUTBOX_TARGET_DIR="$NESTED_TARGET_ROOT/outbox_worker"
-TEMPORAL_BIN="$TEMPORAL_TARGET_DIR/debug/temporal_worker"
-OUTBOX_BIN="$OUTBOX_TARGET_DIR/debug/outbox_worker"
+# Reuse compiled dependencies between the real Worker binaries, without
+# sharing their target with the integration harness running those binaries.
+# Runtime processes, binary identities and the disposable DB remain separate.
+WORKERS_TARGET_DIR="$NESTED_TARGET_ROOT/workers"
+TEMPORAL_BIN="$WORKERS_TARGET_DIR/debug/temporal_worker"
+OUTBOX_BIN="$WORKERS_TARGET_DIR/debug/outbox_worker"
+
+if [[ "$(realpath -m "$WORKERS_TARGET_DIR")" == "$(realpath -m "$SUITE_TARGET_DIR")" ]]; then
+  echo "Truth Worker and integration harness Cargo target directories must differ" >&2
+  exit 2
+fi
 
 cd "$ROOT_DIR"
 
 rm -f "$REPORT_PATH"
 
 bash automation/measure_ci_phase.sh truth_worker_build cargo build --manifest-path app/rust/Cargo.toml \
-  --target-dir "$TEMPORAL_TARGET_DIR" \
+  --target-dir "$WORKERS_TARGET_DIR" \
   -p temporal_worker \
   --bin temporal_worker
 
 bash automation/measure_ci_phase.sh truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml \
-  --target-dir "$OUTBOX_TARGET_DIR" \
+  --target-dir "$WORKERS_TARGET_DIR" \
   -p outbox_worker \
   --bin outbox_worker
+
+for worker_bin in "$TEMPORAL_BIN" "$OUTBOX_BIN"; do
+  if [[ ! -x "$worker_bin" ]]; then
+    echo "Missing or non-executable Truth Worker binary: $worker_bin" >&2
+    exit 1
+  fi
+done
+echo "CI_TRUTH_WORKER_BINARIES temporal=$TEMPORAL_BIN outbox=$OUTBOX_BIN"
 
 # Prove both Qdrant transports on a real container before running the
 # multi-fixture truth certification. A gRPC-only harness cannot validate the
