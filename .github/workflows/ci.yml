@@ -84,6 +84,7 @@ jobs:
       - name: Regression-test exact CI timing and failure propagation
         run: |
           python3 automation/check_ci_phase_timing.py
+          python3 automation/check_ci_rust_owned_check.py
           python3 automation/check_ci_smoke_diagnostics.py
           python3 automation/check_ci_merge_provenance.py
           python3 automation/check_cargo_feedback.py
@@ -144,6 +145,16 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: cargo test -p integration_harness --features e2e --no-run --locked
+
+      # These exact checks used to rebuild Rust artifacts sequentially inside
+      # verify's Python contracts/integration phases. Run them on the mandatory
+      # Rust owner after its workspace/e2e compilation to reuse those outputs.
+      # The standalone ci_verify.sh still executes them in full outside CI.
+      - name: Retained Rust-backed crawler, proto and run-report checks
+        run: |
+          python3 automation/smoke_crawler_robots_policy.py
+          bash automation/contract_verify.sh
+          python3 automation/smoke_run_report_completeness.py
 
       - name: Execute retained-source and editorial ownership PostgreSQL regressions
         working-directory: app/rust
@@ -477,6 +488,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # The three real Rust-backed checks run on the mandatory architecture
+      # owner; the shared gate requires that job's success as well as verify.
+      CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       # Disposable integration database, never a production credential.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci

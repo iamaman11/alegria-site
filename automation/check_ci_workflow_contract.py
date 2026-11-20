@@ -73,6 +73,29 @@ def check() -> None:
     assert "bash automation/ci_verify.sh product" not in verify
     assert "bash automation/ci_verify.sh contracts" in verify
     assert "bash automation/ci_verify.sh integration" in verify
+    # Preserve every actual test, but run the expensive Rust-backed checks in
+    # the already compiled native Rust owner instead of recompiling and
+    # relinking them inside verify's sequential Python phase.
+    rust_owned = (
+        ("python3", "automation/smoke_crawler_robots_policy.py"),
+        ("bash", "automation/contract_verify.sh"),
+        ("python3", "automation/smoke_run_report_completeness.py"),
+    )
+    assert 'CI_RUST_CHECK_OWNER: "architecture-and-rust"' in verify
+    assert "CI_RUST_CHECK_OWNER: " not in architecture
+    assert "CI_RUST_CHECK_OWNER: " not in product
+    assert "name: Retained Rust-backed crawler, proto and run-report checks" in architecture
+    assert architecture.index("cargo test -p integration_harness --features e2e --no-run --locked") < architecture.index(
+        "name: Retained Rust-backed crawler, proto and run-report checks"
+    ), "Rust-backed checks must reuse the already compiled workspace/e2e artifacts"
+    for interpreter, script_name in rust_owned:
+        command = f"{interpreter} {script_name}"
+        assert architecture.count(command) == 1, f"missing native owner for {script_name}"
+        assert shell.count(f"bash automation/run_rust_owned_check.sh {command}") == 1, (
+            f"standalone ci_verify.sh must retain {script_name}"
+        )
+        assert command not in verify, f"duplicate Rust compilation in verify: {script_name}"
+    assert "python3 automation/check_ci_rust_owned_check.py" in architecture
     # All three owners run concurrently on separate ephemeral GitHub VMs.
     # No phase can read another owner's mutable PostgreSQL state or artifacts.
     for owner in (architecture, product, verify):

@@ -39,7 +39,7 @@ echo "[3a/50] Crawler invariants contract (fail early)"
 python3 automation/check_crawler_invariants.py
 
 echo "[3b/50] Crawler robots-policy smoke (fail early)"
-python3 automation/smoke_crawler_robots_policy.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_crawler_robots_policy.py
 
 echo "[3c/50] Crawl provenance contract (fail early)"
 python3 automation/check_crawl_provenance_contract.py
@@ -116,7 +116,7 @@ echo "[18/50] Services/temporal boundary"
 python3 automation/check_services_temporal_boundary.py
 
 echo "[19/50] Proto contract verify"
-bash automation/contract_verify.sh
+bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
 
 echo "[20/50] Reliability contracts check"
 python3 automation/check_reliability_contracts.py
@@ -384,7 +384,7 @@ echo "[42c/53] Run report completeness"
 python3 automation/check_run_report_completeness.py
 
 echo "[42d/53] Run report completeness smoke"
-python3 automation/smoke_run_report_completeness.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_run_report_completeness.py
 
 echo "[42d1/53] Manual LLM PostgreSQL inbox lifecycle E2E"
 python3 automation/smoke_manual_llm_queue.py
