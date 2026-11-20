@@ -21,6 +21,12 @@ jobs:
     timeout-minutes: 45
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      # Release-like CI compiles use a shared compiler-object cache, including
+      # the isolated Truth/Outbox/e2e target dirs; local dev stays incremental.
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       # Execute Rust truth/HITL SQL tests on this disposable PostgreSQL,
       # not merely compile them in a separate job without DATABASE_URL.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
@@ -55,6 +61,19 @@ jobs:
       - name: Pin the same stable Rust toolchain as the verify job
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Match the Python runtime used by the original Product/Truth owner
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install audit tools required by the Product/Truth phase
+        run: python -m pip install --disable-pip-version-check ruff==0.17.4
+
+      - name: Cache Rust compiler outputs across independent target directories
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
       - name: Initialize disposable truth/HITL schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
@@ -67,6 +86,9 @@ jobs:
 
       - name: Regression-test fail-closed Rust change impact analysis
         run: python3 automation/check_ci_impact.py
+
+      - name: Regression-test exact CI timing and failure propagation
+        run: python3 automation/check_ci_phase_timing.py
 
       - name: Integration image boundary
         run: python3 automation/smoke_integration_harness_image_contract.py
@@ -141,6 +163,25 @@ jobs:
           cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
             check-fact-verifier-parity --root . \
             --report-json automation/reports/fact_verifier_parity.rust.json
+
+      # This entire established phase used to run serially between Contracts
+      # and Integration in verify. The architecture job already has its own
+      # isolated disposable Postgres and test runner; keep tests intact while
+      # executing both full phases concurrently in separate mandatory jobs.
+      - name: Product and truth invariants (separate disposable CI runner)
+        run: bash automation/measure_ci_phase.sh product bash automation/ci_verify.sh product
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload measured Product/Truth phase timing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-phase-product
+          path: automation/reports/ci_phase_timings.jsonl
+          if-no-files-found: ignore
 
   rust-security:
     if: github.event_name == 'pull_request'
@@ -329,6 +370,10 @@ jobs:
     timeout-minutes: 60
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       # Disposable integration database, never a production credential.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       # Only this disposable CI database may run scoped truth SQL smoke tests.
@@ -362,6 +407,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache compiler outputs across Truth, Outbox and semantic targets
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
       - name: Reuse workspace compilation cache in the expensive verify job
         uses: actions/cache@v4
         with:
@@ -382,13 +432,22 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Source contracts and policy
-        run: bash automation/ci_verify.sh contracts
-
-      - name: Product and truth invariants
-        run: bash automation/ci_verify.sh product
+        run: bash automation/measure_ci_phase.sh contracts bash automation/ci_verify.sh contracts
 
       - name: Integration and consistency checks
-        run: bash automation/ci_verify.sh integration
+        run: bash automation/measure_ci_phase.sh integration bash automation/ci_verify.sh integration
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Upload measured Contracts/Integration phase timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-phase-verify
+          path: automation/reports/ci_phase_timings.jsonl
+          if-no-files-found: ignore
 
       - name: Render consistency report
         if: always()
