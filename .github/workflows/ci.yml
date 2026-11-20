@@ -201,15 +201,26 @@ jobs:
           cmp "$public/index.html" "$built"
 
   temporal-worker-docker:
-    if: github.event_name == 'pull_request'
+    # Main's merge SHA also needs its own immutable image; a PR image is
+    # intentionally not relabelled as the subsequent two-parent merge commit.
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
       - uses: actions/checkout@v7
+        with:
+          # PR defaults to a synthetic merge commit, which is not the exact
+          # checkout that Windows installs by a requested 40-character SHA.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - name: Build the actual canonical Temporal worker image
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           docker build --progress=plain \
             -f app/rust/services/temporal/Dockerfile \
+            --label "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --label "by.alegria.source-head-sha=${SOURCE_SHA}" \
             -t alegria-seo-temporal:ci .
       - name: Verify the runtime image includes its native deploy tools
         run: |
@@ -225,6 +236,30 @@ jobs:
             python3 -m py_compile /app/automation/check_first_site_release.py
             test -f /app/automation/check_first_site_release.py
           '
+
+      - name: Save the tested Worker image once for Windows no-build deployment
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/temporal-worker-artifact"
+          mkdir -p "$artifact_dir"
+          label="$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' alegria-seo-temporal:ci)"
+          test "$label" = "$SOURCE_SHA"
+          docker save alegria-seo-temporal:ci | gzip -1 > "$artifact_dir/temporal-worker.tar.gz"
+          (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
+          docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
+          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+
+      - name: Upload immutable Worker image from this exact CI run
+        uses: actions/upload-artifact@v7
+        with:
+          name: temporal-worker-image-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
   stack-temporal-postgres18:
     if: github.event_name == 'pull_request'
@@ -377,6 +412,7 @@ jobs:
         run: |
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
 
   gate:
     name: CI

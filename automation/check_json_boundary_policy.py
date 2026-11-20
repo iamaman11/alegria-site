@@ -25,6 +25,10 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel.startswith("app/rust/crates/infrastructure/src/adapters/"):
         return True
+    # Transport-only Qdrant boundary, extracted verbatim from infrastructure.
+    # Wire JSON remains legal here, never in the SEO domain or step crates.
+    if rel.startswith("app/rust/crates/vector_qdrant/src/"):
+        return True
     if rel.startswith("app/rust/crates/integration_harness/src/"):
         return True
     if rel in {

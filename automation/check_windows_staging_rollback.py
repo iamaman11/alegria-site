@@ -22,7 +22,7 @@ def check(script: str) -> None:
         "WHERE status NOT IN ('done','failed');",
         "if ($EnvFile)",
         "if ($Service -ne 'temporal-worker')",
-        "& $docker @previousArgs build $Service",
+        "& $docker @previousArgs build --quiet $Service",
         "& $docker create --network none --entrypoint /bin/true $recoveredImage",
         "& $docker cp ($target + ':/' + $file) $live",
         "& $docker cp ($verifier + ':/' + $file) $rebuilt",
@@ -35,7 +35,13 @@ def check(script: str) -> None:
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
         "-ExpectedImage $rollbackImage",
         "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
-        "& $docker @newArgs build $Service",
+        ". (Join-Path $PSScriptRoot 'windows_staging_image.ps1')",
+        "& gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir",
+        "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
+        "& $docker image load --input $artifact.Archive",
+        "if ($loadedId -cne $artifact.ImageId)",
+        "& $docker image tag $artifact.ImageId $latestTag",
+        "& $docker @newArgs build --quiet $Service",
         "function Invoke-Compose-Recreate-Start",
         "& $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service",
         "$startInfo.ArgumentList.Add('start')",
@@ -71,21 +77,33 @@ def check(script: str) -> None:
     ]
     for snippet in required:
         assert snippet in script, f"missing safety check: {snippet}"
-    recovery = script.index("& $docker @previousArgs build $Service")
+    recovery = script.index("& $docker @previousArgs build --quiet $Service")
     compare = script.index("Get-FileHash $live -Algorithm SHA256")
     preserve = script.index("& $docker image tag $recoveredImage $rollbackTag")
     guard = script.index("Assert-Exit 'rollback guard: verified image absent'")
-    candidate_build = script.index("& $docker @newArgs build $Service")
+    candidate_selection = script.index("$latestTag = $project + '-' + $Service + ':latest'")
     recreate = script.index("$startExit = Invoke-Compose-Recreate-Start -ComposeArgs $newArgs")
     rollback_image = script.index("$rollbackImage = ((& $docker image inspect $rollbackTag")
-    assert recovery < compare < preserve < rollback_image < guard < candidate_build < recreate
+    assert recovery < compare < preserve < rollback_image < guard < candidate_selection < recreate
+    artifact_branch = script[candidate_selection:script.index("$newImage = ((& $docker image inspect $latestTag")]
+    before_outbox, outbox = artifact_branch.split("} else {", 1)
+    assert "if ($Service -eq 'temporal-worker')" in before_outbox
+    assert "& $docker @newArgs build --quiet $Service" not in before_outbox, (
+        "Temporal candidate must load a tested CI image, not compile on Windows"
+    )
+    assert "& $docker @newArgs build --quiet $Service" in outbox, (
+        "Outbox must retain its existing build until its artifact is certified"
+    )
+    assert before_outbox.index("Read-Staging-Verified-Worker-Image") < before_outbox.index(
+        "& $docker image load --input $artifact.Archive"
+    ) < before_outbox.index("& $docker image tag $artifact.ImageId $latestTag")
     assert "& $docker exec alegria_temporal_worker /usr/local/bin/temporal_starter" in script
     assert " @newArgs run --rm --no-deps" not in script, (
         "terminal-run reconciliation must reuse the running worker, not a temporary Compose run"
     )
     reconcile = script.index("Assert-Exit 'Temporal terminal-run reconciliation'")
     active_guard = script.index("if ($activeCount -ne '0')")
-    assert candidate_build < reconcile < active_guard < recreate, (
+    assert candidate_selection < reconcile < active_guard < recreate, (
         "verify Temporal terminal state using the candidate CLI before replacing a worker"
     )
     readback = script.index("$decision = Wait-Worker-Reconciliation -StartExit $startExit")
