@@ -52,12 +52,21 @@ jobs:
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
 
+      - name: Pin the same stable Rust toolchain as the verify job
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Initialize disposable truth/HITL schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Rust formatting
         working-directory: app/rust
         run: cargo fmt --all -- --check
+
+      - name: Verify isolated Rust service dependency boundaries
+        run: python3 automation/check_module_boundaries.py
+
+      - name: Regression-test fail-closed Rust change impact analysis
+        run: python3 automation/check_ci_impact.py
 
       - name: Integration image boundary
         run: python3 automation/smoke_integration_harness_image_contract.py
@@ -72,6 +81,30 @@ jobs:
           key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
             cargo-${{ runner.os }}-
+
+      - name: Determine directly changed Rust crates and dependent consumers
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+          python3 automation/ci_impact.py \
+            --base "$PR_BASE_SHA" \
+            --head "$CI_HEAD_SHA" \
+            --report automation/reports/ci_impact.json
+
+      - name: Fast scoped Rust feedback (never replaces mandatory acceptance)
+        env:
+          SQLX_OFFLINE: "true"
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
+
+      - name: Upload machine-readable Rust change impact report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-change-impact
+          path: automation/reports/ci_impact.json
+          if-no-files-found: ignore
 
       - name: Rust workspace tests (includes compile)
         working-directory: app/rust
@@ -283,6 +316,17 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Reuse workspace compilation cache in the expensive verify job
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            app/rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
 
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler

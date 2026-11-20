@@ -39,7 +39,7 @@ name = "analytics_svc"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "infrastructure",
+ "graph_neo4j",
  "prost",
  "tokio",
  "tonic",
@@ -1872,11 +1872,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "graph_neo4j"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "neo4rs",
+ "tokio",
+]
+
+[[package]]
 name = "gsc_sync"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "infrastructure",
+ "http_client",
  "oauth2",
  "serde_json",
  "tokio",
@@ -2054,6 +2063,14 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "http_client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest 0.13.5",
+]
 
 [[package]]
 name = "hybrid-array"
@@ -2341,7 +2358,9 @@ dependencies = [
  "bytes",
  "chrono",
  "contracts",
+ "graph_neo4j",
  "http-body-util",
+ "http_client",
  "hyper",
  "hyper-util",
  "neo4rs",

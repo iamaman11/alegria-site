@@ -1,11 +1,12 @@
 use anyhow::Result;
-use infrastructure::adapters::neo4rs_adapter::{connect_neo4j, query, Graph};
-use infrastructure::adapters::tonic_adapter::{async_trait, Request, Response, Server, Status};
+use graph_neo4j::{connect_neo4j, query, Graph};
 use std::collections::{HashMap, HashSet};
+use tonic::transport::Server;
+use tonic::{async_trait, Request, Response, Status};
 use tracing::info;
 
 pub mod proto {
-    infrastructure::adapters::tonic_adapter::include_proto!("alegria.analytics.v1");
+    tonic::include_proto!("alegria.analytics.v1");
 }
 
 use proto::graph_analytics_service_server::{GraphAnalyticsService, GraphAnalyticsServiceServer};
