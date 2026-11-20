@@ -82,7 +82,9 @@ jobs:
           python3 automation/check_dev_rust_feedback.py
 
       - name: Regression-test exact CI timing and failure propagation
-        run: python3 automation/check_ci_phase_timing.py
+        run: |
+          python3 automation/check_ci_phase_timing.py
+          python3 automation/check_ci_smoke_diagnostics.py
 
       - name: Integration image boundary
         run: python3 automation/smoke_integration_harness_image_contract.py
