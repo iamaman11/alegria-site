@@ -19,7 +19,7 @@ def main() -> int:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
-    if report.get("schema_version") != 1 or report.get("mandatory_full_9_of_9_gate") is not True:
+    if report.get("schema_version") != 2 or report.get("mandatory_full_ci_gate") is not True:
         raise ValueError("invalid or unsafe Rust impact report")
 
     changed = report["direct_crates"] if report["analysis"] == "scoped" else []

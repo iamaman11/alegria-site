@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic, fail-closed Rust change-impact report for the canonical workspace.
 
-This report accelerates developer feedback; it NEVER replaces the full 9/9 CI gate.
+This report accelerates developer feedback; it NEVER replaces the full mandatory CI gate.
 Unknown external inputs and unresolvable changes expand the scope to the full
 workspace, rather than silently excluding a consumer from the analysis.
 """
@@ -18,7 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "app" / "rust"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Includes changes to generated contracts, integration fixtures, build tooling,
 # container contents and runtime configuration; they are NOT Rust crate-local.
@@ -39,12 +39,8 @@ GLOBAL_FILES = {
 }
 
 
-def changed_paths(base: str, head: str, *, root: Path = ROOT) -> list[str]:
-    """Return BOTH names in renames/copies, including deleted paths."""
-    raw = subprocess.check_output(
-        ["git", "diff", "--name-status", "-z", "--find-renames", base, head, "--"],
-        cwd=root,
-    )
+def parse_name_status(raw: bytes) -> list[str]:
+    """Decode a NUL-delimited Git diff, keeping both rename paths and deletes."""
     fields = raw.decode("utf-8", errors="surrogateescape").split("\0")
     paths: set[str] = set()
     i = 0
@@ -64,6 +60,34 @@ def changed_paths(base: str, head: str, *, root: Path = ROOT) -> list[str]:
             paths.add(path)
         i += count
     return sorted(paths)
+
+
+def changed_paths(base: str, head: str, *, root: Path = ROOT) -> list[str]:
+    """Return BOTH names in renames/copies, including deleted paths."""
+    raw = subprocess.check_output(
+        ["git", "diff", "--name-status", "-z", "--find-renames", base, head, "--"],
+        cwd=root,
+    )
+    return parse_name_status(raw)
+
+
+def changed_worktree_paths(base: str, *, root: Path = ROOT) -> list[str]:
+    """Include staged, unstaged, renamed, deleted and not-yet-tracked local files."""
+    raw = subprocess.check_output(
+        ["git", "diff", "--name-status", "-z", "--find-renames", base, "--"],
+        cwd=root,
+    )
+    tracked = set(parse_name_status(raw))
+    untracked = subprocess.check_output(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z", "--"],
+        cwd=root,
+    )
+    for path in untracked.decode("utf-8", errors="surrogateescape").split("\0"):
+        if path:
+            if path.startswith("/") or ".." in Path(path).parts:
+                raise ValueError(f"unsafe untracked path: {path!r}")
+            tracked.add(path)
+    return sorted(tracked)
 
 
 def load_cargo_metadata(*, workspace: Path = WORKSPACE) -> dict[str, Any]:
@@ -176,7 +200,7 @@ def analyze(
         "affected_services": services,
         "reasons": {pkg: sorted(reason[pkg]) for pkg in sorted(affected)},
         # Never treat impact analysis as evidence to skip accepted test owners.
-        "mandatory_full_9_of_9_gate": True,
+        "mandatory_full_ci_gate": True,
     }
 
 

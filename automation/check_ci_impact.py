@@ -40,7 +40,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_isolated_gsc_does_not_trigger_other_services(self) -> None:
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
         self.assertEqual(result["affected_crates"], ["gsc_sync"])
-        self.assertTrue(result["mandatory_full_9_of_9_gate"])
+        self.assertTrue(result["mandatory_full_ci_gate"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])

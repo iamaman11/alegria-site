@@ -76,8 +76,10 @@ jobs:
       - name: Verify isolated Rust service dependency boundaries
         run: python3 automation/check_module_boundaries.py
 
-      - name: Regression-test fail-closed Rust change impact analysis
-        run: python3 automation/check_ci_impact.py
+      - name: Regression-test fail-closed Rust impact and local developer feedback
+        run: |
+          python3 automation/check_ci_impact.py
+          python3 automation/check_dev_rust_feedback.py
 
       - name: Regression-test exact CI timing and failure propagation
         run: python3 automation/check_ci_phase_timing.py
