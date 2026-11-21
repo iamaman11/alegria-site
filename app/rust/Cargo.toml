@@ -61,9 +61,9 @@ oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
 hyper = "1.8.1"
 tower = { version = "0.5.3", features = ["util", "timeout", "retry", "limit"] }
 playwright-rs = "0.20.1"
-temporalio-sdk = "1.2.0"
+temporalio-sdk = "1.1.2"
 temporalio-sdk-core = "0.10.2"
-temporalio-client = "1.2.0"
-temporalio-common = "1.2.0"
+temporalio-client = "1.1.2"
+temporalio-common = "1.1.2"
 temporalio-macros = "1.1.2"
 temporalio-workflow = "1.1.2"
