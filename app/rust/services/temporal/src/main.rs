@@ -48,7 +48,28 @@ async fn main() -> Result<()> {
     infrastructure::adapters::sqlx_seo_cms_adapter::recover_pending_publication(&pool)
         .await
         .context("restore or verify interrupted static publication")?;
+    #[cfg(unix)]
+    infrastructure::adapters::sqlx_seo_cms_adapter::recover_pending_renderer_refresh(&pool)
+        .await
+        .context("restore interrupted renderer-only publication")?;
     let pool = Arc::new(pool);
+    // Layout changes do not change approved CMS content. Refresh the public
+    // static release asynchronously so Temporal activities start normally.
+    #[cfg(unix)]
+    {
+        let refresh_pool = Arc::clone(&pool);
+        tokio::spawn(async move {
+            match infrastructure::adapters::sqlx_seo_cms_adapter::refresh_published_renderer_if_stale(
+                &refresh_pool,
+            )
+            .await
+            {
+                Ok(true) => tracing::info!("published static site refreshed for renderer version"),
+                Ok(false) => tracing::debug!("published static renderer already current"),
+                Err(err) => tracing::error!(reason = %err, "published static renderer refresh deferred"),
+            }
+        });
+    }
     let acts = activities::AlegriaActivities { pool };
 
     // WorkerOptions built inside workflows module to keep workflow types private

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cheap PR acceptance: actual Rust workspace tests run in architecture-and-rust.
+# Cheap PR acceptance: lightweight Rust model tests run in architecture-and-rust.
 # Long-running Temporal/Truth, cross-service and repeated Rust checks remain in
 # the explicitly invoked .github/workflows/ci-deep.yml (ci_verify.sh all).
 set -euo pipefail
@@ -21,6 +21,7 @@ case "${1:-}" in
     python3 automation/check_seo_crate_graph.py
     python3 automation/check_temporal_runtime_purity.py
     python3 automation/check_seo_publish_gates.py
+    python3 automation/check_static_site_builder_contract.py
     python3 automation/gen_proto_contracts.py --out automation/PROTO_CONTRACTS.md --check
     ;;
   product)

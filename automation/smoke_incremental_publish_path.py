@@ -3,6 +3,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CMS = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter.rs"
+MATERIALIZE = CMS.parent / "sqlx_seo_cms_adapter/publish_materialize.rs"
 STATIC = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs"
 SNAPSHOT = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs"
 SCHEMA = ROOT / "app/db/schema.sql"
@@ -21,6 +22,7 @@ def read_file_resolved(path: Path) -> str:
 def main() -> int:
     failures: list[str] = []
     cms = read_file_resolved(CMS)
+    materialize = MATERIALIZE.read_text(encoding="utf-8")
     static = STATIC.read_text(encoding="utf-8")
     snapshot = SNAPSHOT.read_text(encoding="utf-8")
     schema = SCHEMA.read_text(encoding="utf-8")
@@ -36,8 +38,11 @@ def main() -> int:
     ]:
         if needle not in cms:
             failures.append(f"cms adapter missing `{needle}`")
-    if "static_site_builder_adapter::build_static_site(" in cms:
-        failures.append("cms adapter must not fall back to a public full build")
+    # A renderer-version refresh legitimately rebuilds the *previously approved*
+    # public release. The ordinary candidate-page publication entrypoint must
+    # still never fall back to a public full build.
+    if "static_site_builder_adapter::build_static_site(" in materialize:
+        failures.append("candidate materialization must not fall back to a public full build")
     for needle in [
         "pub async fn build_static_site_candidate_incremental",
         "load_static_site_candidate_snapshot(",

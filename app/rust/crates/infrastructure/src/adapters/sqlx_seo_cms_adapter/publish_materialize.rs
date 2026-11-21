@@ -149,7 +149,7 @@ pub async fn persist_publish_materialize_output(
         "page_node_key": input.page_node_key,
         "revision_id": input.revision_id,
         "content_contract": "headless_cms_blocks@1",
-        "renderer_version": "alegria_static_site_builder@2",
+        "renderer_version": static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION,
         "candidate_isolated_from_public_output": true,
         "public_snapshot_fallback_allowed": false,
     })
