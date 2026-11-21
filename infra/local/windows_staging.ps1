@@ -107,7 +107,7 @@ if ($Service -eq 'temporal-worker') {
     $jobsJson = & gh api "repos/$repo/actions/runs/$imageRunId/jobs?per_page=100"
     Assert-Exit 'accepted PR CI jobs lookup'
     $releaseJobs = (($jobsJson | Out-String) | ConvertFrom-Json).jobs
-    foreach ($requiredJob in @('CI', 'rust-regressions', 'comprehensive', 'package')) {
+    foreach ($requiredJob in @('CI', 'rust-regressions', 'integration-e2e', 'comprehensive', 'package')) {
         if (@($releaseJobs | Where-Object { $_.name -eq $requiredJob -and $_.conclusion -eq 'success' }).Count -ne 1) {
             throw "Worker image NO-GO: PR CI $requiredJob did not pass at $sourceSha"
         }

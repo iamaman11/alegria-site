@@ -23,7 +23,7 @@ JOBS = (
     "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
-    "rust-regressions", "comprehensive", "package",
+    "rust-regressions", "integration-e2e", "comprehensive", "package",
 )
 
 
@@ -114,6 +114,11 @@ class MainMergeProvenanceTests(unittest.TestCase):
 
     def test_missing_parallel_rust_regressions_rejects_previous_pr_proof(self) -> None:
         ok, message, _ = execute_gate(omit_job="rust-regressions")
+        self.assertFalse(ok)
+        self.assertIn("did not pass every mandatory owner", message)
+
+    def test_missing_independent_integration_e2e_rejects_previous_pr_proof(self) -> None:
+        ok, message, _ = execute_gate(omit_job="integration-e2e")
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
 

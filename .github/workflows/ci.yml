@@ -513,7 +513,7 @@ jobs:
               "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
-              "rust-regressions", "comprehensive", "package",
+              "rust-regressions", "integration-e2e", "comprehensive", "package",
           }
 
           def fetch(path):
@@ -667,9 +667,93 @@ jobs:
           path: automation/reports/ci_phase_timings.jsonl
           if-no-files-found: ignore
 
-  # Ready PRs run full real-service certification when source impact requires it.
-  # Support-only and isolated-crate changes retain a successful lightweight
-  # gate; manual dispatch always runs every deep test in this SAME workflow.
+  # Independent real PostgreSQL + Temporal integration does not wait for the
+  # Truth fixture suite. It builds both Workers with Cargo's native multi-bin
+  # build, using its own runner target and isolated service containers.
+  integration-e2e:
+    if: always() && needs.gate.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository))
+    needs: [gate, architecture-and-rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      CI_WORKSPACE_TESTED: "true"
+      WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
+    services:
+      postgres:
+        image: postgres:18.7-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+
+      - uses: actions/setup-python@v7
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        with:
+          python-version: "3.15"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        with:
+          version: "v0.16.0"
+
+      - name: Reuse shared Cargo dependency sources (read-only)
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Initialize real integration services
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Full Temporal/LLM and semantic integration E2E
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        run: bash automation/measure_ci_phase.sh integration bash automation/ci_verify.sh integration
+
+      - name: Rust compiler cache statistics
+        if: always() && (github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true')
+        run: sccache --show-stats
+
+      - name: Preserve real integration evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-integration-evidence
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/consistency_report.json
+          if-no-files-found: ignore
+
+  # Ready PRs run full real-service Truth certification alongside independent
+  # integration and Rust regressions. Manual dispatch always runs full depth.
   comprehensive:
     if: always() && needs.gate.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository))
     needs: [gate, architecture-and-rust]
@@ -758,18 +842,6 @@ jobs:
         if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: bash automation/ci_verify.sh product
 
-      - name: Full service integration with already-built real Workers
-        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
-        env:
-          # Product/Truth built and tested these binaries in this same job.
-          # Manual LLM E2E must not recompile them from the default target.
-          INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/temporal_worker
-          INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/outbox_worker
-          # Semantic fixture runs after all other Cargo commands, so reuse
-          # the workspace target rather than a fourth cold build graph.
-          WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
-        run: bash automation/ci_verify.sh integration
-
       - name: Rust compiler cache statistics
         if: always() && (github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true')
         run: sccache --show-stats
@@ -784,8 +856,8 @@ jobs:
             automation/reports/consistency_report.json
           if-no-files-found: ignore
 
-  # Compile/sign the source-specific image alongside the two deep owners.
-  # It cannot be accepted/deployed until BOTH deep jobs succeed on this SHA.
+  # Compile/sign alongside all three required deep owners; the archive cannot
+  # be accepted/deployed until ALL deep jobs succeed on the same source SHA.
   # No post-merge Docker or Rust rebuild is required.
   package:
     if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && needs.gate.result == 'success'

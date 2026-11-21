@@ -35,8 +35,7 @@ def validate(source: str, prep: str) -> None:
     if source.index('bash automation/run_truth_prepare.sh') > source.index('run_suite() {'):
         raise ValueError("Workers must be ready before suite")
     prep_required = (
-        'truth_worker_build cargo build --manifest-path app/rust/Cargo.toml',
-        'truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml',
+        'truth_workers_build cargo build --manifest-path app/rust/Cargo.toml',
         'truth_transport cargo test --manifest-path app/rust/Cargo.toml',
         'qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval',
         'CI_TRUTH_PREP_SHARED_TARGET=PASS',
@@ -44,10 +43,12 @@ def validate(source: str, prep: str) -> None:
     for marker in prep_required:
         if marker not in prep:
             raise ValueError(f"missing real Worker or Qdrant preparation: {marker}")
-    if prep.count('--target-dir "$TARGET_DIR"') != 3:
+    if prep.count('--target-dir "$TARGET_DIR"') != 2:
         raise ValueError("all Cargo preparation must reuse the same Cargo target")
-    if prep.count('--locked') != 3 or prep.count('--timings') != 3:
-        raise ValueError("all three phases must retain locked dependencies and timing")
+    if prep.count('--locked') != 2 or prep.count('--timings') != 2:
+        raise ValueError("both phases must retain locked dependencies and timing")
+    if prep.count('-p temporal_worker -p outbox_worker') != 1:
+        raise ValueError("real Worker packages must build in one native Cargo invocation")
     if prep.count('--bin temporal_worker') != 1 or prep.count('--bin outbox_worker') != 1:
         raise ValueError("real Worker binary selection changed")
     if '--jobs' in prep or 'worker_build_pid' in prep or 'transport_pid' in prep:
@@ -110,8 +111,9 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "#!/usr/bin/env python3\n"
             "import os, sys, time\n"
             "args = sys.argv[1:]\n"
-            "name = args[args.index('-p') + 1]\n"
+            "name = 'workers' if args[0] == 'build' else 'integration_harness'\n"
             "if '--locked' not in args or '--timings' not in args: sys.exit(87)\n"
+            "if name == 'workers' and not all(x in args for x in ('temporal_worker','outbox_worker')): sys.exit(86)\n"
             "if args[args.index('--target-dir') + 1] != os.environ['TRUTH_TEST_TARGET']: sys.exit(88)\n"
             "with open(os.environ['TRUTH_TEST_EVENTS'], 'a') as f: f.write(f'{name} start\\n')\n"
             "time.sleep(0.005)\n"
@@ -131,25 +133,24 @@ class TruthWorkerTargetContract(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
 
-    def test_all_three_real_cargo_commands_are_sequential_with_shared_target(self) -> None:
+    def test_both_cargo_invocations_are_sequential_with_shared_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             result = self.invoke_stubbed_prep(root)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("CI_TRUTH_PREP_SHARED_TARGET=PASS", result.stdout)
             self.assertEqual((root / "events.txt").read_text().splitlines(), [
-                "temporal_worker start", "temporal_worker end",
-                "outbox_worker start", "outbox_worker end",
+                "workers start", "workers end",
                 "integration_harness start", "integration_harness end",
             ])
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
             self.assertEqual([item["phase"] for item in timings], [
-                "truth_worker_build", "truth_outbox_build", "truth_transport",
+                "truth_workers_build", "truth_transport",
             ])
             self.assertTrue(all(item["exit_code"] == 0 for item in timings))
 
     def test_each_failure_blocks_remaining_commands(self) -> None:
-        stages = ("temporal_worker", "outbox_worker", "integration_harness")
+        stages = ("workers", "integration_harness")
         for stage in stages:
             with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
