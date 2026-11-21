@@ -35,10 +35,10 @@ def validate(source: str, prep: str) -> None:
     if source.index('bash automation/run_truth_build_transport_parallel.sh') > source.index('run_suite() {'):
         raise ValueError("transport and Worker preparation must finish before Truth suite")
     prep_required = (
-        'truth_worker_build cargo build --manifest-path app/rust/Cargo.toml',
-        'truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml',
+        'truth_workers_build cargo build --manifest-path app/rust/Cargo.toml',
         'truth_transport cargo test --manifest-path app/rust/Cargo.toml',
         'qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval',
+        '-p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker',
         'worker_build_pid=$!',
         'transport_pid=$!',
         'wait "$worker_build_pid"',
@@ -50,12 +50,12 @@ def validate(source: str, prep: str) -> None:
     for marker in prep_required:
         if marker not in prep:
             raise ValueError(f"missing parallel Truth preparation/failure gate: {marker}")
-    if prep.count('--target-dir "$WORKERS_TARGET_DIR"') != 2:
-        raise ValueError("both Worker builds must use the same Cargo target")
+    if prep.count('--target-dir "$WORKERS_TARGET_DIR"') != 1 or prep.count('truth_workers_build cargo build') != 1:
+        raise ValueError("both Worker binaries must use a single Cargo target and build invocation")
     if prep.count('--target-dir "$SUITE_TARGET_DIR"') != 1 or source.count('--target-dir "$SUITE_TARGET_DIR"') != 1:
         raise ValueError("transport and full suite must use their isolated Cargo target")
-    if prep.count('  --bin temporal_worker') != 1 or prep.count('  --bin outbox_worker') != 1:
-        raise ValueError("real Worker binary selection was changed")
+    if prep.count('-p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker') != 1:
+        raise ValueError("both real Worker binary packages must be selected exactly once")
 
 
 def validate_fixture_lifecycle(source: str) -> None:
@@ -94,9 +94,22 @@ class TruthWorkerTargetContract(unittest.TestCase):
     def test_separate_worker_target_regression_is_rejected(self) -> None:
         source = GATE.read_text(encoding="utf-8")
         changed = PREP.read_text(encoding="utf-8").replace(
-            '--target-dir "$WORKERS_TARGET_DIR"', '--target-dir "$NESTED_TARGET_ROOT/outbox"', 1
+            '-p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker',
+            '-p temporal_worker --bin temporal_worker', 1
         )
-        with self.assertRaisesRegex(ValueError, "same Cargo target"):
+        with self.assertRaisesRegex(ValueError, "missing parallel Truth preparation"):
+            validate(source, changed)
+
+    def test_second_worker_cargo_invocation_is_rejected(self) -> None:
+        source = GATE.read_text(encoding="utf-8")
+        changed = PREP.read_text(encoding="utf-8").replace(
+            ') &\nworker_build_pid=$!',
+            '  bash automation/measure_ci_phase.sh truth_workers_build cargo build --manifest-path app/rust/Cargo.toml \\\n'
+            '    --target-dir "$WORKERS_TARGET_DIR" -p outbox_worker --bin outbox_worker\n'
+            ') &\nworker_build_pid=$!',
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "single Cargo target and build invocation"):
             validate(source, changed)
 
     def test_shared_integration_harness_target_is_rejected(self) -> None:
@@ -104,7 +117,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
         changed = PREP.read_text(encoding="utf-8").replace(
             '--target-dir "$SUITE_TARGET_DIR"', '--target-dir "$WORKERS_TARGET_DIR"', 1
         )
-        with self.assertRaisesRegex(ValueError, "(same|isolated) Cargo target"):
+        with self.assertRaisesRegex(ValueError, "(single|isolated) Cargo target"):
             validate(source, changed)
 
     def test_missing_worker_binary_override_is_rejected(self) -> None:
@@ -120,12 +133,14 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "#!/usr/bin/env python3\n"
             "import os, sys, time\n"
             "args = sys.argv\n"
-            "name = args[args.index('-p') + 1]\n"
+            "names = [args[i + 1] for i, arg in enumerate(args[:-1]) if arg == '-p']\n"
             "events = os.environ['TRUTH_TEST_EVENTS']\n"
-            "with open(events, 'a') as f: f.write(f'{name} start {time.monotonic_ns()}\\n')\n"
-            "time.sleep({'temporal_worker': 0.18, 'outbox_worker': 0.04, 'integration_harness': 0.23}[name])\n"
-            "with open(events, 'a') as f: f.write(f'{name} end {time.monotonic_ns()}\\n')\n"
-            "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') == name else 0)\n"
+            "with open(events, 'a') as f:\n"
+            "    for name in names: f.write(f'{name} start {time.monotonic_ns()}\\n')\n"
+            "time.sleep(0.20 if 'temporal_worker' in names else 0.23)\n"
+            "with open(events, 'a') as f:\n"
+            "    for name in names: f.write(f'{name} end {time.monotonic_ns()}\\n')\n"
+            "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') in names else 0)\n"
         )
         fake_cargo.chmod(0o755)
         return subprocess.run(
@@ -138,7 +153,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
             capture_output=True, text=True, check=False,
         )
 
-    def test_parallel_cargo_targets_overlap_and_all_three_phases_pass(self) -> None:
+    def test_parallel_cargo_targets_overlap_and_both_phases_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             result = self.invoke_stubbed_parallel_prep(root)
@@ -146,7 +161,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
             self.assertIn("worker_exit=0 transport_exit=0", result.stdout)
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
             self.assertEqual({item["phase"] for item in timings}, {
-                "truth_worker_build", "truth_outbox_build", "truth_transport"
+                "truth_workers_build", "truth_transport"
             })
             self.assertTrue(all(item["exit_code"] == 0 for item in timings))
             events = {
@@ -155,6 +170,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
             }
             self.assertLess(events[("integration_harness", "start")], events[("temporal_worker", "end")])
             self.assertLess(events[("outbox_worker", "start")], events[("integration_harness", "end")])
+            self.assertLess(events[("outbox_worker", "start")], events[("temporal_worker", "end")])
 
     def test_failed_transport_blocks_truth_gate_even_when_workers_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -165,23 +181,25 @@ class TruthWorkerTargetContract(unittest.TestCase):
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
             self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_transport"), 23)
 
-    def test_failed_temporal_worker_blocks_outbox_and_truth_suite(self) -> None:
+    def test_failed_temporal_worker_build_blocks_truth_suite(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             result = self.invoke_stubbed_parallel_prep(root, fail="temporal_worker")
             self.assertEqual(result.returncode, 23, result.stderr)
             self.assertIn("worker_exit=23 transport_exit=0", result.stdout)
             events = (root / "events.txt").read_text()
-            self.assertNotIn("outbox_worker start", events)
+            self.assertIn("outbox_worker start", events)
+            timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
+            self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_workers_build"), 23)
 
-    def test_failed_outbox_worker_cannot_be_hidden_by_transport_success(self) -> None:
+    def test_failed_combined_build_cannot_be_hidden_by_transport_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
             result = self.invoke_stubbed_parallel_prep(root, fail="outbox_worker")
             self.assertEqual(result.returncode, 23, result.stderr)
             self.assertIn("worker_exit=23 transport_exit=0", result.stdout)
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
-            self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_outbox_build"), 23)
+            self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_workers_build"), 23)
 
     def test_aliasing_targets_fails_before_cargo_or_side_effects(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

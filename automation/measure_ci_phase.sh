@@ -3,7 +3,7 @@
 # elapsed time. This is observation only: it never exempts a failed gate.
 set -euo pipefail
 
-if [[ $# -lt 2 || ! "$1" =~ ^(contracts|product|integration|truth_worker_build|truth_outbox_build|truth_transport|truth_suite|semantic_fixture)$ ]]; then
+if [[ $# -lt 2 || ! "$1" =~ ^(contracts|product|integration|truth_workers_build|truth_transport|truth_suite|semantic_fixture)$ ]]; then
   echo 'usage: measure_ci_phase.sh <known phase> <command...>' >&2
   exit 2
 fi

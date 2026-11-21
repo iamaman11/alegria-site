@@ -129,7 +129,7 @@ Current certification state:
 - the accepted baseline currently contains 16 fixtures, including explicit proof cases for mirror non-independence, weak-source corroboration rejection, single-source authority override, override denial for non-authoritative sources, and stale primary-authority override blocking;
 - certification remains evidence-only and never writes authority truth;
 - `automation/run_truth_certification_gate.sh` is the canonical certification runner and diff gate against the accepted baseline, and it uses an isolated Cargo target dir for the suite itself so shared build-cache corruption cannot silently weaken proof execution;
-- Worker builds and the real Qdrant REST/gRPC transport regression prepare concurrently in independent Cargo target directories; both branches must finish successfully before any of the 16 certification fixtures executes. Worker runtime binaries remain separate from the suite target;
+- Both Worker binaries are built in one Cargo invocation (shared dependency graph and target) while the real Qdrant REST/gRPC transport regression prepares concurrently in an independent Cargo target. Both branches must finish successfully before any of the 16 certification fixtures executes. Worker runtime binaries remain separate from the suite target;
 - truth-governance changes and regex-authority changes must stay behind that regression gate.
 
 Current execution-plan semantics:

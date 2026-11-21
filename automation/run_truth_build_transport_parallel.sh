@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Prepare real Truth Worker binaries and prove Qdrant REST/gRPC independently.
-# Their isolated Cargo targets permit overlap without a shared target lock.
+# Prepare both real Truth Worker binaries in one Cargo dependency graph while
+# proving Qdrant REST/gRPC in an independent target. The single build lets
+# Cargo schedule/link both bins without a second process and build-graph pass.
 set -euo pipefail
 
 if [[ $# -ne 2 || -z "$1" || -z "$2" ]]; then
@@ -20,15 +21,9 @@ cd "$ROOT_DIR"
 started_ms="$(date +%s%3N)"
 
 (
-  set -e
-  bash automation/measure_ci_phase.sh truth_worker_build cargo build --manifest-path app/rust/Cargo.toml \
+  bash automation/measure_ci_phase.sh truth_workers_build cargo build --manifest-path app/rust/Cargo.toml \
     --target-dir "$WORKERS_TARGET_DIR" \
-    -p temporal_worker \
-    --bin temporal_worker
-  bash automation/measure_ci_phase.sh truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml \
-    --target-dir "$WORKERS_TARGET_DIR" \
-    -p outbox_worker \
-    --bin outbox_worker
+    -p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker
 ) &
 worker_build_pid=$!
 
