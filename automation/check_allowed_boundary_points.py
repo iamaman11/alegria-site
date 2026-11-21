@@ -26,6 +26,10 @@ def allowed(path: Path) -> bool:
         return True
     if rel_s.startswith("app/rust/crates/infrastructure/src/adapters/"):
         return True
+    # The Qdrant transport was extracted from infrastructure's adapter
+    # boundary; its wire JSON handling remains legal at that exact boundary.
+    if rel_s.startswith("app/rust/crates/vector_qdrant/src/"):
+        return True
     if rel_s.startswith("app/rust/crates/integration_harness/src/"):
         return True
     if rel_s in {

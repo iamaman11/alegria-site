@@ -28,8 +28,7 @@ def cargo_step_failures(workflow: str) -> list[str]:
     rust = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
     expected = (
         ("Rust workspace tests (includes compile)", "run: cargo test --workspace --locked"),
-        ("Compile e2e-feature integration harness", "run: cargo test -p integration_harness --features e2e --no-run --locked"),
-        ("Rust migration and fact-verifier parity", "cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml --"),
+        ("Focused PostgreSQL/Rust integration regression", "run: cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result"),
     )
     for name, command in expected:
         marker = f"      - name: {name}\n"

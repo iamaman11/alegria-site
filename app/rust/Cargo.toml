@@ -9,6 +9,9 @@ members = [
   "crates/seo_ports",
   "crates/seo_application",
   "crates/infrastructure",
+  "crates/graph_neo4j",
+  "crates/http_client",
+  "crates/vector_qdrant",
   "crates/seo_steps",
   "crates/telemetry",
   "services/temporal",
@@ -33,9 +36,9 @@ idna = "1.0.3"
 url = "2.5.4"
 uuid = { version = "1.15.1", features = ["v4", "serde"] }
 chrono = { version = "0.4.39", features = ["serde"] }
-sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "json", "time", "chrono", "macros"] }
+sqlx = { version = "0.9.1", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "json", "time", "chrono", "macros"] }
 tokio-postgres = "0.7.18"
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 futures = "0.3.31"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "json", "env-filter"] }
@@ -53,13 +56,11 @@ scraper = "0.22.0"
 lopdf = "0.42.0"
 regex = "1.11.1"
 ego-tree = "0.10.0"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "http2"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2"] }
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
 hyper = "1.8.1"
 tower = { version = "0.5.3", features = ["util", "timeout", "retry", "limit"] }
 playwright-rs = "0.20.1"
-rig-core = "0.33.0"
-rig-vertexai = "0.3.2"
 temporalio-sdk = "1.1.2"
 temporalio-sdk-core = "0.10.2"
 temporalio-client = "1.1.2"

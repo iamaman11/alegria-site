@@ -6,6 +6,7 @@ use neo4rs::{query, Graph};
 use qdrant_client::Qdrant;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::BTreeMap;
+use std::time::Instant;
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_sdk_core::Url;
 use testcontainers::{
@@ -55,7 +56,7 @@ pub struct InfraHarness {
 
 impl PostgresHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("postgres", "18.6-alpine")
+        let image = GenericImage::new("postgres", "18.7-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
@@ -71,7 +72,9 @@ impl PostgresHarness {
             .get_host_port_ipv4(5432.tcp())
             .await
             .context("resolve postgres mapped port failed")?;
-        sleep(Duration::from_secs(10)).await;
+        // The container's PostgreSQL-ready log marker has already fired.
+        // The pool connection and schema bootstrap below are the actual
+        // readiness contract; an unconditional 10-second wait adds no safety.
         let database_url = format!(
             "postgres://postgres:postgres_password@localhost:{port}/alegria?sslmode=disable"
         );
@@ -107,7 +110,7 @@ impl PostgresHarness {
 
 impl QdrantHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("qdrant/qdrant", "v1.20.0")
+        let image = GenericImage::new("qdrant/qdrant", "v1.20.1")
             .with_exposed_port(6334.tcp())
             .with_exposed_port(6333.tcp())
             .with_wait_for(WaitFor::message_on_stdout("Qdrant HTTP listening on 6333"));
@@ -163,9 +166,10 @@ impl Neo4jHarness {
         // Exercise the same Neo4j/GDS capability contract as docker-compose.
         // The plugin is installed in this existing test container, not a
         // separate synthetic graph service or a production-side bypass.
-        let image = GenericImage::new("neo4j", "2026.10.1")
+        let image = GenericImage::new("neo4j", "2026.10.2")
             .with_exposed_port(7687.tcp())
-            .with_wait_for(WaitFor::seconds(45))
+            // Readiness is established by the real Bolt RETURN 1 probe below,
+            // with bounded retries. Waiting 45 seconds first is redundant.
             .with_env_var("NEO4J_AUTH", "neo4j/neo4j_password")
             .with_env_var("NEO4J_PLUGINS", r#"["apoc", "graph-data-science"]"#)
             .with_env_var(
@@ -195,10 +199,27 @@ impl Neo4jHarness {
 
 impl InfraHarness {
     pub async fn start() -> Result<Self> {
+        let started = Instant::now();
         let postgres = PostgresHarness::start().await?;
+        eprintln!(
+            "CI_HARNESS_READY stage=postgres elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let qdrant = QdrantHarness::start().await?;
+        eprintln!(
+            "CI_HARNESS_READY stage=qdrant elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let neo4j = Neo4jHarness::start().await?;
+        eprintln!(
+            "CI_HARNESS_READY stage=neo4j elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         let temporal = TemporalHarness::start().await?;
+        eprintln!(
+            "CI_HARNESS_READY stage=temporal elapsed_ms={}",
+            started.elapsed().as_millis()
+        );
         Ok(Self {
             postgres,
             qdrant,
@@ -240,7 +261,7 @@ impl InfraHarness {
 impl TemporalHarness {
     pub async fn start() -> Result<Self> {
         let network = format!("integration-harness-temporal-{}", Uuid::new_v4());
-        let postgres_image = GenericImage::new("postgres", "18.6-alpine")
+        let postgres_image = GenericImage::new("postgres", "18.7-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
@@ -287,7 +308,8 @@ impl TemporalHarness {
 
         let temporal_image = GenericImage::new("temporalio/server", "1.32.2")
             .with_exposed_port(7233.tcp())
-            .with_wait_for(WaitFor::seconds(15))
+            // The namespace bootstrap below retries until the real Temporal
+            // endpoint accepts commands; no fixed startup delay is needed.
             .with_env_var("DB", "postgres12")
             .with_env_var("DB_PORT", "5432")
             .with_env_var("POSTGRES_USER", "temporal")
@@ -320,7 +342,7 @@ impl TemporalHarness {
             .with_entrypoint("/bin/sh")
             .with_cmd([
                 "-ec",
-                "set -eu; if ! temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1; then temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\"; fi; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
+                "set -eu; attempt=0; until temporal operator namespace describe --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1; do temporal operator namespace create --namespace default --address \"$TEMPORAL_ADDRESS\" >/dev/null 2>&1 || true; attempt=$((attempt + 1)); if [ \"$attempt\" -ge 60 ]; then echo 'TEMPORAL_NAMESPACE_BOOTSTRAP_FAILED' >&2; exit 1; fi; sleep 1; done; echo TEMPORAL_NAMESPACE_READY; sleep 3600",
             ])
             .with_env_var("TEMPORAL_ADDRESS", format!("{}:7233", temporal_container.get_bridge_ip_address().await?))
             .with_network(&network);

@@ -1,9 +1,13 @@
-FROM rust:1.99.1-slim-bookworm AS builder
+FROM rust:1.100.0-slim-bookworm AS builder
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compiler libprotobuf-dev pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
 
 COPY app ./app
+
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=0
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
 RUN cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \

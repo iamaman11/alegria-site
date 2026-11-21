@@ -1,0 +1,9 @@
+[package]
+name = "graph_neo4j"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+neo4rs = { workspace = true }
+tokio = { workspace = true }

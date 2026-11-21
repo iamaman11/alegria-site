@@ -22,7 +22,11 @@ def main() -> int:
     errors = [needle for needle in FORBIDDEN if needle in text]
     # Expose the existing operator CLI without a second service.
     docker = WORKER_DOCKERFILE.read_text(encoding="utf-8")
-    if "-p cli_tools --bin cli_tools" not in docker or (
+    if (
+        "-p temporal_worker -p cli_tools" not in docker
+        or "--bin temporal_worker --bin temporal_starter --bin cli_tools" not in docker
+        or docker.count("RUN cargo build --release --locked") != 1
+    ) or (
         "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools"
         not in docker
     ):

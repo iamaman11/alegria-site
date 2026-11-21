@@ -12,8 +12,6 @@ pub mod proto_runtime_payload_store;
 pub mod qdrant_client_adapter;
 pub mod raw_crawl_adapter;
 pub mod reqwest_adapter;
-pub mod rig_core_adapter;
-pub mod rig_vertexai_adapter;
 pub mod runtime_storage;
 pub mod semantic_search_adapter;
 pub mod seo_ports_sqlx_adapter;

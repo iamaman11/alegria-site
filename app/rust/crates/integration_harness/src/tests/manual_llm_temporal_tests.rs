@@ -5,6 +5,14 @@
 #[tokio::test]
 #[serial]
 async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
+    let started = std::time::Instant::now();
+    let checkpoint = |stage: &str| {
+        eprintln!(
+            "CI_TEMPORAL_MANUAL_STAGE stage={} elapsed_ms={}",
+            stage,
+            started.elapsed().as_millis()
+        );
+    };
     use contracts::generated::alegria::temporal::v1::EditorialDraftGenerateInputPayload;
     use infrastructure::adapters::{
         manual_llm_queue::{self, ManualLlmJob, ManualLlmSubmission},
@@ -20,6 +28,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         render_fixture_source_pages(std::slice::from_ref(&fixture)).await;
     assert!(!source_servers.is_empty());
     let infra = InfraHarness::start().await.unwrap();
+    checkpoint("infra_ready");
     let voyage_stub = stub_servers::spawn_voyage_contract_stub().await.unwrap();
     let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_responses[0].1.clone()])
     .await
@@ -91,6 +100,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         )
         .await
         .unwrap();
+    checkpoint("workflow_started");
 
     // Before editorial generation, prove that the same Temporal run waits
     // for every raw-section truth proposal in the same durable inbox.
@@ -239,6 +249,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             }
         };
     assert_eq!(first.payload.run_id, run_id);
+    checkpoint("editorial_task_ready");
     assert_eq!(first.operation, "editorial_draft");
     assert!(
         truth_driver.await.unwrap() > 0,
@@ -279,6 +290,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         worker.child.try_wait().unwrap().is_none(),
         "restarted canonical worker exited"
     );
+    checkpoint("worker_restarted");
 
     let control = TemporalSeoWorkflowControlAdapter::new(
         infra.temporal.temporal_url.clone(),
@@ -358,6 +370,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         "canonical manual editorial workflow timed out after restarting worker"
     );
     result.unwrap().expect("canonical manual workflow failed");
+    checkpoint("workflow_completed");
     let drafted: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")
         .fetch_one(&infra.postgres.pool)
         .await
