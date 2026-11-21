@@ -1,4 +1,4 @@
-FROM rust:1.99.1-slim-bookworm AS builder
+FROM rust:1.100.0-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -24,7 +24,7 @@ RUN cargo build --release --locked \
 
 # The same Temporal worker owns native Cloudflare static release deployment.
 # Node is required only for the pinned official cf CLI; no extra container.
-FROM node:26.13.0-bookworm-slim
+FROM node:26.13.1-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates python3 \

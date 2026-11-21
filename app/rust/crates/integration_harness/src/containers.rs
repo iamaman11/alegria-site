@@ -56,7 +56,7 @@ pub struct InfraHarness {
 
 impl PostgresHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("postgres", "18.6-alpine")
+        let image = GenericImage::new("postgres", "18.7-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",
@@ -110,7 +110,7 @@ impl PostgresHarness {
 
 impl QdrantHarness {
     pub async fn start() -> Result<Self> {
-        let image = GenericImage::new("qdrant/qdrant", "v1.20.0")
+        let image = GenericImage::new("qdrant/qdrant", "v1.20.1")
             .with_exposed_port(6334.tcp())
             .with_exposed_port(6333.tcp())
             .with_wait_for(WaitFor::message_on_stdout("Qdrant HTTP listening on 6333"));
@@ -166,7 +166,7 @@ impl Neo4jHarness {
         // Exercise the same Neo4j/GDS capability contract as docker-compose.
         // The plugin is installed in this existing test container, not a
         // separate synthetic graph service or a production-side bypass.
-        let image = GenericImage::new("neo4j", "2026.10.1")
+        let image = GenericImage::new("neo4j", "2026.10.2")
             .with_exposed_port(7687.tcp())
             // Readiness is established by the real Bolt RETURN 1 probe below,
             // with bounded retries. Waiting 45 seconds first is redundant.
@@ -261,7 +261,7 @@ impl InfraHarness {
 impl TemporalHarness {
     pub async fn start() -> Result<Self> {
         let network = format!("integration-harness-temporal-{}", Uuid::new_v4());
-        let postgres_image = GenericImage::new("postgres", "18.6-alpine")
+        let postgres_image = GenericImage::new("postgres", "18.7-alpine")
             .with_exposed_port(5432.tcp())
             .with_wait_for(WaitFor::message_on_stderr(
                 "database system is ready to accept connections",

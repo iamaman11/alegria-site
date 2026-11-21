@@ -38,7 +38,7 @@ uuid = { version = "1.15.1", features = ["v4", "serde"] }
 chrono = { version = "0.4.39", features = ["serde"] }
 sqlx = { version = "0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "uuid", "json", "time", "chrono", "macros"] }
 tokio-postgres = "0.7.18"
-tokio = { version = "1.50.0", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "signal", "sync", "time"] }
 futures = "0.3.31"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["fmt", "json", "env-filter"] }
@@ -56,7 +56,7 @@ scraper = "0.22.0"
 lopdf = "0.42.0"
 regex = "1.11.1"
 ego-tree = "0.10.0"
-reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls", "http2"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls", "http2"] }
 oauth2 = { version = "5.0.0", default-features = false, features = ["reqwest"] }
 hyper = "1.8.1"
 tower = { version = "0.5.3", features = ["util", "timeout", "retry", "limit"] }

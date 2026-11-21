@@ -1,7 +1,7 @@
 services:
   # 1. Слой данных (PostgreSQL для бизнес-данных Alegria)
   postgres:
-    image: postgres:18.6-alpine
+    image: postgres:18.7-alpine
     container_name: alegria_postgres
     restart: unless-stopped
     environment:
@@ -21,7 +21,7 @@ services:
 
   # 1b. Отдельная БД для Temporal (service persistence)
   postgres-temporal:
-    image: postgres:18.6-alpine
+    image: postgres:18.7-alpine
     container_name: alegria_postgres_temporal
     restart: unless-stopped
     environment:
@@ -61,7 +61,7 @@ services:
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
-    image: neo4j:2026.10.1
+    image: neo4j:2026.10.2
     container_name: alegria_neo4j
     restart: unless-stopped
     environment:
@@ -82,7 +82,7 @@ services:
 
   # 3. Слой векторного поиска (Qdrant)
   qdrant:
-    image: qdrant/qdrant:v1.20.0
+    image: qdrant/qdrant:v1.20.1
     container_name: alegria_qdrant
     restart: unless-stopped
     ports:
