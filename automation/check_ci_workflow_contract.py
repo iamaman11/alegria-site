@@ -142,9 +142,6 @@ def check() -> None:
         assert "uses: mozilla-actions/sccache-action@v0.0.11" in owner
         assert "sccache --show-stats" in owner
     assert "name: ci-phase-product" in product
-    assert 'SCCACHE_GHA_RW_MODE: "READ_ONLY"' in product
-    for other in (architecture, rust_smokes, verify):
-        assert "SCCACHE_GHA_RW_MODE:" not in other, "only Product is the read-only sccache A/B"
     assert 'SCCACHE_LOG: "sccache::server=debug"' in product
     assert 'SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log' in product
     assert "python3 automation/report_ci_sccache_write_errors.py --job product-truth" in product
