@@ -300,6 +300,11 @@ jobs:
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       CARGO_INCREMENTAL: "0"
+      # Experiment #37: skip DWARF generation for CI-only Worker and e2e
+      # builds. This does not disable debug_assertions, overflow checks,
+      # any fixture or the production release profile. Measure on exact SHA.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
