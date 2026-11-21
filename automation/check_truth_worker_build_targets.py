@@ -47,11 +47,6 @@ def validate(source: str, prep: str) -> None:
         'if [[ "$worker_rc" -ne 0 ]]; then exit "$worker_rc"; fi',
         'if [[ "$transport_rc" -ne 0 ]]; then exit "$transport_rc"; fi',
         'CI_TRUTH_PREP_PARALLEL',
-        'available_cpus="$(nproc)"',
-        'worker_jobs=$(((available_cpus + 1) / 2))',
-        'transport_jobs=$((available_cpus / 2))',
-        'if ((transport_jobs < 1)); then transport_jobs=1; fi',
-        'CI_TRUTH_CARGO_JOBS available_cpus=$available_cpus worker_jobs=$worker_jobs transport_jobs=$transport_jobs',
     )
     for marker in prep_required:
         if marker not in prep:
@@ -62,8 +57,10 @@ def validate(source: str, prep: str) -> None:
         raise ValueError("transport and full suite must use their isolated Cargo target")
     if prep.count('  --bin temporal_worker') != 1 or prep.count('  --bin outbox_worker') != 1:
         raise ValueError("real Worker binary selection was changed")
-    if prep.count('--jobs "$worker_jobs" --timings') != 2 or prep.count('--jobs "$transport_jobs" --timings') != 1:
-        raise ValueError("Truth compilation must split the available job budget and retain Cargo timing evidence")
+    if prep.count('--timings') != 3:
+        raise ValueError("all three Truth preparation commands must retain Cargo timing evidence")
+    if '--jobs' in prep:
+        raise ValueError("unproven Cargo job budget override must not replace the default scheduler")
 
 
 def validate_fixture_lifecycle(source: str) -> None:
@@ -124,7 +121,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
     @staticmethod
     def invoke_stubbed_parallel_prep(
         root: Path, *, fail: str = "", skew_clock: bool = False,
-        synchronize: bool = False, cpus: int = 4,
+        synchronize: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         fake_cargo = root / "cargo"
         fake_cargo.write_text(
@@ -132,10 +129,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "import os, sys, time\n"
             "args = sys.argv\n"
             "name = args[args.index('-p') + 1]\n"
-            "cpus = int(os.environ['TRUTH_TEST_CPUS'])\n"
-            "budget = (cpus + 1) // 2 if name != 'integration_harness' else max(1, cpus // 2)\n"
-            "if '--timings' not in args or '--jobs' not in args "
-            "or args[args.index('--jobs') + 1] != str(budget): sys.exit(89)\n"
+            "if '--timings' not in args or '--jobs' in args: sys.exit(89)\n"
             "events = os.environ['TRUTH_TEST_EVENTS']\n"
             "with open(events, 'a') as f: f.write(f'{name} start {time.monotonic_ns()}\\n')\n"
             "if os.environ.get('TRUTH_TEST_SYNC') == '1':\n"
@@ -157,9 +151,6 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') == name else 0)\n"
         )
         fake_cargo.chmod(0o755)
-        fake_nproc = root / "nproc"
-        fake_nproc.write_text('#!/bin/sh\nprintf "%s\\n" "$TRUTH_TEST_CPUS"\n', encoding="utf-8")
-        fake_nproc.chmod(0o755)
         if skew_clock:
             fake_date = root / "date"
             fake_date.write_text(
@@ -173,7 +164,6 @@ class TruthWorkerTargetContract(unittest.TestCase):
             cwd=ROOT,
             env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                  "TRUTH_TEST_EVENTS": str(root / "events.txt"),
-                 "TRUTH_TEST_CPUS": str(cpus),
                  "TRUTH_TEST_FAIL": fail, "TRUTH_TEST_SYNC": "1" if synchronize else "0",
                  "CI_SOURCE_SHA": "a" * 40,
                  "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl"),
@@ -187,7 +177,6 @@ class TruthWorkerTargetContract(unittest.TestCase):
             result = self.invoke_stubbed_parallel_prep(root, synchronize=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("worker_exit=0 transport_exit=0", result.stdout)
-            self.assertIn("CI_TRUTH_CARGO_JOBS available_cpus=4 worker_jobs=2 transport_jobs=2", result.stdout)
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
             self.assertEqual({item["phase"] for item in timings}, {
                 "truth_worker_build", "truth_outbox_build", "truth_transport"
@@ -201,23 +190,13 @@ class TruthWorkerTargetContract(unittest.TestCase):
             self.assertLess(events[("outbox_worker", "start")], events[("integration_harness", "end")])
             self.assertLess(events[("temporal_worker", "end")], events[("outbox_worker", "start")])
 
-    def test_compilation_budget_partitions_odd_even_and_single_core_runners(self) -> None:
-        for cpus, worker, transport in ((1, 1, 1), (2, 1, 1), (3, 2, 1), (4, 2, 2), (5, 3, 2)):
-            with self.subTest(cpus=cpus), tempfile.TemporaryDirectory() as temp:
-                result = self.invoke_stubbed_parallel_prep(Path(temp), cpus=cpus)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn(
-                    f"CI_TRUTH_CARGO_JOBS available_cpus={cpus} worker_jobs={worker} transport_jobs={transport}",
-                    result.stdout,
-                )
-
-    def test_missing_budget_or_timing_proof_is_rejected(self) -> None:
+    def test_unproven_cargo_job_cap_or_missing_timing_is_rejected(self) -> None:
         source = GATE.read_text(encoding="utf-8")
         prep = PREP.read_text(encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "job budget"):
-            validate(source, prep.replace('--jobs "$transport_jobs" --timings', '--timings', 1))
+            validate(source, prep.replace('--timings', '--jobs 2 --timings', 1))
         with self.assertRaisesRegex(ValueError, "timing"):
-            validate(source, prep.replace('--jobs "$worker_jobs" --timings', '--jobs "$worker_jobs"', 1))
+            validate(source, prep.replace('--timings', '', 1))
 
     def test_overlap_proof_is_stable_across_repeated_process_schedules(self) -> None:
         for attempt in range(5):

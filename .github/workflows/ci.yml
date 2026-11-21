@@ -378,6 +378,21 @@ jobs:
         if: always()
         run: python3 automation/report_ci_sccache_write_errors.py --job product-truth
 
+      # CI #222 Cargo timings showed two ~77s aws-lc-sys build-script runs
+      # on isolated targets. Diagnose resolved TLS feature paths before any
+      # cryptographic provider change; this is read-only Cargo metadata.
+      - name: Trace costly TLS provider features for both real targets
+        if: always()
+        run: |
+          {
+            echo '=== temporal_worker TLS feature path ==='
+            cargo tree --locked --manifest-path app/rust/Cargo.toml \
+              -p temporal_worker -i aws-lc-sys -e features
+            echo '=== integration_harness e2e TLS feature path ==='
+            cargo tree --locked --manifest-path app/rust/Cargo.toml \
+              -p integration_harness --features e2e -i aws-lc-sys -e features
+          } > automation/reports/cargo_tls_feature_paths.txt
+
       - name: Measure Cargo dependency and compilation footprints
         if: always()
         run: python3 automation/report_ci_cargo_cache.py --job product-truth --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
@@ -391,6 +406,7 @@ jobs:
             automation/reports/ci_phase_timings.jsonl
             automation/reports/cargo_cache_product-truth.json
             automation/reports/sccache_diagnostic_product-truth.json
+            automation/reports/cargo_tls_feature_paths.txt
             app/rust/target/integration-harness-nested/workers/cargo-timings/*.html
             app/rust/target/integration-harness-suite/cargo-timings/*.html
           if-no-files-found: ignore
