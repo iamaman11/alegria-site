@@ -159,6 +159,10 @@ fn page_markdown(page: &StaticCmsPageRow) -> &str {
         .unwrap_or("")
 }
 
+fn is_russian(locale: &str) -> bool {
+    locale.split(['-', '_']).next() == Some("ru")
+}
+
 fn render_content_blocks(page: &StaticCmsPageRow) -> String {
     let Some(blocks) = page
         .body_payload
@@ -177,6 +181,12 @@ fn render_content_blocks(page: &StaticCmsPageRow) -> String {
             .get("section_role")
             .and_then(Value::as_str)
             .unwrap_or("section");
+        // Related pages are rendered from the current release's link graph.
+        // Older CMS revisions also contain a generated internal_links block;
+        // showing both creates duplicate sections with stale link titles.
+        if section_role == "internal_links" {
+            continue;
+        }
         let heading = block.get("heading").and_then(Value::as_str).unwrap_or("");
         let markdown = block.get("markdown").and_then(Value::as_str).unwrap_or("");
         if markdown.trim().is_empty() && heading.trim().is_empty() {
@@ -205,16 +215,35 @@ fn menu_depth(url_path: &str) -> Result<usize> {
         .count())
 }
 
-fn render_navigation(pages: &[StaticCmsPageRow]) -> Result<String> {
+fn navigation_label(page: &StaticCmsPageRow) -> &str {
+    match (is_russian(&page.locale_code), page.page_type_key.as_str()) {
+        (true, "requirement_page") => "Документы",
+        (true, "fee_page") => "Сборы",
+        (true, "timeline_page") => "Сроки",
+        (false, "requirement_page") => "Documents",
+        (false, "fee_page") => "Fees",
+        (false, "timeline_page") => "Processing times",
+        _ => page.title.split(':').next().unwrap_or(&page.title).trim(),
+    }
+}
+
+fn render_navigation(current: &StaticCmsPageRow, pages: &[StaticCmsPageRow]) -> Result<String> {
     let mut items = String::new();
     for page in pages {
         let href = normalize_url_path(&page.canonical_url_path)?;
         let depth = menu_depth(&href)?;
+        let current_marker = if page.page_node_key == current.page_node_key {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
         items.push_str(&format!(
-            r#"<a href="{}" data-depth="{}">{}</a>"#,
+            r#"<a href="{}" data-depth="{}" title="{}"{}>{}</a>"#,
             escape_html(&href),
             depth,
-            escape_html(&page.title)
+            escape_html(&page.title),
+            current_marker,
+            escape_html(navigation_label(page)),
         ));
     }
     Ok(items)
@@ -265,7 +294,7 @@ fn render_breadcrumbs(
     }
     Ok(format!(
         r#"<nav class="breadcrumbs" aria-label="{}"><ol>{items}</ol></nav>"#,
-        if page.locale_code == "ru" {
+        if is_russian(&page.locale_code) {
             "Навигационная цепочка"
         } else {
             "Breadcrumb"
@@ -455,7 +484,7 @@ fn render_related_links(
         Ok((
             format!(
                 r#"<section class="related"><h2>{}</h2><ul>{items}</ul></section>"#,
-                if page.locale_code == "ru" {
+                if is_russian(&page.locale_code) {
                     "Связанные страницы"
                 } else {
                     "Related Pages"
@@ -482,11 +511,16 @@ fn render_page(
     } else {
         block_body
     };
-    let nav = render_navigation(pages)?;
+    let nav = render_navigation(page, pages)?;
     let breadcrumbs = render_breadcrumbs(page, pages, base_url)?;
     let (related, required_link_count, rendered_link_count) =
         render_related_links(page, pages_by_key, links_by_source)?;
     let schema_json = json_for_script(&page_schema_json(page, pages, &canonical, base_url)?)?;
+    let navigation_label = if is_russian(&page.locale_code) {
+        "Разделы сайта"
+    } else {
+        "Site sections"
+    };
 
     let html = format!(
         r#"<!doctype html>
@@ -502,11 +536,9 @@ fn render_page(
     :root {{ color-scheme: light; --ink: #182026; --muted: #5a6872; --line: #d9e0e5; --accent: #176b5d; --bg: #fbfcfc; }}
     body {{ margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); line-height: 1.62; }}
     header {{ border-bottom: 1px solid var(--line); background: #ffffff; }}
-    nav {{ max-width: 1120px; margin: 0 auto; padding: 14px 24px; display: flex; gap: 16px; overflow-x: auto; }}
-    nav a {{ color: var(--ink); text-decoration: none; white-space: nowrap; font-size: 14px; }}
-    nav a[data-depth="0"] {{ font-weight: 700; }}
-    nav a[data-depth="1"] {{ font-weight: 600; }}
-    nav a[data-depth="2"] {{ color: var(--muted); }}
+    .site-nav {{ max-width: 1120px; margin: 0 auto; padding: 12px 24px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }}
+    .site-nav a {{ color: var(--ink); text-decoration: none; font-size: 14px; padding: 6px 10px; border-radius: 8px; }}
+    .site-nav a:hover, .site-nav a[aria-current="page"] {{ color: var(--accent); background: #e9f2f0; }}
     main {{ max-width: 820px; margin: 0 auto; padding: 48px 24px 72px; }}
     .breadcrumbs {{ max-width: 820px; padding: 0; margin: 0 0 28px; display: block; overflow: visible; }}
     .breadcrumbs ol {{ display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 0; margin: 0; color: var(--muted); font-size: 13px; }}
@@ -525,7 +557,7 @@ fn render_page(
   </style>
 </head>
 <body>
-  <header><nav>{nav}</nav></header>
+  <header><nav class="site-nav" aria-label="{navigation_label}">{nav}</nav></header>
   <main>
     {breadcrumbs}
     <article>
@@ -543,6 +575,7 @@ fn render_page(
         canonical = escape_html(&canonical),
         schema_json = schema_json,
         nav = nav,
+        navigation_label = navigation_label,
         breadcrumbs = breadcrumbs,
         h1 = escape_html(&page.h1),
         body = body,
@@ -932,6 +965,64 @@ mod tests {
         assert_eq!((required, rendered), (1, 1));
         assert!(html.contains("Связанные страницы"));
         assert!(html.contains("href=\"/ru/garden\""));
+    }
+
+    #[test]
+    fn regional_russian_pages_render_one_related_section_and_compact_navigation() {
+        let mut page = sample_release_page(
+            "fees",
+            "/ru/visa/spain/tourist/fees/",
+            "Стоимость туристической визы в Испанию: сборы",
+        );
+        page.locale_code = "ru-RU".into();
+        page.page_type_key = "fee_page".into();
+        page.body_payload = json!({
+            "markdown": "## Обзор\n\n35 евро.\n\n## Связанные страницы\n\n- [Устаревшее название](/ru/visa/spain/tourist/)",
+            "content_blocks": [
+                {"block_type": "prose", "section_role": "overview", "heading": "Обзор", "markdown": "35 евро."},
+                {"block_type": "related_links", "section_role": "internal_links", "heading": "Связанные страницы", "markdown": "- [Устаревшее название](/ru/visa/spain/tourist/)"}
+            ]
+        });
+        let mut hub = sample_release_page(
+            "hub",
+            "/ru/visa/spain/tourist/",
+            "Туристическая виза в Испанию: документы и сроки",
+        );
+        hub.locale_code = "ru-RU".into();
+        hub.page_type_key = "hub_page".into();
+        let pages = vec![hub.clone(), page.clone()];
+        let targets = HashMap::from([
+            (page.page_node_key.clone(), page.clone()),
+            (hub.page_node_key.clone(), hub),
+        ]);
+        let links = HashMap::from([(
+            page.page_node_key.clone(),
+            vec![StaticCmsLinkRow {
+                source_page_key: page.page_node_key.clone(),
+                target_page_key: "hub".into(),
+                link_role: String::new(),
+                required_flag: true,
+            }],
+        )]);
+
+        let (html, preview) = render_page(
+            &page,
+            &pages,
+            &targets,
+            &links,
+            "https://staging.example.test",
+        )
+        .unwrap();
+        assert_eq!(preview.required_link_count, 1);
+        assert_eq!(preview.rendered_link_count, 1);
+        assert_eq!(html.matches("<h2>Связанные страницы</h2>").count(), 1);
+        assert!(!html.contains("Устаревшее название"));
+        assert!(!html.contains("Related Pages"));
+        assert!(html.contains("aria-label=\"Навигационная цепочка\""));
+        assert!(html.contains("aria-label=\"Разделы сайта\""));
+        assert!(html.contains("aria-current=\"page\">Сборы</a>"));
+        assert!(html.contains("flex-wrap: wrap"));
+        assert!(!html.contains("overflow-x: auto"));
     }
 
     #[test]

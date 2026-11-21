@@ -66,10 +66,11 @@ def main() -> int:
         "resolve_required_internal_links",
         "required_internal_target_not_published",
         "Json(required_link_payload)",
-        '"section_role": "internal_links"',
     ]:
         if needle not in cms:
             failures.append(f"CMS adapter missing `{needle}`")
+    if '"section_role": "internal_links"' in cms:
+        failures.append("CMS must not duplicate the static builder's related-links section")
     for needle in [
         "r.revision_id = COALESCE($2, p.current_revision_id)",
         "r.revision_status = 'review_required'",
@@ -88,6 +89,8 @@ def main() -> int:
         "render_content_blocks",
         "content-block--",
         "content_blocks",
+        'section_role == "internal_links"',
+        "render_related_links",
     ]:
         if needle not in static:
             failures.append(f"static/headless renderer missing `{needle}`")
