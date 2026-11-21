@@ -134,9 +134,8 @@ def main() -> int:
         print("FAIL integration_harness ci_missing=" + ",".join(missing_ci))
         return 1
 
-    # Test execution moved to the canonical Rust owner in the single CI.
-    # Workspace tests cover integration_harness's default suite; the separate
-    # e2e-feature compile remains required. Never recreate duplicate Cargo runs.
+    # Workspace unit tests and a focused real e2e SQL regression run on PRs;
+    # the remaining e2e cases are explicitly runnable in ci-deep.yml.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
         print("FAIL integration_harness missing Rust owner")
@@ -144,7 +143,7 @@ def main() -> int:
     rust_job = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
     for snippet in (
         "run: cargo test --workspace --locked",
-        "run: cargo test -p integration_harness --features e2e --no-run --locked",
+        "run: cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result",
     ):
         if snippet not in rust_job:
             print("FAIL integration_harness missing Rust CI coverage: " + snippet)

@@ -1,0 +1,87 @@
+name: ci-deep
+
+# Run before a release or after a broad runtime migration. This is deliberately
+# opt-in: experimental PR feedback stays under five minutes on warm CI caches.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  comprehensive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Install full regression tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          python -m pip install --disable-pip-version-check ruff==0.17.4
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Workspace unit tests
+        working-directory: app/rust
+        run: cargo test --workspace --locked
+
+      - name: All retained-source/editorial PostgreSQL regressions
+        working-directory: app/rust
+        run: |
+          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
+          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
+          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
+          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
+          cargo test -p integration_harness --features e2e --locked --lib cms_publish_materializes_verified_internal_links_in_blocks_and_payload
+          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
+          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
+
+      - name: Full product truth, service integration, contracts and Rust-backed checks
+        run: bash automation/ci_verify.sh all
+
+      - name: Rust compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Preserve deep regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-ci-evidence
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/consistency_report.json
+          if-no-files-found: ignore

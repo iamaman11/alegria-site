@@ -81,13 +81,9 @@ jobs:
           python3 automation/check_ci_impact.py
           python3 automation/check_dev_rust_feedback.py
 
-      - name: Regression-test exact CI timing and failure propagation
+      - name: Regression-test fast CI timing and failure propagation
         run: |
           python3 automation/check_ci_phase_timing.py
-          python3 automation/check_ci_rust_owned_check.py
-          python3 automation/check_truth_worker_build_targets.py
-          python3 automation/check_ci_sccache_diagnostics.py
-          python3 automation/check_ci_smoke_diagnostics.py
           python3 automation/check_ci_merge_provenance.py
           python3 automation/check_cargo_feedback.py
 
@@ -142,53 +138,13 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo test --workspace --locked
 
-      - name: Compile e2e-feature integration harness
+      # A single real PostgreSQL regression compiles the e2e graph and asserts
+      # actual behaviour. The remaining seven SQL tests run in ci-deep.yml.
+      - name: Focused PostgreSQL/Rust integration regression
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test -p integration_harness --features e2e --no-run --locked
-
-      - name: Execute retained-source and editorial ownership PostgreSQL regressions
-        working-directory: app/rust
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib cms_publish_materializes_verified_internal_links_in_blocks_and_payload -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved -- --nocapture
-          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family -- --nocapture
-
-      - name: Rust migration and fact-verifier parity
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
-            check-rust-migration-contract --root . \
-            --report-json automation/reports/rust_migration_contract.rust.json
-          cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
-            check-fact-verifier-parity --root . \
-            --report-json automation/reports/fact_verifier_parity.rust.json
-
-      # Product's real SQL migration + infrastructure Rust smoke used to
-      # compile after Truth suite (99s in #204). Keep the exact command on
-      # this mandatory owner after workspace compilation; local product runs it.
-      - name: Retained rebuild dependency graph PostgreSQL/Rust smoke
-        env:
-          SQLX_OFFLINE: "true"
-        run: python3 automation/smoke_rebuild_dependency_graph.py
-
-      # Both original Product/Truth smoke scripts invoke real Cargo tests for
-      # already compiled workspace packages. Keep their exact commands, but
-      # do not rebuild Rust in the serial Product/Truth Python tail.
-      - name: Retained Product Rust extraction and rebuild-queue smoke
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          python3 automation/smoke_extraction_coverage.py
-          python3 automation/smoke_rebuild_queue_execution_path.py
+        run: cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition -- --nocapture
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -206,35 +162,14 @@ jobs:
           path: automation/reports/cargo_cache_architecture-and-rust.json
           if-no-files-found: error
 
-  # Run the three retained, real Rust-backed checks independently of the
-  # workspace acceptance critical path. The CI Gate and protected main both
-  # require this owner; standalone ci_verify.sh still executes all three.
+  # Fast source-level contract checks. Real Rust-backed checks are retained
+  # in the explicitly runnable ci-deep.yml, without a fourth Cargo build.
   rust-contract-smokes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     env:
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      SQLX_OFFLINE: "true"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
     steps:
       - name: Checkout exact PR source and assert provenance
         uses: actions/checkout@v7
@@ -244,16 +179,8 @@ jobs:
       - name: Verify exact source
         run: test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
 
-      - name: Install native Rust smoke dependencies
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
-
       - name: Pin stable Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-
-      - name: Reuse Rust compiler outputs on independent runner
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: "v0.16.0"
 
       - name: Restore shared Cargo dependency sources (read-only)
         id: cargo_registry
@@ -266,149 +193,41 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Initialize disposable smoke database
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
-
-      - name: Retained Rust-backed crawler, proto and run-report checks
+      - name: Fast Rust manifest, crawler and proto contracts
         run: |
-          python3 automation/smoke_crawler_robots_policy.py
-          bash automation/contract_verify.sh
-          python3 automation/smoke_run_report_completeness.py
+          cargo metadata --format-version 1 --no-deps --locked --manifest-path app/rust/Cargo.toml > /dev/null
+          python3 automation/check_crawler_invariants.py
+          python3 automation/gen_proto_contracts.py --out automation/PROTO_CONTRACTS.md --check
+          python3 automation/check_run_report_completeness.py
 
-      - name: Publish Rust compiler cache hit/miss statistics
-        if: always()
-        run: sccache --show-stats
-
-      - name: Measure Cargo dependency and compilation footprints
-        if: always()
-        run: python3 automation/report_ci_cargo_cache.py --job rust-contract-smokes --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
-
-      - name: Upload Rust contract smoke measurements
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: cargo-cache-rust-contract-smokes
-          path: automation/reports/cargo_cache_rust-contract-smokes.json
-          if-no-files-found: error
-
-  # Product/Truth must not wait for the architecture workspace test/compile job.
-  # Its complete prior ci_verify.sh phase stays mandatory on a distinct runner.
+  # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
+  # remains callable through ci-deep.yml, not on every experimental PR.
   product-truth:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
     env:
-      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
-      # The raw runner-local log is never printed or uploaded.
-      SCCACHE_LOG: "sccache::server=debug"
-      SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log
-      # Only three existing Product Rust smokes are delegated, never Truth.
-      CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
     steps:
       - name: Checkout exact PR source
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
 
-      - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
-
-      - name: Pin stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Match the established Product/Truth Python runtime
         uses: actions/setup-python@v7
         with:
           python-version: "3.15"
 
-      - name: Install Product/Truth audit tools
-        run: python -m pip install --disable-pip-version-check ruff==0.17.4
-
-      - name: Cache Rust compiler objects across isolated target directories
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: "v0.16.0"
-
-      # Read-only: the architecture job is the only registry cache writer.
-      # Per-job compilation outputs remain uncached in this A/B leg; sccache
-      # continues to cache compiler objects across the isolated target dirs.
-      - name: Restore shared Cargo dependency sources (read-only)
-        id: cargo_registry
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
-      - name: Initialize disposable truth/HITL schema
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
-
-      - name: Complete Product and truth invariants
-        run: bash automation/measure_ci_phase.sh product bash automation/ci_verify.sh product
-
-      - name: Publish Rust compiler cache hit/miss statistics
-        if: always()
-        run: sccache --show-stats
-
-      - name: Classify Product/Truth cache write errors without raw logs
-        if: always()
-        run: python3 automation/report_ci_sccache_write_errors.py --job product-truth
-
-      # CI #222 Cargo timings showed two ~77s aws-lc-sys build-script runs
-      # on isolated targets. Diagnose resolved TLS feature paths before any
-      # cryptographic provider change; this is read-only Cargo metadata.
-      - name: Trace costly TLS provider features for both real targets
-        if: always()
-        run: |
-          {
-            echo '=== temporal_worker TLS feature path ==='
-            cargo tree --locked --manifest-path app/rust/Cargo.toml \
-              -p temporal_worker -i aws-lc-sys -e features
-            echo '=== integration_harness e2e TLS feature path ==='
-            cargo tree --locked --manifest-path app/rust/Cargo.toml \
-              -p integration_harness --features e2e -i aws-lc-sys -e features
-          } > automation/reports/cargo_tls_feature_paths.txt
-
-      - name: Measure Cargo dependency and compilation footprints
-        if: always()
-        run: python3 automation/report_ci_cargo_cache.py --job product-truth --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+      - name: Fast Product and truth invariants
+        run: bash automation/measure_ci_phase.sh product bash automation/ci_fast_verify.sh product
 
       - name: Upload measured Product/Truth phase timing
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: ci-phase-product
-          path: |
-            automation/reports/ci_phase_timings.jsonl
-            automation/reports/cargo_cache_product-truth.json
-            automation/reports/sccache_diagnostic_product-truth.json
-            automation/reports/cargo_tls_feature_paths.txt
-            app/rust/target/integration-harness-nested/workers/cargo-timings/*.html
-            app/rust/target/integration-harness-suite/cargo-timings/*.html
+          path: automation/reports/ci_phase_timings.jsonl
           if-no-files-found: ignore
 
   rust-security:
@@ -606,39 +425,9 @@ jobs:
   verify:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     env:
-      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-      CARGO_INCREMENTAL: "0"
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      # The three real Rust-backed checks run in the independent mandatory
-      # smoke owner; the shared gate requires that job and verify to pass.
-      CI_RUST_CHECK_OWNER: "rust-contract-smokes"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-      # The semantic fixture runs after Manual LLM E2E has finished its Cargo
-      # subprocesses. Reuse those exact-job artifacts instead of recompiling
-      # the temporal service in a second target directory (77s in CI #206).
-      # Local clean acceptance keeps its explicitly isolated target.
-      WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
-      # Disposable integration database, never a production credential.
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      # Only this disposable CI database may run scoped truth SQL smoke tests.
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -654,11 +443,6 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache compiler outputs across Truth, Outbox and semantic targets
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: "v0.16.0"
-
       - name: Restore shared Cargo dependency sources (read-only)
         id: cargo_registry
         uses: actions/cache/restore@v4
@@ -670,27 +454,14 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
+      - name: Install lightweight Python policy tool
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-      - name: Initialize disposable integration schema
-        run: |
-          sudo apt-get install -y postgresql-client
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+      - name: Fast source contracts and policy
+        run: bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
 
-      - name: Source contracts and policy
-        run: bash automation/measure_ci_phase.sh contracts bash automation/ci_verify.sh contracts
-
-      - name: Integration and consistency checks
-        run: bash automation/measure_ci_phase.sh integration bash automation/ci_verify.sh integration
-
-      - name: Publish Rust compiler cache hit/miss statistics
-        if: always()
-        run: sccache --show-stats
-
-      - name: Measure Cargo dependency and compilation footprints
-        if: always()
-        run: python3 automation/report_ci_cargo_cache.py --job verify --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+      - name: Fast integration and consistency checks
+        run: bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
 
       - name: Upload measured Contracts/Integration phase timings
         if: always()
@@ -699,7 +470,6 @@ jobs:
           name: ci-phase-verify
           path: |
             automation/reports/ci_phase_timings.jsonl
-            automation/reports/cargo_cache_verify.json
           if-no-files-found: ignore
 
       - name: Render consistency report

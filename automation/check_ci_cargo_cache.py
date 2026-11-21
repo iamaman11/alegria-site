@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline safety contract for the single-writer, target-free Cargo A/B leg."""
+"""Offline smoke for caching only when CI actually runs Cargo."""
 from __future__ import annotations
 
 import re
@@ -11,7 +11,7 @@ from report_ci_cargo_cache import directory_bytes, record
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust", "rust-contract-smokes", "product-truth", "verify")
+OWNERS = ("architecture-and-rust", "rust-contract-smokes", "verify")
 
 
 def validate_cache_policy(workflow: str) -> None:
@@ -52,8 +52,9 @@ def validate_cache_policy(workflow: str) -> None:
             raise ValueError("owners must use the same Cargo.lock source cache")
         if "CI_CARGO_CACHE_METRIC" in block:
             raise ValueError("metric marker belongs to reporting code, not workflow")
-        if "report_ci_cargo_cache.py" not in block:
-            raise ValueError("missing per-owner footprint report")
+    product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
+    if "uses: actions/cache" in product or "RUSTC_WRAPPER" in product or "cargo tree" in product:
+        raise ValueError("Product's Python-only fast path must not set up or inspect Cargo")
 
 
 class CargoCachePolicy(unittest.TestCase):
@@ -75,9 +76,10 @@ class CargoCachePolicy(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unbounded target"):
             validate_cache_policy(single_path)
 
-    def test_target_reuse_without_archiving_is_permitted(self) -> None:
+    def test_noncompiling_product_has_no_registry_restore(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertIn("WHOLE_PAGE_SEMANTIC_TARGET_DIR:", original)
+        product = original.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
+        self.assertNotIn("cargo-registry-", product)
         validate_cache_policy(original)
 
     def test_metrics_distinguish_uncached_target_and_missing_registry(self) -> None:
