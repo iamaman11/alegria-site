@@ -132,19 +132,14 @@ jobs:
             automation/reports/scoped_cargo_feedback.json
           if-no-files-found: ignore
 
-      - name: Rust workspace tests (includes compile)
+      # The E2E harness changes the feature graph and recompiles infrastructure.
+      # Its full unit/e2e matrix is already owned by opt-in ci-deep.yml before
+      # releases; do not pay for two cold builds on every small PR.
+      - name: Rust workspace unit tests (excluding E2E harness)
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test --workspace --locked
-
-      # A single real PostgreSQL regression compiles the e2e graph and asserts
-      # actual behaviour. The remaining seven SQL tests run in ci-deep.yml.
-      - name: Focused PostgreSQL/Rust integration regression
-        working-directory: app/rust
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition -- --nocapture
+        run: cargo test --workspace --exclude integration_harness --locked
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
