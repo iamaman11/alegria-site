@@ -426,6 +426,14 @@ python3 automation/check_run_report_completeness.py
 echo "[42d/53] Run report completeness smoke"
 bash automation/run_rust_owned_check.sh python3 automation/smoke_run_report_completeness.py
 
+# CI's existing integration_harness e2e target is now built. Run the real
+# Qdrant REST->gRPC transport here rather than recompiling it in the Truth
+# owner; standalone local full audits retain the transport in Truth prepare.
+if [[ "${CI_QDRANT_TRANSPORT_IN_INTEGRATION:-}" == "true" ]]; then
+  echo "[42d0/53] Real Qdrant transport on the already compiled e2e test target"
+  bash automation/run_qdrant_transport_gate.sh "${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-$ROOT_DIR/app/rust/target}"
+fi
+
 echo "[42d1/53] Manual LLM PostgreSQL inbox lifecycle E2E"
 python3 automation/smoke_manual_llm_queue.py
 

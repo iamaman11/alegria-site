@@ -115,7 +115,7 @@ def check() -> None:
     for group, steps in (
         (rust_deep, ("Workspace unit tests", "All retained-source/editorial PostgreSQL regressions", "Full architecture and Rust-backed contracts")),
         (integration_deep, ("Full Temporal/LLM and semantic integration E2E",)),
-        (deep, ("Real Qdrant transport and all 16 Truth Worker fixtures",)),
+        (deep, ("All 16 real Truth Worker fixtures (Qdrant in integration)",)),
     ):
         for step in steps:
             assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in group
@@ -131,6 +131,13 @@ def check() -> None:
     assert "cargo test -p integration_harness --features e2e" not in deep
     assert 'WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target' in integration_deep
     assert "CI_WORKSPACE_TESTED: \"true\"" in integration_deep
+    assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"' in integration_deep
+    assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"' in deep
+    assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION' not in rust_deep
+    assert 'bash automation/run_qdrant_transport_gate.sh' in legacy
+    assert (legacy.index('python3 automation/smoke_run_report_completeness.py')
+            < legacy.index('bash automation/run_qdrant_transport_gate.sh')
+            < legacy.index('python3 automation/smoke_manual_llm_queue.py'))
     assert "services:\n" not in integration_deep
     assert "DATABASE_URL:" not in integration_deep
     assert "postgresql-client" not in integration_deep
@@ -147,9 +154,15 @@ def check() -> None:
     assert "PostgresHarness::start().await?" in (ROOT / "app/rust/crates/integration_harness/src/containers.rs").read_text()
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
     truth = (ROOT / "automation/run_truth_certification_gate.sh").read_text(encoding="utf-8")
+    truth_prepare = (ROOT / "automation/run_truth_prepare.sh").read_text(encoding="utf-8")
+    qdrant_gate = (ROOT / "automation/run_qdrant_transport_gate.sh").read_text(encoding="utf-8")
     manual = (ROOT / "automation/smoke_manual_llm_queue.py").read_text(encoding="utf-8")
     semantic = (ROOT / "automation/run_whole_page_semantic_gate.sh").read_text(encoding="utf-8")
     assert 'bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"' in truth
+    assert 'CI_TRUTH_TRANSPORT_REUSED=integration-e2e' in truth_prepare
+    assert 'bash automation/run_qdrant_transport_gate.sh "$TARGET_DIR"' in truth_prepare
+    assert 'qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval' in qdrant_gate
+    assert '--locked --target-dir "$TARGET_DIR" --timings' in qdrant_gate
     assert 'if env.get(temporal_key) and env.get(outbox_key)' in manual
     assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-' in semantic
     assert "INTEGRATION_TEMPORAL_WORKER_BIN:" not in integration_deep

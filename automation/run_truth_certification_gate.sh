@@ -15,8 +15,10 @@ cd "$ROOT_DIR"
 
 rm -f "$REPORT_PATH"
 
-# Build real Workers in the already-warm suite target, then test Qdrant and
-# launch the full fixture harness. No overlapping Cargo processes or locks.
+# Build real Workers in the already-warm suite target, then launch the full
+# fixture harness. Standalone Truth runs also verify Qdrant transport here;
+# canonical CI uses the same real test in its compiled integration sibling.
+# No overlapping Cargo processes or locks within either target.
 bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"
 
 for worker_bin in "$TEMPORAL_BIN" "$OUTBOX_BIN"; do

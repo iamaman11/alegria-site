@@ -18,13 +18,15 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44960887942](https://github.com/iamaman11/alegria-site/actions/runs/44960887942) | **6m 29s** | Full Python Product policy in fast owner; 14/14 PASS |
 | [#44962223447](https://github.com/iamaman11/alegria-site/actions/runs/44962223447) | **5m 38s** | Reused workspace-owned Quality/SERP Cargo tests; 14/14 PASS |
 | [#44962860262](https://github.com/iamaman11/alegria-site/actions/runs/44962860262) | **5m 13s** | Parallel deep DAG, no unused hosted E2E PostgreSQL; 14/14 PASS |
+| [#44963430262](https://github.com/iamaman11/alegria-site/actions/runs/44963430262) | **5m 44s** | Same native code, Truth Workers took 133s instead of 95s; 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
 full CI + three warm/one cold** acceptance open until measured. Historical
 28m52s and 30m+ runs and detailed cache experiments are recorded there.
-The current critical path is the real `integration-e2e` job (4m 46s after
-architecture) rather than compilation of the signed Worker image (50s).
+The critical path varies between the real `integration-e2e` (4m46s in the
+first run) and `comprehensive` (5m18s in the second). Even 99.62% sccache
+hits did not guarantee a ≤5m full run; the signed image still took only 50s.
 
 ## On each pull request
 
@@ -66,11 +68,14 @@ end-to-end latency.
   PostgreSQL/SQLx regressions and Rust-backed contracts. It alone needs a
   hosted disposable fixed-port PostgreSQL for the scoped Truth SQLx test.
 - `integration-e2e`: real manual-LLM/Temporal restart, replay, full synthetic
-  harness and semantic fixture. The test harness starts its own isolated
-  PostgreSQL/Temporal containers. Quality/SERP Cargo tests run in the
-  mandatory workspace owner, not here again.
-- `comprehensive`: real Qdrant transport plus all 16 Temporal/Outbox Truth
-  certification fixtures, with both native Workers built in one Cargo target.
+  harness, Qdrant REST→gRPC transport and semantic fixture. Qdrant reuses the
+  already compiled `integration_harness` E2E test binary. The harness starts
+  isolated PostgreSQL/Temporal/Qdrant containers; Quality/SERP Cargo tests run
+  in the mandatory workspace owner, not here again.
+- `comprehensive`: all 16 real Temporal/Outbox Truth certification fixtures,
+  with both native Workers built in one Cargo target. It reuses the mandatory
+  integration sibling's Qdrant transport proof in CI; a standalone local Truth
+  gate still runs that real test itself.
   The harness starts its own PostgreSQL, Qdrant, Neo4j and Temporal containers.
 
 The full deep suite remains available through manual dispatch. Support-only

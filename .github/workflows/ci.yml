@@ -692,6 +692,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CI_WORKSPACE_TESTED: "true"
+      CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"
       WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       # Integration tests start disposable PostgreSQL/Temporal via Testcontainers.
       # Only rust-regressions needs a separately hosted, fixed-port PostgreSQL.
@@ -763,6 +764,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"
       TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       # The real Truth harness starts its own isolated PostgreSQL, Temporal,
@@ -814,9 +816,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y protobuf-compiler
 
-      # The required rust-regressions sibling owns workspace, SQL and contracts.
-      # Product/Truth and integration use prebuilt Workers in one Cargo target.
-      - name: Real Qdrant transport and all 16 Truth Worker fixtures
+      # Rust-regressions owns workspace/SQL; integration-e2e owns real Qdrant
+      # transport on its already compiled test target. Truth builds Workers
+      # once and runs all 16 fixtures against genuine disposable containers.
+      - name: All 16 real Truth Worker fixtures (Qdrant in integration)
         if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: bash automation/run_truth_certification_gate.sh
 

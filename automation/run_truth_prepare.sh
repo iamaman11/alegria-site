@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Single native Cargo target: build both Workers in one Cargo invocation,
-# then run the Qdrant transport and suite sequentially.
+# Single native Cargo target: build both Workers in one Cargo invocation.
+# Standalone Truth gates also run Qdrant; CI's mandatory integration owner
+# already has the e2e test binary and runs that exact transport regression.
 # All operations are sequential. Runtime process isolation is still real.
 set -euo pipefail
 
@@ -17,8 +18,10 @@ bash automation/measure_ci_phase.sh truth_workers_build cargo build --manifest-p
   --locked --target-dir "$TARGET_DIR" --timings \
   -p temporal_worker -p outbox_worker --bin temporal_worker --bin outbox_worker
 
-bash automation/measure_ci_phase.sh truth_transport cargo test --manifest-path app/rust/Cargo.toml \
-  --locked --target-dir "$TARGET_DIR" --timings -p integration_harness --features e2e --lib \
-  qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval -- --nocapture
+if [[ "${CI_QDRANT_TRANSPORT_IN_INTEGRATION:-}" == "true" ]]; then
+  echo 'CI_TRUTH_TRANSPORT_REUSED=integration-e2e'
+else
+  bash automation/run_qdrant_transport_gate.sh "$TARGET_DIR"
+fi
 
 echo "CI_TRUTH_PREP_SHARED_TARGET=PASS target=$TARGET_DIR"
