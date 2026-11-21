@@ -89,13 +89,17 @@ def check() -> None:
         assert "python3 automation/smoke_manual_llm_queue.py" not in block
         assert "bash automation/ci_verify.sh" not in block
 
-    # The independent Rust/SQL, real Integration, Truth and package owners
-    # run in parallel. All four are mandatory for accepted provenance.
+    # Deep owners start after architecture without waiting on the slower
+    # stack gates. The independent CI gate and package still require all
+    # fast owners to pass; main provenance requires all 14 exact-source jobs.
     for group in (rust_deep, integration_deep, deep):
         assert "github.event.pull_request.draft == false" in group
         assert "ref: ${{ env.CI_SOURCE_SHA }}" in group
         assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in group
-        assert "needs: [gate, architecture-and-rust]" in group
+        assert "needs: [architecture-and-rust]" in group
+        assert "needs.gate.result" not in group
+        assert "needs.architecture-and-rust.result == 'success'" in group
+        assert "github.event_name == 'workflow_dispatch' ||" in group
         assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in group
         assert 'CARGO_PROFILE_DEV_DEBUG: "line-tables-only"' in group
         assert 'CARGO_PROFILE_TEST_DEBUG: "line-tables-only"' in group
@@ -127,6 +131,11 @@ def check() -> None:
     assert "cargo test -p integration_harness --features e2e" not in deep
     assert 'WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target' in integration_deep
     assert "CI_WORKSPACE_TESTED: \"true\"" in integration_deep
+    assert "services:\n" not in integration_deep
+    assert "DATABASE_URL:" not in integration_deep
+    assert "postgresql-client" not in integration_deep
+    assert "psql " not in integration_deep
+    assert "Install native Cargo integration build tools" in integration_deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "bash automation/ci_verify.sh product-policy" in fast
     assert '"$PHASE" == "product-policy"' in legacy
