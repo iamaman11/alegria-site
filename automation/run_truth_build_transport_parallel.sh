@@ -22,14 +22,27 @@ monotonic_ms() {
 }
 started_ms="$(monotonic_ms)"
 
+# The independent Cargo builds overlap on one runner. By default each Cargo
+# process can schedule nproc compiler jobs, oversubscribing the same CPUs.
+# Split that compiler budget, favoring the Worker branch on odd CPU counts.
+# Cargo --jobs only controls scheduling; it does not change Rust profiles,
+# compilation fingerprints, test coverage or the shared sccache keys.
+available_cpus="$(nproc)"
+worker_jobs=$(((available_cpus + 1) / 2))
+transport_jobs=$((available_cpus / 2))
+if ((transport_jobs < 1)); then transport_jobs=1; fi
+echo "CI_TRUTH_CARGO_JOBS available_cpus=$available_cpus worker_jobs=$worker_jobs transport_jobs=$transport_jobs"
+
 (
   set -e
   bash automation/measure_ci_phase.sh truth_worker_build cargo build --manifest-path app/rust/Cargo.toml \
     --target-dir "$WORKERS_TARGET_DIR" \
+    --jobs "$worker_jobs" --timings \
     -p temporal_worker \
     --bin temporal_worker
   bash automation/measure_ci_phase.sh truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml \
     --target-dir "$WORKERS_TARGET_DIR" \
+    --jobs "$worker_jobs" --timings \
     -p outbox_worker \
     --bin outbox_worker
 ) &
@@ -38,6 +51,7 @@ worker_build_pid=$!
 (
   bash automation/measure_ci_phase.sh truth_transport cargo test --manifest-path app/rust/Cargo.toml \
     --target-dir "$SUITE_TARGET_DIR" \
+    --jobs "$transport_jobs" --timings \
     -p integration_harness \
     --features e2e \
     --lib \

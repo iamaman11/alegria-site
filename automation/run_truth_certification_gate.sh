@@ -43,6 +43,7 @@ run_suite() {
   TRUTH_CERT_REPORT_PATH="$REPORT_PATH" \
   bash automation/measure_ci_phase.sh truth_suite cargo test --manifest-path app/rust/Cargo.toml \
     --target-dir "$SUITE_TARGET_DIR" \
+    --timings \
     -p integration_harness \
     --features e2e \
     --lib \

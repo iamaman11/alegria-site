@@ -391,6 +391,8 @@ jobs:
             automation/reports/ci_phase_timings.jsonl
             automation/reports/cargo_cache_product-truth.json
             automation/reports/sccache_diagnostic_product-truth.json
+            app/rust/target/integration-harness-nested/workers/cargo-timings/*.html
+            app/rust/target/integration-harness-suite/cargo-timings/*.html
           if-no-files-found: ignore
 
   rust-security:
