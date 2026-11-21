@@ -47,10 +47,10 @@ class PhaseTimingContract(unittest.TestCase):
     def test_rust_subphases_are_measured_by_the_same_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = Path(tmp) / "evidence.jsonl"
-            for phase in ("truth_workers_build", "truth_transport", "truth_suite", "semantic_fixture"):
+            for phase in ("truth_worker_build", "truth_outbox_build", "truth_transport", "truth_suite", "semantic_fixture"):
                 self.assertEqual(self.invoke(report, phase, "exit 0").returncode, 0)
             entries = [json.loads(line) for line in report.read_text().splitlines()]
-            self.assertEqual(len(entries), 4)
+            self.assertEqual(len(entries), 5)
             self.assertTrue(all(entry["exit_code"] == 0 for entry in entries))
 
     def test_unknown_phase_is_rejected(self) -> None:
