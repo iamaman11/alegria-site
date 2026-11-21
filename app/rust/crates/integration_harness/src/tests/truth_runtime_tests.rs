@@ -1174,6 +1174,7 @@
         let mut reports = Vec::new();
 
         for fixture in &fixtures {
+            let fixture_started = Instant::now();
             // A failed/short-circuited workflow must not consume the next
             // fixture's provider replies. Keep infrastructure shared, but
             // bind each worker to independently queued deterministic stubs.
@@ -1212,7 +1213,9 @@
                 &format!("{}/v1/chat/completions", editorial_stub.base_url),
             ));
             let mut worker = spawn_temporal_worker(&worker_env);
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // Temporal persists workflow tasks until a poller is available.
+            // Starting the workflow below is the actual readiness/dispatch
+            // contract; a fixed startup sleep cannot establish readiness.
             assert!(
                 worker.child.try_wait().unwrap().is_none(),
                 "temporal_worker exited before fixture {}",
@@ -1269,7 +1272,8 @@
             )
             .await;
             let mut outbox_worker = spawn_outbox_worker(&worker_env);
-            tokio::time::sleep(Duration::from_secs(3)).await;
+            // Outbox work is persisted in PostgreSQL and polled asynchronously.
+            // Its real delivery is asserted by the certification report.
             assert!(
                 outbox_worker.child.try_wait().unwrap().is_none(),
                 "outbox_worker exited before certification workflow start"
@@ -1285,6 +1289,7 @@
                 None
             };
 
+            let workflow_started = Instant::now();
             let handle = client
                 .start_workflow(
                     UntypedWorkflow::new("SeoSiteBuildCanonicalCutoverWorkflow"),
@@ -1298,6 +1303,7 @@
                 handle.get_result(WorkflowGetResultOptions::default()),
             )
             .await;
+            let workflow_finished = Instant::now();
             let workflow_error = match workflow_result {
                 Ok(Ok(_)) => None,
                 Ok(Err(err)) => Some(format!("{err:#}")),
@@ -1336,6 +1342,27 @@
                 report.workflow_failure_diagnostics =
                     Some(format!("workflow_result_error:{error}\n{diagnostics}"));
             }
+            // A successful workflow result must never conceal a worker crash.
+            assert!(
+                worker.child.try_wait().unwrap().is_none(),
+                "temporal_worker exited during fixture {}",
+                fixture.fixture_id
+            );
+            assert!(
+                outbox_worker.child.try_wait().unwrap().is_none(),
+                "outbox_worker exited during fixture {}",
+                fixture.fixture_id
+            );
+            eprintln!(
+                "CI_TRUTH_FIXTURE_TIME source_sha={} fixture_id={} pass={} preparation_ms={} workflow_ms={} reporting_ms={} total_ms={}",
+                env::var("CI_SOURCE_SHA").unwrap_or_else(|_| "local".to_string()),
+                fixture.fixture_id,
+                report.pass,
+                workflow_started.duration_since(fixture_started).as_millis(),
+                workflow_finished.duration_since(workflow_started).as_millis(),
+                workflow_finished.elapsed().as_millis(),
+                fixture_started.elapsed().as_millis(),
+            );
             reports.push(report);
             if let Ok(report_path) = env::var("TRUTH_CERT_REPORT_PATH") {
                 let partial = TruthCertificationSuiteReport {

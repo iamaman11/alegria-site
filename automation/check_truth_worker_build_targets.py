@@ -10,6 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = ROOT / "automation" / "run_truth_certification_gate.sh"
+TRUTH_RUNTIME_TESTS = ROOT / "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs"
 
 
 def validate(source: str) -> None:
@@ -35,6 +36,35 @@ def validate(source: str) -> None:
         raise ValueError("transport and full suite must use their isolated Cargo target")
     if source.count('  --bin temporal_worker') != 1 or source.count('  --bin outbox_worker') != 1:
         raise ValueError("real Worker binary selection was changed")
+
+
+def validate_fixture_lifecycle(source: str) -> None:
+    marker = "async fn truth_certification_suite_matches_fixture_expectations() {"
+    if marker not in source:
+        raise ValueError("missing full truth certification test")
+    body = source.split(marker, 1)[1].split("\n    }", 1)[0]
+    if "tokio::time::sleep(Duration::from_secs(3))" in body:
+        raise ValueError("fixed per-fixture Worker startup sleep returned")
+    required = (
+        "for fixture in &fixtures {",
+        "spawn_temporal_worker(&worker_env)",
+        "spawn_outbox_worker(&worker_env)",
+        "handle.get_result(WorkflowGetResultOptions::default())",
+        "Duration::from_secs(180)",
+        "collect_truth_certification_fixture_report(",
+        "worker.child.try_wait().unwrap().is_none()",
+        "outbox_worker.child.try_wait().unwrap().is_none()",
+        "CI_TRUTH_FIXTURE_TIME source_sha={} fixture_id=",
+        "workflow_started.duration_since(fixture_started)",
+        "workflow_finished.duration_since(workflow_started)",
+    )
+    for item in required:
+        if item not in body:
+            raise ValueError(f"missing truth fixture lifecycle contract: {item}")
+    if body.count("\n                worker.child.try_wait().unwrap().is_none()") != 2:
+        raise ValueError("temporal worker must be checked before and after each workflow")
+    if body.count("\n                outbox_worker.child.try_wait().unwrap().is_none()") != 2:
+        raise ValueError("outbox worker must be checked before and after each workflow")
 
 
 class TruthWorkerTargetContract(unittest.TestCase):
@@ -75,6 +105,38 @@ class TruthWorkerTargetContract(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertIn("must differ", result.stderr)
             self.assertFalse((Path(temp) / "report.json").exists())
+
+
+class TruthFixtureLifecycleContract(unittest.TestCase):
+    def test_actual_fixture_lifecycle_has_timing_and_liveness(self) -> None:
+        validate_fixture_lifecycle(TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8"))
+
+    def test_reintroduced_fixed_sleep_is_rejected(self) -> None:
+        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        changed = source.replace(
+            "let mut worker = spawn_temporal_worker(&worker_env);",
+            "let mut worker = spawn_temporal_worker(&worker_env);\n"
+            "            tokio::time::sleep(Duration::from_secs(3)).await;",
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "fixed per-fixture"):
+            validate_fixture_lifecycle(changed)
+
+    def test_missing_post_workflow_liveness_is_rejected(self) -> None:
+        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        changed = source.replace(
+            'outbox_worker.child.try_wait().unwrap().is_none(),\n                "outbox_worker exited during fixture',
+            'outbox_worker.child.try_wait().unwrap().is_some(),\n                "outbox_worker exited during fixture',
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "before and after"):
+            validate_fixture_lifecycle(changed)
+
+    def test_missing_per_fixture_timing_is_rejected(self) -> None:
+        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        changed = source.replace("CI_TRUTH_FIXTURE_TIME source_sha={} fixture_id=", "CI_TRUTH_TIME removed=", 1)
+        with self.assertRaisesRegex(ValueError, "missing truth fixture lifecycle"):
+            validate_fixture_lifecycle(changed)
 
 
 if __name__ == "__main__":

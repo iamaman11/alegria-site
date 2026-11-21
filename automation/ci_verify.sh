@@ -321,7 +321,7 @@ echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
 echo "[52d/53] Rebuild dependency graph smoke"
-python3 automation/smoke_rebuild_dependency_graph.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_dependency_graph.py
 
 echo "[52e/53] Rebuild queue and execution path"
 python3 automation/check_rebuild_queue_execution_path.py

@@ -181,6 +181,14 @@ jobs:
             check-fact-verifier-parity --root . \
             --report-json automation/reports/fact_verifier_parity.rust.json
 
+      # Product's real SQL migration + infrastructure Rust smoke used to
+      # compile after Truth suite (99s in #204). Keep the exact command on
+      # this mandatory owner after workspace compilation; local product runs it.
+      - name: Retained rebuild dependency graph PostgreSQL/Rust smoke
+        env:
+          SQLX_OFFLINE: "true"
+        run: python3 automation/smoke_rebuild_dependency_graph.py
+
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
         run: sccache --show-stats
@@ -208,6 +216,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # Only the existing rebuild graph Rust smoke is delegated, never Truth.
+      CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       ALEGRIA_SCOPED_TRUTH_TEST: "true"

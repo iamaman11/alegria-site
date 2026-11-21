@@ -83,7 +83,7 @@ def check() -> None:
     )
     assert 'CI_RUST_CHECK_OWNER: "architecture-and-rust"' in verify
     assert "CI_RUST_CHECK_OWNER: " not in architecture
-    assert "CI_RUST_CHECK_OWNER: " not in product
+    assert 'CI_RUST_CHECK_OWNER: "architecture-and-rust"' in product
     assert "name: Retained Rust-backed crawler, proto and run-report checks" in architecture
     assert architecture.index("cargo test -p integration_harness --features e2e --no-run --locked") < architecture.index(
         "name: Retained Rust-backed crawler, proto and run-report checks"
@@ -95,6 +95,15 @@ def check() -> None:
             f"standalone ci_verify.sh must retain {script_name}"
         )
         assert command not in verify, f"duplicate Rust compilation in verify: {script_name}"
+    rebuild_smoke = "python3 automation/smoke_rebuild_dependency_graph.py"
+    assert architecture.count(rebuild_smoke) == 1, "rebuild smoke must be in required Rust owner"
+    assert shell.count(f"bash automation/run_rust_owned_check.sh {rebuild_smoke}") == 1, (
+        "standalone product must retain the real rebuild smoke"
+    )
+    assert rebuild_smoke not in product, "duplicate Rust compilation in product owner"
+    assert architecture.index("cargo test --workspace --locked") < architecture.index(rebuild_smoke), (
+        "rebuild smoke must reuse Rust workspace compilation"
+    )
     assert "python3 automation/check_ci_rust_owned_check.py" in architecture
     # All three owners run concurrently on separate ephemeral GitHub VMs.
     # No phase can read another owner's mutable PostgreSQL state or artifacts.
