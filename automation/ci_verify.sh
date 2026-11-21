@@ -39,7 +39,11 @@ echo "[3a/50] Crawler invariants contract (fail early)"
 python3 automation/check_crawler_invariants.py
 
 echo "[3b/50] Crawler robots-policy smoke (fail early)"
-bash automation/run_rust_owned_check.sh python3 automation/smoke_crawler_robots_policy.py
+if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+  bash automation/run_rust_owned_check.sh python3 automation/smoke_crawler_robots_policy.py
+else
+  echo "CARGO_REUSE=robots_policy_and_redirect_trace_smoke already passed in workspace"
+fi
 
 echo "[3c/50] Crawl provenance contract (fail early)"
 python3 automation/check_crawl_provenance_contract.py
@@ -113,7 +117,12 @@ echo "[18/50] Services/temporal boundary"
 python3 automation/check_services_temporal_boundary.py
 
 echo "[19/50] Proto contract verify"
-bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
+if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+  bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
+else
+  python3 automation/gen_proto_contracts.py --out automation/PROTO_CONTRACTS.md --check
+  echo "CARGO_REUSE=contracts and infrastructure already compiled by workspace"
+fi
 
 echo "[20/50] Reliability contracts check"
 python3 automation/check_reliability_contracts.py
@@ -254,7 +263,11 @@ echo "[38a/53] Expert core activation contract"
 python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
-bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
+if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+  bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
+else
+  echo "CARGO_REUSE=seo_steps_form_publish_ready_pipeline already passed in workspace"
+fi
 
 echo "[40/53] Contradiction handling"
 python3 automation/check_contradiction_handling.py
@@ -324,7 +337,11 @@ echo "[52e/53] Rebuild queue and execution path"
 python3 automation/check_rebuild_queue_execution_path.py
 
 echo "[52f/53] Rebuild queue and execution path smoke"
-bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_queue_execution_path.py
+if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+  bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_queue_execution_path.py
+else
+  echo "CARGO_REUSE=infrastructure unit library already passed in workspace"
+fi
 
 echo "[52g/53] Global navigation policy"
 python3 automation/check_global_navigation_policy.py

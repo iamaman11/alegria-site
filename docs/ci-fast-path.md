@@ -1,9 +1,10 @@
 # CI for the experimental Alegria app
 
-The canonical `.github/workflows/ci.yml` owns fast PR feedback, full Ready-PR
-acceptance, and the single signed Worker build. Draft PRs run only the fast
-10/10 feedback gate; a Ready-for-review PR also runs the real Rust/PG/Truth
-suite and packages its verified source head. For a manual deep diagnostic,
+The canonical `.github/workflows/ci.yml` owns changed-crate PR feedback,
+affected-service acceptance, and the single signed Worker build. Draft PRs
+run only the fast 10/10 feedback gate; Ready PRs run real Rust/PG/Truth suites
+**when source impact requires them**, then package the verified source head.
+For an unconditional manual deep diagnostic,
 use GitHub Actions → `ci` → **Run workflow**, or locally run
 `bash automation/ci_verify.sh all`.
 
@@ -17,6 +18,7 @@ use GitHub Actions → `ci` → **Run workflow**, or locally run
 | [#39](https://github.com/iamaman11/alegria-site/actions/runs/44934597524) | **8m 33s** | Cold Rust workspace tests 5m 12s, then E2E feature-graph rebuild 2m 20s |
 | [#40, first attempt](https://github.com/iamaman11/alegria-site/actions/runs/44935699114) | **6m 46s** | Cold unit tests of all operational crates still exceeded the PR budget |
 | [#40, lightweight gate](https://github.com/iamaman11/alegria-site/actions/runs/44936425556) | **1m 14s** | All ten mandatory jobs passed with Rust model regressions and no full-workspace compilation |
+| [#42, before impact-based execution](https://github.com/iamaman11/alegria-site/actions/runs/44948968617) | **28m 52s** | Workspace 225s; PostgreSQL 178s; Rust contracts 299s; Truth 517s; integration 319s; package 56s |
 
 The three earlier runs passed every then-required job. After the version refresh, a cold
 Docker rebuild revealed a separate release-compilation bottleneck, so Docker
@@ -28,29 +30,30 @@ the `sccache` compiler cache reported 100% hits.
 Run #39 exposed the opposite case: `sccache` had no Rust compiler hits, and
 the second E2E feature graph made the cold PR gate exceed five minutes.
 Removing the E2E rebuild was insufficient (#40). The regular prototype PR
-gate now exercises lightweight Rust model regressions, source/format/contract
-checks and operational container checks; the full workspace and E2E feature
-graph are checked by the `comprehensive` job before release. The five-minute goal must be
+gate now exercises changed Rust crates and reverse consumers,
+source/format/contract checks and operational container checks; the full
+workspace and E2E feature graph run only for core runtime/DB/contract changes
+or an explicit manual deep diagnostic. The five-minute goal must be
 confirmed against exact completed CI runs; it is not a cold-run SLA.
 
 ## On each pull request
 
-- Real `cargo test -p runtime_models --locked` for the lightweight model
-  regressions and `cargo fmt --all -- --check`. Full workspace Rust tests,
-  `integration_harness`, and PostgreSQL E2E run on Ready PRs, not on every
-  experimental PR. The PR gate by itself **does not certify full Rust compilation**.
+- `cargo fmt --all -- --check` and native Cargo metadata impact on every PR.
+  An isolated Rust change runs one `cargo test --locked -p ...` covering the
+  changed crate and all its reverse consumers. Core runtime changes still
+  require the full real-service suite. Support-only changes compile no Rust.
 - Python/SQLx/SEO/Truth policy contracts and native Windows operator checks.
 - RustSec dependency audit, Cloudflare static build, Temporal/PostgreSQL and
   storage/graph container checks, plus source-level Docker boundary checks.
 - A single Rust compilation owner; the static contract jobs no longer compile
   or repeatedly bootstrap Rust/Temporal/PostgreSQL.
-- The dependency-impact report is produced on PRs, while the optional scoped
-  `cargo check` remains a developer command. A direct Rust-only edit no longer
-  starts an unpredictable second cold compile in PR CI.
+- The dependency-impact report selects actual PR Cargo scope; optional scoped
+  `cargo check` remains a local developer command. Unknown files conservatively
+  expand to full verification, without misclassifying known support-only files.
 
 ## Release Worker image (same accepted source, one compilation)
 
-After all mandatory fast and deep checks pass on a Ready PR, the `package`
+After all mandatory fast and source-relevant deep checks pass on a Ready PR, the `package`
 job of the **same `ci.yml` run** builds the real Temporal Worker once,
 verifies its runtime tools, signs the archive and uploads an immutable
 source-HEAD-specific artifact. The protected main merge gate checks that its
@@ -70,18 +73,24 @@ certification fixtures, Qdrant REST→gRPC transport, the manual LLM lifecycle,
 rebuild/extraction Rust-backed checks, semantic fixtures, protocol checks,
 and the remaining PostgreSQL regressions.
 
-Its three ordered `contracts`, `product`, and `integration` phases preserve
-the same `ci_verify.sh all` coverage while exposing phase durations.
+When required, its three ordered `contracts`, `product`, and `integration`
+phases preserve the same `ci_verify.sh all` coverage while exposing phase
+durations. Rust compilation already verified by successful workspace tests
+is not repeated in crawler, protocol, extraction or report-surface smoke tests.
 `product` builds the real Truth Workers; `integration` passes their exact
 binary paths to manual LLM E2E and reuses the workspace Cargo target for the
 whole-page semantic fixture. No synthetic Worker replaces a real test.
 
-It runs automatically when a PR is marked Ready for Review, on subsequent
-Ready-PR updates, or via manual dispatch. Draft feedback stays fast; the full
+It runs on Ready PRs with core runtime/DB/contract changes, or by manual
+dispatch for unconditional full verification. On Ready support-only PRs it
+records `NOT_AFFECTED_BY_SOURCE_CHANGE` without building Rust. The full
 accepted release is **not** claimed to take under five minutes. The most recent
 completed full run, [#41](https://github.com/iamaman11/alegria-site/actions/runs/44943520406),
 took about 30m 30s with 1,680 Rust cache misses and 445 cache write errors.
 Cache and feature-graph reuse remain measured performance work.
+The newer #42 full run took 28m 52s: 1,112 Rust misses, zero cache write
+errors, and a 56-second signed Docker package. Neither result proves a
+repeatable five-minute complete regression.
 
 ## Dependency strategy
 

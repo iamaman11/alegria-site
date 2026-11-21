@@ -21,6 +21,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      deep_required: ${{ steps.rust_impact.outputs.deep_required }}
+      affected_packages: ${{ steps.rust_impact.outputs.affected_packages }}
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       # Release-like CI compiles use a shared compiler-object cache;
@@ -89,6 +92,7 @@ jobs:
             cargo-registry-${{ runner.os }}-
 
       - name: Determine directly changed Rust crates and dependent consumers
+        id: rust_impact
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -108,14 +112,41 @@ jobs:
             automation/reports/ci_impact.json
           if-no-files-found: ignore
 
-      # A cold workspace test takes longer than the five-minute PR budget.
-      # Keep real fast Rust model regressions here; run all crates and real
-      # PostgreSQL E2E in the comprehensive release job of this workflow.
-      - name: Fast Rust runtime model unit tests
+      # Core/DB changes run the real deep suite. Give them an early model smoke.
+      # Isolated changes test only their Cargo reverse dependency closure.
+      # Docs, workflow and operator-only changes never compile unrelated Rust.
+      - name: Fast Rust runtime model unit tests for deep changes
+        if: steps.rust_impact.outputs.deep_required == 'true'
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
         run: cargo test -p runtime_models --locked
+
+      - name: Native Cargo tests for affected crates and consumers
+        if: steps.rust_impact.outputs.deep_required != 'true'
+        working-directory: app/rust
+        env:
+          SQLX_OFFLINE: "true"
+          CI_AFFECTED_PACKAGES: ${{ steps.rust_impact.outputs.affected_packages }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          packages = json.loads(os.environ["CI_AFFECTED_PACKAGES"])
+          assert isinstance(packages, list)
+          assert all(isinstance(p, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", p) for p in packages)
+          if not packages:
+              print("CARGO_IMPACT=NO_RUST_CHANGE")
+          else:
+              command = ["cargo", "test", "--locked"]
+              for package in packages:
+                  command.extend(("-p", package))
+              print("CARGO_IMPACT=" + ",".join(packages), flush=True)
+              subprocess.run(command, check=True)
+          PY
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -537,12 +568,12 @@ jobs:
           print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
 
-  # Draft changes keep their fast 10/10 feedback. Ready-for-review PRs earn
-  # real Rust/PG/Truth acceptance in this SAME workflow before packaging.
-  # A manual dispatch performs deep diagnostics but never publishes an image.
+  # Ready PRs run full real-service certification when source impact requires it.
+  # Support-only and isolated-crate changes retain a successful lightweight
+  # gate; manual dispatch always runs every deep test in this SAME workflow.
   comprehensive:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository)
-    needs: gate
+    if: always() && needs.gate.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository))
+    needs: [gate, architecture-and-rust]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -555,6 +586,7 @@ jobs:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
+      CI_WORKSPACE_TESTED: "true"
     services:
       postgres:
         image: postgres:18.7-alpine
@@ -577,19 +609,33 @@ jobs:
       - name: Preflight publication source contract
         run: python3 automation/smoke_incremental_publish_path.py
 
+      - name: Report exact-source acceptance scope
+        env:
+          CI_DEEP_REQUIRED: ${{ needs.architecture-and-rust.outputs.deep_required }}
+        run: |
+          if [[ "${{ github.event_name }}" == 'workflow_dispatch' || "$CI_DEEP_REQUIRED" == 'true' ]]; then
+            echo 'CI_DEEP_SCOPE=REAL_SERVICE_REGRESSION_REQUIRED'
+          else
+            echo 'CI_DEEP_SCOPE=NOT_AFFECTED_BY_SOURCE_CHANGE'
+          fi
+
       - uses: actions/setup-python@v7
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         with:
           python-version: "3.15"
 
       - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
 
       - uses: mozilla-actions/sccache-action@v0.0.11
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         with:
           version: "v0.16.0"
 
       # The fast Rust owner has completed before this job starts. Restore its
       # exact-lockfile registry cache without creating a second cache writer.
       - name: Reuse shared Cargo dependency sources (read-only)
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         uses: actions/cache/restore@v4
         with:
           path: |
@@ -600,6 +646,7 @@ jobs:
             cargo-registry-${{ runner.os }}-
 
       - name: Install full regression tooling
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
@@ -607,10 +654,12 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Workspace unit tests
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         working-directory: app/rust
         run: cargo test --workspace --locked
 
       - name: All retained-source/editorial PostgreSQL regressions
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         working-directory: app/rust
         run: |
           cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
@@ -624,12 +673,15 @@ jobs:
       # Preserve ci_verify.sh all coverage, but split the exact same ordered
       # phases so GitHub shows their real critical path and allows scoped reuse.
       - name: Full architecture and Rust-backed contracts
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: bash automation/ci_verify.sh contracts
 
       - name: Full Product/Truth and real Worker certification
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: bash automation/ci_verify.sh product
 
       - name: Full service integration with already-built real Workers
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         env:
           # Product/Truth built and tested these binaries in this same job.
           # Manual LLM E2E must not recompile them from the default target.
@@ -641,7 +693,7 @@ jobs:
         run: bash automation/ci_verify.sh integration
 
       - name: Rust compiler cache statistics
-        if: always()
+        if: always() && (github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true')
         run: sccache --show-stats
 
       - name: Preserve deep regression evidence

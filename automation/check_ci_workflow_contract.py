@@ -62,6 +62,12 @@ def check() -> None:
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "cargo test -p runtime_models --locked" in architecture
+    assert "deep_required: ${{ steps.rust_impact.outputs.deep_required }}" in architecture
+    assert "affected_packages: ${{ steps.rust_impact.outputs.affected_packages }}" in architecture
+    assert "id: rust_impact" in architecture
+    assert "CI_AFFECTED_PACKAGES: ${{ steps.rust_impact.outputs.affected_packages }}" in architecture
+    assert 'command = ["cargo", "test", "--locked"]' in architecture
+    assert "CARGO_IMPACT=NO_RUST_CHANGE" in architecture
     assert "cargo test --workspace" not in architecture
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
@@ -82,6 +88,12 @@ def check() -> None:
     assert "github.event.pull_request.draft == false" in deep
     assert "ref: ${{ env.CI_SOURCE_SHA }}" in deep
     assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
+    assert "needs: [gate, architecture-and-rust]" in deep
+    assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in deep
+    assert "CI_DEEP_SCOPE=NOT_AFFECTED_BY_SOURCE_CHANGE" in deep
+    assert 'CI_WORKSPACE_TESTED: "true"' in deep
+    for step in ("Workspace unit tests", "Full architecture and Rust-backed contracts", "Full Product/Truth and real Worker certification", "Full service integration with already-built real Workers"):
+        assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in deep
     ordered_full_phases = (
         "bash automation/ci_verify.sh contracts",
         "bash automation/ci_verify.sh product",
@@ -105,6 +117,12 @@ def check() -> None:
     assert "INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/temporal_worker" in deep
     assert "INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/outbox_worker" in deep
     assert "WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target" in deep
+    # Real workspace tests precede the duplicate-free audit phases. Standalone
+    # local audits still execute their own Rust checks without this setting.
+    assert '${CI_WORKSPACE_TESTED:-}' in legacy
+    run_report = (ROOT / "automation/smoke_run_report_completeness.py").read_text(encoding="utf-8")
+    assert 'os.environ.get("CI_WORKSPACE_TESTED") == "true"' in run_report
+    assert '"full_harness"' in run_report
 
 
 if __name__ == "__main__":
