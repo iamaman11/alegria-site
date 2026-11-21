@@ -305,7 +305,7 @@ jobs:
       # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
       # The raw runner-local log is never printed or uploaded.
       SCCACHE_LOG: "sccache::server=debug"
-      SCCACHE_ERROR_LOG: ${{ runner.temp }}/alegria-product-sccache.log
+      SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log
       # Only three existing Product Rust smokes are delegated, never Truth.
       CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}

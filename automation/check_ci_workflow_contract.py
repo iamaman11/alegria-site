@@ -143,7 +143,7 @@ def check() -> None:
         assert "sccache --show-stats" in owner
     assert "name: ci-phase-product" in product
     assert 'SCCACHE_LOG: "sccache::server=debug"' in product
-    assert 'SCCACHE_ERROR_LOG: ${{ runner.temp }}/alegria-product-sccache.log' in product
+    assert 'SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log' in product
     assert "python3 automation/report_ci_sccache_write_errors.py --job product-truth" in product
     assert "automation/reports/sccache_diagnostic_product-truth.json" in product
     assert "python3 automation/check_ci_sccache_diagnostics.py" in architecture

@@ -95,7 +95,8 @@ class SccacheDiagnosticContract(unittest.TestCase):
         product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
         self.assertIn('SCCACHE_LOG: "sccache::server=debug"', product)
-        self.assertIn('SCCACHE_ERROR_LOG: ${{ runner.temp }}/alegria-product-sccache.log', product)
+        self.assertIn('SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log', product)
+        self.assertNotIn("${{ runner.temp }}", product)
         self.assertEqual(product.count("python3 automation/report_ci_sccache_write_errors.py --job product-truth"), 1)
         self.assertIn("automation/reports/sccache_diagnostic_product-truth.json", product)
         upload = product.split("- name: Upload measured Product/Truth phase timing", 1)[1]
