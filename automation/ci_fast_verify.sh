@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cheap PR acceptance: lightweight Rust model tests run in architecture-and-rust.
 # Long-running Temporal/Truth, cross-service and repeated Rust checks remain in
-# the explicitly invoked .github/workflows/ci-deep.yml (ci_verify.sh all).
+# the comprehensive release job of .github/workflows/ci.yml (ci_verify.sh all).
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"

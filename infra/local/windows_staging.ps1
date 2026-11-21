@@ -69,20 +69,51 @@ foreach ($name in @('ci')) {
     }
     $verifiedRunId = [string]$latest[0].databaseId
 }
-# The release image is deliberately compiled after the fast PR check. A
-# successful PR CI proves the source; a successful, exact-SHA worker-image run
-# separately proves the deployable artifact. Both must match -Commit.
+# A two-parent accepted main merge must have the SAME Git tree as its approved
+# PR head. The real Worker was compiled and signed in that PR's unified CI:
+# never compile it again just to obtain the distinct GitHub merge commit SHA.
+$sourceSha = $Commit
 if ($Service -eq 'temporal-worker') {
-    $images = @($runs | Where-Object {
-        $_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit
-    } | Sort-Object databaseId -Descending | Select-Object -First 1)
-    if ($images.Count -ne 1 -or $images[0].status -ne 'completed' -or
-        $images[0].conclusion -ne 'success') {
-        throw "Worker image NO-GO: run the worker-image release workflow for $Commit before deployment"
+    $mergeJson = & gh api "repos/$repo/commits/$Commit"
+    Assert-Exit 'read canonical main merge'
+    $merge = ($mergeJson | Out-String) | ConvertFrom-Json
+    if (@($merge.parents).Count -ne 2) { throw 'Worker release requires a two-parent accepted main PR merge' }
+    $sourceSha = [string]$merge.parents[1].sha
+    if ($sourceSha -cnotmatch '^[a-f0-9]{40}$') { throw 'Accepted PR head SHA is invalid' }
+    $mergedTree = (& gh api "repos/$repo/git/commits/$Commit" --jq '.tree.sha' | Out-String).Trim()
+    Assert-Exit 'main merge tree lookup'
+    $sourceTree = (& gh api "repos/$repo/git/commits/$sourceSha" --jq '.tree.sha' | Out-String).Trim()
+    Assert-Exit 'accepted source tree lookup'
+    if (-not $mergedTree -or $mergedTree -cne $sourceTree) {
+        throw 'Worker image NO-GO: main merge and approved PR head have different source trees'
     }
-    $imageRunId = [string]$images[0].databaseId
+    $pullsJson = & gh api "repos/$repo/commits/$Commit/pulls"
+    Assert-Exit 'merged PR provenance lookup'
+    $mergedPulls = @(($pullsJson | Out-String | ConvertFrom-Json) | Where-Object {
+        $_.merged_at -and $_.merge_commit_sha -ceq $Commit -and
+        $_.head.sha -ceq $sourceSha -and $_.base.ref -eq 'main'
+    })
+    if ($mergedPulls.Count -ne 1) { throw 'Worker image NO-GO: no unique accepted main PR' }
+    $sourceRunJson = & gh run list -R $repo --commit $sourceSha --json databaseId,workflowName,event,conclusion,status,headSha --limit 100
+    Assert-Exit 'accepted PR CI lookup'
+    $sourceRuns = $sourceRunJson | ConvertFrom-Json
+    $accepted = @($sourceRuns | Where-Object {
+        $_.workflowName -eq 'ci' -and $_.event -eq 'pull_request' -and
+        $_.headSha -ceq $sourceSha -and $_.status -eq 'completed' -and
+        $_.conclusion -eq 'success'
+    } | Sort-Object databaseId -Descending | Select-Object -First 1)
+    if ($accepted.Count -ne 1) { throw 'Worker image NO-GO: no successful exact-head PR CI' }
+    $imageRunId = [string]$accepted[0].databaseId
+    $jobsJson = & gh api "repos/$repo/actions/runs/$imageRunId/jobs?per_page=100"
+    Assert-Exit 'accepted PR CI jobs lookup'
+    $releaseJobs = (($jobsJson | Out-String) | ConvertFrom-Json).jobs
+    foreach ($requiredJob in @('CI', 'comprehensive', 'package')) {
+        if (@($releaseJobs | Where-Object { $_.name -eq $requiredJob -and $_.conclusion -eq 'success' }).Count -ne 1) {
+            throw "Worker image NO-GO: PR CI $requiredJob did not pass at $sourceSha"
+        }
+    }
 }
-Write-Output "CI=PASS COMMIT=$Commit"
+Write-Output "CI=PASS COMMIT=$Commit SOURCE_SHA=$sourceSha"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
 if ((Container-State $target) -ne 'running') { throw "$target not running" }
 if ((Container-Label $target 'com.docker.compose.project') -ne $project) { throw 'Worker project mismatch' }
@@ -93,7 +124,7 @@ if ($oldSha -notmatch '^[a-f0-9]{40}$' -or -not (Test-Path (Join-Path $oldRoot '
 }
 # A repeated Deploy of the same SHA may carry new provider credentials.
 # Compute and compare the effective environment before treating it as a no-op.
-$env:WORKER_BUILD_ID = $Commit
+$env:WORKER_BUILD_ID = $sourceSha
 if ($EnvFile) {
     $EnvFile = (Resolve-Path -LiteralPath $EnvFile).Path
     if ($EnvFile.StartsWith($runtime, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -233,18 +264,18 @@ $latestTag = $project + '-' + $Service + ':latest'
 if ($Service -eq 'temporal-worker') {
     # No local compilation. Load only the source-specific successful release
     # artifact, never a floating or unverified Docker image.
-    $artifactName = 'temporal-worker-image-' + $Commit
+    $artifactName = 'temporal-worker-image-' + $sourceSha
     $artifactDir = Join-Path $downloads ($artifactName + '-' + [guid]::NewGuid().ToString('n'))
     New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
     try {
         & gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir
         Assert-Exit 'download source-verified Worker release image'
-        $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit
+        $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $sourceSha
         # A checksum shipped beside the archive only detects corruption. This
         # Sigstore check additionally ties those bytes to GitHub's own signed
         # build provenance for the precise canonical workflow identity.
         $attestJson = & gh attestation verify $artifact.Archive -R $repo `
-            --signer-workflow "$repo/.github/workflows/worker-image.yml" --deny-self-hosted-runners --format json
+            --signer-workflow "$repo/.github/workflows/ci.yml" --deny-self-hosted-runners --format json
         Assert-Exit 'verify signed GitHub Worker provenance'
         if (@(($attestJson | Out-String | ConvertFrom-Json)).Count -lt 1) {
             throw 'GitHub Worker archive has no valid signed provenance'
@@ -261,7 +292,7 @@ if ($Service -eq 'temporal-worker') {
         Assert-Exit 'inspect loaded CI Worker labels'
         $labels = $labelsJson | ConvertFrom-Json
         foreach ($name in @('org.opencontainers.image.revision','by.alegria.source-head-sha')) {
-            if ([string]$labels.PSObject.Properties[$name].Value -cne $Commit) {
+            if ([string]$labels.PSObject.Properties[$name].Value -cne $sourceSha) {
                 throw "CI Worker image $name does not match exact source SHA"
             }
         }
@@ -269,7 +300,7 @@ if ($Service -eq 'temporal-worker') {
         # Previous image has already been secured under its rollback tag.
         & $docker image tag $artifact.ImageId $latestTag
         Assert-Exit 'tag exact CI Worker image for existing Compose project'
-        Write-Output "WORKER_IMAGE=RELEASE_ARTIFACT SOURCE_SHA=$Commit RUN_ID=$imageRunId IMAGE=$artifact.ImageId"
+        Write-Output "WORKER_IMAGE=RELEASE_ARTIFACT SOURCE_SHA=$sourceSha MERGE_SHA=$Commit RUN_ID=$imageRunId IMAGE=$($artifact.ImageId)"
     } finally {
         # Only the unique, newly-created download staging directory is removed.
         Remove-Item -LiteralPath $artifactDir -Force -Recurse
@@ -283,7 +314,8 @@ if ($Service -eq 'temporal-worker') {
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'inspect selected candidate image'
 # An operator-only commit can legitimately rebuild to the SAME immutable image.
-# Checkout + WORKER_BUILD_ID must still match the requested commit at readback.
+# Checkout matches the accepted merge; Worker build identity matches its
+# byte-identical, separately signed source PR head.
 if (-not $newImage) {
     throw 'Candidate image has no verifiable image ID'
 }
@@ -347,7 +379,7 @@ function Wait-Worker-Reconciliation([int]$StartExit, [int]$Attempts = 90) {
             }
             $newVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $newImage `
                 -ExpectedProject $project -ExpectedCheckout $root `
-                -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
+                -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $sourceSha } else { '' }) `
                 -MetricsRequired ($Service -eq 'temporal-worker') -MetricsOk $metricsOk `
                 -ExpectedEnvironment $expectedEnvironment
             $oldVerified = Test-Staging-Readback -Observed $observed -ExpectedImage $rollbackImage `
@@ -395,7 +427,7 @@ function Invoke-Compose-Recreate-Start([string[]]$ComposeArgs) {
         }
         $ownedCandidate = Test-Staging-Identity -Observed $created -ExpectedImage $newImage `
             -ExpectedProject $project -ExpectedCheckout $root `
-            -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $Commit } else { '' }) `
+            -ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $sourceSha } else { '' }) `
             -ExpectedEnvironment $expectedEnvironment
         if (-not $ownedCandidate -or $created.State -notin @('created','exited','running')) {
             Write-Warning "Compose recreate exit $createExit; exact candidate not verified for safe start"

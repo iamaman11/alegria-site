@@ -134,10 +134,10 @@ def main() -> int:
         print("FAIL integration_harness ci_missing=" + ",".join(missing_ci))
         return 1
 
-    # Fast PRs test lightweight Rust models; the full workspace, isolated E2E
-    # harness and real PostgreSQL tests live in ci-deep before release.
+    # Fast PRs test lightweight Rust models; the single workflow's Ready-PR
+    # acceptance owns full workspace, isolated E2E and PostgreSQL regressions.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+    deep = workflow.split("  comprehensive:\n", 1)[1].split("  package:\n", 1)[0]
     if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
         print("FAIL integration_harness missing Rust owner")
         return 1

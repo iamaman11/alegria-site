@@ -2,8 +2,10 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -28,14 +30,15 @@ jobs:
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
-      - name: Checkout exact commit without third-party actions
+      - name: Checkout exact PR head without third-party actions
         shell: bash
         run: |
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git fetch --depth=1 origin "${CI_SOURCE_SHA}"
           git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
 
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
@@ -88,7 +91,7 @@ jobs:
       - name: Determine directly changed Rust crates and dependent consumers
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          CI_HEAD_SHA: ${{ github.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
           python3 automation/ci_impact.py \
@@ -107,7 +110,7 @@ jobs:
 
       # A cold workspace test takes longer than the five-minute PR budget.
       # Keep real fast Rust model regressions here; run all crates and real
-      # PostgreSQL E2E in ci-deep before release.
+      # PostgreSQL E2E in the comprehensive release job of this workflow.
       - name: Fast Rust runtime model unit tests
         working-directory: app/rust
         env:
@@ -130,8 +133,8 @@ jobs:
           path: automation/reports/cargo_cache_architecture-and-rust.json
           if-no-files-found: error
 
-  # Fast source-level contract checks. Real Rust-backed checks are retained
-  # in the explicitly runnable ci-deep.yml, without a fourth Cargo build.
+  # Fast source-level contract checks; real Rust-backed checks remain in the
+  # single workflow's comprehensive release job.
   rust-contract-smokes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -169,7 +172,7 @@ jobs:
           python3 automation/check_run_report_completeness.py
 
   # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
-  # remains callable through ci-deep.yml, not on every experimental PR.
+  # runs for Ready-for-review PRs, not for each draft iteration.
   product-truth:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -203,14 +206,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout exact commit without third-party actions
+      - name: Checkout exact PR head without third-party actions
         shell: bash
+        env:
+          CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           git init .
           git remote add origin "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git"
-          git fetch --depth=1 origin "${GITHUB_SHA}"
+          git fetch --depth=1 origin "${CI_SOURCE_SHA}"
           git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
 
       # Official RustSec release binary: a 6-MB download instead of compiling
       # cargo-audit from sources for ~196s on a fresh GitHub runner.
@@ -250,6 +256,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
@@ -276,6 +284,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Validate all Compose services and current image syntax
         run: docker compose config --quiet
       - name: Boot supported PostgreSQL 18 + Temporal 1.32 and initialize namespace
@@ -300,6 +310,8 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Validate upgraded persistent services as actual containers
         run: |
           set -euo pipefail
@@ -331,6 +343,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -393,6 +407,8 @@ jobs:
     steps:
       - name: Checkout canonical GitHub source
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Setup native Windows Python
         uses: actions/setup-python@v7
@@ -440,6 +456,10 @@ jobs:
           print("CI_GATE=PASS")
           PY
 
+      - name: Permit manual deep diagnostics without a release
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "Manual deep verification; package is PR-only"
+
       - name: Verify main merge comes from a fully successful PR CI
         if: github.event_name == 'push'
         env:
@@ -461,6 +481,7 @@ jobs:
               "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
+              "comprehensive", "package",
           }
 
           def fetch(path):
@@ -501,7 +522,7 @@ jobs:
               and run["name"] == "ci" and run["status"] == "completed"
               and run["conclusion"] == "success"
           ]
-          require(bool(accepted), "exact source PR head has no successful full CI")
+          require(bool(accepted), "exact source PR head has no successful release CI")
           accepted.sort(key=lambda run: run["id"], reverse=True)
           run = accepted[0]
           results = {
@@ -514,3 +535,191 @@ jobs:
           )
           print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
+
+  # Draft changes keep their fast 10/10 feedback. Ready-for-review PRs earn
+  # real Rust/PG/Truth acceptance in this SAME workflow before packaging.
+  # A manual dispatch performs deep diagnostics but never publishes an image.
+  comprehensive:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:18.7-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+
+      - name: Preflight publication source contract
+        run: python3 automation/smoke_incremental_publish_path.py
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      # The fast Rust owner has completed before this job starts. Restore its
+      # exact-lockfile registry cache without creating a second cache writer.
+      - name: Reuse shared Cargo dependency sources (read-only)
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Install full regression tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          python -m pip install --disable-pip-version-check ruff==0.17.6
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Workspace unit tests
+        working-directory: app/rust
+        run: cargo test --workspace --locked
+
+      - name: All retained-source/editorial PostgreSQL regressions
+        working-directory: app/rust
+        run: |
+          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
+          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
+          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
+          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
+          cargo test -p integration_harness --features e2e --locked --lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections
+          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
+          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
+
+      - name: Full product truth, service integration, contracts and Rust-backed checks
+        run: bash automation/ci_verify.sh all
+
+      - name: Rust compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Preserve deep regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-ci-evidence
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/consistency_report.json
+          if-no-files-found: ignore
+
+  # Compile the native Worker ONCE from the accepted PR head. The signed image
+  # is deployed after merge only if the merge tree matches this exact source.
+  # No post-merge Docker or Rust rebuild is required.
+  package:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && needs.gate.result == 'success' && needs.comprehensive.result == 'success'
+    needs: [gate, comprehensive]
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - name: Checkout exact canonical source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify requested commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build canonical Temporal Worker release image with persistent layers
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/rust/services/temporal/Dockerfile
+          push: false
+          load: true
+          tags: alegria-seo-temporal:ci
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            by.alegria.source-head-sha=${{ env.SOURCE_SHA }}
+          cache-from: type=gha,scope=alegria-temporal-worker
+          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
+
+      - name: Verify runtime includes its native deployment tools
+        run: |
+          docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
+            command -v python3
+            command -v node
+            command -v temporal_worker
+            command -v temporal_starter
+            temporal_starter --help >/dev/null
+            test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
+            test -f /app/infra/cloudflare/seo-static/vite.config.ts
+            python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
+            python3 -m py_compile /app/automation/check_first_site_release.py
+            test -f /app/automation/check_first_site_release.py
+          '
+
+      - name: Archive exact image for no-build Windows staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/temporal-worker-artifact"
+          mkdir -p "$artifact_dir"
+          label="$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' alegria-seo-temporal:ci)"
+          test "$label" = "$SOURCE_SHA"
+          docker save alegria-seo-temporal:ci | gzip -1 > "$artifact_dir/temporal-worker.tar.gz"
+          (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
+          docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
+          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+
+      - name: Sign source-specific archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz
+
+      - name: Upload source-specific Worker image
+        uses: actions/upload-artifact@v7
+        with:
+          name: temporal-worker-image-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30

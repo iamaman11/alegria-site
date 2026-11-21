@@ -23,6 +23,7 @@ JOBS = (
     "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
+    "comprehensive", "package",
 )
 
 
@@ -106,10 +107,20 @@ class MainMergeProvenanceTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
 
+    def test_missing_deep_acceptance_rejects_previous_pr_proof(self) -> None:
+        ok, message, _ = execute_gate(omit_job="comprehensive")
+        self.assertFalse(ok)
+        self.assertIn("did not pass every mandatory owner", message)
+
+    def test_missing_signed_package_rejects_previous_pr_proof(self) -> None:
+        ok, message, _ = execute_gate(omit_job="package")
+        self.assertFalse(ok)
+        self.assertIn("did not pass every mandatory owner", message)
+
     def test_no_accepted_exact_head_run_rejects_reuse(self) -> None:
         ok, message, _ = execute_gate(accepted_run=False)
         self.assertFalse(ok)
-        self.assertIn("no successful full CI", message)
+        self.assertIn("no successful release CI", message)
 
 
 if __name__ == "__main__":

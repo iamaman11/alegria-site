@@ -1,8 +1,11 @@
 # CI for the experimental Alegria app
 
-The pull-request gate is intentionally a **fast feedback** gate; deep runtime
-certification is available separately through GitHub Actions → `ci-deep` →
-**Run workflow**, or locally with `bash automation/ci_verify.sh all`.
+The canonical `.github/workflows/ci.yml` owns fast PR feedback, full Ready-PR
+acceptance, and the single signed Worker build. Draft PRs run only the fast
+10/10 feedback gate; a Ready-for-review PR also runs the real Rust/PG/Truth
+suite and packages its verified source head. For a manual deep diagnostic,
+use GitHub Actions → `ci` → **Run workflow**, or locally run
+`bash automation/ci_verify.sh all`.
 
 ## Measured result (GitHub Actions, 21 November 2026)
 
@@ -27,14 +30,14 @@ the second E2E feature graph made the cold PR gate exceed five minutes.
 Removing the E2E rebuild was insufficient (#40). The regular prototype PR
 gate now exercises lightweight Rust model regressions, source/format/contract
 checks and operational container checks; the full workspace and E2E feature
-graph are checked in `ci-deep` before release. The five-minute goal must be
+graph are checked by the `comprehensive` job before release. The five-minute goal must be
 confirmed against exact completed CI runs; it is not a cold-run SLA.
 
 ## On each pull request
 
 - Real `cargo test -p runtime_models --locked` for the lightweight model
   regressions and `cargo fmt --all -- --check`. Full workspace Rust tests,
-  `integration_harness`, and PostgreSQL E2E run in `ci-deep`, not on every
+  `integration_harness`, and PostgreSQL E2E run on Ready PRs, not on every
   experimental PR. The PR gate by itself **does not certify full Rust compilation**.
 - Python/SQLx/SEO/Truth policy contracts and native Windows operator checks.
 - RustSec dependency audit, Cloudflare static build, Temporal/PostgreSQL and
@@ -45,28 +48,34 @@ confirmed against exact completed CI runs; it is not a cold-run SLA.
   `cargo check` remains a developer command. A direct Rust-only edit no longer
   starts an unpredictable second cold compile in PR CI.
 
-## Release Worker image (independent of PR feedback)
+## Release Worker image (same accepted source, one compilation)
 
-On an accepted push to `main`, `worker-image.yml` separately builds the real
-Temporal Worker Docker image, runs its native runtime smoke, signs the archive,
-and publishes the source-specific artifact. A manual dispatch can also package
-the exact HEAD of the selected GitHub branch. Windows staging requires both a
-successful `ci` run and a successful `worker-image` run for the requested
-commit; it downloads and verifies the signed archive without compiling on Windows.
+After all mandatory fast and deep checks pass on a Ready PR, the `package`
+job of the **same `ci.yml` run** builds the real Temporal Worker once,
+verifies its runtime tools, signs the archive and uploads an immutable
+source-HEAD-specific artifact. The protected main merge gate checks that its
+tree is byte-identical to the successful PR source and that the full acceptance
+and package jobs passed. Windows staging checks the main merge and both trees,
+then downloads the signed **PR artifact**, verifying its source SHA and
+`ci.yml` signer. Neither GitHub nor Windows recompiles the accepted Worker
+after merge.
 
 Cold image compilation **can still exceed five minutes**: that packaging is
 release work rather than a requirement before each experimental PR review.
 
-## Deep verification on demand
+## Deep verification at Ready for Review
 
-The manually dispatched `ci-deep.yml` retains all 16 real-worker Truth
+The `comprehensive` job in `ci.yml` retains all 16 real-worker Truth
 certification fixtures, Qdrant REST→gRPC transport, the manual LLM lifecycle,
 rebuild/extraction Rust-backed checks, semantic fixtures, protocol checks,
 and the remaining PostgreSQL regressions.
 
-Run it before a release, or after changes to Temporal workflow behavior,
-truth admission, publishing, or SQL schema. These checks were **moved out of
-the PR critical path**, not deleted or represented as having run on PR.
+It runs automatically when a PR is marked Ready for Review, on subsequent
+Ready-PR updates, or via manual dispatch. Draft feedback stays fast; the full
+accepted release is **not** claimed to take under five minutes. The most recent
+completed full run, [#41](https://github.com/iamaman11/alegria-site/actions/runs/44943520406),
+took about 30m 30s with 1,680 Rust cache misses and 445 cache write errors.
+Cache and feature-graph reuse remain measured performance work.
 
 ## Dependency strategy
 

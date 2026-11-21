@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Small offline contract for fast PR CI and opt-in comprehensive CI.
+"""Small offline contract for unified fast PR, deep acceptance and OCI release.
 
 The project is experimental: don't lock every test to a CI job forever.
 Check actual gates and that expensive integration suites remain executable.
@@ -19,12 +19,16 @@ OWNERS = (
 def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
-    deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
-    release = (ROOT / ".github/workflows/worker-image.yml").read_text(encoding="utf-8")
+    deep = workflow.split("  comprehensive:\n", 1)[1].split("  package:\n", 1)[0]
+    release = workflow.split("  package:\n", 1)[1]
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     assert workflow.startswith("name: ci\n")
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
+    assert "  workflow_dispatch:\n" in workflow
+    assert "ready_for_review" in workflow and "converted_to_draft" in workflow
+    assert not (ROOT / ".github/workflows/ci-deep.yml").exists()
+    assert not (ROOT / ".github/workflows/worker-image.yml").exists()
     assert "  gate:\n    name: CI\n    if: always()\n" in workflow
     assert "toJSON(needs)" in workflow and 'result != "success"' in workflow
     gate = workflow.split("  gate:\n", 1)[1]
@@ -38,14 +42,15 @@ def check() -> None:
     assert "actions/runs?head_sha={source_sha}" in workflow
     assert "job[\"conclusion\"]" in workflow
     assert "temporal-worker-docker" not in workflow
-    assert release.startswith("name: worker-image\n")
-    assert "  push:\n    branches: [main]\n" in release
-    assert "  workflow_dispatch:\n" in release
-    assert "SOURCE_SHA: ${{ github.sha }}" in release
+    assert "needs: [gate, comprehensive]" in release
+    assert "needs.comprehensive.result == 'success'" in release
+    assert "SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
+    assert '"comprehensive", "package"' in gate
+    assert 'git fetch --depth=1 origin "${CI_SOURCE_SHA}"' in workflow
     # A fresh runner must not waste ~3 minutes compiling the audit CLI itself.
     assert "cargo install cargo-audit" not in workflow
     assert "cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz" in workflow
@@ -72,13 +77,11 @@ def check() -> None:
         assert "python3 automation/smoke_manual_llm_queue.py" not in block
         assert "bash automation/ci_verify.sh" not in block
 
-    # Deep acceptance is available explicitly, with real Rust-backed checks,
-    # all 16 Truth fixtures and Temporal/manual E2E. It is not a PR blocker.
-    assert deep.startswith("name: ci-deep\n")
-    assert "  workflow_dispatch:\n" in deep
-    assert "  pull_request:\n" in deep and "ready_for_review" in deep
+    # Deep acceptance is selected on Ready PRs or explicit dispatch; its full
+    # success AND immutable Worker image are mandatory for release provenance.
     assert "github.event.pull_request.draft == false" in deep
-    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
+    assert "ref: ${{ env.CI_SOURCE_SHA }}" in deep
+    assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
     assert "bash automation/ci_verify.sh all" in deep
     assert "cargo test --workspace --locked" in deep
     assert "cargo test -p integration_harness --features e2e" in deep
