@@ -33,7 +33,7 @@ jobs:
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18.7-alpine
         env:
           POSTGRES_USER: alegria_ci
           POSTGRES_PASSWORD: alegria_ci_only
@@ -244,18 +244,22 @@ jobs:
           git fetch --depth=1 origin "${GITHUB_SHA}"
           git checkout --detach FETCH_HEAD
 
-      # Installing cargo-audit from sources cost 196s on CI #224. Cache the
-      # exact RustSec binary, not a multi-gigabyte Cargo build directory.
-      - name: Restore compiled cargo-audit executable
-        id: cargo_audit_bin
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-v0.23.0
-
-      - name: Install cargo-audit
-        if: steps.cargo_audit_bin.outputs.cache-hit != 'true'
-        run: cargo install cargo-audit --version 0.23.0 --locked
+      # Official RustSec release binary: a 6-MB download instead of compiling
+      # cargo-audit from sources for ~196s on a fresh GitHub runner.
+      - name: Install pinned RustSec release with verified SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(mktemp -t cargo-audit.XXXXXX.tgz)"
+          trap 'rm -f "$archive"' EXIT
+          curl --fail --location --silent --show-error --retry 3 --max-time 90 \
+            -o "$archive" \
+            https://github.com/rustsec/rustsec/releases/download/cargo-audit/v0.23.0/cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz
+          printf '%s  %s\n' 'b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59' "$archive" | sha256sum -c -
+          mkdir -p "$HOME/.cargo/bin"
+          tar -xzOf "$archive" cargo-audit-x86_64-unknown-linux-gnu-v0.23.0/cargo-audit > "$HOME/.cargo/bin/cargo-audit"
+          chmod 755 "$HOME/.cargo/bin/cargo-audit"
+          cargo audit --version
 
       - name: RustSec audit
         working-directory: app/rust
@@ -297,88 +301,6 @@ jobs:
           built=".cloudflare/output/v0/workers/default/assets/index.html"
           test -f "$built"
           cmp "$public/index.html" "$built"
-
-  temporal-worker-docker:
-    # Build only for the accepted PR HEAD. Main retains its fast provenance
-    # gate and never recompiles/relabels this image after the protected merge.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 65
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
-      artifact-metadata: write
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # PR defaults to a synthetic merge commit, which is not the exact
-          # checkout that Windows installs by a requested 40-character SHA.
-          ref: ${{ github.event.pull_request.head.sha }}
-      - name: Verify exact PR source before image build
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-
-      - name: Set up official Docker Buildx builder
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build the actual canonical Temporal worker image with persistent layers
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: app/rust/services/temporal/Dockerfile
-          push: false
-          load: true
-          tags: alegria-seo-temporal:ci
-          labels: |
-            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
-            by.alegria.source-head-sha=${{ github.event.pull_request.head.sha }}
-          cache-from: type=gha,scope=alegria-temporal-worker
-          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
-      - name: Verify the runtime image includes its native deploy tools
-        run: |
-          docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
-            command -v python3
-            command -v node
-            command -v temporal_worker
-            command -v temporal_starter
-            temporal_starter --help >/dev/null
-            test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
-            test -f /app/infra/cloudflare/seo-static/vite.config.ts
-            python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
-            python3 -m py_compile /app/automation/check_first_site_release.py
-            test -f /app/automation/check_first_site_release.py
-          '
-
-      - name: Save the tested Worker image once for Windows no-build deployment
-        env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          artifact_dir="${RUNNER_TEMP}/temporal-worker-artifact"
-          mkdir -p "$artifact_dir"
-          label="$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' alegria-seo-temporal:ci)"
-          test "$label" = "$SOURCE_SHA"
-          docker save alegria-seo-temporal:ci | gzip -1 > "$artifact_dir/temporal-worker.tar.gz"
-          (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
-          docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
-          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
-
-      - name: Sign SLSA provenance for the exact Worker archive
-        uses: actions/attest@v4
-        with:
-          subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz
-
-      - name: Upload immutable Worker image from this exact CI run
-        uses: actions/upload-artifact@v7
-        with:
-          name: temporal-worker-image-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/temporal-worker-artifact/
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 30
 
   stack-temporal-postgres18:
     if: github.event_name == 'pull_request'
@@ -525,7 +447,6 @@ jobs:
       - product-truth
       - rust-security
       - cloudflare-static-build
-      - temporal-worker-docker
       - stack-temporal-postgres18
       - stack-storage-graph
       - verify
@@ -569,7 +490,7 @@ jobs:
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
               "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security", "cloudflare-static-build",
-              "temporal-worker-docker", "stack-temporal-postgres18",
+              "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
           }

@@ -69,6 +69,19 @@ foreach ($name in @('ci')) {
     }
     $verifiedRunId = [string]$latest[0].databaseId
 }
+# The release image is deliberately compiled after the fast PR check. A
+# successful PR CI proves the source; a successful, exact-SHA worker-image run
+# separately proves the deployable artifact. Both must match -Commit.
+if ($Service -eq 'temporal-worker') {
+    $images = @($runs | Where-Object {
+        $_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit
+    } | Sort-Object databaseId -Descending | Select-Object -First 1)
+    if ($images.Count -ne 1 -or $images[0].status -ne 'completed' -or
+        $images[0].conclusion -ne 'success') {
+        throw "Worker image NO-GO: run the worker-image release workflow for $Commit before deployment"
+    }
+    $imageRunId = [string]$images[0].databaseId
+}
 Write-Output "CI=PASS COMMIT=$Commit"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
 if ((Container-State $target) -ne 'running') { throw "$target not running" }
@@ -218,20 +231,20 @@ if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image 
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
 $latestTag = $project + '-' + $Service + ':latest'
 if ($Service -eq 'temporal-worker') {
-    # No local compilation for the accepted Temporal Worker. Load only an
-    # artifact from the exact completed successful CI run, not the newest tag.
+    # No local compilation. Load only the source-specific successful release
+    # artifact, never a floating or unverified Docker image.
     $artifactName = 'temporal-worker-image-' + $Commit
     $artifactDir = Join-Path $downloads ($artifactName + '-' + [guid]::NewGuid().ToString('n'))
     New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
     try {
-        & gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir
-        Assert-Exit 'download CI-verified Worker image'
+        & gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir
+        Assert-Exit 'download source-verified Worker release image'
         $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit
         # A checksum shipped beside the archive only detects corruption. This
         # Sigstore check additionally ties those bytes to GitHub's own signed
         # build provenance for the precise canonical workflow identity.
         $attestJson = & gh attestation verify $artifact.Archive -R $repo `
-            --signer-workflow "$repo/.github/workflows/ci.yml" --deny-self-hosted-runners --format json
+            --signer-workflow "$repo/.github/workflows/worker-image.yml" --deny-self-hosted-runners --format json
         Assert-Exit 'verify signed GitHub Worker provenance'
         if (@(($attestJson | Out-String | ConvertFrom-Json)).Count -lt 1) {
             throw 'GitHub Worker archive has no valid signed provenance'
@@ -256,7 +269,7 @@ if ($Service -eq 'temporal-worker') {
         # Previous image has already been secured under its rollback tag.
         & $docker image tag $artifact.ImageId $latestTag
         Assert-Exit 'tag exact CI Worker image for existing Compose project'
-        Write-Output "WORKER_IMAGE=CI_ARTIFACT SOURCE_SHA=$Commit RUN_ID=$verifiedRunId IMAGE=$artifact.ImageId"
+        Write-Output "WORKER_IMAGE=RELEASE_ARTIFACT SOURCE_SHA=$Commit RUN_ID=$imageRunId IMAGE=$artifact.ImageId"
     } finally {
         # Only the unique, newly-created download staging directory is removed.
         Remove-Item -LiteralPath $artifactDir -Force -Recurse

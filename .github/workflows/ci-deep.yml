@@ -22,7 +22,7 @@ jobs:
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:18.7-alpine
         env:
           POSTGRES_USER: alegria_ci
           POSTGRES_PASSWORD: alegria_ci_only

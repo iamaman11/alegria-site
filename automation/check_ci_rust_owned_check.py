@@ -55,18 +55,18 @@ class RustOwnedCheckContract(unittest.TestCase):
             self.assertIn(f"check={command[1]}", result.stdout)
             self.assertIn(f"source_sha={SHA}", result.stdout)
 
-    def test_original_smoke_still_runs_from_local_product_gate(self) -> None:
+    def test_original_smoke_remains_runnable_in_explicit_deep_gate(self) -> None:
         source = PRODUCT_GATE.read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
         owner_section = workflow.split("  architecture-and-rust:", 1)[1].split("  product-truth:", 1)[0]
         product_section = workflow.split("  product-truth:", 1)[1].split("  rust-security:", 1)[0]
         for command in PRODUCT_COMMANDS:
             self.assertIn(f"bash automation/run_rust_owned_check.sh {' '.join(command)}", source)
-            self.assertEqual(owner_section.count(' '.join(command)), 1)
-        self.assertIn("Retained rebuild dependency graph PostgreSQL/Rust smoke", owner_section)
-        self.assertIn("run: python3 automation/smoke_rebuild_dependency_graph.py", owner_section)
-        self.assertIn("Retained Product Rust extraction and rebuild-queue smoke", owner_section)
-        self.assertIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
+            self.assertNotIn(' '.join(command), owner_section)
+            self.assertNotIn(' '.join(command), product_section)
+        self.assertIn("bash automation/ci_verify.sh all", deep)
+        self.assertNotIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 
     def test_local_delegation_is_denied(self) -> None:
         result = invoke("rust-contract-smokes", actions="false")

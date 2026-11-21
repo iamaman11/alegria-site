@@ -10,7 +10,7 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
     "architecture-and-rust", "rust-contract-smokes", "product-truth",
-    "rust-security", "cloudflare-static-build", "temporal-worker-docker",
+    "rust-security", "cloudflare-static-build",
     "stack-temporal-postgres18", "stack-storage-graph", "verify",
     "windows-operator-smoke",
 )
@@ -20,6 +20,7 @@ def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
     deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+    release = (ROOT / ".github/workflows/worker-image.yml").read_text(encoding="utf-8")
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     assert workflow.startswith("name: ci\n")
     assert "  pull_request:\n" in workflow
@@ -32,12 +33,22 @@ def check() -> None:
         assert f"      - {owner}\n" in gate, owner
     assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", workflow)) == len(OWNERS)
 
-    # Main still verifies exact source + approved PR before reusing the image.
+    # Main verifies exact source + the accepted PR before release/deployment.
     assert "commits/{merge_sha}/pulls" in workflow
     assert "actions/runs?head_sha={source_sha}" in workflow
     assert "job[\"conclusion\"]" in workflow
-    assert "by.alegria.source-head-sha=${{ github.event.pull_request.head.sha }}" in workflow
-    assert "uses: actions/attest@v4" in workflow
+    assert "temporal-worker-docker" not in workflow
+    assert release.startswith("name: worker-image\n")
+    assert "  push:\n    branches: [main]\n" in release
+    assert "  workflow_dispatch:\n" in release
+    assert "file: app/rust/services/temporal/Dockerfile" in release
+    assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
+    assert "uses: actions/attest@v4" in release
+    assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
+    # A fresh runner must not waste ~3 minutes compiling the audit CLI itself.
+    assert "cargo install cargo-audit" not in workflow
+    assert "cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz" in workflow
+    assert "b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59" in workflow
 
     # No repeated expensive Rust compilation in three independent PR runners.
     architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  rust-contract-smokes:\n", 1)[0]

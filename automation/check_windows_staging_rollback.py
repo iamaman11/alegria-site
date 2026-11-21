@@ -36,10 +36,11 @@ def check(script: str) -> None:
         "-ExpectedImage $rollbackImage",
         "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
         ". (Join-Path $PSScriptRoot 'windows_staging_image.ps1')",
-        "& gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir",
+        "& gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir",
+        "$_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit",
         "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
         "& gh attestation verify $artifact.Archive -R $repo",
-        "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
+        "--signer-workflow \"$repo/.github/workflows/worker-image.yml\" --deny-self-hosted-runners --format json",
         "Assert-Exit 'verify signed GitHub Worker provenance'",
         "throw 'GitHub Worker archive has no valid signed provenance'",
         "& $docker image load --input $artifact.Archive",
@@ -146,6 +147,8 @@ def check(script: str) -> None:
     )
     assert "foreach ($name in @('ci'))" in script
     assert "name: CI" in workflow and "if: always()" in workflow
+    release = (ROOT / ".github" / "workflows" / "worker-image.yml").read_text(encoding="utf-8")
+    assert "name: worker-image" in release and "  push:\n    branches: [main]" in release
     assert not (ROOT / ".github" / "workflows" / "quality-gate.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "automation-verify.yml").exists()
     assert script.index("if ($oldSha -eq $Commit)") > script.index("effective Compose config")

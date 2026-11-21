@@ -21,7 +21,7 @@ SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
     "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
-    "cloudflare-static-build", "temporal-worker-docker", "stack-temporal-postgres18",
+    "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
 )
 
@@ -84,7 +84,7 @@ def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
 
 
 class MainMergeProvenanceTests(unittest.TestCase):
-    def test_identical_git_trees_and_all_eleven_green_jobs_accept_without_build(self) -> None:
+    def test_identical_git_trees_and_all_ten_green_jobs_accept_without_build(self) -> None:
         ok, message, calls = execute_gate()
         self.assertTrue(ok, message)
         self.assertIn("CI_GATE=PASS", message)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline positive and negative contracts for Product/Truth cache diagnostics."""
+"""Offline report fixtures and regression against needless Product/Truth caching."""
 from __future__ import annotations
 
 import importlib.util
@@ -88,24 +88,21 @@ class SccacheDiagnosticContract(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "sccache counter"):
                     reporter.make_report(stats, Path(temp) / "missing", SHA)
 
-    def test_workflow_only_diagnoses_product_and_never_uploads_raw_log(self) -> None:
+    def test_python_only_product_does_not_launch_rust_cache_diagnostics(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
         architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  rust-contract-smokes:\n", 1)[0]
         smokes = source.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
         product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
-        self.assertIn('SCCACHE_LOG: "sccache::server=debug"', product)
-        self.assertIn('SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log', product)
-        self.assertNotIn("${{ runner.temp }}", product)
-        self.assertEqual(product.count("python3 automation/report_ci_sccache_write_errors.py --job product-truth"), 1)
-        self.assertIn("automation/reports/sccache_diagnostic_product-truth.json", product)
-        upload = product.split("- name: Upload measured Product/Truth phase timing", 1)[1]
-        self.assertNotIn("alegria-product-sccache.log", upload)
-        self.assertNotIn("SCCACHE_ERROR_LOG", upload)
+        self.assertIn("bash automation/ci_fast_verify.sh product", product)
+        self.assertNotIn("RUSTC_WRAPPER", product)
+        self.assertNotIn("cargo test", product)
+        self.assertNotIn("SCCACHE_LOG:", product)
+        self.assertNotIn("report_ci_sccache_write_errors.py", product)
         for other in (architecture, smokes, verify):
             self.assertNotIn("SCCACHE_LOG:", other)
             self.assertNotIn("report_ci_sccache_write_errors.py", other)
-        self.assertEqual(source.count("SCCACHE_ERROR_LOG:"), 1)
+        self.assertNotIn("SCCACHE_ERROR_LOG:", source)
 
 
 if __name__ == "__main__":
