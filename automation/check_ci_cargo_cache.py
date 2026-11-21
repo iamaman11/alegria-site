@@ -2,6 +2,7 @@
 """Offline safety contract for the single-writer, target-free Cargo A/B leg."""
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,8 +36,16 @@ def validate_cache_policy(workflow: str) -> None:
     if any(block.count("uses: actions/cache/restore@v4") != 1 for block in readers):
         raise ValueError("read-only jobs must restore dependency sources")
     for block in blocks:
-        if "app/rust/target" in block:
-            raise ValueError("unbounded target transfer in registry-only A/B")
+        # Reject target *cache payloads*, not valid references to a job-local
+        # build directory in an unrelated environment variable or test step.
+        for step in re.split(r"(?m)^      - ", block):
+            if "uses: actions/cache" not in step:
+                continue
+            paths = re.findall(
+                r"(?m)^          path: ([^\n]*)(?:\n((?:            [^\n]*\n)*))?", step
+            )
+            if any("app/rust/target" in "".join(parts) for parts in paths):
+                raise ValueError("unbounded target transfer in registry-only A/B")
         if "~/.cargo/registry" not in block or "~/.cargo/git" not in block:
             raise ValueError("Cargo source dependency cache missing")
         if "key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}" not in block:
@@ -62,6 +71,14 @@ class CargoCachePolicy(unittest.TestCase):
         changed = original.replace("            ~/.cargo/git\n", "            ~/.cargo/git\n            app/rust/target\n", 1)
         with self.assertRaisesRegex(ValueError, "unbounded target"):
             validate_cache_policy(changed)
+        single_path = original.replace("          path: |\n", "          path: app/rust/target\n", 1)
+        with self.assertRaisesRegex(ValueError, "unbounded target"):
+            validate_cache_policy(single_path)
+
+    def test_target_reuse_without_archiving_is_permitted(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("WHOLE_PAGE_SEMANTIC_TARGET_DIR:", original)
+        validate_cache_policy(original)
 
     def test_metrics_distinguish_uncached_target_and_missing_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

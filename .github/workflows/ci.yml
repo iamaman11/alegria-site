@@ -513,6 +513,11 @@ jobs:
       # owner; the shared gate requires that job's success as well as verify.
       CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      # The semantic fixture runs after Manual LLM E2E has finished its Cargo
+      # subprocesses. Reuse those exact-job artifacts instead of recompiling
+      # the temporal service in a second target directory (77s in CI #206).
+      # Local clean acceptance keeps its explicitly isolated target.
+      WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       # Disposable integration database, never a production credential.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       # Only this disposable CI database may run scoped truth SQL smoke tests.

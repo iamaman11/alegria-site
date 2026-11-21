@@ -73,6 +73,19 @@ def check() -> None:
     assert "bash automation/ci_verify.sh product" not in verify
     assert "bash automation/ci_verify.sh contracts" in verify
     assert "bash automation/ci_verify.sh integration" in verify
+    # The real semantic fixture executes after the Manual LLM Cargo subprocess
+    # exits. It should reuse the job's already built target, while the local
+    # clean-acceptance bundle retains its separately scoped target.
+    assert "WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target" in verify
+    assert "bash automation/run_whole_page_semantic_gate.sh" in shell
+    assert shell.index("python3 automation/smoke_manual_llm_queue.py") < shell.index(
+        "bash automation/run_whole_page_semantic_gate.sh"
+    ), "the two Cargo invocations must not contend for the same target lock"
+    semantic_gate = (ROOT / "automation/run_whole_page_semantic_gate.sh").read_text(encoding="utf-8")
+    clean_bundle = (ROOT / "automation/run_clean_acceptance_bundle.sh").read_text(encoding="utf-8")
+    assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-$ROOT_DIR/app/rust/target/whole-page-semantic-gate}"' in semantic_gate
+    assert '--target-dir "$TARGET_DIR"' in semantic_gate
+    assert 'WHOLE_PAGE_SEMANTIC_TARGET_DIR="$TARGET_ROOT/whole-page-semantic-gate"' in clean_bundle
     # Preserve every actual test, but run the expensive Rust-backed checks in
     # the already compiled native Rust owner instead of recompiling and
     # relinking them inside verify's sequential Python phase.
