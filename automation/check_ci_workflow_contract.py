@@ -134,10 +134,22 @@ def check() -> None:
     assert "ref: ${{ github.event.pull_request.head.sha }}" in product
     for owner in (architecture, product, verify):
         assert "CARGO_INCREMENTAL: \"0\"" in owner
+        assert "CARGO_PROFILE_DEV_DEBUG: line-tables-only" in owner
+        assert "CARGO_PROFILE_TEST_DEBUG: line-tables-only" in owner
+        # Do not silently alter runtime semantics to chase build speed.
+        assert "CARGO_PROFILE_DEV_OPT_LEVEL:" not in owner
+        assert "CARGO_PROFILE_TEST_OPT_LEVEL:" not in owner
+        assert "CARGO_PROFILE_TEST_DEBUG_ASSERTIONS:" not in owner
+        assert "CARGO_PROFILE_TEST_OVERFLOW_CHECKS:" not in owner
         assert "RUSTC_WRAPPER: sccache" in owner
         assert "SCCACHE_GHA_ENABLED: \"true\"" in owner
         assert "uses: mozilla-actions/sccache-action@v0.0.11" in owner
         assert "sccache --show-stats" in owner
+    assert source.count("CARGO_PROFILE_DEV_DEBUG: line-tables-only") == 3
+    assert source.count("CARGO_PROFILE_TEST_DEBUG: line-tables-only") == 3
+    assert "CARGO_PROFILE_DEV_DEBUG" not in shell and "CARGO_PROFILE_TEST_DEBUG" not in shell, (
+        "standalone developer checks must keep the workspace's local Cargo debug profile"
+    )
     assert "name: ci-phase-product" in product
     assert "name: ci-phase-verify" in verify
     assert "bash automation/audit.sh fast" not in source

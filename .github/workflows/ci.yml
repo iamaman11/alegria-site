@@ -24,6 +24,11 @@ jobs:
       # Release-like CI compiles use a shared compiler-object cache;
       # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
+      # Keep file/line backtraces, debug assertions and overflow checks, but
+      # omit full variable/type DWARF from disposable CI test binaries.
+      # This is a cold sccache-key experiment; local Cargo profiles are intact.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
@@ -224,6 +229,8 @@ jobs:
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       # Only three existing Product Rust smokes are delegated, never Truth.
@@ -507,6 +514,8 @@ jobs:
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_PROFILE_TEST_DEBUG: line-tables-only
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       # The three real Rust-backed checks run on the mandatory architecture
