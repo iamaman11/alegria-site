@@ -115,7 +115,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
 
     @staticmethod
     def invoke_stubbed_parallel_prep(
-        root: Path, *, fail: str = "", skew_clock: bool = False
+        root: Path, *, fail: str = "", skew_clock: bool = False, synchronize: bool = False
     ) -> subprocess.CompletedProcess[str]:
         fake_cargo = root / "cargo"
         fake_cargo.write_text(
@@ -125,7 +125,21 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "name = args[args.index('-p') + 1]\n"
             "events = os.environ['TRUTH_TEST_EVENTS']\n"
             "with open(events, 'a') as f: f.write(f'{name} start {time.monotonic_ns()}\\n')\n"
-            "time.sleep({'temporal_worker': 0.18, 'outbox_worker': 0.04, 'integration_harness': 0.23}[name])\n"
+            "if os.environ.get('TRUTH_TEST_SYNC') == '1':\n"
+            "    # Event barriers prove overlap regardless of CI process scheduling.\n"
+            "    expected = {'temporal_worker': 'integration_harness start',\n"
+            "                'integration_harness': 'outbox_worker start'}.get(name)\n"
+            "    if expected:\n"
+            "        deadline = time.monotonic() + 10\n"
+            "        while True:\n"
+            "            with open(events) as f: observed = expected in f.read()\n"
+            "            if observed: break\n"
+            "            if time.monotonic() >= deadline:\n"
+            "                sys.exit(87)\n"
+            "            time.sleep(0.01)\n"
+            "    time.sleep(0.01)\n"
+            "else:\n"
+            "    time.sleep({'temporal_worker': 0.18, 'outbox_worker': 0.04, 'integration_harness': 0.23}[name])\n"
             "with open(events, 'a') as f: f.write(f'{name} end {time.monotonic_ns()}\\n')\n"
             "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') == name else 0)\n"
         )
@@ -143,7 +157,8 @@ class TruthWorkerTargetContract(unittest.TestCase):
             cwd=ROOT,
             env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                  "TRUTH_TEST_EVENTS": str(root / "events.txt"),
-                 "TRUTH_TEST_FAIL": fail, "CI_SOURCE_SHA": "a" * 40,
+                 "TRUTH_TEST_FAIL": fail, "TRUTH_TEST_SYNC": "1" if synchronize else "0",
+                 "CI_SOURCE_SHA": "a" * 40,
                  "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl"),
                  "FAKE_DATE_STATE": str(root / "date_called")},
             capture_output=True, text=True, check=False,
@@ -152,7 +167,7 @@ class TruthWorkerTargetContract(unittest.TestCase):
     def test_parallel_cargo_targets_overlap_and_all_three_phases_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root)
+            result = self.invoke_stubbed_parallel_prep(root, synchronize=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("worker_exit=0 transport_exit=0", result.stdout)
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
@@ -166,6 +181,13 @@ class TruthWorkerTargetContract(unittest.TestCase):
             }
             self.assertLess(events[("integration_harness", "start")], events[("temporal_worker", "end")])
             self.assertLess(events[("outbox_worker", "start")], events[("integration_harness", "end")])
+            self.assertLess(events[("temporal_worker", "end")], events[("outbox_worker", "start")])
+
+    def test_overlap_proof_is_stable_across_repeated_process_schedules(self) -> None:
+        for attempt in range(5):
+            with self.subTest(attempt=attempt), tempfile.TemporaryDirectory() as temp:
+                result = self.invoke_stubbed_parallel_prep(Path(temp), synchronize=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_truth_prep_duration_ignores_backward_wall_clock_jump(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
