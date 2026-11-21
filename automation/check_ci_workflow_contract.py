@@ -70,6 +70,7 @@ def check() -> None:
     assert "CI_AFFECTED_PACKAGES: ${{ steps.rust_impact.outputs.affected_packages }}" in architecture
     assert 'command = ["cargo", "test", "--locked"]' in architecture
     assert "CARGO_IMPACT=NO_RUST_CHANGE" in architecture
+    assert "CARGO_PROFILE_DEV_DEBUG" not in architecture
     assert "cargo test --workspace" not in architecture
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
@@ -94,6 +95,9 @@ def check() -> None:
         assert "needs: [gate, architecture-and-rust]" in group
         assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in group
         assert 'CI_WORKSPACE_TESTED: "true"' in group
+        assert 'CARGO_PROFILE_DEV_DEBUG: "line-tables-only"' in group
+        assert 'CARGO_PROFILE_TEST_DEBUG: "line-tables-only"' in group
+        assert "RUSTFLAGS:" not in group  # Stable Rust already uses its native lld linker.
     assert "CI_DEEP_SCOPE=NOT_AFFECTED_BY_SOURCE_CHANGE" in deep
     for group, steps in (
         (rust_deep, ("Workspace unit tests", "All retained-source/editorial PostgreSQL regressions", "Full architecture and Rust-backed contracts")),

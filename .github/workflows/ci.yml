@@ -579,6 +579,10 @@ jobs:
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SQLX_OFFLINE: "true"
       CARGO_INCREMENTAL: "0"
+      # CI needs source-line backtraces, not full variable/type debug info.
+      # Cargo-native profiles keep developer and release builds unchanged.
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
@@ -679,6 +683,8 @@ jobs:
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SQLX_OFFLINE: "true"
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
@@ -763,6 +769,8 @@ jobs:
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       SQLX_OFFLINE: "true"
       CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
+      CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
