@@ -142,6 +142,12 @@ def check() -> None:
         assert "uses: mozilla-actions/sccache-action@v0.0.11" in owner
         assert "sccache --show-stats" in owner
     assert "name: ci-phase-product" in product
+    assert 'SCCACHE_LOG: "sccache::server=debug"' in product
+    assert 'SCCACHE_ERROR_LOG: ${{ runner.temp }}/alegria-product-sccache.log' in product
+    assert "python3 automation/report_ci_sccache_write_errors.py --job product-truth" in product
+    assert "automation/reports/sccache_diagnostic_product-truth.json" in product
+    assert "python3 automation/check_ci_sccache_diagnostics.py" in architecture
+    assert source.count("SCCACHE_ERROR_LOG:") == 1, "bounded Product-only cache diagnostic"
     assert "name: ci-phase-verify" in verify
     assert "bash automation/audit.sh fast" not in source
     assert "bash automation/audit.sh full" not in source

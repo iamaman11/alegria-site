@@ -86,6 +86,7 @@ jobs:
           python3 automation/check_ci_phase_timing.py
           python3 automation/check_ci_rust_owned_check.py
           python3 automation/check_truth_worker_build_targets.py
+          python3 automation/check_ci_sccache_diagnostics.py
           python3 automation/check_ci_smoke_diagnostics.py
           python3 automation/check_ci_merge_provenance.py
           python3 automation/check_cargo_feedback.py
@@ -301,6 +302,10 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
+      # The raw runner-local log is never printed or uploaded.
+      SCCACHE_LOG: "sccache::server=debug"
+      SCCACHE_ERROR_LOG: ${{ runner.temp }}/alegria-product-sccache.log
       # Only three existing Product Rust smokes are delegated, never Truth.
       CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
@@ -369,6 +374,10 @@ jobs:
         if: always()
         run: sccache --show-stats
 
+      - name: Classify Product/Truth cache write errors without raw logs
+        if: always()
+        run: python3 automation/report_ci_sccache_write_errors.py --job product-truth
+
       - name: Measure Cargo dependency and compilation footprints
         if: always()
         run: python3 automation/report_ci_cargo_cache.py --job product-truth --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
@@ -381,6 +390,7 @@ jobs:
           path: |
             automation/reports/ci_phase_timings.jsonl
             automation/reports/cargo_cache_product-truth.json
+            automation/reports/sccache_diagnostic_product-truth.json
           if-no-files-found: ignore
 
   rust-security:
