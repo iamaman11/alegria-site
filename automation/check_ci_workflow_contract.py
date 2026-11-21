@@ -152,6 +152,12 @@ def check() -> None:
     run_report = (ROOT / "automation/smoke_run_report_completeness.py").read_text(encoding="utf-8")
     assert 'os.environ.get("CI_WORKSPACE_TESTED") == "true"' in run_report
     assert '"full_harness"' in run_report
+    # The full workspace owner ran the exact native policy and SERP tests.
+    # Integration avoids compiling those crates again on a fresh runner.
+    for smoke in ("smoke_quality_policy_registry.py", "smoke_serp_top10_pattern_pipeline.py"):
+        source = (ROOT / "automation" / smoke).read_text(encoding="utf-8")
+        assert 'os.environ.get("CI_WORKSPACE_TESTED") == "true"' in source
+        assert "REUSED=rust-regressions/workspace" in source
 
 
 if __name__ == "__main__":
