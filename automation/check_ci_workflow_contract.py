@@ -76,7 +76,9 @@ def check() -> None:
     # all 16 Truth fixtures and Temporal/manual E2E. It is not a PR blocker.
     assert deep.startswith("name: ci-deep\n")
     assert "  workflow_dispatch:\n" in deep
-    assert "  pull_request:\n" not in deep
+    assert "  pull_request:\n" in deep and "ready_for_review" in deep
+    assert "github.event.pull_request.draft == false" in deep
+    assert "ref: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
     assert "bash automation/ci_verify.sh all" in deep
     assert "cargo test --workspace --locked" in deep
     assert "cargo test -p integration_harness --features e2e" in deep
