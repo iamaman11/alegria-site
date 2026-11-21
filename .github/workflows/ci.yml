@@ -302,6 +302,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # Bounded A/B: all 370 Product GHA writes failed in CI #215 (0 saved).
+      # Keep cache reads and allow the other Rust owners to fill shared GHA.
+      SCCACHE_GHA_RW_MODE: "READ_ONLY"
       # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
       # The raw runner-local log is never printed or uploaded.
       SCCACHE_LOG: "sccache::server=debug"

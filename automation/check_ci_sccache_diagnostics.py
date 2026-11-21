@@ -94,6 +94,7 @@ class SccacheDiagnosticContract(unittest.TestCase):
         smokes = source.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
         product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
+        self.assertIn('SCCACHE_GHA_RW_MODE: "READ_ONLY"', product)
         self.assertIn('SCCACHE_LOG: "sccache::server=debug"', product)
         self.assertIn('SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log', product)
         self.assertNotIn("${{ runner.temp }}", product)
@@ -103,6 +104,7 @@ class SccacheDiagnosticContract(unittest.TestCase):
         self.assertNotIn("alegria-product-sccache.log", upload)
         self.assertNotIn("SCCACHE_ERROR_LOG", upload)
         for other in (architecture, smokes, verify):
+            self.assertNotIn("SCCACHE_GHA_RW_MODE:", other)
             self.assertNotIn("SCCACHE_LOG:", other)
             self.assertNotIn("report_ci_sccache_write_errors.py", other)
         self.assertEqual(source.count("SCCACHE_ERROR_LOG:"), 1)
