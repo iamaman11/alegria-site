@@ -10,11 +10,14 @@ certification is available separately through GitHub Actions → `ci-deep` →
 | --- | ---: | --- |
 | [#223](https://github.com/iamaman11/alegria-site/actions/runs/44915481077) | ~7m 02s | Truth 416s; Rust contracts 368s; architecture 356s; verify 322s |
 | [#224](https://github.com/iamaman11/alegria-site/actions/runs/44917627978) | **3m 28s** | RustSec 199s; architecture 189s |
+| [#230](https://github.com/iamaman11/alegria-site/actions/runs/44920111633) | **3m 24s** | Rust architecture 184s; RustSec 4s |
 
-Both runs passed every then-required job. After the version refresh, a cold
+All three runs passed every then-required job. After the version refresh, a cold
 Docker rebuild revealed a separate release-compilation bottleneck, so Docker
 image packaging has been removed from the PR critical path. These timings are
-**warm-cache** observations, not a guarantee for a cold Rust rebuild.
+**warm-cache** observations, not a guarantee for a cold Rust rebuild. Run #230
+retained full workspace tests and one real PostgreSQL e2e regression while
+the `sccache` compiler cache reported 100% hits.
 
 ## On each pull request
 
@@ -29,10 +32,10 @@ image packaging has been removed from the PR critical path. These timings are
 
 On an accepted push to `main`, `worker-image.yml` separately builds the real
 Temporal Worker Docker image, runs its native runtime smoke, signs the archive,
-and publishes the source-specific artifact. A manual dispatch can package an
-explicit SHA as well. Windows staging requires both the successful `ci` run
-and this successful `worker-image` run for the exact requested commit; it
-downloads and verifies the signed archive instead of compiling on Windows.
+and publishes the source-specific artifact. A manual dispatch can also package
+the exact HEAD of the selected GitHub branch. Windows staging requires both a
+successful `ci` run and a successful `worker-image` run for the requested
+commit; it downloads and verifies the signed archive without compiling on Windows.
 
 Cold image compilation **can still exceed five minutes**: that packaging is
 release work rather than a requirement before each experimental PR review.

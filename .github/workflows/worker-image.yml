@@ -6,11 +6,6 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      source_sha:
-        description: Exact 40-character canonical source commit to package
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -19,7 +14,7 @@ permissions:
   artifact-metadata: write
 
 concurrency:
-  group: worker-image-${{ github.event.inputs.source_sha || github.sha }}
+  group: worker-image-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -27,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 65
     env:
-      SOURCE_SHA: ${{ github.event.inputs.source_sha || github.sha }}
+      SOURCE_SHA: ${{ github.sha }}
     steps:
       - name: Checkout exact canonical source
         uses: actions/checkout@v7

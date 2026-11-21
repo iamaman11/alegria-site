@@ -41,6 +41,7 @@ def check() -> None:
     assert release.startswith("name: worker-image\n")
     assert "  push:\n    branches: [main]\n" in release
     assert "  workflow_dispatch:\n" in release
+    assert "SOURCE_SHA: ${{ github.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
