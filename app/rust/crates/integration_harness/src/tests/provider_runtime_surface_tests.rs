@@ -878,7 +878,7 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
-async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload() {
+async fn cms_publish_keeps_verified_links_structured_without_duplicate_body_sections() {
     use contracts::generated::alegria::temporal::v1::{
         CmsPublishInputPayload, CmsPublishOutputPayload,
     };
@@ -961,12 +961,11 @@ async fn cms_publish_materializes_verified_internal_links_in_blocks_and_payload(
     let (body, links): (serde_json::Value, serde_json::Value) = sqlx::query_as(
         "SELECT body_payload,required_link_payload FROM site.cms_page_revisions WHERE revision_id=$1",
     ).bind(&result.revision_id).fetch_one(pool).await.unwrap();
-    let expected = format!("[Виза в Испанию]({parent_path})");
-    assert!(body["markdown"].as_str().unwrap().contains(&expected));
-    assert!(body["content_blocks"].as_array().unwrap().iter().any(|block| {
-        block["section_role"] == "internal_links"
-            && block["markdown"].as_str().unwrap().contains(&expected)
-    }));
+    // The CMS stores authored content only. The static renderer owns the
+    // related-pages section, so links must not be injected twice.
+    assert_eq!(body["markdown"], "Текст туристической страницы");
+    let blocks = body["content_blocks"].as_array().unwrap();
+    assert!(blocks.iter().all(|block| block["section_role"] != "internal_links"));
     assert_eq!(links.as_array().unwrap().len(), 1);
     assert_eq!(links[0]["target_page_key"], parent_page);
     assert_eq!(links[0]["canonical_url_path"], parent_path);
