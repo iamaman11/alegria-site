@@ -160,6 +160,7 @@ def check(script: str) -> None:
     assert "needs: [gate, comprehensive]" in release
     assert "uses: actions/attest@v4" in release
     assert not (ROOT / ".github" / "workflows" / "worker-image.yml").exists()
+    assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_source_provenance.ps1" in workflow
     assert not (ROOT / ".github" / "workflows" / "quality-gate.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "automation-verify.yml").exists()
     assert script.index("if ($oldSha -eq $Commit)") > script.index("effective Compose config")

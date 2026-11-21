@@ -421,6 +421,7 @@ jobs:
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_source_provenance.ps1
 
   gate:
     name: CI
