@@ -5,6 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends protobuf-compil
 
 COPY app ./app
 
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=0
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+ENV CARGO_PROFILE_RELEASE_STRIP=symbols
+
 RUN cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \
     -p analytics_svc

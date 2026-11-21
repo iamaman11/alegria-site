@@ -43,9 +43,11 @@ the PR critical path**, not deleted or represented as having run on PR.
   Rust owner. Avoid archiving multi-gigabyte `target/` directories.
 - Keep reproducible `Cargo.lock` and `--locked` for compilation. Stable
   updates that change the lockfile require a separate resolve/compile pass.
-- The bare `rig-core`/`rig-vertexai` re-export adapters are candidates for
-  removal; the application currently uses its own reqwest-based Vertex path.
-  Confirm their absence from the resolved feature graph before altering TLS.
+- The bare `rig-core`/`rig-vertexai` re-export adapters were removed: the
+  application uses its own reqwest-based Vertex path. These unused dependencies
+  pulled duplicate Rig versions and Google Cloud Auth into the build graph.
+  Regenerate `Cargo.lock` and re-run the Rust acceptance before considering
+  any separate TLS provider change.
 - The `cf` CLI is still in a release-candidate cycle, and its `v1` Build Output
   differs from the current deployment artifact. Do not silently replace the
   pinned beta with an incompatible prerelease during a fast CI optimization.

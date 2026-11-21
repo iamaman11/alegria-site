@@ -34,8 +34,6 @@ bytes = "1"
 pulldown-cmark = "0.13.3"
 tower = { workspace = true }
 playwright-rs = { workspace = true }
-rig-core = { workspace = true }
-rig-vertexai = { workspace = true }
 # Production graph/retrieval adapters use Neo4j and Qdrant directly.
 # Do not reintroduce dormant GraphFlow (old SQLx/MySQL/RSA lockfile chain).
 temporalio-sdk = { workspace = true }

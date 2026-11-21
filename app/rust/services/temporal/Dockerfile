@@ -12,6 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY app ./app
 
 ENV SQLX_OFFLINE=true
+# Experimental deployment: ship native binaries with a fast Rust codegen
+# profile. Optimized release codegen was the cold Docker CI bottleneck.
+ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=0
+ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
 # Build the existing worker, starter and native CMS CLI in one Cargo resolve/
 # compilation graph. Separate release invocations replayed a costly second
