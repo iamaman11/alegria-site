@@ -621,8 +621,24 @@ jobs:
           cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
           cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
 
-      - name: Full product truth, service integration, contracts and Rust-backed checks
-        run: bash automation/ci_verify.sh all
+      # Preserve ci_verify.sh all coverage, but split the exact same ordered
+      # phases so GitHub shows their real critical path and allows scoped reuse.
+      - name: Full architecture and Rust-backed contracts
+        run: bash automation/ci_verify.sh contracts
+
+      - name: Full Product/Truth and real Worker certification
+        run: bash automation/ci_verify.sh product
+
+      - name: Full service integration with already-built real Workers
+        env:
+          # Product/Truth built and tested these binaries in this same job.
+          # Manual LLM E2E must not recompile them from the default target.
+          INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/temporal_worker
+          INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/outbox_worker
+          # Semantic fixture runs after all other Cargo commands, so reuse
+          # the workspace target rather than a fourth cold build graph.
+          WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
+        run: bash automation/ci_verify.sh integration
 
       - name: Rust compiler cache statistics
         if: always()

@@ -65,7 +65,8 @@ class RustOwnedCheckContract(unittest.TestCase):
             self.assertIn(f"bash automation/run_rust_owned_check.sh {' '.join(command)}", source)
             self.assertNotIn(' '.join(command), owner_section)
             self.assertNotIn(' '.join(command), product_section)
-        self.assertIn("bash automation/ci_verify.sh all", deep)
+        for phase in ("contracts", "product", "integration"):
+            self.assertIn(f"bash automation/ci_verify.sh {phase}", deep)
         self.assertNotIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 
     def test_local_delegation_is_denied(self) -> None:

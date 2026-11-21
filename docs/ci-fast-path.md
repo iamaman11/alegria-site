@@ -70,6 +70,12 @@ certification fixtures, Qdrant REST→gRPC transport, the manual LLM lifecycle,
 rebuild/extraction Rust-backed checks, semantic fixtures, protocol checks,
 and the remaining PostgreSQL regressions.
 
+Its three ordered `contracts`, `product`, and `integration` phases preserve
+the same `ci_verify.sh all` coverage while exposing phase durations.
+`product` builds the real Truth Workers; `integration` passes their exact
+binary paths to manual LLM E2E and reuses the workspace Cargo target for the
+whole-page semantic fixture. No synthetic Worker replaces a real test.
+
 It runs automatically when a PR is marked Ready for Review, on subsequent
 Ready-PR updates, or via manual dispatch. Draft feedback stays fast; the full
 accepted release is **not** claimed to take under five minutes. The most recent

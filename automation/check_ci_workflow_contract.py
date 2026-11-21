@@ -82,11 +82,29 @@ def check() -> None:
     assert "github.event.pull_request.draft == false" in deep
     assert "ref: ${{ env.CI_SOURCE_SHA }}" in deep
     assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
-    assert "bash automation/ci_verify.sh all" in deep
+    ordered_full_phases = (
+        "bash automation/ci_verify.sh contracts",
+        "bash automation/ci_verify.sh product",
+        "bash automation/ci_verify.sh integration",
+    )
+    assert all(deep.count(command) == 1 for command in ordered_full_phases)
+    assert [deep.index(command) for command in ordered_full_phases] == sorted(
+        deep.index(command) for command in ordered_full_phases
+    )
+    assert "bash automation/ci_verify.sh all" not in deep
     assert "cargo test --workspace --locked" in deep
     assert "cargo test -p integration_harness --features e2e" in deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
+    truth = (ROOT / "automation/run_truth_certification_gate.sh").read_text(encoding="utf-8")
+    manual = (ROOT / "automation/smoke_manual_llm_queue.py").read_text(encoding="utf-8")
+    semantic = (ROOT / "automation/run_whole_page_semantic_gate.sh").read_text(encoding="utf-8")
+    assert 'WORKERS_TARGET_DIR="$NESTED_TARGET_ROOT/workers"' in truth
+    assert 'if env.get(temporal_key) and env.get(outbox_key)' in manual
+    assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-' in semantic
+    assert "INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/temporal_worker" in deep
+    assert "INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/outbox_worker" in deep
+    assert "WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target" in deep
 
 
 if __name__ == "__main__":
