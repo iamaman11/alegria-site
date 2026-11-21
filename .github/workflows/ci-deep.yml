@@ -17,6 +17,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # Reuse the full-workspace and e2e harness compilation in this same job.
+      # Real Worker binaries retain their separate Cargo target and processes.
+      TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
@@ -36,6 +39,10 @@ jobs:
           --health-retries 15
     steps:
       - uses: actions/checkout@v7
+
+      # Catch source-contract failures before the expensive Rust/Truth suites.
+      - name: Preflight publication source contract
+        run: python3 automation/smoke_incremental_publish_path.py
 
       - uses: actions/setup-python@v7
         with:
