@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Only these four pre-existing Rust-backed checks may move to the mandatory
+# Only these six pre-existing Rust-backed checks may move to the mandatory
 # architecture-and-rust owner. Never accept an arbitrary command or source job.
 case "$*" in
   "python3 automation/smoke_crawler_robots_policy.py"|\
   "bash automation/contract_verify.sh"|\
   "python3 automation/smoke_run_report_completeness.py") source_job="verify" ;;
-  "python3 automation/smoke_rebuild_dependency_graph.py") source_job="product-truth" ;;
+  "python3 automation/smoke_rebuild_dependency_graph.py"|\
+  "python3 automation/smoke_rebuild_queue_execution_path.py"|\
+  "python3 automation/smoke_extraction_coverage.py") source_job="product-truth" ;;
   *) echo "Unsupported Rust-backed CI check: $*" >&2; exit 2 ;;
 esac
 

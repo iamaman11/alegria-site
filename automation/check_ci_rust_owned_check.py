@@ -12,7 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "automation" / "run_rust_owned_check.sh"
 SHA = "a" * 40
 COMMAND = ("python3", "automation/smoke_crawler_robots_policy.py")
-PRODUCT_COMMAND = ("python3", "automation/smoke_rebuild_dependency_graph.py")
+PRODUCT_COMMANDS = (
+    ("python3", "automation/smoke_rebuild_dependency_graph.py"),
+    ("python3", "automation/smoke_extraction_coverage.py"),
+    ("python3", "automation/smoke_rebuild_queue_execution_path.py"),
+)
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
 PRODUCT_GATE = ROOT / "automation/ci_verify.sh"
 
@@ -43,21 +47,25 @@ class RustOwnedCheckContract(unittest.TestCase):
             self.assertIn("CI_RUST_CHECK_DELEGATED owner=architecture-and-rust", result.stdout)
             self.assertIn(f"source_sha={SHA}", result.stdout)
 
-    def test_exact_source_product_delegates_only_rebuild_smoke(self) -> None:
-        result = invoke("architecture-and-rust", job="product-truth", command=PRODUCT_COMMAND)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("CI_RUST_CHECK_DELEGATED owner=architecture-and-rust", result.stdout)
-        self.assertIn("check=automation/smoke_rebuild_dependency_graph.py", result.stdout)
-        self.assertIn(f"source_sha={SHA}", result.stdout)
+    def test_exact_source_product_delegates_only_retained_rust_smokes(self) -> None:
+        for command in PRODUCT_COMMANDS:
+            result = invoke("architecture-and-rust", job="product-truth", command=command)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CI_RUST_CHECK_DELEGATED owner=architecture-and-rust", result.stdout)
+            self.assertIn(f"check={command[1]}", result.stdout)
+            self.assertIn(f"source_sha={SHA}", result.stdout)
 
     def test_original_smoke_still_runs_from_local_product_gate(self) -> None:
         source = PRODUCT_GATE.read_text(encoding="utf-8")
-        self.assertIn("bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_dependency_graph.py", source)
         workflow = WORKFLOW.read_text(encoding="utf-8")
         owner_section = workflow.split("  architecture-and-rust:", 1)[1].split("  product-truth:", 1)[0]
         product_section = workflow.split("  product-truth:", 1)[1].split("  rust-security:", 1)[0]
+        for command in PRODUCT_COMMANDS:
+            self.assertIn(f"bash automation/run_rust_owned_check.sh {' '.join(command)}", source)
+            self.assertEqual(owner_section.count(' '.join(command)), 1)
         self.assertIn("Retained rebuild dependency graph PostgreSQL/Rust smoke", owner_section)
         self.assertIn("run: python3 automation/smoke_rebuild_dependency_graph.py", owner_section)
+        self.assertIn("Retained Product Rust extraction and rebuild-queue smoke", owner_section)
         self.assertIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 
     def test_local_delegation_is_denied(self) -> None:
@@ -69,14 +77,16 @@ class RustOwnedCheckContract(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
 
     def test_product_smoke_cannot_be_delegated_from_verify(self) -> None:
-        result = invoke("architecture-and-rust", job="verify", command=PRODUCT_COMMAND)
-        self.assertEqual(result.returncode, 2)
+        for command in PRODUCT_COMMANDS:
+            result = invoke("architecture-and-rust", job="verify", command=command)
+            self.assertEqual(result.returncode, 2)
 
     def test_product_smoke_cannot_be_delegated_without_exact_ci(self) -> None:
-        for actions, sha in (("false", SHA), ("true", "invalid")):
-            result = invoke("architecture-and-rust", actions=actions,
-                            job="product-truth", sha=sha, command=PRODUCT_COMMAND)
-            self.assertEqual(result.returncode, 2)
+        for command in PRODUCT_COMMANDS:
+            for actions, sha in (("false", SHA), ("true", "invalid")):
+                result = invoke("architecture-and-rust", actions=actions,
+                                job="product-truth", sha=sha, command=command)
+                self.assertEqual(result.returncode, 2)
 
     def test_invalid_source_is_denied(self) -> None:
         result = invoke("architecture-and-rust", sha="not-a-commit")
@@ -104,11 +114,12 @@ class RustOwnedCheckContract(unittest.TestCase):
             fake_python = Path(temp) / "python3"
             fake_python.write_text("#!/bin/sh\nprintf 'LOCAL_PRODUCT_SMOKE_EXECUTED\\n'\nexit 19\n")
             fake_python.chmod(0o755)
-            result = invoke("verify", actions="false", command=PRODUCT_COMMAND, extra_env={
-                "PATH": f"{temp}:{os.environ.get('PATH', '')}",
-            })
-            self.assertEqual(result.returncode, 19)
-            self.assertIn("LOCAL_PRODUCT_SMOKE_EXECUTED", result.stdout)
+            for command in PRODUCT_COMMANDS:
+                result = invoke("verify", actions="false", command=command, extra_env={
+                    "PATH": f"{temp}:{os.environ.get('PATH', '')}",
+                })
+                self.assertEqual(result.returncode, 19)
+                self.assertIn("LOCAL_PRODUCT_SMOKE_EXECUTED", result.stdout)
 
     def test_arbitrary_or_extended_check_is_denied(self) -> None:
         for command in (("python3", "-c", "pass"), (*COMMAND, "extra")):

@@ -189,6 +189,16 @@ jobs:
           SQLX_OFFLINE: "true"
         run: python3 automation/smoke_rebuild_dependency_graph.py
 
+      # Both original Product/Truth smoke scripts invoke real Cargo tests for
+      # already compiled workspace packages. Keep their exact commands, but
+      # do not rebuild Rust in the serial Product/Truth Python tail.
+      - name: Retained Product Rust extraction and rebuild-queue smoke
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          python3 automation/smoke_extraction_coverage.py
+          python3 automation/smoke_rebuild_queue_execution_path.py
+
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
         run: sccache --show-stats
@@ -216,7 +226,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
-      # Only the existing rebuild graph Rust smoke is delegated, never Truth.
+      # Only three existing Product Rust smokes are delegated, never Truth.
       CI_RUST_CHECK_OWNER: "architecture-and-rust"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci

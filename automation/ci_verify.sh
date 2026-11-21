@@ -257,7 +257,7 @@ echo "[38a/53] Expert core activation contract"
 python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
-python3 automation/smoke_extraction_coverage.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
 
 echo "[40/53] Contradiction handling"
 python3 automation/check_contradiction_handling.py
@@ -327,7 +327,7 @@ echo "[52e/53] Rebuild queue and execution path"
 python3 automation/check_rebuild_queue_execution_path.py
 
 echo "[52f/53] Rebuild queue and execution path smoke"
-python3 automation/smoke_rebuild_queue_execution_path.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_queue_execution_path.py
 
 echo "[52g/53] Global navigation policy"
 python3 automation/check_global_navigation_policy.py

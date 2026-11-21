@@ -95,15 +95,21 @@ def check() -> None:
             f"standalone ci_verify.sh must retain {script_name}"
         )
         assert command not in verify, f"duplicate Rust compilation in verify: {script_name}"
-    rebuild_smoke = "python3 automation/smoke_rebuild_dependency_graph.py"
-    assert architecture.count(rebuild_smoke) == 1, "rebuild smoke must be in required Rust owner"
-    assert shell.count(f"bash automation/run_rust_owned_check.sh {rebuild_smoke}") == 1, (
-        "standalone product must retain the real rebuild smoke"
+    product_rust_smokes = (
+        "python3 automation/smoke_rebuild_dependency_graph.py",
+        "python3 automation/smoke_extraction_coverage.py",
+        "python3 automation/smoke_rebuild_queue_execution_path.py",
     )
-    assert rebuild_smoke not in product, "duplicate Rust compilation in product owner"
-    assert architecture.index("cargo test --workspace --locked") < architecture.index(rebuild_smoke), (
-        "rebuild smoke must reuse Rust workspace compilation"
-    )
+    assert "Retained Product Rust extraction and rebuild-queue smoke" in architecture
+    for command in product_rust_smokes:
+        assert architecture.count(command) == 1, f"missing Product Rust smoke in required owner: {command}"
+        assert shell.count(f"bash automation/run_rust_owned_check.sh {command}") == 1, (
+            f"standalone product must retain the real Rust smoke: {command}"
+        )
+        assert command not in product, f"duplicate Rust compilation in Product owner: {command}"
+        assert architecture.index("cargo test --workspace --locked") < architecture.index(command), (
+            f"Product Rust smoke must reuse workspace compilation: {command}"
+        )
     assert "python3 automation/check_ci_rust_owned_check.py" in architecture
     # All three owners run concurrently on separate ephemeral GitHub VMs.
     # No phase can read another owner's mutable PostgreSQL state or artifacts.
