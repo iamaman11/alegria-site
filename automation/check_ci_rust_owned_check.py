@@ -58,6 +58,7 @@ class RustOwnedCheckContract(unittest.TestCase):
     def test_original_smoke_remains_runnable_in_explicit_deep_gate(self) -> None:
         source = PRODUCT_GATE.read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
+        rust_deep = workflow.split("  rust-regressions:\n", 1)[1].split("  comprehensive:\n", 1)[0]
         deep = workflow.split("  comprehensive:\n", 1)[1].split("  package:\n", 1)[0]
         owner_section = workflow.split("  architecture-and-rust:", 1)[1].split("  product-truth:", 1)[0]
         product_section = workflow.split("  product-truth:", 1)[1].split("  rust-security:", 1)[0]
@@ -65,7 +66,8 @@ class RustOwnedCheckContract(unittest.TestCase):
             self.assertIn(f"bash automation/run_rust_owned_check.sh {' '.join(command)}", source)
             self.assertNotIn(' '.join(command), owner_section)
             self.assertNotIn(' '.join(command), product_section)
-        for phase in ("contracts", "product", "integration"):
+        self.assertIn("bash automation/ci_verify.sh contracts", rust_deep)
+        for phase in ("product", "integration"):
             self.assertIn(f"bash automation/ci_verify.sh {phase}", deep)
         self.assertNotIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 

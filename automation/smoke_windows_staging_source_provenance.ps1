@@ -50,6 +50,9 @@ function gh {
                     @{ name = 'CI'; conclusion = 'success' },
                     @{ name = 'comprehensive'; conclusion = 'success' }
                 )
+                if ($script:Scenario -ne 'missing_rust_regressions') {
+                    $jobs += @{ name = 'rust-regressions'; conclusion = 'success' }
+                }
                 if ($script:Scenario -ne 'missing_package') {
                     $jobs += @{ name = 'package'; conclusion = 'success' }
                 }
@@ -100,7 +103,8 @@ function Invoke-Case([string]$Case, [string]$ExpectedError) {
 Invoke-Case 'pass' ''
 Invoke-Case 'wrong_tree' 'different source trees'
 Invoke-Case 'missing_pr' 'no unique accepted main PR'
+Invoke-Case 'missing_rust_regressions' 'rust-regressions did not pass'
 Invoke-Case 'missing_package' 'package did not pass'
 Invoke-Case 'wrong_head' 'no successful exact-head PR CI'
 Invoke-Case 'failed_ci' 'no successful exact-head PR CI'
-Write-Output 'WINDOWS_STAGING_SOURCE_PROVENANCE=PASS scenarios=6'
+Write-Output 'WINDOWS_STAGING_SOURCE_PROVENANCE=PASS scenarios=7'

@@ -23,7 +23,7 @@ JOBS = (
     "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
-    "comprehensive", "package",
+    "rust-regressions", "comprehensive", "package",
 )
 
 
@@ -85,7 +85,7 @@ def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
 
 
 class MainMergeProvenanceTests(unittest.TestCase):
-    def test_identical_git_trees_and_all_ten_green_jobs_accept_without_build(self) -> None:
+    def test_identical_git_trees_and_all_required_jobs_accept_without_build(self) -> None:
         ok, message, calls = execute_gate()
         self.assertTrue(ok, message)
         self.assertIn("CI_GATE=PASS", message)
@@ -109,6 +109,11 @@ class MainMergeProvenanceTests(unittest.TestCase):
 
     def test_missing_deep_acceptance_rejects_previous_pr_proof(self) -> None:
         ok, message, _ = execute_gate(omit_job="comprehensive")
+        self.assertFalse(ok)
+        self.assertIn("did not pass every mandatory owner", message)
+
+    def test_missing_parallel_rust_regressions_rejects_previous_pr_proof(self) -> None:
+        ok, message, _ = execute_gate(omit_job="rust-regressions")
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
 

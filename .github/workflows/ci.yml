@@ -513,7 +513,7 @@ jobs:
               "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
-              "comprehensive", "package",
+              "rust-regressions", "comprehensive", "package",
           }
 
           def fetch(path):
@@ -567,6 +567,105 @@ jobs:
           )
           print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
+
+  # Independent Rust/SQL regressions run beside the real Truth/Integration
+  # group. Both are mandatory for accepted PR provenance and Windows staging.
+  rust-regressions:
+    if: always() && needs.gate.result == 'success' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository))
+    needs: [gate, architecture-and-rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      CI_WORKSPACE_TESTED: "true"
+    services:
+      postgres:
+        image: postgres:18.7-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CI_SOURCE_SHA }}
+
+      - uses: actions/setup-python@v7
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        with:
+          python-version: "3.15"
+
+      - uses: dtolnay/rust-toolchain@stable
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        with:
+          version: "v0.16.0"
+
+      - name: Restore Cargo dependency sources (read-only)
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Install Rust and PostgreSQL regression tools
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          python -m pip install --disable-pip-version-check ruff==0.17.6
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Workspace unit tests
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        working-directory: app/rust
+        run: cargo test --workspace --locked
+
+      - name: All retained-source/editorial PostgreSQL regressions
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        working-directory: app/rust
+        run: |
+          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
+          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
+          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
+          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
+          cargo test -p integration_harness --features e2e --locked --lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections
+          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
+          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
+
+      - name: Full architecture and Rust-backed contracts
+        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
+        run: bash automation/ci_verify.sh contracts
+
+      - name: Rust compiler cache statistics
+        if: always() && (github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true')
+        run: sccache --show-stats
+
+      - name: Preserve Rust and PostgreSQL regression timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-rust-evidence
+          path: automation/reports/ci_phase_timings.jsonl
+          if-no-files-found: ignore
 
   # Ready PRs run full real-service certification when source impact requires it.
   # Support-only and isolated-crate changes retain a successful lightweight
@@ -653,29 +752,8 @@ jobs:
           python -m pip install --disable-pip-version-check ruff==0.17.6
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
-      - name: Workspace unit tests
-        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
-        working-directory: app/rust
-        run: cargo test --workspace --locked
-
-      - name: All retained-source/editorial PostgreSQL regressions
-        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
-        working-directory: app/rust
-        run: |
-          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
-          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
-          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
-          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
-          cargo test -p integration_harness --features e2e --locked --lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections
-          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
-          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
-
-      # Preserve ci_verify.sh all coverage, but split the exact same ordered
-      # phases so GitHub shows their real critical path and allows scoped reuse.
-      - name: Full architecture and Rust-backed contracts
-        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
-        run: bash automation/ci_verify.sh contracts
-
+      # The required rust-regressions sibling owns workspace, SQL and contracts.
+      # Product/Truth and integration use prebuilt Workers in one Cargo target.
       - name: Full Product/Truth and real Worker certification
         if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: bash automation/ci_verify.sh product
@@ -685,8 +763,8 @@ jobs:
         env:
           # Product/Truth built and tested these binaries in this same job.
           # Manual LLM E2E must not recompile them from the default target.
-          INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/temporal_worker
-          INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/outbox_worker
+          INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/temporal_worker
+          INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/outbox_worker
           # Semantic fixture runs after all other Cargo commands, so reuse
           # the workspace target rather than a fourth cold build graph.
           WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
@@ -706,12 +784,12 @@ jobs:
             automation/reports/consistency_report.json
           if-no-files-found: ignore
 
-  # Compile the native Worker ONCE from the accepted PR head. The signed image
-  # is deployed after merge only if the merge tree matches this exact source.
+  # Compile/sign the source-specific image alongside the two deep owners.
+  # It cannot be accepted/deployed until BOTH deep jobs succeed on this SHA.
   # No post-merge Docker or Rust rebuild is required.
   package:
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && needs.gate.result == 'success' && needs.comprehensive.result == 'success'
-    needs: [gate, comprehensive]
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository && needs.gate.result == 'success'
+    needs: [gate]
     runs-on: ubuntu-latest
     timeout-minutes: 65
     permissions:

@@ -19,6 +19,7 @@ OWNERS = (
 def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
+    rust_deep = workflow.split("  rust-regressions:\n", 1)[1].split("  comprehensive:\n", 1)[0]
     deep = workflow.split("  comprehensive:\n", 1)[1].split("  package:\n", 1)[0]
     release = workflow.split("  package:\n", 1)[1]
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
@@ -42,14 +43,14 @@ def check() -> None:
     assert "actions/runs?head_sha={source_sha}" in workflow
     assert "job[\"conclusion\"]" in workflow
     assert "temporal-worker-docker" not in workflow
-    assert "needs: [gate, comprehensive]" in release
-    assert "needs.comprehensive.result == 'success'" in release
+    assert "needs: [gate]" in release
+    assert "needs.comprehensive.result" not in release
     assert "SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
-    assert '"comprehensive", "package"' in gate
+    assert '"rust-regressions", "comprehensive", "package"' in gate
     assert 'git fetch --depth=1 origin "${CI_SOURCE_SHA}"' in workflow
     # A fresh runner must not waste ~3 minutes compiling the audit CLI itself.
     assert "cargo install cargo-audit" not in workflow
@@ -83,42 +84,44 @@ def check() -> None:
         assert "python3 automation/smoke_manual_llm_queue.py" not in block
         assert "bash automation/ci_verify.sh" not in block
 
-    # Deep acceptance is selected on Ready PRs or explicit dispatch; its full
-    # success AND immutable Worker image are mandatory for release provenance.
-    assert "github.event.pull_request.draft == false" in deep
-    assert "ref: ${{ env.CI_SOURCE_SHA }}" in deep
-    assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in deep
-    assert "needs: [gate, architecture-and-rust]" in deep
-    assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in deep
+    # The independent Rust/SQL and Truth/Integration deep owners may run in
+    # parallel with package, but all three remain mandatory for provenance.
+    for group in (rust_deep, deep):
+        assert "github.event.pull_request.draft == false" in group
+        assert "ref: ${{ env.CI_SOURCE_SHA }}" in group
+        assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in group
+        assert "needs: [gate, architecture-and-rust]" in group
+        assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in group
+        assert 'CI_WORKSPACE_TESTED: "true"' in group
     assert "CI_DEEP_SCOPE=NOT_AFFECTED_BY_SOURCE_CHANGE" in deep
-    assert 'CI_WORKSPACE_TESTED: "true"' in deep
-    for step in ("Workspace unit tests", "Full architecture and Rust-backed contracts", "Full Product/Truth and real Worker certification", "Full service integration with already-built real Workers"):
-        assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in deep
-    ordered_full_phases = (
-        "bash automation/ci_verify.sh contracts",
-        "bash automation/ci_verify.sh product",
-        "bash automation/ci_verify.sh integration",
-    )
-    assert all(deep.count(command) == 1 for command in ordered_full_phases)
-    assert [deep.index(command) for command in ordered_full_phases] == sorted(
-        deep.index(command) for command in ordered_full_phases
-    )
-    assert "bash automation/ci_verify.sh all" not in deep
-    assert "cargo test --workspace --locked" in deep
-    assert "cargo test -p integration_harness --features e2e" in deep
+    for group, steps in (
+        (rust_deep, ("Workspace unit tests", "All retained-source/editorial PostgreSQL regressions", "Full architecture and Rust-backed contracts")),
+        (deep, ("Full Product/Truth and real Worker certification", "Full service integration with already-built real Workers")),
+    ):
+        for step in steps:
+            assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in group
+    assert rust_deep.count("bash automation/ci_verify.sh contracts") == 1
+    assert deep.count("bash automation/ci_verify.sh product") == 1
+    assert deep.count("bash automation/ci_verify.sh integration") == 1
+    assert deep.index("bash automation/ci_verify.sh product") < deep.index("bash automation/ci_verify.sh integration")
+    assert "bash automation/ci_verify.sh all" not in workflow
+    assert "cargo test --workspace --locked" in rust_deep
+    assert "cargo test -p integration_harness --features e2e" in rust_deep
+    assert "cargo test --workspace --locked" not in deep
+    assert "cargo test -p integration_harness --features e2e" not in deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
     truth = (ROOT / "automation/run_truth_certification_gate.sh").read_text(encoding="utf-8")
     manual = (ROOT / "automation/smoke_manual_llm_queue.py").read_text(encoding="utf-8")
     semantic = (ROOT / "automation/run_whole_page_semantic_gate.sh").read_text(encoding="utf-8")
-    assert 'WORKERS_TARGET_DIR="$NESTED_TARGET_ROOT/workers"' in truth
+    assert 'bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"' in truth
     assert 'if env.get(temporal_key) and env.get(outbox_key)' in manual
     assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-' in semantic
-    assert "INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/temporal_worker" in deep
-    assert "INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/integration-harness-nested/workers/debug/outbox_worker" in deep
+    assert "INTEGRATION_TEMPORAL_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/temporal_worker" in deep
+    assert "INTEGRATION_OUTBOX_WORKER_BIN: ${{ github.workspace }}/app/rust/target/debug/outbox_worker" in deep
     assert "WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target" in deep
-    # Real workspace tests precede the duplicate-free audit phases. Standalone
-    # local audits still execute their own Rust checks without this setting.
+    # Real workspace tests are owned by a mandatory sibling. Standalone local
+    # audits still execute their own Rust checks without this setting.
     assert '${CI_WORKSPACE_TESTED:-}' in legacy
     run_report = (ROOT / "automation/smoke_run_report_completeness.py").read_text(encoding="utf-8")
     assert 'os.environ.get("CI_WORKSPACE_TESTED") == "true"' in run_report

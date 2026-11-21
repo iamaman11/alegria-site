@@ -5,28 +5,19 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 REPORT_PATH="${TRUTH_CERT_REPORT_PATH:-/tmp/truth_certification_local_ci_current.json}"
 LOG_PATH="$(mktemp /tmp/truth-cert-gate.XXXXXX.log)"
 TARGET_ROOT="${TRUTH_CERT_TARGET_ROOT:-$ROOT_DIR/app/rust/target}"
-NESTED_TARGET_ROOT="${TRUTH_CERT_NESTED_TARGET_ROOT:-$TARGET_ROOT/integration-harness-nested}"
-SUITE_TARGET_DIR="${TRUTH_CERT_SUITE_TARGET_DIR:-$TARGET_ROOT/integration-harness-suite}"
-# Reuse compiled dependencies between the real Worker binaries, without
-# sharing their target with the integration harness running those binaries.
-# Runtime processes, binary identities and the disposable DB remain separate.
-WORKERS_TARGET_DIR="$NESTED_TARGET_ROOT/workers"
-TEMPORAL_BIN="$WORKERS_TARGET_DIR/debug/temporal_worker"
-OUTBOX_BIN="$WORKERS_TARGET_DIR/debug/outbox_worker"
-
-if [[ "$(realpath -m "$WORKERS_TARGET_DIR")" == "$(realpath -m "$SUITE_TARGET_DIR")" ]]; then
-  echo "Truth Worker and integration harness Cargo target directories must differ" >&2
-  exit 2
-fi
+SUITE_TARGET_DIR="${TRUTH_CERT_SUITE_TARGET_DIR:-$TARGET_ROOT}"
+# All Cargo commands are sequential. E2E runs prebuilt native Workers via
+# explicit binary paths; no nested Cargo build can contend for this target.
+TEMPORAL_BIN="$SUITE_TARGET_DIR/debug/temporal_worker"
+OUTBOX_BIN="$SUITE_TARGET_DIR/debug/outbox_worker"
 
 cd "$ROOT_DIR"
 
 rm -f "$REPORT_PATH"
 
-# The isolated Worker and e2e suite targets have no shared Cargo lock.
-# Prepare the two real Worker binaries and execute the real Qdrant transport
-# regression concurrently. Both branches must pass before any fixture starts.
-bash automation/run_truth_build_transport_parallel.sh "$WORKERS_TARGET_DIR" "$SUITE_TARGET_DIR"
+# Build real Workers in the already-warm suite target, then test Qdrant and
+# launch the full fixture harness. No overlapping Cargo processes or locks.
+bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"
 
 for worker_bin in "$TEMPORAL_BIN" "$OUTBOX_BIN"; do
   if [[ ! -x "$worker_bin" ]]; then

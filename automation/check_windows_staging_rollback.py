@@ -43,7 +43,7 @@ def check(script: str) -> None:
         "repos/$repo/commits/$Commit/pulls",
         "$_.head.sha -ceq $sourceSha",
         "$_.workflowName -eq 'ci' -and $_.event -eq 'pull_request'",
-        "foreach ($requiredJob in @('CI', 'comprehensive', 'package'))",
+        "foreach ($requiredJob in @('CI', 'rust-regressions', 'comprehensive', 'package'))",
         "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $sourceSha",
         "& gh attestation verify $artifact.Archive -R $repo",
         "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
@@ -157,7 +157,8 @@ def check(script: str) -> None:
     assert "foreach ($name in @('ci'))" in script
     assert "name: CI" in workflow and "if: always()" in workflow
     release = workflow.split("  package:\n", 1)[1]
-    assert "needs: [gate, comprehensive]" in release
+    assert "needs: [gate]" in release
+    assert '"rust-regressions", "comprehensive", "package"' in workflow
     assert "uses: actions/attest@v4" in release
     assert not (ROOT / ".github" / "workflows" / "worker-image.yml").exists()
     assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_source_provenance.ps1" in workflow
@@ -201,7 +202,7 @@ def main() -> None:
         "WHERE status NOT IN ('done','failed');",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
         "if (-not $mergedTree -or $mergedTree -cne $sourceTree)",
-        "foreach ($requiredJob in @('CI', 'comprehensive', 'package'))",
+        "foreach ($requiredJob in @('CI', 'rust-regressions', 'comprehensive', 'package'))",
         "$_.head.sha -ceq $sourceSha",
     ):
         mutated = source.replace(fragment, "", 1)

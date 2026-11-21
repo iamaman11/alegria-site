@@ -39,7 +39,7 @@ SUPPORT_ONLY_FILES = {"README.md", "docker-compose.yml", ".gitignore"}
 DEEP_DRIVER_FILES = {
     "automation/ci_verify.sh",
     "automation/run_truth_certification_gate.sh",
-    "automation/run_truth_build_transport_parallel.sh",
+    "automation/run_truth_prepare.sh",
     "automation/run_whole_page_semantic_gate.sh",
     "automation/smoke_manual_llm_queue.py",
 }
