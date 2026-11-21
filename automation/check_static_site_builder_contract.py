@@ -199,6 +199,9 @@ def main() -> int:
             ("deploy_cloudflare_static_release", "native Cloudflare publishing"),
             ("verify_live_release", "public HTTPS verification"),
             ("PublicationActivation", "automatic rollback"),
+            ("keep_published_content_provenance", "original approval provenance retention"),
+            ('manifest["publication_run_id"]', "originating Temporal workflow identity"),
+            ('manifest["publication_revision_id"]', "originating published revision identity"),
         ]:
             failures += require(renderer_refresh, needle, label)
         for needle, label in [

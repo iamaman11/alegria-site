@@ -57,6 +57,51 @@ fn published_renderer_files(
     Ok(artifacts)
 }
 
+// A renderer-only release changes bytes, not the editorial decision. Keep the
+// original approved Temporal run and page revision as the content provenance;
+// the native first-site release doctor must continue proving that identity.
+fn keep_published_content_provenance(
+    artifacts: &mut [ReleaseArtifact],
+    original: &serde_json::Value,
+) -> Result<(), String> {
+    let run_id = original.get("publication_run_id").and_then(|v| v.as_str())
+        .ok_or("published release has no canonical publication run")?;
+    let canonical = uuid::Uuid::parse_str(run_id)
+        .map_err(|_| "published release has invalid publication run")?.to_string();
+    if canonical != run_id {
+        return Err("published release has noncanonical publication run".into());
+    }
+    let page_key = original.get("publication_page_node_key").and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or("published release has no origin page")?;
+    let revision = original.get("publication_revision_id").and_then(|v| v.as_str())
+        .filter(|value| !value.is_empty())
+        .ok_or("published release has no origin revision")?;
+    let file = artifacts.iter_mut()
+        .find(|file| file.relative_path == "alegria-static-manifest.json")
+        .ok_or("renderer release has no manifest")?;
+    let mut manifest: serde_json::Value = serde_json::from_slice(&file.bytes)
+        .map_err(|err| format!("renderer manifest JSON: {err}"))?;
+    let matching = manifest.get("pages").and_then(|v| v.as_array())
+        .ok_or("renderer release pages missing")?
+        .iter()
+        .filter(|page| page.get("page_node_key").and_then(|v| v.as_str()) == Some(page_key)
+            && page.get("revision_id").and_then(|v| v.as_str()) == Some(revision)
+            && page.get("status").and_then(|v| v.as_str()) == Some("published"))
+        .count();
+    if matching != 1 {
+        return Err("renderer release lost its originally published CMS revision".into());
+    }
+    manifest["publication_run_id"] = serde_json::json!(run_id);
+    manifest["publication_page_node_key"] = serde_json::json!(page_key);
+    manifest["publication_revision_id"] = serde_json::json!(revision);
+    manifest["renderer_refresh_version"] =
+        serde_json::json!(static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION);
+    file.bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|err| format!("serialize renderer provenance: {err}"))?;
+    Ok(())
+}
+
 #[cfg(unix)]
 fn renderer_refresh_journal(public: &ReleasePath) -> Result<ReleasePathBuf, String> {
     Ok(public.parent().ok_or("public static path has no parent")?.join(RENDER_REFRESH_JOURNAL))
@@ -177,9 +222,10 @@ pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, 
     let candidate = root.join(format!("renderer-{}", uuid::Uuid::new_v4().simple()));
     static_site_builder_adapter::build_static_site(pool, &candidate, &origin_raw)
         .await.map_err(|err| validation_failure(format!("build published renderer candidate: {err}")))?;
-    let files = published_renderer_files(
+    let mut files = published_renderer_files(
         &candidate, &origin_raw, static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION,
     ).map_err(validation_failure)?;
+    keep_published_content_provenance(&mut files, &current).map_err(validation_failure)?;
     let release = create_immutable_release(&candidate, &files).map_err(validation_failure)?;
     write_pending_publication(&refresh_journal, &PendingPublication {
         new_release: release.clone(),
@@ -234,6 +280,28 @@ mod renderer_refresh_tests {
             &dir, "https://staging.alegria.by", static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION,
         ).unwrap();
         assert_eq!(files.len(), 4);
+        let provenance = serde_json::json!({
+            "publication_run_id": "f628a0b7-c405-4cce-8b3b-a95d0ac7db6c",
+            "publication_page_node_key": "visa",
+            "publication_revision_id": "revision",
+        });
+        let mut refreshed = files;
+        keep_published_content_provenance(&mut refreshed, &provenance).unwrap();
+        let refreshed_manifest: serde_json::Value = serde_json::from_slice(
+            &refreshed.iter().find(|file| file.relative_path == "alegria-static-manifest.json")
+                .unwrap().bytes,
+        ).unwrap();
+        assert_eq!(refreshed_manifest["publication_run_id"], provenance["publication_run_id"]);
+        assert_eq!(refreshed_manifest["publication_page_node_key"], "visa");
+        assert_eq!(refreshed_manifest["publication_revision_id"], "revision");
+        assert_eq!(refreshed_manifest["renderer_refresh_version"],
+            static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION);
+        let wrong_revision = serde_json::json!({
+            "publication_run_id": provenance["publication_run_id"],
+            "publication_page_node_key": "visa",
+            "publication_revision_id": "different-revision",
+        });
+        assert!(keep_published_content_provenance(&mut refreshed, &wrong_revision).is_err());
         manifest["pages"][0]["status"] = "approved".into();
         std::fs::write(&file, manifest.to_string()).unwrap();
         assert!(published_renderer_files(
