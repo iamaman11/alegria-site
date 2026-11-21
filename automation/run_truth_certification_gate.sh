@@ -23,15 +23,10 @@ cd "$ROOT_DIR"
 
 rm -f "$REPORT_PATH"
 
-bash automation/measure_ci_phase.sh truth_worker_build cargo build --manifest-path app/rust/Cargo.toml \
-  --target-dir "$WORKERS_TARGET_DIR" \
-  -p temporal_worker \
-  --bin temporal_worker
-
-bash automation/measure_ci_phase.sh truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml \
-  --target-dir "$WORKERS_TARGET_DIR" \
-  -p outbox_worker \
-  --bin outbox_worker
+# The isolated Worker and e2e suite targets have no shared Cargo lock.
+# Prepare the two real Worker binaries and execute the real Qdrant transport
+# regression concurrently. Both branches must pass before any fixture starts.
+bash automation/run_truth_build_transport_parallel.sh "$WORKERS_TARGET_DIR" "$SUITE_TARGET_DIR"
 
 for worker_bin in "$TEMPORAL_BIN" "$OUTBOX_BIN"; do
   if [[ ! -x "$worker_bin" ]]; then
@@ -40,17 +35,6 @@ for worker_bin in "$TEMPORAL_BIN" "$OUTBOX_BIN"; do
   fi
 done
 echo "CI_TRUTH_WORKER_BINARIES temporal=$TEMPORAL_BIN outbox=$OUTBOX_BIN"
-
-# Prove both Qdrant transports on a real container before running the
-# multi-fixture truth certification. A gRPC-only harness cannot validate the
-# HTTP REST endpoint used by projection_materialize_adapter.
-bash automation/measure_ci_phase.sh truth_transport cargo test --manifest-path app/rust/Cargo.toml \
-  --target-dir "$SUITE_TARGET_DIR" \
-  -p integration_harness \
-  --features e2e \
-  --lib \
-  qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval \
-  -- --nocapture
 
 run_suite() {
   rm -f "$LOG_PATH"

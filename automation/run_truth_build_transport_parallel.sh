@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Prepare real Truth Worker binaries and prove Qdrant REST/gRPC independently.
+# Their isolated Cargo targets permit overlap without a shared target lock.
+set -euo pipefail
+
+if [[ $# -ne 2 || -z "$1" || -z "$2" ]]; then
+  echo 'usage: run_truth_build_transport_parallel.sh <workers-target> <suite-target>' >&2
+  exit 2
+fi
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+WORKERS_TARGET_DIR="$(realpath -m "$1")"
+SUITE_TARGET_DIR="$(realpath -m "$2")"
+if [[ "$WORKERS_TARGET_DIR" == "$SUITE_TARGET_DIR" ]]; then
+  echo 'Truth Worker and transport Cargo targets must differ' >&2
+  exit 2
+fi
+cd "$ROOT_DIR"
+
+started_ms="$(date +%s%3N)"
+
+(
+  set -e
+  bash automation/measure_ci_phase.sh truth_worker_build cargo build --manifest-path app/rust/Cargo.toml \
+    --target-dir "$WORKERS_TARGET_DIR" \
+    -p temporal_worker \
+    --bin temporal_worker
+  bash automation/measure_ci_phase.sh truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml \
+    --target-dir "$WORKERS_TARGET_DIR" \
+    -p outbox_worker \
+    --bin outbox_worker
+) &
+worker_build_pid=$!
+
+(
+  bash automation/measure_ci_phase.sh truth_transport cargo test --manifest-path app/rust/Cargo.toml \
+    --target-dir "$SUITE_TARGET_DIR" \
+    -p integration_harness \
+    --features e2e \
+    --lib \
+    qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval \
+    -- --nocapture
+) &
+transport_pid=$!
+
+# Observe both results even if one branch fails. Do not let a successful wait
+# hide a failed Cargo command; the subsequent Truth suite is never started.
+worker_rc=0
+if wait "$worker_build_pid"; then :; else worker_rc=$?; fi
+transport_rc=0
+if wait "$transport_pid"; then :; else transport_rc=$?; fi
+
+echo "CI_TRUTH_PREP_PARALLEL elapsed_ms=$(($(date +%s%3N) - started_ms)) worker_exit=$worker_rc transport_exit=$transport_rc"
+if [[ "$worker_rc" -ne 0 ]]; then exit "$worker_rc"; fi
+if [[ "$transport_rc" -ne 0 ]]; then exit "$transport_rc"; fi
