@@ -17,7 +17,10 @@ if [[ "$WORKERS_TARGET_DIR" == "$SUITE_TARGET_DIR" ]]; then
 fi
 cd "$ROOT_DIR"
 
-started_ms="$(date +%s%3N)"
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+started_ms="$(monotonic_ms)"
 
 (
   set -e
@@ -50,6 +53,6 @@ if wait "$worker_build_pid"; then :; else worker_rc=$?; fi
 transport_rc=0
 if wait "$transport_pid"; then :; else transport_rc=$?; fi
 
-echo "CI_TRUTH_PREP_PARALLEL elapsed_ms=$(($(date +%s%3N) - started_ms)) worker_exit=$worker_rc transport_exit=$transport_rc"
+echo "CI_TRUTH_PREP_PARALLEL elapsed_ms=$(($(monotonic_ms) - started_ms)) worker_exit=$worker_rc transport_exit=$transport_rc"
 if [[ "$worker_rc" -ne 0 ]]; then exit "$worker_rc"; fi
 if [[ "$transport_rc" -ne 0 ]]; then exit "$transport_rc"; fi

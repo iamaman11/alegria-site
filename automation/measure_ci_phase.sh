@@ -14,7 +14,12 @@ if [[ -z "$report" && "${GITHUB_ACTIONS:-}" == "true" ]]; then
   report='automation/reports/ci_phase_timings.jsonl'
 fi
 source_sha="${CI_SOURCE_SHA:-${GITHUB_SHA:-unknown}}"
-start_ms="$(date +%s%3N)"
+# A runner may synchronize its wall clock backwards while a phase is running.
+# Measure elapsed time from a monotonic clock, not GNU date/EPOCHREALTIME.
+monotonic_ms() {
+  python3 -c 'import time; print(time.monotonic_ns() // 1_000_000)'
+}
+start_ms="$(monotonic_ms)"
 
 if "$@"; then
   result=0
@@ -22,7 +27,7 @@ else
   result=$?
 fi
 
-end_ms="$(date +%s%3N)"
+end_ms="$(monotonic_ms)"
 elapsed_ms="$((end_ms - start_ms))"
 if [[ -n "$report" ]]; then
   mkdir -p "$(dirname "$report")"

@@ -60,8 +60,31 @@ class PhaseTimingContract(unittest.TestCase):
             self.assertEqual(result.returncode, 2)
             self.assertFalse(report.exists())
 
+    def test_wall_clock_jump_backwards_cannot_make_elapsed_negative(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_date = root / "date"
+            fake_date.write_text(
+                "#!/bin/sh\n"
+                'if [ -e "$FAKE_DATE_STATE" ]; then printf "0\\n"; '
+                'else touch "$FAKE_DATE_STATE"; printf "999999\\n"; fi\n',
+                encoding="utf-8",
+            )
+            fake_date.chmod(0o755)
+            result = self.invoke(
+                root / "evidence.jsonl", "contracts", "exit 0",
+                env_overrides={"PATH": f"{root}:{os.environ['PATH']}",
+                               "FAKE_DATE_STATE": str(root / "date_called")},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertGreaterEqual(json.loads((root / "evidence.jsonl").read_text())["elapsed_ms"], 0)
+            self.assertFalse((root / "date_called").exists(), "phase timer must not read wall clock")
+
     @staticmethod
-    def invoke(report: Path, phase: str, command: str) -> subprocess.CompletedProcess[str]:
+    def invoke(
+        report: Path, phase: str, command: str,
+        env_overrides: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", str(WRAPPER), phase, "bash", "-c", command],
             cwd=ROOT,
@@ -69,6 +92,7 @@ class PhaseTimingContract(unittest.TestCase):
                 **os.environ,
                 "CI_TIMING_REPORT_PATH": str(report),
                 "CI_SOURCE_SHA": SOURCE_SHA,
+                **(env_overrides or {}),
             },
             capture_output=True,
             text=True,

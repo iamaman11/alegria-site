@@ -114,7 +114,9 @@ class TruthWorkerTargetContract(unittest.TestCase):
             validate(changed, PREP.read_text(encoding="utf-8"))
 
     @staticmethod
-    def invoke_stubbed_parallel_prep(root: Path, *, fail: str = "") -> subprocess.CompletedProcess[str]:
+    def invoke_stubbed_parallel_prep(
+        root: Path, *, fail: str = "", skew_clock: bool = False
+    ) -> subprocess.CompletedProcess[str]:
         fake_cargo = root / "cargo"
         fake_cargo.write_text(
             "#!/usr/bin/env python3\n"
@@ -128,13 +130,22 @@ class TruthWorkerTargetContract(unittest.TestCase):
             "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') == name else 0)\n"
         )
         fake_cargo.chmod(0o755)
+        if skew_clock:
+            fake_date = root / "date"
+            fake_date.write_text(
+                '#!/bin/sh\nif [ -e "$FAKE_DATE_STATE" ]; then echo 0; '
+                'else touch "$FAKE_DATE_STATE"; echo 999999; fi\n',
+                encoding="utf-8",
+            )
+            fake_date.chmod(0o755)
         return subprocess.run(
             ["bash", str(PREP), str(root / "worker-target"), str(root / "suite-target")],
             cwd=ROOT,
             env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                  "TRUTH_TEST_EVENTS": str(root / "events.txt"),
                  "TRUTH_TEST_FAIL": fail, "CI_SOURCE_SHA": "a" * 40,
-                 "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl")},
+                 "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl"),
+                 "FAKE_DATE_STATE": str(root / "date_called")},
             capture_output=True, text=True, check=False,
         )
 
@@ -155,6 +166,16 @@ class TruthWorkerTargetContract(unittest.TestCase):
             }
             self.assertLess(events[("integration_harness", "start")], events[("temporal_worker", "end")])
             self.assertLess(events[("outbox_worker", "start")], events[("integration_harness", "end")])
+
+    def test_truth_prep_duration_ignores_backward_wall_clock_jump(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            result = self.invoke_stubbed_parallel_prep(root, skew_clock=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CI_TRUTH_PREP_PARALLEL elapsed_ms=", result.stdout)
+            elapsed = int(result.stdout.split("CI_TRUTH_PREP_PARALLEL elapsed_ms=", 1)[1].split()[0])
+            self.assertGreaterEqual(elapsed, 0)
+            self.assertFalse((root / "date_called").exists(), "Truth prep must use monotonic time")
 
     def test_failed_transport_blocks_truth_gate_even_when_workers_pass(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
