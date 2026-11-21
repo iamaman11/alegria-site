@@ -42,9 +42,9 @@ class RustOwnedCheckContract(unittest.TestCase):
             ("bash", "automation/contract_verify.sh"),
             ("python3", "automation/smoke_run_report_completeness.py"),
         ):
-            result = invoke("architecture-and-rust", command=command)
+            result = invoke("rust-contract-smokes", command=command)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("CI_RUST_CHECK_DELEGATED owner=architecture-and-rust", result.stdout)
+            self.assertIn("CI_RUST_CHECK_DELEGATED owner=rust-contract-smokes", result.stdout)
             self.assertIn(f"source_sha={SHA}", result.stdout)
 
     def test_exact_source_product_delegates_only_retained_rust_smokes(self) -> None:
@@ -69,11 +69,25 @@ class RustOwnedCheckContract(unittest.TestCase):
         self.assertIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 
     def test_local_delegation_is_denied(self) -> None:
-        result = invoke("architecture-and-rust", actions="false")
+        result = invoke("rust-contract-smokes", actions="false")
         self.assertEqual(result.returncode, 2)
 
+    def test_verify_smoke_cannot_be_delegated_without_exact_ci_source(self) -> None:
+        for actions, sha in (("false", SHA), ("true", "invalid")):
+            result = invoke("rust-contract-smokes", actions=actions, sha=sha)
+            self.assertEqual(result.returncode, 2)
+
     def test_wrong_ci_job_is_denied(self) -> None:
-        result = invoke("architecture-and-rust", job="product-truth")
+        result = invoke("rust-contract-smokes", job="product-truth")
+        self.assertEqual(result.returncode, 2)
+
+    def test_wrong_owner_for_verify_is_denied(self) -> None:
+        result = invoke("architecture-and-rust", job="verify")
+        self.assertEqual(result.returncode, 2)
+
+    def test_wrong_owner_for_product_is_denied(self) -> None:
+        result = invoke("rust-contract-smokes", job="product-truth",
+                        command=PRODUCT_COMMANDS[0])
         self.assertEqual(result.returncode, 2)
 
     def test_product_smoke_cannot_be_delegated_from_verify(self) -> None:
@@ -89,7 +103,7 @@ class RustOwnedCheckContract(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
 
     def test_invalid_source_is_denied(self) -> None:
-        result = invoke("architecture-and-rust", sha="not-a-commit")
+        result = invoke("rust-contract-smokes", sha="not-a-commit")
         self.assertEqual(result.returncode, 2)
 
     def test_unknown_owner_is_denied(self) -> None:
@@ -123,7 +137,7 @@ class RustOwnedCheckContract(unittest.TestCase):
 
     def test_arbitrary_or_extended_check_is_denied(self) -> None:
         for command in (("python3", "-c", "pass"), (*COMMAND, "extra")):
-            result = invoke("architecture-and-rust", command=command)
+            result = invoke("rust-contract-smokes", command=command)
             self.assertEqual(result.returncode, 2)
 
 

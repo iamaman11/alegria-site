@@ -22,7 +22,7 @@ def check() -> None:
     assert "  gate:\n    name: CI\n    if: always()\n" in source
     assert "toJSON(needs)" in source and 'result != "success"' in source
     required = (
-        "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
+        "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security", "cloudflare-static-build",
         "temporal-worker-docker", "stack-temporal-postgres18",
         "stack-storage-graph", "verify", "windows-operator-smoke",
     )
@@ -65,7 +65,8 @@ def check() -> None:
         assert source.count(f"bash automation/measure_ci_phase.sh {phase} ") == 1, (
             f"mandatory {phase} must produce an independent timing and preserve its exit code"
         )
-    architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  rust-contract-smokes:\n", 1)[0]
+    rust_smokes = source.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
     product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "bash automation/ci_verify.sh product" not in architecture
@@ -86,27 +87,29 @@ def check() -> None:
     assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-$ROOT_DIR/app/rust/target/whole-page-semantic-gate}"' in semantic_gate
     assert '--target-dir "$TARGET_DIR"' in semantic_gate
     assert 'WHOLE_PAGE_SEMANTIC_TARGET_DIR="$TARGET_ROOT/whole-page-semantic-gate"' in clean_bundle
-    # Preserve every actual test, but run the expensive Rust-backed checks in
-    # the already compiled native Rust owner instead of recompiling and
-    # relinking them inside verify's sequential Python phase.
+    # Preserve every actual test in an independent mandatory Rust owner, so
+    # the workspace and Rust-backed smoke checks occupy parallel critical paths.
     rust_owned = (
         ("python3", "automation/smoke_crawler_robots_policy.py"),
         ("bash", "automation/contract_verify.sh"),
         ("python3", "automation/smoke_run_report_completeness.py"),
     )
-    assert 'CI_RUST_CHECK_OWNER: "architecture-and-rust"' in verify
+    assert 'CI_RUST_CHECK_OWNER: "rust-contract-smokes"' in verify
     assert "CI_RUST_CHECK_OWNER: " not in architecture
+    assert "CI_RUST_CHECK_OWNER: " not in rust_smokes
     assert 'CI_RUST_CHECK_OWNER: "architecture-and-rust"' in product
-    assert "name: Retained Rust-backed crawler, proto and run-report checks" in architecture
-    assert architecture.index("cargo test -p integration_harness --features e2e --no-run --locked") < architecture.index(
-        "name: Retained Rust-backed crawler, proto and run-report checks"
-    ), "Rust-backed checks must reuse the already compiled workspace/e2e artifacts"
+    assert "name: Retained Rust-backed crawler, proto and run-report checks" in rust_smokes
+    assert "name: Retained Rust-backed crawler, proto and run-report checks" not in architecture
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in rust_smokes
+    assert 'test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"' in rust_smokes
+    assert "SQLX_OFFLINE: \"true\"" in rust_smokes
     for interpreter, script_name in rust_owned:
         command = f"{interpreter} {script_name}"
-        assert architecture.count(command) == 1, f"missing native owner for {script_name}"
+        assert rust_smokes.count(command) == 1, f"missing independent owner for {script_name}"
         assert shell.count(f"bash automation/run_rust_owned_check.sh {command}") == 1, (
             f"standalone ci_verify.sh must retain {script_name}"
         )
+        assert command not in architecture, f"duplicate Rust smoke on architecture: {script_name}"
         assert command not in verify, f"duplicate Rust compilation in verify: {script_name}"
     product_rust_smokes = (
         "python3 automation/smoke_rebuild_dependency_graph.py",
@@ -124,15 +127,15 @@ def check() -> None:
             f"Product Rust smoke must reuse workspace compilation: {command}"
         )
     assert "python3 automation/check_ci_rust_owned_check.py" in architecture
-    # All three owners run concurrently on separate ephemeral GitHub VMs.
+    # All four owners run concurrently on separate ephemeral GitHub VMs.
     # No phase can read another owner's mutable PostgreSQL state or artifacts.
-    for owner in (architecture, product, verify):
+    for owner in (architecture, rust_smokes, product, verify):
         assert "runs-on: ubuntu-latest" in owner
         assert "    services:\n      postgres:" in owner
         assert "DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci" in owner
         assert "    needs:" not in owner
     assert "ref: ${{ github.event.pull_request.head.sha }}" in product
-    for owner in (architecture, product, verify):
+    for owner in (architecture, rust_smokes, product, verify):
         assert "CARGO_INCREMENTAL: \"0\"" in owner
         assert "RUSTC_WRAPPER: sccache" in owner
         assert "SCCACHE_GHA_ENABLED: \"true\"" in owner

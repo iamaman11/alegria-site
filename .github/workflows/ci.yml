@@ -147,16 +147,6 @@ jobs:
           SQLX_OFFLINE: "true"
         run: cargo test -p integration_harness --features e2e --no-run --locked
 
-      # These exact checks used to rebuild Rust artifacts sequentially inside
-      # verify's Python contracts/integration phases. Run them on the mandatory
-      # Rust owner after its workspace/e2e compilation to reuse those outputs.
-      # The standalone ci_verify.sh still executes them in full outside CI.
-      - name: Retained Rust-backed crawler, proto and run-report checks
-        run: |
-          python3 automation/smoke_crawler_robots_policy.py
-          bash automation/contract_verify.sh
-          python3 automation/smoke_run_report_completeness.py
-
       - name: Execute retained-source and editorial ownership PostgreSQL regressions
         working-directory: app/rust
         env:
@@ -213,6 +203,91 @@ jobs:
         with:
           name: cargo-cache-architecture
           path: automation/reports/cargo_cache_architecture-and-rust.json
+          if-no-files-found: error
+
+  # Run the three retained, real Rust-backed checks independently of the
+  # workspace acceptance critical path. The CI Gate and protected main both
+  # require this owner; standalone ci_verify.sh still executes all three.
+  rust-contract-smokes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout exact PR source and assert provenance
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
+
+      - name: Install native Rust smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+
+      - name: Pin stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Reuse Rust compiler outputs on independent runner
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Initialize disposable smoke database
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Retained Rust-backed crawler, proto and run-report checks
+        run: |
+          python3 automation/smoke_crawler_robots_policy.py
+          bash automation/contract_verify.sh
+          python3 automation/smoke_run_report_completeness.py
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job rust-contract-smokes --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload Rust contract smoke measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-rust-contract-smokes
+          path: automation/reports/cargo_cache_rust-contract-smokes.json
           if-no-files-found: error
 
   # Product/Truth must not wait for the architecture workspace test/compile job.
@@ -509,9 +584,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
-      # The three real Rust-backed checks run on the mandatory architecture
-      # owner; the shared gate requires that job's success as well as verify.
-      CI_RUST_CHECK_OWNER: "architecture-and-rust"
+      # The three real Rust-backed checks run in the independent mandatory
+      # smoke owner; the shared gate requires that job and verify to pass.
+      CI_RUST_CHECK_OWNER: "rust-contract-smokes"
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       # The semantic fixture runs after Manual LLM E2E has finished its Cargo
       # subprocesses. Reuse those exact-job artifacts instead of recompiling
@@ -638,6 +713,7 @@ jobs:
     if: always()
     needs:
       - architecture-and-rust
+      - rust-contract-smokes
       - product-truth
       - rust-security
       - cloudflare-static-build
@@ -684,7 +760,7 @@ jobs:
           merge_sha = os.environ["MERGE_SHA"]
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
-              "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
+              "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security", "cloudflare-static-build",
               "temporal-worker-docker", "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
