@@ -46,8 +46,13 @@ the PR critical path**, not deleted or represented as having run on PR.
 - The bare `rig-core`/`rig-vertexai` re-export adapters were removed: the
   application uses its own reqwest-based Vertex path. These unused dependencies
   pulled duplicate Rig versions and Google Cloud Auth into the build graph.
-  Regenerate `Cargo.lock` and re-run the Rust acceptance before considering
-  any separate TLS provider change.
+  The dependency lock was regenerated on GitHub after removing these unused
+  adapters; no separate TLS provider migration is assumed.
+- `temporalio-sdk-core 0.10.2` requires `temporalio-client 1.1.x`, so the
+  Temporal SDK/client/common group stays at compatible `1.1.2` even though a
+  newer client exists. The rejected `1.2.0` resolution did not compile.
+- Dependency refresh is now manually dispatched; changes to the lockfile must
+  pass the same PR CI rather than being silently pushed by an automatic job.
 - The `cf` CLI is still in a release-candidate cycle, and its `v1` Build Output
   differs from the current deployment artifact. Do not silently replace the
   pinned beta with an incompatible prerelease during a fast CI optimization.

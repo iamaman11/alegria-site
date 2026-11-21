@@ -1,15 +1,9 @@
 name: dependency-refresh-branch
 
-# One-shot dependency resolution for the reviewed Draft CI/stack-upgrade branch.
-# This resolver only commits Cargo.lock. The canonical PR CI owns compilation,
-# security and tests of the resulting source SHA, avoiding duplicate work.
+# Manual dependency resolution for maintenance of the reviewed Draft branch.
+# Do not auto-commit lock changes on every manifest edit: review and test an
+# explicit Cargo.lock update via the canonical PR CI instead.
 on:
-  push:
-    branches: ["codex/issue-37-modular-build"]
-    paths:
-      - ".github/workflows/dependency-refresh-branch.yml"
-      - "app/rust/Cargo.toml"
-      - "app/rust/crates/infrastructure/Cargo.toml"
   workflow_dispatch:
 
 permissions:
