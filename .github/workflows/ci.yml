@@ -27,24 +27,6 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-      # Execute Rust truth/HITL SQL tests on this disposable PostgreSQL,
-      # not merely compile them in a separate job without DATABASE_URL.
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-    services:
-      postgres:
-        image: postgres:18.7-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
@@ -56,7 +38,7 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
       - name: Pin the same stable Rust toolchain as the verify job
         uses: dtolnay/rust-toolchain@stable
@@ -65,9 +47,6 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
-
-      - name: Initialize disposable truth/HITL schema
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Rust formatting
         working-directory: app/rust
@@ -117,11 +96,6 @@ jobs:
             --head "$CI_HEAD_SHA" \
             --report automation/reports/ci_impact.json
 
-      - name: Fast scoped Rust feedback (never replaces mandatory acceptance)
-        env:
-          SQLX_OFFLINE: "true"
-        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
-
       - name: Upload machine-readable Rust change impact report
         if: always()
         uses: actions/upload-artifact@v7
@@ -129,22 +103,16 @@ jobs:
           name: rust-change-impact
           path: |
             automation/reports/ci_impact.json
-            automation/reports/scoped_cargo_feedback.json
           if-no-files-found: ignore
 
-      - name: Rust workspace tests (includes compile)
+      # A cold workspace test takes longer than the five-minute PR budget.
+      # Keep real fast Rust model regressions here; run all crates and real
+      # PostgreSQL E2E in ci-deep before release.
+      - name: Fast Rust runtime model unit tests
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test --workspace --locked
-
-      # A single real PostgreSQL regression compiles the e2e graph and asserts
-      # actual behaviour. The remaining seven SQL tests run in ci-deep.yml.
-      - name: Focused PostgreSQL/Rust integration regression
-        working-directory: app/rust
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition -- --nocapture
+        run: cargo test -p runtime_models --locked
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()

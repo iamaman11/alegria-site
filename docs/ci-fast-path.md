@@ -11,22 +11,39 @@ certification is available separately through GitHub Actions → `ci-deep` →
 | [#223](https://github.com/iamaman11/alegria-site/actions/runs/44915481077) | ~7m 02s | Truth 416s; Rust contracts 368s; architecture 356s; verify 322s |
 | [#224](https://github.com/iamaman11/alegria-site/actions/runs/44917627978) | **3m 28s** | RustSec 199s; architecture 189s |
 | [#230](https://github.com/iamaman11/alegria-site/actions/runs/44920111633) | **3m 24s** | Rust architecture 184s; RustSec 4s |
+| [#39](https://github.com/iamaman11/alegria-site/actions/runs/44934597524) | **8m 33s** | Cold Rust workspace tests 5m 12s, then E2E feature-graph rebuild 2m 20s |
+| [#40, first attempt](https://github.com/iamaman11/alegria-site/actions/runs/44935699114) | **6m 46s** | Cold unit tests of all operational crates still exceeded the PR budget |
+| [#40, lightweight gate](https://github.com/iamaman11/alegria-site/actions/runs/44936425556) | **1m 14s** | All ten mandatory jobs passed with Rust model regressions and no full-workspace compilation |
 
-All three runs passed every then-required job. After the version refresh, a cold
+The three earlier runs passed every then-required job. After the version refresh, a cold
 Docker rebuild revealed a separate release-compilation bottleneck, so Docker
 image packaging has been removed from the PR critical path. These timings are
 **warm-cache** observations, not a guarantee for a cold Rust rebuild. Run #230
 retained full workspace tests and one real PostgreSQL e2e regression while
 the `sccache` compiler cache reported 100% hits.
 
+Run #39 exposed the opposite case: `sccache` had no Rust compiler hits, and
+the second E2E feature graph made the cold PR gate exceed five minutes.
+Removing the E2E rebuild was insufficient (#40). The regular prototype PR
+gate now exercises lightweight Rust model regressions, source/format/contract
+checks and operational container checks; the full workspace and E2E feature
+graph are checked in `ci-deep` before release. The five-minute goal must be
+confirmed against exact completed CI runs; it is not a cold-run SLA.
+
 ## On each pull request
 
-- Real `cargo test --workspace --locked` and one PostgreSQL e2e regression.
+- Real `cargo test -p runtime_models --locked` for the lightweight model
+  regressions and `cargo fmt --all -- --check`. Full workspace Rust tests,
+  `integration_harness`, and PostgreSQL E2E run in `ci-deep`, not on every
+  experimental PR. The PR gate by itself **does not certify full Rust compilation**.
 - Python/SQLx/SEO/Truth policy contracts and native Windows operator checks.
 - RustSec dependency audit, Cloudflare static build, Temporal/PostgreSQL and
   storage/graph container checks, plus source-level Docker boundary checks.
 - A single Rust compilation owner; the static contract jobs no longer compile
   or repeatedly bootstrap Rust/Temporal/PostgreSQL.
+- The dependency-impact report is produced on PRs, while the optional scoped
+  `cargo check` remains a developer command. A direct Rust-only edit no longer
+  starts an unpredictable second cold compile in PR CI.
 
 ## Release Worker image (independent of PR feedback)
 

@@ -75,36 +75,14 @@ pub async fn persist_cms_publish_output(
     } else {
         false
     };
-    // Materialize structural links from exact published CMS targets, never
-    // from LLM-supplied URLs or opaque page keys. The static renderer prefers
-    // content_blocks over markdown, so both must carry the real links.
-    let link_markdown = resolved_links
-        .iter()
-        .map(|link| format!("- [{}]({})", link.title, link.canonical_url_path))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let body_markdown = if link_markdown.is_empty() {
-        row.body_markdown.clone()
-    } else {
-        format!("{}\n\n## Связанные страницы\n\n{}\n", row.body_markdown.trim_end(), link_markdown)
-    };
-    let mut content_blocks = row
+    // CMS persists the link plan; the static builder is the single owner of
+    // displaying links using the current release's page titles and routes.
+    let content_blocks = row
         .traceability_manifest
         .get("content_blocks")
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if !link_markdown.is_empty() {
-        content_blocks.push(json!({
-            "block_type": "related_links",
-            "section_role": "internal_links",
-            "heading": "Связанные страницы",
-            "markdown": link_markdown,
-            "support_refs": [],
-            "traceability_label": "canonical_published_target",
-            "required": true,
-        }));
-    }
     let required_link_payload = resolved_links
         .iter()
         .map(|link| json!({
@@ -185,7 +163,7 @@ pub async fn persist_cms_publish_output(
     .bind(&row.meta_description)
     .bind(&row.title)
     .bind(Json(json!({
-        "markdown": body_markdown,
+        "markdown": row.body_markdown.clone(),
         "content_blocks": content_blocks,
         "claim_ledger": row
             .traceability_manifest

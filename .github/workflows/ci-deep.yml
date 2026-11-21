@@ -65,7 +65,7 @@ jobs:
           cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
           cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
           cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
-          cargo test -p integration_harness --features e2e --locked --lib cms_publish_materializes_verified_internal_links_in_blocks_and_payload
+          cargo test -p integration_harness --features e2e --locked --lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections
           cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
           cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
 
