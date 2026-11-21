@@ -94,20 +94,27 @@ def check() -> None:
         assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in group
         assert "needs: [gate, architecture-and-rust]" in group
         assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in group
-        assert 'CI_WORKSPACE_TESTED: "true"' in group
         assert 'CARGO_PROFILE_DEV_DEBUG: "line-tables-only"' in group
         assert 'CARGO_PROFILE_TEST_DEBUG: "line-tables-only"' in group
         assert "RUSTFLAGS:" not in group  # Stable Rust already uses its native lld linker.
+    assert all('CI_WORKSPACE_TESTED: "true"' in group for group in (rust_deep, integration_deep))
+    assert 'CI_WORKSPACE_TESTED: "true"' not in deep
+    # The scoped Truth reader/writer test needs the disposable hosted DB.
+    # Enable it in the required workspace owner, never in the fixture-only job.
+    assert 'ALEGRIA_SCOPED_TRUTH_TEST: "true"' in rust_deep
+    assert 'ALEGRIA_SCOPED_TRUTH_TEST' not in deep
+    assert 'DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci' in rust_deep
     assert "CI_DEEP_SCOPE=NOT_AFFECTED_BY_SOURCE_CHANGE" in deep
     for group, steps in (
         (rust_deep, ("Workspace unit tests", "All retained-source/editorial PostgreSQL regressions", "Full architecture and Rust-backed contracts")),
         (integration_deep, ("Full Temporal/LLM and semantic integration E2E",)),
-        (deep, ("Full Product/Truth and real Worker certification",)),
+        (deep, ("Real Qdrant transport and all 16 Truth Worker fixtures",)),
     ):
         for step in steps:
             assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in group
     assert rust_deep.count("bash automation/ci_verify.sh contracts") == 1
-    assert deep.count("bash automation/ci_verify.sh product") == 1
+    assert deep.count("run: bash automation/run_truth_certification_gate.sh") == 1
+    assert "bash automation/ci_verify.sh product" not in deep
     assert integration_deep.count("bash automation/ci_verify.sh integration") == 1
     assert "bash automation/ci_verify.sh integration" not in deep
     assert "bash automation/ci_verify.sh all" not in workflow
@@ -118,6 +125,14 @@ def check() -> None:
     assert 'WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target' in integration_deep
     assert "CI_WORKSPACE_TESTED: \"true\"" in integration_deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
+    assert "bash automation/ci_verify.sh product-policy" in fast
+    assert '"$PHASE" == "product-policy"' in legacy
+    assert "run_product_rust_smoke" in legacy
+    assert 'python3 automation/smoke_contradiction_handling.py' not in fast
+    assert "services:\n" not in deep
+    assert "postgresql-client" not in deep
+    assert "python -m pip install" not in deep
+    assert "PostgresHarness::start().await?" in (ROOT / "app/rust/crates/integration_harness/src/containers.rs").read_text()
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
     truth = (ROOT / "automation/run_truth_certification_gate.sh").read_text(encoding="utf-8")
     manual = (ROOT / "automation/smoke_manual_llm_queue.py").read_text(encoding="utf-8")

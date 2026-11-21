@@ -202,8 +202,8 @@ jobs:
           python3 automation/gen_proto_contracts.py --out automation/PROTO_CONTRACTS.md --check
           python3 automation/check_run_report_completeness.py
 
-  # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
-  # runs for Ready-for-review PRs, not for each draft iteration.
+  # Full Python-only Product/Truth policy acceptance, including draft PRs.
+  # Real 16-fixture Worker certification stays in comprehensive for deep PRs.
   product-truth:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -587,6 +587,7 @@ jobs:
       RUSTC_WRAPPER: sccache
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       CI_WORKSPACE_TESTED: "true"
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
     services:
       postgres:
         image: postgres:18.7-alpine
@@ -775,30 +776,12 @@ jobs:
       RUSTC_WRAPPER: sccache
       TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-      CI_WORKSPACE_TESTED: "true"
-    services:
-      postgres:
-        image: postgres:18.7-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
+      # The real Truth harness starts its own isolated PostgreSQL, Temporal,
+      # Neo4j and Qdrant containers. No second unused PostgreSQL service.
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.CI_SOURCE_SHA }}
-
-      - name: Preflight publication source contract
-        run: python3 automation/smoke_incremental_publish_path.py
 
       - name: Report exact-source acceptance scope
         env:
@@ -836,19 +819,17 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      - name: Install full regression tooling
+      - name: Install native protobuf compiler for real Truth Workers
         if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
-          python -m pip install --disable-pip-version-check ruff==0.17.6
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+          sudo apt-get install -y protobuf-compiler
 
       # The required rust-regressions sibling owns workspace, SQL and contracts.
       # Product/Truth and integration use prebuilt Workers in one Cargo target.
-      - name: Full Product/Truth and real Worker certification
+      - name: Real Qdrant transport and all 16 Truth Worker fixtures
         if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'
-        run: bash automation/ci_verify.sh product
+        run: bash automation/run_truth_certification_gate.sh
 
       - name: Rust compiler cache statistics
         if: always() && (github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true')

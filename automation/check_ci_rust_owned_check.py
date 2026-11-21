@@ -68,7 +68,8 @@ class RustOwnedCheckContract(unittest.TestCase):
             self.assertNotIn(' '.join(command), owner_section)
             self.assertNotIn(' '.join(command), product_section)
         self.assertIn("bash automation/ci_verify.sh contracts", rust_deep)
-        self.assertIn("bash automation/ci_verify.sh product", deep)
+        self.assertIn("bash automation/run_truth_certification_gate.sh", deep)
+        self.assertIn("bash automation/ci_verify.sh product-policy", (ROOT / "automation/ci_fast_verify.sh").read_text())
         self.assertIn("bash automation/ci_verify.sh integration", integration_deep)
         self.assertNotIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 

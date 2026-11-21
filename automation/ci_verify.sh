@@ -10,9 +10,29 @@ fi
 
 PHASE="${1:-all}"
 case "$PHASE" in
-  all|contracts|product|integration) ;;
-  *) echo "Usage: bash automation/ci_verify.sh [all|contracts|product|integration]" >&2; exit 2 ;;
+  all|contracts|product|product-policy|integration) ;;
+  *) echo "Usage: bash automation/ci_verify.sh [all|contracts|product|product-policy|integration]" >&2; exit 2 ;;
 esac
+
+# These Python wrappers invoke native Cargo unit tests already exercised by
+# the required rust-regressions workspace owner. The fast Python-policy path
+# never compiles Rust; standalone local full audits still run every wrapper.
+run_product_rust_smoke() {
+  case "$1" in
+    automation/smoke_contradiction_handling.py|\
+    automation/smoke_pii_redaction_pre_llm.py|\
+    automation/smoke_licensing_gate.py|\
+    automation/smoke_deterministic_fallback_publish_blocking.py|\
+    automation/smoke_hitl_operator_surface.py|\
+    automation/smoke_global_navigation_policy.py) ;;
+    *) echo "Unexpected Cargo-backed Product smoke: $1" >&2; return 2 ;;
+  esac
+  if [[ "$PHASE" == "product-policy" || "${CI_WORKSPACE_TESTED:-}" == "true" ]]; then
+    echo "CARGO_REUSE=$1 owned by mandatory Rust workspace"
+  else
+    python3 "$1"
+  fi
+}
 
 echo "== Alegria audit: $PHASE =="
 if [[ "$PHASE" == "all" || "$PHASE" == "contracts" ]]; then
@@ -210,12 +230,14 @@ python3 automation/check_cutover_convergence_policy.py
 
 fi
 
-if [[ "$PHASE" == "all" || "$PHASE" == "product" ]]; then
+if [[ "$PHASE" == "all" || "$PHASE" == "product" || "$PHASE" == "product-policy" ]]; then
 echo "[35g3a/58] Truth certification fail-closed baseline migration policy"
 python3 automation/smoke_truth_certification_strict_projection_policy.py
 
+if [[ "$PHASE" != "product-policy" ]]; then
 echo "[35g3/58] Truth certification regression gate"
 bash automation/run_truth_certification_gate.sh
+fi
 
 echo "[35g4/58] Truth governance policy"
 python3 automation/check_truth_governance_policy.py
@@ -263,7 +285,7 @@ echo "[38a/53] Expert core activation contract"
 python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
-if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+if [[ "$PHASE" != "product-policy" && "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
   bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
 else
   echo "CARGO_REUSE=seo_steps_form_publish_ready_pipeline already passed in workspace"
@@ -273,31 +295,31 @@ echo "[40/53] Contradiction handling"
 python3 automation/check_contradiction_handling.py
 
 echo "[41/53] Contradiction handling smoke"
-python3 automation/smoke_contradiction_handling.py
+run_product_rust_smoke automation/smoke_contradiction_handling.py
 
 echo "[42/53] PII redaction pre-LLM"
 python3 automation/check_pii_redaction_pre_llm.py
 
 echo "[43/53] PII redaction pre-LLM smoke"
-python3 automation/smoke_pii_redaction_pre_llm.py
+run_product_rust_smoke automation/smoke_pii_redaction_pre_llm.py
 
 echo "[44/53] Licensing gate"
 python3 automation/check_licensing_gate.py
 
 echo "[45/53] Licensing gate smoke"
-python3 automation/smoke_licensing_gate.py
+run_product_rust_smoke automation/smoke_licensing_gate.py
 
 echo "[46/53] Deterministic fallback publish blocking"
 python3 automation/check_deterministic_fallback_publish_blocking.py
 
 echo "[47/53] Deterministic fallback publish blocking smoke"
-python3 automation/smoke_deterministic_fallback_publish_blocking.py
+run_product_rust_smoke automation/smoke_deterministic_fallback_publish_blocking.py
 
 echo "[48/53] HITL operator surface"
 python3 automation/check_hitl_operator_surface.py
 
 echo "[49/53] HITL operator surface smoke"
-python3 automation/smoke_hitl_operator_surface.py
+run_product_rust_smoke automation/smoke_hitl_operator_surface.py
 
 echo "[50/53] Headless CMS publish flow smoke"
 python3 automation/smoke_headless_cms_publish_flow.py
@@ -331,13 +353,17 @@ echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
 echo "[52d/53] Rebuild dependency graph smoke"
+if [[ "$PHASE" != "product-policy" && "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
 bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_dependency_graph.py
+else
+  echo "CARGO_REUSE=infrastructure rebuild graph covered by mandatory Rust workspace"
+fi
 
 echo "[52e/53] Rebuild queue and execution path"
 python3 automation/check_rebuild_queue_execution_path.py
 
 echo "[52f/53] Rebuild queue and execution path smoke"
-if [[ "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
+if [[ "$PHASE" != "product-policy" && "${CI_WORKSPACE_TESTED:-}" != "true" ]]; then
   bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_queue_execution_path.py
 else
   echo "CARGO_REUSE=infrastructure unit library already passed in workspace"
@@ -347,7 +373,7 @@ echo "[52g/53] Global navigation policy"
 python3 automation/check_global_navigation_policy.py
 
 echo "[52h/53] Global navigation policy smoke"
-python3 automation/smoke_global_navigation_policy.py
+run_product_rust_smoke automation/smoke_global_navigation_policy.py
 
 echo "[52i/53] Dependency-aware rebuild smoke"
 python3 automation/smoke_dependency_aware_rebuild.py
