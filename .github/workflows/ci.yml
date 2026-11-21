@@ -112,11 +112,13 @@ jobs:
             automation/reports/ci_impact.json
           if-no-files-found: ignore
 
-      # Core/DB changes run the real deep suite. Give them an early model smoke.
+      # Drafts need an early Rust model smoke because they skip deep CI.
+      # Ready PRs run the same crate in the mandatory full-workspace suite:
+      # avoid paying for its compilation twice on separate fresh runners.
       # Isolated changes test only their Cargo reverse dependency closure.
       # Docs, workflow and operator-only changes never compile unrelated Rust.
       - name: Fast Rust runtime model unit tests for deep changes
-        if: steps.rust_impact.outputs.deep_required == 'true'
+        if: github.event.pull_request.draft == true && steps.rust_impact.outputs.deep_required == 'true'
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
@@ -584,9 +586,6 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
-      # One workflow-wide GHA cache writer avoids shared 429 rate limits.
-      # integration-e2e owns writes for the full E2E/Worker dependency graph.
-      SCCACHE_GHA_RW_MODE: READ_ONLY
       RUSTC_WRAPPER: sccache
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       CI_WORKSPACE_TESTED: "true"
@@ -690,7 +689,6 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
-      # Shared GHA sccache writer for all three required Rust owners.
       RUSTC_WRAPPER: sccache
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       CI_WORKSPACE_TESTED: "true"
@@ -777,7 +775,6 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "line-tables-only"
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
-      SCCACHE_GHA_RW_MODE: READ_ONLY
       RUSTC_WRAPPER: sccache
       TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"

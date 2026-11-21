@@ -64,6 +64,9 @@ def check() -> None:
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "cargo test -p runtime_models --locked" in architecture
+    # Drafts retain their fast unit smoke. Ready PRs already run the same
+    # model crate in the required full workspace owner after the fast gate.
+    assert "if: github.event.pull_request.draft == true && steps.rust_impact.outputs.deep_required == 'true'" in architecture
     assert "deep_required: ${{ steps.rust_impact.outputs.deep_required }}" in architecture
     assert "affected_packages: ${{ steps.rust_impact.outputs.affected_packages }}" in architecture
     assert "id: rust_impact" in architecture
@@ -99,12 +102,6 @@ def check() -> None:
         assert "RUSTFLAGS:" not in group  # Stable Rust already uses its native lld linker.
     assert all('CI_WORKSPACE_TESTED: "true"' in group for group in (rust_deep, integration_deep))
     assert 'CI_WORKSPACE_TESTED: "true"' not in deep
-    # GitHub's sccache backend limits writes across the WHOLE workflow run.
-    # One writer stores shared Rust artifacts; the other jobs retain reads.
-    assert rust_deep.count("SCCACHE_GHA_RW_MODE: READ_ONLY") == 1
-    assert deep.count("SCCACHE_GHA_RW_MODE: READ_ONLY") == 1
-    assert "SCCACHE_GHA_RW_MODE: READ_ONLY" not in integration_deep
-    assert all('SCCACHE_GHA_ENABLED: "true"' in group for group in (rust_deep, integration_deep, deep))
     # The scoped Truth reader/writer test needs the disposable hosted DB.
     # Enable it in the required workspace owner, never in the fixture-only job.
     assert 'ALEGRIA_SCOPED_TRUTH_TEST: "true"' in rust_deep
