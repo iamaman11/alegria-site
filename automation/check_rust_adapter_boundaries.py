@@ -11,10 +11,19 @@ RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
+# SDKs may be used by these dedicated adapter crates, never by domain code.
+DEDICATED_ADAPTER_DIRS = {
+    (RUST_ROOT / "crates" / "graph_neo4j").resolve(),
+    (RUST_ROOT / "crates" / "http_client").resolve(),
+    (RUST_ROOT / "crates" / "vector_qdrant").resolve(),
+}
+# A standalone gRPC service owns its transport-facing request/response types.
+GRPC_SERVICE_SRC = (RUST_ROOT / "services" / "analytics_svc" / "src").resolve()
 
 ALLOWED_DIRECT_SDK_MANIFESTS = {
     (ROOT / "app" / "rust" / "Cargo.toml").resolve(),
     (ROOT / "app" / "rust" / "crates" / "infrastructure" / "Cargo.toml").resolve(),
+    *(directory / "Cargo.toml" for directory in DEDICATED_ADAPTER_DIRS),
 }
 
 MANIFEST_DEP_EXCEPTIONS = {
@@ -136,8 +145,14 @@ def main() -> int:
             continue
         if INTEGRATION_HARNESS_DIR in file_path.parents:
             continue
+        if any(directory in file_path.parents for directory in DEDICATED_ADAPTER_DIRS):
+            continue
         text = file_path.read_text(encoding="utf-8")
         for pat in FORBIDDEN_DIRECT_IN_USE_CASES:
+            # A gRPC server must use tonic request/response types directly,
+            # but still must not import unrelated external SDKs.
+            if GRPC_SERVICE_SRC in file_path.parents and "tonic" in pat.pattern:
+                continue
             if pat.search(text):
                 violations.append(f"{rel}: forbidden direct external SDK usage matched `{pat.pattern}`")
 

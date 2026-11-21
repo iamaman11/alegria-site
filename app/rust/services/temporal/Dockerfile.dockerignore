@@ -1,0 +1,23 @@
+.git
+.venv
+.pytest_cache
+worker.log
+
+**/__pycache__/
+**/*.pyc
+**/target/
+**/.mypy_cache/
+**/.ruff_cache/
+
+docs/_archive/
+docs/knowledge/
+automation/reports/
+
+# This Dockerfile compiles only temporal_worker, temporal_starter and cli_tools.
+# Keep integration-harness test-only changes out of COPY app ./app so a test
+# edit does not invalidate a 10-minute Rust release compilation layer.
+# All Cargo manifests and production Rust sources remain in the build context.
+app/rust/crates/integration_harness/src/tests/
+app/rust/crates/integration_harness/src/containers.rs
+app/rust/crates/integration_harness/src/env_overrides.rs
+app/rust/crates/integration_harness/src/stub_servers.rs

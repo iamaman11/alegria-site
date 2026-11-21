@@ -19,6 +19,7 @@ if [[ "$PHASE" == "all" || "$PHASE" == "contracts" ]]; then
 
 echo "[0/50] Single CI ownership and aggregate policy"
 python3 automation/check_ci_workflow_contract.py
+python3 automation/check_ci_cargo_cache.py
 
 echo "[1/50] Python compile check"
 python3 -m compileall -q automation infra/analytics_lab/src
@@ -38,7 +39,7 @@ echo "[3a/50] Crawler invariants contract (fail early)"
 python3 automation/check_crawler_invariants.py
 
 echo "[3b/50] Crawler robots-policy smoke (fail early)"
-python3 automation/smoke_crawler_robots_policy.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_crawler_robots_policy.py
 
 echo "[3c/50] Crawl provenance contract (fail early)"
 python3 automation/check_crawl_provenance_contract.py
@@ -115,7 +116,7 @@ echo "[18/50] Services/temporal boundary"
 python3 automation/check_services_temporal_boundary.py
 
 echo "[19/50] Proto contract verify"
-bash automation/contract_verify.sh
+bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
 
 echo "[20/50] Reliability contracts check"
 python3 automation/check_reliability_contracts.py
@@ -256,7 +257,7 @@ echo "[38a/53] Expert core activation contract"
 python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
-python3 automation/smoke_extraction_coverage.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
 
 echo "[40/53] Contradiction handling"
 python3 automation/check_contradiction_handling.py
@@ -320,13 +321,13 @@ echo "[52c/53] Rebuild dependency graph"
 python3 automation/check_rebuild_dependency_graph.py
 
 echo "[52d/53] Rebuild dependency graph smoke"
-python3 automation/smoke_rebuild_dependency_graph.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_dependency_graph.py
 
 echo "[52e/53] Rebuild queue and execution path"
 python3 automation/check_rebuild_queue_execution_path.py
 
 echo "[52f/53] Rebuild queue and execution path smoke"
-python3 automation/smoke_rebuild_queue_execution_path.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_rebuild_queue_execution_path.py
 
 echo "[52g/53] Global navigation policy"
 python3 automation/check_global_navigation_policy.py
@@ -383,7 +384,7 @@ echo "[42c/53] Run report completeness"
 python3 automation/check_run_report_completeness.py
 
 echo "[42d/53] Run report completeness smoke"
-python3 automation/smoke_run_report_completeness.py
+bash automation/run_rust_owned_check.sh python3 automation/smoke_run_report_completeness.py
 
 echo "[42d1/53] Manual LLM PostgreSQL inbox lifecycle E2E"
 python3 automation/smoke_manual_llm_queue.py

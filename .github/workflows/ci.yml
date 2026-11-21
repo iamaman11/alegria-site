@@ -21,6 +21,12 @@ jobs:
     timeout-minutes: 45
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      # Release-like CI compiles use a shared compiler-object cache;
+      # local developer builds retain incremental compilation.
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
       # Execute Rust truth/HITL SQL tests on this disposable PostgreSQL,
       # not merely compile them in a separate job without DATABASE_URL.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
@@ -52,6 +58,14 @@ jobs:
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
 
+      - name: Pin the same stable Rust toolchain as the verify job
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust compiler outputs across independent target directories
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
       - name: Initialize disposable truth/HITL schema
         run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
@@ -59,19 +73,68 @@ jobs:
         working-directory: app/rust
         run: cargo fmt --all -- --check
 
-      - name: Integration image boundary
-        run: python3 automation/smoke_integration_harness_image_contract.py
+      - name: Verify isolated Rust service dependency boundaries
+        run: python3 automation/check_module_boundaries.py
 
-      - name: Cache Rust workspace builds
+      - name: Regression-test fail-closed Rust impact and local developer feedback
+        run: |
+          python3 automation/check_ci_impact.py
+          python3 automation/check_dev_rust_feedback.py
+
+      - name: Regression-test exact CI timing and failure propagation
+        run: |
+          python3 automation/check_ci_phase_timing.py
+          python3 automation/check_ci_rust_owned_check.py
+          python3 automation/check_truth_worker_build_targets.py
+          python3 automation/check_ci_sccache_diagnostics.py
+          python3 automation/check_ci_smoke_diagnostics.py
+          python3 automation/check_ci_merge_provenance.py
+          python3 automation/check_cargo_feedback.py
+
+      - name: Integration image boundary
+        run: |
+          python3 automation/smoke_integration_harness_image_contract.py
+          python3 automation/check_temporal_docker_context.py
+
+      # Only this owner publishes dependency sources. Three parallel writers to
+      # the old 5.6-GB Cargo.lock/target key raced on a cache miss in CI #201.
+      # Keep compiler-object reuse in sccache while measuring target-free runs.
+      - name: Cache shared Cargo dependency sources (single writer)
+        id: cargo_registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            app/rust/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-
+            cargo-registry-${{ runner.os }}-
+
+      - name: Determine directly changed Rust crates and dependent consumers
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"
+          python3 automation/ci_impact.py \
+            --base "$PR_BASE_SHA" \
+            --head "$CI_HEAD_SHA" \
+            --report automation/reports/ci_impact.json
+
+      - name: Fast scoped Rust feedback (never replaces mandatory acceptance)
+        env:
+          SQLX_OFFLINE: "true"
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
+
+      - name: Upload machine-readable Rust change impact report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-change-impact
+          path: |
+            automation/reports/ci_impact.json
+            automation/reports/scoped_cargo_feedback.json
+          if-no-files-found: ignore
 
       - name: Rust workspace tests (includes compile)
         working-directory: app/rust
@@ -108,6 +171,227 @@ jobs:
           cargo run -q --locked --manifest-path app/rust/services/cli_tools/Cargo.toml -- \
             check-fact-verifier-parity --root . \
             --report-json automation/reports/fact_verifier_parity.rust.json
+
+      # Product's real SQL migration + infrastructure Rust smoke used to
+      # compile after Truth suite (99s in #204). Keep the exact command on
+      # this mandatory owner after workspace compilation; local product runs it.
+      - name: Retained rebuild dependency graph PostgreSQL/Rust smoke
+        env:
+          SQLX_OFFLINE: "true"
+        run: python3 automation/smoke_rebuild_dependency_graph.py
+
+      # Both original Product/Truth smoke scripts invoke real Cargo tests for
+      # already compiled workspace packages. Keep their exact commands, but
+      # do not rebuild Rust in the serial Product/Truth Python tail.
+      - name: Retained Product Rust extraction and rebuild-queue smoke
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          python3 automation/smoke_extraction_coverage.py
+          python3 automation/smoke_rebuild_queue_execution_path.py
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job architecture-and-rust --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload Rust cache experiment measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-architecture
+          path: automation/reports/cargo_cache_architecture-and-rust.json
+          if-no-files-found: error
+
+  # Run the three retained, real Rust-backed checks independently of the
+  # workspace acceptance critical path. The CI Gate and protected main both
+  # require this owner; standalone ci_verify.sh still executes all three.
+  rust-contract-smokes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout exact PR source and assert provenance
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
+
+      - name: Install native Rust smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+
+      - name: Pin stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Reuse Rust compiler outputs on independent runner
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Initialize disposable smoke database
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Retained Rust-backed crawler, proto and run-report checks
+        run: |
+          python3 automation/smoke_crawler_robots_policy.py
+          bash automation/contract_verify.sh
+          python3 automation/smoke_run_report_completeness.py
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job rust-contract-smokes --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload Rust contract smoke measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-rust-contract-smokes
+          path: automation/reports/cargo_cache_rust-contract-smokes.json
+          if-no-files-found: error
+
+  # Product/Truth must not wait for the architecture workspace test/compile job.
+  # Its complete prior ci_verify.sh phase stays mandatory on a distinct runner.
+  product-truth:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      # Diagnostic only: v0.16.0 records failed writes at DEBUG, not WARN.
+      # The raw runner-local log is never printed or uploaded.
+      SCCACHE_LOG: "sccache::server=debug"
+      SCCACHE_ERROR_LOG: /tmp/alegria-product-sccache.log
+      # Only three existing Product Rust smokes are delegated, never Truth.
+      CI_RUST_CHECK_OWNER: "architecture-and-rust"
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install native audit/build tools
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+
+      - name: Pin stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Match the established Product/Truth Python runtime
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install Product/Truth audit tools
+        run: python -m pip install --disable-pip-version-check ruff==0.17.4
+
+      - name: Cache Rust compiler objects across isolated target directories
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      # Read-only: the architecture job is the only registry cache writer.
+      # Per-job compilation outputs remain uncached in this A/B leg; sccache
+      # continues to cache compiler objects across the isolated target dirs.
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Initialize disposable truth/HITL schema
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Complete Product and truth invariants
+        run: bash automation/measure_ci_phase.sh product bash automation/ci_verify.sh product
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Classify Product/Truth cache write errors without raw logs
+        if: always()
+        run: python3 automation/report_ci_sccache_write_errors.py --job product-truth
+
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job product-truth --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload measured Product/Truth phase timing
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-phase-product
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/cargo_cache_product-truth.json
+            automation/reports/sccache_diagnostic_product-truth.json
+          if-no-files-found: ignore
 
   rust-security:
     if: github.event_name == 'pull_request'
@@ -168,16 +452,43 @@ jobs:
           cmp "$public/index.html" "$built"
 
   temporal-worker-docker:
+    # Build only for the accepted PR HEAD. Main retains its fast provenance
+    # gate and never recompiles/relabels this image after the protected merge.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
-      - name: Build the actual canonical Temporal worker image
-        run: |
-          docker build --progress=plain \
-            -f app/rust/services/temporal/Dockerfile \
-            -t alegria-seo-temporal:ci .
+        with:
+          # PR defaults to a synthetic merge commit, which is not the exact
+          # checkout that Windows installs by a requested 40-character SHA.
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify exact PR source before image build
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build the actual canonical Temporal worker image with persistent layers
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/rust/services/temporal/Dockerfile
+          push: false
+          load: true
+          tags: alegria-seo-temporal:ci
+          labels: |
+            org.opencontainers.image.revision=${{ github.event.pull_request.head.sha }}
+            by.alegria.source-head-sha=${{ github.event.pull_request.head.sha }}
+          cache-from: type=gha,scope=alegria-temporal-worker
+          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
       - name: Verify the runtime image includes its native deploy tools
         run: |
           docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
@@ -192,6 +503,35 @@ jobs:
             python3 -m py_compile /app/automation/check_first_site_release.py
             test -f /app/automation/check_first_site_release.py
           '
+
+      - name: Save the tested Worker image once for Windows no-build deployment
+        env:
+          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/temporal-worker-artifact"
+          mkdir -p "$artifact_dir"
+          label="$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' alegria-seo-temporal:ci)"
+          test "$label" = "$SOURCE_SHA"
+          docker save alegria-seo-temporal:ci | gzip -1 > "$artifact_dir/temporal-worker.tar.gz"
+          (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
+          docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
+          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+
+      - name: Sign SLSA provenance for the exact Worker archive
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz
+
+      - name: Upload immutable Worker image from this exact CI run
+        uses: actions/upload-artifact@v7
+        with:
+          name: temporal-worker-image-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
 
   stack-temporal-postgres18:
     if: github.event_name == 'pull_request'
@@ -251,6 +591,18 @@ jobs:
     timeout-minutes: 60
     env:
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      # The three real Rust-backed checks run in the independent mandatory
+      # smoke owner; the shared gate requires that job and verify to pass.
+      CI_RUST_CHECK_OWNER: "rust-contract-smokes"
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      # The semantic fixture runs after Manual LLM E2E has finished its Cargo
+      # subprocesses. Reuse those exact-job artifacts instead of recompiling
+      # the temporal service in a second target directory (77s in CI #206).
+      # Local clean acceptance keeps its explicitly isolated target.
+      WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       # Disposable integration database, never a production credential.
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       # Only this disposable CI database may run scoped truth SQL smoke tests.
@@ -284,6 +636,22 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache compiler outputs across Truth, Outbox and semantic targets
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Restore shared Cargo dependency sources (read-only)
+        id: cargo_registry
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
       - name: Install native audit/build tools
         run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
@@ -293,13 +661,28 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Source contracts and policy
-        run: bash automation/ci_verify.sh contracts
-
-      - name: Product and truth invariants
-        run: bash automation/ci_verify.sh product
+        run: bash automation/measure_ci_phase.sh contracts bash automation/ci_verify.sh contracts
 
       - name: Integration and consistency checks
-        run: bash automation/ci_verify.sh integration
+        run: bash automation/measure_ci_phase.sh integration bash automation/ci_verify.sh integration
+
+      - name: Publish Rust compiler cache hit/miss statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Measure Cargo dependency and compilation footprints
+        if: always()
+        run: python3 automation/report_ci_cargo_cache.py --job verify --registry-cache-hit '${{ steps.cargo_registry.outputs.cache-hit }}'
+
+      - name: Upload measured Contracts/Integration phase timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-phase-verify
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/cargo_cache_verify.json
+          if-no-files-found: ignore
 
       - name: Render consistency report
         if: always()
@@ -333,12 +716,15 @@ jobs:
         run: |
           python automation/check_windows_staging_rollback.py
           pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_reconcile.ps1
+          pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_image_artifact.ps1
 
   gate:
     name: CI
     if: always()
     needs:
       - architecture-and-rust
+      - rust-contract-smokes
+      - product-truth
       - rust-security
       - cloudflare-static-build
       - temporal-worker-docker
@@ -384,7 +770,7 @@ jobs:
           merge_sha = os.environ["MERGE_SHA"]
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
-              "architecture-and-rust", "rust-security", "cloudflare-static-build",
+              "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security", "cloudflare-static-build",
               "temporal-worker-docker", "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
@@ -418,6 +804,9 @@ jobs:
               and pr["head"]["sha"] == source_sha and pr["base"]["ref"] == "main"
           ]
           require(len(matches) == 1, "merge commit does not match one accepted PR head")
+          merge_tree = fetch(f"git/commits/{merge_sha}")["tree"]["sha"]
+          source_tree = fetch(f"git/commits/{source_sha}")["tree"]["sha"]
+          require(merge_tree == source_tree, "merge tree differs from fully tested PR source tree")
           runs = fetch(f"actions/runs?head_sha={source_sha}&per_page=100")["workflow_runs"]
           accepted = [
               run for run in runs

@@ -1,0 +1,10 @@
+[package]
+name = "vector_qdrant"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+qdrant-client = { workspace = true }
+reqwest = { workspace = true }
+serde_json = { workspace = true }

@@ -248,70 +248,73 @@
             .unwrap_or_else(|| workspace_root().join("target"))
     }
 
-    fn nested_worker_target_dir(bin_name: &str) -> PathBuf {
+    fn nested_worker_target_dir() -> PathBuf {
         target_dir()
             .join("integration-harness-nested")
-            .join(bin_name)
+            .join("combined-workers")
+    }
+
+    fn nested_worker_binaries() -> &'static (PathBuf, PathBuf) {
+        static BINARIES: std::sync::OnceLock<(PathBuf, PathBuf)> = std::sync::OnceLock::new();
+        BINARIES.get_or_init(|| {
+            // Compile both real binaries once; their processes and runtime state
+            // remain isolated. Keep this target separate from the e2e test target.
+            let nested_target = nested_worker_target_dir();
+            let build_started = Instant::now();
+            let status = Command::new("cargo")
+                .args([
+                    "build",
+                    "--locked",
+                    "--target-dir",
+                    nested_target
+                        .to_str()
+                        .expect("nested integration worker target dir"),
+                    "-p",
+                    "temporal_worker",
+                    "-p",
+                    "outbox_worker",
+                    "--bin",
+                    "temporal_worker",
+                    "--bin",
+                    "outbox_worker",
+                ])
+                .current_dir(workspace_root())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .status()
+                .expect("build nested integration workers");
+            eprintln!(
+                "CI_NESTED_WORKERS_BUILD elapsed_ms={} exit_code={}",
+                build_started.elapsed().as_millis(),
+                status.code().unwrap_or(-1)
+            );
+            assert!(status.success(), "combined integration worker build failed");
+            let debug_dir = nested_target.join("debug");
+            (
+                debug_dir.join(format!("temporal_worker{}", env::consts::EXE_SUFFIX)),
+                debug_dir.join(format!("outbox_worker{}", env::consts::EXE_SUFFIX)),
+            )
+        })
     }
 
     fn build_temporal_worker_binary() -> PathBuf {
-        if let Some(path) = env::var_os("INTEGRATION_TEMPORAL_WORKER_BIN") {
-            return PathBuf::from(path);
+        if let Some(binary) = env::var_os("INTEGRATION_TEMPORAL_WORKER_BIN") {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=prebuilt");
+            PathBuf::from(binary)
+        } else {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=nested");
+            nested_worker_binaries().0.clone()
         }
-        let nested_target = nested_worker_target_dir("temporal_worker");
-        let binary = nested_target
-            .join("debug")
-            .join(format!("temporal_worker{}", env::consts::EXE_SUFFIX));
-        let workspace = workspace_root();
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "--target-dir",
-                nested_target
-                    .to_str()
-                    .expect("nested temporal_worker target dir"),
-                "-p",
-                "temporal_worker",
-                "--bin",
-                "temporal_worker",
-            ])
-            .current_dir(&workspace)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("build temporal_worker");
-        assert!(status.success(), "cargo build -p temporal_worker failed");
-        binary
     }
 
     fn build_outbox_worker_binary() -> PathBuf {
-        if let Some(path) = env::var_os("INTEGRATION_OUTBOX_WORKER_BIN") {
-            return PathBuf::from(path);
+        if let Some(binary) = env::var_os("INTEGRATION_OUTBOX_WORKER_BIN") {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=outbox origin=prebuilt");
+            PathBuf::from(binary)
+        } else {
+            eprintln!("CI_WORKER_BINARY_SOURCE kind=outbox origin=nested");
+            nested_worker_binaries().1.clone()
         }
-        let nested_target = nested_worker_target_dir("outbox_worker");
-        let binary = nested_target
-            .join("debug")
-            .join(format!("outbox_worker{}", env::consts::EXE_SUFFIX));
-        let workspace = workspace_root();
-        let status = Command::new("cargo")
-            .args([
-                "build",
-                "--target-dir",
-                nested_target
-                    .to_str()
-                    .expect("nested outbox_worker target dir"),
-                "-p",
-                "outbox_worker",
-                "--bin",
-                "outbox_worker",
-            ])
-            .current_dir(&workspace)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .expect("build outbox_worker");
-        assert!(status.success(), "cargo build -p outbox_worker failed");
-        binary
     }
 
     fn spawn_temporal_worker(envs: &BTreeMap<String, String>) -> ChildGuard {

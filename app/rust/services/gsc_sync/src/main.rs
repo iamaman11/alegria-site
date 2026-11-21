@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use infrastructure::adapters::reqwest_adapter::new_default_client;
+use http_client::new_default_client;
 use serde_json::json;
 
 #[tokio::main]

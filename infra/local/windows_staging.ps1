@@ -19,6 +19,7 @@ $runtime = Join-Path $HomeOnB 'runtime'
 $downloads = Join-Path $HomeOnB 'downloads'
 $repo = 'iamaman11/alegria-site'
 . (Join-Path $PSScriptRoot 'windows_staging_reconcile.ps1')
+. (Join-Path $PSScriptRoot 'windows_staging_image.ps1')
 
 function Assert-Exit([string]$Stage) {
     if ($LASTEXITCODE -ne 0) { throw "$Stage failed: exit $LASTEXITCODE" }
@@ -66,6 +67,7 @@ foreach ($name in @('ci')) {
     if ($latest.Count -ne 1 -or $latest[0].status -ne 'completed' -or $latest[0].conclusion -ne 'success') {
         throw "CI NO-GO: $name not SUCCESS at $Commit"
     }
+    $verifiedRunId = [string]$latest[0].databaseId
 }
 Write-Output "CI=PASS COMMIT=$Commit"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
@@ -207,22 +209,70 @@ if ($LASTEXITCODE -eq 0) {
         Remove-Item -LiteralPath $scratch -Force -Recurse
     }
 }
-# The rollback tag is now immutable across the candidate :latest build.
+# The rollback tag is now immutable across the candidate :latest selection.
 # The old container's .Image can be absent from the local image store; a verified
 # rebuild can have a different ID. Compare post-rollback state to this tag.
 $rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}') | Out-String).Trim()
 Assert-Exit 'rollback guard: verified image absent'
 if (-not $rollbackImage) { throw 'Rollback guard returned empty immutable image ID' }
 Write-Output "ROLLBACK_IMAGE=$rollbackTag PREVIOUS_SHA=$oldSha"
-& $docker @newArgs build --quiet $Service
-Assert-Exit "build $Service"
 $latestTag = $project + '-' + $Service + ':latest'
+if ($Service -eq 'temporal-worker') {
+    # No local compilation for the accepted Temporal Worker. Load only an
+    # artifact from the exact completed successful CI run, not the newest tag.
+    $artifactName = 'temporal-worker-image-' + $Commit
+    $artifactDir = Join-Path $downloads ($artifactName + '-' + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null
+    try {
+        & gh run download $verifiedRunId -R $repo -n $artifactName -D $artifactDir
+        Assert-Exit 'download CI-verified Worker image'
+        $artifact = Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit
+        # A checksum shipped beside the archive only detects corruption. This
+        # Sigstore check additionally ties those bytes to GitHub's own signed
+        # build provenance for the precise canonical workflow identity.
+        $attestJson = & gh attestation verify $artifact.Archive -R $repo `
+            --signer-workflow "$repo/.github/workflows/ci.yml" --deny-self-hosted-runners --format json
+        Assert-Exit 'verify signed GitHub Worker provenance'
+        if (@(($attestJson | Out-String | ConvertFrom-Json)).Count -lt 1) {
+            throw 'GitHub Worker archive has no valid signed provenance'
+        }
+        & $docker image load --input $artifact.Archive | Out-Null
+        Assert-Exit 'load verified CI Worker image'
+        $imageTag = 'alegria-seo-temporal:ci'
+        $loadedId = ((& $docker image inspect $imageTag --format '{{.Id}}') | Out-String).Trim()
+        Assert-Exit 'inspect loaded CI Worker image'
+        if ($loadedId -cne $artifact.ImageId) {
+            throw 'CI Worker image ID differs after Docker load'
+        }
+        $labelsJson = ((& $docker image inspect $imageTag --format '{{json .Config.Labels}}') | Out-String).Trim()
+        Assert-Exit 'inspect loaded CI Worker labels'
+        $labels = $labelsJson | ConvertFrom-Json
+        foreach ($name in @('org.opencontainers.image.revision','by.alegria.source-head-sha')) {
+            if ([string]$labels.PSObject.Properties[$name].Value -cne $Commit) {
+                throw "CI Worker image $name does not match exact source SHA"
+            }
+        }
+        # Compose --no-build uses the canonical project-scoped image alias.
+        # Previous image has already been secured under its rollback tag.
+        & $docker image tag $artifact.ImageId $latestTag
+        Assert-Exit 'tag exact CI Worker image for existing Compose project'
+        Write-Output "WORKER_IMAGE=CI_ARTIFACT SOURCE_SHA=$Commit RUN_ID=$verifiedRunId IMAGE=$artifact.ImageId"
+    } finally {
+        # Only the unique, newly-created download staging directory is removed.
+        Remove-Item -LiteralPath $artifactDir -Force -Recurse
+    }
+} else {
+    # Outbox retains the existing build path until it has its own certified CI
+    # image. Do not falsely claim a zero-build deployment for this service.
+    & $docker @newArgs build --quiet $Service
+    Assert-Exit "build $Service"
+}
 $newImage = ((& $docker image inspect $latestTag --format '{{.Id}}') | Out-String).Trim()
-Assert-Exit 'inspect newly built image'
+Assert-Exit 'inspect selected candidate image'
 # An operator-only commit can legitimately rebuild to the SAME immutable image.
 # Checkout + WORKER_BUILD_ID must still match the requested commit at readback.
 if (-not $newImage) {
-    throw 'Candidate build has no verifiable image ID'
+    throw 'Candidate image has no verifiable image ID'
 }
 
 # Reconcile terminal executions through the already-running canonical Rust
