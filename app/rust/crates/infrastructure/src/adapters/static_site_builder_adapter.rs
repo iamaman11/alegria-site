@@ -13,6 +13,10 @@ use super::sqlx_static_site_adapter::{
     StaticCmsPageRow, StaticSiteSnapshot,
 };
 
+// Bump only when published HTML/layout semantics change. The Worker uses this
+// to refresh already-approved public pages without new editorial revisions.
+pub const STATIC_SITE_BUILDER_VERSION: &str = "alegria_static_site_builder@3";
+
 #[derive(Debug, Clone)]
 pub struct StaticArtifact {
     pub relative_path: String,
@@ -655,7 +659,7 @@ fn build_static_artifacts(
     artifacts.push(StaticArtifact {
         relative_path: "alegria-static-manifest.json".to_string(),
         bytes: serde_json::to_vec_pretty(&json!({
-            "builder": "alegria_static_site_builder@2",
+            "builder": STATIC_SITE_BUILDER_VERSION,
             "base_url": base_url,
             "page_count": pages.len(),
             "pages": manifest_pages,
@@ -681,7 +685,7 @@ fn write_static_artifacts(output_dir: &Path, artifacts: &[StaticArtifact]) -> Re
     }
     fs::create_dir_all(output_dir)
         .with_context(|| format!("create output dir failed: {}", output_dir.display()))?;
-    fs::write(&marker, b"alegria_static_site_builder@2\n")
+    fs::write(&marker, format!("{STATIC_SITE_BUILDER_VERSION}\n"))
         .with_context(|| format!("write marker failed: {}", marker.display()))?;
     for artifact in artifacts {
         let path = output_dir.join(&artifact.relative_path);
@@ -709,7 +713,7 @@ fn ensure_output_dir_ready(output_dir: &Path) -> Result<()> {
     }
     fs::create_dir_all(output_dir)
         .with_context(|| format!("create output dir failed: {}", output_dir.display()))?;
-    fs::write(&marker, b"alegria_static_site_builder@2\n")
+    fs::write(&marker, format!("{STATIC_SITE_BUILDER_VERSION}\n"))
         .with_context(|| format!("write marker failed: {}", marker.display()))?;
     Ok(())
 }

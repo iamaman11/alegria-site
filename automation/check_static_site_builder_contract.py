@@ -41,11 +41,16 @@ def main() -> int:
         ROOT
         / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publish_materialize.rs"
     )
+    renderer_refresh = (
+        ROOT
+        / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/renderer_refresh.rs"
+    )
+    temporal_worker = ROOT / "app/rust/services/temporal/src/main.rs"
     adapter_mod = ROOT / "app/rust/crates/infrastructure/src/adapters/mod.rs"
     cargo = ROOT / "app/rust/services/cli_tools/Cargo.toml"
     compose = ROOT / "docker-compose.yml"
 
-    for path in [cli, adapter, builder, publish_materialize, adapter_mod, cargo, compose]:
+    for path in [cli, adapter, builder, publish_materialize, renderer_refresh, temporal_worker, adapter_mod, cargo, compose]:
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
 
@@ -180,6 +185,27 @@ def main() -> int:
             failures += require(builder, needle, label)
 
         failures += require(compose, "/dev/tcp/127.0.0.1/6333", "Qdrant healthcheck")
+
+        for needle, label in [
+            ("STATIC_SITE_BUILDER_VERSION", "versioned renderer"),
+            ("alegria_static_site_builder@3", "updated page layout generation"),
+        ]:
+            failures += require(builder, needle, label)
+        for needle, label in [
+            ("published_renderer_files", "published-only release manifest"),
+            ("recover_pending_renderer_refresh", "crash-safe renderer recovery"),
+            ("pg_advisory_xact_lock", "shared atomic publication lock"),
+            ("create_immutable_release", "immutable renderer release"),
+            ("deploy_cloudflare_static_release", "native Cloudflare publishing"),
+            ("verify_live_release", "public HTTPS verification"),
+            ("PublicationActivation", "automatic rollback"),
+        ]:
+            failures += require(renderer_refresh, needle, label)
+        for needle, label in [
+            ("recover_pending_renderer_refresh", "worker startup publication recovery"),
+            ("refresh_published_renderer_if_stale", "automatic renderer refresh"),
+        ]:
+            failures += require(temporal_worker, needle, label)
 
     if failures:
         print("STATIC_SITE_BUILDER_CONTRACT: FAILED")
