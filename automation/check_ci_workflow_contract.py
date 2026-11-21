@@ -56,7 +56,8 @@ def check() -> None:
     rust_smokes = workflow.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
-    assert "cargo test --workspace --exclude integration_harness --locked" in architecture
+    assert "cargo test -p runtime_models --locked" in architecture
+    assert "cargo test --workspace" not in architecture
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
     assert "cargo metadata --format-version 1 --no-deps --locked" in rust_smokes

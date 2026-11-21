@@ -27,24 +27,6 @@ jobs:
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-      # Execute Rust truth/HITL SQL tests on this disposable PostgreSQL,
-      # not merely compile them in a separate job without DATABASE_URL.
-      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
-      ALEGRIA_SCOPED_TRUTH_TEST: "true"
-    services:
-      postgres:
-        image: postgres:18.7-alpine
-        env:
-          POSTGRES_USER: alegria_ci
-          POSTGRES_PASSWORD: alegria_ci_only
-          POSTGRES_DB: alegria_ci
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
     steps:
       - name: Checkout exact commit without third-party actions
         shell: bash
@@ -56,7 +38,7 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
 
       - name: Pin the same stable Rust toolchain as the verify job
         uses: dtolnay/rust-toolchain@stable
@@ -65,9 +47,6 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
-
-      - name: Initialize disposable truth/HITL schema
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
       - name: Rust formatting
         working-directory: app/rust
@@ -132,14 +111,14 @@ jobs:
             automation/reports/scoped_cargo_feedback.json
           if-no-files-found: ignore
 
-      # The E2E harness changes the feature graph and recompiles infrastructure.
-      # Its full unit/e2e matrix is already owned by opt-in ci-deep.yml before
-      # releases; do not pay for two cold builds on every small PR.
-      - name: Rust workspace unit tests (excluding E2E harness)
+      # A cold workspace test takes longer than the five-minute PR budget.
+      # Keep real fast Rust model regressions here; run all crates and real
+      # PostgreSQL E2E in ci-deep before release.
+      - name: Fast Rust runtime model unit tests
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test --workspace --exclude integration_harness --locked
+        run: cargo test -p runtime_models --locked
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()

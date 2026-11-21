@@ -27,7 +27,7 @@ def cargo_step_failures(workflow: str) -> list[str]:
         return ["missing canonical Rust owner in ci.yml"]
     rust = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
     expected = (
-        ("Rust workspace unit tests (excluding E2E harness)", "run: cargo test --workspace --exclude integration_harness --locked"),
+        ("Fast Rust runtime model unit tests", "run: cargo test -p runtime_models --locked"),
     )
     for name, command in expected:
         marker = f"      - name: {name}\n"
