@@ -36,7 +36,7 @@ pub async fn apply_human_review_decision(
         .ok_or_else(|| {
             validation_failure("seo workflow run_id not found for current review revision")
         })?;
-    let decision_key = primitives::seo::seo_artifact_key(
+    let decision_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_approval_decision",
         &[
             &request.page_node_key,

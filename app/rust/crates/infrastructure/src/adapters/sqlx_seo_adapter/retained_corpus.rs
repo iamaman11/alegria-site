@@ -186,7 +186,7 @@ pub async fn retained_serp_ingest(
         result["retained_provenance"] = json!({
             "source_run_id": source.run_id, "source_job_id": source_job,
         });
-        let key = primitives::seo::seo_artifact_key(
+        let key = seo_domain::artifact_identity::seo_artifact_key(
             "retained_serp_result", &[&input.run_id, &source.run_id, &source_job],
         );
         sqlx::query(

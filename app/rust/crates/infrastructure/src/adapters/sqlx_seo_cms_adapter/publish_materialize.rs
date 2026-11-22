@@ -12,7 +12,7 @@ pub async fn persist_publish_materialize_output(
     }
     let mut artifact = planned.publish_artifact.clone().unwrap_or_default();
     if artifact.artifact_key.trim().is_empty() {
-        artifact.artifact_key = primitives::seo::seo_artifact_key(
+        artifact.artifact_key = seo_domain::artifact_identity::seo_artifact_key(
             "publish_artifact",
             &[
                 &input.page_node_key,
@@ -217,7 +217,7 @@ pub async fn persist_publish_materialize_output(
                 updated_at = now()
             "#,
         )
-        .bind(primitives::seo::seo_artifact_key(
+        .bind(seo_domain::artifact_identity::seo_artifact_key(
             "publish_artifact_entry",
             &[&artifact.artifact_key, &built_artifact.relative_path],
         ))

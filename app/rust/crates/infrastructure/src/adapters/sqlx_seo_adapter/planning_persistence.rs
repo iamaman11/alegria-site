@@ -215,7 +215,7 @@ pub async fn persist_serp_normalize_output(
                 observed_at = now()
             "#,
         )
-        .bind(primitives::seo::seo_artifact_key(
+        .bind(seo_domain::artifact_identity::seo_artifact_key(
             "serp_pattern_observation",
             &[
                 &pattern.serp_pattern_key,
@@ -250,7 +250,7 @@ pub async fn persist_serp_normalize_output(
                     updated_at = now()
                 "#,
             )
-            .bind(primitives::seo::seo_artifact_key(
+            .bind(seo_domain::artifact_identity::seo_artifact_key(
                 "seo_hitl_task",
                 &[
                     &pattern.serp_pattern_key,
@@ -466,7 +466,7 @@ pub async fn persist_opportunity_build_output(
                 updated_at = now()
             "#,
         )
-        .bind(primitives::seo::seo_artifact_key(
+        .bind(seo_domain::artifact_identity::seo_artifact_key(
             "opportunity",
             &[
                 &pattern.scope_signature,
@@ -487,7 +487,7 @@ pub async fn persist_opportunity_build_output(
     }
 
     for gap in &output.content_gaps {
-        use primitives::seo::ContentGapDetector;
+        use seo_domain::artifact_identity::ContentGapDetector;
         non_empty(&gap.content_gap_key, "content_gap_key")?;
         non_empty(&gap.scope_signature, "gap scope_signature")?;
         non_empty(&gap.missing_topic, "gap missing_topic")?;
@@ -704,7 +704,7 @@ pub async fn persist_ia_build_output(
                     updated_at = now()
                 "#,
             )
-            .bind(primitives::seo::seo_artifact_key(
+            .bind(seo_domain::artifact_identity::seo_artifact_key(
                 "rebuild_dependency",
                 &[&page.page_node_key, "blueprint", &page.blueprint_key],
             ))
@@ -730,7 +730,7 @@ pub async fn persist_ia_build_output(
                     updated_at = now()
                 "#,
             )
-            .bind(primitives::seo::seo_artifact_key(
+            .bind(seo_domain::artifact_identity::seo_artifact_key(
                 "rebuild_dependency",
                 &[&page.page_node_key, "keyword_cluster", &page.keyword_cluster_key],
             ))
@@ -768,7 +768,7 @@ pub async fn persist_ia_build_output(
                         updated_at = now()
                     "#,
                 )
-                .bind(primitives::seo::seo_artifact_key(
+                .bind(seo_domain::artifact_identity::seo_artifact_key(
                     "rebuild_dependency",
                     &[&page.page_node_key, "serp_query", &seed_keyword],
                 ))
@@ -800,7 +800,7 @@ pub async fn persist_ia_build_output(
                 updated_at = now()
             "#,
         )
-        .bind(primitives::seo::seo_artifact_key(
+        .bind(seo_domain::artifact_identity::seo_artifact_key(
             "rebuild_dependency",
             &[&page.page_node_key, "navigation_state", &navigation_state_ref],
         ))
@@ -995,7 +995,7 @@ pub async fn persist_link_recommend_output(
                     updated_at = now()
                 "#,
             )
-            .bind(primitives::seo::seo_artifact_key(
+            .bind(seo_domain::artifact_identity::seo_artifact_key(
                 "rebuild_dependency",
                 &[&link.source_page_key, "required_link", &link.target_page_key],
             ))

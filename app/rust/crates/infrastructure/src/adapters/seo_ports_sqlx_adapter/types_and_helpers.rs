@@ -221,7 +221,7 @@ fn cluster_queries_from_embeddings(
             } else {
                 pair_scores.iter().sum::<f32>() / pair_scores.len() as f32
             };
-            let cluster_key = primitives::seo::seo_artifact_key(
+            let cluster_key = seo_domain::artifact_identity::seo_artifact_key(
                 "step0_demand_cluster",
                 &[&member_queries.join("|"), "voyage_step0@1"],
             );

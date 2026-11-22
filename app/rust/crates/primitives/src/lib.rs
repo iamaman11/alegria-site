@@ -4,7 +4,6 @@ pub mod errors;
 pub mod hash;
 pub mod page_key;
 pub mod qdrant_point_id;
-pub mod seo;
 pub mod source_key;
 pub mod stable_id;
 pub mod url_norm;

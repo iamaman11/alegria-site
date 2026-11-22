@@ -100,7 +100,7 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
                 },
             ),
             query_batch_key: request.query_batch_key.clone().unwrap_or_else(|| {
-                primitives::seo::seo_artifact_key(
+                seo_domain::artifact_identity::seo_artifact_key(
                     "query_batch",
                     &[
                         &request.run_id,

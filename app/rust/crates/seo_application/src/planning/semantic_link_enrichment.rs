@@ -95,7 +95,7 @@ async fn enrich_semantic_link_recommendations<S: SemanticLinkSearchPort>(
                     + orphan_bonus,
             );
             output.link_recommendations.push(LinkRecommendationState {
-                link_recommendation_key: primitives::seo::seo_artifact_key(
+                link_recommendation_key: seo_domain::artifact_identity::seo_artifact_key(
                     "link_recommendation",
                     &[
                         &source.scope_signature,

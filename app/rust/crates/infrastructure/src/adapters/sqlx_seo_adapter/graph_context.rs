@@ -139,7 +139,7 @@ pub async fn load_seo_site_build_input(
     identity::assert_scope_matches_context(&validated_scope, &truth)?;
 
     if input.query_batch_key.trim().is_empty() {
-        input.query_batch_key = primitives::seo::seo_artifact_key(
+        input.query_batch_key = seo_domain::artifact_identity::seo_artifact_key(
             "query_batch",
             &[run_id, &validated_scope.scope_signature],
         );

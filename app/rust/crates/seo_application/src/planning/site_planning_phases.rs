@@ -119,7 +119,7 @@ pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort + GraphCapa
             let Some(owner) = cluster_owner.get(&best.entity_key) else {
                 continue;
             };
-            let conflict_key = primitives::seo::seo_artifact_key(
+            let conflict_key = seo_domain::artifact_identity::seo_artifact_key(
                 "cannibalization_conflict",
                 &[
                     &node.scope_signature,
@@ -227,7 +227,7 @@ pub async fn run_global_site_reconcile<
                 {
                     continue;
                 }
-                let conflict_key = primitives::seo::seo_artifact_key(
+                let conflict_key = seo_domain::artifact_identity::seo_artifact_key(
                     "cannibalization_conflict",
                     &[
                         &source.scope_signature,

@@ -139,7 +139,7 @@ impl SemanticLinkSearchPort for SqlxSeoRuntimeRepository<'_> {
                 return Ok(queries
                     .iter()
                     .map(|query| SemanticDemandCluster {
-                        cluster_key: primitives::seo::seo_artifact_key(
+                        cluster_key: seo_domain::artifact_identity::seo_artifact_key(
                             "step0_demand_cluster",
                             &[query, "deterministic@1"],
                         ),

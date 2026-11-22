@@ -127,7 +127,7 @@ pub async fn persist_draft_assemble_output(
                         updated_at = now()
                     "#,
                 )
-                .bind(primitives::seo::seo_artifact_key(
+                .bind(seo_domain::artifact_identity::seo_artifact_key(
                     "page_support_binding",
                     &[
                         &draft.page_node_key,
@@ -158,7 +158,7 @@ pub async fn persist_draft_assemble_output(
                         updated_at = now()
                     "#,
                 )
-                .bind(primitives::seo::seo_artifact_key(
+                .bind(seo_domain::artifact_identity::seo_artifact_key(
                     "rebuild_dependency",
                     &[&draft.page_node_key, "truth_support", support_ref],
                 ))
@@ -200,7 +200,7 @@ pub async fn persist_draft_assemble_output(
                             updated_at = now()
                         "#,
                     )
-                    .bind(primitives::seo::seo_artifact_key(
+                    .bind(seo_domain::artifact_identity::seo_artifact_key(
                         "rebuild_dependency",
                         &[&draft.page_node_key, "source_provenance", &source_key],
                     ))
@@ -234,7 +234,7 @@ pub async fn persist_draft_assemble_output(
                         updated_at = now()
                     "#,
                 )
-                .bind(primitives::seo::seo_artifact_key(
+                .bind(seo_domain::artifact_identity::seo_artifact_key(
                     "rebuild_dependency",
                     &[&draft.page_node_key, "section_template", &item.template_key],
                 ))
@@ -353,7 +353,7 @@ pub async fn persist_draft_qa_output(
     set_page_lifecycle(pool, &draft.page_node_key, lifecycle_state, "draft_qa").await?;
 
     for reason in &output.blocking_reasons {
-        let quality_failure_key = primitives::seo::seo_artifact_key(
+        let quality_failure_key = seo_domain::artifact_identity::seo_artifact_key(
             "seo_quality_failure",
             &[&draft.page_draft_key, reason, "draft_qa@1"],
         );
@@ -467,7 +467,7 @@ pub async fn persist_rebuild_detect_output(
             set_page_lifecycle(pool, page_node_key, lifecycle_state, &trigger_type).await?;
         }
         projection_events.push(seo_graph_projection_event("page_node", page_node_key, ""));
-        let rebuild_request_key = primitives::seo::seo_artifact_key(
+        let rebuild_request_key = seo_domain::artifact_identity::seo_artifact_key(
             "seo_rebuild",
             &[
                 page_node_key,
@@ -498,7 +498,7 @@ pub async fn persist_rebuild_detect_output(
         .await
         .map_err(classify_sqlx)?;
 
-        let global_rebuild_plan_key = primitives::seo::seo_artifact_key(
+        let global_rebuild_plan_key = seo_domain::artifact_identity::seo_artifact_key(
             "global_rebuild_plan",
             &[page_node_key, &trigger_type, changed_truth_key],
         );

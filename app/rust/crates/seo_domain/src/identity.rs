@@ -1,9 +1,7 @@
 use contracts::generated::alegria::temporal::v1::SeoScopePayload;
-use primitives::{
-    context_key,
-    errors::DomainError,
-    seo::{canonical_scope_tuple, scope_signature},
-};
+use primitives::{context_key, errors::DomainError};
+
+use crate::artifact_identity::{canonical_scope_tuple, scope_signature};
 
 const ALLOWED_APPLICANT_PROFILES: &[&str] = &["standard", "minor", "student", "family"];
 

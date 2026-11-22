@@ -146,7 +146,7 @@ pub async fn persist_finalize_publish_output(
     } else {
         "seo_page_publish_blocked"
     };
-    let event_key = primitives::seo::seo_artifact_key(
+    let event_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_event",
         &[
             &input.page_node_key,
@@ -216,7 +216,7 @@ pub async fn persist_finalize_publish_output(
     }
     if !is_published {
         for blocker_reason in &blocking_reasons {
-            let task_key = primitives::seo::seo_artifact_key(
+            let task_key = seo_domain::artifact_identity::seo_artifact_key(
                 "seo_hitl_task",
                 &[
                     &input.page_node_key,

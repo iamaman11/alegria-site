@@ -134,7 +134,7 @@ pub async fn persist_global_navigation_from_active_pages(
         scope_count += 1;
     }
 
-    let navigation_tree_key = primitives::seo::seo_artifact_key(
+    let navigation_tree_key = seo_domain::artifact_identity::seo_artifact_key(
         "navigation_tree",
         &[market, locale, "navigation_policy@1"],
     );
@@ -172,7 +172,7 @@ pub async fn persist_global_navigation_from_active_pages(
         if silo_group_by_menu.contains_key(&menu_group) {
             continue;
         }
-        let silo_group_key = primitives::seo::seo_artifact_key("silo_group", &[&menu_group]);
+        let silo_group_key = seo_domain::artifact_identity::seo_artifact_key("silo_group", &[&menu_group]);
         sqlx::query(
             r#"
             INSERT INTO site.silo_groups
@@ -198,7 +198,7 @@ pub async fn persist_global_navigation_from_active_pages(
         .map(|page| {
             (
                 page.page_node_key.clone(),
-                primitives::seo::seo_artifact_key(
+                seo_domain::artifact_identity::seo_artifact_key(
                     "navigation_item",
                     &[&navigation_tree_key, &page.page_node_key],
                 ),
@@ -217,7 +217,7 @@ pub async fn persist_global_navigation_from_active_pages(
             .get(&page.page_node_key)
             .cloned()
             .unwrap_or_else(|| {
-                primitives::seo::seo_artifact_key(
+                seo_domain::artifact_identity::seo_artifact_key(
                     "navigation_item",
                     &[&navigation_tree_key, &page.page_node_key],
                 )
@@ -268,7 +268,7 @@ pub async fn persist_global_navigation_from_active_pages(
     }
 
     let rebuild_plan_key =
-        primitives::seo::seo_artifact_key("global_rebuild_plan", &[&navigation_tree_key, reason]);
+        seo_domain::artifact_identity::seo_artifact_key("global_rebuild_plan", &[&navigation_tree_key, reason]);
     sqlx::query(
         r#"
         INSERT INTO site.global_rebuild_plan

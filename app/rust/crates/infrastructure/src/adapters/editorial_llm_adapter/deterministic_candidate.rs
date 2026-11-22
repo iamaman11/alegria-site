@@ -84,7 +84,7 @@ fn build_deterministic_candidate(
                     };
                     body.push_str(&format!("  [{source_label}]({url})\n"));
                 }
-                let claim_key = primitives::seo::seo_artifact_key(
+                let claim_key = seo_domain::artifact_identity::seo_artifact_key(
                     "claim",
                     &[page_node_key, &block.section_role, &support.support_ref],
                 );
@@ -104,7 +104,7 @@ fn build_deterministic_candidate(
                 });
             }
         }
-        let section_key = primitives::seo::seo_artifact_key(
+        let section_key = seo_domain::artifact_identity::seo_artifact_key(
             "draft_section",
             &[page_node_key, &block.section_role],
         );
@@ -133,7 +133,7 @@ fn build_deterministic_candidate(
                 .unwrap_or_default(),
         });
         content_blocks.push(RenderedContentBlock {
-            block_key: primitives::seo::seo_artifact_key(
+            block_key: seo_domain::artifact_identity::seo_artifact_key(
                 "content_block",
                 &[page_node_key, &block.section_role, "llm"],
             ),
@@ -181,7 +181,7 @@ fn build_deterministic_candidate(
     }))
     .unwrap_or_else(|_| "{}".to_string());
     Ok(LlmDraftCandidate {
-        candidate_key: primitives::seo::seo_artifact_key(
+        candidate_key: seo_domain::artifact_identity::seo_artifact_key(
             "llm_draft_candidate",
             &[&request.request_key, provider_key, model_key],
         ),

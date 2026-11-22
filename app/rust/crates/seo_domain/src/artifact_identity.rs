@@ -1,4 +1,4 @@
-use crate::hash::blake3_hex;
+use primitives::hash::blake3_hex;
 
 fn normalize_component(input: &str) -> String {
     input
