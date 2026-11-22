@@ -65,6 +65,20 @@ OUTBOX_A14_PATHS = {
     "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
 }
 
+# A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
+# through the production SQLx reader and the active SEO generation operation.
+KNOWLEDGE_A13_PATHS = {
+    "app/rust/crates/seo_ports/src/knowledge.rs",
+    "app/rust/crates/seo_ports/src/lib.rs",
+    "app/rust/crates/seo_application/src/knowledge.rs",
+    "app/rust/crates/seo_application/src/context_bundle.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_context_bundle_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
+    "app/rust/services/temporal/src/activities/content_generation.rs",
+    "app/rust/crates/integration_harness/src/tests/knowledge_read_tests.rs",
+}
+
 
 def parse_name_status(raw: bytes) -> list[str]:
     """Decode a NUL-delimited Git diff, keeping both rename paths and deletes."""
@@ -230,6 +244,7 @@ def analyze(
         "mandatory_full_ci_gate": True,
         "publishing_a17_required": bool(broad_reasons) or bool(PUBLISHING_A17_PATHS.intersection(paths)),
         "outbox_a14_required": bool(broad_reasons) or bool(OUTBOX_A14_PATHS.intersection(paths)),
+        "knowledge_a13_required": bool(broad_reasons) or bool(KNOWLEDGE_A13_PATHS.intersection(paths)),
     }
 
 

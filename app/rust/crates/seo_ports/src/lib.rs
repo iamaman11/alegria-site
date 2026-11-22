@@ -1,5 +1,6 @@
 use async_trait::async_trait;
-use contracts::generated::alegria::read_api::v1::ContextBundle;
+pub mod knowledge;
+
 use contracts::generated::alegria::temporal::v1::{
     CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
@@ -17,6 +18,7 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
     SourceContextChunkState,
 };
+use knowledge::{VerifiedRulesQuery, VerifiedRulesView};
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
@@ -476,8 +478,13 @@ pub trait PublishArtifactRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait ContextBundleRepository: Send + Sync {
-    async fn load_context_bundle(&self, context_key: &str) -> Result<ContextBundle, DomainError>;
+pub trait VerifiedRulesReader: Send + Sync {
+    /// None means the requested context is not active. An active context
+    /// with no admissible verified rules is returned with an empty rules list.
+    async fn read_verified_rules(
+        &self,
+        query: &VerifiedRulesQuery,
+    ) -> Result<Option<VerifiedRulesView>, DomainError>;
 }
 
 #[async_trait]

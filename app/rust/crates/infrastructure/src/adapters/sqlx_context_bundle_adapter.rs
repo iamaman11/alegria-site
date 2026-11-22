@@ -4,25 +4,14 @@ use runtime_models::RuleParams;
 use sqlx::{PgPool, Row};
 
 #[derive(Debug, Clone)]
-pub struct ContextBundleBaseRow {
-    pub country_code: String,
-    pub visa_family: String,
-    pub visa_subtype: String,
-    pub citizenship_code: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextBundleRuleRow {
+pub struct AdmissibleVerifiedRuleRow {
     pub rule_instance_id: String,
     pub rule_type_key: String,
     pub role_type: String,
     pub params: RuleParams,
-    pub status: String,
     pub effective_from: String,
     pub effective_to: String,
     pub source_key: Option<String>,
-    pub source_label: Option<String>,
-    pub base_url: Option<String>,
 }
 
 fn infra_unavailable(message: impl Into<String>) -> DomainError {
@@ -31,36 +20,28 @@ fn infra_unavailable(message: impl Into<String>) -> DomainError {
     }
 }
 
-pub async fn load_context_bundle_base(
+pub async fn active_context_exists(
     pool: &PgPool,
     context_key: &str,
-) -> std::result::Result<Option<ContextBundleBaseRow>, DomainError> {
-    let ctx_row = sqlx::query(
+) -> std::result::Result<bool, DomainError> {
+    sqlx::query_scalar(
         r#"
-        SELECT country_code, visa_family, visa_subtype, citizenship_code
-        FROM kb.visa_contexts
-        WHERE context_key = $1 AND status = 'active'
+        SELECT EXISTS (
+            SELECT 1 FROM kb.visa_contexts
+            WHERE context_key = $1 AND status = 'active'
+        )
         "#,
     )
     .bind(context_key)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
-
-    Ok(ctx_row.map(|ctx| ContextBundleBaseRow {
-        country_code: ctx.get("country_code"),
-        visa_family: ctx.get("visa_family"),
-        visa_subtype: ctx
-            .get::<Option<String>, _>("visa_subtype")
-            .unwrap_or_default(),
-        citizenship_code: ctx.get("citizenship_code"),
-    }))
+    .map_err(|e| infra_unavailable(e.to_string()))
 }
 
-pub async fn load_context_bundle_rules(
+pub async fn load_admissible_verified_rules(
     pool: &PgPool,
     context_key: &str,
-) -> std::result::Result<Vec<ContextBundleRuleRow>, DomainError> {
+) -> std::result::Result<Vec<AdmissibleVerifiedRuleRow>, DomainError> {
     let rows = sqlx::query(
         r#"
         SELECT
@@ -81,14 +62,10 @@ pub async fn load_context_bundle_rules(
             (r.params->>'notarization_required')::boolean as notarization_required,
             (r.params->>'translation_required')::boolean as translation_required,
             (r.params->>'accepts_alternatives')::boolean as accepts_alternatives,
-            r.status,
             r.effective_from::text as effective_from,
             r.effective_to::text as effective_to,
-            s.source_key,
-            s.source_label,
-            s.base_url
+            r.source_key
         FROM verified.rule_instances r
-        LEFT JOIN kb.sources s ON r.source_key = s.source_key
         WHERE r.context_key = $1
           AND r.status = 'verified'
           AND r.publish_admissibility = 'admissible'
@@ -111,6 +88,7 @@ pub async fn load_context_bundle_rules(
                     AND c.epistemic_status IN ('verified', 'structured')
               )
           )
+        ORDER BY r.rule_instance_id
         "#,
     )
     .bind(context_key)
@@ -182,12 +160,11 @@ pub async fn load_context_bundle_rules(
                 _ => RuleParams::None,
             };
 
-            ContextBundleRuleRow {
+            AdmissibleVerifiedRuleRow {
                 rule_instance_id: r.get("rule_instance_id"),
                 rule_type_key: r.get("rule_type_key"),
                 role_type,
                 params,
-                status: r.get("status"),
                 effective_from: r
                     .get::<Option<String>, _>("effective_from")
                     .unwrap_or_default(),
@@ -195,8 +172,6 @@ pub async fn load_context_bundle_rules(
                     .get::<Option<String>, _>("effective_to")
                     .unwrap_or_default(),
                 source_key: r.get::<Option<String>, _>("source_key"),
-                source_label: r.get::<Option<String>, _>("source_label"),
-                base_url: r.get::<Option<String>, _>("base_url"),
             }
         })
         .collect())

@@ -20,6 +20,8 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/http_client": "http_client",
             "app/rust/crates/infrastructure": "infrastructure",
             "app/rust/crates/integration_harness": "integration_harness",
+            "app/rust/crates/seo_application": "seo_application",
+            "app/rust/crates/seo_ports": "seo_ports",
             "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
             "app/rust/services/analytics_svc": "analytics_svc",
@@ -33,6 +35,8 @@ class ImpactFixtures(unittest.TestCase):
             "http_client": {"gsc_sync"},
             "infrastructure": set(),
             "integration_harness": set(),
+            "seo_application": set(),
+            "seo_ports": set(),
             "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
             "analytics_svc": set(),
@@ -49,15 +53,24 @@ class ImpactFixtures(unittest.TestCase):
         self.assertTrue(result["mandatory_full_ci_gate"])
         self.assertFalse(result["publishing_a17_required"])
         self.assertFalse(result["outbox_a14_required"])
+        self.assertFalse(result["knowledge_a13_required"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
         self.assertTrue(result["publishing_a17_required"])
         self.assertFalse(result["outbox_a14_required"])
+        self.assertFalse(result["knowledge_a13_required"])
 
     def test_outbox_change_selects_real_a14_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs")
         self.assertTrue(result["outbox_a14_required"])
+        self.assertFalse(result["publishing_a17_required"])
+        self.assertFalse(result["knowledge_a13_required"])
+
+    def test_knowledge_read_change_selects_postgres_a13(self) -> None:
+        result = self.impact("app/rust/crates/seo_application/src/knowledge.rs")
+        self.assertTrue(result["knowledge_a13_required"])
+        self.assertFalse(result["outbox_a14_required"])
         self.assertFalse(result["publishing_a17_required"])
 
     def test_unknown_global_change_fails_closed_to_a17(self) -> None:
@@ -65,6 +78,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["analysis"], "full")
         self.assertTrue(result["publishing_a17_required"])
         self.assertTrue(result["outbox_a14_required"])
+        self.assertTrue(result["knowledge_a13_required"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])

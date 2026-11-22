@@ -1,6 +1,5 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use contracts::generated::alegria::read_api::v1::{citation_fact, RuleRoleTypeV1};
 use contracts::generated::alegria::temporal::v1::{
     ValidationDiagnostic as TemporalValidationDiagnostic, ValidationReport,
 };
@@ -8,7 +7,8 @@ use infrastructure::adapters::editorial_block_validation_adapter;
 use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter as pipeline_storage;
 use primitives::errors::{DomainError, ErrorClass};
-use seo_application::context_bundle as context_bundle_application;
+use seo_application::knowledge;
+use seo_ports::knowledge::VerifiedRulesQuery;
 
 use super::AlegriaActivities;
 
@@ -21,78 +21,15 @@ pub(crate) async fn generate_content_impl(
         .map_err(AlegriaActivities::classify_error)?;
     let context_key = &run.context_key;
     let repo = SqlxSeoRuntimeRepository::new(&acts.pool);
-    let bundle = context_bundle_application::load_context_bundle(&repo, context_key)
-        .await
-        .map_err(AlegriaActivities::classify_error)?;
-
-    let mut rendered_blocks: BTreeMap<String, String> = BTreeMap::new();
-    let citation_rules: Vec<seo_domain::writer::CitationRule> = bundle
-        .citation_facts
-        .iter()
-        .map(|fact| {
-            let mut role = match RuleRoleTypeV1::try_from(fact.role_type).ok() {
-                Some(RuleRoleTypeV1::DocumentRequired | RuleRoleTypeV1::MustProvide) => {
-                    seo_domain::writer::RuleRole::DocumentRequired
-                }
-                Some(RuleRoleTypeV1::FormRequired) => seo_domain::writer::RuleRole::FormRequired,
-                Some(RuleRoleTypeV1::FeeItem | RuleRoleTypeV1::MustPay) => {
-                    seo_domain::writer::RuleRole::FeeItem
-                }
-                Some(RuleRoleTypeV1::TimelineItem | RuleRoleTypeV1::Timeline) => {
-                    seo_domain::writer::RuleRole::TimelineItem
-                }
-                Some(_) => seo_domain::writer::RuleRole::Generic,
-                None => seo_domain::writer::RuleRole::Unknown,
-            };
-            let mut params = seo_domain::writer::RuleParamsView::None;
-            match fact.params.as_ref() {
-                Some(citation_fact::Params::DocParams(v)) => {
-                    role = seo_domain::writer::RuleRole::DocumentRequired;
-                    params = seo_domain::writer::RuleParamsView::Document {
-                        severity: v.severity.clone(),
-                        subtype: if v.subtype.is_empty() {
-                            None
-                        } else {
-                            Some(v.subtype.clone())
-                        },
-                        notarization_required: v.notarization_required,
-                    };
-                }
-                Some(citation_fact::Params::FeeParams(v)) => {
-                    role = seo_domain::writer::RuleRole::FeeItem;
-                    params = seo_domain::writer::RuleParamsView::Fee {
-                        amount: v.amount,
-                        currency: if v.currency.is_empty() {
-                            "EUR".to_string()
-                        } else {
-                            v.currency.clone()
-                        },
-                    };
-                }
-                Some(citation_fact::Params::TimelineParams(v)) => {
-                    role = seo_domain::writer::RuleRole::TimelineItem;
-                    params = seo_domain::writer::RuleParamsView::Timeline { days: v.days };
-                }
-                None => {}
-                _ => role = seo_domain::writer::RuleRole::Generic,
-            }
-
-            seo_domain::writer::CitationRule {
-                rule_instance_id: fact.rule_instance_id.clone(),
-                rule_type_key: fact.rule_type_key.clone(),
-                role,
-                params,
-                status: fact.status.clone(),
-                effective_from: fact.effective_from.clone(),
-                effective_to: fact.effective_to.clone(),
-            }
-        })
-        .collect();
-    let faq_items: Vec<seo_domain::writer::FaqItem> = Vec::new();
-    for block_key in seo_domain::writer::plan_blocks(&citation_rules, &faq_items) {
-        let html = seo_domain::writer::render_block(&block_key, &citation_rules, &faq_items);
-        rendered_blocks.insert(block_key, html);
-    }
+    let rendered_blocks = knowledge::generate_verified_blocks(
+        &repo,
+        &VerifiedRulesQuery {
+            run_id: run_id.to_string(),
+            context_key: context_key.clone(),
+        },
+    )
+    .await
+    .map_err(AlegriaActivities::classify_error)?;
 
     pipeline_storage::advance_execution_run_typed(
         &acts.pool,

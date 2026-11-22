@@ -511,7 +511,7 @@
             .unwrap();
         assert!(public_rules.is_empty());
         let context_rules =
-            infrastructure::adapters::sqlx_context_bundle_adapter::load_context_bundle_rules(
+            infrastructure::adapters::sqlx_context_bundle_adapter::load_admissible_verified_rules(
                 &pool,
                 &context_key,
             )

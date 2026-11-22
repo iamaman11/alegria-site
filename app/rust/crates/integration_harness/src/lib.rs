@@ -121,6 +121,7 @@ mod tests {
     include!("tests/provider_runtime_surface_tests.rs");
     include!("tests/publication_delivery_tests.rs");
     include!("tests/outbox_delivery_tests.rs");
+    include!("tests/knowledge_read_tests.rs");
     include!("tests/truth_runtime_tests.rs");
     include!("tests/scenario_parity_tests.rs");
     include!("tests/manual_llm_temporal_tests.rs");

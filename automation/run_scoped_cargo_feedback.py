@@ -57,6 +57,17 @@ def main() -> int:
         print("CI_OUTBOX_A14_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
 
+    required_a13 = report.get("knowledge_a13_required")
+    if not isinstance(required_a13, bool):
+        raise ValueError("impact report omitted the fail-closed Knowledge A13 decision")
+    if required_a13:
+        command = [
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "knowledge_a13_", "--locked", "--", "--nocapture",
+        ]
+        print("CI_KNOWLEDGE_A13_COMMAND=" + " ".join(command), flush=True)
+        measurements.append(run_cargo(command, cwd=WORKSPACE))
+
     output = ROOT / "automation/reports/scoped_cargo_feedback.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
