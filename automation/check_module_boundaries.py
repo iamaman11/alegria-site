@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline structural regression: independent services must not import infrastructure."""
+"""Offline Cargo/source boundary guard for independent services and capabilities."""
 
 from __future__ import annotations
 
@@ -24,6 +24,17 @@ ADAPTER_ALLOWED = {
     "http_client": {"anyhow", "reqwest"},
     "vector_qdrant": {"anyhow", "qdrant-client", "reqwest", "serde_json"},
 }
+CAPABILITY_FORBIDDEN_DIRECT = {
+    "acquisition": {"contracts", "infrastructure", "truth_domain", "seo_domain", "seo_steps", "seo_application"},
+    "truth_domain": {"contracts", "infrastructure", "policies", "primitives", "seo_domain", "seo_steps", "temporal_worker"},
+    "seo_domain": {"contracts", "infrastructure", "runtime_models", "seo_ports", "seo_steps", "temporal_worker"},
+    "policies": {"truth_domain"},
+}
+CAPABILITY_FORBIDDEN_IMPORTS = {
+    "acquisition": ("contracts::", "infrastructure::", "truth_domain::", "seo_domain::", "temporalio_sdk::"),
+    "truth_domain": ("contracts::", "infrastructure::", "seo_domain::", "sqlx::", "temporalio_sdk::"),
+    "seo_domain": ("contracts::", "infrastructure::", "runtime_models::", "sqlx::", "temporalio_sdk::"),
+}
 FORBIDDEN_TRANSITIVE = {
     "gsc_sync": {
         "infrastructure", "sqlx", "neo4rs", "qdrant-client", "temporalio-sdk",
@@ -33,7 +44,14 @@ FORBIDDEN_TRANSITIVE = {
         "infrastructure", "sqlx", "qdrant-client", "temporalio-sdk",
         "playwright-rs", "rig-core", "rig-vertexai",
     },
+    "truth_domain": {"contracts", "sqlx", "neo4rs", "qdrant-client", "temporalio-sdk", "prost", "tonic"},
+    "seo_domain": {"contracts", "sqlx", "neo4rs", "qdrant-client", "temporalio-sdk", "prost", "tonic"},
 }
+
+
+def forbidden_source_references(source: str, tokens: tuple[str, ...]) -> list[str]:
+    """Detect transport/runtime names even in fully qualified Rust signatures."""
+    return sorted(token for token in tokens if token in source)
 
 
 def lock_dependencies(lock_packages: list[dict], root_name: str) -> set[str]:
@@ -59,6 +77,26 @@ def lock_dependencies(lock_packages: list[dict], root_name: str) -> set[str]:
 def main() -> int:
     manifest = tomllib.loads((RUST / "Cargo.toml").read_text(encoding="utf-8"))
     members = set(manifest["workspace"]["members"])
+    # Negative fixture: Cargo edges alone cannot catch a generated payload
+    # leaked through a fully qualified domain function signature.
+    if forbidden_source_references(
+        "pub fn validate(v: contracts::generated::alegria::temporal::v1::SeoScopePayload) {}",
+        CAPABILITY_FORBIDDEN_IMPORTS["seo_domain"],
+    ) != ["contracts::"]:
+        raise ValueError("domain transport-import guard does not detect a wire type")
+
+    for name, forbidden in CAPABILITY_FORBIDDEN_DIRECT.items():
+        folder = RUST / "crates" / name
+        config = tomllib.loads((folder / "Cargo.toml").read_text(encoding="utf-8"))
+        unexpected = set(config.get("dependencies", {})) & forbidden
+        if unexpected:
+            raise ValueError(f"{name} has forbidden direct dependencies: {sorted(unexpected)}")
+        for source in (folder / "src").rglob("*.rs"):
+            references = forbidden_source_references(
+                source.read_text(encoding="utf-8"), CAPABILITY_FORBIDDEN_IMPORTS.get(name, ()),
+            )
+            if references:
+                raise ValueError(f"{name} has forbidden source references in {source}: {references}")
     for independent, allowed in ADAPTER_ALLOWED.items():
         if f"crates/{independent}" not in members:
             raise ValueError(f"missing workspace member: {independent}")

@@ -90,6 +90,47 @@ async fn knowledge_a13_verified_context_reads_only_admissible_global_truth() {
         assert!(!first["fees_table"].contains(excluded));
     }
 
+    // PostgreSQL can contain a verified/admissible JSON object without the
+    // fields needed to render a numerical claim. It must not become 0 EUR or
+    // a fabricated zero-day timeline, even though its status says verified.
+    for (idx, role, params, missing_field) in [
+        (5, "fee_item", serde_json::json!({"amount": 35.0}), "currency"),
+        (6, "fee_item", serde_json::json!({"currency": "EUR"}), "amount"),
+        (7, "timeline_item", serde_json::json!({}), "days"),
+    ] {
+        let rule_id = format!("knowledge-{suffix}-{idx:02}");
+        sqlx::query(
+            "INSERT INTO verified.rule_instances \
+             (rule_instance_id,context_key,rule_type_key,concept_key,role_type,params,status,source_key,publish_admissibility) \
+             VALUES ($1,$2,'consular_fee','consular_fee',$3,$4,'verified',$5,'admissible')",
+        )
+        .bind(&rule_id)
+        .bind(&context_key)
+        .bind(role)
+        .bind(sqlx::types::Json(params))
+        .bind(&source_key)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+
+        let invalid = reader.read_verified_rules(&query).await.unwrap_err();
+        assert_eq!(invalid.class(), ErrorClass::ContractViolation);
+        assert!(invalid.to_string().contains("stage=required_params"));
+        assert!(invalid.to_string().contains(&query.run_id));
+        assert!(invalid.to_string().contains(&rule_id));
+        assert!(invalid.to_string().contains(missing_field));
+
+        sqlx::query(
+            "UPDATE verified.rule_instances SET publish_admissibility='not_admissible' \
+             WHERE rule_instance_id=$1",
+        )
+        .bind(&rule_id)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+        assert_eq!(reader.read_verified_rules(&query).await.unwrap().unwrap().rules.len(), 1);
+    }
+
     sqlx::query(
         "UPDATE verified.rule_instances SET publish_admissibility='not_admissible' \
          WHERE context_key=$1 AND rule_instance_id=$2",

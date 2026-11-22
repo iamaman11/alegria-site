@@ -9,7 +9,7 @@ pub async fn upsert_seo_site_build_input(
         .scope
         .as_ref()
         .ok_or_else(|| validation_failure("SeoSiteBuildInputPayload.scope is required"))?;
-    let validated_scope = identity::derive_scope_from_payload(scope)?;
+    let validated_scope = seo_steps::seo_identity::derive_scope_from_payload(scope)?;
     validate_applicant_profile_reference(pool, &validated_scope.applicant_profile).await?;
     let payload_bytes = input.encode_payload_bytes()?;
     let payload_hash = primitives::hash::blake3_hex(&payload_bytes);

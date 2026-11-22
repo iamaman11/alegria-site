@@ -107,7 +107,7 @@ pub async fn load_seo_site_build_input(
         .scope
         .as_ref()
         .ok_or_else(|| validation_failure("SeoSiteBuildInputPayload.scope is required"))?;
-    let validated_scope = identity::derive_scope_from_payload(scope)?;
+    let validated_scope = seo_steps::seo_identity::derive_scope_from_payload(scope)?;
     validate_applicant_profile_reference(pool, &validated_scope.applicant_profile).await?;
     if input.queries.iter().all(|q| q.trim().is_empty()) {
         return Err(validation_failure(

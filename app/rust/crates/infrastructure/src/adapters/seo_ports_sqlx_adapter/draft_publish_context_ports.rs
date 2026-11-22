@@ -134,11 +134,19 @@ impl VerifiedRulesReader for SqlxSeoRuntimeRepository<'_> {
 
         let rules_rows = sqlx_context_bundle_adapter::load_admissible_verified_rules(self.pool, context_key)
             .await
-            .map_err(|err| DomainError::InfraUnavailable {
-                message: format!(
-                    "knowledge.read_verified_rules stage=verified_rows run_id={} context_key={context_key}: {err}",
-                    query.run_id
-                ),
+            .map_err(|err| match err {
+                DomainError::ContractViolation { message } => DomainError::ContractViolation {
+                    message: format!(
+                        "knowledge.read_verified_rules stage=verified_rows run_id={} context_key={context_key}: {message}",
+                        query.run_id
+                    ),
+                },
+                other => DomainError::InfraUnavailable {
+                    message: format!(
+                        "knowledge.read_verified_rules stage=verified_rows run_id={} context_key={context_key}: {other}",
+                        query.run_id
+                    ),
+                },
             })?;
         let rules = rules_rows
             .into_iter()

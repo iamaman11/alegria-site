@@ -4346,7 +4346,6 @@ dependencies = [
 name = "seo_domain"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "primitives",
  "regex",
  "scraper",

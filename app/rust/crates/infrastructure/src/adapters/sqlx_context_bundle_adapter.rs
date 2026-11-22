@@ -20,6 +20,14 @@ fn infra_unavailable(message: impl Into<String>) -> DomainError {
     }
 }
 
+fn incomplete_verified_param(rule_id: &str, field: &str) -> DomainError {
+    DomainError::ContractViolation {
+        message: format!(
+            "knowledge.read_verified_rules stage=required_params rule_id={rule_id} missing {field}"
+        ),
+    }
+}
+
 pub async fn active_context_exists(
     pool: &PgPool,
     context_key: &str,
@@ -96,9 +104,9 @@ pub async fn load_admissible_verified_rules(
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
 
-    Ok(rows
-        .into_iter()
-        .map(|r| {
+    rows.into_iter()
+        .map(|r| -> Result<AdmissibleVerifiedRuleRow, DomainError> {
+            let rule_id: String = r.get("rule_instance_id");
             let role_type = r.get::<Option<String>, _>("role_type").unwrap_or_default();
             let severity = r.get::<Option<String>, _>("severity").unwrap_or_default();
             let subtype = r.get::<Option<String>, _>("subtype");
@@ -121,16 +129,21 @@ pub async fn load_admissible_verified_rules(
                     conditions_key,
                 },
                 "fee_item" | "must_pay" => RuleParams::Fee {
-                    amount: r.get::<Option<f64>, _>("amount").unwrap_or(0.0),
+                    amount: r
+                        .get::<Option<f64>, _>("amount")
+                        .ok_or_else(|| incomplete_verified_param(&rule_id, "amount"))?,
                     currency: r
                         .get::<Option<String>, _>("currency")
-                        .unwrap_or_else(|| "EUR".to_string()),
+                        .filter(|value| !value.trim().is_empty())
+                        .ok_or_else(|| incomplete_verified_param(&rule_id, "currency"))?,
                     severity,
                     channel: r.get::<Option<String>, _>("channel"),
                     conditions_key,
                 },
                 "timeline_item" | "timeline" => RuleParams::Timeline {
-                    days: r.get::<Option<i64>, _>("days").unwrap_or_default(),
+                    days: r
+                        .get::<Option<i64>, _>("days")
+                        .ok_or_else(|| incomplete_verified_param(&rule_id, "days"))?,
                     subtype,
                     severity,
                     conditions_key,
@@ -160,8 +173,8 @@ pub async fn load_admissible_verified_rules(
                 _ => RuleParams::None,
             };
 
-            AdmissibleVerifiedRuleRow {
-                rule_instance_id: r.get("rule_instance_id"),
+            Ok(AdmissibleVerifiedRuleRow {
+                rule_instance_id: rule_id,
                 rule_type_key: r.get("rule_type_key"),
                 role_type,
                 params,
@@ -172,9 +185,9 @@ pub async fn load_admissible_verified_rules(
                     .get::<Option<String>, _>("effective_to")
                     .unwrap_or_default(),
                 source_key: r.get::<Option<String>, _>("source_key"),
-            }
+            })
         })
-        .collect())
+        .collect::<Result<Vec<_>, DomainError>>()
 }
 
 pub async fn load_rule_instance_materialization_row(

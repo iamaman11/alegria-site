@@ -1,9 +1,9 @@
+use crate::seo_identity;
 use contracts::generated::alegria::temporal::v1::SeoScopePayload;
 use seo_domain::artifact_identity;
-use seo_domain::identity;
 
 pub fn scope_signature(scope: Option<&SeoScopePayload>) -> String {
-    identity::scope_signature_from_payload(scope)
+    seo_identity::scope_signature_from_payload(scope)
 }
 
 pub fn slug(input: &str) -> String {

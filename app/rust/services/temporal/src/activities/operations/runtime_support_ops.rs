@@ -298,7 +298,7 @@ pub(crate) async fn seo_preflight_impl(
     input: &SeoPreflightInput,
 ) -> Result<SeoPreflightOutput, DomainError> {
     sqlx_seo_adapter::ensure_seo_runtime_registries(&acts.pool).await?;
-    let scope = seo_domain::identity::derive_scope_from_payload(&input.scope)?;
+    let scope = seo_steps::seo_identity::derive_scope_from_payload(&input.scope)?;
     let normalized_profile = sqlx_seo_adapter::validate_applicant_profile_reference(
         &acts.pool,
         &scope.applicant_profile,

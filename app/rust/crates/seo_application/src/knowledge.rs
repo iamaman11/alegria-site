@@ -46,7 +46,11 @@ pub async fn generate_verified_blocks<R: VerifiedRulesReader>(
         });
     }
 
-    let rules: Vec<_> = context.rules.into_iter().map(project_writer_rule).collect();
+    let rules: Vec<_> = context
+        .rules
+        .into_iter()
+        .map(|rule| project_writer_rule(rule, &query.run_id))
+        .collect::<Result<Vec<_>, DomainError>>()?;
     let faq_items: Vec<FaqItem> = Vec::new();
     Ok(writer::plan_blocks(&rules, &faq_items)
         .into_iter()
@@ -57,7 +61,39 @@ pub async fn generate_verified_blocks<R: VerifiedRulesReader>(
         .collect())
 }
 
-fn project_writer_rule(rule: VerifiedRule) -> CitationRule {
+fn project_writer_rule(rule: VerifiedRule, run_id: &str) -> Result<CitationRule, DomainError> {
+    let invalid_params = |field: &str| {
+        DomainError::ContractViolation {
+        message: format!(
+            "knowledge.read_verified_rules stage=required_params run_id={run_id} rule_id={} invalid {field}",
+            rule.rule_instance_id
+        ),
+    }
+    };
+    if (matches!(rule.role, RuleRoleType::FeeItem | RuleRoleType::MustPay)
+        || matches!(rule.rule_type_key.as_str(), "fee" | "consular_fee"))
+        && !matches!(&rule.params, RuleParams::Fee { .. })
+    {
+        return Err(invalid_params("fee"));
+    }
+    if matches!(
+        rule.role,
+        RuleRoleType::TimelineItem | RuleRoleType::Timeline
+    ) && !matches!(&rule.params, RuleParams::Timeline { .. })
+    {
+        return Err(invalid_params("timeline"));
+    }
+    match &rule.params {
+        RuleParams::Fee {
+            amount, currency, ..
+        } if !amount.is_finite() || currency.trim().is_empty() => {
+            return Err(invalid_params("fee amount/currency"));
+        }
+        RuleParams::Timeline { days, .. } if *days < 0 => {
+            return Err(invalid_params("timeline days"));
+        }
+        _ => {}
+    }
     let mut role = match rule.role {
         RuleRoleType::DocumentRequired | RuleRoleType::MustProvide => RuleRole::DocumentRequired,
         RuleRoleType::FormRequired => RuleRole::FormRequired,
@@ -83,14 +119,7 @@ fn project_writer_rule(rule: VerifiedRule) -> CitationRule {
             amount, currency, ..
         } => {
             role = RuleRole::FeeItem;
-            RuleParamsView::Fee {
-                amount,
-                currency: if currency.is_empty() {
-                    "EUR".to_string()
-                } else {
-                    currency
-                },
-            }
+            RuleParamsView::Fee { amount, currency }
         }
         RuleParams::Timeline { days, .. } => {
             role = RuleRole::TimelineItem;
@@ -103,7 +132,7 @@ fn project_writer_rule(rule: VerifiedRule) -> CitationRule {
         }
     };
 
-    CitationRule {
+    Ok(CitationRule {
         rule_instance_id: rule.rule_instance_id,
         rule_type_key: rule.rule_type_key,
         role,
@@ -111,7 +140,7 @@ fn project_writer_rule(rule: VerifiedRule) -> CitationRule {
         status: "verified".to_string(),
         effective_from: rule.effective_from,
         effective_to: rule.effective_to,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -229,6 +258,48 @@ mod tests {
             assert_eq!(error.class(), expected_class);
             assert!(error.to_string().contains(stage));
             assert!(error.to_string().contains("test-run"));
+        }
+    }
+
+    #[tokio::test]
+    async fn incomplete_verified_numeric_rules_fail_closed_with_typed_error() {
+        for (role, params, key) in [
+            (
+                RuleRoleType::FeeItem,
+                RuleParams::None,
+                "fee_without_params",
+            ),
+            (RuleRoleType::Allows, RuleParams::None, "consular_fee"),
+            (
+                RuleRoleType::MustPay,
+                RuleParams::Fee {
+                    amount: 35.0,
+                    currency: String::new(),
+                    severity: String::new(),
+                    channel: None,
+                    conditions_key: String::new(),
+                },
+                "fee_without_currency",
+            ),
+            (
+                RuleRoleType::TimelineItem,
+                RuleParams::None,
+                "timeline_without_days",
+            ),
+        ] {
+            let reader = FakeReader {
+                context: Some(VerifiedRulesView {
+                    context_key: "test-context".into(),
+                    rules: vec![rule(role, params, key)],
+                }),
+            };
+            let error = generate_verified_blocks(&reader, &query())
+                .await
+                .unwrap_err();
+            assert_eq!(error.class(), ErrorClass::ContractViolation);
+            assert!(error.to_string().contains("stage=required_params"));
+            assert!(error.to_string().contains("run_id=test-run"));
+            assert!(error.to_string().contains(key));
         }
     }
 }
