@@ -52,7 +52,7 @@ jobs:
       - name: Cache Rust compiler outputs across independent target directories
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
-          version: "v0.16.0"
+          version: "v0.19.0"
 
       - name: Rust formatting
         working-directory: app/rust
@@ -639,7 +639,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'
         with:
-          version: "v0.16.0"
+          version: "v0.19.0"
 
       - name: Restore Cargo dependency sources (read-only)
         if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'
@@ -732,7 +732,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'
         with:
-          version: "v0.16.0"
+          version: "v0.19.0"
 
       - name: Reuse shared Cargo dependency sources (read-only)
         if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'
@@ -818,7 +818,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'
         with:
-          version: "v0.16.0"
+          version: "v0.19.0"
 
       # Restore published Cargo registry sources (when present) without a
       # second cache writer. A fresh lockfile may still need native downloads.
