@@ -280,11 +280,11 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.TripleBuilderOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::contradiction_gate_step::ContradictionGateInput,
+    truth_domain::contradiction_gate::ContradictionGateInput,
     "alegria.runtime.json.ContradictionGateInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::contradiction_gate_step::ContradictionGateOutput,
+    truth_domain::contradiction_gate::ContradictionGateOutput,
     "alegria.runtime.json.ContradictionGateOutput"
 );
 impl_json_runtime_payload!(

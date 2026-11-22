@@ -447,8 +447,8 @@ fn semantic_rule_instance_id_for_scope_local(
     scope: &TruthParamValue,
 ) -> String {
     if matches!(
-        primitives::truth_candidates::truth_scope_target(scope),
-        Some(primitives::truth_candidates::TruthScopeTarget::Global)
+        truth_domain::truth_candidates::truth_scope_target(scope),
+        Some(truth_domain::truth_candidates::TruthScopeTarget::Global)
     ) {
         // Preserve the old global ID for historical data and projections.
         return semantic_rule_instance_id_local(context_key, role, concept_canonical_key);

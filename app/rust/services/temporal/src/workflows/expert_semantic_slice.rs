@@ -328,7 +328,7 @@ impl ExpertSemanticSliceWorkflow {
         let contradiction_facts = procedural
             .rules
             .iter()
-            .map(|rule| seo_steps::contradiction_gate_step::FactAssertion {
+            .map(|rule| truth_domain::contradiction_gate::FactAssertion {
                 subject_key: rule.rule_key.clone(),
                 predicate_key: format!("{:?}", rule.role_type),
                 value_normalized: if rule.numeric_tokens.is_empty() {
@@ -345,7 +345,7 @@ impl ExpertSemanticSliceWorkflow {
         let contradiction = ctx
             .start_activity(
                 AlegriaActivities::run_contradiction_gate_step,
-                seo_steps::contradiction_gate_step::ContradictionGateInput {
+                truth_domain::contradiction_gate::ContradictionGateInput {
                     run_id: run_id.clone(),
                     facts: contradiction_facts,
                 },

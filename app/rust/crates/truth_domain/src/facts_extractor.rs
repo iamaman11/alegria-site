@@ -1,6 +1,6 @@
 //! Deterministic facts/rules extraction from section text (R2).
 //!
-//! Typed core only. JSON wrappers live in `facts_extractor_json.rs`.
+//! Typed fact extraction with no JSON transport wrapper in the domain.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -194,5 +194,32 @@ pub fn extract_facts_typed(markdown: &str, context: &ExtractionContext) -> Extra
     ExtractedFactsEnvelope {
         rule_instances: rules,
         facts,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_source_produces_no_candidates() {
+        let result = extract_facts_typed("  ", &ExtractionContext::default());
+        assert!(result.rule_instances.is_empty());
+        assert!(result.facts.is_empty());
+    }
+
+    #[test]
+    fn source_key_survives_typed_extraction_without_external_services() {
+        let context = ExtractionContext {
+            source_key: Some("source-official-1".to_string()),
+        };
+        let result = extract_facts_typed(
+            "Visa fee 80 EUR. Passport required. Processing 15 days.",
+            &context,
+        );
+        assert_eq!(result.rule_instances.len(), 3);
+        assert_eq!(result.facts.len(), 1);
+        assert!(result.rule_instances.iter().all(|rule| rule.source_key == context.source_key));
+        assert!(matches!(&result.facts[0].fact_value, FactValue::Integer(15)));
     }
 }

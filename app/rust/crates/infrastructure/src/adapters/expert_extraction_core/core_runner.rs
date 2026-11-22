@@ -537,12 +537,12 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let contradiction_input = seo_steps::contradiction_gate_step::ContradictionGateInput {
+        let contradiction_input = truth_domain::contradiction_gate::ContradictionGateInput {
             run_id: run_id.to_string(),
             facts: contradiction_facts(section, &procedural_output),
         };
         let contradiction_output =
-            seo_steps::contradiction_gate_step::execute(&contradiction_input);
+            truth_domain::contradiction_gate::execute(&contradiction_input);
         stage_records.push(stage_record(
             "contradiction_gate",
             section,

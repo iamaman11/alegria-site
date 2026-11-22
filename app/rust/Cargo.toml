@@ -2,6 +2,7 @@
 members = [
   "crates/acquisition",
   "crates/primitives",
+  "crates/truth_domain",
   "crates/contracts",
   "crates/integration_harness",
   "crates/runtime_models",

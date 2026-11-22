@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::fact_verifier::{
+use truth_domain::fact_verifier::{
     verify_fact_typed, verify_numeric_rule_typed, FactCandidate, NumericRuleCandidate,
     SourceRegistryEntry,
 };

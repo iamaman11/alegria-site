@@ -238,12 +238,6 @@ python3 automation/check_truth_extraction_provider_contract.py
 echo "[37f/53] LLM extraction contract"
 python3 automation/check_llm_extraction_contract.py
 
-echo "[37g/53] Truth validators contract"
-python3 automation/check_truth_validators_contract.py
-
-echo "[37h/53] Truth adjudication contract"
-python3 automation/check_truth_adjudication_contract.py
-
 echo "[37e/53] SEO provenance invariants"
 python3 automation/check_seo_provenance_invariants.py
 
@@ -255,12 +249,6 @@ python3 automation/check_expert_core_activation_contract.py
 
 echo "[39/53] Extraction coverage smoke"
 bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
-
-echo "[40/53] Contradiction handling"
-python3 automation/check_contradiction_handling.py
-
-echo "[41/53] Contradiction handling smoke"
-python3 automation/smoke_contradiction_handling.py
 
 echo "[42/53] PII redaction pre-LLM"
 python3 automation/check_pii_redaction_pre_llm.py

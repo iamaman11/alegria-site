@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 acquisition = { path = "../acquisition" }
+truth_domain = { path = "../truth_domain" }
 graph_neo4j = { path = "../graph_neo4j" }
 http_client = { path = "../http_client" }
 vector_qdrant = { path = "../vector_qdrant" }

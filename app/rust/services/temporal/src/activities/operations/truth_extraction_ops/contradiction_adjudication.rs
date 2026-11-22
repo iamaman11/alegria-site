@@ -4,7 +4,7 @@
 // No evidence/source attributes are accepted from the LLM here.
 fn validated_candidate_assertions(
     state: &CandidateValidationSectionState,
-) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
+) -> Vec<truth_domain::contradiction_gate::FactAssertion> {
     state
         .candidates
         .iter()
@@ -23,7 +23,7 @@ fn validated_candidate_assertions(
                 candidate.scope.stable_signature(),
             );
             let assertion = |predicate_key: String, value_normalized: String| {
-                seo_steps::contradiction_gate_step::FactAssertion {
+                truth_domain::contradiction_gate::FactAssertion {
                     subject_key: subject.clone(),
                     predicate_key,
                     value_normalized,
@@ -83,7 +83,7 @@ mod typed_contradiction_regressions {
 
     fn check(
         candidates: Vec<ValidatedTruthCandidateRecord>,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+    ) -> truth_domain::contradiction_gate::ContradictionGateOutput {
         let state = CandidateValidationSectionState {
             section_id: 1248,
             page_id: 133,
@@ -94,8 +94,8 @@ mod typed_contradiction_regressions {
             blocked_by_gate: false,
             status: "accepted".to_string(),
         };
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        truth_domain::contradiction_gate::execute(
+            &truth_domain::contradiction_gate::ContradictionGateInput {
                 run_id: "same-evidence".to_string(),
                 facts: validated_candidate_assertions(&state),
             },
@@ -263,7 +263,7 @@ fn independently_confirmed_weak_duplicate(
 // A blocked section holds overlapping scope, not every applicant profile.
 // A global or unrepresentable scope conservatively overlaps all profiles.
 fn held_scope_key(scope: &TruthParamValue) -> String {
-    if primitives::truth_candidates::truth_scope_target(scope).is_some() {
+    if truth_domain::truth_candidates::truth_scope_target(scope).is_some() {
         scope.stable_signature()
     } else {
         TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature()
@@ -364,7 +364,7 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 } else {
                     rule.rule_key.clone()
                 };
-                seo_steps::contradiction_gate_step::FactAssertion {
+                truth_domain::contradiction_gate::FactAssertion {
                     subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
                     predicate_key: predicate.to_string(),
                     value_normalized,
@@ -376,8 +376,8 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         // Preserve procedural conflict checks and add every validated
         // structured proposition before the independent adjudication step.
         facts.extend(validated_candidate_assertions(candidate_state));
-        let output = seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        let output = truth_domain::contradiction_gate::execute(
+            &truth_domain::contradiction_gate::ContradictionGateInput {
                 run_id: input.run_id.clone(),
                 facts,
             },
@@ -977,9 +977,9 @@ mod manual_candidate_contradiction_tests {
 
     fn gate(
         state: &CandidateValidationSectionState,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+    ) -> truth_domain::contradiction_gate::ContradictionGateOutput {
+        truth_domain::contradiction_gate::execute(
+            &truth_domain::contradiction_gate::ContradictionGateInput {
                 run_id: "manual-contradiction-test".to_string(),
                 facts: validated_candidate_assertions(state),
             },

@@ -18,9 +18,9 @@ pub(crate) async fn extract_facts_impl(
         .await
         .map_err(AlegriaActivities::classify_error)?;
     let sections_json_owned = pipeline_storage::extract_sections_json(run.input_payload.as_ref());
-    let extracted_typed = primitives::facts_extractor::extract_facts_typed(
+    let extracted_typed = truth_domain::facts_extractor::extract_facts_typed(
         &sections_json_owned,
-        &primitives::facts_extractor::ExtractionContext::default(),
+        &truth_domain::facts_extractor::ExtractionContext::default(),
     );
     let extracted_payload = pipeline_storage::build_extracted_payload_from_typed(extracted_typed);
 

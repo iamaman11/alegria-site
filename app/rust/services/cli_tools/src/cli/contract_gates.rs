@@ -7,7 +7,7 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     // ---------------------------------------------------------------------
     let required_files = [
         "app/rust/crates/primitives/src/block_validator.rs",
-        "app/rust/crates/primitives/src/fact_verifier.rs",
+        "app/rust/crates/truth_domain/src/fact_verifier.rs",
         "app/rust/crates/primitives/src/writer.rs",
         "app/rust/crates/acquisition/src/pdf_parser.rs",
         "app/rust/crates/seo_application/src/seo_runtime.rs",

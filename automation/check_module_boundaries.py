@@ -24,6 +24,11 @@ ADAPTER_ALLOWED = {
     "http_client": {"anyhow", "reqwest"},
     "vector_qdrant": {"anyhow", "qdrant-client", "reqwest", "serde_json"},
 }
+CAPABILITY_FORBIDDEN_DIRECT = {
+    # Enforce directions, not a frozen list of Rust libraries.
+    "truth_domain": {"contracts", "infrastructure", "primitives", "seo_steps", "seo_domain", "temporal_worker"},
+    "acquisition": {"truth_domain", "infrastructure", "seo_domain", "seo_steps", "seo_application"},
+}
 FORBIDDEN_TRANSITIVE = {
     "gsc_sync": {
         "infrastructure", "sqlx", "neo4rs", "qdrant-client", "temporalio-sdk",
@@ -32,6 +37,10 @@ FORBIDDEN_TRANSITIVE = {
     "analytics_svc": {
         "infrastructure", "sqlx", "qdrant-client", "temporalio-sdk",
         "playwright-rs", "rig-core", "rig-vertexai",
+    },
+    "truth_domain": {
+        "contracts", "infrastructure", "primitives", "sqlx", "neo4rs",
+        "qdrant-client", "temporalio-sdk", "playwright-rs", "scraper", "lopdf",
     },
 }
 
@@ -68,6 +77,16 @@ def main() -> int:
         unexpected = set(config["dependencies"]) - allowed
         if unexpected:
             raise ValueError(f"{independent} has unexpected dependencies: {sorted(unexpected)}")
+
+    for name, forbidden in CAPABILITY_FORBIDDEN_DIRECT.items():
+        if f"crates/{name}" not in members:
+            raise ValueError(f"missing capability member: {name}")
+        config = tomllib.loads(
+            (RUST / "crates" / name / "Cargo.toml").read_text(encoding="utf-8")
+        )
+        actual = set(config["dependencies"]) & forbidden
+        if actual:
+            raise ValueError(f"{name} has forbidden domain dependency: {sorted(actual)}")
 
     for name, allowed in SERVICE_ALLOWED.items():
         folder = RUST / "services" / name

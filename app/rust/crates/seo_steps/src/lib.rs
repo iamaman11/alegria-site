@@ -2,7 +2,6 @@ pub mod canonical_mapping_step;
 pub mod cms_publish_step;
 pub mod completeness_judge_step;
 pub mod content_contract_validate_step;
-pub mod contradiction_gate_step;
 pub mod dom_block_relevance_step;
 pub mod draft_assemble_step;
 pub mod draft_normalize_step;

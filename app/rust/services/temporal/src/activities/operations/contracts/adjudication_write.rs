@@ -10,7 +10,7 @@ pub struct ContradictionGateSweepInput {
 pub struct ContradictionGateSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub output: seo_steps::contradiction_gate_step::ContradictionGateOutput,
+    pub output: truth_domain::contradiction_gate::ContradictionGateOutput,
     pub status: String,
     pub semantic_neighbor_refs: Vec<String>,
     pub semantic_neighbor_reason_codes: Vec<String>,

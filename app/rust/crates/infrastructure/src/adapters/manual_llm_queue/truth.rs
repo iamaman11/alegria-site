@@ -27,12 +27,12 @@ pub fn validated_candidate_values(
     candidate: &TruthRuleCandidate,
 ) -> Result<
     (
-        primitives::truth_candidates::TruthParamValue,
-        primitives::truth_candidates::TruthParamValue,
+        truth_domain::truth_candidates::TruthParamValue,
+        truth_domain::truth_candidates::TruthParamValue,
     ),
     DomainError,
 > {
-    use primitives::truth_candidates::TruthParamValue;
+    use truth_domain::truth_candidates::TruthParamValue;
     let mut params: TruthParamValue = serde_json::from_value(candidate.params.clone())
         .map_err(|err| validation(format!("manual truth params malformed: {err}")))?;
     let scope = serde_json::from_value(candidate.scope.clone())
@@ -329,7 +329,7 @@ pub async fn read_truth_results(
 #[cfg(test)]
 mod fee_parameter_canonicalization_tests {
     use super::*;
-    use primitives::truth_candidates::TruthParamValue;
+    use truth_domain::truth_candidates::TruthParamValue;
     use serde_json::json;
 
     fn proposal(role: &str, params: serde_json::Value) -> TruthRuleCandidate {
