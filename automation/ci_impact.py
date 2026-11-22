@@ -561,7 +561,7 @@ def analyze(
             name: "required" if name in ci_job_reasons else "not_applicable"
             for name in CI_PR_OWNERS
         },
-        # Never treat impact analysis as evidence to skip accepted test owners.
+        # The aggregate must prove the selected-versus-skipped owner statuses.
         "mandatory_full_ci_gate": True,
     }
 

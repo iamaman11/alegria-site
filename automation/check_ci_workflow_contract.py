@@ -31,6 +31,7 @@ def check() -> None:
     gate = workflow.split("  gate:\n", 1)[1]
     assert "  impact:\n" in workflow
     assert "      - impact\n" in gate
+    assert "run: python3 automation/check_docs_layout.py" in workflow
     assert "python3 automation/ci_impact.py --base" in workflow
     assert "CI_IMPACT=PASS selected=" in workflow
     for owner in OWNERS:

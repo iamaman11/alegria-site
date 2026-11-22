@@ -102,6 +102,8 @@ accepted impact plan tied to the exact PR workflow SHA. Missing jobs, missing
 plans, a wrong SHA, unexpected execution/skips or a failed selector all fail
 the aggregate. The `main` merge provenance check still requires an accepted
 exact-source PR `impact` and `CI` result and the complete owner result set.
+The mandatory selector also runs the existing documentation layout contract,
+so a docs-only PR cannot hide an invalid nested docs tree by skipping `verify`.
 Unknown/global impacts and Dockerfiles without a narrow verified build owner
 retain all nine owners. This is source-policy acceptance, not certification
 that every selected image was built, deployed or smoke-tested.

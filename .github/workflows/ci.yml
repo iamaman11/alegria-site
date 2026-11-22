@@ -31,6 +31,9 @@ jobs:
       - name: Pin Rust for workspace metadata only
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Enforce source-document layout even when every owner is not applicable
+        run: python3 automation/check_docs_layout.py
+
       - name: Compute one exact-source Cargo, suite and job impact report
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
