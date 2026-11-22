@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministic, fail-closed Rust change-impact report for the canonical workspace.
+"""Deterministic, fail-closed Rust and PR-owner impact for the canonical workspace.
 
-This report accelerates developer feedback; it NEVER replaces the full mandatory CI gate.
-Unknown external inputs and unresolvable changes expand the scope to the full
-workspace, rather than silently excluding a consumer from the analysis.
+The selected job owner set is checked by an exact-SHA mandatory CI gate;
+unmapped executable inputs conservatively retain all established owners.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "app" / "rust"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # Includes changes to generated contracts, integration fixtures, build tooling,
 # container contents and runtime configuration; they are NOT Rust crate-local.
@@ -43,6 +42,18 @@ GLOBAL_FILES = {
 # treated as a live Truth fixture or proof that Rust behavior passed.
 DOCUMENTATION_PREFIXES = ("docs/",)
 DOCUMENTATION_FILES = {"README.md", "CONTRIBUTING.md"}
+# These Markdown files are consumed as policy inputs by source acceptance
+# scripts (including opt-in deep checks); they are not merely explanatory.
+SOURCE_POLICY_DOCUMENTS = {
+    "docs/INDEX.md",
+    "docs/OPS_RUNTIME_RUNBOOK.md",
+    "docs/OPS_TEMPORAL_PRODUCTION_GATE.md",
+    "docs/OPS_TEMPORAL_BUILD_MODES.md",
+    "docs/SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md",
+    "docs/V6_Support_Process_Registry.md",
+    "docs/V6_Expert_Truth_Graph_Runtime.md",
+    "docs/V6_SeoSiteBuildWorkflow_Working_Plan.md",
+}
 
 # Non-Rust inputs with a known downstream image. Do not make every release
 # script change recompile the entire Cargo workspace.
@@ -220,6 +231,100 @@ IMAGE_OWNERS = {
     },
 }
 
+# GitHub job IDs, not display names. The PR gate checks every one of these;
+# only this planner can mark an owner not applicable to an exact source diff.
+CI_PR_OWNERS = (
+    "architecture-and-rust",
+    "rust-contract-smokes",
+    "product-truth",
+    "rust-security",
+    "cloudflare-static-build",
+    "stack-temporal-postgres18",
+    "stack-storage-graph",
+    "verify",
+    "windows-operator-smoke",
+)
+
+
+def ci_jobs_for_change(
+    paths: list[str], scope: str, suites: set[str], images: set[str],
+) -> dict[str, list[str]]:
+    """One fail-closed reasoned selection for the existing PR job owners.
+
+    Integration suites already run in the Rust owner. The two independent
+    Compose boot checks are for *deployment configuration*, not a substitute
+    for the disposable PostgreSQL/Qdrant/Neo4j adapters exercised by suites.
+    """
+    if scope == "full":
+        return {name: ["fail-closed: global or unknown impact"] for name in CI_PR_OWNERS}
+
+    changed = set(paths)
+    selected: dict[str, list[str]] = {}
+
+    def require(name: str, why: str) -> None:
+        selected.setdefault(name, []).append(why)
+
+    if scope == "scoped" or suites:
+        for name in ("architecture-and-rust", "rust-contract-smokes", "rust-security", "verify"):
+            require(name, "affected Rust workspace or integration suite")
+
+    if changed & SOURCE_POLICY_DOCUMENTS:
+        require("product-truth", "Markdown is a source-policy input, not just explanatory documentation")
+        require("verify", "source-policy documents are read by acceptance scripts")
+
+    if any(path.startswith("docs/runs/") for path in changed):
+        require("product-truth", "historical Truth evidence is consumed by Python policy checks")
+        require("verify", "historical run evidence is checked by source contracts")
+
+    truth_prefixes = (
+        "app/rust/crates/truth_domain/", "app/rust/crates/acquisition/",
+        "app/rust/services/temporal/", TRUTH_FIXTURE_PREFIX,
+    )
+    if any(path.startswith(truth_prefixes) for path in changed) or "truth_certification" in suites:
+        require("product-truth", "live Acquisition/Truth/Temporal source or fixture")
+
+    if any(path.startswith("infra/cloudflare/seo-static/") or path in WORKER_PACKAGING_FILES for path in changed):
+        require("cloudflare-static-build", "Cloudflare static or delivered Python asset")
+    if changed & WORKER_PACKAGING_FILES:
+        require("product-truth", "first-site delivery and readback scripts feed Product smoke")
+        require("verify", "delivered Python assets require source policy and lint")
+
+    if any(path.startswith(("infra/analytics_lab/", "app/analytics_lab/")) for path in changed):
+        require("verify", "analytics-lab Python is checked by source policy and Ruff")
+
+    if "temporal-worker" in images:
+        require("windows-operator-smoke", "changed Worker delivery artifact")
+
+    if any(path == "docker-compose.yml" or path.startswith("infra/temporal/") for path in changed):
+        require("stack-temporal-postgres18", "Temporal/Compose deployment configuration")
+    if any(path == "docker-compose.yml" or path.startswith("infra/postgres/") or
+           path.startswith("infra/qdrant/") or path.startswith("infra/neo4j/") for path in changed):
+        require("stack-storage-graph", "storage/graph Compose deployment configuration")
+
+    if any(path.startswith("automation/") and path.endswith(".ps1") or
+           path.startswith("automation/check_windows_") for path in changed):
+        require("windows-operator-smoke", "native Windows operator contract")
+
+    # A Dockerfile is an executable delivery input. No narrow PR job currently
+    # builds these images, so do not label it equivalent to Markdown or infer
+    # release acceptance from the image impact report.
+    if any(path.endswith("/Dockerfile") for path in changed):
+        return {name: ["fail-closed: Dockerfile delivery owner not isolated"] for name in CI_PR_OWNERS}
+
+    # New narrow allowlists must name the executable owner explicitly. This
+    # catches future additions to the non-Rust `scope=none` classification.
+    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES
+    uncovered = {path for path in uncovered
+                 if not (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md"))
+                 and not (path.startswith("docs/runs/") and path.endswith(".json"))
+                 and not path.startswith(("infra/analytics_lab/", "app/analytics_lab/"))
+                 and not path.startswith("infra/cloudflare/seo-static/")
+                 and path not in WORKER_PACKAGING_FILES}
+    if scope == "none" and uncovered:
+        return {name: ["fail-closed: unowned non-Rust input"] for name in CI_PR_OWNERS}
+
+    return {name: selected[name] for name in CI_PR_OWNERS if name in selected}
+
 
 def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[str]]]:
     """Validate and materialize the planner's selected real integration tests."""
@@ -354,7 +459,9 @@ def analyze(
 
     for path in sorted(set(paths)):
         if path in DOCUMENTATION_FILES or (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md")):
-            classified_inputs[path] = "documentation: no executable Rust or image input"
+            classified_inputs[path] = ("source-policy Markdown: no Rust compile or image input"
+                                       if path in SOURCE_POLICY_DOCUMENTS
+                                       else "documentation: no executable Rust or image input")
             continue
         if path.startswith("docs/runs/") and path.endswith(".json"):
             classified_inputs[path] = "historical run evidence: not a live test input or a Rust regression"
@@ -423,6 +530,8 @@ def analyze(
         if matched:
             image_reasons[name] = matched
 
+    ci_job_reasons = ci_jobs_for_change(paths, scope, set(suite_reasons), set(image_reasons))
+
     return {
         "schema_version": SCHEMA_VERSION,
         "base": base,
@@ -446,6 +555,12 @@ def analyze(
             for name in sorted(IMAGE_OWNERS)
         },
         "image_reasons": image_reasons,
+        "selected_ci_jobs": sorted(ci_job_reasons),
+        "ci_job_reasons": ci_job_reasons,
+        "ci_job_status": {
+            name: "required" if name in ci_job_reasons else "not_applicable"
+            for name in CI_PR_OWNERS
+        },
         # Never treat impact analysis as evidence to skip accepted test owners.
         "mandatory_full_ci_gate": True,
     }

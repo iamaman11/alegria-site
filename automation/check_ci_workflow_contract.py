@@ -26,12 +26,18 @@ def check() -> None:
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
     assert "  gate:\n    name: CI\n    if: always()\n" in workflow
-    assert "toJSON(needs)" in workflow and 'result != "success"' in workflow
+    assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
+    assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
+    assert "  impact:\n" in workflow
+    assert "      - impact\n" in gate
+    assert "python3 automation/ci_impact.py --base" in workflow
+    assert "CI_IMPACT=PASS selected=" in workflow
     for owner in OWNERS:
         assert f"  {owner}:\n" in workflow, owner
         assert f"      - {owner}\n" in gate, owner
-    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", workflow)) == len(OWNERS)
+        assert f"contains(fromJSON(needs.impact.outputs.selected_ci_jobs), '{owner}')" in workflow, owner
+    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request' && needs\.impact\.result == 'success' && contains\(", workflow)) == len(OWNERS)
 
     # Main verifies exact source + the accepted PR before release/deployment.
     assert "commits/{merge_sha}/pulls" in workflow

@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ci_impact import SUITE_OWNERS, analyze, changed_paths, suite_commands_for_report, workspace_graph
+from ci_impact import CI_PR_OWNERS, SUITE_OWNERS, analyze, changed_paths, suite_commands_for_report, workspace_graph
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -152,13 +152,34 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["scope"], "none")
         self.assertEqual(outcome["selected_suites"], [])
         self.assertEqual(outcome["selected_images"], [])
+        self.assertEqual(outcome["selected_ci_jobs"], [])
+        self.assertEqual(set(outcome["ci_job_status"].values()), {"not_applicable"})
         self.assertIn("documentation", outcome["classified_inputs"]["docs/ARCHITECTURE_BOUNDARIES.md"])
 
     def test_historical_truth_report_is_not_a_live_rust_fixture(self) -> None:
         outcome = self.impact("docs/runs/r3_contradiction_handling.json")
         self.assertEqual(outcome["scope"], "none")
         self.assertEqual(outcome["selected_suites"], [])
+        self.assertEqual(outcome["selected_ci_jobs"], ["product-truth", "verify"])
         self.assertIn("historical", outcome["classified_inputs"]["docs/runs/r3_contradiction_handling.json"])
+
+    def test_policy_markdown_still_runs_source_acceptance_without_rust_or_docker(self) -> None:
+        outcome = self.impact("docs/OPS_RUNTIME_RUNBOOK.md")
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_ci_jobs"], ["product-truth", "verify"])
+        self.assertEqual(outcome["selected_images"], [])
+        self.assertIn("source-policy", outcome["classified_inputs"]["docs/OPS_RUNTIME_RUNBOOK.md"])
+
+    def test_analytics_lab_python_uses_python_owner_not_rust(self) -> None:
+        outcome = self.impact("infra/analytics_lab/src/runner.py")
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_ci_jobs"], ["verify"])
+
+    def test_container_delivery_input_without_narrow_owner_fails_closed(self) -> None:
+        for path in ("app/rust/services/temporal/Dockerfile", "infra/analytics_lab/Dockerfile"):
+            with self.subTest(path=path):
+                outcome = self.impact(path)
+                self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
 
     def test_live_truth_fixture_selects_its_real_e2e_without_other_images(self) -> None:
         path = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/happy_path_publish_allowed_source.html"
@@ -167,6 +188,8 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["direct_crates"], ["integration_harness"])
         self.assertEqual(outcome["selected_suites"], ["truth_certification"])
         self.assertEqual(outcome["selected_images"], [])
+        self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
+        self.assertIn("product-truth", outcome["selected_ci_jobs"])
         suite_name, command = suite_commands_for_report(outcome)[0]
         self.assertEqual(suite_name, "truth_certification")
         self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
@@ -177,6 +200,10 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["scope"], "none")
         self.assertEqual(outcome["selected_suites"], [])
         self.assertEqual(outcome["selected_images"], ["temporal-worker"])
+        self.assertNotIn("architecture-and-rust", outcome["selected_ci_jobs"])
+        self.assertIn("cloudflare-static-build", outcome["selected_ci_jobs"])
+        self.assertIn("product-truth", outcome["selected_ci_jobs"])
+        self.assertIn("verify", outcome["selected_ci_jobs"])
         self.assertIn(path, outcome["image_reasons"]["temporal-worker"][0])
 
     def test_unrelated_service_edit_selects_no_temporal_image(self) -> None:
@@ -199,6 +226,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["scope"], "full")
         self.assertEqual(len(outcome["selected_suites"]), 3)
         self.assertEqual(len(outcome["selected_images"]), 4)
+        self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
         self.assertTrue(outcome["full_scope_reasons"])
 
     def test_unknown_or_missing_suite_in_report_is_rejected(self) -> None:

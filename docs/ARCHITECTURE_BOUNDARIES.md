@@ -67,7 +67,9 @@ materialization; a demoted point's deletion remains an explicit Qdrant effect.
 `automation/ci_impact.py` is the common local/CI planner. It derives Cargo
 reverse dependencies from `cargo metadata --locked --no-deps` and reports
 `base_sha`, `head_sha`, `scope` (`none`, `scoped`, `full`), affected crates,
-selected real E2E suites, selected images, and an auditable reason for each.
+selected real E2E suites, selected images, selected PR job owners and an
+auditable reason for each. Its `ci_job_status` records every owner as
+`required` or `not_applicable` for the exact evaluated source SHA.
 The Rust-backed suite runner consumes the named suite commands from that same
 module; it does not maintain an independent list of A13/A14/A17 test filters.
 Focused Temporal worker restart, Neo4j query and Qdrant materialization suites
@@ -80,7 +82,10 @@ Cargo target, then passes their absolute paths through the harness's existing
 resumes real processes; it no longer launches a second Cargo compilation tree.
 
 Non-executable Markdown and historical `docs/runs` reports do not select a Rust
-compile or image. A live `integration_harness/fixtures/visa_truth_certification`
+compile or image. Policy Markdown directly read by acceptance scripts still
+selects Product/Truth and source verification; explanatory Markdown needs no
+owner beyond the mandatory impact selector and aggregate CI gate. A live
+`integration_harness/fixtures/visa_truth_certification`
 input selects the actual Temporal/Truth certification E2E, not an archived PASS.
 The Cloudflare static tree and the four Python scripts COPY'd into the Temporal
 image select its packaging even if no Rust crate changed. The `worker-image`
@@ -89,8 +94,19 @@ records `not_applicable` for unrelated changes instead of building that image.
 Local feedback shows the same selections, but defers external Docker/provider
 E2E and all release packaging to canonical CI; it cannot be accepted as CI PASS.
 
-**Remaining:** the PR CI jobs for unrelated documentation changes still run
-their existing infrastructure checks; selective job scheduling, fine-grained
+The PR workflow now runs the source-bound `impact` job first, then schedules
+only the named owners. Every skipped owner is visible as `skipped`, never as a
+test PASS. The `CI` aggregate requires all nine known owner results: `success`
+for selected jobs and `skipped` for explicitly non-applicable jobs, plus an
+accepted impact plan tied to the exact PR workflow SHA. Missing jobs, missing
+plans, a wrong SHA, unexpected execution/skips or a failed selector all fail
+the aggregate. The `main` merge provenance check still requires an accepted
+exact-source PR `impact` and `CI` result and the complete owner result set.
+Unknown/global impacts and Dockerfiles without a narrow verified build owner
+retain all nine owners. This is source-policy acceptance, not certification
+that every selected image was built, deployed or smoke-tested.
+
+**Remaining:** live PR evidence for a documentation-only skip, fine-grained
 known `Cargo.lock`/schema consumers, broader Temporal/graph coverage and
 complete signed/no-build release provenance still require separate evidence.
 Keep Issue #43 open and PR #44 Draft until those scenarios are proven.

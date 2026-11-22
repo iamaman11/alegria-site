@@ -13,6 +13,8 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
+from ci_impact import CI_PR_OWNERS
+
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/ci.yml"
@@ -20,6 +22,7 @@ MERGE = "m" * 40
 SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
+    "impact",
     "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
@@ -43,10 +46,50 @@ def main_gate_source() -> str:
     return source
 
 
+def pr_gate_source() -> str:
+    """Use the actual PR aggregation script, not a hand-written approximation."""
+    lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+    marker = "      - name: Require every mandatory job to succeed"
+    if lines.count(marker) != 1:
+        raise ValueError("exact-source PR gate missing or duplicated")
+    begin = lines.index("          python3 - <<'PY'", lines.index(marker)) + 1
+    end = lines.index("          PY", begin)
+    source = textwrap.dedent("\n".join(lines[begin:end]))
+    compile(source, str(WORKFLOW), "exec")
+    return source
+
+
+def execute_pr_gate(
+    selected: list[str], *, omitted: str | None = None,
+    wrong_status: str | None = None, wrong_sha: bool = False,
+) -> tuple[bool, str]:
+    results = {
+        name: {"result": "success" if name in selected else "skipped"}
+        for name in CI_PR_OWNERS if name != omitted
+    }
+    results["impact"] = {"result": "success"}
+    if wrong_status:
+        results[wrong_status]["result"] = "skipped" if wrong_status in selected else "success"
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output), patch.dict(os.environ, {
+        "NEEDS_JSON": json.dumps(results),
+        "SELECTED_CI_JOBS": json.dumps(selected),
+        "CI_PLAN_SHA": "wrong" if wrong_sha else SOURCE,
+        "CI_HEAD_SHA": SOURCE,
+    }):
+        try:
+            exec(pr_gate_source(), {"__name__": "__main__"})
+        except SystemExit as error:
+            return False, str(error) + output.getvalue()
+    return True, output.getvalue()
+
+
 def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
+                 skipped_job: str | None = None,
                  accepted_run: bool = True) -> tuple[bool, str, set[str]]:
     calls: set[str] = set()
-    jobs = [{"name": name, "conclusion": "success"} for name in JOBS if name != omit_job]
+    jobs = [{"name": name, "conclusion": "skipped" if name == skipped_job else "success"}
+            for name in JOBS if name != omit_job]
     responses = {
         f"commits/{MERGE}": {"parents": [{"sha": BASE}, {"sha": SOURCE}]},
         f"commits/{MERGE}/pulls": [{"merged_at": "2026-11-20T21:00:00Z",
@@ -110,6 +153,39 @@ class MainMergeProvenanceTests(unittest.TestCase):
         ok, message, _ = execute_gate(accepted_run=False)
         self.assertFalse(ok)
         self.assertIn("no successful full CI", message)
+
+    def test_optional_skipped_job_requires_previous_green_pr_aggregate(self) -> None:
+        ok, message, _ = execute_gate(skipped_job="stack-storage-graph")
+        self.assertTrue(ok, message)
+        ok, message, _ = execute_gate(skipped_job="impact")
+        self.assertFalse(ok)
+        self.assertIn("impact selector or aggregate gate", message)
+
+
+class PrSelectedOwnersGateTests(unittest.TestCase):
+    def test_docs_only_skips_every_unneeded_owner_without_docker(self) -> None:
+        ok, message = execute_pr_gate([])
+        self.assertTrue(ok, message)
+        self.assertIn("CI_GATE=PASS", message)
+
+    def test_full_unknown_impact_requires_all_real_owners(self) -> None:
+        ok, message = execute_pr_gate(list(CI_PR_OWNERS))
+        self.assertTrue(ok, message)
+
+    def test_missing_owner_or_wrong_sha_fails_closed(self) -> None:
+        for params in ({"omitted": "stack-storage-graph"}, {"wrong_sha": True}):
+            with self.subTest(params=params):
+                ok, message = execute_pr_gate([], **params)
+                self.assertFalse(ok)
+                self.assertIn("CI_GATE=FAIL", message)
+
+    def test_selected_skipped_or_unselected_executed_fails_closed(self) -> None:
+        for selected, wrong in [(["architecture-and-rust"], "architecture-and-rust"),
+                                ([], "cloudflare-static-build")]:
+            with self.subTest(wrong=wrong):
+                ok, message = execute_pr_gate(selected, wrong_status=wrong)
+                self.assertFalse(ok)
+                self.assertIn("CI_GATE=FAIL", message)
 
 
 if __name__ == "__main__":
