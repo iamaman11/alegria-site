@@ -5814,6 +5814,7 @@ dependencies = [
 name = "truth_domain"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "serde",
 ]
 
