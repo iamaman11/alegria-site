@@ -14,9 +14,33 @@ from unittest.mock import patch
 
 import smoke_manual_llm_queue
 import smoke_run_report_completeness
+import report_sccache_write_errors
 
 
 class SmokeDiagnosticsContract(unittest.TestCase):
+    def test_sccache_backend_errors_are_aggregated_without_raw_log_disclosure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "sccache.log"
+            log.write_text(
+                "DEBUG Error executing cache write: HTTP status: 429 remote=url?token=private\n"
+                "DEBUG Error executing cache write: status 403 remote=private\n"
+                "DEBUG Error executing cache write: capacity exceeded\n"
+                "DEBUG ordinary Rust compile: cache hit\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(report_sccache_write_errors.summarize(log), {
+                "http_429": 1,
+                "http_403": 1,
+                "capacity": 1,
+            })
+            with patch.object(report_sccache_write_errors.sys, "argv", ["check", str(log)]):
+                with contextlib.redirect_stdout(io.StringIO()) as capture:
+                    self.assertEqual(report_sccache_write_errors.main(), 0)
+            report = capture.getvalue()
+            self.assertIn("SCCACHE_WRITE_DIAGNOSTIC=observed total=3", report)
+            self.assertNotIn("token", report)
+            self.assertNotIn("remote", report)
+
     def test_all_three_manual_inbox_tests_still_run(self) -> None:
         calls: list[list[str]] = []
 

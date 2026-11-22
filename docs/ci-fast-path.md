@@ -23,6 +23,7 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44964851388](https://github.com/iamaman11/alegria-site/actions/runs/44964851388) | **4m 32s** | Deep jobs start after 10s Rust contracts; 14/14 PASS |
 | [#44965308197](https://github.com/iamaman11/alegria-site/actions/runs/44965308197) | **5m 19s** | Identical Rust code; compiler-cache misses regress; 14/14 PASS |
 | [#44967454786](https://github.com/iamaman11/alegria-site/actions/runs/44967454786) | **4m 48s** | Cargo-native compile timings recorded, full integration 4m33s; 14/14 PASS |
+| [#44968309924](https://github.com/iamaman11/alegria-site/actions/runs/44968309924) | **5m 04s** | Parallel real test services speed up readiness; Rust cache writes still fail; 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
@@ -102,6 +103,12 @@ PRs report `NOT_AFFECTED_BY_SOURCE_CHANGE` and skip unnecessary Rust builds.
   those failures is still unconfirmed. GitHub limits uploads to 200/min; the
   upstream [retry fix](https://github.com/mozilla/sccache/pull/2911) addresses
   transient rate limiting.
+  In the next 5m04s run, `rust-regressions` succeeded in only **1 of 220**
+  writes; integration had 102/102 write errors. The real Temporal/Neo4j/Qdrant/
+  PostgreSQL startup improved 22.4s→18.0s, and manual Temporal restart test
+  56.1s→52.8s. To distinguish 429 rate limits from quota or permissions,
+  `integration-e2e` temporarily records sccache debug errors on its own runner,
+  then prints **only aggregate error categories**; raw logs are never uploaded.
   That fix was merged after the latest stable sccache v0.18.0 release; do not assume a
   version-only upgrade repairs this. Cargo `--timings` in the deep evidence
   independently measured `aws-lc-sys` C build scripts at **45s (Truth)** and

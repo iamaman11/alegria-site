@@ -707,6 +707,9 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # Short-lived runner-local diagnostics; never upload raw compiler logs.
+      SCCACHE_ERROR_LOG: /tmp/alegria-sccache-integration.log
+      SCCACHE_LOG: "sccache::server=debug"
       CI_WORKSPACE_TESTED: "true"
       CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"
       WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
@@ -754,6 +757,10 @@ jobs:
       - name: Rust compiler cache statistics
         if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
         run: sccache --show-stats
+
+      - name: Aggregate compiler cache write failures without publishing server logs
+        if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
+        run: python3 automation/report_sccache_write_errors.py "$SCCACHE_ERROR_LOG"
 
       - name: Preserve real integration evidence
         if: always()
