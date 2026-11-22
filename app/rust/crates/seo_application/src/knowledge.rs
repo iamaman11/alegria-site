@@ -8,11 +8,114 @@ use runtime_models::{RuleParams, RuleRoleType};
 use seo_domain::writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole};
 use seo_ports::{
     knowledge::{
-        CanonicalVectorCandidate, CanonicalVectorLookup, VerifiedRule, VerifiedRulesQuery,
+        CanonicalVectorCandidate, CanonicalVectorLookup, SemanticNeighborCollection,
+        SemanticNeighborLookup, SemanticNeighborQuery, VerifiedRule, VerifiedRulesQuery,
     },
-    CanonicalVectorSearchPort, VerifiedRulesReader,
+    CanonicalVectorSearchPort, SemanticNeighborSearchPort, VerifiedRulesReader,
 };
 use seo_steps::canonical_mapping_step::{MappingResult, MatchingStage};
+
+/// Read-only Knowledge retrieval for Truth completeness/resolution/conflict
+/// diagnostics. Provider errors, empty observations and fallback decisions
+/// remain distinguishable; vector hits never change verified Truth status.
+pub async fn retrieve_semantic_neighbors<S: SemanticNeighborSearchPort + ?Sized>(
+    search: &S,
+    request: &SemanticNeighborQuery,
+) -> Result<SemanticNeighborLookup, DomainError> {
+    if !search.provider_configured() {
+        if request.retrieval_required {
+            return Err(DomainError::InfraUnavailable {
+                message: "retrieval diagnostics require VOYAGE_API_KEY under hard-required retrieval contract"
+                    .to_string(),
+            });
+        }
+        return Ok(SemanticNeighborLookup {
+            collection_used: None,
+            neighbors: Vec::new(),
+            reason_codes: vec!["provider_unavailable".into()],
+        });
+    }
+    let primary_name = request.primary.name();
+    let fallback_allowed = !(request.contextual_required
+        && request.primary == SemanticNeighborCollection::RawContextual);
+    let mut reason_codes = Vec::new();
+    let primary = search
+        .search_semantic_neighbors(&request.text, request.primary, request.limit)
+        .await;
+    let mut collection_used = Some(primary_name.to_string());
+    let mut neighbors = match primary {
+        Ok(found) if !found.is_empty() => found,
+        Ok(_) => {
+            reason_codes.push(format!("{primary_name}:empty"));
+            if fallback_allowed {
+                if let Some(fallback) = request.fallback {
+                    collection_used = Some(fallback.name().to_string());
+                    search
+                        .search_semantic_neighbors(&request.text, fallback, request.limit)
+                        .await
+                        .map_err(|err| DomainError::InfraUnavailable {
+                            message: format!(
+                                "semantic retrieval failed for `{}` after `{primary_name}` empty: {err}",
+                                fallback.name()
+                            ),
+                        })?
+                } else {
+                    Vec::new()
+                }
+            } else if request.retrieval_required {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!(
+                        "contextual retrieval is required and `{primary_name}` returned no neighbors"
+                    ),
+                });
+            } else {
+                reason_codes.push("contextual_primary_required_no_fallback".into());
+                Vec::new()
+            }
+        }
+        Err(err) => {
+            if request.retrieval_required {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!("semantic retrieval failed for `{primary_name}`: {err}"),
+                });
+            }
+            reason_codes.push(format!("{primary_name}:search_failed"));
+            if fallback_allowed {
+                if let Some(fallback) = request.fallback {
+                    collection_used = Some(fallback.name().to_string());
+                    search
+                        .search_semantic_neighbors(&request.text, fallback, request.limit)
+                        .await
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                reason_codes.push("contextual_primary_required_no_fallback".into());
+                Vec::new()
+            }
+        }
+    };
+    if neighbors.is_empty() {
+        reason_codes.push("semantic_neighbors_empty".into());
+    } else {
+        neighbors = search
+            .rerank_semantic_neighbors(&request.text, neighbors, request.limit)
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!(
+                    "semantic rerank failed for `{}`: {err}",
+                    collection_used.as_deref().unwrap_or_default()
+                ),
+            })?;
+        reason_codes.push("semantic_neighbors_reranked".into());
+    }
+    Ok(SemanticNeighborLookup {
+        collection_used,
+        neighbors,
+        reason_codes,
+    })
+}
 
 /// Resolve symbolic terms against non-authoritative vector suggestions. Only
 /// this mapping result changes; verified rules remain PostgreSQL-owned.
@@ -240,7 +343,189 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use primitives::errors::ErrorClass;
-    use seo_ports::knowledge::VerifiedRulesView;
+    use seo_ports::knowledge::{
+        SemanticNeighborCandidate, SemanticNeighborCollection, SemanticNeighborQuery,
+        VerifiedRulesView,
+    };
+
+    #[derive(Clone, Copy)]
+    enum SearchReply {
+        Empty,
+        Hit,
+        Failure,
+    }
+
+    struct FakeNeighborSearch {
+        configured: bool,
+        primary: SearchReply,
+        fallback: SearchReply,
+        rerank_fails: bool,
+    }
+
+    #[async_trait]
+    impl SemanticNeighborSearchPort for FakeNeighborSearch {
+        fn provider_configured(&self) -> bool {
+            self.configured
+        }
+
+        async fn search_semantic_neighbors(
+            &self,
+            _query: &str,
+            collection: SemanticNeighborCollection,
+            _limit: usize,
+        ) -> Result<Vec<SemanticNeighborCandidate>, DomainError> {
+            let response = if collection == SemanticNeighborCollection::RawStandard {
+                self.fallback
+            } else {
+                self.primary
+            };
+            match response {
+                SearchReply::Empty => Ok(Vec::new()),
+                SearchReply::Hit => Ok(vec![SemanticNeighborCandidate {
+                    entity_key: "source:42".into(),
+                    score: 0.91,
+                    retrieval_text: "diagnostic only".into(),
+                }]),
+                SearchReply::Failure => Err(DomainError::InfraUnavailable {
+                    message: "simulated Qdrant outage".into(),
+                }),
+            }
+        }
+
+        async fn rerank_semantic_neighbors(
+            &self,
+            _query: &str,
+            mut candidates: Vec<SemanticNeighborCandidate>,
+            _limit: usize,
+        ) -> Result<Vec<SemanticNeighborCandidate>, DomainError> {
+            if self.rerank_fails {
+                return Err(DomainError::InfraUnavailable {
+                    message: "simulated Voyage rerank outage".into(),
+                });
+            }
+            for candidate in &mut candidates {
+                candidate.score = 0.96;
+            }
+            Ok(candidates)
+        }
+    }
+
+    fn neighbor_query(required: bool, contextual: bool) -> SemanticNeighborQuery {
+        SemanticNeighborQuery {
+            text: "Official evidence".into(),
+            primary: SemanticNeighborCollection::RawContextual,
+            fallback: Some(SemanticNeighborCollection::RawStandard),
+            limit: 4,
+            retrieval_required: required,
+            contextual_required: contextual,
+        }
+    }
+
+    fn neighbor_fake(primary: SearchReply, fallback: SearchReply) -> FakeNeighborSearch {
+        FakeNeighborSearch {
+            configured: true,
+            primary,
+            fallback,
+            rerank_fails: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn neighbor_provider_absence_preserves_typed_required_gate() {
+        let fake = FakeNeighborSearch {
+            configured: false,
+            ..neighbor_fake(SearchReply::Hit, SearchReply::Hit)
+        };
+        let optional = retrieve_semantic_neighbors(&fake, &neighbor_query(false, false))
+            .await
+            .unwrap();
+        assert!(optional.collection_used.is_none());
+        assert!(optional.neighbors.is_empty());
+        assert_eq!(optional.reason_codes, vec!["provider_unavailable"]);
+        let required = retrieve_semantic_neighbors(&fake, &neighbor_query(true, false))
+            .await
+            .unwrap_err();
+        assert_eq!(required.class(), ErrorClass::InfraUnavailable);
+    }
+
+    #[tokio::test]
+    async fn neighbor_empty_primary_uses_typed_fallback_and_rerank() {
+        let lookup = retrieve_semantic_neighbors(
+            &neighbor_fake(SearchReply::Empty, SearchReply::Hit),
+            &neighbor_query(true, false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(lookup.collection_used.as_deref(), Some("raw_chunks_4"));
+        assert_eq!(lookup.neighbors[0].entity_key, "source:42");
+        assert_eq!(lookup.neighbors[0].score, 0.96);
+        assert_eq!(
+            lookup.reason_codes,
+            vec!["raw_chunks_ctx:empty", "semantic_neighbors_reranked"]
+        );
+    }
+
+    #[tokio::test]
+    async fn contextual_required_never_falls_back_on_empty_or_failure() {
+        let empty = neighbor_fake(SearchReply::Empty, SearchReply::Hit);
+        let err = retrieve_semantic_neighbors(&empty, &neighbor_query(true, true))
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(err.to_string().contains("returned no neighbors"));
+
+        let failed = neighbor_fake(SearchReply::Failure, SearchReply::Hit);
+        let optional = retrieve_semantic_neighbors(&failed, &neighbor_query(false, true))
+            .await
+            .unwrap();
+        assert!(optional.neighbors.is_empty());
+        assert_eq!(optional.collection_used.as_deref(), Some("raw_chunks_ctx"));
+        assert!(optional
+            .reason_codes
+            .contains(&"contextual_primary_required_no_fallback".into()));
+    }
+
+    #[tokio::test]
+    async fn search_failure_can_be_best_effort_but_rerank_failure_cannot() {
+        let failed = neighbor_fake(SearchReply::Failure, SearchReply::Hit);
+        let lookup = retrieve_semantic_neighbors(&failed, &neighbor_query(false, false))
+            .await
+            .unwrap();
+        assert_eq!(lookup.collection_used.as_deref(), Some("raw_chunks_4"));
+        assert!(lookup
+            .reason_codes
+            .contains(&"raw_chunks_ctx:search_failed".into()));
+        assert_eq!(lookup.neighbors.len(), 1);
+
+        let mut rerank_failed = neighbor_fake(SearchReply::Hit, SearchReply::Empty);
+        rerank_failed.rerank_fails = true;
+        let err = retrieve_semantic_neighbors(&rerank_failed, &neighbor_query(false, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(err.to_string().contains("semantic rerank failed"));
+    }
+
+    #[tokio::test]
+    async fn empty_primary_requires_successful_fallback_but_both_failed_is_diagnostic() {
+        let failed_fallback = neighbor_fake(SearchReply::Empty, SearchReply::Failure);
+        let err = retrieve_semantic_neighbors(&failed_fallback, &neighbor_query(false, false))
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(err.to_string().contains("after `raw_chunks_ctx` empty"));
+
+        let both_failed = neighbor_fake(SearchReply::Failure, SearchReply::Failure);
+        let outcome = retrieve_semantic_neighbors(&both_failed, &neighbor_query(false, false))
+            .await
+            .unwrap();
+        assert!(outcome.neighbors.is_empty());
+        assert_eq!(outcome.collection_used.as_deref(), Some("raw_chunks_4"));
+        assert_eq!(
+            outcome.reason_codes,
+            vec!["raw_chunks_ctx:search_failed", "semantic_neighbors_empty"]
+        );
+    }
 
     struct FakeCanonicalSearch {
         lookup: CanonicalVectorLookup,

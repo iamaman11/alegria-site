@@ -8,7 +8,6 @@ use infrastructure::adapters::neo4rs_adapter;
 use infrastructure::adapters::projection_materialize_adapter;
 use infrastructure::adapters::qdrant_client_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
-use infrastructure::adapters::semantic_search_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
 use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
@@ -41,6 +40,9 @@ use truth_domain::semantic_truth_write::{
     validate_verified_truth_write_candidate, SemanticTruthWriteOutcome,
 };
 use primitives::errors::DomainError;
+use seo_ports::knowledge::{
+    SemanticNeighborCollection, SemanticNeighborLookup, SemanticNeighborQuery,
+};
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use truth_domain::truth_candidates::{

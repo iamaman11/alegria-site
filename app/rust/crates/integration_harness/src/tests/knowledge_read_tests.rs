@@ -270,4 +270,48 @@ async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate
     assert_eq!(resolved[0].mapping_type, "auto_map");
     assert!(!resolved[0].needs_hitl);
     assert_eq!(resolved[0].match_method, "qdrant_retrieval");
+
+    // The same real Qdrant and Voyage endpoints also serve the typed
+    // read-only neighborhood contract used by Truth diagnostics.
+    use infrastructure::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter;
+    use seo_application::knowledge::retrieve_semantic_neighbors;
+    use seo_ports::knowledge::{SemanticNeighborCollection, SemanticNeighborQuery};
+
+    let neighborhood = retrieve_semantic_neighbors(
+        &SemanticNeighborSearchAdapter,
+        &SemanticNeighborQuery {
+            text: mapping_input.mentions[0].raw_text.clone(),
+            primary: SemanticNeighborCollection::CanonicalConcepts,
+            fallback: None,
+            limit: 5,
+            retrieval_required: true,
+            contextual_required: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(neighborhood.collection_used.as_deref(), Some("kb_canonical_4"));
+    assert_eq!(neighborhood.neighbors.len(), 2);
+    assert_eq!(neighborhood.neighbors[0].score, 1.0);
+    assert_eq!(neighborhood.reason_codes, vec!["semantic_neighbors_reranked"]);
+
+    let empty_fallback = retrieve_semantic_neighbors(
+        &SemanticNeighborSearchAdapter,
+        &SemanticNeighborQuery {
+            text: mapping_input.mentions[0].raw_text.clone(),
+            primary: SemanticNeighborCollection::RawContextual,
+            fallback: Some(SemanticNeighborCollection::RawStandard),
+            limit: 4,
+            retrieval_required: true,
+            contextual_required: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(empty_fallback.collection_used.as_deref(), Some("raw_chunks_4"));
+    assert!(empty_fallback.neighbors.is_empty());
+    assert_eq!(
+        empty_fallback.reason_codes,
+        vec!["raw_chunks_ctx:empty", "semantic_neighbors_empty"]
+    );
 }

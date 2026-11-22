@@ -235,19 +235,18 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                     .collect::<Vec<_>>()
                     .join(" ")
             );
-            let (_, neighbors, reason_codes) = retrieve_semantic_neighbors(
+            let lookup = retrieve_semantic_neighbors(
                 &contradiction_query,
-                "verified_rules_4",
-                semantic_search_adapter::VoyageSearchSurface::Standard,
+                SemanticNeighborCollection::VerifiedRules,
                 None,
                 4,
             )
             .await?;
-            semantic_neighbor_refs = neighbors
+            semantic_neighbor_refs = lookup.neighbors
                 .into_iter()
                 .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
                 .collect();
-            semantic_neighbor_reason_codes.extend(reason_codes);
+            semantic_neighbor_reason_codes.extend(lookup.reason_codes);
             if output.needs_hitl && !semantic_neighbor_refs.is_empty() {
                 semantic_neighbor_reason_codes
                     .push("semantic_neighbor_conflict_review_required".to_string());

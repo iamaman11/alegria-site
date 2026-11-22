@@ -18,7 +18,10 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
     SourceContextChunkState,
 };
-use knowledge::{CanonicalVectorLookup, VerifiedRulesQuery, VerifiedRulesView};
+use knowledge::{
+    CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,
+    VerifiedRulesQuery, VerifiedRulesView,
+};
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
@@ -297,6 +300,28 @@ pub trait CanonicalVectorSearchPort: Send + Sync {
         &self,
         raw_text: &str,
     ) -> Result<CanonicalVectorLookup, DomainError>;
+}
+
+/// Replaceable Qdrant/Voyage effects for Truth's read-only retrieval diagnostics.
+/// Keeping search and rerank separate allows the use case to distinguish a
+/// best-effort search failure from a failed evidence-bearing rerank.
+#[async_trait]
+pub trait SemanticNeighborSearchPort: Send + Sync {
+    fn provider_configured(&self) -> bool;
+
+    async fn search_semantic_neighbors(
+        &self,
+        query: &str,
+        collection: SemanticNeighborCollection,
+        limit: usize,
+    ) -> Result<Vec<SemanticNeighborCandidate>, DomainError>;
+
+    async fn rerank_semantic_neighbors(
+        &self,
+        query: &str,
+        candidates: Vec<SemanticNeighborCandidate>,
+        limit: usize,
+    ) -> Result<Vec<SemanticNeighborCandidate>, DomainError>;
 }
 
 #[async_trait]

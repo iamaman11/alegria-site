@@ -20,6 +20,52 @@ pub enum CanonicalVectorLookup {
     Candidates(Vec<CanonicalVectorCandidate>),
 }
 
+/// The only retrieval neighborhoods used by Truth diagnostics. These are
+/// search projections, never verified source assertions or write authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SemanticNeighborCollection {
+    RawContextual,
+    RawStandard,
+    VerifiedRules,
+    CanonicalConcepts,
+}
+
+impl SemanticNeighborCollection {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::RawContextual => "raw_chunks_ctx",
+            Self::RawStandard => "raw_chunks_4",
+            Self::VerifiedRules => "verified_rules_4",
+            Self::CanonicalConcepts => "kb_canonical_4",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticNeighborCandidate {
+    pub entity_key: String,
+    pub score: f32,
+    /// Only for Voyage rerank; not permission to use the text as verified Truth.
+    pub retrieval_text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticNeighborQuery {
+    pub text: String,
+    pub primary: SemanticNeighborCollection,
+    pub fallback: Option<SemanticNeighborCollection>,
+    pub limit: usize,
+    pub retrieval_required: bool,
+    pub contextual_required: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SemanticNeighborLookup {
+    pub collection_used: Option<String>,
+    pub neighbors: Vec<SemanticNeighborCandidate>,
+    pub reason_codes: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedRulesQuery {
     pub run_id: String,

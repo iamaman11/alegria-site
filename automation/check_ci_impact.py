@@ -73,6 +73,13 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(result["outbox_a14_required"])
         self.assertFalse(result["publishing_a17_required"])
 
+    def test_real_neighbor_adapter_change_selects_existing_qdrant_a13(self) -> None:
+        result = self.impact("app/rust/crates/infrastructure/src/adapters/semantic_neighbor_search_adapter.rs")
+        self.assertEqual(result["analysis"], "scoped")
+        self.assertTrue(result["knowledge_a13_required"])
+        self.assertFalse(result["publishing_a17_required"])
+        self.assertFalse(result["outbox_a14_required"])
+
     def test_unknown_global_change_fails_closed_to_a17(self) -> None:
         result = self.impact("app/db/schema.sql")
         self.assertEqual(result["analysis"], "full")

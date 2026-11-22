@@ -15,6 +15,7 @@ pub mod qdrant_client_adapter;
 pub mod raw_crawl_adapter;
 pub mod reqwest_adapter;
 pub mod runtime_storage;
+pub mod semantic_neighbor_search_adapter;
 pub mod semantic_search_adapter;
 pub mod seo_ports_sqlx_adapter;
 pub mod seo_workflow_control_adapter;

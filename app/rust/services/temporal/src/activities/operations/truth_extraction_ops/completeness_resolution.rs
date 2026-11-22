@@ -49,23 +49,19 @@ pub(crate) async fn completeness_judge_sweep_impl(
         let mut retrieval_evidence_refs = Vec::new();
         let mut semantic_diagnostic_reason_codes = Vec::new();
         if !section.blocked_by_gate {
-            let (collection_used, neighbors, reason_codes) = retrieve_semantic_neighbors(
+            let lookup = retrieve_semantic_neighbors(
                 &raw.content_md,
-                "raw_chunks_ctx",
-                semantic_search_adapter::VoyageSearchSurface::Contextualized,
-                Some((
-                    "raw_chunks_4",
-                    semantic_search_adapter::VoyageSearchSurface::Standard,
-                )),
+                SemanticNeighborCollection::RawContextual,
+                Some(SemanticNeighborCollection::RawStandard),
                 4,
             )
             .await?;
-            retrieval_collection_used = collection_used;
-            retrieval_evidence_refs = neighbors
+            retrieval_collection_used = lookup.collection_used;
+            retrieval_evidence_refs = lookup.neighbors
                 .into_iter()
                 .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
                 .collect();
-            semantic_diagnostic_reason_codes.extend(reason_codes);
+            semantic_diagnostic_reason_codes.extend(lookup.reason_codes);
             if retrieval_evidence_refs.is_empty() {
                 semantic_diagnostic_reason_codes.push("semantic_neighbor_gap_detected".to_string());
             }
@@ -158,36 +154,34 @@ pub(crate) async fn resolution_loop_impl(
                 blockers.join(" ")
             };
             if !retrieval_query.trim().is_empty() {
-                let (_, verified_neighbors, verified_reason_codes) = retrieve_semantic_neighbors(
+                let verified = retrieve_semantic_neighbors(
                     &retrieval_query,
-                    "verified_rules_4",
-                    semantic_search_adapter::VoyageSearchSurface::Standard,
+                    SemanticNeighborCollection::VerifiedRules,
                     None,
                     3,
                 )
                 .await?;
-                for neighbor in verified_neighbors {
+                for neighbor in verified.neighbors {
                     retrieval_trace_refs.push(format!(
                         "verified_rules_4:{}:{:.4}",
                         neighbor.entity_key, neighbor.score
                     ));
                 }
-                retrieval_trace_reason_codes.extend(verified_reason_codes);
-                let (_, canonical_neighbors, canonical_reason_codes) = retrieve_semantic_neighbors(
+                retrieval_trace_reason_codes.extend(verified.reason_codes);
+                let canonical = retrieve_semantic_neighbors(
                     &retrieval_query,
-                    "kb_canonical_4",
-                    semantic_search_adapter::VoyageSearchSurface::Standard,
+                    SemanticNeighborCollection::CanonicalConcepts,
                     None,
                     2,
                 )
                 .await?;
-                for neighbor in canonical_neighbors {
+                for neighbor in canonical.neighbors {
                     retrieval_trace_refs.push(format!(
                         "kb_canonical_4:{}:{:.4}",
                         neighbor.entity_key, neighbor.score
                     ));
                 }
-                retrieval_trace_reason_codes.extend(canonical_reason_codes);
+                retrieval_trace_reason_codes.extend(canonical.reason_codes);
             }
         }
         sections.push(ResolutionLoopSectionState {
