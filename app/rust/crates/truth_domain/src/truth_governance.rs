@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use truth_domain::truth_candidates::{
+use crate::truth_candidates::{
     TruthAdjudicationDecision, TruthAdjudicationResult, TruthStructuredCandidate,
 };
 
@@ -388,7 +388,7 @@ fn join_set(values: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use truth_domain::truth_candidates::TruthParamValue;
+    use crate::truth_candidates::TruthParamValue;
 
     fn candidate(id: &str, source_key: &str, amount: i64) -> TruthStructuredCandidate {
         TruthStructuredCandidate {

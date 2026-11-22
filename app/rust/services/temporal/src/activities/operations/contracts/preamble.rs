@@ -20,7 +20,7 @@ use infrastructure::adapters::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
 };
 use infrastructure::adapters::whole_page_advisory_adapter;
-use policies::truth_governance::{
+use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
 use primitives::errors::DomainError;

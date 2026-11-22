@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};
 
-use policies::truth_governance::{
+use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
 use primitives::hash::blake3_hex;

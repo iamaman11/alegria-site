@@ -9,7 +9,7 @@ The current dependency graph is evidence of coupling, not the desired design.
 | --- | --- | --- |
 | Core | `primitives::{stable_id,source_key,page_key,concept_key,context_key,hash}`: shared IDs and value objects; no mutable domain state | Shared data types and deterministic libraries only. **Planned:** remove `contracts` and unrelated parsers/SEO/Truth code. |
 | Acquisition | `acquisition::html_sections::{extract_meta_typed,extract_sections_typed,HtmlSection}` and `acquisition::pdf_parser`: parse source documents without judging their truth | `primitives` for stable hashes, parser libraries. Existing fetch/store effects remain in `infrastructure::adapters::raw_crawl_adapter` until their own adapter-boundary slice. No dependency on Truth, SEO or Publishing. |
-| Truth / review | `truth_domain::{truth_candidates,fact_verifier,facts_extractor,contradiction_gate}` owns pure candidate validation, fact verification and contradiction decisions. **Planned:** move remaining governance/HITL decisions to Truth. | Owns its serde-based decision types, with no SDK, Temporal or persistence dependency. Remaining code to move: `policies::truth_governance` and decision rules in Temporal activities. DB writes through application-owned ports; Temporal owns retries, not decisions. |
+| Truth / review | `truth_domain::{truth_candidates,truth_governance,fact_verifier,facts_extractor,contradiction_gate}` owns pure candidate validation, evidence-governed adjudication, fact verification and contradiction decisions. **Planned:** move remaining runtime-embedded review decisions to Truth. | Owns its serde-based decision types, with no SDK, Temporal or persistence dependency. Remaining code to move: business decisions in Temporal activities. DB writes through application-owned ports; Temporal owns retries, not decisions. |
 | Knowledge / retrieval | **Planned:** `seo_ports::knowledge` and `seo_application::knowledge` for typed query/projection operations; PostgreSQL owns authoritative facts | Existing `graph_neo4j`, `vector_qdrant` and concrete materialization adapters implement effects. Search/ranking never changes a Truth decision. No SQL/Neo4j/Qdrant SDK types in public application operations. |
 | SEO / editorial | Existing `seo_domain` and `seo_application` for SEO/content decisions; **planned:** owned editorial modules with typed draft/revision decisions | Reads confirmed facts and search results through application operations; cannot write Truth state or publish directly. `primitives::{writer,block_validator}` and mixed `seo_steps` logic are later ownership moves. |
 | Publishing | **Planned:** `seo_application::publishing` for revision approval, release transition and recovery decisions; owner of publication state | File/SQL/HTTPS/Cloudflare effects remain behind ports. Existing `infrastructure::adapters::sqlx_seo_cms_adapter` contains mixed logic to separate in a complete publishing slice. Approval of a fact, editorial approval of a revision, and successful release are distinct types. |
@@ -37,9 +37,18 @@ editorial/publishing slice; the Core cleanup is not falsely marked complete.
 
 **Second working slice:** Truth candidate validation/adjudication, fact
 extraction/verification and contradiction comparison move to `truth_domain`,
-which depends only on `serde` and `regex`. Existing direct consumers now import
+which uses only `serde`, `serde_json` (for stable value signatures) and `regex`.
+Existing direct consumers now import
 the owning domain crate; they do not use a backwards-compatible `primitives`
 or `seo_steps` re-export. The still-used JSON CLI input wrapper lives in the
 CLI boundary, while an unused JSON extraction wrapper and stale source-text
 checks of archived PASS reports are removed. Truth governance and the residual
 Temporal activity decisions remain explicit follow-up ownership moves.
+
+**Third working slice:** Governance-grade Truth adjudication and its existing
+unit tests move from the generic `policies` crate into the same `truth_domain`
+owner as candidate validation. Active persistence and Temporal consumers now
+import `truth_domain::truth_governance` directly; generic `policies` no longer
+depends on the Truth capability or re-exports its adjudication logic. Authority,
+independence, staleness and HITL decisions remain unchanged. No persisted
+schema, Temporal workflow inputs or downstream effect adapter is modified.

@@ -26,8 +26,10 @@ ADAPTER_ALLOWED = {
 }
 CAPABILITY_FORBIDDEN_DIRECT = {
     # Enforce directions, not a frozen list of Rust libraries.
-    "truth_domain": {"contracts", "infrastructure", "primitives", "seo_steps", "seo_domain", "temporal_worker"},
+    "truth_domain": {"contracts", "infrastructure", "policies", "primitives", "seo_steps", "seo_domain", "temporal_worker"},
     "acquisition": {"truth_domain", "infrastructure", "seo_domain", "seo_steps", "seo_application"},
+    # Business-specific Truth decisions must not leak back into generic policies.
+    "policies": {"truth_domain"},
 }
 FORBIDDEN_TRANSITIVE = {
     "gsc_sync": {
@@ -39,7 +41,7 @@ FORBIDDEN_TRANSITIVE = {
         "playwright-rs", "rig-core", "rig-vertexai",
     },
     "truth_domain": {
-        "contracts", "infrastructure", "primitives", "sqlx", "neo4rs",
+        "contracts", "infrastructure", "policies", "primitives", "sqlx", "neo4rs",
         "qdrant-client", "temporalio-sdk", "playwright-rs", "scraper", "lopdf",
     },
 }

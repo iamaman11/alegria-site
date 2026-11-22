@@ -5,3 +5,4 @@ pub mod contradiction_gate;
 pub mod fact_verifier;
 pub mod facts_extractor;
 pub mod truth_candidates;
+pub mod truth_governance;

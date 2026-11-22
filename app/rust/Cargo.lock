@@ -3358,7 +3358,6 @@ dependencies = [
  "primitives",
  "serde",
  "serde_json",
- "truth_domain",
 ]
 
 [[package]]
@@ -5816,6 +5815,7 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ POLICY_DOC = ROOT / "docs" / "V6_Truth_Governance_Policy.md"
 WORKING_PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
 OWNER_DOC = ROOT / "docs" / "V6_Expert_Truth_Graph_Runtime.md"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
-POLICY_ENGINE = ROOT / "app" / "rust" / "crates" / "policies" / "src" / "truth_governance.rs"
+POLICY_ENGINE = ROOT / "app" / "rust" / "crates" / "truth_domain" / "src" / "truth_governance.rs"
 RAW_CRAWL = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter.rs"
 RAW_CRAWL_SPLIT_DIR = (
     ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter"
@@ -65,7 +65,7 @@ def main() -> int:
             failures.append(f"schema missing governance field: {needle}")
 
     if not POLICY_ENGINE.exists():
-        failures.append("missing truth_governance policy engine")
+        failures.append("missing Truth-owned governance decision engine")
     else:
         engine = read(POLICY_ENGINE)
         for needle in [
