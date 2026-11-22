@@ -53,6 +53,31 @@ pub struct SourceContextQuery {
     pub limit: usize,
 }
 
+/// A global, already-verified Truth rule selected by Truth's scope gate.
+/// Embedding this read-only projection does not confer Truth authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRuleProjectionCandidate {
+    pub rule_instance_id: String,
+    pub role_type: String,
+    pub concept_key: String,
+    pub source_key: String,
+    pub evidence_quote: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedRuleProjectionChange {
+    pub run_id: String,
+    pub context_key: String,
+    pub delete_rule_ids: Vec<String>,
+    pub upserts: Vec<VerifiedRuleProjectionCandidate>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedRuleEmbeddingBatch {
+    pub model: String,
+    pub vectors: Vec<Vec<f32>>,
+}
+
 /// Non-authoritative Qdrant/Voyage suggestion. A vector hit is not a verified
 /// rule, source assertion, or permission to write PostgreSQL Truth.
 #[derive(Debug, Clone, PartialEq)]

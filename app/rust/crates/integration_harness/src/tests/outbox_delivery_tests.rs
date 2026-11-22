@@ -1,3 +1,115 @@
+/// A14: projection metadata and the corresponding Outbox intent are one PG
+/// transaction; the same event can materialize more than once in real Qdrant.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_delete() {
+    use infrastructure::adapters::{
+        projection_materialize_adapter::dispatch_event,
+        qdrant_client_adapter::{self, VerifiedRuleReadbackPoint},
+        verified_rule_projection_adapter::VerifiedRuleProjectionAdapter,
+    };
+    use seo_application::knowledge::reconcile_verified_rule_projection;
+    use seo_ports::knowledge::{VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange};
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let qdrant = QdrantHarness::start().await.unwrap();
+    let voyage = stub_servers::spawn_voyage_contract_stub().await.unwrap();
+    let _env = env_overrides::EnvOverrideGuard::apply([
+        ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
+        ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
+        ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
+        ("VOYAGE_API_KEY".to_string(), "projection-a14-stub".to_string()),
+        ("VOYAGE_API_BASE_URL".to_string(), format!("{}/v1", voyage.base_url)),
+        ("RETRIEVAL_CAPABILITY_REQUIRED".to_string(), "true".to_string()),
+    ]);
+    let run_id = Uuid::new_v4().to_string();
+    let context_key = format!("projection-a14-{}", Uuid::new_v4().simple());
+    let rule_id = format!("rule-a14-{}", Uuid::new_v4().simple());
+    let make_candidate = |rule_id: &str| VerifiedRuleProjectionCandidate {
+        rule_instance_id: rule_id.to_string(),
+        role_type: "document_required".into(),
+        concept_key: "passport".into(),
+        source_key: "https://example.gov/passport".into(),
+        evidence_quote: "A valid passport is mandatory".into(),
+    };
+    let command = VerifiedRuleProjectionChange {
+        run_id: run_id.clone(),
+        context_key: context_key.clone(),
+        delete_rule_ids: Vec::new(),
+        upserts: vec![make_candidate(&rule_id)],
+    };
+    let adapter = VerifiedRuleProjectionAdapter::new(&pg.pool);
+    reconcile_verified_rule_projection(&adapter, &command).await.unwrap();
+    reconcile_verified_rule_projection(&adapter, &command).await.unwrap();
+    let points: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    let events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!((points, events), (1, 1), "replay must leave one registry point and one event");
+    let (point_id, payload): (String, Vec<u8>) = {
+        let point_id: String = sqlx::query_scalar(
+            "SELECT point_id FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+        ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+        let payload: Vec<u8> = sqlx::query_scalar(
+            "SELECT payload_bytes FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
+        ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+        (point_id, payload)
+    };
+    let expected = [VerifiedRuleReadbackPoint {
+        point_id, rule_instance_id: rule_id.clone(),
+        context_key: context_key.clone(), concept_key: "passport".into(),
+        source_key: "https://example.gov/passport".into(),
+    }];
+    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+    for _ in 0..2 {
+        dispatch_event("qdrant", "QdrantUpsertCommand", &rule_id,
+            "alegria.outbox.qdrant_upsert_command.v1", &payload).await.unwrap();
+    }
+    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+
+    // Force a real database error *between* point upsert and Outbox insert.
+    // The transaction must roll back both rather than leaving a false receipt.
+    sqlx::query(
+        "CREATE FUNCTION system.reject_projection_outbox() RETURNS trigger LANGUAGE plpgsql AS $$ \
+         BEGIN IF NEW.event_type = 'QdrantUpsertCommand' THEN RAISE EXCEPTION 'injected outbox rejection'; \
+         END IF; RETURN NEW; END $$",
+    ).execute(&pg.pool).await.unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_projection_outbox BEFORE INSERT ON system.sync_outbox \
+         FOR EACH ROW EXECUTE FUNCTION system.reject_projection_outbox()",
+    ).execute(&pg.pool).await.unwrap();
+    let second_rule_id = format!("rule-a14-next-{}", Uuid::new_v4().simple());
+    let next = VerifiedRuleProjectionChange {
+        upserts: vec![make_candidate(&second_rule_id)], ..command.clone()
+    };
+    assert!(reconcile_verified_rule_projection(&adapter, &next).await.is_err());
+    let rollback_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
+    ).bind(&second_rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(rollback_count, 0, "failed Outbox insertion must undo point metadata");
+    sqlx::query("DROP TRIGGER reject_projection_outbox ON system.sync_outbox")
+        .execute(&pg.pool).await.unwrap();
+    sqlx::query("DROP FUNCTION system.reject_projection_outbox()")
+        .execute(&pg.pool).await.unwrap();
+    reconcile_verified_rule_projection(&adapter, &next).await.unwrap();
+    let recovered: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
+    ).bind(&second_rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(recovered, 1, "next independent revision must be retryable");
+
+    reconcile_verified_rule_projection(&adapter, &VerifiedRuleProjectionChange {
+        delete_rule_ids: vec![rule_id.clone()], upserts: Vec::new(), ..command
+    }).await.unwrap();
+    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+    let deleted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(deleted, 0);
+}
+
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]

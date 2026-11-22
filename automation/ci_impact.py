@@ -56,6 +56,8 @@ PUBLISHING_A17_PATHS = {
 # A14 exercises one real PostgreSQL lease/outbox and Qdrant materialization.
 # The same decision is consumed by local feedback and the canonical CI runner.
 OUTBOX_A14_PATHS = {
+    "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_runtime_store.rs",
     "app/rust/services/outbox_worker/src/worker.rs",
     "app/rust/services/outbox_worker/src/materialize.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs",
@@ -68,6 +70,7 @@ OUTBOX_A14_PATHS = {
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
 # through the production SQLx reader and the active SEO generation operation.
 KNOWLEDGE_A13_PATHS = {
+    "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs",
     "app/rust/crates/seo_ports/src/knowledge.rs",
     "app/rust/crates/seo_ports/src/lib.rs",
     "app/rust/crates/seo_application/src/knowledge.rs",

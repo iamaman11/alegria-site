@@ -19,7 +19,8 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use knowledge::{
     CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,
-    SourceContextChunk, SourceContextCollection, VerifiedRulesQuery, VerifiedRulesView,
+    SourceContextChunk, SourceContextCollection, VerifiedRuleEmbeddingBatch,
+    VerifiedRuleProjectionChange, VerifiedRulesQuery, VerifiedRulesView,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
@@ -237,6 +238,29 @@ pub trait SourceContextSearchPort: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SourceContextChunk>, DomainError>;
+}
+
+/// External effects of one Truth-to-Knowledge materialization. The adapter
+/// owns network I/O and an atomic PostgreSQL metadata+Outbox transaction.
+#[async_trait]
+pub trait VerifiedRuleProjectionPort: Send + Sync {
+    fn retrieval_required(&self) -> bool;
+
+    async fn delete_rule_points(
+        &self,
+        run_id: &str,
+        rule_ids: &[String],
+    ) -> Result<(), DomainError>;
+    async fn embed_rule_texts(
+        &self,
+        run_id: &str,
+        texts: &[String],
+    ) -> Result<Option<VerifiedRuleEmbeddingBatch>, DomainError>;
+    async fn stage_rule_upserts(
+        &self,
+        change: &VerifiedRuleProjectionChange,
+        embeddings: VerifiedRuleEmbeddingBatch,
+    ) -> Result<(), DomainError>;
 }
 
 #[async_trait]

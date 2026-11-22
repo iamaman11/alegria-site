@@ -152,8 +152,8 @@ pub async fn delete_qdrant_rule_points(
     Ok(())
 }
 
-pub async fn upsert_qdrant_rule_point(
-    pool: &PgPool,
+pub async fn upsert_qdrant_rule_point_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     point_id: &str,
     rule_instance_id: &str,
     collection_name: &str,
@@ -175,7 +175,7 @@ pub async fn upsert_qdrant_rule_point(
     .bind(collection_name)
     .bind(embedding_model)
     .bind(embedding_version)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     Ok(())

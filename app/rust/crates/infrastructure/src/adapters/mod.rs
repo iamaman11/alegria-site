@@ -47,6 +47,7 @@ pub mod tonic_adapter;
 pub mod tower_adapter;
 pub mod tracing_adapter;
 pub mod truth_extraction_llm_adapter;
+pub mod verified_rule_projection_adapter;
 pub mod vertex_gemini_runtime;
 pub mod voyage_api_adapter;
 pub mod whole_page_advisory_adapter;

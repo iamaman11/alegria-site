@@ -238,12 +238,15 @@ pub(crate) async fn verified_truth_write_impl(
     demoted_rule_projection_ids.extend(suppressed_scoped_projection_ids);
     demoted_rule_projection_ids.sort();
     demoted_rule_projection_ids.dedup();
-    delete_verified_rules_4_projection(acts, &demoted_rule_projection_ids).await?;
-    emit_verified_rules_4_projection(
-        acts,
-        &input.run_id,
-        &input.context_key,
-        &verified_rule_projections,
+    let projection_port = infrastructure::adapters::verified_rule_projection_adapter::VerifiedRuleProjectionAdapter::new(&acts.pool);
+    seo_application::knowledge::reconcile_verified_rule_projection(
+        &projection_port,
+        &VerifiedRuleProjectionChange {
+            run_id: input.run_id.clone(),
+            context_key: input.context_key.clone(),
+            delete_rule_ids: demoted_rule_projection_ids,
+            upserts: verified_rule_projections,
+        },
     )
     .await?;
 

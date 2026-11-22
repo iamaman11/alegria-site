@@ -67,6 +67,13 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(result["publishing_a17_required"])
         self.assertFalse(result["knowledge_a13_required"])
 
+    def test_verified_rule_projection_effects_select_real_outbox_and_knowledge_integrations(self) -> None:
+        path = "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs"
+        result = self.impact(path)
+        self.assertEqual(result["analysis"], "scoped")
+        self.assertTrue(result["outbox_a14_required"])
+        self.assertTrue(result["knowledge_a13_required"])
+
     def test_knowledge_read_change_selects_postgres_a13(self) -> None:
         result = self.impact("app/rust/crates/seo_application/src/knowledge.rs")
         self.assertTrue(result["knowledge_a13_required"])

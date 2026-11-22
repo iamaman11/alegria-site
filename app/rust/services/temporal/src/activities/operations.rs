@@ -1,7 +1,7 @@
 include!("operations/contracts.rs");
 include!("operations/capability_preflight.rs");
 include!("operations/whole_page_semantic_ops.rs");
-include!("operations/truth_projection_helpers.rs");
+include!("operations/truth_identity_helpers.rs");
 include!("operations/runtime_support_ops.rs");
 include!("operations/acquisition_section_ops.rs");
 include!("operations/truth_extraction_ops.rs");

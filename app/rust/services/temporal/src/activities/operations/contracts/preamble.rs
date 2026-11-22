@@ -42,6 +42,7 @@ use truth_domain::semantic_truth_write::{
 use primitives::errors::DomainError;
 use seo_ports::knowledge::{
     SemanticNeighborCollection, SemanticNeighborLookup, SemanticNeighborQuery,
+    VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange,
 };
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
