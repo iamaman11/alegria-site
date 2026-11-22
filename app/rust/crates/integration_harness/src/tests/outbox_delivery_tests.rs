@@ -14,6 +14,7 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     let qdrant = QdrantHarness::start().await.unwrap();
     let _env = env_overrides::EnvOverrideGuard::apply([
         ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
+        ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
         ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
     ]);
     let run_id = Uuid::new_v4().to_string();

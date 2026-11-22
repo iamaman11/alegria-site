@@ -52,7 +52,9 @@ impl DispatchError {
         Self {
             class: ErrorClass::InfraUnavailable,
             stage,
-            detail: detail.to_string(),
+            // Preserve the source chain from anyhow adapters (for example the
+            // HTTP connector and OS error), not just the outer context.
+            detail: format!("{detail:#}"),
         }
     }
 
