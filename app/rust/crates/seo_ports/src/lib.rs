@@ -21,6 +21,53 @@ use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
+
+/// Exact bytes and public route of one file in an immutable approved release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicReleaseFile {
+    pub relative_path: String,
+    pub public_route: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseDeliveryStage {
+    Preflight,
+    Upload,
+    Readback,
+}
+
+#[derive(Debug)]
+pub struct ReleaseDeliveryError {
+    pub stage: ReleaseDeliveryStage,
+    pub detail: String,
+}
+
+impl std::fmt::Display for ReleaseDeliveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "public release {:?} failed: {}", self.stage, self.detail)
+    }
+}
+
+impl std::error::Error for ReleaseDeliveryError {}
+
+/// One replaceable external effect: deploy an immutable release and read back
+/// its actual public bytes. The caller owns approval, PostgreSQL and Outbox.
+#[async_trait]
+pub trait PublicReleaseDelivery: Send + Sync {
+    fn preflight(&self) -> Result<(), ReleaseDeliveryError>;
+
+    /// Synchronous so an activation guard can safely restore the previous
+    /// release during Drop without spawning a detached deployment.
+    fn deploy(&self, release: &Path, previous: Option<&Path>) -> Result<(), ReleaseDeliveryError>;
+
+    async fn verify(
+        &self,
+        origin: &str,
+        files: &[PublicReleaseFile],
+    ) -> Result<(), ReleaseDeliveryError>;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifiedSupportBundleRequest {

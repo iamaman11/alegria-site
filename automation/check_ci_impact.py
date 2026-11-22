@@ -41,6 +41,16 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
         self.assertEqual(result["affected_crates"], ["gsc_sync"])
         self.assertTrue(result["mandatory_full_ci_gate"])
+        self.assertFalse(result["publishing_a17_required"])
+
+    def test_publishing_change_selects_real_a17_integration(self) -> None:
+        result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
+        self.assertTrue(result["publishing_a17_required"])
+
+    def test_unknown_global_change_fails_closed_to_a17(self) -> None:
+        result = self.impact("app/db/schema.sql")
+        self.assertEqual(result["analysis"], "full")
+        self.assertTrue(result["publishing_a17_required"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])

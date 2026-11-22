@@ -3,6 +3,17 @@ pub async fn persist_finalize_publish_output(
     input: &FinalizePublishInputPayload,
     planned: &FinalizePublishOutputPayload,
 ) -> Result<FinalizePublishOutputPayload, DomainError> {
+    persist_finalize_publish_output_with_delivery(
+        pool, input, planned, &CloudflareStaticDelivery,
+    ).await
+}
+
+pub async fn persist_finalize_publish_output_with_delivery(
+    pool: &PgPool,
+    input: &FinalizePublishInputPayload,
+    planned: &FinalizePublishOutputPayload,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<FinalizePublishOutputPayload, DomainError> {
     let artifact = input.publish_artifact.as_ref().cloned().unwrap_or_default();
     let render_validation = input
         .render_validation
@@ -27,6 +38,46 @@ pub async fn persist_finalize_publish_output(
             .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
+
+        // A retry after an ambiguous COMMIT is not a new publish attempt.
+        // Preserve the committed revision and its one logical Outbox event,
+        // but never claim success without re-reading the exact public bytes.
+        let committed: Option<(String, Json<serde_json::Value>)> = sqlx::query_as(
+            r#"
+            SELECT a.artifact_uri, a.manifest_json
+            FROM site.cms_pages p
+            JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+            JOIN site.publish_artifacts a ON a.revision_id = r.revision_id
+            WHERE p.page_node_key = $1 AND p.current_revision_id = $2
+              AND p.current_status = 'published' AND r.revision_status = 'published'
+              AND a.artifact_key = $3 AND a.status = 'ready'
+            FOR UPDATE OF p, r, a
+            "#,
+        )
+        .bind(&input.page_node_key)
+        .bind(&input.revision_id)
+        .bind(&artifact.artifact_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if let Some((uri, Json(persisted_meta))) = committed {
+            let supplied: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
+                .map_err(|err| validation_failure(format!("retry artifact JSON: {err}")))?;
+            if uri != artifact.artifact_uri || persisted_meta != supplied
+                || supplied.get("run_id").and_then(|v| v.as_str()) != Some(input.run_id.as_str())
+            {
+                return Err(validation_failure("replayed publication artifact/run identity changed"));
+            }
+            verify_committed_release(&artifact, &input.page_node_key, &input.revision_id, delivery)
+                .await.map_err(validation_failure)?;
+            tx.commit().await.map_err(classify_sqlx)?;
+            return Ok(FinalizePublishOutputPayload {
+                verdict: "published".into(),
+                current_status: "published".into(),
+                blocking_reasons: Vec::new(),
+                publish_artifact: Some(PublishArtifact { status: "ready".into(), ..artifact }),
+            });
+        }
     }
 
     let mut activation: Option<PublicationActivation> = None;
@@ -45,6 +96,7 @@ pub async fn persist_finalize_publish_output(
             &input.revision_id,
             allow_first_publication,
             &mut tx,
+            delivery,
         )
         .await
         {

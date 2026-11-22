@@ -38,6 +38,21 @@ GLOBAL_FILES = {
     "rust-toolchain.toml",
 }
 
+# Publishing A17 exercises the real PostgreSQL transaction and a replaceable
+# controlled HTTP delivery adapter. Reuse this same impact report in local/CI;
+# unrelated leaf-crate edits must not pay for a Docker-backed publication test.
+PUBLISHING_A17_PATHS = {
+    "app/rust/crates/seo_domain/src/publishing.rs",
+    "app/rust/crates/seo_steps/src/finalize_publish_step.rs",
+    "app/rust/crates/seo_application/src/review_publish.rs",
+    "app/rust/crates/seo_ports/src/lib.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publication_release.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/renderer_refresh.rs",
+    "app/rust/crates/integration_harness/src/tests/publication_delivery_tests.rs",
+}
+
 
 def parse_name_status(raw: bytes) -> list[str]:
     """Decode a NUL-delimited Git diff, keeping both rename paths and deletes."""
@@ -201,6 +216,7 @@ def analyze(
         "reasons": {pkg: sorted(reason[pkg]) for pkg in sorted(affected)},
         # Never treat impact analysis as evidence to skip accepted test owners.
         "mandatory_full_ci_gate": True,
+        "publishing_a17_required": bool(broad_reasons) or bool(PUBLISHING_A17_PATHS.intersection(paths)),
     }
 
 

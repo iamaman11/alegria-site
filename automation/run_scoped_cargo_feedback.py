@@ -34,6 +34,18 @@ def main() -> int:
         print("CI_RUST_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
 
+    required_a17 = report.get("publishing_a17_required")
+    if not isinstance(required_a17, bool):
+        raise ValueError("impact report omitted the fail-closed Publishing A17 decision")
+    if required_a17:
+        command = [
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "publishing_a17_postgres_outbox_http_faults_and_recovery",
+            "--locked", "--", "--nocapture",
+        ]
+        print("CI_PUBLISHING_A17_COMMAND=" + " ".join(command), flush=True)
+        measurements.append(run_cargo(command, cwd=WORKSPACE))
+
     output = ROOT / "automation/reports/scoped_cargo_feedback.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
@@ -43,7 +55,7 @@ def main() -> int:
         ) + "\n",
         encoding="utf-8",
     )
-    print(f"CI_RUST_FEEDBACK=PASS commands={len(commands)}", flush=True)
+    print(f"CI_RUST_FEEDBACK=PASS commands={len(measurements)}", flush=True)
     return 0
 
 

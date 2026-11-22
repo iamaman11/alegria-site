@@ -2145,6 +2145,7 @@ name = "integration_harness"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "contracts",
  "infrastructure",
