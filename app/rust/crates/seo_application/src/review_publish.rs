@@ -207,7 +207,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(output.verdict, "published");
+        // The fake port cannot prove public HTTPS readback; it receives only
+        // the release candidate, never a false publication success.
+        assert_eq!(output.verdict, "ready_for_release");
+        assert_eq!(output.current_status, "approved");
     }
 
     #[test]

@@ -310,7 +310,6 @@ fn swap_public_release(
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PendingPublication {
     new_release: ReleasePathBuf,
@@ -567,26 +566,32 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
         Err(err) => return Err(validation_failure(format!("read live publication pointer: {err}"))),
     };
     require_cloudflare_publication_backend().map_err(validation_failure)?;
-    if committed {
-        if live.as_deref() != Some(journal.new_release.as_path()) {
-            return Err(validation_failure("committed publication no longer matches live pointer"));
-        }
-        // The live Worker is the public truth: a local symlink check is not
-        // sufficient after a worker crash. Idempotently restore the committed
-        // Cloudflare asset version and independently verify public HTTPS.
-        deploy_cloudflare_static_release(&journal.new_release, None)
-            .map_err(validation_failure)?;
+    use seo_domain::publishing::{LiveReleasePointer, RecoveryAction, RecoveryRefusal};
+    let pointer = if live.as_deref() == Some(journal.new_release.as_path()) {
+        LiveReleasePointer::Candidate
+    } else if live.as_deref() == journal.previous.as_deref() {
+        LiveReleasePointer::Previous
     } else {
-        if live.as_deref() != Some(journal.new_release.as_path())
-            && live.as_deref() != journal.previous.as_deref()
-        {
-            return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
+        LiveReleasePointer::Unknown
+    };
+    let recovery = seo_domain::publishing::plan_recovery(
+        committed, pointer, journal.previous.is_some(),
+    ).map_err(|refusal| match refusal {
+        RecoveryRefusal::CommittedPointerMismatch =>
+            validation_failure("committed publication no longer matches live pointer"),
+        RecoveryRefusal::UnknownLivePointer =>
+            validation_failure("pending publication has unknown live pointer; manual recovery required"),
+    })?;
+    match recovery {
+        RecoveryAction::ReassertCommitted => {
+            // A local symlink is insufficient after a worker crash. Restore the
+            // committed Cloudflare version; the journal remains until success.
+            deploy_cloudflare_static_release(&journal.new_release, None)
+                .map_err(validation_failure)?;
         }
-        // On a first publication there is no safe earlier release to restore.
-        // Permit startup ONLY when the exact still-approved release is already
-        // publicly verified. Keep the journal; only the original finalizer
-        // can commit CMS/outbox status. Unknown/mismatched output stays closed.
-        let Some(previous) = journal.previous.as_deref() else {
+        RecoveryAction::VerifyPendingFirst => {
+            // No safe predecessor: do not claim a release or clear its journal.
+            // The original finalizer alone may commit after public readback.
             verify_pending_first_publication(&mut tx, &public, &journal).await?;
             tx.commit().await.map_err(classify_sqlx)?;
             tracing::info!(
@@ -594,11 +599,16 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
                 "verified pending first release; awaiting canonical finalization"
             );
             return Ok(());
-        };
-        deploy_cloudflare_static_release(previous, None).map_err(validation_failure)?;
-        if live.as_deref() == Some(journal.new_release.as_path()) {
-            restore_public_release(&public, Some(previous))
-                .map_err(validation_failure)?;
+        }
+        RecoveryAction::RestorePrevious => {
+            let previous = journal.previous.as_deref().ok_or_else(||
+                validation_failure("pending publication has no previous release")
+            )?;
+            deploy_cloudflare_static_release(previous, None).map_err(validation_failure)?;
+            if live.as_deref() == Some(journal.new_release.as_path()) {
+                restore_public_release(&public, Some(previous))
+                    .map_err(validation_failure)?;
+            }
         }
     }
     std::fs::remove_file(&journal_path)

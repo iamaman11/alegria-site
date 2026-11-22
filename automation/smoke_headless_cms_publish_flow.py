@@ -9,6 +9,8 @@ STATIC = ROOT / "app/rust/crates/infrastructure/src/adapters/static_site_builder
 CLI_STATIC = ROOT / "app/rust/services/cli_tools/src/cli/static_site.rs"
 CMS_REVIEW_DECISION = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs"
 CMS_REVIEW_INSPECT = ROOT / "app/rust/services/cli_tools/src/cli/cms_inspect.rs"
+PUBLISHING_POLICY = ROOT / "app/rust/crates/seo_domain/src/publishing.rs"
+PUBLISH_FINALIZE = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs"
 
 
 def read_file_resolved(path: Path) -> str:
@@ -35,6 +37,8 @@ def main() -> int:
     cli_static = CLI_STATIC.read_text(encoding="utf-8")
     review_decision = CMS_REVIEW_DECISION.read_text(encoding="utf-8")
     review_inspect = CMS_REVIEW_INSPECT.read_text(encoding="utf-8")
+    publishing_policy = PUBLISHING_POLICY.read_text(encoding="utf-8")
+    publish_finalize = PUBLISH_FINALIZE.read_text(encoding="utf-8")
     if "static_site_builder_adapter::build_static_site(" not in cli_static:
         failures.append("headless CLI does not delegate to canonical shared renderer")
     if "fn render_page(" in cli_static or "fn build_static_artifacts(" in cli_static:
@@ -59,7 +63,6 @@ def main() -> int:
             failures.append(f"schema missing `{needle}`")
     for needle in [
         "missing_persisted_human_approval",
-        "seo_page_published",
         "published_at",
         "PublishArtifact",
         "site.publish_artifacts",
@@ -69,6 +72,10 @@ def main() -> int:
     ]:
         if needle not in cms:
             failures.append(f"CMS adapter missing `{needle}`")
+    if 'Self::Published => "seo_page_published"' not in publishing_policy:
+        failures.append("Publishing policy must own the published event type")
+    if "let event_type = outcome.event_type();" not in publish_finalize:
+        failures.append("CMS adapter must use the Publishing event decision")
     if '"section_role": "internal_links"' in cms:
         failures.append("CMS must not duplicate the static builder's related-links section")
     for needle in [

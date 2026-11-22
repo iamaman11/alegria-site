@@ -11,13 +11,15 @@ pub async fn persist_finalize_publish_output(
         .unwrap_or_default();
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
-    let mut is_published = planned.verdict == "published"
-        && render_validation.verdict == "render_ready"
-        && blocking_reasons.is_empty();
+    let readiness = seo_domain::publishing::ReleaseReadiness::from_render_validation(
+        &render_validation.verdict,
+        &blocking_reasons,
+    );
+    let should_activate = readiness.can_activate(&planned.verdict);
     // Lock all publication effects for this public site, across workers and
     // processes. The transaction owns the lock until the outbox commits.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    if is_published {
+    if should_activate {
         let public_dir = std::env::var("SEO_STATIC_OUTPUT_DIR")
             .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
         sqlx::query("SELECT pg_advisory_xact_lock(21917, hashtext($1))")
@@ -28,7 +30,7 @@ pub async fn persist_finalize_publish_output(
     }
 
     let mut activation: Option<PublicationActivation> = None;
-    if is_published {
+    if should_activate {
         // Render readiness is NOT publication. Activate an immutable,
         // approved release and prove real HTTPS bytes before DB commit.
         let allow_first_publication: bool = sqlx::query_scalar(
@@ -55,13 +57,17 @@ pub async fn persist_finalize_publish_output(
                     "public release promotion/readback failed; refusing published state"
                 );
                 blocking_reasons.push("public_deployment_unverified".to_string());
-                is_published = false;
             }
         }
     }
     blocking_reasons.sort();
     blocking_reasons.dedup();
-    let final_verdict = if is_published { "published" } else { "blocked" };
+    let outcome = seo_domain::publishing::PublicReleaseOutcome::after_readback(
+        readiness,
+        activation.is_some(),
+    );
+    let is_published = outcome.is_published();
+    let final_verdict = outcome.verdict();
 
     // Database status, artifact, event, HITL, and outbox commit together.
     // On any SQL error the activation guard restores the prior public release.
@@ -75,7 +81,7 @@ pub async fn persist_finalize_publish_output(
         WHERE revision_id = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.revision_id)
     .execute(&mut *tx)
     .await
@@ -99,7 +105,7 @@ pub async fn persist_finalize_publish_output(
         WHERE page_node_key = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.page_node_key)
     .bind(&input.revision_id)
     .execute(&mut *tx)
@@ -119,7 +125,7 @@ pub async fn persist_finalize_publish_output(
         WHERE page_node_key = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.page_node_key)
     .execute(&mut *tx)
     .await
@@ -134,18 +140,14 @@ pub async fn persist_finalize_publish_output(
             WHERE artifact_key = $2
             "#,
         )
-        .bind(if is_published { "ready" } else { "blocked" })
+        .bind(outcome.artifact_status())
         .bind(&artifact.artifact_key)
         .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
 
-    let event_type = if is_published {
-        "seo_page_published"
-    } else {
-        "seo_page_publish_blocked"
-    };
+    let event_type = outcome.event_type();
     let event_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_event",
         &[
@@ -273,18 +275,10 @@ pub async fn persist_finalize_publish_output(
 
     Ok(FinalizePublishOutputPayload {
         verdict: final_verdict.to_string(),
-        current_status: if is_published {
-            "published".to_string()
-        } else {
-            "blocked".to_string()
-        },
+        current_status: final_verdict.to_string(),
         blocking_reasons,
         publish_artifact: Some(PublishArtifact {
-            status: if is_published {
-                "ready".to_string()
-            } else {
-                "blocked".to_string()
-            },
+            status: outcome.artifact_status().to_string(),
             ..artifact
         }),
     })
