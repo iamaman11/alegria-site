@@ -111,6 +111,13 @@ def check() -> None:
         assert "RUSTFLAGS:" not in group  # Stable Rust already uses its native lld linker.
     assert all('CI_WORKSPACE_TESTED: "true"' in group for group in (rust_deep, integration_deep))
     assert 'CI_WORKSPACE_TESTED: "true"' not in deep
+    # GHA answered 409 for competing identical writes and 429 for upload rate
+    # limits. Retain a single full-graph writer and parallel read-only owners.
+    assert 'SCCACHE_GHA_RW_MODE: READ_WRITE' in rust_deep
+    assert 'SCCACHE_GHA_RW_MODE: READ_ONLY' in integration_deep
+    assert 'SCCACHE_GHA_RW_MODE: READ_ONLY' in deep
+    assert 'SCCACHE_GHA_RW_MODE: READ_WRITE' not in integration_deep + deep
+    assert 'SCCACHE_LOG:' not in integration_deep + deep
     # The scoped Truth reader/writer test needs the disposable hosted DB.
     # Enable it in the required workspace owner, never in the fixture-only job.
     assert 'ALEGRIA_SCOPED_TRUTH_TEST: "true"' in rust_deep

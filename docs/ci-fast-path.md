@@ -24,6 +24,7 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44965308197](https://github.com/iamaman11/alegria-site/actions/runs/44965308197) | **5m 19s** | Identical Rust code; compiler-cache misses regress; 14/14 PASS |
 | [#44967454786](https://github.com/iamaman11/alegria-site/actions/runs/44967454786) | **4m 48s** | Cargo-native compile timings recorded, full integration 4m33s; 14/14 PASS |
 | [#44968309924](https://github.com/iamaman11/alegria-site/actions/runs/44968309924) | **5m 04s** | Parallel real test services speed up readiness; Rust cache writes still fail; 14/14 PASS |
+| [#44968816771](https://github.com/iamaman11/alegria-site/actions/runs/44968816771) | **4m 56s** | One-run GHA cache failure diagnosis; 409 and 429 confirmed, 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
@@ -99,18 +100,24 @@ PRs report `NOT_AFFECTED_BY_SOURCE_CHANGE` and skip unnecessary Rust builds.
 - The GitHub Actions `sccache` backend has reproducible write losses: the
   5m19s run logged 127–180 misses per deep Rust owner and almost as many write
   errors. In the 4m48s run, **every cache write** in the three deep jobs failed
-  (52/52, 76/76, 78/78), despite 92–95% cache hits. The HTTP status behind
-  those failures is still unconfirmed. GitHub limits uploads to 200/min; the
+  (52/52, 76/76, 78/78), despite 92–95% cache hits. GitHub limits uploads
+  to 200/min; the
   upstream [retry fix](https://github.com/mozilla/sccache/pull/2911) addresses
   transient rate limiting.
   In the next 5m04s run, `rust-regressions` succeeded in only **1 of 220**
   writes; integration had 102/102 write errors. The real Temporal/Neo4j/Qdrant/
   PostgreSQL startup improved 22.4s→18.0s, and manual Temporal restart test
-  56.1s→52.8s. To distinguish 429 rate limits from quota or permissions,
-  `integration-e2e` temporarily records sccache debug errors on its own runner,
-  then prints **only aggregate error categories**; raw logs are never uploaded.
-  That fix was merged after the latest stable sccache v0.18.0 release; do not assume a
-  version-only upgrade repairs this. Cargo `--timings` in the deep evidence
+  56.1s→52.8s. One disposable, runner-local diagnostic in the next full
+  [run #44968816771](https://github.com/iamaman11/alegria-site/actions/runs/44968816771)
+  confirmed **89 HTTP 409 conflicting writes and 35 HTTP 429 rate limits** in
+  integration (124/124 failed writes), without uploading the raw debug log.
+  The permanent native fix assigns one GHA compiler-cache writer to the full
+  `rust-regressions` workspace owner; `integration-e2e` and `comprehensive`
+  retain the same real tests and run in parallel, but read the shared cache
+  without competing writes. The temporary debug instrumentation was removed.
+  That fix was merged after the latest stable sccache v0.19.0 release
+  (24 October 2026); do not assume a version-only upgrade repairs this.
+  Cargo `--timings` in the deep evidence
   independently measured `aws-lc-sys` C build scripts at **45s (Truth)** and
   **60s (integration)**. Moving the application from AWS-LC to `ring` could
   remove that work but changes the runtime TLS provider and is not part of a

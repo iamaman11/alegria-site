@@ -604,6 +604,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # The full-workspace owner is the only deep GHA compiler-cache writer.
+      SCCACHE_GHA_RW_MODE: READ_WRITE
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       CI_WORKSPACE_TESTED: "true"
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
@@ -707,9 +709,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
-      # Short-lived runner-local diagnostics; never upload raw compiler logs.
-      SCCACHE_ERROR_LOG: /tmp/alegria-sccache-integration.log
-      SCCACHE_LOG: "sccache::server=debug"
+      # Concurrent GHA writes produced HTTP 409 conflicts and HTTP 429 limits.
+      SCCACHE_GHA_RW_MODE: READ_ONLY
       CI_WORKSPACE_TESTED: "true"
       CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"
       WHOLE_PAGE_SEMANTIC_TARGET_DIR: ${{ github.workspace }}/app/rust/target
@@ -758,10 +759,6 @@ jobs:
         if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
         run: sccache --show-stats
 
-      - name: Aggregate compiler cache write failures without publishing server logs
-        if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
-        run: python3 automation/report_sccache_write_errors.py "$SCCACHE_ERROR_LOG"
-
       - name: Preserve real integration evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -788,6 +785,8 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "line-tables-only"
       SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
+      # The three deep suites still build in parallel; only one writes cache.
+      SCCACHE_GHA_RW_MODE: READ_ONLY
       CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"
       TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
       PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
