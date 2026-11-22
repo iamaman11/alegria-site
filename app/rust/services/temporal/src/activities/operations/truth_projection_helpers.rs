@@ -414,24 +414,6 @@ fn classify_candidate_freshness_local(uncertainty_flags: &[String]) -> String {
     }
 }
 
-fn non_structured_candidate_reason(candidate: &ValidatedTruthCandidateRecord) -> String {
-    if candidate.freshness_class != "fresh" {
-        format!(
-            "freshness_block; freshness_class={}",
-            candidate.freshness_class
-        )
-    } else if candidate.completeness_class == "incomplete" {
-        format!(
-            "completeness_block; completeness_class={}",
-            candidate.completeness_class
-        )
-    } else if candidate.epistemic_status == "needs_hitl" {
-        "candidate_validation_requires_hitl".to_string()
-    } else {
-        "non_structured_input".to_string()
-    }
-}
-
 fn semantic_rule_instance_id_local(
     context_key: &str,
     role: &str,

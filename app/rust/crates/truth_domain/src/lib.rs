@@ -3,5 +3,6 @@
 
 pub mod contradictions;
 pub mod fact_verifier;
+pub mod review_decisions;
 pub mod truth_candidates;
 pub mod truth_governance;

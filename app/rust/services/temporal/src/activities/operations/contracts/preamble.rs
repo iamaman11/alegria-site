@@ -23,6 +23,11 @@ use infrastructure::adapters::whole_page_advisory_adapter;
 use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
+use truth_domain::review_decisions::{
+    apply_exact_review_rejection_veto, held_semantic_identities, semantic_identity_is_held,
+    non_structured_candidate_reason, validated_candidate_assertions, CandidateValidationSectionState,
+    TruthAdjudicationCandidateDecision, ValidatedTruthCandidateRecord,
+};
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;

@@ -32,48 +32,6 @@ pub struct CandidateValidationInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidatedTruthCandidateRecord {
-    pub section_id: i64,
-    pub page_id: i64,
-    pub rule_candidate_id: String,
-    pub role: String,
-    pub concept_canonical_key: String,
-    pub raw_mention: String,
-    pub params: TruthParamValue,
-    #[serde(default)]
-    pub scope: TruthParamValue,
-    pub source_key: String,
-    pub source_tier: String,
-    pub confidence: f64,
-    pub evidence_quote: String,
-    pub span_start: usize,
-    pub span_end: usize,
-    pub source_snapshot_hash: String,
-    #[serde(default)]
-    pub provider_key: String,
-    #[serde(default)]
-    pub model_key: String,
-    #[serde(default)]
-    pub prompt_version: String,
-    pub freshness_class: String,
-    pub completeness_class: String,
-    pub epistemic_status: String,
-    pub issues: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CandidateValidationSectionState {
-    pub section_id: i64,
-    pub page_id: i64,
-    pub candidates: Vec<ValidatedTruthCandidateRecord>,
-    pub accepted_count: usize,
-    pub needs_hitl_count: usize,
-    pub rejected_count: usize,
-    pub blocked_by_gate: bool,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CandidateValidationOutput {
     pub section_count: usize,
     pub blocked_section_count: usize,
