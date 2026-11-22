@@ -92,6 +92,14 @@ PRs report `NOT_AFFECTED_BY_SOURCE_CHANGE` and skip unnecessary Rust builds.
   package; it does not improve a four-way rebuild of the same graph.
 - Preserve one owner for Cargo registry cache writes and use `sccache` in the
   Rust owner. Avoid archiving multi-gigabyte `target/` directories.
+- The GitHub Actions `sccache` backend has reproducible write losses: the
+  5m19s run logged 127–180 misses per deep Rust owner and almost as many write
+  errors. GitHub limits cache uploads to 200/min per repository; the upstream
+  [retry fix](https://github.com/mozilla/sccache/pull/2911) addresses rate
+  limiting, but the actual HTTP error code in these CI runs is not yet logged.
+  That fix was merged after the latest stable sccache v0.18.0 release; do not assume a
+  version-only upgrade repairs this. The existing deep evidence artifacts now
+  preserve Cargo `--timings` HTML to diagnose actual compile/link hotspots.
 - RustSec installs the official version-pinned, SHA-256-verified 6-MB
   `cargo-audit` executable, avoiding repeated 196-second tool compilation.
 - Disposable Rust integration databases use the same PostgreSQL 18.7 major

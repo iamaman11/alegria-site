@@ -17,7 +17,7 @@ def main() -> int:
     steps = (
         ("report_surface", ["cargo", "test", "-q", "-p", "seo_application", "scenario_report_surface_serializes_phase_reports"]),
         ("cli_tools_compile", ["cargo", "test", "-q", "-p", "cli_tools", "--no-run"]),
-        ("full_harness", ["cargo", "test", "-q", "-p", "integration_harness", "--features", "e2e", "synthetic_full_scenario_persists_page_draft_on_full_harness"]),
+        ("full_harness", ["cargo", "test", "--timings", "-p", "integration_harness", "--features", "e2e", "synthetic_full_scenario_persists_page_draft_on_full_harness"]),
     )
     for name, command in steps:
         if os.environ.get("CI_WORKSPACE_TESTED") == "true" and name in {"report_surface", "cli_tools_compile"}:

@@ -763,6 +763,7 @@ jobs:
           path: |
             automation/reports/ci_phase_timings.jsonl
             automation/reports/consistency_report.json
+            app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: ignore
 
   # Ready PRs run full real-service Truth certification alongside independent
@@ -851,6 +852,7 @@ jobs:
           path: |
             automation/reports/ci_phase_timings.jsonl
             automation/reports/consistency_report.json
+            app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: ignore
 
   # Compile/sign alongside all three required deep owners; the archive cannot

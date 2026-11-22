@@ -139,6 +139,10 @@ def check() -> None:
     assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"' in integration_deep
     assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION: "true"' in deep
     assert 'CI_QDRANT_TRANSPORT_IN_INTEGRATION' not in rust_deep
+    # Cargo generates native compile/link timing HTML from existing commands;
+    # retain that evidence in the existing deep artifacts (no new builds).
+    assert 'app/rust/target/cargo-timings/cargo-timing*.html' in integration_deep
+    assert 'app/rust/target/cargo-timings/cargo-timing*.html' in deep
     assert 'bash automation/run_qdrant_transport_gate.sh' in legacy
     assert (legacy.index('python3 automation/smoke_run_report_completeness.py')
             < legacy.index('bash automation/run_qdrant_transport_gate.sh')
@@ -169,6 +173,7 @@ def check() -> None:
     assert 'qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval' in qdrant_gate
     assert '--locked --target-dir "$TARGET_DIR" --timings' in qdrant_gate
     assert 'if env.get(temporal_key) and env.get(outbox_key)' in manual
+    assert '"--bin", "outbox_worker", "--timings"' in manual
     assert 'TARGET_DIR="${WHOLE_PAGE_SEMANTIC_TARGET_DIR:-' in semantic
     assert "INTEGRATION_TEMPORAL_WORKER_BIN:" not in integration_deep
     assert "INTEGRATION_OUTBOX_WORKER_BIN:" not in integration_deep
@@ -179,6 +184,7 @@ def check() -> None:
     run_report = (ROOT / "automation/smoke_run_report_completeness.py").read_text(encoding="utf-8")
     assert 'os.environ.get("CI_WORKSPACE_TESTED") == "true"' in run_report
     assert '"full_harness"' in run_report
+    assert '"full_harness", ["cargo", "test", "--timings"' in run_report
     # The full workspace owner ran the exact native policy and SERP tests.
     # Integration avoids compiling those crates again on a fresh runner.
     for smoke in ("smoke_quality_policy_registry.py", "smoke_serp_top10_pattern_pipeline.py"):

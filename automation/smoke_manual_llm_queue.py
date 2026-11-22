@@ -37,7 +37,7 @@ def prepare_worker_binaries() -> tuple[dict[str, str], int]:
     }
     command = [
         "cargo", "build", "--locked", "-p", "temporal_worker", "-p", "outbox_worker",
-        "--bin", "temporal_worker", "--bin", "outbox_worker",
+        "--bin", "temporal_worker", "--bin", "outbox_worker", "--timings",
     ]
     started = time.perf_counter_ns()
     result = subprocess.run(command, cwd=RUST_ROOT, check=False)
