@@ -1204,6 +1204,7 @@ mod publication_release_tests {
         let previous = swap_public_release(&live, &new).unwrap();
         {
             let _activation = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),
@@ -1237,6 +1238,7 @@ mod publication_release_tests {
         swap_public_release(&live, &new).unwrap();
         {
             let mut activation = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous: None,
                 journal_path: journal.clone(),
@@ -1272,6 +1274,7 @@ mod publication_release_tests {
         let previous = swap_public_release(&live, &new).unwrap();
         {
             let mut receipt = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),
