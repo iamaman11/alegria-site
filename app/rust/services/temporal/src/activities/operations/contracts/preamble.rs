@@ -36,6 +36,10 @@ use truth_domain::evidence::{
 use truth_domain::procedural_candidates::{
     active_heuristic_truth_rules, params_for_rule, role_and_concept_for_rule,
 };
+use truth_domain::semantic_truth_write::{
+    persisted_candidate_status, semantic_truth_write_outcome, truth_candidate_write_fields,
+    validate_verified_truth_write_candidate, SemanticTruthWriteOutcome,
+};
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
