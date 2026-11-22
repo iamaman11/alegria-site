@@ -154,3 +154,120 @@ async fn knowledge_a13_verified_context_reads_only_admissible_global_truth() {
     assert_eq!(inactive.class(), ErrorClass::ValidationFailure);
     assert!(inactive.to_string().contains("stage=active_context"));
 }
+
+/// A13: exercise the exact production canonical-search adapter against real
+/// Qdrant, with only the paid Voyage HTTP boundary replaced by a local stub.
+/// A vector suggestion changes a mapping, never PostgreSQL verified Truth.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate() {
+    use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
+    use infrastructure::adapters::{
+        canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
+        projection_materialize_adapter,
+    };
+    use prost::Message;
+    use seo_application::knowledge::resolve_canonical_vector_mappings;
+    use seo_ports::{knowledge::CanonicalVectorLookup, CanonicalVectorSearchPort};
+    use seo_steps::canonical_mapping_step::{
+        execute, CanonicalMappingInput, MatchingStage, MentionForMapping,
+    };
+
+    let qdrant = QdrantHarness::start().await.unwrap();
+    let voyage = stub_servers::spawn_voyage_contract_stub().await.unwrap();
+    let _env = env_overrides::EnvOverrideGuard::apply([
+        ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
+        ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
+        ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
+        ("VOYAGE_API_KEY".to_string(), "canonical-e2e-stub".to_string()),
+        (
+            "VOYAGE_API_BASE_URL".to_string(),
+            format!("{}/v1", voyage.base_url),
+        ),
+        ("VOYAGE_CANONICAL_COLLECTION".to_string(), "kb_canonical_4".to_string()),
+        ("CANONICAL_VECTOR_RETRIEVAL_REQUIRED".to_string(), "true".to_string()),
+        ("VOYAGE_RERANK_REQUIRED".to_string(), "true".to_string()),
+    ]);
+    let adapter = CanonicalVectorSearchAdapter;
+    let mapping_input = CanonicalMappingInput {
+        section_id: "canonical-qdrant-e2e".into(),
+        mentions: vec![MentionForMapping {
+            raw_text: "Unseen consular concept".into(),
+            entity_type: "concept".into(),
+        }],
+    };
+    let symbolic = execute(&mapping_input).mappings;
+    assert_eq!(symbolic[0].matching_stage, MatchingStage::VectorQdrant);
+
+    // A valid, empty live collection cannot certify the symbolic candidate.
+    assert_eq!(
+        adapter
+            .search_canonical_concepts(&mapping_input.mentions[0].raw_text)
+            .await
+            .unwrap(),
+        CanonicalVectorLookup::Candidates(vec![])
+    );
+    let empty = resolve_canonical_vector_mappings(&adapter, symbolic.clone())
+        .await
+        .unwrap();
+    assert!(empty[0].needs_hitl);
+    assert!(empty[0].canonical_key.is_none());
+    assert_eq!(empty[0].match_method, "qdrant_no_candidates");
+
+    // Both hits pass through the same REST materialization used by the Outbox
+    // worker. The deterministic Voyage query vector is positive; the second
+    // Qdrant vector is opposite, so ranking remains unambiguous before rerank.
+    for (concept_key, vector_value) in [
+        ("canonical:official_concept", 0.01_f32),
+        ("canonical:unrelated_concept", -0.01_f32),
+    ] {
+        let entity_key = format!("canonical-e2e:{concept_key}");
+        let command = QdrantUpsertCommand {
+            event_id: String::new(),
+            collection_name: "kb_canonical_4".into(),
+            entity_type: "canonical_concept".into(),
+            entity_key: entity_key.clone(),
+            point_id: Uuid::new_v4().to_string(),
+            vector: vec![vector_value; 1024],
+            payload: None,
+            distance: "cosine".into(),
+            vector_size: 1024,
+            metadata: std::collections::HashMap::from([
+                ("concept_key".into(), concept_key.into()),
+                ("label_ru".into(), format!("Label for {concept_key}")),
+            ]),
+        };
+        projection_materialize_adapter::dispatch_event(
+            "qdrant",
+            "QdrantUpsertCommand",
+            &entity_key,
+            "alegria.outbox.qdrant_upsert_command.v1",
+            &command.encode_to_vec(),
+        )
+        .await
+        .unwrap();
+    }
+
+    let candidates = adapter
+        .search_canonical_concepts(&mapping_input.mentions[0].raw_text)
+        .await
+        .unwrap();
+    let CanonicalVectorLookup::Candidates(candidates) = candidates else {
+        panic!("required provider must produce a real Qdrant retrieval result");
+    };
+    assert_eq!(candidates.len(), 2, "both real Qdrant points must survive retrieval");
+    assert_eq!(candidates[0].canonical_key.as_deref(), Some("canonical:official_concept"));
+    assert_eq!(candidates[0].score, 1.0, "Voyage rerank must set the top score");
+    assert_eq!(candidates[1].score, 0.5, "Voyage rerank must score the second hit");
+
+    let resolved = resolve_canonical_vector_mappings(&adapter, symbolic)
+        .await
+        .unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].canonical_key.as_deref(), Some("canonical:official_concept"));
+    assert_eq!(resolved[0].matching_stage, MatchingStage::VectorQdrant);
+    assert_eq!(resolved[0].mapping_type, "auto_map");
+    assert!(!resolved[0].needs_hitl);
+    assert_eq!(resolved[0].match_method, "qdrant_retrieval");
+}
