@@ -1,6 +1,6 @@
 //! Quality gates for generated HTML blocks (typed core only).
 //!
-//! JSON boundary wrappers live in `block_validator_json.rs`.
+//! JSON decoding is isolated in the infrastructure editorial validation adapter.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -347,4 +347,56 @@ pub fn validate_block_typed(html: &str, input: &BlockValidationInput) -> TypedVa
 
     let _ = &mut used_all;
     TypedValidationEnvelope { diagnostics }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_diagnostic(envelope: &TypedValidationEnvelope, gate: &str, severity: &str) -> bool {
+        envelope
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.gate == gate && diagnostic.severity == severity)
+    }
+
+    #[test]
+    fn unresolved_placeholders_block_generated_content() {
+        let input = BlockValidationInput {
+            block_key: "intro".to_string(),
+            allowed_numbers: HashSet::from(["80".to_string()]),
+            ..Default::default()
+        };
+        let result = validate_block_typed("<p>Fee {{amount}} is 180 EUR</p>", &input);
+        assert!(has_diagnostic(&result, "no_hallucination", "critical"));
+        assert!(has_diagnostic(&result, "no_hallucination", "warning"));
+    }
+
+    #[test]
+    fn approved_numeric_claim_in_fee_table_is_not_hallucination() {
+        let input = BlockValidationInput {
+            block_key: "fees_table".to_string(),
+            allowed_numbers: HashSet::from(["80".to_string()]),
+            ..Default::default()
+        };
+        let result = validate_block_typed("<table><tr><td>80 EUR</td></tr></table>", &input);
+        assert!(!has_diagnostic(&result, "no_hallucination", "critical"));
+        assert!(!has_diagnostic(&result, "no_hallucination", "warning"));
+        assert!(!has_diagnostic(&result, "html_structure", "critical"));
+    }
+
+    #[test]
+    fn required_links_and_block_structure_are_enforced() {
+        let input = BlockValidationInput {
+            block_key: "fees_table".to_string(),
+            required_links: vec![RequiredLink {
+                to_url: "/required".to_string(),
+                priority: 1,
+            }],
+            ..Default::default()
+        };
+        let result = validate_block_typed("<p>No table or link</p>", &input);
+        assert!(has_diagnostic(&result, "required_links", "critical"));
+        assert!(has_diagnostic(&result, "html_structure", "critical"));
+    }
 }

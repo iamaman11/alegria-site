@@ -3486,12 +3486,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
- "contracts",
  "idna",
- "regex",
- "scraper",
- "serde",
- "serde_json",
  "thiserror 2.0.21",
  "url",
  "uuid",
@@ -4350,6 +4345,8 @@ version = "0.1.0"
 dependencies = [
  "contracts",
  "primitives",
+ "regex",
+ "scraper",
  "serde",
  "serde_json",
 ]

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::block_validator::{
+use seo_domain::block_validator::{
     validate_block_typed, BlockValidationInput, RequiredLink, TypedValidationEnvelope,
 };
 
@@ -108,4 +108,28 @@ pub fn validate_block_json(
         url_norm,
     );
     serde_json::to_string(&envelope).unwrap_or_else(|_| "{\"diagnostics\":[]}".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_json_boundary_preserves_allowed_numeric_claims() {
+        let result = validate_block_boundary_typed(
+            "<table><tr><td>80 EUR</td></tr></table>",
+            r#"[{"amount":80}]"#,
+            "[]",
+            "[]",
+            "[]",
+            "[]",
+            "[]",
+            "fees_table",
+            "/visas",
+        );
+        assert!(!result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.gate == "no_hallucination"
+                && (diagnostic.severity == "critical" || diagnostic.severity == "warning")
+        }));
+    }
 }

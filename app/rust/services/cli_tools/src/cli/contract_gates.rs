@@ -6,9 +6,9 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     // Legacy Python paths are intentionally NOT required anymore (R9 archive).
     // ---------------------------------------------------------------------
     let required_files = [
-        "app/rust/crates/primitives/src/block_validator.rs",
+        "app/rust/crates/seo_domain/src/block_validator.rs",
         "app/rust/crates/truth_domain/src/fact_verifier.rs",
-        "app/rust/crates/primitives/src/writer.rs",
+        "app/rust/crates/seo_domain/src/writer.rs",
         "app/rust/crates/acquisition/src/pdf_parser.rs",
         "app/rust/crates/seo_application/src/seo_runtime.rs",
         "app/rust/crates/infrastructure/src/adapters/sqlx_pipeline_runtime_adapter.rs",

@@ -4,6 +4,7 @@ use contracts::generated::alegria::read_api::v1::{citation_fact, RuleRoleTypeV1}
 use contracts::generated::alegria::temporal::v1::{
     ValidationDiagnostic as TemporalValidationDiagnostic, ValidationReport,
 };
+use infrastructure::adapters::editorial_block_validation_adapter;
 use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter as pipeline_storage;
 use primitives::errors::{DomainError, ErrorClass};
@@ -25,29 +26,29 @@ pub(crate) async fn generate_content_impl(
         .map_err(AlegriaActivities::classify_error)?;
 
     let mut rendered_blocks: BTreeMap<String, String> = BTreeMap::new();
-    let citation_rules: Vec<primitives::writer::CitationRule> = bundle
+    let citation_rules: Vec<seo_domain::writer::CitationRule> = bundle
         .citation_facts
         .iter()
         .map(|fact| {
             let mut role = match RuleRoleTypeV1::try_from(fact.role_type).ok() {
                 Some(RuleRoleTypeV1::DocumentRequired | RuleRoleTypeV1::MustProvide) => {
-                    primitives::writer::RuleRole::DocumentRequired
+                    seo_domain::writer::RuleRole::DocumentRequired
                 }
-                Some(RuleRoleTypeV1::FormRequired) => primitives::writer::RuleRole::FormRequired,
+                Some(RuleRoleTypeV1::FormRequired) => seo_domain::writer::RuleRole::FormRequired,
                 Some(RuleRoleTypeV1::FeeItem | RuleRoleTypeV1::MustPay) => {
-                    primitives::writer::RuleRole::FeeItem
+                    seo_domain::writer::RuleRole::FeeItem
                 }
                 Some(RuleRoleTypeV1::TimelineItem | RuleRoleTypeV1::Timeline) => {
-                    primitives::writer::RuleRole::TimelineItem
+                    seo_domain::writer::RuleRole::TimelineItem
                 }
-                Some(_) => primitives::writer::RuleRole::Generic,
-                None => primitives::writer::RuleRole::Unknown,
+                Some(_) => seo_domain::writer::RuleRole::Generic,
+                None => seo_domain::writer::RuleRole::Unknown,
             };
-            let mut params = primitives::writer::RuleParamsView::None;
+            let mut params = seo_domain::writer::RuleParamsView::None;
             match fact.params.as_ref() {
                 Some(citation_fact::Params::DocParams(v)) => {
-                    role = primitives::writer::RuleRole::DocumentRequired;
-                    params = primitives::writer::RuleParamsView::Document {
+                    role = seo_domain::writer::RuleRole::DocumentRequired;
+                    params = seo_domain::writer::RuleParamsView::Document {
                         severity: v.severity.clone(),
                         subtype: if v.subtype.is_empty() {
                             None
@@ -58,8 +59,8 @@ pub(crate) async fn generate_content_impl(
                     };
                 }
                 Some(citation_fact::Params::FeeParams(v)) => {
-                    role = primitives::writer::RuleRole::FeeItem;
-                    params = primitives::writer::RuleParamsView::Fee {
+                    role = seo_domain::writer::RuleRole::FeeItem;
+                    params = seo_domain::writer::RuleParamsView::Fee {
                         amount: v.amount,
                         currency: if v.currency.is_empty() {
                             "EUR".to_string()
@@ -69,14 +70,14 @@ pub(crate) async fn generate_content_impl(
                     };
                 }
                 Some(citation_fact::Params::TimelineParams(v)) => {
-                    role = primitives::writer::RuleRole::TimelineItem;
-                    params = primitives::writer::RuleParamsView::Timeline { days: v.days };
+                    role = seo_domain::writer::RuleRole::TimelineItem;
+                    params = seo_domain::writer::RuleParamsView::Timeline { days: v.days };
                 }
                 None => {}
-                _ => role = primitives::writer::RuleRole::Generic,
+                _ => role = seo_domain::writer::RuleRole::Generic,
             }
 
-            primitives::writer::CitationRule {
+            seo_domain::writer::CitationRule {
                 rule_instance_id: fact.rule_instance_id.clone(),
                 rule_type_key: fact.rule_type_key.clone(),
                 role,
@@ -87,9 +88,9 @@ pub(crate) async fn generate_content_impl(
             }
         })
         .collect();
-    let faq_items: Vec<primitives::writer::FaqItem> = Vec::new();
-    for block_key in primitives::writer::plan_blocks(&citation_rules, &faq_items) {
-        let html = primitives::writer::render_block(&block_key, &citation_rules, &faq_items);
+    let faq_items: Vec<seo_domain::writer::FaqItem> = Vec::new();
+    for block_key in seo_domain::writer::plan_blocks(&citation_rules, &faq_items) {
+        let html = seo_domain::writer::render_block(&block_key, &citation_rules, &faq_items);
         rendered_blocks.insert(block_key, html);
     }
 
@@ -171,7 +172,7 @@ pub(crate) async fn validate_blocks_impl(
 
     let mut diagnostics: Vec<TemporalValidationDiagnostic> = Vec::new();
     for (block_key, html) in blocks {
-        let diag_envelope = primitives::block_validator_json::validate_block_boundary_typed(
+        let diag_envelope = editorial_block_validation_adapter::validate_block_boundary_typed(
             &html,
             &rules_json,
             &facts_json,
