@@ -25,6 +25,8 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44967454786](https://github.com/iamaman11/alegria-site/actions/runs/44967454786) | **4m 48s** | Cargo-native compile timings recorded, full integration 4m33s; 14/14 PASS |
 | [#44968309924](https://github.com/iamaman11/alegria-site/actions/runs/44968309924) | **5m 04s** | Parallel real test services speed up readiness; Rust cache writes still fail; 14/14 PASS |
 | [#44968816771](https://github.com/iamaman11/alegria-site/actions/runs/44968816771) | **4m 56s** | One-run GHA cache failure diagnosis; 409 and 429 confirmed, 14/14 PASS |
+| [#44969281951](https://github.com/iamaman11/alegria-site/actions/runs/44969281951) | **4m 21s** | One sccache GHA writer; read-only peers run all real suites; 14/14 PASS |
+| [#44970080966](https://github.com/iamaman11/alegria-site/actions/runs/44970080966) | **5m 14s** | Isolated writer: 139/139 HTTP 409, ~9.53 GiB cache used; 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
@@ -33,8 +35,8 @@ full CI + three warm/one cold** acceptance open until measured. Historical
 The critical path varies between the real `integration-e2e` (4m46s in the
 first run) and `comprehensive` (5m18s in the second). Even 99.62% sccache
 hits did not guarantee a ≤5m full run; the signed image still took only 50s.
-The latest diagnostic run also met five minutes without removing tests, but
-repeatable cold-cache performance still requires the full Issue #37 sample.
+The fastest run also met five minutes without removing tests, but repeatable
+cold-cache performance still requires the full Issue #37 sample.
 
 ## On each pull request
 
@@ -111,12 +113,24 @@ PRs report `NOT_AFFECTED_BY_SOURCE_CHANGE` and skip unnecessary Rust builds.
   [run #44968816771](https://github.com/iamaman11/alegria-site/actions/runs/44968816771)
   confirmed **89 HTTP 409 conflicting writes and 35 HTTP 429 rate limits** in
   integration (124/124 failed writes), without uploading the raw debug log.
-  The permanent native fix assigns one GHA compiler-cache writer to the full
+  The current native mitigation assigns one GHA compiler-cache writer to the full
   `rust-regressions` workspace owner; `integration-e2e` and `comprehensive`
   retain the same real tests and run in parallel, but read the shared cache
-  without competing writes. The temporary debug instrumentation was removed.
-  That fix was merged after the latest stable sccache v0.19.0 release
-  (24 October 2026); do not assume a version-only upgrade repairs this.
+  without competing network writes. `sccache 0.16.0` still reports local
+  `cache_write_errors` in `READ_ONLY` mode by design; those counters are not
+  network write failures. The single `READ_WRITE` owner is **not repaired**:
+  it observed 139/139 failed writes, all HTTP 409, in the isolated follow-up
+  [run #44970080966](https://github.com/iamaman11/alegria-site/actions/runs/44970080966).
+  That run passed all 14 owners in 5m14s; `comprehensive` took 4m49s
+  (Truth Worker build 126s, fixture suite 107s). At that moment GitHub
+  reported 10,228,572,328 bytes across 6,737
+  repository cache entries; checking the actual repository storage limit
+  returned HTTP 403, so near-quota pressure is a plausible contributor, not
+  a demonstrated sole cause. No cache entries were deleted. The temporary
+  diagnostic instrumentation was removed after measuring. The upstream
+  [retry fix](https://github.com/mozilla/sccache/pull/2911) was merged after
+  the latest stable sccache v0.19.0 release (24 October 2026); do not assume
+  a version-only upgrade repairs 409 conflicts or quota pressure.
   Cargo `--timings` in the deep evidence
   independently measured `aws-lc-sys` C build scripts at **45s (Truth)** and
   **60s (integration)**. Moving the application from AWS-LC to `ring` could
