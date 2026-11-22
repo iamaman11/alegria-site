@@ -42,11 +42,12 @@ def commands_for_report(report: dict, *, check_only: bool) -> list[list[str]]:
         raise ValueError("affected closure omitted a directly modified crate")
 
     if report.get("analysis") == "full":
-        # Global, unknown, manifest and generated-contract edits are fail-closed.
-        commands = [["cargo", "check", "--workspace", "--locked"]]
-        if not check_only:
-            commands.append(["cargo", "test", "--workspace", "--locked"])
-        return commands
+        # Global/unknown changes require the whole workspace. `cargo test`
+        # already compiles its targets; a preceding full `cargo check` would
+        # compile the dependency graph again for another profile.
+        return [["cargo", "check", "--workspace", "--locked"]] if check_only else [
+            ["cargo", "test", "--workspace", "--locked"]
+        ]
     if report.get("analysis") != "scoped":
         raise ValueError("unknown impact scope")
     if not affected:

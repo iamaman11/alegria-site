@@ -105,14 +105,12 @@ jobs:
             automation/reports/ci_impact.json
           if-no-files-found: ignore
 
-      # A cold workspace test takes longer than the five-minute PR budget.
-      # Keep real fast Rust model regressions here; run all crates and real
-      # PostgreSQL E2E in ci-deep before release.
-      - name: Fast Rust runtime model unit tests
-        working-directory: app/rust
+      # Same impact report drives local and CI Cargo feedback. Broad or
+      # unclassifiable inputs fail closed to the workspace, not a fake PASS.
+      - name: Changed Rust crates and dependent consumers
         env:
           SQLX_OFFLINE: "true"
-        run: cargo test -p runtime_models --locked
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()

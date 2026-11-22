@@ -73,10 +73,11 @@ class DevRustFeedbackTests(unittest.TestCase):
 
     def test_global_input_falls_back_to_whole_workspace(self) -> None:
         commands = commands_for_report(report("app/db/schema.sql"), check_only=False)
-        self.assertEqual(commands, [
-            ["cargo", "check", "--workspace", "--locked"],
-            ["cargo", "test", "--workspace", "--locked"],
-        ])
+        self.assertEqual(commands, [["cargo", "test", "--workspace", "--locked"]])
+        self.assertEqual(
+            commands_for_report(report("app/db/schema.sql"), check_only=True),
+            [["cargo", "check", "--workspace", "--locked"]],
+        )
 
     def test_clean_worktree_only_needs_formatting(self) -> None:
         self.assertEqual(commands_for_report(report(), check_only=False), [])
