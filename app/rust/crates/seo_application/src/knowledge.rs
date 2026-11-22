@@ -6,7 +6,99 @@ use std::collections::BTreeMap;
 use primitives::errors::DomainError;
 use runtime_models::{RuleParams, RuleRoleType};
 use seo_domain::writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole};
-use seo_ports::{knowledge::VerifiedRule, knowledge::VerifiedRulesQuery, VerifiedRulesReader};
+use seo_ports::{
+    knowledge::{
+        CanonicalVectorCandidate, CanonicalVectorLookup, VerifiedRule, VerifiedRulesQuery,
+    },
+    CanonicalVectorSearchPort, VerifiedRulesReader,
+};
+use seo_steps::canonical_mapping_step::{MappingResult, MatchingStage};
+
+/// Resolve symbolic terms against non-authoritative vector suggestions. Only
+/// this mapping result changes; verified rules remain PostgreSQL-owned.
+pub async fn resolve_canonical_vector_mappings<S: CanonicalVectorSearchPort + ?Sized>(
+    search: &S,
+    mappings: Vec<MappingResult>,
+) -> Result<Vec<MappingResult>, DomainError> {
+    let mut resolved = Vec::with_capacity(mappings.len());
+    for mapping in mappings {
+        if mapping.matching_stage != MatchingStage::VectorQdrant
+            || mapping.raw_text.trim().is_empty()
+        {
+            resolved.push(mapping);
+            continue;
+        }
+        let updated = match search.search_canonical_concepts(&mapping.raw_text).await? {
+            CanonicalVectorLookup::Unavailable => mapping,
+            CanonicalVectorLookup::Candidates(candidates) if candidates.is_empty() => {
+                unresolved_canonical_mapping(&mapping, "qdrant_no_candidates")
+            }
+            CanonicalVectorLookup::Candidates(candidates) => {
+                resolve_canonical_candidates(&mapping, &candidates)
+            }
+        };
+        resolved.push(updated);
+    }
+    Ok(resolved)
+}
+
+fn unresolved_canonical_mapping(mapping: &MappingResult, method: &str) -> MappingResult {
+    MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key: None,
+        mapping_type: "new_candidate".to_string(),
+        match_method: method.to_string(),
+        matching_stage: MatchingStage::VectorQdrant,
+        qdrant_score: None,
+        confidence: 0.0,
+        needs_hitl: true,
+    }
+}
+
+fn resolve_canonical_candidates(
+    mapping: &MappingResult,
+    candidates: &[CanonicalVectorCandidate],
+) -> MappingResult {
+    let top = &candidates[0];
+    // Provider scores and candidate identities are untrusted. An invalid hit
+    // cannot produce an automatic match even if its reported score is high.
+    let Some(top_key) = top
+        .canonical_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+    else {
+        return unresolved_canonical_mapping(mapping, "qdrant_invalid_candidate");
+    };
+    if !top.score.is_finite()
+        || !(0.0..=1.0).contains(&top.score)
+        || candidates
+            .iter()
+            .skip(1)
+            .any(|candidate| !candidate.score.is_finite())
+    {
+        return unresolved_canonical_mapping(mapping, "qdrant_invalid_score");
+    }
+    let margin = candidates
+        .get(1)
+        .map_or(top.score, |second| top.score - second.score);
+    let (mapping_type, needs_hitl, canonical_key) = if top.score >= 0.88 && margin >= 0.03 {
+        ("auto_map", false, Some(top_key.to_string()))
+    } else if top.score >= 0.75 {
+        ("review", true, Some(top_key.to_string()))
+    } else {
+        ("new_candidate", true, None)
+    };
+    MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key,
+        mapping_type: mapping_type.to_string(),
+        match_method: "qdrant_retrieval".to_string(),
+        matching_stage: MatchingStage::VectorQdrant,
+        qdrant_score: Some(top.score),
+        confidence: top.score,
+        needs_hitl,
+    }
+}
 
 pub async fn generate_verified_blocks<R: VerifiedRulesReader>(
     reader: &R,
@@ -149,6 +241,162 @@ mod tests {
     use async_trait::async_trait;
     use primitives::errors::ErrorClass;
     use seo_ports::knowledge::VerifiedRulesView;
+
+    struct FakeCanonicalSearch {
+        lookup: CanonicalVectorLookup,
+    }
+
+    #[async_trait]
+    impl CanonicalVectorSearchPort for FakeCanonicalSearch {
+        async fn search_canonical_concepts(
+            &self,
+            _raw_text: &str,
+        ) -> Result<CanonicalVectorLookup, DomainError> {
+            Ok(self.lookup.clone())
+        }
+    }
+
+    struct FailIfCalled;
+
+    #[async_trait]
+    impl CanonicalVectorSearchPort for FailIfCalled {
+        async fn search_canonical_concepts(
+            &self,
+            _raw_text: &str,
+        ) -> Result<CanonicalVectorLookup, DomainError> {
+            panic!("non-vector mapping must not invoke an external provider")
+        }
+    }
+
+    struct BrokenProvider;
+
+    #[async_trait]
+    impl CanonicalVectorSearchPort for BrokenProvider {
+        async fn search_canonical_concepts(
+            &self,
+            _raw_text: &str,
+        ) -> Result<CanonicalVectorLookup, DomainError> {
+            Err(DomainError::InfraUnavailable {
+                message: "simulated qdrant outage".into(),
+            })
+        }
+    }
+
+    fn symbolic_mapping() -> MappingResult {
+        MappingResult {
+            raw_text: "unseen authority term".into(),
+            canonical_key: Some("candidate:unseen_authority_term".into()),
+            mapping_type: "vector_required".into(),
+            match_method: "vector_qdrant_required".into(),
+            matching_stage: MatchingStage::VectorQdrant,
+            qdrant_score: None,
+            confidence: 0.0,
+            needs_hitl: true,
+        }
+    }
+
+    fn hit(key: Option<&str>, score: f32) -> CanonicalVectorCandidate {
+        CanonicalVectorCandidate {
+            canonical_key: key.map(str::to_owned),
+            score,
+        }
+    }
+
+    async fn resolve(lookup: CanonicalVectorLookup) -> MappingResult {
+        resolve_canonical_vector_mappings(&FakeCanonicalSearch { lookup }, vec![symbolic_mapping()])
+            .await
+            .unwrap()
+            .remove(0)
+    }
+
+    #[tokio::test]
+    async fn empty_search_requires_hitl_and_cannot_promote_symbolic_candidate() {
+        let mapping = resolve(CanonicalVectorLookup::Candidates(vec![])).await;
+        assert!(mapping.canonical_key.is_none());
+        assert!(mapping.needs_hitl);
+        assert_eq!(mapping.match_method, "qdrant_no_candidates");
+        assert_eq!(mapping.confidence, 0.0);
+        assert_eq!(mapping.matching_stage, MatchingStage::VectorQdrant);
+    }
+
+    #[tokio::test]
+    async fn unavailable_optional_provider_preserves_unresolved_hitl_gate() {
+        let mapping = resolve(CanonicalVectorLookup::Unavailable).await;
+        assert_eq!(mapping.canonical_key, symbolic_mapping().canonical_key);
+        assert!(mapping.needs_hitl);
+        assert_eq!(mapping.mapping_type, "vector_required");
+    }
+
+    #[tokio::test]
+    async fn high_confidence_requires_identity_and_margin_for_automatic_mapping() {
+        let confident = resolve(CanonicalVectorLookup::Candidates(vec![
+            hit(Some("canonical:passport"), 0.94),
+            hit(Some("canonical:other"), 0.80),
+        ]))
+        .await;
+        assert!(!confident.needs_hitl);
+        assert_eq!(confident.mapping_type, "auto_map");
+        assert_eq!(
+            confident.canonical_key.as_deref(),
+            Some("canonical:passport")
+        );
+
+        let ambiguous = resolve(CanonicalVectorLookup::Candidates(vec![
+            hit(Some("canonical:passport"), 0.94),
+            hit(Some("canonical:other"), 0.93),
+        ]))
+        .await;
+        assert!(ambiguous.needs_hitl);
+        assert_eq!(ambiguous.mapping_type, "review");
+
+        let weak = resolve(CanonicalVectorLookup::Candidates(vec![hit(
+            Some("canonical:passport"),
+            0.74,
+        )]))
+        .await;
+        assert!(weak.needs_hitl);
+        assert!(weak.canonical_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn invalid_vector_identity_or_scores_never_auto_map() {
+        for candidates in [
+            vec![hit(None, 0.99)],
+            vec![hit(Some("  "), 0.99)],
+            vec![hit(Some("canonical:passport"), f32::NAN)],
+            vec![hit(Some("canonical:passport"), 1.5)],
+            vec![hit(Some("canonical:passport"), 0.99), hit(None, f32::NAN)],
+        ] {
+            let mapping = resolve(CanonicalVectorLookup::Candidates(candidates)).await;
+            assert!(mapping.needs_hitl);
+            assert!(mapping.canonical_key.is_none());
+            assert_eq!(mapping.confidence, 0.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn symbolic_search_does_not_mask_typed_provider_failures() {
+        let err = resolve_canonical_vector_mappings(&BrokenProvider, vec![symbolic_mapping()])
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(err.to_string().contains("simulated qdrant outage"));
+    }
+
+    #[tokio::test]
+    async fn symbolic_retrieval_never_runs_for_exact_alias_mapping() {
+        let fixed = MappingResult {
+            matching_stage: MatchingStage::ExactAlias,
+            needs_hitl: false,
+            mapping_type: "alias".into(),
+            ..symbolic_mapping()
+        };
+        let unchanged = resolve_canonical_vector_mappings(&FailIfCalled, vec![fixed.clone()])
+            .await
+            .unwrap();
+        assert_eq!(unchanged[0].canonical_key, fixed.canonical_key);
+        assert!(!unchanged[0].needs_hitl);
+    }
 
     struct FakeReader {
         context: Option<VerifiedRulesView>,

@@ -18,7 +18,7 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
     SourceContextChunkState,
 };
-use knowledge::{VerifiedRulesQuery, VerifiedRulesView};
+use knowledge::{CanonicalVectorLookup, VerifiedRulesQuery, VerifiedRulesView};
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
@@ -288,6 +288,15 @@ pub trait SemanticLinkSearchPort: Send + Sync {
         &self,
         queries: &[String],
     ) -> Result<Vec<SemanticDemandCluster>, DomainError>;
+}
+
+/// Candidate discovery only; canonical mapping policy belongs to Knowledge.
+#[async_trait]
+pub trait CanonicalVectorSearchPort: Send + Sync {
+    async fn search_canonical_concepts(
+        &self,
+        raw_text: &str,
+    ) -> Result<CanonicalVectorLookup, DomainError>;
 }
 
 #[async_trait]

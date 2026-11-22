@@ -1,3 +1,4 @@
+pub mod canonical_vector_search_adapter;
 pub mod dataforseo_serp_adapter;
 pub mod editorial_block_validation_adapter;
 pub mod editorial_llm_adapter;

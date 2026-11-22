@@ -4,6 +4,5 @@ include!("operations/whole_page_semantic_ops.rs");
 include!("operations/truth_projection_helpers.rs");
 include!("operations/runtime_support_ops.rs");
 include!("operations/acquisition_section_ops.rs");
-include!("operations/canonical_retrieval_ops.rs");
 include!("operations/truth_extraction_ops.rs");
 include!("operations/truth_write_and_fixture_tests.rs");
