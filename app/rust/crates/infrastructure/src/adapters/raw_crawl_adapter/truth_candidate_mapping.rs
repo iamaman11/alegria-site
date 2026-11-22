@@ -54,7 +54,7 @@ async fn load_persisted_candidates_for_adjudication(
             .try_get::<Json<Vec<String>>, _>("uncertainty_flags")
             .map(|json| json.0)
             .unwrap_or_default();
-        let mut epistemic_status: String = row.get("epistemic_status");
+        let original_status: String = row.get("epistemic_status");
         // Legacy candidates may predate the scoped applicability validator.
         // A nonempty/malformed scope must never be promoted by historical
         // extraction or by a previously persisted "structured" verdict.
@@ -63,32 +63,18 @@ async fn load_persisted_candidates_for_adjudication(
             .map(|value| value.0)
             .unwrap_or(Value::Null);
         let unresolved_applicability: bool = row.get("unresolved_applicability");
-        if (!is_unrestricted_scope(&scope) || unresolved_applicability)
-            && epistemic_status != "rejected"
-        {
-            epistemic_status = "needs_hitl".to_string();
-            let candidate_id: String = row.get("rule_candidate_id");
-            update_candidate_epistemic_status(pool, &candidate_id, &epistemic_status).await?;
-        }
         let concept_exists: bool = row.get("concept_exists");
-        if epistemic_status != "rejected" && !concept_exists {
-            epistemic_status = "needs_hitl".to_string();
-            if let Ok(rule_candidate_id) = row.try_get::<String, _>("rule_candidate_id") {
-                update_candidate_epistemic_status(pool, &rule_candidate_id, &epistemic_status)
-                    .await?;
-            }
-        }
-        let freshness_class = classify_candidate_freshness(&uncertainty_flags);
-        let completeness_class =
-            classify_candidate_completeness(&epistemic_status, &uncertainty_flags);
-        if epistemic_status == "structured"
-            && (freshness_class != "fresh" || completeness_class != "complete")
-        {
-            epistemic_status = "needs_hitl".to_string();
-            if let Ok(rule_candidate_id) = row.try_get::<String, _>("rule_candidate_id") {
-                update_candidate_epistemic_status(pool, &rule_candidate_id, &epistemic_status)
-                    .await?;
-            }
+        let classification = classify_persisted_candidate(
+            &original_status,
+            &truth_param_value_from_json(&scope),
+            unresolved_applicability,
+            concept_exists,
+            &uncertainty_flags,
+        );
+        if classification.epistemic_status != original_status {
+            let candidate_id: String = row.get("rule_candidate_id");
+            update_candidate_epistemic_status(pool, &candidate_id, &classification.epistemic_status)
+                .await?;
         }
         candidates.push(PersistedCandidateForAdjudication {
             rule_candidate_id: row.get("rule_candidate_id"),
@@ -102,8 +88,8 @@ async fn load_persisted_candidates_for_adjudication(
             source_key: row.get("source_key"),
             source_tier: row.get("source_tier"),
             confidence: row.get::<f64, _>("confidence"),
-            freshness_class,
-            completeness_class,
+            freshness_class: classification.freshness_class,
+            completeness_class: classification.completeness_class,
             evidence_section_id: row.get("evidence_section_id"),
             evidence_quote: row.get("evidence_quote"),
             span_start: row.get("span_start"),
@@ -111,29 +97,10 @@ async fn load_persisted_candidates_for_adjudication(
             source_snapshot_hash: row.get("source_snapshot_hash"),
             prompt_version: row.get("prompt_version"),
             model_version: row.get("llm_model"),
-            epistemic_status,
+            epistemic_status: classification.epistemic_status,
         });
     }
     Ok(candidates)
-}
-
-fn is_unrestricted_scope(scope: &Value) -> bool {
-    scope.as_object().is_some_and(|fields| fields.is_empty())
-}
-
-#[cfg(test)]
-mod persisted_scope_guard_tests {
-    use super::*;
-
-    #[test]
-    fn scoped_and_malformed_candidates_never_count_as_global_facts() {
-        assert!(is_unrestricted_scope(&serde_json::json!({})));
-        assert!(!is_unrestricted_scope(&serde_json::json!({
-            "applicant_type": "student"
-        })));
-        assert!(!is_unrestricted_scope(&Value::Null));
-        assert!(!is_unrestricted_scope(&serde_json::json!(["student"])));
-    }
 }
 
 fn to_truth_structured_candidate(
@@ -203,42 +170,6 @@ fn truth_param_value_to_json(value: &TruthParamValue) -> Value {
     }
 }
 
-fn classify_candidate_freshness(uncertainty_flags: &[String]) -> String {
-    if uncertainty_flags.iter().any(|flag| {
-        flag == "stale_source" || flag == "validator:freshness_or_temporality_ambiguous"
-    }) {
-        "stale".to_string()
-    } else if uncertainty_flags
-        .iter()
-        .any(|flag| flag == "freshness_ambiguous" || flag == "temporal_ambiguous")
-    {
-        "watch".to_string()
-    } else {
-        "fresh".to_string()
-    }
-}
-
-fn classify_candidate_completeness(epistemic_status: &str, uncertainty_flags: &[String]) -> String {
-    if uncertainty_flags.iter().any(|flag| {
-        matches!(
-            flag.as_str(),
-            "validator:fee_item_incomplete"
-                | "validator:timeline_item_incomplete"
-                | "validator:where_to_apply_incomplete"
-                | "validator:role_specific_params_missing"
-                | "validator:missing_numeric_params"
-                | "validator:missing_range_bounds"
-                | "validator:candidate_marked_incomplete"
-        )
-    }) {
-        "incomplete".to_string()
-    } else if epistemic_status == "needs_hitl" {
-        "partial".to_string()
-    } else {
-        "complete".to_string()
-    }
-}
-
 async fn update_candidate_epistemic_status(
     pool: &PgPool,
     rule_candidate_id: &str,
@@ -262,57 +193,19 @@ fn semantic_rule_instance_id(context_key: &str, role: &str, concept_canonical_ke
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
 }
 
-fn canonical_role_key(role: &str) -> String {
-    role.trim().to_ascii_lowercase()
-}
-
 fn pick_canonical_candidate<'a>(
     group_candidates: &'a [PersistedCandidateForAdjudication],
+    structured: &[TruthStructuredCandidate],
     adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
 ) -> std::result::Result<&'a PersistedCandidateForAdjudication, primitives::errors::DomainError> {
-    let verified_ids: Vec<&str> = adjudication
-        .decisions
-        .iter()
-        .filter(|decision| decision.decision == "verified")
-        .map(|decision| decision.rule_candidate_id.as_str())
-        .collect();
+    let canonical_id = canonical_verified_candidate_id(structured, adjudication);
     group_candidates
         .iter()
-        .filter(|candidate| {
-            verified_ids
-                .iter()
-                .any(|id| *id == candidate.rule_candidate_id)
-        })
-        .max_by(|left, right| {
-            left.confidence
-                .partial_cmp(&right.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .find(|candidate| Some(candidate.rule_candidate_id.as_str()) == canonical_id)
         .ok_or_else(|| primitives::errors::DomainError::UnexpectedBug {
             message: "truth adjudication produced verified verdict without canonical candidate"
                 .to_string(),
         })
-}
-
-fn canonical_verification_method(
-    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
-) -> String {
-    adjudication
-        .decisions
-        .iter()
-        .find(|decision| decision.decision == "verified")
-        .map(|decision| decision.verification_method.clone())
-        .unwrap_or_else(|| "truth_adjudication@1".to_string())
-}
-
-fn canonical_adjudication_reason(
-    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
-) -> String {
-    adjudication
-        .decisions
-        .first()
-        .map(|decision| decision.adjudication_reason.clone())
-        .unwrap_or_else(|| "truth_adjudication_result_missing".to_string())
 }
 
 async fn upsert_verified_rule_instance_from_candidate(

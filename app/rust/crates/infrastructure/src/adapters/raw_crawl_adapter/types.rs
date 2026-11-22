@@ -14,6 +14,10 @@ use sqlx::{types::Json, PgPool, Row};
 use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
+use truth_domain::persisted_candidates::{
+    canonical_adjudication_reason, canonical_role_key, canonical_verification_method,
+    canonical_verified_candidate_id, classify_persisted_candidate,
+};
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
 use acquisition::html_sections::{extract_meta_typed, extract_sections_typed, HtmlSection};

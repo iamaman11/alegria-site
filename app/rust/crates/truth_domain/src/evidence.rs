@@ -301,24 +301,47 @@ mod source_evidence_span_tests {
 pub fn classify_candidate_completeness_local(
     validation: &TruthCandidateValidationResult,
 ) -> String {
-    if validation.issues.iter().any(|issue| {
-        matches!(
-            issue.code.as_str(),
-            "fee_item_incomplete"
-                | "timeline_item_incomplete"
-                | "where_to_apply_incomplete"
-                | "role_specific_params_missing"
-                | "missing_numeric_params"
-                | "missing_range_bounds"
-                | "candidate_marked_incomplete"
-        )
-    }) {
+    if validation
+        .issues
+        .iter()
+        .any(|issue| incomplete_validator_code(&issue.code))
+    {
         "incomplete".to_string()
     } else if validation.epistemic_status == "needs_hitl" {
         "partial".to_string()
     } else {
         "complete".to_string()
     }
+}
+
+/// Reloaded candidates store validation issues as prefixed uncertainty flags.
+pub fn classify_candidate_completeness_from_flags(
+    epistemic_status: &str,
+    uncertainty_flags: &[String],
+) -> String {
+    if uncertainty_flags.iter().any(|flag| {
+        flag.strip_prefix("validator:")
+            .is_some_and(incomplete_validator_code)
+    }) {
+        "incomplete".to_string()
+    } else if epistemic_status == "needs_hitl" {
+        "partial".to_string()
+    } else {
+        "complete".to_string()
+    }
+}
+
+fn incomplete_validator_code(code: &str) -> bool {
+    matches!(
+        code,
+        "fee_item_incomplete"
+            | "timeline_item_incomplete"
+            | "where_to_apply_incomplete"
+            | "role_specific_params_missing"
+            | "missing_numeric_params"
+            | "missing_range_bounds"
+            | "candidate_marked_incomplete"
+    )
 }
 
 pub fn section_uncertainty_flags(raw_text: &str) -> Vec<String> {

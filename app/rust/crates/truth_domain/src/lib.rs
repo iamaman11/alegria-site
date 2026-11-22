@@ -4,6 +4,7 @@
 pub mod contradictions;
 pub mod evidence;
 pub mod fact_verifier;
+pub mod persisted_candidates;
 pub mod procedural_candidates;
 pub mod review_decisions;
 pub mod truth_candidates;
