@@ -19,6 +19,8 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44962223447](https://github.com/iamaman11/alegria-site/actions/runs/44962223447) | **5m 38s** | Reused workspace-owned Quality/SERP Cargo tests; 14/14 PASS |
 | [#44962860262](https://github.com/iamaman11/alegria-site/actions/runs/44962860262) | **5m 13s** | Parallel deep DAG, no unused hosted E2E PostgreSQL; 14/14 PASS |
 | [#44963430262](https://github.com/iamaman11/alegria-site/actions/runs/44963430262) | **5m 44s** | Same native code, Truth Workers took 133s instead of 95s; 14/14 PASS |
+| [#44964187468](https://github.com/iamaman11/alegria-site/actions/runs/44964187468) | **5m 15s** | Qdrant transport reused existing integration test target; 14/14 PASS |
+| [#44964851388](https://github.com/iamaman11/alegria-site/actions/runs/44964851388) | **4m 32s** | Deep jobs start after 10s Rust contracts; 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
@@ -27,6 +29,8 @@ full CI + three warm/one cold** acceptance open until measured. Historical
 The critical path varies between the real `integration-e2e` (4m46s in the
 first run) and `comprehensive` (5m18s in the second). Even 99.62% sccache
 hits did not guarantee a ≤5m full run; the signed image still took only 50s.
+The latest single run met the five-minute target without removing tests; a
+repeatable cold-cache SLA still requires the full Issue #37 acceptance sample.
 
 ## On each pull request
 
