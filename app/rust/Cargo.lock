@@ -617,6 +617,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "truth_domain",
  "uuid",
 ]
 
@@ -2124,6 +2125,7 @@ dependencies = [
  "tonic-prost-build",
  "tower",
  "tracing",
+ "truth_domain",
  "uuid",
  "vector_qdrant",
 ]
@@ -3356,6 +3358,7 @@ dependencies = [
  "primitives",
  "serde",
  "serde_json",
+ "truth_domain",
 ]
 
 [[package]]
@@ -5064,6 +5067,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "truth_domain",
  "url",
  "uuid",
 ]
@@ -5804,6 +5808,14 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "truth_domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

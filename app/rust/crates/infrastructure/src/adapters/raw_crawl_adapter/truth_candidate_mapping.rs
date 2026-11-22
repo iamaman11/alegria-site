@@ -268,7 +268,7 @@ fn canonical_role_key(role: &str) -> String {
 
 fn pick_canonical_candidate<'a>(
     group_candidates: &'a [PersistedCandidateForAdjudication],
-    adjudication: &primitives::truth_candidates::TruthAdjudicationResult,
+    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
 ) -> std::result::Result<&'a PersistedCandidateForAdjudication, primitives::errors::DomainError> {
     let verified_ids: Vec<&str> = adjudication
         .decisions
@@ -295,7 +295,7 @@ fn pick_canonical_candidate<'a>(
 }
 
 fn canonical_verification_method(
-    adjudication: &primitives::truth_candidates::TruthAdjudicationResult,
+    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
 ) -> String {
     adjudication
         .decisions
@@ -306,7 +306,7 @@ fn canonical_verification_method(
 }
 
 fn canonical_adjudication_reason(
-    adjudication: &primitives::truth_candidates::TruthAdjudicationResult,
+    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
 ) -> String {
     adjudication
         .decisions

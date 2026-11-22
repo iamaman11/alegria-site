@@ -6,7 +6,7 @@ import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PRIMITIVES = ROOT / "app/rust/crates/primitives/src/truth_candidates.rs"
+PRIMITIVES = ROOT / "app/rust/crates/truth_domain/src/truth_candidates.rs"
 RAW_CRAWL = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 PLAN = ROOT / "docs/SUPERSITE_10_10_EXPERT_GAP_CLOSURE_PLAN.md"
 

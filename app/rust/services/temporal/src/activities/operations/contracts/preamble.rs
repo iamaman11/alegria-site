@@ -26,7 +26,7 @@ use policies::truth_governance::{
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
-use primitives::truth_candidates::{
+use truth_domain::truth_candidates::{
     validate_truth_candidate, TruthCandidateRuntime, TruthCandidateValidationResult,
     TruthParamValue, TruthStructuredCandidate,
 };

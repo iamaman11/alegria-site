@@ -196,7 +196,7 @@ pub(crate) async fn verified_truth_write_impl(
             });
         }
         if decision.decision == "verified"
-            && primitives::truth_candidates::truth_scope_target(&decision.scope).is_none()
+            && truth_domain::truth_candidates::truth_scope_target(&decision.scope).is_none()
         {
             return Err(DomainError::ValidationFailure {
                 message: format!(
@@ -353,8 +353,8 @@ pub(crate) async fn verified_truth_write_impl(
                 // global retrieval; its validated support flows through the
                 // existing SQL profile resolver instead.
                 if matches!(
-                    primitives::truth_candidates::truth_scope_target(&decision.scope),
-                    Some(primitives::truth_candidates::TruthScopeTarget::Global)
+                    truth_domain::truth_candidates::truth_scope_target(&decision.scope),
+                    Some(truth_domain::truth_candidates::TruthScopeTarget::Global)
                 ) {
                     verified_rule_projections.push(VerifiedRuleProjectionCandidate {
                         rule_instance_id: rule_instance_id.clone(),

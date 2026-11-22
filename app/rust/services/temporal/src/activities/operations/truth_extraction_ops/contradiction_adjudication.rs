@@ -263,7 +263,7 @@ fn independently_confirmed_weak_duplicate(
 // A blocked section holds overlapping scope, not every applicant profile.
 // A global or unrepresentable scope conservatively overlaps all profiles.
 fn held_scope_key(scope: &TruthParamValue) -> String {
-    if primitives::truth_candidates::truth_scope_target(scope).is_some() {
+    if truth_domain::truth_candidates::truth_scope_target(scope).is_some() {
         scope.stable_signature()
     } else {
         TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature()

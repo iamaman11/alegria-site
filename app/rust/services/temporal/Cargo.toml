@@ -20,6 +20,7 @@ infrastructure = { path = "../../crates/infrastructure" }
 policies = { path = "../../crates/policies" }
 seo_steps = { path = "../../crates/seo_steps" }
 primitives = { path = "../../crates/primitives" }
+truth_domain = { path = "../../crates/truth_domain" }
 contracts = { path = "../../crates/contracts" }
 seo_domain = { path = "../../crates/seo_domain" }
 seo_ports = { path = "../../crates/seo_ports" }
