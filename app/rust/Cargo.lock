@@ -3358,7 +3358,6 @@ dependencies = [
  "primitives",
  "serde",
  "serde_json",
- "truth_domain",
 ]
 
 [[package]]
