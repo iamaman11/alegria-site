@@ -73,6 +73,11 @@ module; it does not maintain an independent list of A13/A14/A17 test filters.
 Focused Temporal worker restart, Neo4j query and Qdrant materialization suites
 are also selected for their actual source owners. These longer suites are not
 silently counted as run on unrelated changes.
+For the selected Temporal restart suite the same registry first builds real
+`temporal_worker`/`outbox_worker` debug binaries into the **already warmed**
+Cargo target, then passes their absolute paths through the harness's existing
+`INTEGRATION_*_WORKER_BIN` variables. The test still starts, interrupts and
+resumes real processes; it no longer launches a second Cargo compilation tree.
 
 Non-executable Markdown and historical `docs/runs` reports do not select a Rust
 compile or image. A live `integration_harness/fixtures/visa_truth_certification`

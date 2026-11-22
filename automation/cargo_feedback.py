@@ -7,11 +7,12 @@ This only observes compilation: it never chooses tests or changes acceptance.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TextIO
+from typing import Mapping, TextIO
 
 
 def workspace_artifact(record: dict, workspace: Path) -> str | None:
@@ -28,9 +29,15 @@ def workspace_artifact(record: dict, workspace: Path) -> str | None:
     return target["name"]
 
 
-def run_cargo(command: list[str], *, cwd: Path, output: TextIO = sys.stdout) -> dict:
-    if len(command) < 2 or command[0] != "cargo" or command[1] not in {"check", "test"}:
-        raise ValueError("only scoped Cargo check/test commands may be instrumented")
+def run_cargo(
+    command: list[str], *, cwd: Path, output: TextIO = sys.stdout,
+    env: Mapping[str, str] | None = None,
+) -> dict:
+    if len(command) < 2 or command[0] != "cargo" or (
+        command[1] not in {"check", "test"}
+        and not (command[1] == "build" and "--locked" in command and "--release" not in command)
+    ):
+        raise ValueError("only scoped Cargo check/test or locked debug build may be instrumented")
 
     traced = [*command[:2], "--message-format=json-render-diagnostics", *command[2:]]
     started = time.monotonic()
@@ -40,6 +47,7 @@ def run_cargo(command: list[str], *, cwd: Path, output: TextIO = sys.stdout) -> 
     process = subprocess.Popen(
         traced, cwd=cwd, stdout=subprocess.PIPE, stderr=None,
         text=True, errors="replace", bufsize=1,
+        env={**os.environ, **env} if env is not None else None,
     )
     assert process.stdout is not None
     for line in process.stdout:

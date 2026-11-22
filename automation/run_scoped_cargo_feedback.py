@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from pathlib import Path
 
 from cargo_feedback import run_cargo
-from ci_impact import ROOT, WORKSPACE, suite_commands_for_report
+from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report
 from dev_rust_feedback import commands_for_report
 
 
@@ -38,8 +39,27 @@ def main() -> int:
     # All real integration commands and their owners come from ci_impact.py.
     # The runner deliberately has no suite-specific branch or path logic.
     for name, command in integration_commands:
+        owner = SUITE_OWNERS[name]
+        preparation = owner.get("prepare")
+        if preparation:
+            print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
+            measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
+
+        # The prebuilt-binary hook is generic. A runtime suite can use its
+        # existing override variables without recompiling the same Rust graph
+        # under a second Cargo target directory inside the test process.
+        target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
+        if not target.is_absolute():
+            target = WORKSPACE / target
+        runtime_env = {}
+        for variable, binary in owner.get("runtime_binaries", {}).items():
+            path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
+            if not path.is_file() or not os.access(path, os.X_OK):
+                raise FileNotFoundError(f"selected suite {name} lacks prebuilt runtime binary: {path}")
+            runtime_env[variable] = str(path)
+            print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
         print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
-        measurements.append(run_cargo(command, cwd=WORKSPACE))
+        measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
 
     output = ROOT / "automation/reports/scoped_cargo_feedback.json"
     output.parent.mkdir(parents=True, exist_ok=True)

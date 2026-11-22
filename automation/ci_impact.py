@@ -172,6 +172,18 @@ SUITE_OWNERS = {
         "paths": {"app/rust/services/temporal/Cargo.toml"},
         "prefixes": ("app/rust/services/temporal/src/",),
         "on_unknown_global_input": False,
+        # Build the actual processes in the SAME Cargo target as the preceding
+        # workspace tests. The harness already accepts these binary paths;
+        # otherwise it compiles both workers again in an isolated target.
+        "prepare": (
+            "cargo", "build", "--locked",
+            "-p", "temporal_worker", "-p", "outbox_worker",
+            "--bin", "temporal_worker", "--bin", "outbox_worker",
+        ),
+        "runtime_binaries": {
+            "INTEGRATION_TEMPORAL_WORKER_BIN": "temporal_worker",
+            "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
+        },
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "canonical_temporal_manual_editorial_resumes_after_worker_restart",

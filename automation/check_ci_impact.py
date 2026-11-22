@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ci_impact import analyze, changed_paths, suite_commands_for_report, workspace_graph
+from ci_impact import SUITE_OWNERS, analyze, changed_paths, suite_commands_for_report, workspace_graph
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -59,6 +59,12 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["affected_crates"], ["temporal_worker"])
         self.assertEqual(result["selected_suites"], ["temporal_restart"])
         self.assertEqual(result["selected_images"], ["temporal-worker"])
+        selected = SUITE_OWNERS[result["selected_suites"][0]]
+        self.assertEqual(selected["prepare"][:3], ("cargo", "build", "--locked"))
+        self.assertEqual(set(selected["runtime_binaries"]), {
+            "INTEGRATION_TEMPORAL_WORKER_BIN", "INTEGRATION_OUTBOX_WORKER_BIN",
+        })
+        self.assertNotIn("--target-dir", selected["prepare"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
