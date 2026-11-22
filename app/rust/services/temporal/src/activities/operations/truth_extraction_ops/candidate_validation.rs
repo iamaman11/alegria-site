@@ -181,7 +181,7 @@ pub(crate) async fn candidate_validation_impl(
                 span_start,
                 span_end,
                 source_key: raw.source_url.clone(),
-                source_tier: section_source_tier(raw),
+                source_tier: section_source_tier(&raw.source_dtype, &raw.source_domain),
                 source_snapshot_hash: if raw.content_hash.trim().is_empty() {
                     content_hash_v1(&raw.content_md)
                 } else {
@@ -303,7 +303,7 @@ pub(crate) async fn candidate_validation_impl(
                     span_start: rule.span_start,
                     span_end: rule.span_end,
                     source_key: raw.source_url.clone(),
-                    source_tier: section_source_tier(raw),
+                    source_tier: section_source_tier(&raw.source_dtype, &raw.source_domain),
                     source_snapshot_hash: current_snapshot_hash.clone(),
                     is_numeric: rule.is_numeric,
                     is_range: rule.is_range,

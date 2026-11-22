@@ -28,6 +28,11 @@ use truth_domain::review_decisions::{
     non_structured_candidate_reason, validated_candidate_assertions, CandidateValidationSectionState,
     TruthAdjudicationCandidateDecision, ValidatedTruthCandidateRecord,
 };
+use truth_domain::evidence::{
+    classify_candidate_completeness_local, classify_candidate_freshness_local,
+    contains_exact_evidence_token, deterministic_evidence_has_role_context, find_evidence_span,
+    section_source_tier, section_uncertainty_flags,
+};
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
