@@ -2150,6 +2150,7 @@ dependencies = [
  "contracts",
  "infrastructure",
  "neo4rs",
+ "outbox_worker",
  "primitives",
  "prost",
  "qdrant-client",

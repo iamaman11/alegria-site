@@ -53,6 +53,18 @@ PUBLISHING_A17_PATHS = {
     "app/rust/crates/integration_harness/src/tests/publication_delivery_tests.rs",
 }
 
+# A14 exercises one real PostgreSQL lease/outbox and Qdrant materialization.
+# The same decision is consumed by local feedback and the canonical CI runner.
+OUTBOX_A14_PATHS = {
+    "app/rust/services/outbox_worker/src/worker.rs",
+    "app/rust/services/outbox_worker/src/materialize.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_runtime_outbox_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/projection_materialize_adapter.rs",
+    "app/rust/services/temporal/src/activities/operations/runtime_support_ops.rs",
+    "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+}
+
 
 def parse_name_status(raw: bytes) -> list[str]:
     """Decode a NUL-delimited Git diff, keeping both rename paths and deletes."""
@@ -217,6 +229,7 @@ def analyze(
         # Never treat impact analysis as evidence to skip accepted test owners.
         "mandatory_full_ci_gate": True,
         "publishing_a17_required": bool(broad_reasons) or bool(PUBLISHING_A17_PATHS.intersection(paths)),
+        "outbox_a14_required": bool(broad_reasons) or bool(OUTBOX_A14_PATHS.intersection(paths)),
     }
 
 

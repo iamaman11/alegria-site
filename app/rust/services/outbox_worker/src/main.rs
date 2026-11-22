@@ -2,11 +2,8 @@ use anyhow::Result;
 use std::env;
 
 use infrastructure::adapters::sqlx_adapter::connect_pg;
+use outbox_worker::worker;
 use tracing::info;
-
-mod materialize;
-mod retry;
-mod worker;
 
 #[tokio::main]
 async fn main() -> Result<()> {

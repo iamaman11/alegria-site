@@ -1,6 +1,9 @@
 use anyhow::Result;
+use sqlx::types::time::OffsetDateTime;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+use primitives::errors::ErrorClass;
 
 #[derive(Debug, Clone)]
 pub struct OutboxEnvelope {
@@ -24,6 +27,7 @@ impl OutboxEnvelope {
 #[derive(Debug, Clone)]
 pub struct OutboxEvent {
     pub event_id: Uuid,
+    pub run_id: String,
     pub aggregate_type: String,
     pub aggregate_key: String,
     pub target_system: String,
@@ -33,6 +37,14 @@ pub struct OutboxEvent {
     pub idempotency_key: String,
     pub payload_bytes: Vec<u8>,
     pub retry_count: i32,
+    pub lease_worker_id: String,
+    pub lease_locked_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseUpdate {
+    Applied,
+    Lost,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +88,7 @@ pub async fn claim_outbox_batch(
         WHERE o.event_id = c.event_id
         RETURNING
             o.event_id,
+            o.run_id,
             o.aggregate_type,
             o.aggregate_key,
             o.target_system,
@@ -84,7 +97,9 @@ pub async fn claim_outbox_batch(
             o.schema_version,
             o.idempotency_key,
             o.payload_bytes,
-            o.retry_count
+            o.retry_count,
+            o.worker_id,
+            o.locked_at
         "#,
     )
     .bind(limit)
@@ -98,6 +113,7 @@ pub async fn claim_outbox_batch(
         .into_iter()
         .map(|r| OutboxEvent {
             event_id: r.get("event_id"),
+            run_id: r.get("run_id"),
             aggregate_type: r.get("aggregate_type"),
             aggregate_key: r.get("aggregate_key"),
             target_system: r.get("target_system"),
@@ -107,6 +123,8 @@ pub async fn claim_outbox_batch(
             idempotency_key: r.get("idempotency_key"),
             payload_bytes: r.get("payload_bytes"),
             retry_count: r.get("retry_count"),
+            lease_worker_id: r.get("worker_id"),
+            lease_locked_at: r.get("locked_at"),
         })
         .collect();
 
@@ -147,6 +165,7 @@ pub async fn claim_outbox_batch_for_run_target(
         WHERE o.event_id = c.event_id
         RETURNING
             o.event_id,
+            o.run_id,
             o.aggregate_type,
             o.aggregate_key,
             o.target_system,
@@ -155,7 +174,9 @@ pub async fn claim_outbox_batch_for_run_target(
             o.schema_version,
             o.idempotency_key,
             o.payload_bytes,
-            o.retry_count
+            o.retry_count,
+            o.worker_id,
+            o.locked_at
         "#,
     )
     .bind(limit)
@@ -170,6 +191,7 @@ pub async fn claim_outbox_batch_for_run_target(
         .into_iter()
         .map(|r| OutboxEvent {
             event_id: r.get("event_id"),
+            run_id: r.get("run_id"),
             aggregate_type: r.get("aggregate_type"),
             aggregate_key: r.get("aggregate_key"),
             target_system: r.get("target_system"),
@@ -179,14 +201,16 @@ pub async fn claim_outbox_batch_for_run_target(
             idempotency_key: r.get("idempotency_key"),
             payload_bytes: r.get("payload_bytes"),
             retry_count: r.get("retry_count"),
+            lease_worker_id: r.get("worker_id"),
+            lease_locked_at: r.get("locked_at"),
         })
         .collect();
 
     Ok(events)
 }
 
-pub async fn mark_done(pool: &PgPool, event_id: Uuid) -> Result<()> {
-    sqlx::query(
+pub async fn mark_done(pool: &PgPool, event: &OutboxEvent) -> Result<LeaseUpdate> {
+    let result = sqlx::query(
         r#"
         UPDATE system.sync_outbox
         SET status = 'done',
@@ -195,22 +219,29 @@ pub async fn mark_done(pool: &PgPool, event_id: Uuid) -> Result<()> {
             locked_until = NULL,
             worker_id = NULL,
             updated_at = now()
-        WHERE event_id = $1
+        WHERE event_id = $1 AND status = 'processing'
+          AND worker_id = $2 AND locked_at = $3
         "#,
     )
-    .bind(event_id)
+    .bind(event.event_id)
+    .bind(&event.lease_worker_id)
+    .bind(event.lease_locked_at)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(if result.rows_affected() == 1 {
+        LeaseUpdate::Applied
+    } else {
+        LeaseUpdate::Lost
+    })
 }
 
 pub async fn mark_retry(
     pool: &PgPool,
-    event_id: Uuid,
+    event: &OutboxEvent,
     error: &str,
     next_retry_delay_sec: i64,
-) -> Result<()> {
-    sqlx::query(
+) -> Result<LeaseUpdate> {
+    let result = sqlx::query(
         r#"
         UPDATE system.sync_outbox
         SET status = 'pending',
@@ -221,63 +252,91 @@ pub async fn mark_retry(
             locked_until = NULL,
             worker_id = NULL,
             updated_at = now()
-        WHERE event_id = $1
+        WHERE event_id = $1 AND status = 'processing'
+          AND worker_id = $4 AND locked_at = $5
         "#,
     )
-    .bind(event_id)
+    .bind(event.event_id)
     .bind(next_retry_delay_sec)
     .bind(error)
+    .bind(&event.lease_worker_id)
+    .bind(event.lease_locked_at)
     .execute(pool)
     .await?;
-    Ok(())
+    Ok(if result.rows_affected() == 1 {
+        LeaseUpdate::Applied
+    } else {
+        LeaseUpdate::Lost
+    })
 }
 
-pub async fn mark_deferred(
+/// A terminal failure and its dead letter are one transaction. If persisting
+/// the dead letter fails, the lease remains recoverable instead of losing it.
+pub async fn mark_failed_with_dead_letter(
     pool: &PgPool,
-    event_id: Uuid,
-    reason: &str,
-    next_retry_delay_sec: i64,
-) -> Result<()> {
-    sqlx::query(
+    event: &OutboxEvent,
+    step_name: &str,
+    error_class: ErrorClass,
+    build_id: &str,
+    error: &str,
+) -> Result<LeaseUpdate> {
+    let mut tx = pool.begin().await?;
+    let update = sqlx::query(
         r#"
         UPDATE system.sync_outbox
-        SET status = 'pending',
-            next_retry_at = now() + make_interval(secs => $2::int),
-            last_error = left($3, 4000),
-            locked_at = NULL,
-            locked_until = NULL,
-            worker_id = NULL,
-            updated_at = now()
-        WHERE event_id = $1
+        SET status = 'failed', retry_count = retry_count + 1,
+            last_error = left($2, 4000), locked_at = NULL,
+            locked_until = NULL, worker_id = NULL, updated_at = now()
+        WHERE event_id = $1 AND status = 'processing'
+          AND worker_id = $3 AND locked_at = $4
         "#,
     )
-    .bind(event_id)
-    .bind(next_retry_delay_sec)
-    .bind(reason)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-pub async fn mark_failed(pool: &PgPool, event_id: Uuid, error: &str) -> Result<()> {
-    sqlx::query(
-        r#"
-        UPDATE system.sync_outbox
-        SET status = 'failed',
-            retry_count = retry_count + 1,
-            last_error = left($2, 4000),
-            locked_at = NULL,
-            locked_until = NULL,
-            worker_id = NULL,
-            updated_at = now()
-        WHERE event_id = $1
-        "#,
-    )
-    .bind(event_id)
+    .bind(event.event_id)
     .bind(error)
-    .execute(pool)
+    .bind(&event.lease_worker_id)
+    .bind(event.lease_locked_at)
+    .execute(&mut *tx)
     .await?;
-    Ok(())
+    if update.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(LeaseUpdate::Lost);
+    }
+    let payload_hash = primitives::hash::blake3_hex(&event.payload_bytes);
+    let idempotency_key = if event.idempotency_key.is_empty() {
+        event.event_id.to_string()
+    } else {
+        event.idempotency_key.clone()
+    };
+    // Legacy run IDs may be non-UUID strings, and not every projection run
+    // has a pipeline.execution_runs row. Preserve all of them in sync_outbox;
+    // only attach the optional UUID foreign key when its parent exists.
+    let run_uuid = Uuid::parse_str(&event.run_id).ok();
+    sqlx::query(
+        r#"
+        INSERT INTO system.dead_letter_queue
+        (run_id, step_name, workflow_id, error_class, retryable, payload_type,
+         schema_version, payload_bytes, payload_hash, input_hash,
+         idempotency_key, build_id, error_message)
+        VALUES ((SELECT run_id FROM pipeline.execution_runs WHERE run_id=$1),
+                $2, $3, $4, false, $5, $6, $7, $8, $9, $10, $11, $12)
+        "#,
+    )
+    .bind(run_uuid)
+    .bind(step_name)
+    .bind(event.event_id.to_string())
+    .bind(error_class.as_str())
+    .bind(&event.payload_type)
+    .bind(event.schema_version)
+    .bind(&event.payload_bytes)
+    .bind(&payload_hash)
+    .bind(&payload_hash)
+    .bind(&idempotency_key)
+    .bind(build_id)
+    .bind(error)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(LeaseUpdate::Applied)
 }
 
 pub async fn read_sync_status(pool: &PgPool) -> Result<SyncStatusSnapshot> {

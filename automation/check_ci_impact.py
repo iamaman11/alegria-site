@@ -18,20 +18,26 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/primitives": "primitives",
             "app/rust/crates/graph_neo4j": "graph_neo4j",
             "app/rust/crates/http_client": "http_client",
+            "app/rust/crates/infrastructure": "infrastructure",
+            "app/rust/crates/integration_harness": "integration_harness",
             "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
             "app/rust/services/analytics_svc": "analytics_svc",
             "app/rust/services/temporal": "temporal_worker",
+            "app/rust/services/outbox_worker": "outbox_worker",
         }
         self.reverse = {
             "contracts": {"primitives"},
             "primitives": {"temporal_worker"},
             "graph_neo4j": {"analytics_svc", "temporal_worker"},
             "http_client": {"gsc_sync"},
+            "infrastructure": set(),
+            "integration_harness": set(),
             "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
             "analytics_svc": set(),
             "temporal_worker": set(),
+            "outbox_worker": set(),
         }
 
     def impact(self, *paths: str) -> dict:
@@ -42,15 +48,23 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["affected_crates"], ["gsc_sync"])
         self.assertTrue(result["mandatory_full_ci_gate"])
         self.assertFalse(result["publishing_a17_required"])
+        self.assertFalse(result["outbox_a14_required"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
         self.assertTrue(result["publishing_a17_required"])
+        self.assertFalse(result["outbox_a14_required"])
+
+    def test_outbox_change_selects_real_a14_integration(self) -> None:
+        result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs")
+        self.assertTrue(result["outbox_a14_required"])
+        self.assertFalse(result["publishing_a17_required"])
 
     def test_unknown_global_change_fails_closed_to_a17(self) -> None:
         result = self.impact("app/db/schema.sql")
         self.assertEqual(result["analysis"], "full")
         self.assertTrue(result["publishing_a17_required"])
+        self.assertTrue(result["outbox_a14_required"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])

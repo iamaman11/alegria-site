@@ -1,10 +1,10 @@
 use std::env;
 
-use anyhow::{bail, Context, Result};
 use contracts::generated::alegria::sync::v1::{
     Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, SeoCmsEventPayload,
     SeoGraphProjectionPayload,
 };
+use primitives::errors::{DomainError, ErrorClass};
 use primitives::qdrant_point_id::{is_valid_qdrant_point_id, qdrant_point_id_v1};
 use prost::Message;
 
@@ -23,6 +23,64 @@ const VOYAGE4_COLLECTIONS: [&str; 3] = [
     "editorial_topics_4",
     "seo_keyword_clusters_4",
 ];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchStage {
+    Contract,
+    Embedding,
+    Qdrant,
+    Neo4j,
+}
+
+#[derive(Debug)]
+pub struct DispatchError {
+    pub class: ErrorClass,
+    pub stage: DispatchStage,
+    pub detail: String,
+}
+
+impl DispatchError {
+    fn contract(detail: impl std::fmt::Display) -> Self {
+        Self {
+            class: ErrorClass::ContractViolation,
+            stage: DispatchStage::Contract,
+            detail: detail.to_string(),
+        }
+    }
+
+    fn external(stage: DispatchStage, detail: impl std::fmt::Display) -> Self {
+        Self {
+            class: ErrorClass::InfraUnavailable,
+            stage,
+            detail: detail.to_string(),
+        }
+    }
+
+    pub fn into_domain_error(self) -> DomainError {
+        match self.class {
+            ErrorClass::ContractViolation => DomainError::ContractViolation {
+                message: self.to_string(),
+            },
+            _ => DomainError::InfraUnavailable {
+                message: self.to_string(),
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "dispatch {:?} ({}) failed: {}",
+            self.stage,
+            self.class.as_str(),
+            self.detail
+        )
+    }
+}
+
+impl std::error::Error for DispatchError {}
 
 fn requires_voyage4_projection(collection_name: &str) -> bool {
     VOYAGE4_COLLECTIONS.contains(&collection_name)
@@ -65,22 +123,27 @@ fn qdrant_payload_value(
     serde_json::Value::Object(map)
 }
 
-async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
-    let mut cmd = QdrantUpsertCommand::decode(payload_bytes)
-        .context("invalid protobuf payload for QdrantUpsertCommand")?;
+async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchError> {
+    let mut cmd = QdrantUpsertCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
 
     let collection_name_owned = cmd.collection_name.trim().to_string();
     let collection_name = collection_name_owned.as_str();
     if collection_name.is_empty() {
-        bail!("QdrantUpsertCommand.collection_name is empty");
+        return Err(DispatchError::contract(
+            "QdrantUpsertCommand.collection_name is empty",
+        ));
     }
     let entity_type = cmd.entity_type.trim();
     if entity_type.is_empty() {
-        bail!("QdrantUpsertCommand.entity_type is empty");
+        return Err(DispatchError::contract(
+            "QdrantUpsertCommand.entity_type is empty",
+        ));
     }
     let entity_key = cmd.entity_key.trim();
     if entity_key.is_empty() {
-        bail!("QdrantUpsertCommand.entity_key is empty");
+        return Err(DispatchError::contract(
+            "QdrantUpsertCommand.entity_key is empty",
+        ));
     }
     if requires_voyage4_projection(collection_name)
         && cmd
@@ -96,12 +159,11 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
             .unwrap_or("")
             .trim();
         if retrieval_text.is_empty() {
-            bail!(
+            return Err(DispatchError::contract(format!(
                 "{collection_name} projection requires retrieval_text for Voyage materialization"
-            );
+            )));
         }
-        let api_key = env::var("VOYAGE_API_KEY")
-            .context("VOYAGE_API_KEY is required to materialize Voyage4 Qdrant projection")?;
+        let api_key = env::var("VOYAGE_API_KEY").map_err(DispatchError::contract)?;
         let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_VOYAGE_MODEL.to_string());
         let voyage = VoyageClient::new(api_key, model.clone());
         let vector = voyage
@@ -115,12 +177,12 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
                 },
             )
             .await
-            .with_context(|| {
-                format!("Voyage materialization failed for collection `{collection_name}`")
-            })?
+            .map_err(|err| DispatchError::external(DispatchStage::Embedding, err))?
             .into_iter()
             .next()
-            .context("Voyage materialization returned no embedding")?;
+            .ok_or_else(|| {
+                DispatchError::external(DispatchStage::Embedding, "Voyage returned no embedding")
+            })?;
         cmd.vector = vector;
         cmd.vector_size = 1024;
         cmd.metadata.insert("embedding_model".to_string(), model);
@@ -137,10 +199,11 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
             .unwrap_or("")
             .trim();
         if retrieval_text.is_empty() {
-            bail!("QdrantUpsertCommand.vector is empty");
+            return Err(DispatchError::contract(
+                "QdrantUpsertCommand.vector is empty",
+            ));
         }
-        let api_key = env::var("VOYAGE_API_KEY")
-            .context("VOYAGE_API_KEY is required to backfill empty Qdrant projection vectors")?;
+        let api_key = env::var("VOYAGE_API_KEY").map_err(DispatchError::contract)?;
         let model = env::var("VOYAGE_MODEL").unwrap_or_else(|_| DEFAULT_VOYAGE_MODEL.to_string());
         let voyage = VoyageClient::new(api_key, model.clone());
         let vector = voyage
@@ -154,12 +217,15 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
                 },
             )
             .await
-            .with_context(|| {
-                format!("Voyage empty-vector backfill failed for collection `{collection_name}`")
-            })?
+            .map_err(|err| DispatchError::external(DispatchStage::Embedding, err))?
             .into_iter()
             .next()
-            .context("Voyage empty-vector backfill returned no embedding")?;
+            .ok_or_else(|| {
+                DispatchError::external(
+                    DispatchStage::Embedding,
+                    "Voyage returned no backfill embedding",
+                )
+            })?;
         cmd.vector = vector;
         cmd.vector_size = 1024;
         cmd.metadata.insert("embedding_model".to_string(), model);
@@ -175,17 +241,18 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
         cmd.vector_size as u64
     };
     if vector_size != cmd.vector.len() as u64 {
-        bail!(
+        return Err(DispatchError::contract(format!(
             "QdrantUpsertCommand.vector_size mismatch: declared={}, actual={}",
             vector_size,
             cmd.vector.len()
-        );
+        )));
     }
     let distance = parse_distance(if cmd.distance.is_empty() {
         "cosine"
     } else {
         &cmd.distance
-    })?;
+    })
+    .map_err(DispatchError::contract)?;
     let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
     let point_id = if cmd.point_id.is_empty() {
         qdrant_point_id_v1(collection_name, entity_type, entity_key)
@@ -197,8 +264,10 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
 
     let client = connect_qdrant(&qdrant_url)
         .await
-        .with_context(|| format!("failed to connect qdrant: {qdrant_url}"))?;
-    ensure_dense_collection(&client, collection_name, vector_size, distance).await?;
+        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
+    ensure_dense_collection(&client, collection_name, vector_size, distance)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
     let entity_payload_value = qdrant_payload_value(cmd.payload, cmd.metadata);
     let merged_payload = normalize_payload(entity_type, entity_key, Some(&entity_payload_value));
     upsert_dense_point(
@@ -208,13 +277,17 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<()> {
         cmd.vector,
         merged_payload,
     )
-    .await?;
+    .await
+    .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
     Ok(())
 }
 
-async fn dispatch_seo_graph_projection(aggregate_key: &str, payload_bytes: &[u8]) -> Result<()> {
-    let payload = SeoGraphProjectionPayload::decode(payload_bytes)
-        .context("invalid protobuf payload for SeoGraphProjectionPayload")?;
+async fn dispatch_seo_graph_projection(
+    aggregate_key: &str,
+    payload_bytes: &[u8],
+) -> Result<(), DispatchError> {
+    let payload =
+        SeoGraphProjectionPayload::decode(payload_bytes).map_err(DispatchError::contract)?;
     let artifact_key = if payload.artifact_key.is_empty() {
         aggregate_key
     } else {
@@ -222,30 +295,40 @@ async fn dispatch_seo_graph_projection(aggregate_key: &str, payload_bytes: &[u8]
     };
     neo4j_materialization_adapter::materialize_seo_artifact(&payload.artifact_type, artifact_key)
         .await
+        .map_err(|err| DispatchError::external(DispatchStage::Neo4j, err))
 }
 
-async fn dispatch_neo4j_rule_upsert(aggregate_key: &str, payload_bytes: &[u8]) -> Result<()> {
-    let payload = Neo4jRuleUpsertPayload::decode(payload_bytes)
-        .context("invalid protobuf payload for RuleInstanceUpserted")?;
+async fn dispatch_neo4j_rule_upsert(
+    aggregate_key: &str,
+    payload_bytes: &[u8],
+) -> Result<(), DispatchError> {
+    let payload = Neo4jRuleUpsertPayload::decode(payload_bytes).map_err(DispatchError::contract)?;
     let rule_instance_id = if payload.rule_instance_id.is_empty() {
         aggregate_key
     } else {
         &payload.rule_instance_id
     };
-    neo4j_materialization_adapter::materialize_rule_instance(rule_instance_id).await
+    neo4j_materialization_adapter::materialize_rule_instance(rule_instance_id)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Neo4j, err))
 }
 
-fn dispatch_cms_event(payload_bytes: &[u8]) -> Result<()> {
-    let payload = SeoCmsEventPayload::decode(payload_bytes)
-        .context("invalid protobuf payload for SeoCmsEventPayload")?;
+fn dispatch_cms_event(payload_bytes: &[u8]) -> Result<(), DispatchError> {
+    let payload = SeoCmsEventPayload::decode(payload_bytes).map_err(DispatchError::contract)?;
     if payload.event_key.trim().is_empty() {
-        bail!("SeoCmsEventPayload.event_key is empty");
+        return Err(DispatchError::contract(
+            "SeoCmsEventPayload.event_key is empty",
+        ));
     }
     if payload.page_node_key.trim().is_empty() {
-        bail!("SeoCmsEventPayload.page_node_key is empty");
+        return Err(DispatchError::contract(
+            "SeoCmsEventPayload.page_node_key is empty",
+        ));
     }
     if payload.revision_id.trim().is_empty() {
-        bail!("SeoCmsEventPayload.revision_id is empty");
+        return Err(DispatchError::contract(
+            "SeoCmsEventPayload.revision_id is empty",
+        ));
     }
     Ok(())
 }
@@ -256,11 +339,13 @@ pub async fn dispatch_event(
     aggregate_key: &str,
     payload_type: &str,
     payload_bytes: &[u8],
-) -> Result<()> {
+) -> Result<(), DispatchError> {
     if target_system == "qdrant" {
         return match event_type {
             "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload_bytes).await,
-            _ => bail!("unsupported qdrant event_type: {event_type}"),
+            _ => Err(DispatchError::contract(format!(
+                "unsupported qdrant event_type: {event_type}"
+            ))),
         };
     }
     if target_system == "cms" {
@@ -274,8 +359,16 @@ pub async fn dispatch_event(
             | "seo_page_rolled_back"
             | "seo_page_rebuild_requested"
             | "seo_page_canonical_changed" => dispatch_cms_event(payload_bytes),
-            _ => bail!("unsupported cms event_type: {event_type}"),
+            _ => Err(DispatchError::contract(format!(
+                "unsupported cms event_type: {event_type}"
+            ))),
         };
+    }
+
+    if target_system != "neo4j" {
+        return Err(DispatchError::contract(format!(
+            "unsupported target_system: {target_system}"
+        )));
     }
 
     match event_type {
@@ -283,22 +376,44 @@ pub async fn dispatch_event(
             if payload_type == "alegria.outbox.neo4j_rule_upserted.v1" {
                 dispatch_neo4j_rule_upsert(aggregate_key, payload_bytes).await
             } else {
-                neo4j_materialization_adapter::materialize_rule_instance(aggregate_key).await
+                neo4j_materialization_adapter::materialize_rule_instance(aggregate_key)
+                    .await
+                    .map_err(|err| DispatchError::external(DispatchStage::Neo4j, err))
             }
         }
-        "ConceptApproved" => {
-            neo4j_materialization_adapter::materialize_concept(aggregate_key).await
-        }
+        "ConceptApproved" => neo4j_materialization_adapter::materialize_concept(aggregate_key)
+            .await
+            .map_err(|err| DispatchError::external(DispatchStage::Neo4j, err)),
         "PageContextUpserted" => {
-            neo4j_materialization_adapter::materialize_page_context(aggregate_key).await
+            neo4j_materialization_adapter::materialize_page_context(aggregate_key)
+                .await
+                .map_err(|err| DispatchError::external(DispatchStage::Neo4j, err))
         }
         "SeoGraphProjectionUpserted" => {
             if payload_type == "alegria.outbox.seo_graph_projection.v1" {
                 dispatch_seo_graph_projection(aggregate_key, payload_bytes).await
             } else {
-                bail!("unsupported SEO graph payload_type: {payload_type}")
+                Err(DispatchError::contract(format!(
+                    "unsupported SEO graph payload_type: {payload_type}"
+                )))
             }
         }
-        _ => bail!("unsupported event_type: {event_type}"),
+        _ => Err(DispatchError::contract(format!(
+            "unsupported event_type: {event_type}"
+        ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_code_is_not_inferred_from_detail_text() {
+        let invalid = DispatchError::contract("timeout connecting to remote");
+        assert_eq!(invalid.class, ErrorClass::ContractViolation);
+        let offline = DispatchError::external(DispatchStage::Qdrant, "invalid payload");
+        assert_eq!(offline.class, ErrorClass::InfraUnavailable);
+        assert_eq!(offline.stage, DispatchStage::Qdrant);
     }
 }

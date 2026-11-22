@@ -33,6 +33,7 @@ temporalio-sdk-core = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
+outbox_worker = { path = "../../services/outbox_worker" }
 async-trait = "0.1"
 contracts = { path = "../contracts" }
 primitives = { path = "../primitives" }

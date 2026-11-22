@@ -46,6 +46,17 @@ def main() -> int:
         print("CI_PUBLISHING_A17_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
 
+    required_a14 = report.get("outbox_a14_required")
+    if not isinstance(required_a14, bool):
+        raise ValueError("impact report omitted the fail-closed Outbox A14 decision")
+    if required_a14:
+        command = [
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
+        ]
+        print("CI_OUTBOX_A14_COMMAND=" + " ".join(command), flush=True)
+        measurements.append(run_cargo(command, cwd=WORKSPACE))
+
     output = ROOT / "automation/reports/scoped_cargo_feedback.json"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
