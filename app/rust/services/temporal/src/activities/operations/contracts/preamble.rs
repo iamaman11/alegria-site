@@ -33,6 +33,9 @@ use truth_domain::evidence::{
     contains_exact_evidence_token, deterministic_evidence_has_role_context, find_evidence_span,
     section_source_tier, section_uncertainty_flags,
 };
+use truth_domain::procedural_candidates::{
+    active_heuristic_truth_rules, params_for_rule, role_and_concept_for_rule,
+};
 use primitives::errors::DomainError;
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;

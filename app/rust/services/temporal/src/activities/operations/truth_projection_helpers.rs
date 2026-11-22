@@ -1,20 +1,3 @@
-fn extract_first_number(token: &str) -> Option<f64> {
-    let normalized = token.replace(',', ".");
-    let digits = normalized
-        .chars()
-        .filter(|ch| ch.is_ascii_digit() || *ch == '.')
-        .collect::<String>();
-    digits.parse::<f64>().ok()
-}
-
-fn extract_first_days(token: &str) -> Option<i64> {
-    let digits = token
-        .chars()
-        .filter(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    digits.parse::<i64>().ok()
-}
-
 fn normalize_numeric_token_fragments(tokens: &[String]) -> Vec<String> {
     tokens
         .iter()
@@ -32,56 +15,6 @@ fn normalize_numeric_token_fragments(tokens: &[String]) -> Vec<String> {
             }
         })
         .collect()
-}
-
-fn role_and_concept_for_rule(
-    rule: &seo_steps::procedural_extraction_step::ProceduralRule,
-) -> (&'static str, String) {
-    match rule.rule_key.as_str() {
-        "consular_fee" => ("FEE_ITEM", "consular_fee".to_string()),
-        "processing_time" => ("TIMELINE_ITEM", "processing_time".to_string()),
-        "passport_required" => ("DOCUMENT_REQUIRED", "passport".to_string()),
-        "insurance_required" => ("DOCUMENT_REQUIRED", "medical_insurance".to_string()),
-        _ => ("DOCUMENT_REQUIRED", rule.rule_key.clone()),
-    }
-}
-
-fn params_for_rule(
-    rule: &seo_steps::procedural_extraction_step::ProceduralRule,
-) -> TruthParamValue {
-    match rule.rule_key.as_str() {
-        "consular_fee" => {
-            let amount = rule
-                .numeric_tokens
-                .first()
-                .and_then(|token| extract_first_number(token))
-                .unwrap_or_default();
-            TruthParamValue::object([
-                ("amount", TruthParamValue::Decimal(amount)),
-                ("currency", TruthParamValue::Text("EUR".to_string())),
-            ])
-        }
-        "processing_time" => {
-            let days = rule
-                .numeric_tokens
-                .first()
-                .and_then(|token| extract_first_days(token))
-                .unwrap_or_default();
-            TruthParamValue::object([("days", TruthParamValue::Integer(days))])
-        }
-        "passport_required" => TruthParamValue::object([
-            ("subtype", TruthParamValue::Text("passport".to_string())),
-            ("severity", TruthParamValue::Text("mandatory".to_string())),
-        ]),
-        "insurance_required" => TruthParamValue::object([
-            (
-                "subtype",
-                TruthParamValue::Text("medical_insurance".to_string()),
-            ),
-            ("severity", TruthParamValue::Text("mandatory".to_string())),
-        ]),
-        _ => TruthParamValue::object([("subtype", TruthParamValue::Text(rule.rule_key.clone()))]),
-    }
 }
 
 fn truth_param_value_to_json_local(value: &TruthParamValue) -> Value {
