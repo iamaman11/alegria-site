@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 import sys
@@ -10,6 +11,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    # Ready PR acceptance requires rust-regressions to run the full workspace.
+    # Both policies and seo_steps quality_policy tests are already owned there.
+    # Keep the full native Cargo smoke for standalone/local audits.
+    if os.environ.get("CI_WORKSPACE_TESTED") == "true":
+        print("QUALITY_POLICY_REGISTRY_SMOKE: REUSED=rust-regressions/workspace")
+        return 0
+
     result = subprocess.run(
         [
             "bash",

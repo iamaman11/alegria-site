@@ -40,7 +40,7 @@ Run it from any exact-commit GitHub checkout on `B:`:
 
 ```powershell
 pwsh -NoProfile -File infra/local/windows_staging.ps1
-pwsh -NoProfile -File infra/local/windows_staging.ps1 -Action Deploy -Commit <CI-green-full-40-character-GitHub-SHA> -Service temporal-worker
+pwsh -NoProfile -File infra/local/windows_staging.ps1 -Action Deploy -Commit <accepted-main-merge-40-character-SHA> -Service temporal-worker
 pwsh -NoProfile -File infra/local/windows_staging.ps1 -Action Deploy -Commit <CI-green-full-40-character-GitHub-SHA> -Service outbox-worker
 ```
 
@@ -58,9 +58,12 @@ Before Docker load, the installer also requires a valid GitHub Sigstore/SLSA
 attestation for the **archive's bytes**, signed by exactly this repository's
 `.github/workflows/ci.yml` workflow; checksum metadata alone is not trusted.
 No new Windows Rust/Docker compilation occurs on the normal candidate path.
-After merging the PR, deploy by its accepted **PR-head SHA**, not the distinct
-two-parent merge SHA. The `main` gate checks provenance without compiling or
-pretending that the PR image was built from the merge commit.
+After merging the PR, supply its **main merge SHA** to Deploy. The installer
+proves that the merged tree equals the successful PR-head tree and downloads
+that PR's signed image without modifying or recompiling it. The container's
+`WORKER_BUILD_ID` remains the actual source PR-head SHA; its immutable
+checkout is the accepted main merge. These identities are deliberately
+different and both checked.
 A missing, expired or mismatched image artifact is a hard NO-GO: never fall back
 to an uncertified local candidate build. The previous worker image is preserved
 under its rollback tag before retagging the candidate. The previous-image

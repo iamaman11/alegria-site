@@ -41,6 +41,7 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
         self.assertEqual(result["affected_crates"], ["gsc_sync"])
         self.assertTrue(result["mandatory_full_ci_gate"])
+        self.assertFalse(result["deep_required"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])
@@ -60,16 +61,14 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})
+        self.assertTrue(self.impact("app/rust/crates/contracts/src/lib.rs")["deep_required"])
 
     def test_global_inputs_fail_closed(self) -> None:
         paths = (
             "contracts/proto/temporal_payloads.proto",
             "app/db/schema.sql",
             "app/rust/Cargo.lock",
-            ".github/workflows/ci.yml",
-            "automation/check_seo_crate_graph.py",
-            "infra/cloudflare/seo-static/package.json",
-            "docker-compose.yml",
+            "automation/ci_verify.sh",
             "analytics_lab/proto/analytics.proto",
         )
         for path in paths:
@@ -77,6 +76,25 @@ class ImpactFixtures(unittest.TestCase):
                 outcome = self.impact(path)
                 self.assertEqual(outcome["analysis"], "full")
                 self.assertEqual(len(outcome["affected_crates"]), len(self.reverse))
+                self.assertTrue(outcome["deep_required"])
+
+    def test_support_only_changes_never_compile_all_rust_crates(self) -> None:
+        for path in (
+            ".github/workflows/ci.yml", "automation/check_seo_crate_graph.py",
+            "infra/cloudflare/seo-static/package.json", "infra/local/windows_staging.ps1",
+            "docker-compose.yml", "docs/ci-fast-path.md", "README.md",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["analysis"], "scoped")
+                self.assertEqual(result["affected_crates"], [])
+                self.assertFalse(result["deep_required"])
+                self.assertTrue(result["mandatory_full_ci_gate"])
+
+    def test_mixed_support_and_direct_crate_change_is_scoped(self) -> None:
+        result = self.impact("docs/usage.md", "app/rust/services/gsc_sync/src/main.rs")
+        self.assertEqual(result["affected_crates"], ["gsc_sync"])
+        self.assertFalse(result["deep_required"])
 
     def test_unknown_file_is_full_scope(self) -> None:
         self.assertEqual(self.impact("unmapped/thing.txt")["analysis"], "full")

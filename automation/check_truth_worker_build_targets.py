@@ -1,66 +1,66 @@
 #!/usr/bin/env python3
-"""Prove Truth Workers share compilation, not runtime/harness state."""
+"""Protect sequential, shared-target native Worker preparation and real E2E."""
 from __future__ import annotations
 
-import os
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-GATE = ROOT / "automation" / "run_truth_certification_gate.sh"
-PREP = ROOT / "automation" / "run_truth_build_transport_parallel.sh"
+GATE = ROOT / "automation/run_truth_certification_gate.sh"
+PREP = ROOT / "automation/run_truth_prepare.sh"
+TRANSPORT = ROOT / "automation/run_qdrant_transport_gate.sh"
 TRUTH_RUNTIME_TESTS = ROOT / "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs"
 
 
-def validate(source: str, prep: str) -> None:
+def validate(source: str, prep: str, transport: str) -> None:
     required = (
-        'WORKERS_TARGET_DIR="$NESTED_TARGET_ROOT/workers"',
-        'TEMPORAL_BIN="$WORKERS_TARGET_DIR/debug/temporal_worker"',
-        'OUTBOX_BIN="$WORKERS_TARGET_DIR/debug/outbox_worker"',
-        'bash automation/run_truth_build_transport_parallel.sh "$WORKERS_TARGET_DIR" "$SUITE_TARGET_DIR"',
+        'SUITE_TARGET_DIR="${TRUTH_CERT_SUITE_TARGET_DIR:-$TARGET_ROOT}"',
+        'TEMPORAL_BIN="$SUITE_TARGET_DIR/debug/temporal_worker"',
+        'OUTBOX_BIN="$SUITE_TARGET_DIR/debug/outbox_worker"',
+        'bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"',
         'truth_suite cargo test --manifest-path app/rust/Cargo.toml',
-        '--target-dir "$SUITE_TARGET_DIR" \\\n    --timings',
+        '--target-dir "$SUITE_TARGET_DIR"',
         'INTEGRATION_TEMPORAL_WORKER_BIN="$TEMPORAL_BIN"',
         'INTEGRATION_OUTBOX_WORKER_BIN="$OUTBOX_BIN"',
         'if [[ ! -x "$worker_bin" ]]',
-        '"$(realpath -m "$WORKERS_TARGET_DIR")" == "$(realpath -m "$SUITE_TARGET_DIR")"',
     )
     for marker in required:
         if marker not in source:
-            raise ValueError(f"missing Truth runtime/build isolation: {marker}")
-    if source.count('bash automation/run_truth_build_transport_parallel.sh "$WORKERS_TARGET_DIR" "$SUITE_TARGET_DIR"') != 1:
-        raise ValueError("parallel Truth preparation must run exactly once")
-    if source.index('bash automation/run_truth_build_transport_parallel.sh') > source.index('run_suite() {'):
-        raise ValueError("transport and Worker preparation must finish before Truth suite")
+            raise ValueError(f"missing Truth shared-target or runtime contract: {marker}")
+    if source.count('bash automation/run_truth_prepare.sh "$SUITE_TARGET_DIR"') != 1:
+        raise ValueError("Truth preparation must run once")
+    if source.index('bash automation/run_truth_prepare.sh') > source.index('run_suite() {'):
+        raise ValueError("Workers must be ready before suite")
     prep_required = (
-        'truth_worker_build cargo build --manifest-path app/rust/Cargo.toml',
-        'truth_outbox_build cargo build --manifest-path app/rust/Cargo.toml',
+        'truth_workers_build cargo build --manifest-path app/rust/Cargo.toml',
+        'bash automation/run_qdrant_transport_gate.sh "$TARGET_DIR"',
+        'CI_TRUTH_TRANSPORT_REUSED=integration-e2e',
+        'CI_TRUTH_PREP_SHARED_TARGET=PASS',
+    )
+    transport_required = (
         'truth_transport cargo test --manifest-path app/rust/Cargo.toml',
         'qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval',
-        'worker_build_pid=$!',
-        'transport_pid=$!',
-        'wait "$worker_build_pid"',
-        'wait "$transport_pid"',
-        'if [[ "$worker_rc" -ne 0 ]]; then exit "$worker_rc"; fi',
-        'if [[ "$transport_rc" -ne 0 ]]; then exit "$transport_rc"; fi',
-        'CI_TRUTH_PREP_PARALLEL',
     )
     for marker in prep_required:
         if marker not in prep:
-            raise ValueError(f"missing parallel Truth preparation/failure gate: {marker}")
-    if prep.count('--target-dir "$WORKERS_TARGET_DIR"') != 2:
-        raise ValueError("both Worker builds must use the same Cargo target")
-    if prep.count('--target-dir "$SUITE_TARGET_DIR"') != 1 or source.count('--target-dir "$SUITE_TARGET_DIR"') != 1:
-        raise ValueError("transport and full suite must use their isolated Cargo target")
-    if prep.count('  --bin temporal_worker') != 1 or prep.count('  --bin outbox_worker') != 1:
-        raise ValueError("real Worker binary selection was changed")
-    if prep.count('--timings') != 3:
-        raise ValueError("all three Truth preparation commands must retain Cargo timing evidence")
-    if '--jobs' in prep:
-        raise ValueError("unproven Cargo job budget override must not replace the default scheduler")
+            raise ValueError(f"missing real Worker or Qdrant preparation: {marker}")
+    for marker in transport_required:
+        if marker not in transport:
+            raise ValueError(f"missing real Qdrant transport: {marker}")
+    if prep.count('--target-dir "$TARGET_DIR"') != 1 or transport.count('--target-dir "$TARGET_DIR"') != 1:
+        raise ValueError("all Cargo preparation must reuse the same Cargo target")
+    if prep.count('--locked') != 1 or prep.count('--timings') != 1 or transport.count('--locked') != 1 or transport.count('--timings') != 1:
+        raise ValueError("both phases must retain locked dependencies and timing")
+    if prep.count('-p temporal_worker -p outbox_worker') != 1:
+        raise ValueError("real Worker packages must build in one native Cargo invocation")
+    if prep.count('--bin temporal_worker') != 1 or prep.count('--bin outbox_worker') != 1:
+        raise ValueError("real Worker binary selection changed")
+    if '--jobs' in prep or 'worker_build_pid' in prep or 'transport_pid' in prep:
+        raise ValueError("parallel Cargo or arbitrary job budget must not return")
 
 
 def validate_fixture_lifecycle(source: str) -> None:
@@ -93,199 +93,161 @@ def validate_fixture_lifecycle(source: str) -> None:
 
 
 class TruthWorkerTargetContract(unittest.TestCase):
-    def test_actual_workflow_keeps_binaries_and_harness_isolated(self) -> None:
-        validate(GATE.read_text(encoding="utf-8"), PREP.read_text(encoding="utf-8"))
+    def test_actual_shared_target_contract(self) -> None:
+        validate(GATE.read_text(), PREP.read_text(), TRANSPORT.read_text())
 
-    def test_separate_worker_target_regression_is_rejected(self) -> None:
-        source = GATE.read_text(encoding="utf-8")
-        changed = PREP.read_text(encoding="utf-8").replace(
-            '--target-dir "$WORKERS_TARGET_DIR"', '--target-dir "$NESTED_TARGET_ROOT/outbox"', 1
-        )
+    def test_separate_targets_are_rejected(self) -> None:
+        changed = PREP.read_text().replace('--target-dir "$TARGET_DIR"', '--target-dir "$OTHER_TARGET"', 1)
         with self.assertRaisesRegex(ValueError, "same Cargo target"):
-            validate(source, changed)
-
-    def test_shared_integration_harness_target_is_rejected(self) -> None:
-        source = GATE.read_text(encoding="utf-8")
-        changed = PREP.read_text(encoding="utf-8").replace(
-            '--target-dir "$SUITE_TARGET_DIR"', '--target-dir "$WORKERS_TARGET_DIR"', 1
-        )
-        with self.assertRaisesRegex(ValueError, "(same|isolated) Cargo target"):
-            validate(source, changed)
+            validate(GATE.read_text(), changed, TRANSPORT.read_text())
 
     def test_missing_worker_binary_override_is_rejected(self) -> None:
-        source = GATE.read_text(encoding="utf-8")
-        changed = source.replace('INTEGRATION_OUTBOX_WORKER_BIN="$OUTBOX_BIN"', 'INTEGRATION_OUTBOX_WORKER_BIN=""')
-        with self.assertRaisesRegex(ValueError, "runtime/build isolation"):
-            validate(changed, PREP.read_text(encoding="utf-8"))
+        changed = GATE.read_text().replace('INTEGRATION_OUTBOX_WORKER_BIN="$OUTBOX_BIN"', 'INTEGRATION_OUTBOX_WORKER_BIN=""')
+        with self.assertRaisesRegex(ValueError, "runtime contract"):
+            validate(changed, PREP.read_text(), TRANSPORT.read_text())
+
+    def test_missing_cargo_timing_or_unlocked_dependency_is_rejected(self) -> None:
+        prep = PREP.read_text()
+        for changed in (prep.replace('--timings', '', 1), prep.replace('--locked', '', 1)):
+            with self.assertRaisesRegex(ValueError, "timing"):
+                validate(GATE.read_text(), changed, TRANSPORT.read_text())
+        transport = TRANSPORT.read_text()
+        for changed in (transport.replace('--timings', '', 1), transport.replace('--locked', '', 1)):
+            with self.assertRaisesRegex(ValueError, "timing"):
+                validate(GATE.read_text(), prep, changed)
 
     @staticmethod
-    def invoke_stubbed_parallel_prep(
-        root: Path, *, fail: str = "", skew_clock: bool = False,
-        synchronize: bool = False,
-    ) -> subprocess.CompletedProcess[str]:
-        fake_cargo = root / "cargo"
-        fake_cargo.write_text(
+    def invoke_stubbed_prep(root: Path, fail: str = "") -> subprocess.CompletedProcess[str]:
+        cargo = root / "cargo"
+        cargo.write_text(
             "#!/usr/bin/env python3\n"
             "import os, sys, time\n"
-            "args = sys.argv\n"
-            "name = args[args.index('-p') + 1]\n"
-            "if '--timings' not in args or '--jobs' in args: sys.exit(89)\n"
-            "events = os.environ['TRUTH_TEST_EVENTS']\n"
-            "with open(events, 'a') as f: f.write(f'{name} start {time.monotonic_ns()}\\n')\n"
-            "if os.environ.get('TRUTH_TEST_SYNC') == '1':\n"
-            "    # Event barriers prove overlap regardless of CI process scheduling.\n"
-            "    expected = {'temporal_worker': 'integration_harness start',\n"
-            "                'integration_harness': 'outbox_worker start'}.get(name)\n"
-            "    if expected:\n"
-            "        deadline = time.monotonic() + 10\n"
-            "        while True:\n"
-            "            with open(events) as f: observed = expected in f.read()\n"
-            "            if observed: break\n"
-            "            if time.monotonic() >= deadline:\n"
-            "                sys.exit(87)\n"
-            "            time.sleep(0.01)\n"
-            "    time.sleep(0.01)\n"
-            "else:\n"
-            "    time.sleep({'temporal_worker': 0.18, 'outbox_worker': 0.04, 'integration_harness': 0.23}[name])\n"
-            "with open(events, 'a') as f: f.write(f'{name} end {time.monotonic_ns()}\\n')\n"
+            "args = sys.argv[1:]\n"
+            "name = 'workers' if args[0] == 'build' else 'integration_harness'\n"
+            "if '--locked' not in args or '--timings' not in args: sys.exit(87)\n"
+            "if name == 'workers' and not all(x in args for x in ('temporal_worker','outbox_worker')): sys.exit(86)\n"
+            "if args[args.index('--target-dir') + 1] != os.environ['TRUTH_TEST_TARGET']: sys.exit(88)\n"
+            "with open(os.environ['TRUTH_TEST_EVENTS'], 'a') as f: f.write(f'{name} start\\n')\n"
+            "time.sleep(0.005)\n"
+            "with open(os.environ['TRUTH_TEST_EVENTS'], 'a') as f: f.write(f'{name} end\\n')\n"
             "sys.exit(23 if os.environ.get('TRUTH_TEST_FAIL') == name else 0)\n"
         )
-        fake_cargo.chmod(0o755)
-        if skew_clock:
-            fake_date = root / "date"
-            fake_date.write_text(
-                '#!/bin/sh\nif [ -e "$FAKE_DATE_STATE" ]; then echo 0; '
-                'else touch "$FAKE_DATE_STATE"; echo 999999; fi\n',
-                encoding="utf-8",
-            )
-            fake_date.chmod(0o755)
+        cargo.chmod(0o755)
+        target = str(root / "shared-target")
         return subprocess.run(
-            ["bash", str(PREP), str(root / "worker-target"), str(root / "suite-target")],
-            cwd=ROOT,
+            ["bash", str(PREP), target], cwd=ROOT,
             env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                  "TRUTH_TEST_EVENTS": str(root / "events.txt"),
-                 "TRUTH_TEST_FAIL": fail, "TRUTH_TEST_SYNC": "1" if synchronize else "0",
+                 "TRUTH_TEST_TARGET": target,
+                 "TRUTH_TEST_FAIL": fail,
+                 "CI_QDRANT_TRANSPORT_IN_INTEGRATION": "false",
                  "CI_SOURCE_SHA": "a" * 40,
-                 "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl"),
-                 "FAKE_DATE_STATE": str(root / "date_called")},
+                 "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl")},
             capture_output=True, text=True, check=False,
         )
 
-    def test_parallel_cargo_targets_overlap_and_all_three_phases_pass(self) -> None:
+    def test_both_cargo_invocations_are_sequential_with_shared_target(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root, synchronize=True)
+            result = self.invoke_stubbed_prep(root)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("worker_exit=0 transport_exit=0", result.stdout)
+            self.assertIn("CI_TRUTH_PREP_SHARED_TARGET=PASS", result.stdout)
+            self.assertEqual((root / "events.txt").read_text().splitlines(), [
+                "workers start", "workers end",
+                "integration_harness start", "integration_harness end",
+            ])
             timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
-            self.assertEqual({item["phase"] for item in timings}, {
-                "truth_worker_build", "truth_outbox_build", "truth_transport"
-            })
+            self.assertEqual([item["phase"] for item in timings], [
+                "truth_workers_build", "truth_transport",
+            ])
             self.assertTrue(all(item["exit_code"] == 0 for item in timings))
-            events = {
-                (name, event): int(when)
-                for name, event, when in (line.split() for line in (root / "events.txt").read_text().splitlines())
-            }
-            self.assertLess(events[("integration_harness", "start")], events[("temporal_worker", "end")])
-            self.assertLess(events[("outbox_worker", "start")], events[("integration_harness", "end")])
-            self.assertLess(events[("temporal_worker", "end")], events[("outbox_worker", "start")])
 
-    def test_unproven_cargo_job_cap_or_missing_timing_is_rejected(self) -> None:
-        source = GATE.read_text(encoding="utf-8")
-        prep = PREP.read_text(encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "job budget"):
-            validate(source, prep.replace('--timings', '--jobs 2 --timings', 1))
-        with self.assertRaisesRegex(ValueError, "timing"):
-            validate(source, prep.replace('--timings', '', 1))
+    def test_each_failure_blocks_remaining_commands(self) -> None:
+        stages = ("workers", "integration_harness")
+        for stage in stages:
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                result = self.invoke_stubbed_prep(root, fail=stage)
+                self.assertEqual(result.returncode, 23, result.stderr)
+                self.assertNotIn("CI_TRUTH_PREP_SHARED_TARGET=PASS", result.stdout)
+                observed = (root / "events.txt").read_text().splitlines()
+                self.assertEqual([line for line in observed if line.endswith('start')], [
+                    f"{name} start" for name in stages[:stages.index(stage) + 1]
+                ])
+                timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
+                self.assertEqual(timings[-1]["exit_code"], 23)
 
-    def test_overlap_proof_is_stable_across_repeated_process_schedules(self) -> None:
-        for attempt in range(5):
-            with self.subTest(attempt=attempt), tempfile.TemporaryDirectory() as temp:
-                result = self.invoke_stubbed_parallel_prep(Path(temp), synchronize=True)
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_truth_prep_duration_ignores_backward_wall_clock_jump(self) -> None:
+    def test_ci_truth_reuses_real_transport_from_required_integration_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root, skew_clock=True)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("CI_TRUTH_PREP_PARALLEL elapsed_ms=", result.stdout)
-            elapsed = int(result.stdout.split("CI_TRUTH_PREP_PARALLEL elapsed_ms=", 1)[1].split()[0])
-            self.assertGreaterEqual(elapsed, 0)
-            self.assertFalse((root / "date_called").exists(), "Truth prep must use monotonic time")
-
-    def test_failed_transport_blocks_truth_gate_even_when_workers_pass(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root, fail="integration_harness")
-            self.assertEqual(result.returncode, 23, result.stderr)
-            self.assertIn("worker_exit=0 transport_exit=23", result.stdout)
-            timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
-            self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_transport"), 23)
-
-    def test_failed_temporal_worker_blocks_outbox_and_truth_suite(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root, fail="temporal_worker")
-            self.assertEqual(result.returncode, 23, result.stderr)
-            self.assertIn("worker_exit=23 transport_exit=0", result.stdout)
-            events = (root / "events.txt").read_text()
-            self.assertNotIn("outbox_worker start", events)
-
-    def test_failed_outbox_worker_cannot_be_hidden_by_transport_success(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            result = self.invoke_stubbed_parallel_prep(root, fail="outbox_worker")
-            self.assertEqual(result.returncode, 23, result.stderr)
-            self.assertIn("worker_exit=23 transport_exit=0", result.stdout)
-            timings = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
-            self.assertEqual(next(t["exit_code"] for t in timings if t["phase"] == "truth_outbox_build"), 23)
-
-    def test_aliasing_targets_fails_before_cargo_or_side_effects(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            nested = Path(temp) / "nested"
+            cargo = root / "cargo"
+            cargo.write_text("#!/bin/sh\nif [ \"$1\" = build ]; then exit 0; fi\nexit 19\n")
+            cargo.chmod(0o755)
             result = subprocess.run(
-                ["bash", str(GATE)],
-                cwd=ROOT,
-                env={**os.environ, "TRUTH_CERT_NESTED_TARGET_ROOT": str(nested),
-                     "TRUTH_CERT_SUITE_TARGET_DIR": str(nested / "workers"),
-                     "TRUTH_CERT_REPORT_PATH": str(Path(temp) / "report.json")},
-                capture_output=True,
-                text=True,
-                check=False,
+                ["bash", str(PREP), str(root / "shared-target")], cwd=ROOT,
+                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                     "CI_QDRANT_TRANSPORT_IN_INTEGRATION": "true", "CI_SOURCE_SHA": "a" * 40,
+                     "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl")},
+                capture_output=True, text=True, check=False,
             )
-            self.assertEqual(result.returncode, 2)
-            self.assertIn("must differ", result.stderr)
-            self.assertFalse((Path(temp) / "report.json").exists())
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CI_TRUTH_TRANSPORT_REUSED=integration-e2e", result.stdout)
+            entries = [json.loads(line) for line in (root / "timings.jsonl").read_text().splitlines()]
+            self.assertEqual([entry["phase"] for entry in entries], ["truth_workers_build"])
+
+    def test_real_transport_owned_by_integration_propagates_cargo_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            cargo = root / "cargo"
+            cargo.write_text(
+                "#!/bin/sh\n"
+                'test "$1" = test || exit 89\n'
+                'test "$2" = --manifest-path || exit 88\n'
+                'printf "%s\\n" "$@" > "$TRUTH_TEST_EVENTS"\n'
+                "exit 19\n"
+            )
+            cargo.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(TRANSPORT), str(root / "shared-target")], cwd=ROOT,
+                env={**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
+                     "TRUTH_TEST_EVENTS": str(root / "args.txt"), "CI_SOURCE_SHA": "a" * 40,
+                     "CI_TIMING_REPORT_PATH": str(root / "timings.jsonl")},
+                capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 19, result.stderr)
+            self.assertIn("CI_PHASE_TIME phase=truth_transport", result.stdout)
+            arguments = (root / "args.txt").read_text().splitlines()
+            self.assertIn("qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", arguments)
+            self.assertIn(str(root / "shared-target"), arguments)
+            record = json.loads((root / "timings.jsonl").read_text())
+            self.assertEqual((record["phase"], record["exit_code"]), ("truth_transport", 19))
 
 
 class TruthFixtureLifecycleContract(unittest.TestCase):
     def test_actual_fixture_lifecycle_has_timing_and_liveness(self) -> None:
-        validate_fixture_lifecycle(TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8"))
+        validate_fixture_lifecycle(TRUTH_RUNTIME_TESTS.read_text())
 
     def test_reintroduced_fixed_sleep_is_rejected(self) -> None:
-        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        source = TRUTH_RUNTIME_TESTS.read_text()
         changed = source.replace(
             "let mut worker = spawn_temporal_worker(&worker_env);",
             "let mut worker = spawn_temporal_worker(&worker_env);\n"
-            "            tokio::time::sleep(Duration::from_secs(3)).await;",
-            1,
+            "            tokio::time::sleep(Duration::from_secs(3)).await;", 1,
         )
         with self.assertRaisesRegex(ValueError, "fixed per-fixture"):
             validate_fixture_lifecycle(changed)
 
     def test_missing_post_workflow_liveness_is_rejected(self) -> None:
-        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        source = TRUTH_RUNTIME_TESTS.read_text()
         changed = source.replace(
             'outbox_worker.child.try_wait().unwrap().is_none(),\n                "outbox_worker exited during fixture',
-            'outbox_worker.child.try_wait().unwrap().is_some(),\n                "outbox_worker exited during fixture',
-            1,
+            'outbox_worker.child.try_wait().unwrap().is_some(),\n                "outbox_worker exited during fixture', 1,
         )
         with self.assertRaisesRegex(ValueError, "before and after"):
             validate_fixture_lifecycle(changed)
 
     def test_missing_per_fixture_timing_is_rejected(self) -> None:
-        source = TRUTH_RUNTIME_TESTS.read_text(encoding="utf-8")
+        source = TRUTH_RUNTIME_TESTS.read_text()
         changed = source.replace("CI_TRUTH_FIXTURE_TIME source_sha={} fixture_id=", "CI_TRUTH_TIME removed=", 1)
         with self.assertRaisesRegex(ValueError, "missing truth fixture lifecycle"):
             validate_fixture_lifecycle(changed)

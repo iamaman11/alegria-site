@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Deterministic, fail-closed Rust change-impact report for the canonical workspace.
 
-This report accelerates developer feedback; it NEVER replaces the full mandatory CI gate.
-Unknown external inputs and unresolvable changes expand the scope to the full
-workspace, rather than silently excluding a consumer from the analysis.
+This report selects affected native Cargo packages and the relevant CI suites.
+Unknown inputs expand to the full workspace; known support-only files do not
+pretend to have modified every Rust crate.
 """
 
 from __future__ import annotations
@@ -23,15 +23,33 @@ SCHEMA_VERSION = 2
 # Includes changes to generated contracts, integration fixtures, build tooling,
 # container contents and runtime configuration; they are NOT Rust crate-local.
 GLOBAL_PREFIXES = (
-    ".github/",
-    "automation/",
     "app/db/",
     "contracts/",
     "analytics_lab/",
-    "infra/",
 )
+SUPPORT_ONLY_PREFIXES = (
+    ".github/",
+    "docs/",
+    "infra/local/",
+    "infra/cloudflare/",
+    "automation/",
+)
+SUPPORT_ONLY_FILES = {"README.md", "docker-compose.yml", ".gitignore"}
+# A changed test driver must still exercise the suites it directly controls.
+DEEP_DRIVER_FILES = {
+    "automation/ci_verify.sh",
+    "automation/run_truth_certification_gate.sh",
+    "automation/run_truth_prepare.sh",
+    "automation/run_qdrant_transport_gate.sh",
+    "automation/run_whole_page_semantic_gate.sh",
+    "automation/smoke_manual_llm_queue.py",
+}
+# Core runtime changes must prove real external-service behavior before release.
+DEEP_PACKAGES = {
+    "temporal_worker", "outbox_worker", "integration_harness", "infrastructure",
+    "seo_steps", "seo_application", "vector_qdrant", "graph_neo4j",
+}
 GLOBAL_FILES = {
-    "docker-compose.yml",
     "app/rust/Cargo.toml",
     "app/rust/Cargo.lock",
     "app/rust/rust-toolchain.toml",
@@ -158,8 +176,10 @@ def analyze(
     broad_reasons: list[str] = []
 
     for path in sorted(set(paths)):
-        if path in GLOBAL_FILES or path.startswith(GLOBAL_PREFIXES):
+        if path in GLOBAL_FILES or path in DEEP_DRIVER_FILES or path.startswith(GLOBAL_PREFIXES):
             broad_reasons.append(f"global input: {path}")
+            continue
+        if path in SUPPORT_ONLY_FILES or path.startswith(SUPPORT_ONLY_PREFIXES):
             continue
         matches = [(prefix, name) for prefix, name in owners.items() if path.startswith(prefix + "/")]
         if len(matches) != 1:
@@ -188,6 +208,7 @@ def analyze(
         name for directory, name in owners.items()
         if directory.startswith("app/rust/services/") and name in affected
     )
+    deep_required = bool(broad_reasons or DEEP_PACKAGES.intersection(affected))
     return {
         "schema_version": SCHEMA_VERSION,
         "base": base,
@@ -198,8 +219,10 @@ def analyze(
         "direct_crates": sorted(direct),
         "affected_crates": sorted(affected),
         "affected_services": services,
+        "deep_required": deep_required,
         "reasons": {pkg: sorted(reason[pkg]) for pkg in sorted(affected)},
-        # Never treat impact analysis as evidence to skip accepted test owners.
+        # The exact-source CI gate always remains mandatory, even when all
+        # expensive runtime suites are irrelevant to the changed files.
         "mandatory_full_ci_gate": True,
     }
 
@@ -221,8 +244,15 @@ def main() -> int:
         f"RUST_IMPACT={report['analysis']} "
         f"direct={','.join(report['direct_crates']) or '-'} "
         f"affected={','.join(report['affected_crates']) or '-'} "
+        f"deep_required={str(report['deep_required']).lower()} "
         f"report={args.report}"
     )
+    import os
+    if os.environ.get("GITHUB_OUTPUT"):
+        # Package names are validated by Cargo metadata, never by PR text.
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as outputs:
+            outputs.write(f"deep_required={str(report['deep_required']).lower()}\n")
+            outputs.write(f"affected_packages={json.dumps(report['affected_crates'])}\n")
     for why in report["full_scope_reasons"]:
         print(f"  FULL_SCOPE: {why}")
     return 0

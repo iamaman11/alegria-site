@@ -37,15 +37,24 @@ def check(script: str) -> None:
         "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
         ". (Join-Path $PSScriptRoot 'windows_staging_image.ps1')",
         "& gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir",
-        "$_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit",
-        "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
+        "if (@($merge.parents).Count -ne 2)",
+        "$merge.parents[1].sha",
+        "if (-not $mergedTree -or $mergedTree -cne $sourceTree)",
+        "repos/$repo/commits/$Commit/pulls",
+        "$_.head.sha -ceq $sourceSha",
+        "$_.workflowName -eq 'ci' -and $_.event -eq 'pull_request'",
+        "foreach ($requiredJob in @('CI', 'rust-regressions', 'integration-e2e', 'comprehensive', 'package'))",
+        "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $sourceSha",
         "& gh attestation verify $artifact.Archive -R $repo",
-        "--signer-workflow \"$repo/.github/workflows/worker-image.yml\" --deny-self-hosted-runners --format json",
+        "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
         "Assert-Exit 'verify signed GitHub Worker provenance'",
         "throw 'GitHub Worker archive has no valid signed provenance'",
         "& $docker image load --input $artifact.Archive",
         "if ($loadedId -cne $artifact.ImageId)",
+        "if ([string]$labels.PSObject.Properties[$name].Value -cne $sourceSha)",
         "& $docker image tag $artifact.ImageId $latestTag",
+        "$env:WORKER_BUILD_ID = $sourceSha",
+        "-ExpectedBuildId $(if ($Service -eq 'temporal-worker') { $sourceSha } else { '' })",
         "& $docker @newArgs build --quiet $Service",
         "function Invoke-Compose-Recreate-Start",
         "& $docker @ComposeArgs up --no-start --no-deps --no-build --force-recreate $Service",
@@ -147,8 +156,12 @@ def check(script: str) -> None:
     )
     assert "foreach ($name in @('ci'))" in script
     assert "name: CI" in workflow and "if: always()" in workflow
-    release = (ROOT / ".github" / "workflows" / "worker-image.yml").read_text(encoding="utf-8")
-    assert "name: worker-image" in release and "  push:\n    branches: [main]" in release
+    release = workflow.split("  package:\n", 1)[1]
+    assert "needs: [gate]" in release
+    assert '"rust-regressions", "integration-e2e", "comprehensive", "package"' in workflow
+    assert "uses: actions/attest@v4" in release
+    assert not (ROOT / ".github" / "workflows" / "worker-image.yml").exists()
+    assert "pwsh -NoProfile -NonInteractive -File automation/smoke_windows_staging_source_provenance.ps1" in workflow
     assert not (ROOT / ".github" / "workflows" / "quality-gate.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "automation-verify.yml").exists()
     assert script.index("if ($oldSha -eq $Commit)") > script.index("effective Compose config")
@@ -188,6 +201,9 @@ def main() -> None:
         "$startProcess.WaitForExit(20000)",
         "WHERE status NOT IN ('done','failed');",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
+        "if (-not $mergedTree -or $mergedTree -cne $sourceTree)",
+        "foreach ($requiredJob in @('CI', 'rust-regressions', 'integration-e2e', 'comprehensive', 'package'))",
+        "$_.head.sha -ceq $sourceSha",
     ):
         mutated = source.replace(fragment, "", 1)
         try:

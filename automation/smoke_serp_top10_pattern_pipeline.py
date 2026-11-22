@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -10,6 +11,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    # This exact seo_steps test is also executed by mandatory workspace tests.
+    if os.environ.get("CI_WORKSPACE_TESTED") == "true":
+        print("SMOKE_SERP_TOP10_PATTERN_PIPELINE: REUSED=rust-regressions/workspace")
+        return 0
+
     proc = subprocess.run(
         [
             "cargo",

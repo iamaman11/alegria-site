@@ -58,14 +58,19 @@ class RustOwnedCheckContract(unittest.TestCase):
     def test_original_smoke_remains_runnable_in_explicit_deep_gate(self) -> None:
         source = PRODUCT_GATE.read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+        rust_deep = workflow.split("  rust-regressions:\n", 1)[1].split("  integration-e2e:\n", 1)[0]
+        integration_deep = workflow.split("  integration-e2e:\n", 1)[1].split("  comprehensive:\n", 1)[0]
+        deep = workflow.split("  comprehensive:\n", 1)[1].split("  package:\n", 1)[0]
         owner_section = workflow.split("  architecture-and-rust:", 1)[1].split("  product-truth:", 1)[0]
         product_section = workflow.split("  product-truth:", 1)[1].split("  rust-security:", 1)[0]
         for command in PRODUCT_COMMANDS:
             self.assertIn(f"bash automation/run_rust_owned_check.sh {' '.join(command)}", source)
             self.assertNotIn(' '.join(command), owner_section)
             self.assertNotIn(' '.join(command), product_section)
-        self.assertIn("bash automation/ci_verify.sh all", deep)
+        self.assertIn("bash automation/ci_verify.sh contracts", rust_deep)
+        self.assertIn("bash automation/run_truth_certification_gate.sh", deep)
+        self.assertIn("bash automation/ci_verify.sh product-policy", (ROOT / "automation/ci_fast_verify.sh").read_text())
+        self.assertIn("bash automation/ci_verify.sh integration", integration_deep)
         self.assertNotIn('CI_RUST_CHECK_OWNER: "architecture-and-rust"', product_section)
 
     def test_local_delegation_is_denied(self) -> None:
