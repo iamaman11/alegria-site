@@ -1373,7 +1373,8 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
     use infrastructure::adapters::{
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
     };
-    use primitives::{errors::ErrorClass, seo::ContentGapDetector};
+    use primitives::errors::ErrorClass;
+    use seo_domain::artifact_identity::ContentGapDetector;
     use seo_application::registration::register_site_build_input;
     use seo_ports::SeoSiteBuildRegistrationRequest;
 

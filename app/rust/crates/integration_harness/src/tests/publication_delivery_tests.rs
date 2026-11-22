@@ -20,7 +20,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     };
     use std::{
         collections::HashMap,
-        path::{Path, PathBuf},
+        path::Path,
         sync::{Arc, Mutex},
     };
 
@@ -60,6 +60,16 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
             *self.fault.lock().unwrap() = Some(next);
         }
 
+        fn consume_fault(&self, expected: Fault) -> bool {
+            let mut fault = self.fault.lock().unwrap();
+            if *fault == Some(expected) {
+                *fault = None;
+                true
+            } else {
+                false
+            }
+        }
+
         fn error(stage: ReleaseDeliveryStage, detail: &str) -> ReleaseDeliveryError {
             ReleaseDeliveryError {
                 stage,
@@ -79,8 +89,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
             release: &Path,
             _previous: Option<&Path>,
         ) -> Result<(), ReleaseDeliveryError> {
-            if *self.fault.lock().unwrap() == Some(Fault::Upload) {
-                *self.fault.lock().unwrap() = None;
+            if self.consume_fault(Fault::Upload) {
                 return Err(Self::error(
                     ReleaseDeliveryStage::Upload,
                     "injected upload failure",
@@ -106,8 +115,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
             files: &[PublicReleaseFile],
         ) -> Result<(), ReleaseDeliveryError> {
             assert_eq!(origin, "https://staging.alegria.by");
-            if *self.fault.lock().unwrap() == Some(Fault::Readback) {
-                *self.fault.lock().unwrap() = None;
+            if self.consume_fault(Fault::Readback) {
                 self.http
                     .fail_next_read
                     .store(true, std::sync::atomic::Ordering::SeqCst);
