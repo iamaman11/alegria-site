@@ -1,0 +1,14 @@
+[package]
+name = "acquisition"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+primitives = { path = "../primitives" }
+anyhow = { workspace = true }
+ego-tree = { workspace = true }
+lopdf = { workspace = true }
+regex = { workspace = true }
+scraper = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+acquisition = { path = "../acquisition" }
 graph_neo4j = { path = "../graph_neo4j" }
 http_client = { path = "../http_client" }
 vector_qdrant = { path = "../vector_qdrant" }

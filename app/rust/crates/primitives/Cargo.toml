@@ -11,9 +11,7 @@ thiserror = { workspace = true }
 idna = { workspace = true }
 url = { workspace = true }
 scraper = { workspace = true }
-lopdf = { workspace = true }
 regex = { workspace = true }
-ego-tree = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 contracts = { path = "../contracts" }

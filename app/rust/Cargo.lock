@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "acquisition"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ego-tree",
+ "lopdf",
+ "primitives",
+ "regex",
+ "scraper",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2071,6 +2085,7 @@ dependencies = [
 name = "infrastructure"
 version = "0.1.0"
 dependencies = [
+ "acquisition",
  "anyhow",
  "async-trait",
  "bytes",
@@ -3470,9 +3485,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "contracts",
- "ego-tree",
  "idna",
- "lopdf",
  "regex",
  "scraper",
  "serde",

@@ -16,7 +16,7 @@ use policies::truth_governance::{
 };
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
-use primitives::html_sections::{extract_meta_typed, extract_sections_typed, HtmlSection};
+use acquisition::html_sections::{extract_meta_typed, extract_sections_typed, HtmlSection};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use primitives::truth_candidates::{
     validate_truth_candidate, TruthCandidateRuntime, TruthParamValue, TruthStructuredCandidate,

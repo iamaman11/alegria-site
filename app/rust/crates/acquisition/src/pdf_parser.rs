@@ -144,7 +144,7 @@ pub fn extract_pdf(file_path: &str) -> Result<PdfExtractResult> {
 
     let page_texts: Vec<String> = page_entries.iter().map(|(_, t)| t.clone()).collect();
     let content_md = page_texts.join("\n\n");
-    let content_hash = crate::hash::content_hash_v1(&content_md);
+    let content_hash = primitives::hash::content_hash_v1(&content_md);
     let tables = infer_tables_from_pages(&page_entries);
 
     Ok(PdfExtractResult {
