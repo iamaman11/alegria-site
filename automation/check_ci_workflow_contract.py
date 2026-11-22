@@ -78,6 +78,10 @@ def check() -> None:
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
     assert "cargo metadata --format-version 1 --no-deps --locked" in rust_smokes
+    assert "deep_required: ${{ steps.deep_impact.outputs.deep_required }}" in rust_smokes
+    assert "id: deep_impact" in rust_smokes
+    assert 'git fetch --no-tags --depth=1 origin "$PR_BASE_SHA"' in rust_smokes
+    assert 'automation/reports/ci_impact_rust_contracts.json' in rust_smokes
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):
         invocation = f"bash automation/measure_ci_phase.sh {phase} bash automation/ci_fast_verify.sh {phase}"
         assert workflow.count(invocation) == 1, phase
@@ -89,18 +93,19 @@ def check() -> None:
         assert "python3 automation/smoke_manual_llm_queue.py" not in block
         assert "bash automation/ci_verify.sh" not in block
 
-    # Deep owners start after architecture without waiting on the slower
-    # stack gates. The independent CI gate and package still require all
-    # fast owners to pass; main provenance requires all 14 exact-source jobs.
+    # Fast Rust contracts supply a conservative exact-source impact output.
+    # Deep owners start immediately after this short owner, without waiting
+    # for architecture or Docker stack jobs. The independent CI gate and
+    # main provenance still require every architecture/deep/package result.
     for group in (rust_deep, integration_deep, deep):
         assert "github.event.pull_request.draft == false" in group
         assert "ref: ${{ env.CI_SOURCE_SHA }}" in group
         assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}" in group
-        assert "needs: [architecture-and-rust]" in group
+        assert "needs: [rust-contract-smokes]" in group
         assert "needs.gate.result" not in group
-        assert "needs.architecture-and-rust.result == 'success'" in group
+        assert "needs.rust-contract-smokes.result == 'success'" in group
         assert "github.event_name == 'workflow_dispatch' ||" in group
-        assert "needs.architecture-and-rust.outputs.deep_required == 'true'" in group
+        assert "needs.rust-contract-smokes.outputs.deep_required == 'true'" in group
         assert 'CARGO_PROFILE_DEV_DEBUG: "line-tables-only"' in group
         assert 'CARGO_PROFILE_TEST_DEBUG: "line-tables-only"' in group
         assert "RUSTFLAGS:" not in group  # Stable Rust already uses its native lld linker.
@@ -118,7 +123,7 @@ def check() -> None:
         (deep, ("All 16 real Truth Worker fixtures (Qdrant in integration)",)),
     ):
         for step in steps:
-            assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.architecture-and-rust.outputs.deep_required == 'true'" in group
+            assert f"      - name: {step}\n        if: github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true'" in group
     assert rust_deep.count("bash automation/ci_verify.sh contracts") == 1
     assert deep.count("run: bash automation/run_truth_certification_gate.sh") == 1
     assert "bash automation/ci_verify.sh product" not in deep

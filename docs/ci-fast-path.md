@@ -57,12 +57,12 @@ path. A cold Docker image compilation can still vary independently.
 
 ## Deep verification at Ready for Review
 
-Ready PRs with deep source impact start all three owners after successful
-`architecture-and-rust`, in parallel with the remaining fast infrastructure
-checks. They do **not** await the slowest fast Docker stack test. The fast `CI`
-gate still blocks the signed package and any accepted release. This trades a
-small amount of potential wasted test work on a failed fast owner for lower
-end-to-end latency.
+Ready PRs with deep source impact start all three owners after the lightweight
+`rust-contract-smokes` owner has selected the exact-source Cargo impact scope,
+in parallel with `architecture-and-rust` and the Docker infrastructure checks.
+Every fast owner, **including architecture**, must still pass the required
+`CI` gate for packaging and release acceptance. On a failed fast owner, deep
+work may be wasted, but all mandatory acceptance remains fail-closed.
 
 - `rust-regressions`: full `cargo test --workspace --locked`, retained
   PostgreSQL/SQLx regressions and Rust-backed contracts. It alone needs a
