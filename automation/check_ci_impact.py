@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from ci_impact import analyze, changed_paths, workspace_graph
+from ci_impact import analyze, changed_paths, suite_commands_for_report, workspace_graph
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -51,41 +51,37 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
         self.assertEqual(result["affected_crates"], ["gsc_sync"])
         self.assertTrue(result["mandatory_full_ci_gate"])
-        self.assertFalse(result["publishing_a17_required"])
-        self.assertFalse(result["outbox_a14_required"])
-        self.assertFalse(result["knowledge_a13_required"])
+        self.assertEqual(result["selected_suites"], [])
+        self.assertEqual(result["selected_images"], [])
+
+    def test_temporal_source_selects_real_restart_e2e_and_worker_image(self) -> None:
+        result = self.impact("app/rust/services/temporal/src/main.rs")
+        self.assertEqual(result["affected_crates"], ["temporal_worker"])
+        self.assertEqual(result["selected_suites"], ["temporal_restart"])
+        self.assertEqual(result["selected_images"], ["temporal-worker"])
 
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
-        self.assertTrue(result["publishing_a17_required"])
-        self.assertFalse(result["outbox_a14_required"])
-        self.assertFalse(result["knowledge_a13_required"])
+        self.assertEqual(result["selected_suites"], ["publishing_a17"])
 
     def test_outbox_change_selects_real_a14_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs")
-        self.assertTrue(result["outbox_a14_required"])
-        self.assertFalse(result["publishing_a17_required"])
-        self.assertFalse(result["knowledge_a13_required"])
+        self.assertEqual(result["selected_suites"], ["outbox_a14"])
 
     def test_verified_rule_projection_effects_select_real_outbox_and_knowledge_integrations(self) -> None:
         path = "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs"
         result = self.impact(path)
         self.assertEqual(result["analysis"], "scoped")
-        self.assertTrue(result["outbox_a14_required"])
-        self.assertTrue(result["knowledge_a13_required"])
+        self.assertEqual(result["selected_suites"], ["knowledge_a13", "outbox_a14"])
 
     def test_knowledge_read_change_selects_postgres_a13(self) -> None:
         result = self.impact("app/rust/crates/seo_application/src/knowledge.rs")
-        self.assertTrue(result["knowledge_a13_required"])
-        self.assertFalse(result["outbox_a14_required"])
-        self.assertFalse(result["publishing_a17_required"])
+        self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_real_neighbor_adapter_change_selects_existing_qdrant_a13(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/semantic_neighbor_search_adapter.rs")
         self.assertEqual(result["analysis"], "scoped")
-        self.assertTrue(result["knowledge_a13_required"])
-        self.assertFalse(result["publishing_a17_required"])
-        self.assertFalse(result["outbox_a14_required"])
+        self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_editorial_source_context_port_changes_select_real_qdrant_a13(self) -> None:
         for path in (
@@ -95,14 +91,14 @@ class ImpactFixtures(unittest.TestCase):
             with self.subTest(path=path):
                 result = self.impact(path)
                 self.assertEqual(result["analysis"], "scoped")
-                self.assertTrue(result["knowledge_a13_required"])
+                self.assertIn("knowledge_a13", result["selected_suites"])
 
     def test_unknown_global_change_fails_closed_to_a17(self) -> None:
         result = self.impact("app/db/schema.sql")
         self.assertEqual(result["analysis"], "full")
-        self.assertTrue(result["publishing_a17_required"])
-        self.assertTrue(result["outbox_a14_required"])
-        self.assertTrue(result["knowledge_a13_required"])
+        self.assertIn("publishing_a17", result["selected_suites"])
+        self.assertIn("outbox_a14", result["selected_suites"])
+        self.assertIn("knowledge_a13", result["selected_suites"])
 
     def test_isolated_analytics(self) -> None:
         self.assertEqual(self.impact("app/rust/services/analytics_svc/src/main.rs")["affected_services"], ["analytics_svc"])
@@ -110,15 +106,18 @@ class ImpactFixtures(unittest.TestCase):
     def test_graph_change_includes_reverse_consumers(self) -> None:
         got = self.impact("app/rust/crates/graph_neo4j/src/lib.rs")
         self.assertEqual(set(got["affected_crates"]), {"graph_neo4j", "analytics_svc", "temporal_worker"})
+        self.assertEqual(got["selected_suites"], ["graph_query"])
 
     def test_http_change_includes_gsc_only(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/http_client/src/lib.rs")["affected_crates"]), {"http_client", "gsc_sync"})
 
     def test_vector_change_does_not_rebuild_unrelated_analytics_or_gsc(self) -> None:
+        result = self.impact("app/rust/crates/vector_qdrant/src/lib.rs")
         self.assertEqual(
-            set(self.impact("app/rust/crates/vector_qdrant/src/lib.rs")["affected_crates"]),
+            set(result["affected_crates"]),
             {"vector_qdrant", "temporal_worker"},
         )
+        self.assertEqual(result["selected_suites"], ["vector_projection"])
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})
@@ -130,7 +129,6 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/Cargo.lock",
             ".github/workflows/ci.yml",
             "automation/check_seo_crate_graph.py",
-            "infra/cloudflare/seo-static/package.json",
             "docker-compose.yml",
             "analytics_lab/proto/analytics.proto",
         )
@@ -142,6 +140,69 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_unknown_file_is_full_scope(self) -> None:
         self.assertEqual(self.impact("unmapped/thing.txt")["analysis"], "full")
+
+    def test_explanatory_markdown_needs_no_rust_suite_or_image(self) -> None:
+        outcome = self.impact("docs/ARCHITECTURE_BOUNDARIES.md")
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_suites"], [])
+        self.assertEqual(outcome["selected_images"], [])
+        self.assertIn("documentation", outcome["classified_inputs"]["docs/ARCHITECTURE_BOUNDARIES.md"])
+
+    def test_historical_truth_report_is_not_a_live_rust_fixture(self) -> None:
+        outcome = self.impact("docs/runs/r3_contradiction_handling.json")
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_suites"], [])
+        self.assertIn("historical", outcome["classified_inputs"]["docs/runs/r3_contradiction_handling.json"])
+
+    def test_live_truth_fixture_selects_its_real_e2e_without_other_images(self) -> None:
+        path = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/happy_path_publish_allowed_source.html"
+        outcome = self.impact(path)
+        self.assertEqual(outcome["scope"], "scoped")
+        self.assertEqual(outcome["direct_crates"], ["integration_harness"])
+        self.assertEqual(outcome["selected_suites"], ["truth_certification"])
+        self.assertEqual(outcome["selected_images"], [])
+        suite_name, command = suite_commands_for_report(outcome)[0]
+        self.assertEqual(suite_name, "truth_certification")
+        self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
+
+    def test_delivery_script_selects_temporal_worker_image_without_rust(self) -> None:
+        path = "automation/deploy_seo_static_cloudflare.py"
+        outcome = self.impact(path)
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_suites"], [])
+        self.assertEqual(outcome["selected_images"], ["temporal-worker"])
+        self.assertIn(path, outcome["image_reasons"]["temporal-worker"][0])
+
+    def test_unrelated_service_edit_selects_no_temporal_image(self) -> None:
+        outcome = self.impact("app/rust/services/analytics_svc/src/main.rs")
+        self.assertEqual(outcome["selected_images"], ["analytics-svc"])
+        self.assertEqual(outcome["image_status"]["temporal-worker"], "not_applicable")
+
+    def test_outbox_service_change_runs_real_outbox_suite_and_own_image(self) -> None:
+        outcome = self.impact("app/rust/services/outbox_worker/src/worker.rs")
+        self.assertEqual(outcome["selected_suites"], ["outbox_a14"])
+        self.assertEqual(outcome["selected_images"], ["outbox-worker"])
+
+    def test_cloudflare_static_is_worker_image_input_without_cargo(self) -> None:
+        outcome = self.impact("infra/cloudflare/seo-static/package.json")
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["selected_images"], ["temporal-worker"])
+
+    def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
+        outcome = self.impact("automation/ci_impact.py")
+        self.assertEqual(outcome["scope"], "full")
+        self.assertEqual(len(outcome["selected_suites"]), 3)
+        self.assertEqual(len(outcome["selected_images"]), 4)
+        self.assertTrue(outcome["full_scope_reasons"])
+
+    def test_unknown_or_missing_suite_in_report_is_rejected(self) -> None:
+        outcome = self.impact("app/rust/services/gsc_sync/src/main.rs")
+        outcome.pop("selected_suites")
+        with self.assertRaises(ValueError):
+            suite_commands_for_report(outcome)
+        outcome["selected_suites"] = ["invented"]
+        with self.assertRaises(ValueError):
+            suite_commands_for_report(outcome)
 
     def test_multiple_changes_include_all_consumers(self) -> None:
         self.assertEqual(

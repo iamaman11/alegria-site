@@ -48,7 +48,7 @@ def commands_for_report(report: dict, *, check_only: bool) -> list[list[str]]:
         return [["cargo", "check", "--workspace", "--locked"]] if check_only else [
             ["cargo", "test", "--workspace", "--locked"]
         ]
-    if report.get("analysis") != "scoped":
+    if report.get("analysis") not in {"scoped", "none"}:
         raise ValueError("unknown impact scope")
     if not affected:
         return []
@@ -84,6 +84,10 @@ def main() -> int:
     report = analyze(paths, owners, reverse, base=args.base, head=head)
     report["local_worktree"] = True
     report["exact_source_sha"] = False  # HEAD does not cover uncommitted edits.
+    report["deferred_external_suites"] = {
+        name: "local feedback runs Cargo only; use exact-source CI for disposable Docker/provider integration"
+        for name in report["selected_suites"]
+    }
     report_path = Path(subprocess.check_output(
         ["git", "rev-parse", "--git-path", "alegria-dev-impact.json"],
         cwd=ROOT,
@@ -94,6 +98,8 @@ def main() -> int:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"DEV_IMPACT={report['analysis']} changed={len(paths)} affected={','.join(report['affected_crates']) or '-'}", flush=True)
+    print(f"DEV_SELECTED_SUITES={','.join(report['selected_suites']) or '-'} (deferred to CI)", flush=True)
+    print(f"DEV_SELECTED_IMAGES={','.join(report['selected_images']) or '-'} (not built locally)", flush=True)
     for reason in report["full_scope_reasons"]:
         print(f"  FULL_SCOPE: {reason}", flush=True)
 

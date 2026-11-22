@@ -41,6 +41,12 @@ def check() -> None:
     assert release.startswith("name: worker-image\n")
     assert "  push:\n    branches: [main]\n" in release
     assert "  workflow_dispatch:\n" in release
+    assert "  select-image:\n" in release
+    assert "python3 automation/ci_impact.py" in release
+    assert "--head \"$SOURCE_SHA\"" in release
+    assert "status = report.get('image_status', {}).get('temporal-worker')" in release
+    assert "if: needs.select-image.outputs.worker_required == 'true'" in release
+    assert "worker-image-impact-${{ env.SOURCE_SHA }}" in release
     assert "SOURCE_SHA: ${{ github.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release

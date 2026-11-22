@@ -61,3 +61,31 @@ Voyage/Qdrant/SQLx implementation is replaceable, and Qdrant point metadata
 and corresponding Outbox intent stage in one PostgreSQL transaction. The
 deduplicated Outbox transport, not an immediate direct write, owns projection
 materialization; a demoted point's deletion remains an explicit Qdrant effect.
+
+### Shared change-impact owner registry (in progress)
+
+`automation/ci_impact.py` is the common local/CI planner. It derives Cargo
+reverse dependencies from `cargo metadata --locked --no-deps` and reports
+`base_sha`, `head_sha`, `scope` (`none`, `scoped`, `full`), affected crates,
+selected real E2E suites, selected images, and an auditable reason for each.
+The Rust-backed suite runner consumes the named suite commands from that same
+module; it does not maintain an independent list of A13/A14/A17 test filters.
+Focused Temporal worker restart, Neo4j query and Qdrant materialization suites
+are also selected for their actual source owners. These longer suites are not
+silently counted as run on unrelated changes.
+
+Non-executable Markdown and historical `docs/runs` reports do not select a Rust
+compile or image. A live `integration_harness/fixtures/visa_truth_certification`
+input selects the actual Temporal/Truth certification E2E, not an archived PASS.
+The Cloudflare static tree and the four Python scripts COPY'd into the Temporal
+image select its packaging even if no Rust crate changed. The `worker-image`
+release workflow now checks this report against its exact source commit and
+records `not_applicable` for unrelated changes instead of building that image.
+Local feedback shows the same selections, but defers external Docker/provider
+E2E and all release packaging to canonical CI; it cannot be accepted as CI PASS.
+
+**Remaining:** the PR CI jobs for unrelated documentation changes still run
+their existing infrastructure checks; selective job scheduling, fine-grained
+known `Cargo.lock`/schema consumers, broader Temporal/graph coverage and
+complete signed/no-build release provenance still require separate evidence.
+Keep Issue #43 open and PR #44 Draft until those scenarios are proven.

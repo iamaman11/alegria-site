@@ -54,6 +54,21 @@ class DevRustFeedbackTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 changed_worktree_paths("HEAD", root=Path("/synthetic/repo"))
 
+    def test_staged_unstaged_and_untracked_select_same_owners_as_pr_diff(self) -> None:
+        # Local Git status is a different input surface, not a second planner.
+        with patch("subprocess.check_output", side_effect=[
+            b"M\0app/rust/services/temporal/src/main.rs\0"
+            b"M\0automation/deploy_seo_static_cloudflare.py\0",
+            b"docs/ARCHITECTURE_BOUNDARIES.md\0",
+        ]):
+            paths = changed_worktree_paths("HEAD", root=Path("/synthetic/repo"))
+        local = analyze(paths, OWNERS, REVERSE, head="HEAD", base="BASE")
+        pr = analyze(list(reversed(paths)), OWNERS, REVERSE, head="PR_HEAD", base="PR_BASE")
+        for key in ("scope", "direct_crates", "affected_crates", "selected_suites", "selected_images", "image_status"):
+            self.assertEqual(local[key], pr[key], key)
+        self.assertEqual(local["base_sha"], "BASE")
+        self.assertEqual(pr["head_sha"], "PR_HEAD")
+
     def test_http_change_only_checks_own_dependency_closure_and_tests_owner(self) -> None:
         commands = commands_for_report(
             report("app/rust/crates/http_client/src/lib.rs"), check_only=False
