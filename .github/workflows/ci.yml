@@ -606,6 +606,9 @@ jobs:
       RUSTC_WRAPPER: sccache
       # The full-workspace owner is the only deep GHA compiler-cache writer.
       SCCACHE_GHA_RW_MODE: READ_WRITE
+      # One-run writer diagnosis: aggregate HTTP status only, never upload log.
+      SCCACHE_ERROR_LOG: /tmp/alegria-sccache-writer.log
+      SCCACHE_LOG: "sccache::server=debug"
       DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
       CI_WORKSPACE_TESTED: "true"
       ALEGRIA_SCOPED_TRUTH_TEST: "true"
@@ -684,6 +687,36 @@ jobs:
       - name: Rust compiler cache statistics
         if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
         run: sccache --show-stats
+
+      - name: Diagnose writer HTTP failures and GitHub cache capacity
+        if: always() && (github.event_name == 'workflow_dispatch' || needs.rust-contract-smokes.outputs.deep_required == 'true')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          from collections import Counter
+          from pathlib import Path
+          import re
+
+          path = Path('/tmp/alegria-sccache-writer.log')
+          statuses = Counter()
+          if path.is_file():
+              for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+                  if 'Error executing cache write:' not in line:
+                      continue
+                  detail = line.split('Error executing cache write:', 1)[1]
+                  match = re.search(r'\b(?:HTTP\s+status|status)\s*[:=]?\s*([45]\d\d)\b', detail, re.I)
+                  if not match:
+                      match = re.search(r'(?<![0-9A-Za-z])(409|429|403|507)(?![0-9A-Za-z])', detail)
+                  statuses[match.group(1) if match else 'unclassified'] += 1
+          print(f'CI_GHA_WRITER_ERRORS count={sum(statuses.values())} by_http_status={dict(sorted(statuses.items()))}')
+          PY
+          gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" --jq \
+            '"CI_GHA_CACHE_USAGE bytes=\(.active_caches_size_in_bytes) entries=\(.active_caches_count)"' \
+            || echo 'CI_GHA_CACHE_USAGE=unavailable'
+          gh api "repos/$GITHUB_REPOSITORY/actions/cache/storage-limit" --jq \
+            '"CI_GHA_CACHE_LIMIT bytes=\(.storage_limit_in_bytes)"' \
+            || echo 'CI_GHA_CACHE_LIMIT=unavailable'
 
       - name: Preserve Rust and PostgreSQL regression timings
         if: always()
