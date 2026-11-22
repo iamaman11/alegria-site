@@ -219,7 +219,13 @@ mod tests {
         );
         assert_eq!(result.rule_instances.len(), 3);
         assert_eq!(result.facts.len(), 1);
-        assert!(result.rule_instances.iter().all(|rule| rule.source_key == context.source_key));
-        assert!(matches!(&result.facts[0].fact_value, FactValue::Integer(15)));
+        assert!(result
+            .rule_instances
+            .iter()
+            .all(|rule| rule.source_key == context.source_key));
+        assert!(matches!(
+            &result.facts[0].fact_value,
+            FactValue::Integer(15)
+        ));
     }
 }

@@ -242,14 +242,20 @@ mod tests {
     #[test]
     fn authoritative_source_wins_over_conflicting_editorial_candidate() {
         let sources = HashMap::from([
-            ("official".to_string(), SourceRegistryEntry {
-                source_type: "government".to_string(),
-                trust_level: 4,
-            }),
-            ("blog".to_string(), SourceRegistryEntry {
-                source_type: "editorial".to_string(),
-                trust_level: 1,
-            }),
+            (
+                "official".to_string(),
+                SourceRegistryEntry {
+                    source_type: "government".to_string(),
+                    trust_level: 4,
+                },
+            ),
+            (
+                "blog".to_string(),
+                SourceRegistryEntry {
+                    source_type: "editorial".to_string(),
+                    trust_level: 1,
+                },
+            ),
         ]);
         let result = verify_fact_typed(
             "visa_fee",
@@ -264,16 +270,18 @@ mod tests {
     fn conflicting_untrusted_sources_preserve_human_review_and_evidence_keys() {
         let result = verify_fact_typed(
             "visa_fee",
-            &[candidate("source-a", "80 EUR"), candidate("source-b", "90 EUR")],
+            &[
+                candidate("source-a", "80 EUR"),
+                candidate("source-b", "90 EUR"),
+            ],
             &HashMap::new(),
         );
         assert_eq!(result.resolution, "hitl_required");
         assert_eq!(result.diagnostics.len(), 1);
         match &result.diagnostics[0].context {
-            VerificationContext::CandidateSourceKeys(keys) => assert_eq!(
-                keys,
-                &["source-a".to_string(), "source-b".to_string()]
-            ),
+            VerificationContext::CandidateSourceKeys(keys) => {
+                assert_eq!(keys, &["source-a".to_string(), "source-b".to_string()])
+            }
             VerificationContext::None => panic!("candidate source keys must be retained"),
         }
     }
@@ -281,9 +289,15 @@ mod tests {
     #[test]
     fn numeric_rule_merges_only_present_values() {
         let candidates = [
-            NumericRuleCandidate { params: HashMap::from([("days".to_string(), 15.0)]) },
-            NumericRuleCandidate { params: HashMap::from([("days".to_string(), 30.0)]) },
-            NumericRuleCandidate { params: HashMap::new() },
+            NumericRuleCandidate {
+                params: HashMap::from([("days".to_string(), 15.0)]),
+            },
+            NumericRuleCandidate {
+                params: HashMap::from([("days".to_string(), 30.0)]),
+            },
+            NumericRuleCandidate {
+                params: HashMap::new(),
+            },
         ];
         let result = verify_numeric_rule_typed("timeline", &candidates, "days");
         assert_eq!(result.resolution, "range_merged");
