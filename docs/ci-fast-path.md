@@ -21,6 +21,8 @@ or locally run `bash automation/ci_verify.sh all`.
 | [#44963430262](https://github.com/iamaman11/alegria-site/actions/runs/44963430262) | **5m 44s** | Same native code, Truth Workers took 133s instead of 95s; 14/14 PASS |
 | [#44964187468](https://github.com/iamaman11/alegria-site/actions/runs/44964187468) | **5m 15s** | Qdrant transport reused existing integration test target; 14/14 PASS |
 | [#44964851388](https://github.com/iamaman11/alegria-site/actions/runs/44964851388) | **4m 32s** | Deep jobs start after 10s Rust contracts; 14/14 PASS |
+| [#44965308197](https://github.com/iamaman11/alegria-site/actions/runs/44965308197) | **5m 19s** | Identical Rust code; compiler-cache misses regress; 14/14 PASS |
+| [#44967454786](https://github.com/iamaman11/alegria-site/actions/runs/44967454786) | **4m 48s** | Cargo-native compile timings recorded, full integration 4m33s; 14/14 PASS |
 
 These are exact completed PR runs, not an established cold-cache SLA. Issue
 [#37](https://github.com/iamaman11/alegria-site/issues/37) keeps the **≤5m
@@ -29,8 +31,8 @@ full CI + three warm/one cold** acceptance open until measured. Historical
 The critical path varies between the real `integration-e2e` (4m46s in the
 first run) and `comprehensive` (5m18s in the second). Even 99.62% sccache
 hits did not guarantee a ≤5m full run; the signed image still took only 50s.
-The latest single run met the five-minute target without removing tests; a
-repeatable cold-cache SLA still requires the full Issue #37 acceptance sample.
+The latest diagnostic run also met five minutes without removing tests, but
+repeatable cold-cache performance still requires the full Issue #37 sample.
 
 ## On each pull request
 
@@ -74,7 +76,8 @@ work may be wasted, but all mandatory acceptance remains fail-closed.
 - `integration-e2e`: real manual-LLM/Temporal restart, replay, full synthetic
   harness, Qdrant REST→gRPC transport and semantic fixture. Qdrant reuses the
   already compiled `integration_harness` E2E test binary. The harness starts
-  isolated PostgreSQL/Temporal/Qdrant containers; Quality/SERP Cargo tests run
+  isolated PostgreSQL/Temporal/Qdrant/Neo4j containers concurrently because
+  their readiness and data setup are independent; Quality/SERP Cargo tests run
   in the mandatory workspace owner, not here again.
 - `comprehensive`: all 16 real Temporal/Outbox Truth certification fixtures,
   with both native Workers built in one Cargo target. It reuses the mandatory
@@ -94,12 +97,17 @@ PRs report `NOT_AFFECTED_BY_SOURCE_CHANGE` and skip unnecessary Rust builds.
   Rust owner. Avoid archiving multi-gigabyte `target/` directories.
 - The GitHub Actions `sccache` backend has reproducible write losses: the
   5m19s run logged 127–180 misses per deep Rust owner and almost as many write
-  errors. GitHub limits cache uploads to 200/min per repository; the upstream
-  [retry fix](https://github.com/mozilla/sccache/pull/2911) addresses rate
-  limiting, but the actual HTTP error code in these CI runs is not yet logged.
+  errors. In the 4m48s run, **every cache write** in the three deep jobs failed
+  (52/52, 76/76, 78/78), despite 92–95% cache hits. The HTTP status behind
+  those failures is still unconfirmed. GitHub limits uploads to 200/min; the
+  upstream [retry fix](https://github.com/mozilla/sccache/pull/2911) addresses
+  transient rate limiting.
   That fix was merged after the latest stable sccache v0.18.0 release; do not assume a
-  version-only upgrade repairs this. The existing deep evidence artifacts now
-  preserve Cargo `--timings` HTML to diagnose actual compile/link hotspots.
+  version-only upgrade repairs this. Cargo `--timings` in the deep evidence
+  independently measured `aws-lc-sys` C build scripts at **45s (Truth)** and
+  **60s (integration)**. Moving the application from AWS-LC to `ring` could
+  remove that work but changes the runtime TLS provider and is not part of a
+  CI-only optimization.
 - RustSec installs the official version-pinned, SHA-256-verified 6-MB
   `cargo-audit` executable, avoiding repeated 196-second tool compilation.
 - Disposable Rust integration databases use the same PostgreSQL 18.7 major

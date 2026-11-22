@@ -200,26 +200,43 @@ impl Neo4jHarness {
 impl InfraHarness {
     pub async fn start() -> Result<Self> {
         let started = Instant::now();
-        let postgres = PostgresHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=postgres elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let qdrant = QdrantHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=qdrant elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let neo4j = Neo4jHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=neo4j elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let temporal = TemporalHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=temporal elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
+        // Each service has its own container, ports, readiness probe and
+        // bootstrap. Start them together so slow Neo4j/Temporal startup does
+        // not block unrelated PostgreSQL/Qdrant initialization.
+        let (postgres, qdrant, neo4j, temporal) = tokio::try_join!(
+            async {
+                let harness = PostgresHarness::start().await?;
+                eprintln!(
+                    "CI_HARNESS_READY stage=postgres elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                Ok::<_, anyhow::Error>(harness)
+            },
+            async {
+                let harness = QdrantHarness::start().await?;
+                eprintln!(
+                    "CI_HARNESS_READY stage=qdrant elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                Ok::<_, anyhow::Error>(harness)
+            },
+            async {
+                let harness = Neo4jHarness::start().await?;
+                eprintln!(
+                    "CI_HARNESS_READY stage=neo4j elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                Ok::<_, anyhow::Error>(harness)
+            },
+            async {
+                let harness = TemporalHarness::start().await?;
+                eprintln!(
+                    "CI_HARNESS_READY stage=temporal elapsed_ms={}",
+                    started.elapsed().as_millis()
+                );
+                Ok::<_, anyhow::Error>(harness)
+            },
+        )?;
         Ok(Self {
             postgres,
             qdrant,
