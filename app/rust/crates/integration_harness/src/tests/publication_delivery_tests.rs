@@ -114,7 +114,14 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
             origin: &str,
             files: &[PublicReleaseFile],
         ) -> Result<(), ReleaseDeliveryError> {
-            assert_eq!(origin, "https://staging.alegria.by");
+            let parsed = reqwest::Url::parse(origin)
+                .map_err(|err| Self::error(ReleaseDeliveryStage::Readback, &err.to_string()))?;
+            if parsed.scheme() != "https" || parsed.host_str() != Some("staging.alegria.by") {
+                return Err(Self::error(
+                    ReleaseDeliveryStage::Readback,
+                    "unexpected public origin",
+                ));
+            }
             if self.consume_fault(Fault::Readback) {
                 self.http
                     .fail_next_read
