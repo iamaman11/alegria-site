@@ -4,7 +4,7 @@
 // No evidence/source attributes are accepted from the LLM here.
 fn validated_candidate_assertions(
     state: &CandidateValidationSectionState,
-) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
+) -> Vec<truth_domain::contradictions::FactAssertion> {
     state
         .candidates
         .iter()
@@ -23,7 +23,7 @@ fn validated_candidate_assertions(
                 candidate.scope.stable_signature(),
             );
             let assertion = |predicate_key: String, value_normalized: String| {
-                seo_steps::contradiction_gate_step::FactAssertion {
+                truth_domain::contradictions::FactAssertion {
                     subject_key: subject.clone(),
                     predicate_key,
                     value_normalized,
@@ -83,7 +83,7 @@ mod typed_contradiction_regressions {
 
     fn check(
         candidates: Vec<ValidatedTruthCandidateRecord>,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+    ) -> truth_domain::contradictions::ContradictionGateOutput {
         let state = CandidateValidationSectionState {
             section_id: 1248,
             page_id: 133,
@@ -94,8 +94,8 @@ mod typed_contradiction_regressions {
             blocked_by_gate: false,
             status: "accepted".to_string(),
         };
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: "same-evidence".to_string(),
                 facts: validated_candidate_assertions(&state),
             },
@@ -364,7 +364,7 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 } else {
                     rule.rule_key.clone()
                 };
-                seo_steps::contradiction_gate_step::FactAssertion {
+                truth_domain::contradictions::FactAssertion {
                     subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
                     predicate_key: predicate.to_string(),
                     value_normalized,
@@ -376,8 +376,8 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         // Preserve procedural conflict checks and add every validated
         // structured proposition before the independent adjudication step.
         facts.extend(validated_candidate_assertions(candidate_state));
-        let output = seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        let output = truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: input.run_id.clone(),
                 facts,
             },
@@ -977,9 +977,9 @@ mod manual_candidate_contradiction_tests {
 
     fn gate(
         state: &CandidateValidationSectionState,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+    ) -> truth_domain::contradictions::ContradictionGateOutput {
+        truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: "manual-contradiction-test".to_string(),
                 facts: validated_candidate_assertions(state),
             },

@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs" / "runs" / "r3_contradiction_handling.json"
-CONTRADICTION = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "contradiction_gate_step.rs"
+CONTRADICTION = ROOT / "app" / "rust" / "crates" / "truth_domain" / "src" / "contradictions.rs"
 HITL = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "hitl_decision_step.rs"
 
 

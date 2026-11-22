@@ -220,8 +220,8 @@ impl AlegriaActivities {
     pub async fn run_contradiction_gate_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::contradiction_gate_step::ContradictionGateInput,
-    ) -> Result<seo_steps::contradiction_gate_step::ContradictionGateOutput, ActivityError> {
+        input: truth_domain::contradictions::ContradictionGateInput,
+    ) -> Result<truth_domain::contradictions::ContradictionGateOutput, ActivityError> {
         self.execute_step(&input.run_id, "contradiction_gate", 1, &input, || async {
             Ok(step_catalog::run_contradiction_gate(self.as_ref(), &input))
         })

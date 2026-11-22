@@ -17,11 +17,11 @@ fn block_role_for_section(
 fn contradiction_facts(
     section: &RawSectionRecord,
     procedural: &seo_steps::procedural_extraction_step::ProceduralExtractionOutput,
-) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
+) -> Vec<truth_domain::contradictions::FactAssertion> {
     let mut facts = Vec::new();
     for rule in &procedural.rules {
         if rule.numeric_tokens.is_empty() {
-            facts.push(seo_steps::contradiction_gate_step::FactAssertion {
+            facts.push(truth_domain::contradictions::FactAssertion {
                 subject_key: rule.rule_key.clone(),
                 predicate_key: format!("{:?}", rule.role_type).to_lowercase(),
                 value_normalized: "true".to_string(),
@@ -31,7 +31,7 @@ fn contradiction_facts(
             continue;
         }
         for token in &rule.numeric_tokens {
-            facts.push(seo_steps::contradiction_gate_step::FactAssertion {
+            facts.push(truth_domain::contradictions::FactAssertion {
                 subject_key: rule.rule_key.clone(),
                 predicate_key: format!("{:?}", rule.role_type).to_lowercase(),
                 value_normalized: token.replace(',', "."),

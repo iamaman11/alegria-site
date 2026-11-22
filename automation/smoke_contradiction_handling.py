@@ -9,12 +9,12 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_filter(filter_name: str) -> None:
+def run_filter(package: str, filter_name: str) -> None:
     result = subprocess.run(
         [
             "bash",
             "-lc",
-            "cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_steps "
+            f"cd app/rust && SQLX_OFFLINE=true cargo test -q -p {package} "
             f"{filter_name}",
         ],
         cwd=ROOT,
@@ -32,8 +32,8 @@ def run_filter(filter_name: str) -> None:
 
 
 def main() -> int:
-    run_filter("contradiction_gate_step")
-    run_filter("hitl_decision_step")
+    run_filter("truth_domain", "contradictions")
+    run_filter("seo_steps", "hitl_decision_step")
     print("CONTRADICTION_HANDLING_SMOKE: OK")
     return 0
 
