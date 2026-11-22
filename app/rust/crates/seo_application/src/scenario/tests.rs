@@ -16,7 +16,7 @@ mod tests {
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
         RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
-        SourceContextRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
+        SourceContextSearchPort, VerifiedSupportBundleRequest, VerifiedSupportRepository,
     };
 
     #[derive(Default)]
@@ -308,15 +308,15 @@ mod tests {
     }
 
     #[async_trait]
-    impl SourceContextRepository for FakeRepo {
-        async fn load_source_context_chunks(
+    impl SourceContextSearchPort for FakeRepo {
+        fn provider_configured(&self) -> bool { false }
+        fn retrieval_required(&self) -> bool { false }
+        async fn search_source_context_collection(
             &self,
+            _collection: seo_ports::knowledge::SourceContextCollection,
             _query: &str,
             _limit: usize,
-        ) -> Result<
-            Vec<contracts::generated::alegria::temporal::v1::SourceContextChunkState>,
-            DomainError,
-        > {
+        ) -> Result<Vec<seo_ports::knowledge::SourceContextChunk>, DomainError> {
             Ok(Vec::new())
         }
     }

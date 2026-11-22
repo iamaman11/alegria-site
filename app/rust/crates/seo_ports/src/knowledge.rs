@@ -4,6 +4,55 @@
 
 use runtime_models::{RuleParams, RuleRoleType};
 
+/// Search projections for editorial context, ordered by the Knowledge use case.
+/// None of these collections is an authoritative PostgreSQL Truth read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceContextCollection {
+    VerifiedRules,
+    RawContextual,
+    EditorialTopics,
+    RawStandard,
+}
+
+impl SourceContextCollection {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::VerifiedRules => "verified_rules_4",
+            Self::RawContextual => "raw_chunks_ctx",
+            Self::EditorialTopics => "editorial_topics_4",
+            Self::RawStandard => "raw_chunks_4",
+        }
+    }
+
+    pub fn usage_policy(self) -> &'static str {
+        match self {
+            Self::VerifiedRules => "verified_fact_support",
+            Self::RawContextual => "contextual_source_neighborhood_not_fact_support",
+            Self::EditorialTopics => "editorial_topic_support_not_fact_support",
+            Self::RawStandard => "standard_source_neighborhood_not_fact_support",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceContextChunk {
+    pub collection: SourceContextCollection,
+    pub chunk_key: String,
+    pub source_url: String,
+    pub source_domain: String,
+    pub heading_path: String,
+    pub section_type: String,
+    pub content_md: String,
+    pub retrieval_score: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceContextQuery {
+    pub run_id: String,
+    pub text: String,
+    pub limit: usize,
+}
+
 /// Non-authoritative Qdrant/Voyage suggestion. A vector hit is not a verified
 /// rule, source assertion, or permission to write PostgreSQL Truth.
 #[derive(Debug, Clone, PartialEq)]

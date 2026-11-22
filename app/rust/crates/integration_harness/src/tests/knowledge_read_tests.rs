@@ -1,5 +1,83 @@
 // The real SQLx adapter is the only evidence source. Neither Qdrant nor
 // Neo4j is connected: retrieval projections cannot supply verified rules.
+
+/// A13: the real editorial source-context port reads disposable Qdrant through
+/// Voyage's stubbed HTTP boundary, but never treats a vector hit as PG Truth.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn knowledge_a13_editorial_source_context_uses_real_qdrant_and_typed_port() {
+    use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
+    use infrastructure::adapters::projection_materialize_adapter;
+    use prost::Message;
+    use seo_application::knowledge::retrieve_source_context;
+    use seo_ports::knowledge::{SourceContextCollection, SourceContextQuery};
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let qdrant = QdrantHarness::start().await.unwrap();
+    let voyage = stub_servers::spawn_voyage_contract_stub().await.unwrap();
+    let _env = env_overrides::EnvOverrideGuard::apply([
+        ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
+        ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
+        ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
+        ("VOYAGE_API_KEY".to_string(), "editorial-a13-stub".to_string()),
+        ("VOYAGE_API_BASE_URL".to_string(), format!("{}/v1", voyage.base_url)),
+        ("RETRIEVAL_CAPABILITY_REQUIRED".to_string(), "true".to_string()),
+    ]);
+    let reader = SqlxSeoRuntimeRepository::new(&pg.pool);
+    let query = SourceContextQuery {
+        run_id: Uuid::new_v4().to_string(),
+        text: "Official visa requirements".into(),
+        limit: 2,
+    };
+    let empty = retrieve_source_context(&reader, &query).await.unwrap();
+    assert!(empty.is_empty(), "a successful empty Qdrant read must stay empty");
+
+    // Insert through the production Outbox materialization effect. The search
+    // result is non-authoritative even when its metadata claims source trust.
+    let command = QdrantUpsertCommand {
+        event_id: String::new(),
+        collection_name: "raw_chunks_4".into(),
+        entity_type: "raw_section".into(),
+        entity_key: "a13:source-context".into(),
+        point_id: Uuid::new_v4().to_string(),
+        vector: vec![0.01; 1024],
+        payload: None,
+        distance: "cosine".into(),
+        vector_size: 1024,
+        metadata: std::collections::HashMap::from([
+            ("retrieval_text".into(), "Official visa requirements".into()),
+            ("source_url".into(), "https://example.gov/visa".into()),
+            ("source_domain".into(), "example.gov".into()),
+            ("section_type".into(), "requirements".into()),
+            ("heading_path".into(), "Visa / requirements".into()),
+        ]),
+    };
+    projection_materialize_adapter::dispatch_event(
+        "qdrant",
+        "QdrantUpsertCommand",
+        &command.entity_key,
+        "alegria.outbox.qdrant_upsert_command.v1",
+        &command.encode_to_vec(),
+    )
+    .await
+    .unwrap();
+
+    let first = retrieve_source_context(&reader, &query).await.unwrap();
+    let replay = retrieve_source_context(&reader, &query).await.unwrap();
+    assert_eq!(first, replay);
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].collection, SourceContextCollection::RawStandard);
+    assert_eq!(first[0].chunk_key, "raw_chunks_4:a13:source-context");
+    assert_eq!(first[0].source_domain, "example.gov");
+    assert_eq!(first[0].content_md, "Official visa requirements");
+    assert_eq!(first[0].collection.usage_policy(),
+               "standard_source_neighborhood_not_fact_support");
+
+    let verified: i64 = sqlx::query_scalar("SELECT count(*) FROM verified.rule_instances")
+        .fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(verified, 0, "Qdrant evidence cannot create PostgreSQL verified Truth");
+}
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]

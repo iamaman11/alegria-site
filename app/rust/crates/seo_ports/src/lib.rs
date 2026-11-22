@@ -16,11 +16,10 @@ use contracts::generated::alegria::temporal::v1::{
     RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
-    SourceContextChunkState,
 };
 use knowledge::{
     CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,
-    VerifiedRulesQuery, VerifiedRulesView,
+    SourceContextChunk, SourceContextCollection, VerifiedRulesQuery, VerifiedRulesView,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
@@ -227,12 +226,17 @@ pub trait CrawlIngestRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait SourceContextRepository: Send + Sync {
-    async fn load_source_context_chunks(
+pub trait SourceContextSearchPort: Send + Sync {
+    /// Runtime configuration is an effect; the application owns required/optional behavior.
+    fn provider_configured(&self) -> bool;
+    fn retrieval_required(&self) -> bool;
+
+    async fn search_source_context_collection(
         &self,
+        collection: SourceContextCollection,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SourceContextChunkState>, DomainError>;
+    ) -> Result<Vec<SourceContextChunk>, DomainError>;
 }
 
 #[async_trait]

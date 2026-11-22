@@ -77,6 +77,8 @@ KNOWLEDGE_A13_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_context_bundle_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
+    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
+    "app/rust/crates/seo_application/src/drafting.rs",
     "app/rust/services/temporal/src/activities/content_generation.rs",
     "app/rust/crates/integration_harness/src/tests/knowledge_read_tests.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/triple_builder.rs",

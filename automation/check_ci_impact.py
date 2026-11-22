@@ -80,6 +80,16 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(result["publishing_a17_required"])
         self.assertFalse(result["outbox_a14_required"])
 
+    def test_editorial_source_context_port_changes_select_real_qdrant_a13(self) -> None:
+        for path in (
+            "app/rust/crates/seo_application/src/drafting.rs",
+            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["analysis"], "scoped")
+                self.assertTrue(result["knowledge_a13_required"])
+
     def test_unknown_global_change_fails_closed_to_a17(self) -> None:
         result = self.impact("app/db/schema.sql")
         self.assertEqual(result["analysis"], "full")

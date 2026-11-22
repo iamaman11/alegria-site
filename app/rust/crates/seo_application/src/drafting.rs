@@ -3,12 +3,13 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
     DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
     EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    SeoTraceabilityEntryState,
+    SeoTraceabilityEntryState, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
+use seo_ports::knowledge::{SourceContextChunk, SourceContextQuery};
 use seo_ports::{
     DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
-    SourceContextRepository,
+    SourceContextSearchPort,
 };
 
 use crate::seo_runtime;
@@ -46,8 +47,23 @@ fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
     )
 }
 
+// Temporal's payload is only an orchestration/wire format. Neither the port
+// nor Knowledge's source admissibility and ordering rules use this DTO.
+fn source_context_wire(chunk: SourceContextChunk) -> SourceContextChunkState {
+    SourceContextChunkState {
+        chunk_key: chunk.chunk_key,
+        source_url: chunk.source_url,
+        source_domain: chunk.source_domain,
+        heading_path: chunk.heading_path,
+        section_type: chunk.section_type,
+        content_md: chunk.content_md,
+        retrieval_score: format!("{:.4}", chunk.retrieval_score),
+        usage_policy: chunk.collection.usage_policy().to_string(),
+    }
+}
+
 pub async fn run_draft_assemble<
-    R: DraftRepository + SectionTemplateRepository + SourceContextRepository + GraphCapabilityPort,
+    R: DraftRepository + SectionTemplateRepository + SourceContextSearchPort + GraphCapabilityPort,
 >(
     repo: &R,
     input: &DraftAssembleInputPayload,
@@ -71,9 +87,18 @@ pub async fn run_draft_assemble<
         }
     }
     if enriched_input.source_context_chunks.is_empty() {
-        enriched_input.source_context_chunks = repo
-            .load_source_context_chunks(&draft_source_context_query(&enriched_input), 12)
-            .await?;
+        enriched_input.source_context_chunks = crate::knowledge::retrieve_source_context(
+            repo,
+            &SourceContextQuery {
+                run_id: input.run_id.clone(),
+                text: draft_source_context_query(&enriched_input),
+                limit: 12,
+            },
+        )
+        .await?
+        .into_iter()
+        .map(source_context_wire)
+        .collect();
     }
     let output = seo_steps::draft_assemble_step::execute(&enriched_input);
     repo.persist_draft_assemble_output(&input.run_id, &output)
@@ -112,7 +137,7 @@ pub async fn run_draft_qa<R: DraftRepository + GraphCapabilityPort>(
     input: &DraftQaInputPayload,
 ) -> Result<DraftQaOutputPayload, DomainError>
 where
-    R: SourceContextRepository,
+    R: SourceContextSearchPort,
 {
     ensure_graph_required_for_phase(repo, "draft_qa").await?;
     let mut output = seo_steps::draft_qa_step::execute(input);
@@ -170,7 +195,7 @@ fn semantic_trace(
     }
 }
 
-async fn append_retrieval_diagnostics<R: SourceContextRepository>(
+async fn append_retrieval_diagnostics<R: SourceContextSearchPort>(
     repo: &R,
     input: &DraftQaInputPayload,
     output: &mut DraftQaOutputPayload,
@@ -190,7 +215,15 @@ async fn append_retrieval_diagnostics<R: SourceContextRepository>(
             continue;
         }
         let query = trimmed_excerpt(&entry.fragment_text, 48);
-        let neighbors = repo.load_source_context_chunks(&query, 3).await?;
+        let neighbors = crate::knowledge::retrieve_source_context(
+            repo,
+            &SourceContextQuery {
+                run_id: input.run_id.clone(),
+                text: query,
+                limit: 3,
+            },
+        )
+        .await?;
         if neighbors.is_empty() {
             continue;
         }
@@ -237,7 +270,15 @@ async fn append_retrieval_diagnostics<R: SourceContextRepository>(
     // Plagiarism/boilerplate leakage diagnostics.
     if !draft.body_markdown.trim().is_empty() {
         let query = trimmed_excerpt(&draft.body_markdown, 64);
-        let neighbors = repo.load_source_context_chunks(&query, 4).await?;
+        let neighbors = crate::knowledge::retrieve_source_context(
+            repo,
+            &SourceContextQuery {
+                run_id: input.run_id.clone(),
+                text: query,
+                limit: 4,
+            },
+        )
+        .await?;
         for chunk in neighbors {
             let excerpt = trimmed_excerpt(&chunk.content_md, 40);
             if excerpt.is_empty() {
@@ -287,7 +328,7 @@ mod tests {
     };
     use seo_ports::{
         DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
-        SourceContextRepository,
+        SourceContextSearchPort,
     };
 
     #[derive(Default)]
@@ -356,15 +397,19 @@ mod tests {
     }
 
     #[async_trait]
-    impl SourceContextRepository for FakeDraftRepo {
-        async fn load_source_context_chunks(
+    impl SourceContextSearchPort for FakeDraftRepo {
+        fn provider_configured(&self) -> bool {
+            false
+        }
+        fn retrieval_required(&self) -> bool {
+            false
+        }
+        async fn search_source_context_collection(
             &self,
+            _collection: seo_ports::knowledge::SourceContextCollection,
             _query: &str,
             _limit: usize,
-        ) -> Result<
-            Vec<contracts::generated::alegria::temporal::v1::SourceContextChunkState>,
-            DomainError,
-        > {
+        ) -> Result<Vec<SourceContextChunk>, DomainError> {
             Ok(Vec::new())
         }
     }
@@ -546,21 +591,31 @@ mod tests {
     }
 
     #[async_trait]
-    impl SourceContextRepository for DiagnosticDraftRepo {
-        async fn load_source_context_chunks(
+    impl SourceContextSearchPort for DiagnosticDraftRepo {
+        fn provider_configured(&self) -> bool {
+            true
+        }
+        fn retrieval_required(&self) -> bool {
+            false
+        }
+        async fn search_source_context_collection(
             &self,
+            collection: seo_ports::knowledge::SourceContextCollection,
             _query: &str,
             _limit: usize,
-        ) -> Result<Vec<SourceContextChunkState>, DomainError> {
-            Ok(vec![SourceContextChunkState {
+        ) -> Result<Vec<SourceContextChunk>, DomainError> {
+            if collection != seo_ports::knowledge::SourceContextCollection::VerifiedRules {
+                return Ok(Vec::new());
+            }
+            Ok(vec![SourceContextChunk {
+                collection,
                 chunk_key: "verified_rules_4:rule-passport".to_string(),
                 source_url: "https://example.com/rule".to_string(),
                 source_domain: "example.com".to_string(),
                 heading_path: "passport".to_string(),
                 section_type: "verified_rules_4".to_string(),
                 content_md: "Passport copy is required for tourist visa applications".to_string(),
-                retrieval_score: "0.95".to_string(),
-                usage_policy: "verified_fact_support".to_string(),
+                retrieval_score: 0.95,
             }])
         }
     }

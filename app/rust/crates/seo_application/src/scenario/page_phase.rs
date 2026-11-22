@@ -1,7 +1,7 @@
 async fn run_page_phase<
     R: DraftRepository
         + SectionTemplateRepository
-        + SourceContextRepository
+        + SourceContextSearchPort
         + EditorialGenerationPort
         + CmsReviewPort
         + PublishArtifactRepository

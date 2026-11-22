@@ -11,10 +11,13 @@ use seo_ports::{
     PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
     SectionTemplateRepository, SemanticDemandCluster, SemanticLinkCandidate,
     SemanticLinkSearchPort, SeoBuildInputRepository, SeoBuildRegistrationRepository,
-    SeoSiteBuildRegistrationRequest, SerpSearchPort, SourceContextRepository,
+    SeoSiteBuildRegistrationRequest, SerpSearchPort, SourceContextSearchPort,
     VerifiedRulesReader, VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
-use seo_ports::knowledge::{VerifiedRule, VerifiedRulesQuery, VerifiedRulesView};
+use seo_ports::knowledge::{
+    SourceContextChunk, SourceContextCollection, VerifiedRule, VerifiedRulesQuery,
+    VerifiedRulesView,
+};
 
 use super::{
     dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, manual_llm_queue, neo4rs_adapter,
@@ -39,7 +42,6 @@ use contracts::generated::alegria::temporal::v1::{
     RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
-    SourceContextChunkState,
 };
 use serde_json::json;
 use sqlx::Row;
@@ -60,9 +62,10 @@ async fn ensure_graph_contract_if_required(context_key: &str) -> Result<(), Doma
 }
 
 fn source_chunk_from_search_result(
-    collection_name: &str,
+    collection: SourceContextCollection,
     record: semantic_search_adapter::SearchResultRecord,
-) -> SourceContextChunkState {
+) -> SourceContextChunk {
+    let collection_name = collection.name();
     let payload = record.payload;
     let retrieval_text = payload
         .get("retrieval_text")
@@ -79,7 +82,8 @@ fn source_chunk_from_search_result(
     } else {
         record.entity_key
     };
-    SourceContextChunkState {
+    SourceContextChunk {
+        collection,
         chunk_key: format!("{collection_name}:{entity_key}"),
         source_url: payload.get("source_url").cloned().unwrap_or_default(),
         source_domain: payload.get("source_domain").cloned().unwrap_or_default(),
@@ -94,26 +98,24 @@ fn source_chunk_from_search_result(
             .or_else(|| payload.get("artifact_type").cloned())
             .unwrap_or_else(|| collection_name.to_string()),
         content_md: retrieval_text,
-        retrieval_score: format!("{:.4}", record.score),
-        usage_policy: match collection_name {
-            "verified_rules_4" => "verified_fact_support".to_string(),
-            "raw_chunks_ctx" => "contextual_source_neighborhood_not_fact_support".to_string(),
-            "editorial_topics_4" => "editorial_topic_support_not_fact_support".to_string(),
-            "raw_chunks_4" => "standard_source_neighborhood_not_fact_support".to_string(),
-            _ => "supplemental_context_not_fact_support".to_string(),
-        },
+        retrieval_score: record.score,
     }
 }
 
 async fn search_context_collection(
-    collection_name: &str,
+    collection: SourceContextCollection,
     query: &str,
     limit: usize,
-    surface: semantic_search_adapter::VoyageSearchSurface,
-) -> Result<Vec<SourceContextChunkState>, DomainError> {
+) -> Result<Vec<SourceContextChunk>, DomainError> {
     if limit == 0 {
         return Ok(Vec::new());
     }
+    let collection_name = collection.name();
+    let surface = if collection == SourceContextCollection::RawContextual {
+        semantic_search_adapter::VoyageSearchSurface::Contextualized
+    } else {
+        semantic_search_adapter::VoyageSearchSurface::Standard
+    };
     let search_limit = u64::try_from(limit.saturating_mul(3).max(limit)).map_err(|_| {
         DomainError::ValidationFailure {
             message: format!("source context search limit too large: {limit}"),
@@ -137,7 +139,7 @@ async fn search_context_collection(
     Ok(reranked
         .into_iter()
         .take(limit)
-        .map(|record| source_chunk_from_search_result(collection_name, record))
+        .map(|record| source_chunk_from_search_result(collection, record))
         .collect())
 }
 

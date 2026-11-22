@@ -1,7 +1,7 @@
 //! Build editorial blocks from authoritative, admissible PostgreSQL Truth.
 //! The reader is replaceable; the role projection and rendering are pure Rust.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use primitives::errors::DomainError;
 use runtime_models::{RuleParams, RuleRoleType};
@@ -9,11 +9,81 @@ use seo_domain::writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole};
 use seo_ports::{
     knowledge::{
         CanonicalVectorCandidate, CanonicalVectorLookup, SemanticNeighborCollection,
-        SemanticNeighborLookup, SemanticNeighborQuery, VerifiedRule, VerifiedRulesQuery,
+        SemanticNeighborLookup, SemanticNeighborQuery, SourceContextChunk, SourceContextCollection,
+        SourceContextQuery, VerifiedRule, VerifiedRulesQuery,
     },
-    CanonicalVectorSearchPort, SemanticNeighborSearchPort, VerifiedRulesReader,
+    CanonicalVectorSearchPort, SemanticNeighborSearchPort, SourceContextSearchPort,
+    VerifiedRulesReader,
 };
 use seo_steps::canonical_mapping_step::{MappingResult, MatchingStage};
+
+/// Select editorial evidence neighborhoods in one place. Search hits provide
+/// context and diagnostics only: no vector projection can verify a Truth fact.
+pub async fn retrieve_source_context<S: SourceContextSearchPort + ?Sized>(
+    search: &S,
+    request: &SourceContextQuery,
+) -> Result<Vec<SourceContextChunk>, DomainError> {
+    if request.limit == 0 {
+        return Ok(Vec::new());
+    }
+    if !search.provider_configured() {
+        if search.retrieval_required() {
+            return Err(DomainError::InfraUnavailable {
+                message: format!(
+                    "knowledge.source_context stage=provider run_id={} requires a configured provider",
+                    request.run_id
+                ),
+            });
+        }
+        return Ok(Vec::new());
+    }
+
+    let mut chunks = Vec::new();
+    let mut seen = BTreeSet::new();
+    for collection in [
+        SourceContextCollection::VerifiedRules,
+        SourceContextCollection::RawContextual,
+        SourceContextCollection::EditorialTopics,
+        SourceContextCollection::RawStandard,
+    ] {
+        let found = match search
+            .search_source_context_collection(collection, &request.text, request.limit.max(4))
+            .await
+        {
+            Ok(found) => found,
+            Err(err) if !search.retrieval_required() => {
+                let _ = err;
+                continue;
+            }
+            Err(err) => {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!(
+                        "knowledge.source_context stage=search run_id={} collection={}: {err}",
+                        request.run_id,
+                        collection.name()
+                    ),
+                });
+            }
+        };
+        for chunk in found {
+            if chunk.collection != collection {
+                return Err(DomainError::ContractViolation {
+                    message: format!(
+                        "knowledge.source_context stage=collection_identity run_id={} requested={} returned={}",
+                        request.run_id, collection.name(), chunk.collection.name()
+                    ),
+                });
+            }
+            if seen.insert(chunk.chunk_key.clone()) {
+                chunks.push(chunk);
+            }
+            if chunks.len() >= request.limit {
+                return Ok(chunks);
+            }
+        }
+    }
+    Ok(chunks)
+}
 
 /// Read-only Knowledge retrieval for Truth completeness/resolution/conflict
 /// diagnostics. Provider errors, empty observations and fallback decisions
@@ -345,8 +415,188 @@ mod tests {
     use primitives::errors::ErrorClass;
     use seo_ports::knowledge::{
         SemanticNeighborCandidate, SemanticNeighborCollection, SemanticNeighborQuery,
-        VerifiedRulesView,
+        SourceContextCollection, SourceContextQuery, VerifiedRulesView,
     };
+
+    struct FakeSourceContextSearch {
+        configured: bool,
+        required: bool,
+        fail: Option<SourceContextCollection>,
+        hits: Vec<SourceContextChunk>,
+        calls: std::sync::Mutex<Vec<SourceContextCollection>>,
+    }
+
+    impl FakeSourceContextSearch {
+        fn new(hits: Vec<SourceContextChunk>) -> Self {
+            Self {
+                configured: true,
+                required: false,
+                fail: None,
+                hits,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl SourceContextSearchPort for FakeSourceContextSearch {
+        fn provider_configured(&self) -> bool {
+            self.configured
+        }
+        fn retrieval_required(&self) -> bool {
+            self.required
+        }
+
+        async fn search_source_context_collection(
+            &self,
+            collection: SourceContextCollection,
+            _query: &str,
+            limit: usize,
+        ) -> Result<Vec<SourceContextChunk>, DomainError> {
+            self.calls.lock().unwrap().push(collection);
+            if self.fail == Some(collection) {
+                return Err(DomainError::InfraUnavailable {
+                    message: format!("simulated {} outage", collection.name()),
+                });
+            }
+            Ok(self
+                .hits
+                .iter()
+                .filter(|chunk| chunk.collection == collection)
+                .take(limit)
+                .cloned()
+                .collect())
+        }
+    }
+
+    fn source_hit(collection: SourceContextCollection, key: &str) -> SourceContextChunk {
+        SourceContextChunk {
+            collection,
+            chunk_key: key.into(),
+            source_url: "https://example.gov/source".into(),
+            source_domain: "example.gov".into(),
+            heading_path: "Visa rules".into(),
+            section_type: "visa".into(),
+            content_md: "Retrieval is not verified Truth".into(),
+            retrieval_score: 0.93,
+        }
+    }
+
+    fn source_query(limit: usize) -> SourceContextQuery {
+        SourceContextQuery {
+            run_id: "source-test-run".into(),
+            text: "visa evidence".into(),
+            limit,
+        }
+    }
+
+    #[tokio::test]
+    async fn source_context_missing_provider_and_zero_limit_obey_required_policy() {
+        let mut search = FakeSourceContextSearch::new(Vec::new());
+        search.configured = false;
+        assert!(retrieve_source_context(&search, &source_query(4))
+            .await
+            .unwrap()
+            .is_empty());
+        search.required = true;
+        let err = retrieve_source_context(&search, &source_query(4))
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(retrieve_source_context(&search, &source_query(0))
+            .await
+            .unwrap()
+            .is_empty());
+        assert!(search.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn source_context_prioritizes_collections_deduplicates_and_stops_at_limit() {
+        use SourceContextCollection as C;
+        let search = FakeSourceContextSearch::new(vec![
+            source_hit(C::VerifiedRules, "shared"),
+            source_hit(C::RawContextual, "shared"),
+            source_hit(C::RawContextual, "context-only"),
+            source_hit(C::EditorialTopics, "topic-later"),
+        ]);
+        let found = retrieve_source_context(&search, &source_query(2))
+            .await
+            .unwrap();
+        assert_eq!(
+            found
+                .iter()
+                .map(|hit| hit.chunk_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["shared", "context-only"]
+        );
+        assert_eq!(found[0].collection.usage_policy(), "verified_fact_support");
+        assert_eq!(
+            found[1].collection.usage_policy(),
+            "contextual_source_neighborhood_not_fact_support"
+        );
+        assert_eq!(
+            *search.calls.lock().unwrap(),
+            vec![C::VerifiedRules, C::RawContextual]
+        );
+    }
+
+    #[tokio::test]
+    async fn source_context_optional_failure_continues_but_required_fails_closed() {
+        use SourceContextCollection as C;
+        let mut search = FakeSourceContextSearch::new(vec![source_hit(C::RawStandard, "raw")]);
+        search.fail = Some(C::RawContextual);
+        let found = retrieve_source_context(&search, &source_query(4))
+            .await
+            .unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].chunk_key, "raw");
+        search.required = true;
+        let err = retrieve_source_context(&search, &source_query(4))
+            .await
+            .unwrap_err();
+        assert_eq!(err.class(), ErrorClass::InfraUnavailable);
+        assert!(err.to_string().contains("raw_chunks_ctx"));
+    }
+
+    #[tokio::test]
+    async fn source_context_rejects_mislabeled_projection_without_promoting_truth() {
+        let search = FakeSourceContextSearch::new(vec![source_hit(
+            SourceContextCollection::VerifiedRules,
+            "vector-only",
+        )]);
+        // The same typed result cannot prove a PostgreSQL Truth rule.
+        let found = retrieve_source_context(&search, &source_query(1))
+            .await
+            .unwrap();
+        assert_eq!(found[0].collection, SourceContextCollection::VerifiedRules);
+        assert_eq!(found[0].content_md, "Retrieval is not verified Truth");
+        // A wrong collection identity from an adapter is a contract failure.
+        struct WrongCollection;
+        #[async_trait]
+        impl SourceContextSearchPort for WrongCollection {
+            fn provider_configured(&self) -> bool {
+                true
+            }
+            fn retrieval_required(&self) -> bool {
+                true
+            }
+            async fn search_source_context_collection(
+                &self,
+                _collection: SourceContextCollection,
+                _query: &str,
+                _limit: usize,
+            ) -> Result<Vec<SourceContextChunk>, DomainError> {
+                Ok(vec![source_hit(
+                    SourceContextCollection::RawStandard,
+                    "wrong",
+                )])
+            }
+        }
+        let error = retrieve_source_context(&WrongCollection, &source_query(1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.class(), ErrorClass::ContractViolation);
+    }
 
     #[derive(Clone, Copy)]
     enum SearchReply {
