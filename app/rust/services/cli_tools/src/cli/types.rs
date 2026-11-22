@@ -16,7 +16,7 @@ use infrastructure::adapters::{
     sqlx_adapter::connect_pg,
     tonic_adapter::AnalyticsClient,
 };
-use truth_domain::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
+use crate::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
 use seo_application::crawl_ingest::run_crawl_sources;

@@ -1,3 +1,6 @@
+#[path = "cli/fact_verifier_json.rs"]
+mod fact_verifier_json;
+
 include!("cli/types.rs");
 include!("cli/report_helpers.rs");
 include!("cli/seo_run.rs");
