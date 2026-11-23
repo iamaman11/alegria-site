@@ -112,6 +112,7 @@ OUTBOX_A14_PATHS = {
 # decision, typed port, SQL transaction and active-workflow ownership. It is
 # distinct from the public release/readback A17 integration.
 CMS_REVIEW_PATHS = {
+    "app/rust/crates/seo_domain/src/cms_revision.rs",
     "app/rust/crates/seo_domain/src/review_decision.rs",
     "app/rust/crates/seo_application/src/cms_review.rs",
     "app/rust/crates/seo_application/src/review_publish.rs",
@@ -176,7 +177,7 @@ SUITE_OWNERS = {
         "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "published_page_review_requires_exact_pending_revision_and_active_workflow",
+            "--lib", "cms_revision_",
             "--locked", "--", "--nocapture",
         ),
     },

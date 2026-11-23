@@ -784,7 +784,7 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
-async fn published_page_review_requires_exact_pending_revision_and_active_workflow() {
+async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow() {
     use infrastructure::adapters::sqlx_seo_cms_adapter;
     use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
@@ -890,11 +890,12 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
-async fn cms_publish_keeps_verified_links_structured_without_duplicate_body_sections() {
+async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_body_sections() {
     use contracts::generated::alegria::temporal::v1::{
         CmsPublishInputPayload, CmsPublishOutputPayload,
     };
     use infrastructure::adapters::sqlx_seo_cms_adapter;
+    use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -959,9 +960,11 @@ async fn cms_publish_keeps_verified_links_structured_without_duplicate_body_sect
 
     let input = CmsPublishInputPayload {
         run_id: Uuid::new_v4().to_string(),
-        publish_mode: "publish_with_hitl".into(),
+        publish_mode: "request_review".into(),
         ..Default::default()
     };
+    sqlx::query("INSERT INTO pipeline.execution_runs (run_id,workflow_run_id,workflow_type,context_key) VALUES ($1,'cms-revision-test-workflow','seo_site_build','ES|tourist||BY')")
+        .bind(Uuid::parse_str(&input.run_id).unwrap()).execute(pool).await.unwrap();
     let planned = CmsPublishOutputPayload {
         page_draft_key: tourist_draft,
         ..Default::default()
@@ -970,6 +973,52 @@ async fn cms_publish_keeps_verified_links_structured_without_duplicate_body_sect
         .await.unwrap();
     assert_eq!(result.verdict, "review_requested");
     assert!(result.blocking_reasons.is_empty());
+    let (review_status, page_status, page_lifecycle): (String, String, String) = sqlx::query_as(
+        "SELECT r.revision_status,p.current_status,n.lifecycle_state FROM site.cms_page_revisions r JOIN site.cms_pages p ON p.page_node_key=r.page_node_key JOIN site.page_nodes n ON n.page_node_key=r.page_node_key WHERE r.revision_id=$1",
+    ).bind(&result.revision_id).fetch_one(pool).await.unwrap();
+    assert_eq!((review_status.as_str(), page_status.as_str(), page_lifecycle.as_str()),
+        ("review_required", "review_required", "review_required"));
+
+    let reviewer = CmsReviewDecisionRequest {
+        page_node_key: tourist_page.clone(),
+        revision_id: Some(result.revision_id.clone()),
+        actor_role: "editor_fixture".to_string(),
+        decision: HumanReviewDecision::Approved,
+        reason: "Exact revision approved".to_string(),
+        source: "cms_revision_transition_e2e".to_string(),
+    };
+    sqlx_seo_cms_adapter::apply_human_review_decision(pool, &reviewer)
+        .await
+        .unwrap();
+    let persisted = sqlx_seo_cms_adapter::load_latest_approval_decision(
+        pool,
+        &tourist_page,
+        &result.revision_id,
+    )
+    .await
+    .unwrap()
+    .expect("exact approved revision");
+    let approved_input = CmsPublishInputPayload {
+        publish_mode: "approved_publish".to_string(),
+        approval_decision: Some(seo_steps::cms_review_wire::to_wire(persisted)),
+        ..input.clone()
+    };
+    let approved = sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &approved_input,
+        &CmsPublishOutputPayload {
+            page_draft_key: result.page_draft_key.clone(),
+            revision_id: result.revision_id.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(approved.verdict, "approved");
+    let (revision_status, page_status): (String, String) = sqlx::query_as(
+        "SELECT r.revision_status,p.current_status FROM site.cms_page_revisions r JOIN site.cms_pages p ON p.page_node_key=r.page_node_key WHERE r.revision_id=$1",
+    ).bind(&approved.revision_id).fetch_one(pool).await.unwrap();
+    assert_eq!((revision_status.as_str(), page_status.as_str()), ("approved", "approved"));
     let (body, links): (serde_json::Value, serde_json::Value) = sqlx::query_as(
         "SELECT body_payload,required_link_payload FROM site.cms_page_revisions WHERE revision_id=$1",
     ).bind(&result.revision_id).fetch_one(pool).await.unwrap();
@@ -1048,6 +1097,23 @@ async fn cms_publish_keeps_verified_links_structured_without_duplicate_body_sect
     ).await.unwrap();
     assert_eq!(blocked.verdict, "blocked");
     assert!(blocked.blocking_reasons.contains(&"required_internal_target_not_published".to_string()));
+    let (revision_status, page_status): (String, String) = sqlx::query_as(
+        "SELECT r.revision_status,p.current_status FROM site.cms_page_revisions r JOIN site.cms_pages p ON p.page_node_key=r.page_node_key WHERE r.revision_id=$1",
+    ).bind(&blocked.revision_id).fetch_one(pool).await.unwrap();
+    assert_eq!((revision_status.as_str(), page_status.as_str()), ("blocked", "blocked"));
+
+    let invalid_mode = CmsPublishInputPayload {
+        publish_mode: "unexpected_mode".into(),
+        ..input
+    };
+    assert!(sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &invalid_mode,
+        &CmsPublishOutputPayload {
+            page_draft_key: blocked.page_draft_key,
+            ..Default::default()
+        },
+    ).await.is_err());
 }
 
 #[cfg(feature = "e2e")]

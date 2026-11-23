@@ -356,7 +356,8 @@ fn seo_steps_form_publish_ready_pipeline() {
         actor_role: "seo_system".to_string(),
         publish_mode: "request_review".to_string(),
         approval_decision: None,
-    });
+    })
+    .unwrap();
     assert_eq!(cms.verdict, "review_requested");
     assert!(cms.blocking_reasons.is_empty());
 

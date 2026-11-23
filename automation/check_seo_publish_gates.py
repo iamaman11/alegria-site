@@ -7,6 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
 PUBLISH = ROOT / "app/rust/crates/seo_steps/src/cms_publish_step.rs"
+REVISION = ROOT / "app/rust/crates/seo_domain/src/cms_revision.rs"
 RENDER_VALIDATE = ROOT / "app/rust/crates/seo_steps/src/render_preview_validate_step.rs"
 PAGE_PUBLISH = (
     ROOT
@@ -17,6 +18,7 @@ PAGE_PUBLISH = (
 def main() -> int:
     qa = QA.read_text(encoding="utf-8")
     publish = PUBLISH.read_text(encoding="utf-8")
+    revision = REVISION.read_text(encoding="utf-8")
     render_validate = RENDER_VALIDATE.read_text(encoding="utf-8")
     page_publish = PAGE_PUBLISH.read_text(encoding="utf-8")
     failures: list[str] = []
@@ -31,12 +33,12 @@ def main() -> int:
         if needle not in qa:
             failures.append(f"draft_qa_step missing publish gate `{needle}`")
 
-    for needle in [
-        "human_approval_required",
-        "review_requested",
-    ]:
+    for needle in ["human_approval_required", "CmsRevisionState::decide", "CmsPublishIntent::parse"]:
         if needle not in publish:
             failures.append(f"cms_publish_step missing human gate `{needle}`")
+    for needle in ["review_requested", "publish_blocked", "seo_page_publish_blocked"]:
+        if needle not in revision:
+            failures.append(f"cms_revision domain missing transition outcome `{needle}`")
 
     forbidden = [
         'publish_status: "approved"',

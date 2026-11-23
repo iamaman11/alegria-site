@@ -3,6 +3,7 @@ pub async fn persist_cms_publish_output(
     input: &CmsPublishInputPayload,
     planned: &CmsPublishOutputPayload,
 ) -> Result<CmsPublishOutputPayload, DomainError> {
+    let intent = seo_domain::cms_revision::CmsPublishIntent::parse(&input.publish_mode)?;
     if planned.page_draft_key.trim().is_empty() {
         return Err(validation_failure(
             "cms_publish persistence requires page_draft_key",
@@ -59,7 +60,7 @@ pub async fn persist_cms_publish_output(
     } else {
         planned.cms_document_id.clone()
     };
-    let valid_human_approval = if input.publish_mode == "approved_publish" {
+    let valid_human_approval = if intent.requires_human_approval() {
         let persisted =
             load_latest_approval_decision(pool, &row.page_node_key, &revision_id).await?;
         let supplied = input
@@ -95,38 +96,19 @@ pub async fn persist_cms_publish_output(
             "link_role": link.link_role,
         }))
         .collect::<Vec<_>>();
-    if input.publish_mode == "approved_publish" && !valid_human_approval {
+    if intent.requires_human_approval() && !valid_human_approval {
         blockers.push("missing_persisted_human_approval".to_string());
     }
     blockers.sort();
     blockers.dedup();
-    let (current_status, page_lifecycle_state, revision_status, event_type, verdict) =
-        if blockers.is_empty() {
-            match input.publish_mode.as_str() {
-                "approved_publish" => (
-                    "approved",
-                    "approved",
-                    "approved",
-                    "seo_page_approved",
-                    "approved",
-                ),
-                _ => (
-                    "review_required",
-                    "review_required",
-                    "review_required",
-                    "seo_page_review_requested",
-                    "review_requested",
-                ),
-            }
-        } else {
-            (
-                "blocked",
-                "blocked",
-                "blocked",
-                "seo_page_publish_blocked",
-                "blocked",
-            )
-        };
+    let transition = seo_domain::cms_revision::CmsRevisionState::decide(
+        intent,
+        !blockers.is_empty(),
+    );
+    let (current_status, page_lifecycle_state, revision_status) =
+        (transition.status(), transition.status(), transition.status());
+    let event_type = transition.event_type();
+    let verdict = transition.persisted_verdict();
 
     let revision_write = sqlx::query(
         r#"

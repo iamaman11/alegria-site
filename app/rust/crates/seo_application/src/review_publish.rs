@@ -10,7 +10,7 @@ pub async fn run_cms_publish<P: CmsReviewPort>(
     port: &P,
     input: &CmsPublishInputPayload,
 ) -> Result<CmsPublishOutputPayload, DomainError> {
-    let output = seo_steps::cms_publish_step::execute(input);
+    let output = seo_steps::cms_publish_step::execute(input)?;
     port.persist_cms_publish_output(input, &output).await
 }
 
