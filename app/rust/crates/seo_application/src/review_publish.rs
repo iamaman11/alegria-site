@@ -1,8 +1,7 @@
 use contracts::generated::alegria::temporal::v1::{
-    CmsPublishInputPayload, CmsPublishOutputPayload,
-    FinalizePublishInputPayload, FinalizePublishOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, RenderPreviewValidateInputPayload,
-    RenderPreviewValidateOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload, FinalizePublishInputPayload,
+    FinalizePublishOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
 };
 use primitives::errors::DomainError;
 use seo_ports::{CmsApproval, CmsReviewPort, PublishArtifactRepository};
