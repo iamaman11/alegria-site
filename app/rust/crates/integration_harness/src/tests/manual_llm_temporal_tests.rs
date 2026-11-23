@@ -480,6 +480,12 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
             result.contains("blocked:editorial_rework_required"),
             "{result}"
         );
+        assert!(
+            result.contains(&format!(
+                "blocked:editorial_rework_required:page_node_key={page_node_key}"
+            )),
+            "blocked result referred to a different page: {result}"
+        );
         assert!(result.contains("published_pages=0"), "{result}");
         checkpoint("blocked_rework_completed");
 
