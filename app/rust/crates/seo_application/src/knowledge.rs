@@ -5,18 +5,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primitives::errors::DomainError;
 use runtime_models::{RuleParams, RuleRoleType};
+#[cfg(test)]
+use seo_domain::canonical_mapping::CanonicalVectorCandidate;
 use seo_domain::{
     canonical_mapping::{self, MappingResult, MatchingStage},
     writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole},
 };
-#[cfg(test)]
-use seo_domain::canonical_mapping::CanonicalVectorCandidate;
 use seo_ports::{
     knowledge::{
-        CanonicalVectorLookup, SemanticNeighborCollection,
-        SemanticNeighborLookup, SemanticNeighborQuery, SourceContextChunk, SourceContextCollection,
-        SourceContextQuery, VerifiedRule, VerifiedRuleProjectionCandidate,
-        VerifiedRuleProjectionChange, VerifiedRulesQuery,
+        CanonicalVectorLookup, SemanticNeighborCollection, SemanticNeighborLookup,
+        SemanticNeighborQuery, SourceContextChunk, SourceContextCollection, SourceContextQuery,
+        VerifiedRule, VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange,
+        VerifiedRulesQuery,
     },
     CanonicalVectorSearchPort, SemanticNeighborSearchPort, SourceContextSearchPort,
     VerifiedRuleProjectionPort, VerifiedRulesReader,

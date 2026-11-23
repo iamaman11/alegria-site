@@ -190,12 +190,10 @@ impl ExpertDecomposedExtractionWorkflow {
                         mentions: spans
                             .mentions
                             .iter()
-                            .map(
-                                |mention| seo_domain::canonical_mapping::MentionForMapping {
-                                    raw_text: mention.raw_text.clone(),
-                                    entity_type: mention.entity_type.clone(),
-                                },
-                            )
+                            .map(|mention| seo_domain::canonical_mapping::MentionForMapping {
+                                raw_text: mention.raw_text.clone(),
+                                entity_type: mention.entity_type.clone(),
+                            })
                             .collect(),
                     },
                     db_opts(30),
