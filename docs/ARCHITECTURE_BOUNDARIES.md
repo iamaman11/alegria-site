@@ -90,6 +90,15 @@ database-derived blockers, commits revisions and preserves a published live
 pointer atomically. The `cms_review_revision` impact suite now selects both
 the exact-workflow human-review and CMS-publish PostgreSQL tests. This does not
 prove every editorial revision operation or a public HTTPS release.
+The editorial post-review workflow gate now delegates to
+`seo_domain::review_decision::editorial_review_disposition`. The shared
+`seo_steps::cms_review_wire` mapper translates recorded Temporal strings to
+the typed decision; unknown historical values can only wait, never approve.
+Both the canonical cutover and legacy-compatible Temporal workflow use the
+same domain policy. Temporal still owns `patched` history compatibility,
+durable waiting and resume, while PostgreSQL validates immutable revision
+identity and human reviewer. Changes to either workflow select the actual CMS
+PostgreSQL suite and the Temporal worker-restart E2E.
 
 ### Shared change-impact owner registry (in progress)
 

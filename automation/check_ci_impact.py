@@ -220,11 +220,15 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/seo_steps/src/cms_review_wire.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
+            "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+            "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
                 self.assertEqual(result["analysis"], "scoped")
                 self.assertIn("cms_review_revision", result["selected_suites"])
+                if path.startswith("app/rust/services/temporal/"):
+                    self.assertIn("temporal_restart", result["selected_suites"])
         suite = SUITE_OWNERS["cms_review_revision"]
         self.assertIn(
             "cms_revision_",

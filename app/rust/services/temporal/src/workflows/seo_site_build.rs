@@ -24,6 +24,7 @@ use seo_application::execution::{
     RunInteractionPolicy, SeoExecutionCursor, SeoExecutionSegment, SeoPhaseDecision, SeoPhaseKey,
 };
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest};
+use seo_domain::review_decision::EditorialReviewDisposition;
 
 use crate::activities::AlegriaActivities;
 use crate::metrics;
@@ -533,7 +534,11 @@ impl SeoSiteBuildWorkflow {
                                                     db_opts(30),
                                                 )
                                                 .await?;
-                                            if approval_decision.decision == "approved" {
+                                            if seo_steps::cms_review_wire::workflow_disposition(
+                                                &approval_decision,
+                                                false,
+                                            ) == EditorialReviewDisposition::Approved
+                                            {
                                                 break;
                                             }
                                             ctx.state_mut(|s| {
@@ -578,7 +583,11 @@ impl SeoSiteBuildWorkflow {
                                                 db_opts(30),
                                             )
                                             .await?;
-                                        if approval_decision.decision != "approved" {
+                                        if seo_steps::cms_review_wire::workflow_disposition(
+                                            &approval_decision,
+                                            false,
+                                        ) != EditorialReviewDisposition::Approved
+                                        {
                                             page_blocked = true;
                                             ctx.state_mut(|s| {
                                                 s.waiting_hitl = false;
