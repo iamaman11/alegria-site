@@ -1,3 +1,5 @@
+//! Pure Truth review-routing policy; Temporal owns durable human-review tasks.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,5 +110,29 @@ mod tests {
         assert_eq!(output.route, "queue_hitl");
         assert_eq!(output.task_type.as_deref(), Some("quality_review"));
         assert_eq!(output.priority, 120);
+    }
+
+    #[test]
+    fn low_completeness_queues_review_and_clean_input_auto_approves() {
+        let mut input = HitlDecisionInput {
+            run_id: "run".to_string(),
+            step_name: "completeness_judge".to_string(),
+            layer_confidence: 0.95,
+            completeness_score: 0.79,
+            unresolved_mappings: 0,
+            contradiction_blocked: false,
+            conflict_count: 0,
+            loss_count: 0,
+        };
+        let review = execute(&input);
+        assert!(review.requires_hitl);
+        assert_eq!(review.task_type.as_deref(), Some("low_confidence"));
+        assert_eq!(review.priority, 100);
+
+        input.completeness_score = 0.80;
+        let approved = execute(&input);
+        assert!(!approved.requires_hitl);
+        assert_eq!(approved.route, "auto_approve");
+        assert_eq!(approved.priority, 0);
     }
 }

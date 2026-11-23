@@ -1,3 +1,6 @@
+//! Deterministic completeness assessment for extracted Truth facts.
+//! The caller owns source retrieval, human-review scheduling and persistence.
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -138,5 +141,30 @@ mod tests {
             extracted_rule_keys: vec!["passport_required".to_string()],
         });
         assert!(!output.needs_hitl);
+    }
+
+    #[test]
+    fn exception_and_alternative_are_reviewed_without_losing_numeric_evidence() {
+        let input = CompletenessJudgeInput {
+            section_id: "visa-1".to_string(),
+            raw_text: "Срок 15 дней, кроме студентов; вместо справки можно предоставить письмо."
+                .to_string(),
+            source_numeric_tokens: vec!["15".to_string()],
+            extracted_numeric_tokens: vec!["15".to_string()],
+            extracted_rule_keys: vec!["deadline".to_string()],
+        };
+        let output = execute(&input);
+        let loss_types: Vec<_> = output
+            .missing_elements
+            .iter()
+            .map(|element| element.loss_type.as_str())
+            .collect();
+
+        assert_eq!(loss_types.as_slice(), &["exception", "alternative"]);
+        assert!((output.completeness_score - 0.76).abs() < f32::EPSILON);
+        assert_eq!(
+            output.hitl_reason.as_deref(),
+            Some("completeness_gaps_detected")
+        );
     }
 }

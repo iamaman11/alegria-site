@@ -78,7 +78,7 @@ pub struct CompletenessJudgeSweepInput {
 pub struct CompletenessJudgeSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub output: seo_steps::completeness_judge_step::CompletenessJudgeOutput,
+    pub output: truth_domain::completeness::CompletenessJudgeOutput,
     pub blocked_by_gate: bool,
     pub status: String,
     pub retrieval_collection_used: Option<String>,
