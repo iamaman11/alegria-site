@@ -474,7 +474,7 @@ pub fn run_expert_extraction_core(
             .filter(|mention| mention.has_numeric)
             .map(|mention| mention.raw_text.replace(',', "."))
             .collect();
-        let completeness_input = seo_steps::completeness_judge_step::CompletenessJudgeInput {
+        let completeness_input = truth_domain::completeness::CompletenessJudgeInput {
             section_id: section.id.to_string(),
             raw_text: section.content_md.clone(),
             source_numeric_tokens: source_numeric_tokens.into_iter().collect(),
@@ -485,7 +485,7 @@ pub fn run_expert_extraction_core(
                 .map(|rule| rule.rule_key.clone())
                 .collect(),
         };
-        let completeness_output = seo_steps::completeness_judge_step::execute(&completeness_input);
+        let completeness_output = truth_domain::completeness::execute(&completeness_input);
         stage_records.push(stage_record(
             "completeness_judge",
             section,

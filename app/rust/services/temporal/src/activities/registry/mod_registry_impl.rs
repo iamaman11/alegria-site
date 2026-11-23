@@ -190,8 +190,8 @@ impl AlegriaActivities {
     pub async fn run_completeness_judge_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::completeness_judge_step::CompletenessJudgeInput,
-    ) -> Result<seo_steps::completeness_judge_step::CompletenessJudgeOutput, ActivityError> {
+        input: truth_domain::completeness::CompletenessJudgeInput,
+    ) -> Result<truth_domain::completeness::CompletenessJudgeOutput, ActivityError> {
         self.execute_step(
             &input.section_id,
             "completeness_judge",
@@ -233,8 +233,8 @@ impl AlegriaActivities {
     pub async fn run_hitl_decision_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::hitl_decision_step::HitlDecisionInput,
-    ) -> Result<seo_steps::hitl_decision_step::HitlDecisionOutput, ActivityError> {
+        input: truth_domain::hitl_decision::HitlDecisionInput,
+    ) -> Result<truth_domain::hitl_decision::HitlDecisionOutput, ActivityError> {
         self.execute_step(&input.run_id, "hitl_decision", 1, &input, || async {
             Ok(step_catalog::run_hitl_decision(self.as_ref(), &input))
         })

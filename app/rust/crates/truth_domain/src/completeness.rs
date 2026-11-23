@@ -1,3 +1,6 @@
+//! Deterministic completeness assessment for extracted Truth facts.
+//! The caller owns source retrieval, human-review scheduling and persistence.
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -138,5 +141,55 @@ mod tests {
             extracted_rule_keys: vec!["passport_required".to_string()],
         });
         assert!(!output.needs_hitl);
+    }
+
+    #[test]
+    fn exception_and_alternative_are_reviewed_without_losing_numeric_evidence() {
+        let input = CompletenessJudgeInput {
+            section_id: "visa-1".to_string(),
+            raw_text: "Срок 15 дней, кроме студентов; вместо справки можно предоставить письмо."
+                .to_string(),
+            source_numeric_tokens: vec!["15".to_string()],
+            extracted_numeric_tokens: vec!["15".to_string()],
+            extracted_rule_keys: vec!["deadline".to_string()],
+        };
+        let output = execute(&input);
+        let loss_types: Vec<_> = output
+            .missing_elements
+            .iter()
+            .map(|element| element.loss_type.as_str())
+            .collect();
+
+        assert_eq!(loss_types, ["exception", "alternative"]);
+        assert!((output.completeness_score - 0.76).abs() < f32::EPSILON);
+        assert_eq!(output.hitl_reason.as_deref(), Some("completeness_gaps_detected"));
+    }
+
+    #[test]
+    fn temporal_json_field_names_and_output_remain_stable() {
+        let input = CompletenessJudgeInput {
+            section_id: "s".to_string(),
+            raw_text: "Fee: 80 EUR".to_string(),
+            source_numeric_tokens: vec!["80".to_string()],
+            extracted_numeric_tokens: Vec::new(),
+            extracted_rule_keys: Vec::new(),
+        };
+        let serialized = serde_json::to_value(&input).unwrap();
+        assert_eq!(
+            serialized,
+            serde_json::json!({
+                "section_id": "s",
+                "raw_text": "Fee: 80 EUR",
+                "source_numeric_tokens": ["80"],
+                "extracted_numeric_tokens": [],
+                "extracted_rule_keys": []
+            })
+        );
+        let decoded: CompletenessJudgeInput = serde_json::from_value(serialized).unwrap();
+        let result = serde_json::to_value(execute(&decoded)).unwrap();
+        assert_eq!(result["needs_hitl"], true);
+        assert_eq!(result["hitl_reason"], "completeness_gaps_detected");
+        assert_eq!(result["missing_elements"][0]["action"], "add_numeric_fact");
+        assert!(result.get("completeness_score").is_some());
     }
 }

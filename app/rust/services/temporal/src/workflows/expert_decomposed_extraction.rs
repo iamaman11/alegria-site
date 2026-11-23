@@ -247,7 +247,7 @@ impl ExpertDecomposedExtractionWorkflow {
             let completeness = ctx
                 .start_activity(
                     AlegriaActivities::run_completeness_judge_step,
-                    seo_steps::completeness_judge_step::CompletenessJudgeInput {
+                    truth_domain::completeness::CompletenessJudgeInput {
                         section_id: section.section_id.clone(),
                         raw_text: section.raw_text.clone(),
                         source_numeric_tokens: spans
@@ -345,7 +345,7 @@ impl ExpertDecomposedExtractionWorkflow {
             let hitl = ctx
                 .start_activity(
                     AlegriaActivities::run_hitl_decision_step,
-                    seo_steps::hitl_decision_step::HitlDecisionInput {
+                    truth_domain::hitl_decision::HitlDecisionInput {
                         run_id: run_id.clone(),
                         step_name: "expert_decomposed_extraction".to_string(),
                         layer_confidence: layer.confidence,

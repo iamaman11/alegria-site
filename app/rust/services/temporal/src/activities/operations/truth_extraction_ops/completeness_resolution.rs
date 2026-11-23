@@ -32,8 +32,8 @@ pub(crate) async fn completeness_judge_sweep_impl(
                 normalize_numeric_token_fragments(std::slice::from_ref(&mention.raw_text))
             })
             .collect();
-        let output = seo_steps::completeness_judge_step::execute(
-            &seo_steps::completeness_judge_step::CompletenessJudgeInput {
+        let output = truth_domain::completeness::execute(
+            &truth_domain::completeness::CompletenessJudgeInput {
                 section_id: section.section_id.to_string(),
                 raw_text: raw.content_md.clone(),
                 source_numeric_tokens: source_numeric_tokens.into_iter().collect(),

@@ -67,9 +67,9 @@ pub(crate) fn run_triple_builder(
 
 pub(crate) fn run_completeness_judge(
     _acts: &AlegriaActivities,
-    input: &seo_steps::completeness_judge_step::CompletenessJudgeInput,
-) -> seo_steps::completeness_judge_step::CompletenessJudgeOutput {
-    seo_steps::completeness_judge_step::execute(input)
+    input: &truth_domain::completeness::CompletenessJudgeInput,
+) -> truth_domain::completeness::CompletenessJudgeOutput {
+    truth_domain::completeness::execute(input)
 }
 
 pub(crate) fn run_contradiction_gate(
@@ -81,9 +81,9 @@ pub(crate) fn run_contradiction_gate(
 
 pub(crate) fn run_hitl_decision(
     _acts: &AlegriaActivities,
-    input: &seo_steps::hitl_decision_step::HitlDecisionInput,
-) -> seo_steps::hitl_decision_step::HitlDecisionOutput {
-    seo_steps::hitl_decision_step::execute(input)
+    input: &truth_domain::hitl_decision::HitlDecisionInput,
+) -> truth_domain::hitl_decision::HitlDecisionOutput {
+    truth_domain::hitl_decision::execute(input)
 }
 
 pub(crate) async fn run_neo4j_backwrite(

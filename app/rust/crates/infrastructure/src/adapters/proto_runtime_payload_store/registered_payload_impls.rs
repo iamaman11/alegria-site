@@ -264,11 +264,11 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.EditorialExtractionOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::completeness_judge_step::CompletenessJudgeInput,
+    truth_domain::completeness::CompletenessJudgeInput,
     "alegria.runtime.json.CompletenessJudgeInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::completeness_judge_step::CompletenessJudgeOutput,
+    truth_domain::completeness::CompletenessJudgeOutput,
     "alegria.runtime.json.CompletenessJudgeOutput"
 );
 impl_json_runtime_payload!(
@@ -288,11 +288,11 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.ContradictionGateOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::hitl_decision_step::HitlDecisionInput,
+    truth_domain::hitl_decision::HitlDecisionInput,
     "alegria.runtime.json.HitlDecisionInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::hitl_decision_step::HitlDecisionOutput,
+    truth_domain::hitl_decision::HitlDecisionOutput,
     "alegria.runtime.json.HitlDecisionOutput"
 );
 
