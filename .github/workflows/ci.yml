@@ -761,7 +761,9 @@ jobs:
   # This remains INSIDE the single CI workflow; PRs consume cache read-only.
   rust-cache-prime:
     needs: gate
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'
+    # A successful aggregate CI has intentionally skipped PR-only ancestors.
+    # Override GitHub's implicit success() while still requiring gate=success.
+    if: !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
@@ -865,9 +867,11 @@ jobs:
   # only after the accepted-main CI provenance gate; PRs never build an image.
   select-image:
     needs: gate
+    # PR-only ancestors are deliberately skipped on main; gate itself must pass.
     if: >-
-      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main') }}
+      ${{ !cancelled() && needs.gate.result == 'success' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -971,7 +975,7 @@ jobs:
   package:
     needs: [gate, select-image]
     if: >-
-      ${{ needs.gate.result == 'success' && needs.select-image.result == 'success' &&
+      ${{ !cancelled() && needs.gate.result == 'success' && needs.select-image.result == 'success' &&
       needs.select-image.outputs.worker_required == 'true' && github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')) }}
     runs-on: ubuntu-latest
