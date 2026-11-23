@@ -416,6 +416,7 @@ class ImpactFixtures(unittest.TestCase):
             ".github/workflows/future-build.yml",
             "automation/ci_impact.py",
             "automation/check_ci_impact.py",
+            "automation/check_worker_dependency_skeleton.py",
             "automation/run_scoped_cargo_feedback.py",
             "automation/future_ci_driver.py",
         ):

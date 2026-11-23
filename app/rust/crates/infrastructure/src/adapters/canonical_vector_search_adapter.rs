@@ -3,10 +3,8 @@
 
 use async_trait::async_trait;
 use primitives::errors::DomainError;
-use seo_ports::{
-    knowledge::{CanonicalVectorCandidate, CanonicalVectorLookup},
-    CanonicalVectorSearchPort,
-};
+use seo_domain::canonical_mapping::CanonicalVectorCandidate;
+use seo_ports::{knowledge::CanonicalVectorLookup, CanonicalVectorSearchPort};
 
 use super::semantic_search_adapter::{self, SearchResultRecord, VoyageSearchSurface};
 

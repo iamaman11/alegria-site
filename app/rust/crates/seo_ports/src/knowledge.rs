@@ -78,20 +78,12 @@ pub struct VerifiedRuleEmbeddingBatch {
     pub vectors: Vec<Vec<f32>>,
 }
 
-/// Non-authoritative Qdrant/Voyage suggestion. A vector hit is not a verified
-/// rule, source assertion, or permission to write PostgreSQL Truth.
-#[derive(Debug, Clone, PartialEq)]
-pub struct CanonicalVectorCandidate {
-    pub canonical_key: Option<String>,
-    pub score: f32,
-}
-
 /// Unavailable optional provider differs from a successful, empty search.
 /// The latter requires HITL instead of retaining a symbolic candidate key.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CanonicalVectorLookup {
     Unavailable,
-    Candidates(Vec<CanonicalVectorCandidate>),
+    Candidates(Vec<seo_domain::canonical_mapping::CanonicalVectorCandidate>),
 }
 
 /// The only retrieval neighborhoods used by Truth diagnostics. These are

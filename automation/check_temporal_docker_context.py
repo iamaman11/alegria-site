@@ -7,11 +7,16 @@ omit known test-only sources that cannot affect the release Worker binaries.
 """
 
 from pathlib import Path
+import hashlib
+import tempfile
 import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from prepare_worker_build_context import context_files, release_closure
+from prepare_worker_build_context import (
+    context_files, dependency_skeleton_targets, release_closure, write_dependency_skeleton,
+)
+from check_worker_dependency_skeleton import graph_signature
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +44,14 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
 
     if "COPY app ./app" not in dockerfile:
         errors.append("Docker build context contract changed: update this check before modifying COPY")
+    if "COPY dependency-skeleton/app ./app" not in dockerfile:
+        errors.append("Docker must preserve the stable source-free dependency layer")
+    deps = dockerfile.find("COPY dependency-skeleton/app ./app")
+    real = dockerfile.find("COPY app ./app")
+    if not (0 <= deps < dockerfile.find("RUN cargo build --release --locked", deps) < real):
+        errors.append("Cargo dependencies must compile before production Rust source is copied")
+    if dockerfile.count("cargo build --release --locked") != 2:
+        errors.append("Docker requires one dependency compile and one real source compile")
     if "COPY worker-context.json /app/worker-context.json" not in dockerfile:
         errors.append("Worker image must preserve exact-source context provenance")
     if "cargo build --release --locked" not in dockerfile:
@@ -117,6 +130,90 @@ class TemporalDockerContextTests(unittest.TestCase):
     def test_missing_manifest_fails_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "workspace manifest"):
             context_files(set(), {"app/rust/services/temporal": "temporal_worker"}, {"temporal_worker"})
+
+    def test_dependency_skeleton_uses_cargo_metadata_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "app/rust/services/temporal"
+            owners = {"app/rust/services/temporal": "temporal_worker"}
+            metadata = {"packages": [{"name": "temporal_worker", "targets": [
+                {"kind": ["bin"], "src_path": str(package_dir / "src/main.rs")},
+                {"kind": ["bin"], "src_path": str(package_dir / "src/bin/temporal_starter.rs")},
+                {"kind": ["custom-build"], "src_path": str(package_dir / "build.rs")},
+            ]}]}
+            expected = {
+                "app/rust/services/temporal/src/main.rs": "fn main() {}\n",
+                "app/rust/services/temporal/src/bin/temporal_starter.rs": "fn main() {}\n",
+                "app/rust/services/temporal/build.rs": "fn main() {}\n",
+            }
+            self.assertEqual(dependency_skeleton_targets(metadata, owners, {"temporal_worker"}, root=root), expected)
+            metadata["packages"][0]["targets"].append({
+                "kind": ["bin"], "src_path": str(root.parent / "private.rs"),
+            })
+            with self.assertRaisesRegex(ValueError, "escaped the repository"):
+                dependency_skeleton_targets(metadata, owners, {"temporal_worker"}, root=root)
+
+    def test_native_dependency_layer_is_stable_across_rust_source_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "source"
+            owner = "app/rust/services/temporal"
+            src = root / owner / "src/main.rs"
+            metadata = {"packages": [{"name": "temporal_worker", "targets": [
+                {"kind": ["bin"], "src_path": str(src)},
+                {"kind": ["custom-build"], "src_path": str(root / owner / "build.rs")},
+            ]}]}
+            context_files = {
+                "app/rust/Cargo.toml": "[workspace]\nmembers = [\"services/temporal\"]\n",
+                "app/rust/Cargo.lock": "version = 4\n",
+                f"{owner}/Cargo.toml": "[package]\nname = \"temporal_worker\"\nversion = \"0.1.0\"\n",
+                f"{owner}/build.rs": "fn main() {}\n",
+                f"{owner}/src/main.rs": "fn main() { println!(\"first\"); }\n",
+                "app/contracts/proto/read_api.proto": "syntax = \"proto3\";\n",
+            }
+            source = root / owner / "src/main.rs"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(context_files[f"{owner}/src/main.rs"], encoding="utf-8")
+
+            def prepare(dest: Path) -> dict[str, str]:
+                for name, content in context_files.items():
+                    target = dest / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(content, encoding="utf-8")
+                write_dependency_skeleton(dest, metadata=metadata, owners={owner: "temporal_worker"}, release={"temporal_worker"}, root=root)
+                skel = dest / "dependency-skeleton"
+                return {
+                    path.relative_to(skel).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in skel.rglob("*") if path.is_file()
+                }
+
+            first = prepare(Path(tmp) / "first")
+            context_files[f"{owner}/src/main.rs"] = "fn main() { println!(\"changed\"); }\n"
+            second = prepare(Path(tmp) / "second")
+            self.assertEqual(first, second, "Rust body edits must not invalidate the dependency Docker layer")
+            context_files[f"{owner}/build.rs"] = "fn main() { println!(\"new protobuf\"); }\n"
+            context_files["app/contracts/proto/read_api.proto"] = "syntax = \"proto3\"; // changed\n"
+            proto_only = prepare(Path(tmp) / "proto-only")
+            self.assertEqual(second, proto_only, "build.rs and protobuf edits must also reuse third-party objects")
+            context_files[f"{owner}/Cargo.toml"] += "edition = \"2021\"\n"
+            third = prepare(Path(tmp) / "third")
+            self.assertNotEqual(proto_only, third, "Cargo manifest edits must invalidate dependency objects")
+            self.assertEqual((Path(tmp) / "second" / owner / "src/main.rs").read_text(encoding="utf-8"),
+                             "fn main() { println!(\"changed\"); }\n")
+
+    def test_cargo_graph_parity_ignores_relocated_paths_not_feature_changes(self) -> None:
+        package = {
+            "name": "temporal_worker", "version": "0.1.0", "features": {"default": []},
+            "dependencies": [{"name": "sqlx", "source": "registry+crates.io", "req": "^0.9",
+                              "kind": None, "path": "/some/absolute/place"}],
+            "targets": [{"name": "temporal_worker", "kind": ["bin"]}],
+        }
+        real = {"packages": [package]}
+        moved = {"packages": [{**package, "dependencies": [
+            {**package["dependencies"][0], "path": "/another/absolute/place"}
+        ]}]}
+        self.assertEqual(graph_signature(real), graph_signature(moved))
+        moved["packages"][0]["features"] = {"default": ["sqlx/postgres"]}
+        self.assertNotEqual(graph_signature(real), graph_signature(moved))
 
 if __name__ == "__main__":
     unittest.main()

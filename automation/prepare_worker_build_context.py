@@ -20,6 +20,93 @@ from pathlib import Path
 from ci_impact import IMAGE_OWNERS, ROOT, WORKER_PACKAGING_FILES, load_cargo_metadata, workspace_graph
 
 
+SKELETON_ROOT = "dependency-skeleton"
+
+
+def dependency_skeleton_targets(
+    metadata: dict, owners: dict[str, str], release: set[str], *, root: Path,
+) -> dict[str, str]:
+    """Map actual Cargo library/binary entrypoints to inert dependency stubs.
+
+    Cargo metadata, not a second hand-maintained package list, owns target
+    discovery. The first Docker layer retains the original locked manifests,
+    but has neither production Rust bodies nor active workspace build scripts.
+    """
+    packages = {package["name"]: package for package in metadata["packages"]}
+    if not release <= packages.keys():
+        raise ValueError("dependency skeleton is missing release packages")
+    targets: dict[str, str] = {}
+    for directory, package_name in sorted(owners.items()):
+        if package_name not in release:
+            continue
+        found = False
+        for target in packages[package_name]["targets"]:
+            kind = set(target["kind"])
+            if kind & {"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"}:
+                content = "// Cargo dependency skeleton: real implementation copied in the next layer.\n"
+            elif kind & {"bin", "custom-build"}:
+                content = "fn main() {}\n"
+            else:
+                # Examples, benches and tests are not part of cargo build.
+                continue
+            target_source = Path(target["src_path"]).resolve()
+            try:
+                relpath = target_source.relative_to(root.resolve()).as_posix()
+            except ValueError as exc:
+                raise ValueError(f"Cargo target escaped the repository: {target_source}") from exc
+            if not relpath.startswith(directory + "/"):
+                raise ValueError(f"Cargo target escaped its owning crate: {relpath}")
+            if relpath in targets:
+                raise ValueError(f"duplicate Cargo target: {relpath}")
+            targets[relpath] = content
+            found = True
+        if not found:
+            raise ValueError(f"release crate has no buildable lib/bin: {package_name}")
+    return targets
+
+
+def write_dependency_skeleton(
+    destination: Path, *, metadata: dict, owners: dict[str, str],
+    release: set[str], root: Path,
+) -> None:
+    """Persist dependency objects as an ordinary Buildx-exportable Docker layer.
+
+    BuildKit cache mounts are not included in `cache-to: type=gha`; a native
+    Cargo compile against stable stub targets gives real reusable .rlib files
+    in the layer instead. It is rebuilt when Cargo manifests/lock change, but
+    not when Rust functions, protobuf schemas or workspace build.rs change.
+    """
+    actual = destination / "app"
+    skeleton = destination / SKELETON_ROOT / "app"
+    # Keep only exact Cargo resolution inputs. Dummy workspace build.rs files
+    # compile their *declared build dependencies* without generating outputs;
+    # the real build scripts/protos run after the second COPY of actual source.
+    for source in sorted(actual.rglob("*")):
+        if not source.is_file():
+            continue
+        relpath = source.relative_to(destination).as_posix()
+        if relpath.startswith("app/rust/") and source.name in {"Cargo.toml", "Cargo.lock"}:
+            target = skeleton / source.relative_to(actual)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+
+    stubs = dependency_skeleton_targets(metadata, owners, release, root=root)
+    for relpath, content in sorted(stubs.items()):
+        if not (destination / relpath).is_file():
+            raise ValueError(f"Cargo entrypoint missing from release context: {relpath}")
+        target = destination / SKELETON_ROOT / relpath
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    for directory, package_name in owners.items():
+        if package_name not in release:
+            # Preserve the same inert non-consumer placeholder as the actual
+            # release context, to maintain workspace resolution parity.
+            stub = destination / directory / "src/lib.rs"
+            target = destination / SKELETON_ROOT / directory / "src/lib.rs"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(stub, target)
+
+
 def release_closure(owners: dict[str, str], reverse: dict[str, set[str]]) -> set[str]:
     """Follow the same verified Cargo graph in the dependency direction."""
     direct_dependencies = {name: set() for name in reverse}
@@ -83,7 +170,8 @@ def build_context(destination: Path, source_sha: str, *, root: Path = ROOT) -> d
     if subprocess.check_output(["git", "status", "--porcelain", "--untracked-files=no"], cwd=root):
         raise ValueError("release source has uncommitted tracked changes")
 
-    owners, reverse = workspace_graph(load_cargo_metadata(workspace=root / "app/rust"), root=root)
+    metadata = load_cargo_metadata(workspace=root / "app/rust")
+    owners, reverse = workspace_graph(metadata, root=root)
     release = release_closure(owners, reverse)
     paths = context_files(tracked_files(root=root), owners, release)
     if destination.exists():
@@ -107,6 +195,8 @@ def build_context(destination: Path, source_sha: str, *, root: Path = ROOT) -> d
             placeholder = destination / directory / "src/lib.rs"
             placeholder.parent.mkdir(parents=True, exist_ok=True)
             placeholder.write_text("// Cargo workspace metadata placeholder; never compiled.\n", encoding="utf-8")
+
+    write_dependency_skeleton(destination, metadata=metadata, owners=owners, release=release, root=root)
 
     result = {
         "source_sha": source_sha,

@@ -39,6 +39,14 @@ pub enum MatchingStage {
     VectorQdrant,
 }
 
+/// A non-authoritative search suggestion. Vector scores never authorize Truth
+/// writes; ambiguous or malformed hits must remain subject to human review.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CanonicalVectorCandidate {
+    pub canonical_key: Option<String>,
+    pub score: f32,
+}
+
 fn normalized(s: &str) -> String {
     s.trim().to_lowercase().replace('ё', "е")
 }
@@ -173,6 +181,72 @@ pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
     CanonicalMappingOutput { mappings: out }
 }
 
+/// Make the final canonical decision after the Knowledge search port has
+/// returned its suggestions. This is a pure domain policy: Qdrant does not
+/// decide which identities are safe to accept automatically.
+pub fn resolve_vector_candidates(
+    mapping: &MappingResult,
+    candidates: &[CanonicalVectorCandidate],
+) -> MappingResult {
+    if mapping.matching_stage != MatchingStage::VectorQdrant {
+        return mapping.clone();
+    }
+    let Some(top) = candidates.first() else {
+        return unresolved_vector_mapping(mapping, "qdrant_no_candidates");
+    };
+    // Provider scores and candidate identities are untrusted. Invalid hits
+    // cannot produce an automatic match even when their score is high.
+    let Some(top_key) = top
+        .canonical_key
+        .as_deref()
+        .filter(|key| !key.trim().is_empty())
+    else {
+        return unresolved_vector_mapping(mapping, "qdrant_invalid_candidate");
+    };
+    if !top.score.is_finite()
+        || !(0.0..=1.0).contains(&top.score)
+        || candidates
+            .iter()
+            .skip(1)
+            .any(|candidate| !candidate.score.is_finite())
+    {
+        return unresolved_vector_mapping(mapping, "qdrant_invalid_score");
+    }
+    let margin = candidates
+        .get(1)
+        .map_or(top.score, |second| top.score - second.score);
+    let (mapping_type, needs_hitl, canonical_key) = if top.score >= 0.88 && margin >= 0.03 {
+        ("auto_map", false, Some(top_key.to_string()))
+    } else if top.score >= 0.75 {
+        ("review", true, Some(top_key.to_string()))
+    } else {
+        ("new_candidate", true, None)
+    };
+    MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key,
+        mapping_type: mapping_type.to_string(),
+        match_method: "qdrant_retrieval".to_string(),
+        matching_stage: MatchingStage::VectorQdrant,
+        qdrant_score: Some(top.score),
+        confidence: top.score,
+        needs_hitl,
+    }
+}
+
+fn unresolved_vector_mapping(mapping: &MappingResult, method: &str) -> MappingResult {
+    MappingResult {
+        raw_text: mapping.raw_text.clone(),
+        canonical_key: None,
+        mapping_type: "new_candidate".to_string(),
+        match_method: method.to_string(),
+        matching_stage: MatchingStage::VectorQdrant,
+        qdrant_score: None,
+        confidence: 0.0,
+        needs_hitl: true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +290,50 @@ mod tests {
         assert_eq!(mapped.match_method, "lexicon_token");
         assert_eq!(mapped.matching_stage, MatchingStage::LexiconToken);
         assert!(!mapped.needs_hitl);
+    }
+
+    #[test]
+    fn vector_scores_have_one_fail_closed_domain_owner() {
+        let unresolved = map_one("unknown entity without a symbolic alias");
+        assert_eq!(unresolved.matching_stage, MatchingStage::VectorQdrant);
+        for invalid in [
+            vec![],
+            vec![CanonicalVectorCandidate {
+                canonical_key: None,
+                score: 0.99,
+            }],
+            vec![CanonicalVectorCandidate {
+                canonical_key: Some("valid".into()),
+                score: f32::NAN,
+            }],
+            vec![CanonicalVectorCandidate {
+                canonical_key: Some("valid".into()),
+                score: 1.1,
+            }],
+        ] {
+            let rejected = resolve_vector_candidates(&unresolved, &invalid);
+            assert!(rejected.needs_hitl);
+            assert!(rejected.canonical_key.is_none());
+            assert_eq!(rejected.confidence, 0.0);
+        }
+        let hit = |key: &str, score| CanonicalVectorCandidate {
+            canonical_key: Some(key.into()),
+            score,
+        };
+        let accepted =
+            resolve_vector_candidates(&unresolved, &[hit("passport", 0.94), hit("other", 0.80)]);
+        assert!(!accepted.needs_hitl);
+        assert_eq!(accepted.mapping_type, "auto_map");
+        let tied =
+            resolve_vector_candidates(&unresolved, &[hit("passport", 0.94), hit("other", 0.93)]);
+        assert!(tied.needs_hitl);
+        assert_eq!(tied.mapping_type, "review");
+
+        // The domain itself must not let a high vector score override an
+        // already verified symbolic alias even if a caller skips its gate.
+        let fixed = map_one("паспорт");
+        let cannot_override = resolve_vector_candidates(&fixed, &[hit("wrong", 1.0)]);
+        assert_eq!(cannot_override.matching_stage, MatchingStage::ExactAlias);
+        assert_eq!(cannot_override.canonical_key, fixed.canonical_key);
     }
 }

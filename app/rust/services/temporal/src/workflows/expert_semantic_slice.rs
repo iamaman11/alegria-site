@@ -196,13 +196,13 @@ impl ExpertSemanticSliceWorkflow {
         let mapping = ctx
             .start_activity(
                 AlegriaActivities::run_canonical_mapping_step,
-                seo_steps::canonical_mapping_step::CanonicalMappingInput {
+                seo_domain::canonical_mapping::CanonicalMappingInput {
                     section_id: section.section_id.clone(),
                     mentions: spans
                         .mentions
                         .iter()
                         .map(
-                            |mention| seo_steps::canonical_mapping_step::MentionForMapping {
+                            |mention| seo_domain::canonical_mapping::MentionForMapping {
                                 raw_text: mention.raw_text.clone(),
                                 entity_type: mention.entity_type.clone(),
                             },

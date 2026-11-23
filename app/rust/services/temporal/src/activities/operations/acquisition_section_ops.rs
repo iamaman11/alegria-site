@@ -405,14 +405,14 @@ pub(crate) async fn canonical_mapping_sweep_impl(
 ) -> Result<CanonicalMappingSweepOutput, DomainError> {
     let mut sections = Vec::with_capacity(input.entity_spans.sections.len());
     for section in &input.entity_spans.sections {
-        let mut output = seo_steps::canonical_mapping_step::execute(
-            &seo_steps::canonical_mapping_step::CanonicalMappingInput {
+        let mut output = seo_domain::canonical_mapping::execute(
+            &seo_domain::canonical_mapping::CanonicalMappingInput {
                 section_id: section.section_id.to_string(),
                 mentions: section
                     .mentions
                     .iter()
                     .map(
-                        |mention| seo_steps::canonical_mapping_step::MentionForMapping {
+                        |mention| seo_domain::canonical_mapping::MentionForMapping {
                             raw_text: mention.raw_text.clone(),
                             entity_type: mention.entity_type.clone(),
                         },

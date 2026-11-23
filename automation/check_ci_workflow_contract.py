@@ -108,6 +108,7 @@ def check() -> None:
     for changed, skip in (
         ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
         (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
+        (["automation/check_worker_dependency_skeleton.py"], True),
         ([".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"], True),
         (["app/rust/services/temporal/src/main.rs"], False),
         (["automation/deploy_seo_static_cloudflare.py"], False),
@@ -139,7 +140,8 @@ def check() -> None:
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
     assert "Verify dependency-scoped Worker release context resolves locked Cargo" in architecture
-    assert "cargo metadata --locked --format-version=1 --no-deps" in architecture
+    assert "python3 automation/check_worker_dependency_skeleton.py" in architecture
+    assert 'dependency-skeleton/app/rust/Cargo.toml"' in architecture
     # A new PR restores cache objects from the trusted default branch. It does
     # not flood the service with cache writes in its PR-local merge ref.
     assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in architecture

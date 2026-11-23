@@ -5,10 +5,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use primitives::errors::DomainError;
 use runtime_models::{RuleParams, RuleRoleType};
-use seo_domain::writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole};
+use seo_domain::{
+    canonical_mapping::{self, MappingResult, MatchingStage},
+    writer::{self, CitationRule, FaqItem, RuleParamsView, RuleRole},
+};
+#[cfg(test)]
+use seo_domain::canonical_mapping::CanonicalVectorCandidate;
 use seo_ports::{
     knowledge::{
-        CanonicalVectorCandidate, CanonicalVectorLookup, SemanticNeighborCollection,
+        CanonicalVectorLookup, SemanticNeighborCollection,
         SemanticNeighborLookup, SemanticNeighborQuery, SourceContextChunk, SourceContextCollection,
         SourceContextQuery, VerifiedRule, VerifiedRuleProjectionCandidate,
         VerifiedRuleProjectionChange, VerifiedRulesQuery,
@@ -16,7 +21,6 @@ use seo_ports::{
     CanonicalVectorSearchPort, SemanticNeighborSearchPort, SourceContextSearchPort,
     VerifiedRuleProjectionPort, VerifiedRulesReader,
 };
-use seo_steps::canonical_mapping_step::{MappingResult, MatchingStage};
 
 fn verified_rule_projection_text(
     context_key: &str,
@@ -266,74 +270,13 @@ pub async fn resolve_canonical_vector_mappings<S: CanonicalVectorSearchPort + ?S
         }
         let updated = match search.search_canonical_concepts(&mapping.raw_text).await? {
             CanonicalVectorLookup::Unavailable => mapping,
-            CanonicalVectorLookup::Candidates(candidates) if candidates.is_empty() => {
-                unresolved_canonical_mapping(&mapping, "qdrant_no_candidates")
-            }
             CanonicalVectorLookup::Candidates(candidates) => {
-                resolve_canonical_candidates(&mapping, &candidates)
+                canonical_mapping::resolve_vector_candidates(&mapping, &candidates)
             }
         };
         resolved.push(updated);
     }
     Ok(resolved)
-}
-
-fn unresolved_canonical_mapping(mapping: &MappingResult, method: &str) -> MappingResult {
-    MappingResult {
-        raw_text: mapping.raw_text.clone(),
-        canonical_key: None,
-        mapping_type: "new_candidate".to_string(),
-        match_method: method.to_string(),
-        matching_stage: MatchingStage::VectorQdrant,
-        qdrant_score: None,
-        confidence: 0.0,
-        needs_hitl: true,
-    }
-}
-
-fn resolve_canonical_candidates(
-    mapping: &MappingResult,
-    candidates: &[CanonicalVectorCandidate],
-) -> MappingResult {
-    let top = &candidates[0];
-    // Provider scores and candidate identities are untrusted. An invalid hit
-    // cannot produce an automatic match even if its reported score is high.
-    let Some(top_key) = top
-        .canonical_key
-        .as_deref()
-        .filter(|key| !key.trim().is_empty())
-    else {
-        return unresolved_canonical_mapping(mapping, "qdrant_invalid_candidate");
-    };
-    if !top.score.is_finite()
-        || !(0.0..=1.0).contains(&top.score)
-        || candidates
-            .iter()
-            .skip(1)
-            .any(|candidate| !candidate.score.is_finite())
-    {
-        return unresolved_canonical_mapping(mapping, "qdrant_invalid_score");
-    }
-    let margin = candidates
-        .get(1)
-        .map_or(top.score, |second| top.score - second.score);
-    let (mapping_type, needs_hitl, canonical_key) = if top.score >= 0.88 && margin >= 0.03 {
-        ("auto_map", false, Some(top_key.to_string()))
-    } else if top.score >= 0.75 {
-        ("review", true, Some(top_key.to_string()))
-    } else {
-        ("new_candidate", true, None)
-    };
-    MappingResult {
-        raw_text: mapping.raw_text.clone(),
-        canonical_key,
-        mapping_type: mapping_type.to_string(),
-        match_method: "qdrant_retrieval".to_string(),
-        matching_stage: MatchingStage::VectorQdrant,
-        qdrant_score: Some(top.score),
-        confidence: top.score,
-        needs_hitl,
-    }
 }
 
 pub async fn generate_verified_blocks<R: VerifiedRulesReader>(
