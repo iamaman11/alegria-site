@@ -6,6 +6,7 @@ Check actual gates and that expensive integration suites remain executable.
 """
 from pathlib import Path
 import re
+from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
@@ -20,6 +21,7 @@ def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
     deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+    prime = (ROOT / ".github/workflows/rust-cache-prime.yml").read_text(encoding="utf-8")
     release = (ROOT / ".github/workflows/worker-image.yml").read_text(encoding="utf-8")
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     assert workflow.startswith("name: ci\n")
@@ -70,6 +72,12 @@ def check() -> None:
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
+    # A new PR restores cache objects from the trusted default branch. It does
+    # not flood the service with cache writes in its PR-local merge ref.
+    assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in architecture
+    assert "SCCACHE_ERROR_LOG:" in architecture
+    assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
+    assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
     assert "cargo metadata --format-version 1 --no-deps --locked" in rust_smokes
@@ -102,6 +110,35 @@ def check() -> None:
     assert "--lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections" not in deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
+
+    # Main-only compiler warm-up remains separate from mandatory PR CI and
+    # cannot be invoked with a pull_request or workflow_run trigger.
+    assert prime.startswith("name: rust-cache-prime\n")
+    assert "  push:\n    branches: [main]\n    paths:\n" in prime
+    assert "  workflow_dispatch:\n" in prime
+    for forbidden in ("  pull_request:\n", "  pull_request_target:\n", "  workflow_run:\n"):
+        assert forbidden not in prime
+    assert "    if: github.ref == 'refs/heads/main'" in prime
+    assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
+    assert "SCCACHE_GHA_ENABLED: \"on\"" in prime
+    assert "version: \"v0.16.0\"" in prime
+    assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" in prime
+    assert "cargo build --locked -p temporal_worker -p outbox_worker" in prime
+    assert "core.exportVariable('ACTIONS_RUNTIME_TOKEN', token)" in prime
+    assert "cache-mode: write" not in prime
+    assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in prime
+
+    # Only safe aggregates may leave the disposable sccache daemon log.
+    classified = summarize([
+        "sccache cache write error: 429 Too Many Requests token=private-secret",
+        "sccache Cache write error: 403 Forbidden url=https://private.example.test",
+        "sccache Cache write error: unexpected backend failure token=private-secret",
+        "sccache request succeeded token=private-secret",
+    ])
+    assert classified == {"write_failure_log_lines": 3, "classes": {
+        "rate_limited_429": 1, "forbidden_403": 1, "unclassified": 1,
+    }}
+    assert "private-secret" not in str(classified)
 
 
 if __name__ == "__main__":

@@ -76,6 +76,18 @@ WORKER_PACKAGING_FILES = {
     "automation/check_first_site_release.py",
 }
 
+# Explicitly verified CI-only inputs do not modify a Cargo compilation unit,
+# runtime image or live E2E fixture. Their source-level contract is executed by
+# the mandatory `verify` owner. Keep ci.yml, the impact planner itself, unknown
+# workflows and arbitrary automation scripts fail-closed: they can change what
+# the required gate actually executes.
+CI_ONLY_VERIFY_FILES = {
+    ".github/workflows/ci-deep.yml",
+    ".github/workflows/rust-cache-prime.yml",
+    "automation/check_ci_workflow_contract.py",
+    "automation/report_sccache_failures.py",
+}
+
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
 
@@ -362,6 +374,9 @@ def ci_jobs_for_change(
         require("product-truth", "first-site delivery and readback scripts feed Product smoke")
         require("verify", "delivered Python assets require source policy and lint")
 
+    if changed & CI_ONLY_VERIFY_FILES:
+        require("verify", "known CI-only file: validated by mandatory source-policy contracts")
+
     if any(path.startswith(("infra/analytics_lab/", "app/analytics_lab/")) for path in changed):
         require("verify", "analytics-lab Python is checked by source policy and Ruff")
 
@@ -386,7 +401,7 @@ def ci_jobs_for_change(
 
     # New narrow allowlists must name the executable owner explicitly. This
     # catches future additions to the non-Rust `scope=none` classification.
-    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES
+    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES - CI_ONLY_VERIFY_FILES
     uncovered = {path for path in uncovered
                  if not (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md"))
                  and not (path.startswith("docs/runs/") and path.endswith(".json"))
@@ -767,6 +782,9 @@ def analyze(
             continue
         if path in WORKER_PACKAGING_FILES or path.startswith("infra/cloudflare/seo-static/"):
             classified_inputs[path] = "known non-Rust input: temporal-worker image"
+            continue
+        if path in CI_ONLY_VERIFY_FILES:
+            classified_inputs[path] = "known CI-only input: mandatory verify contract, no Rust compilation"
             continue
         if path.startswith(("infra/analytics_lab/", "app/analytics_lab/")):
             classified_inputs[path] = "known non-Rust input: analytics-lab image"

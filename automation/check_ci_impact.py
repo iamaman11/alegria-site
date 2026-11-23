@@ -308,6 +308,48 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(outcome["analysis"], "full")
                 self.assertEqual(len(outcome["affected_crates"]), len(self.reverse))
 
+    def test_exact_ci_only_inputs_run_verify_without_rust_compilation(self) -> None:
+        for path in (
+            ".github/workflows/ci-deep.yml",
+            ".github/workflows/rust-cache-prime.yml",
+            "automation/check_ci_workflow_contract.py",
+            "automation/report_sccache_failures.py",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "none")
+                self.assertEqual(result["affected_crates"], [])
+                self.assertEqual(result["selected_suites"], [])
+                self.assertEqual(result["selected_images"], [])
+                self.assertEqual(result["selected_ci_jobs"], ["verify"])
+                self.assertIn("known CI-only", result["classified_inputs"][path])
+
+    def test_unknown_ci_and_impact_control_files_still_fail_closed(self) -> None:
+        for path in (
+            ".github/workflows/ci.yml",
+            ".github/workflows/worker-image.yml",
+            ".github/workflows/future-build.yml",
+            "automation/ci_impact.py",
+            "automation/check_ci_impact.py",
+            "automation/run_scoped_cargo_feedback.py",
+            "automation/future_ci_driver.py",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "full")
+                self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
+
+    def test_ci_only_file_does_not_hide_a_real_runtime_change(self) -> None:
+        result = self.impact(
+            ".github/workflows/rust-cache-prime.yml",
+            "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+        )
+        self.assertEqual(result["scope"], "scoped")
+        self.assertIn("temporal_restart", result["selected_suites"])
+        self.assertIn("architecture-and-rust", result["selected_ci_jobs"])
+        self.assertIn("verify", result["selected_ci_jobs"])
+        self.assertNotIn("stack-storage-graph", result["selected_ci_jobs"])
+
     def test_unknown_file_is_full_scope(self) -> None:
         self.assertEqual(self.impact("unmapped/thing.txt")["analysis"], "full")
 
