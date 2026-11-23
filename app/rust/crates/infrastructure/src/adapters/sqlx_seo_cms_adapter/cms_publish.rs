@@ -62,15 +62,18 @@ pub async fn persist_cms_publish_output(
     let valid_human_approval = if input.publish_mode == "approved_publish" {
         let persisted =
             load_latest_approval_decision(pool, &row.page_node_key, &revision_id).await?;
-        input
+        let supplied = input
             .approval_decision
+            .as_ref()
+            .and_then(|wire| seo_steps::cms_review_wire::from_wire(wire).ok());
+        supplied
             .as_ref()
             .zip(persisted.as_ref())
             .is_some_and(|(supplied, saved)| {
                 supplied.decision_key == saved.decision_key
                     && supplied.actor_role == saved.actor_role
-                    && approval_decision_valid(supplied, &row, &revision_id)
-                    && approval_decision_valid(saved, &row, &revision_id)
+                    && supplied.approves_revision(&row.page_node_key, &revision_id)
+                    && saved.approves_revision(&row.page_node_key, &revision_id)
             })
     } else {
         false

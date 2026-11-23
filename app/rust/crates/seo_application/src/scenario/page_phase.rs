@@ -195,7 +195,12 @@ async fn run_page_phase<
                     )
                     .await
                     {
-                        Ok(decision) if decision.decision == "approved" => {
+                        Ok(decision)
+                            if decision.approves_revision(
+                                &page_node.page_node_key,
+                                &cms_requested.revision_id,
+                            ) =>
+                        {
                             phase_reports.push(phase_report(
                                 phase_label(key),
                                 "approved",
@@ -211,7 +216,7 @@ async fn run_page_phase<
                                 phase_label(key),
                                 &status,
                                 &page_node.page_node_key,
-                                decision.decision,
+                                decision.decision.as_str().to_string(),
                             ));
                             Ok(Some(status))
                         }
@@ -249,7 +254,7 @@ async fn run_page_phase<
                     draft: draft.draft.clone(),
                     actor_role: "seo_system".to_string(),
                     publish_mode: "approved_publish".to_string(),
-                    approval_decision: approval,
+                    approval_decision: approval.map(seo_steps::cms_review_wire::to_wire),
                 },
             )
             .await?;

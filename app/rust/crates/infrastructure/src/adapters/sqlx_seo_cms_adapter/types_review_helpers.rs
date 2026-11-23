@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use contracts::generated::alegria::sync::v1::SeoCmsEventPayload;
 use contracts::generated::alegria::temporal::v1::{
-    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload,
     FinalizePublishInputPayload, FinalizePublishOutputPayload, PublishArtifact,
     PublishMaterializeInputPayload, PublishMaterializeOutputPayload, RenderPreviewPageState,
 };
@@ -345,23 +345,11 @@ async fn count_canonical_conflicts(
     .map_err(classify_sqlx)
 }
 
-fn approval_decision_valid(
-    decision: &CmsApprovalDecision,
-    row: &PublishDraftRow,
-    revision_id: &str,
-) -> bool {
-    decision.decision == "approved"
-        && decision.page_node_key == row.page_node_key
-        && decision.revision_id == revision_id
-        && !decision.actor_role.trim().is_empty()
-        && decision.actor_role != "seo_system"
-}
-
 pub async fn load_latest_approval_decision(
     pool: &PgPool,
     page_node_key: &str,
     revision_id: &str,
-) -> Result<Option<CmsApprovalDecision>, DomainError> {
+) -> Result<Option<seo_domain::review_decision::CmsApproval>, DomainError> {
     let row = sqlx::query(
         r#"
         SELECT decision_key, page_node_key, revision_id, actor_role, decision, reason,
@@ -378,12 +366,20 @@ pub async fn load_latest_approval_decision(
     .fetch_optional(pool)
     .await
     .map_err(classify_sqlx)?;
-    Ok(row.map(|row| CmsApprovalDecision {
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    let raw_decision: String = row.get("decision");
+    let decision = seo_domain::review_decision::HumanReviewDecision::parse(&raw_decision)
+        .map_err(|_| DomainError::ContractViolation {
+            message: format!("unsupported persisted CMS approval decision: {raw_decision}"),
+        })?;
+    Ok(Some(seo_domain::review_decision::CmsApproval {
         decision_key: row.get("decision_key"),
         page_node_key: row.get("page_node_key"),
         revision_id: row.get("revision_id"),
         actor_role: row.get("actor_role"),
-        decision: row.get("decision"),
+        decision,
         reason: row.get("reason"),
         decided_at: row.get("decided_at"),
     }))

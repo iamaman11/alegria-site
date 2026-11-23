@@ -41,6 +41,40 @@ impl HumanReviewDecision {
     }
 }
 
+/// A persisted editorial decision, independent of Temporal payloads and SQL
+/// rows. The identity and human actor are part of the approval, not incidental
+/// adapter metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CmsApproval {
+    pub decision_key: String,
+    pub page_node_key: String,
+    pub revision_id: String,
+    pub actor_role: String,
+    pub decision: HumanReviewDecision,
+    pub reason: String,
+    pub decided_at: String,
+}
+
+impl CmsApproval {
+    pub fn is_human_approved(&self) -> bool {
+        self.decision == HumanReviewDecision::Approved
+            && !self.decision_key.trim().is_empty()
+            && human_actor(&self.actor_role)
+    }
+
+    pub fn approves_revision(&self, page_node_key: &str, revision_id: &str) -> bool {
+        self.is_human_approved()
+            && !page_node_key.trim().is_empty()
+            && !revision_id.trim().is_empty()
+            && self.page_node_key == page_node_key
+            && self.revision_id == revision_id
+    }
+}
+
+fn human_actor(actor_role: &str) -> bool {
+    !actor_role.trim().is_empty() && actor_role.trim() != "seo_system"
+}
+
 /// Shared precondition for the application use case and the direct SQL port.
 /// A missing revision is a deliberate legacy lookup, which the persistence
 /// adapter must refuse if it cannot resolve an exact pending review revision.
@@ -59,7 +93,7 @@ pub fn validate_human_reviewer(
             message: "revision_id must be an exact non-empty review candidate".to_string(),
         });
     }
-    if actor_role.trim().is_empty() || actor_role.trim() == "seo_system" {
+    if !human_actor(actor_role) {
         return Err(DomainError::ValidationFailure {
             message: "human actor_role is required".to_string(),
         });
@@ -110,6 +144,49 @@ mod tests {
                     .class_str(),
                 "validation_failure"
             );
+        }
+    }
+
+    #[test]
+    fn approval_is_bound_to_human_actor_page_and_exact_revision() {
+        let valid = CmsApproval {
+            decision_key: "decision-1".to_string(),
+            page_node_key: "page-1".to_string(),
+            revision_id: "revision-2".to_string(),
+            actor_role: "editor".to_string(),
+            decision: HumanReviewDecision::Approved,
+            reason: String::new(),
+            decided_at: String::new(),
+        };
+        assert!(valid.approves_revision("page-1", "revision-2"));
+        assert!(!valid.approves_revision("page-1", "revision-1"));
+        assert!(!valid.approves_revision("other-page", "revision-2"));
+        assert!(!valid.approves_revision("", "revision-2"));
+        assert!(!valid.approves_revision("page-1", ""));
+        for invalid in [
+            CmsApproval {
+                actor_role: "seo_system".to_string(),
+                ..valid.clone()
+            },
+            CmsApproval {
+                actor_role: " ".to_string(),
+                ..valid.clone()
+            },
+            CmsApproval {
+                decision: HumanReviewDecision::Blocked,
+                ..valid.clone()
+            },
+            CmsApproval {
+                decision: HumanReviewDecision::Reopened,
+                ..valid.clone()
+            },
+            CmsApproval {
+                decision_key: String::new(),
+                ..valid.clone()
+            },
+        ] {
+            assert!(!invalid.is_human_approved());
+            assert!(!invalid.approves_revision("page-1", "revision-2"));
         }
     }
 }

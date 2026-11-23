@@ -855,6 +855,18 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
         .await.unwrap();
     assert_eq!(result.revision_id, replacement);
     assert_eq!(result.workflow_id, run_id);
+    let repository =
+        infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository::new(pool);
+    let readback = seo_application::review_publish::load_cms_approval_decision(
+        &repository,
+        &page,
+        &replacement,
+    )
+    .await
+    .unwrap();
+    assert_eq!(readback.decision_key, result.decision_key);
+    assert!(readback.approves_revision(&page, &replacement));
+    assert!(!readback.approves_revision(&page, &original));
     let (live_revision, live_status): (String, String) = sqlx::query_as(
         "SELECT current_revision_id,current_status FROM site.cms_pages WHERE page_node_key=$1",
     ).bind(&page).fetch_one(pool).await.unwrap();

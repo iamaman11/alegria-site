@@ -71,7 +71,7 @@ impl CmsReviewPort for SqlxSeoRuntimeRepository<'_> {
         &self,
         page_node_key: &str,
         revision_id: &str,
-    ) -> Result<Option<CmsApprovalDecision>, DomainError> {
+    ) -> Result<Option<CmsApproval>, DomainError> {
         sqlx_seo_cms_adapter::load_latest_approval_decision(self.pool, page_node_key, revision_id)
             .await
     }

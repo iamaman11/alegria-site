@@ -3,7 +3,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use contracts::generated::alegria::temporal::v1::{
-        CmsApprovalDecision, EditorialDraftGenerateOutputPayload, GlobalSiteReconcileOutputPayload,
+        EditorialDraftGenerateOutputPayload, GlobalSiteReconcileOutputPayload,
         IaBuildOutputPayload, LinkRecommendOutputPayload, LlmDraftCandidate,
         OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload, SectionTemplateBinding,
         SeoScopePayload, SeoVerifiedFactSupportState, SerpIngestOutputPayload,
@@ -402,7 +402,7 @@ mod tests {
             &self,
             _page_node_key: &str,
             _revision_id: &str,
-        ) -> Result<Option<CmsApprovalDecision>, DomainError> {
+        ) -> Result<Option<seo_ports::CmsApproval>, DomainError> {
             Ok(None)
         }
     }

@@ -1161,6 +1161,7 @@ impl AlegriaActivities {
                 &input.revision_id,
             )
             .await
+            .map(seo_steps::cms_review_wire::to_wire)
         })
         .await
     }
@@ -1204,6 +1205,7 @@ impl AlegriaActivities {
                     &revision_id,
                 )
                 .await
+                .map(seo_steps::cms_review_wire::to_wire)
             },
         )
         .await

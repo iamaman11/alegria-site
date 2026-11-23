@@ -114,9 +114,16 @@ OUTBOX_A14_PATHS = {
 CMS_REVIEW_PATHS = {
     "app/rust/crates/seo_domain/src/review_decision.rs",
     "app/rust/crates/seo_application/src/cms_review.rs",
+    "app/rust/crates/seo_application/src/review_publish.rs",
+    "app/rust/crates/seo_application/src/scenario/page_phase.rs",
+    "app/rust/crates/seo_steps/src/cms_review_wire.rs",
+    "app/rust/crates/seo_steps/src/cms_publish_step.rs",
     "app/rust/crates/seo_ports/src/lib.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }
 

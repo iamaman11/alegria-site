@@ -32,6 +32,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/seo_application": "seo_application",
             "app/rust/crates/seo_domain": "seo_domain",
             "app/rust/crates/seo_ports": "seo_ports",
+            "app/rust/crates/seo_steps": "seo_steps",
             "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
             "app/rust/services/analytics_svc": "analytics_svc",
@@ -48,6 +49,7 @@ class ImpactFixtures(unittest.TestCase):
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
             "seo_ports": set(),
+            "seo_steps": {"seo_application", "temporal_worker"},
             "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
             "analytics_svc": set(),
@@ -210,6 +212,9 @@ class ImpactFixtures(unittest.TestCase):
         for path in (
             "app/rust/crates/seo_domain/src/review_decision.rs",
             "app/rust/crates/seo_application/src/cms_review.rs",
+            "app/rust/crates/seo_application/src/review_publish.rs",
+            "app/rust/crates/seo_steps/src/cms_review_wire.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
         ):
             with self.subTest(path=path):

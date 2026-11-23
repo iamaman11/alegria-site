@@ -1,11 +1,11 @@
 use contracts::generated::alegria::temporal::v1::{
-    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload,
     FinalizePublishInputPayload, FinalizePublishOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RenderPreviewValidateInputPayload,
     RenderPreviewValidateOutputPayload,
 };
 use primitives::errors::DomainError;
-use seo_ports::{CmsReviewPort, PublishArtifactRepository};
+use seo_ports::{CmsApproval, CmsReviewPort, PublishArtifactRepository};
 
 pub async fn run_cms_publish<P: CmsReviewPort>(
     port: &P,
@@ -19,11 +19,20 @@ pub async fn load_cms_approval_decision<P: CmsReviewPort>(
     port: &P,
     page_node_key: &str,
     revision_id: &str,
-) -> Result<CmsApprovalDecision, DomainError> {
+) -> Result<CmsApproval, DomainError> {
     port.load_latest_approval_decision(page_node_key, revision_id)
         .await?
         .ok_or_else(|| DomainError::ValidationFailure {
             message: "cms approval decision not found".to_string(),
+        })
+        .and_then(|approval| {
+            if approval.page_node_key != page_node_key || approval.revision_id != revision_id {
+                Err(DomainError::ContractViolation {
+                    message: "CMS review port returned another page or revision".to_string(),
+                })
+            } else {
+                Ok(approval)
+            }
         })
 }
 
@@ -62,6 +71,8 @@ mod tests {
 
     struct FakeReviewPort;
 
+    struct WrongRevisionPort;
+
     #[async_trait]
     impl CmsReviewPort for FakeReviewPort {
         async fn persist_cms_publish_output(
@@ -76,14 +87,41 @@ mod tests {
             &self,
             page_node_key: &str,
             revision_id: &str,
-        ) -> Result<Option<CmsApprovalDecision>, DomainError> {
-            Ok(Some(CmsApprovalDecision {
+        ) -> Result<Option<CmsApproval>, DomainError> {
+            Ok(Some(CmsApproval {
                 decision_key: "decision-1".to_string(),
                 page_node_key: page_node_key.to_string(),
                 revision_id: revision_id.to_string(),
                 actor_role: "editor".to_string(),
-                decision: "approved".to_string(),
+                decision: seo_ports::HumanReviewDecision::Approved,
                 reason: "ok".to_string(),
+                decided_at: String::new(),
+            }))
+        }
+    }
+
+    #[async_trait]
+    impl CmsReviewPort for WrongRevisionPort {
+        async fn persist_cms_publish_output(
+            &self,
+            _input: &CmsPublishInputPayload,
+            output: &CmsPublishOutputPayload,
+        ) -> Result<CmsPublishOutputPayload, DomainError> {
+            Ok(output.clone())
+        }
+
+        async fn load_latest_approval_decision(
+            &self,
+            page_node_key: &str,
+            _revision_id: &str,
+        ) -> Result<Option<CmsApproval>, DomainError> {
+            Ok(Some(CmsApproval {
+                decision_key: "wrong-revision".to_string(),
+                page_node_key: page_node_key.to_string(),
+                revision_id: "another-revision".to_string(),
+                actor_role: "editor".to_string(),
+                decision: seo_ports::HumanReviewDecision::Approved,
+                reason: String::new(),
                 decided_at: String::new(),
             }))
         }
@@ -158,7 +196,15 @@ mod tests {
         let decision = load_cms_approval_decision(&port, "page-1", "revision-1")
             .await
             .unwrap();
-        assert_eq!(decision.decision, "approved");
+        assert!(decision.approves_revision("page-1", "revision-1"));
+    }
+
+    #[tokio::test]
+    async fn review_publish_rejects_wrong_revision_from_replaceable_port() {
+        let err = load_cms_approval_decision(&WrongRevisionPort, "page-1", "revision-1")
+            .await
+            .unwrap_err();
+        assert_eq!(err.class_str(), "contract_violation");
     }
 
     #[tokio::test]

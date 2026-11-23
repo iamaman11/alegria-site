@@ -3,8 +3,8 @@ use primitives::errors::DomainError;
 use runtime_models::{GraphPlanningContext, RuleRoleType};
 use seo_domain::identity;
 use seo_ports::{
-    CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest, CmsReviewPort,
-    CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
+    CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
+    CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
     GraphNeighborhoodHit, GraphReasoningPort, HitlQueuePort, OrganicSerpResponse,
     OrganicSerpResult, PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
@@ -28,7 +28,7 @@ use super::{
     voyage_api_adapter::{VoyageClient, VoyageEmbeddingOptions, VoyageOutputDtype},
 };
 use contracts::generated::alegria::temporal::v1::{
-    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
     CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
     DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,

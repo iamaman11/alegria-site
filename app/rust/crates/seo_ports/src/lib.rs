@@ -2,7 +2,7 @@ use async_trait::async_trait;
 pub mod knowledge;
 
 use contracts::generated::alegria::temporal::v1::{
-    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload,
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
     CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
     DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,
@@ -24,7 +24,7 @@ use knowledge::{
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
-pub use seo_domain::review_decision::HumanReviewDecision;
+pub use seo_domain::review_decision::{CmsApproval, HumanReviewDecision};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
@@ -502,7 +502,7 @@ pub trait CmsReviewPort: Send + Sync {
         &self,
         page_node_key: &str,
         revision_id: &str,
-    ) -> Result<Option<CmsApprovalDecision>, DomainError>;
+    ) -> Result<Option<CmsApproval>, DomainError>;
 }
 
 #[async_trait]
