@@ -128,6 +128,7 @@ CMS_REVIEW_PATHS = {
     "app/rust/services/temporal/src/workflows/seo_site_build.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
     "app/rust/services/cli_tools/src/cli/cms_decision.rs",
+    "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }
 
@@ -248,7 +249,11 @@ SUITE_OWNERS = {
         ),
     },
     "temporal_restart": {
-        "paths": {"app/rust/services/temporal/Cargo.toml", "app/contracts/proto/temporal_payloads.proto"},
+        "paths": {
+            "app/rust/services/temporal/Cargo.toml",
+            "app/contracts/proto/temporal_payloads.proto",
+            "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+        },
         "prefixes": ("app/rust/services/temporal/src/",),
         "lock_crates": {"temporal_worker"},
         # This separate live E2E also opens the canonical happy-path JSON and
@@ -262,7 +267,7 @@ SUITE_OWNERS = {
         "runtime_binaries": WORKER_E2E_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "canonical_temporal_manual_editorial_resumes_after_worker_restart",
+            "--lib", "canonical_temporal_",
             "--locked", "--", "--nocapture",
         ),
     },

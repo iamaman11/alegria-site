@@ -368,8 +368,16 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("stack-storage-graph", outcome["selected_ci_jobs"])
         selected_commands = dict(suite_commands_for_report(outcome))
         self.assertIn("temporal_restart", selected_commands)
+        self.assertIn("canonical_temporal_", selected_commands["temporal_restart"])
         command = selected_commands["truth_certification"]
         self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
+
+    def test_real_temporal_editorial_gate_e2e_selects_both_runtime_and_cms(self) -> None:
+        outcome = self.impact("app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs")
+        self.assertIn("temporal_restart", outcome["selected_suites"])
+        self.assertIn("cms_review_revision", outcome["selected_suites"])
+        command = dict(suite_commands_for_report(outcome))["temporal_restart"]
+        self.assertIn("canonical_temporal_", command)
 
     def test_unrelated_live_html_selects_only_truth_e2e_without_manual_restart(self) -> None:
         outcome = self.impact(TRUTH_FIXTURE_PREFIX + "agency_override_denied.html")
