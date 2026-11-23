@@ -100,7 +100,7 @@ jobs:
       # trusted main without uploading hundreds of PR-only entries or competing
       # for GitHub's per-repository cache-write rate limit.
       SCCACHE_GHA_RW_MODE: READ_ONLY
-      SCCACHE_ERROR_LOG: ${{ runner.temp }}/sccache-pr-errors.log
+      SCCACHE_ERROR_LOG: /tmp/sccache-pr-errors.log
       SCCACHE_LOG: sccache::compiler::compiler=debug
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}

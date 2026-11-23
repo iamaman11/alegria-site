@@ -76,6 +76,8 @@ def check() -> None:
     # not flood the service with cache writes in its PR-local merge ref.
     assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in architecture
     assert "SCCACHE_ERROR_LOG:" in architecture
+    assert "SCCACHE_ERROR_LOG: /tmp/sccache-pr-errors.log" in architecture
+    assert "runner.temp" not in architecture
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
@@ -120,6 +122,8 @@ def check() -> None:
         assert forbidden not in prime
     assert "    if: github.ref == 'refs/heads/main'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
+    assert "SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log" in prime
+    assert "runner.temp" not in prime
     assert "SCCACHE_GHA_ENABLED: \"on\"" in prime
     assert "version: \"v0.16.0\"" in prime
     assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" in prime

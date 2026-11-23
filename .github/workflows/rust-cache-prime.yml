@@ -27,7 +27,7 @@ jobs:
       SQLX_OFFLINE: "true"
       SCCACHE_GHA_ENABLED: "on"
       SCCACHE_GHA_RW_MODE: READ_WRITE
-      SCCACHE_ERROR_LOG: ${{ runner.temp }}/sccache-main-errors.log
+      SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log
       SCCACHE_LOG: sccache::compiler::compiler=debug
       RUSTC_WRAPPER: sccache
     steps:
