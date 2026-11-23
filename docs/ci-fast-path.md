@@ -2,9 +2,10 @@
 
 The pull-request gate is intentionally a **fast feedback** gate; deep runtime
 certification runs on demand through GitHub Actions → `ci` →
-**Run workflow** (`comprehensive` job), or locally with
-`bash automation/ci_verify.sh all`. All CI jobs are defined in
-`.github/workflows/ci.yml`; release-image packaging remains independent.
+**Run workflow** (`operation: comprehensive`), or locally with
+`bash automation/ci_verify.sh all`. All PR checks, optional checks,
+accepted-main packaging and dependency maintenance are defined in
+`.github/workflows/ci.yml`; packaging is not part of PR feedback.
 
 ## Measured result (GitHub Actions, 21 November 2026)
 
@@ -49,21 +50,32 @@ lightweight-PR runs as cold-run proof.
 - The dependency-impact report is produced on PRs and used by the single Rust
   compilation owner. No other PR job compiles the same broad Cargo graph.
 
-## Release Worker image (independent of PR feedback)
+## Release Worker image (inside the same CI workflow)
 
-On an accepted push to `main`, `worker-image.yml` separately builds the real
-Temporal Worker Docker image, runs its native runtime smoke, signs the archive,
-and publishes the source-specific artifact. A manual dispatch can also package
-the exact HEAD of the selected GitHub branch. Windows staging requires both a
-successful `ci` run and a successful `worker-image` run for the requested
-commit; it downloads and verifies the signed archive without compiling on Windows.
+The repository has **one** GitHub Actions workflow: `.github/workflows/ci.yml`.
+On an accepted push to `main`, its `CI` gate verifies the merge against the
+exact successful PR source; only then does `select-image` decide whether to run
+`package`. When the shared owner registry selects the Temporal Worker image,
+`package` builds the real Docker image, runs its runtime smoke, signs the
+archive, and publishes an exact-source artifact **in the same CI run**.
+Changes limited to an explicit allowlist of CI/Windows operator maintenance
+do not rebuild unchanged runtime bytes, even though their PR verification
+remains fail-closed. Mixed or unknown source changes retain image selection.
+
+For an explicit rebuild, dispatch `ci` on **main** with
+`operation: worker-image`: it re-verifies the accepted-PR provenance before
+packaging, and never packages an arbitrary unreviewed branch. Windows staging
+requires a successful `ci` run containing a successful `package` job for the
+exact commit; it verifies the `ci.yml` signer and loads the archive without
+compiling on Windows. A successful CI run with `package` skipped does **not**
+certify a deployable Worker artifact for that SHA.
 
 Cold image compilation **can still exceed five minutes**: that packaging is
 release work rather than a requirement before each experimental PR review.
 
 ## Deep verification on demand
 
-The manually dispatched `comprehensive` job in `ci.yml` retains all 16 real-worker Truth
+Dispatch `ci` with `operation: comprehensive` (the default); that job retains all 16 real-worker Truth
 certification fixtures, Qdrant REST→gRPC transport, the manual LLM lifecycle,
 rebuild/extraction Rust-backed checks, semantic fixtures, protocol checks,
 and the remaining PostgreSQL regressions.
@@ -71,6 +83,11 @@ and the remaining PostgreSQL regressions.
 Run it before a release, or after changes to Temporal workflow behavior,
 truth admission, publishing, or SQL schema. These checks were **moved out of
 the PR critical path**, not deleted or represented as having run on PR.
+
+For an isolated dependency lock refresh, dispatch `ci` with
+`operation: dependency-refresh` on a non-`main` review branch.
+This operation never writes directly to `main`; the resulting lockfile
+candidate still enters through the ordinary PR acceptance gate.
 
 ## Trusted compiler-cache warm-up
 

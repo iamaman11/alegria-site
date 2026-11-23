@@ -4,8 +4,18 @@ on:
   pull_request:
   push:
     branches: [main]
-  # Full-stack certification is opt-in, never a Ready-for-review side effect.
+  # One entry point: required PR CI, accepted-main image, explicit deep or lock refresh.
   workflow_dispatch:
+    inputs:
+      operation:
+        description: Manual job to run (choose main for Worker image)
+        required: true
+        default: comprehensive
+        type: choice
+        options:
+          - comprehensive
+          - worker-image
+          - dependency-refresh
 
 permissions:
   contents: read
@@ -13,8 +23,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # Manual deep certification must not cancel a push provenance check.
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # Dispatch modes cannot cancel each other or an accepted-main push.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'automatic' }}
   cancel-in-progress: true
 
 jobs:
@@ -514,7 +524,7 @@ jobs:
 
   gate:
     name: CI
-    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))
     needs:
       - impact
       - architecture-and-rust
@@ -571,7 +581,7 @@ jobs:
           PY
 
       - name: Verify main merge comes from a fully successful PR CI
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')
         env:
           GITHUB_TOKEN: ${{ github.token }}
           REPO_NAME: ${{ github.repository }}
@@ -654,7 +664,7 @@ jobs:
   # Opt-in full-stack acceptance, never on a PR or an ordinary main push.
   # Scoped PR tests and the aggregate CI gate above do not depend on this job.
   comprehensive:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'comprehensive'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -841,3 +851,243 @@ jobs:
       - name: Classify cache failures without exposing tokens or service URLs
         if: always() && steps.cache_scope.outputs.needed == 'true'
         run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"
+
+  # Source-specific release packaging is part of this SAME workflow. It starts
+  # only after the accepted-main CI provenance gate; PRs never build an image.
+  select-image:
+    needs: gate
+    if: >-
+      ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      worker_required: ${{ steps.select.outputs.worker_required }}
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      MANUAL_PACKAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' }}
+    steps:
+      - name: Checkout exact accepted main source and first parent
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          fetch-depth: 2
+
+      - name: Verify exact release source
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Pin Cargo metadata toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Select Worker image through the shared impact owner registry
+        id: select
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_sha="$(git rev-parse HEAD^1)"
+          python3 automation/ci_impact.py \
+            --base "$base_sha" --head "$SOURCE_SHA" \
+            --report automation/reports/worker_image_impact.json
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          sys.path.insert(0, 'automation')
+          from ci_impact import SCHEMA_VERSION
+
+          with open('automation/reports/worker_image_impact.json', encoding='utf-8') as f:
+              report = json.load(f)
+          source = os.environ['SOURCE_SHA']
+          status = report.get('image_status', {}).get('temporal-worker')
+          if (report.get('schema_version') != SCHEMA_VERSION
+                  or report.get('mandatory_full_ci_gate') is not True
+                  or report.get('source_sha') != source
+                  or report.get('head_sha') != source
+                  or status not in ('selected', 'not_applicable')
+                  or (status == 'selected') != ('temporal-worker' in report.get('selected_images', []))):
+              raise SystemExit('WORKER_IMAGE_SELECTION=FAIL source/owner/report mismatch')
+
+          # The conservative PR planner marks all global CI controls FULL.
+          # An exact allowlist of non-image maintenance files must not turn a
+          # documentation/CI-only merge into a 25-minute Docker compilation.
+          # Any mixed or unknown path still obeys fail-closed owner selection.
+          no_image_inputs = {
+              '.github/workflows/ci.yml',
+              '.github/workflows/worker-image.yml',
+              '.github/workflows/dependency-refresh-branch.yml',
+              'automation/check_ci_workflow_contract.py',
+              'automation/check_windows_staging_rollback.py',
+              'infra/local/windows_staging.ps1',
+              'docs/ci-fast-path.md',
+              'docs/ARCHITECTURE_BOUNDARIES.md',
+          }
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only', 'HEAD^1', 'HEAD'], text=True,
+          ).splitlines()
+          if not changed:
+              raise SystemExit('WORKER_IMAGE_SELECTION=FAIL empty main merge delta')
+          if set(changed) <= no_image_inputs and os.environ['MANUAL_PACKAGE'] != 'true':
+              status = 'not_applicable'
+              decision_reason = 'ci_operator_maintenance_only'
+              print('WORKER_IMAGE_SELECTION=SKIPPED known CI/operator maintenance only')
+          elif os.environ['MANUAL_PACKAGE'] == 'true':
+              status = 'selected'
+              decision_reason = 'explicit_accepted_main_rebuild'
+              print('WORKER_IMAGE_SELECTION=EXPLICIT accepted-main manual rebuild')
+          else:
+              decision_reason = 'shared_impact_registry'
+              print('WORKER_IMAGE_SELECTION=' + status)
+          # Keep the conservative source impact unchanged and record the
+          # actual release decision separately for audit and operator review.
+          report['worker_release_decision'] = {
+              'worker_required': status == 'selected',
+              'reason': decision_reason,
+              'changed_paths': changed,
+          }
+          with open('automation/reports/worker_image_impact.json', 'w', encoding='utf-8') as f:
+              json.dump(report, f, indent=2, sort_keys=True)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('worker_required=' + str(status == 'selected').lower() + '\n')
+          PY
+
+      - name: Preserve image-selection evidence even when packaging is unnecessary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: worker-image-impact-${{ env.SOURCE_SHA }}
+          path: automation/reports/worker_image_impact.json
+          if-no-files-found: ignore
+
+  package:
+    needs: [gate, select-image]
+    if: >-
+      ${{ needs.gate.result == 'success' && needs.select-image.result == 'success' &&
+      needs.select-image.outputs.worker_required == 'true' && github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+    steps:
+      - name: Checkout exact accepted main source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Verify requested commit identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Set up official Docker Buildx builder
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build canonical Temporal Worker release image with persistent layers
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: app/rust/services/temporal/Dockerfile
+          push: false
+          load: true
+          tags: alegria-seo-temporal:ci
+          labels: |
+            org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
+            by.alegria.source-head-sha=${{ env.SOURCE_SHA }}
+          cache-from: type=gha,scope=alegria-temporal-worker
+          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
+
+      - name: Verify runtime includes its native deployment tools
+        run: |
+          docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
+            command -v python3
+            command -v node
+            command -v temporal_worker
+            command -v temporal_starter
+            temporal_starter --help >/dev/null
+            test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
+            test -f /app/infra/cloudflare/seo-static/vite.config.ts
+            python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
+            python3 -m py_compile /app/automation/check_first_site_release.py
+            test -f /app/automation/check_first_site_release.py
+          '
+
+      - name: Archive exact image for no-build Windows staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_dir="${RUNNER_TEMP}/temporal-worker-artifact"
+          mkdir -p "$artifact_dir"
+          label="$(docker image inspect --format '{{index .Config.Labels "by.alegria.source-head-sha"}}' alegria-seo-temporal:ci)"
+          test "$label" = "$SOURCE_SHA"
+          docker save alegria-seo-temporal:ci | gzip -1 > "$artifact_dir/temporal-worker.tar.gz"
+          (cd "$artifact_dir" && sha256sum temporal-worker.tar.gz > temporal-worker.tar.gz.sha256)
+          docker image inspect --format '{{.Id}}' alegria-seo-temporal:ci > "$artifact_dir/image-id.txt"
+          printf '%s\n' "$SOURCE_SHA" > "$artifact_dir/source-sha.txt"
+
+      - name: Sign source-specific archive provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ runner.temp }}/temporal-worker-artifact/temporal-worker.tar.gz
+
+      - name: Upload source-specific Worker image
+        uses: actions/upload-artifact@v7
+        with:
+          name: temporal-worker-image-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/temporal-worker-artifact/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  # A manual lockfile refresh is also a mode of this single workflow. It may
+  # update only a reviewed non-main branch; its candidate still needs PR CI.
+  dependency-refresh:
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'dependency-refresh' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - name: Checkout exact upgrade branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch --depth=1 origin "${GITHUB_REF_NAME}"
+          git checkout -B "${GITHUB_REF_NAME}" FETCH_HEAD
+
+      - name: Update resolved Rust dependencies
+        working-directory: app/rust
+        run: |
+          cargo --version
+          cargo update
+          cargo metadata --locked --format-version=1 --no-deps >/dev/null
+
+      - name: Commit dependency lock candidate to isolated draft branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git add app/rust/Cargo.lock
+          if git diff --cached --quiet; then
+            echo "LOCK_ALREADY_CURRENT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore(rust): refresh dependency lock for latest stack candidate"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

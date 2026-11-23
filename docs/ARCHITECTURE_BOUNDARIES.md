@@ -147,9 +147,11 @@ This optimization is **not** evidence that the full 16-fixture suite ran when
 only one ID is selected; the exact scope is reported in `suite_fixture_ids`
 and printed as `CI_SUITE_FIXTURE_IDS` in the Rust job.
 The Cloudflare static tree and the four Python scripts COPY'd into the Temporal
-image select its packaging even if no Rust crate changed. The `worker-image`
-release workflow now checks this report against its exact source commit and
-records `not_applicable` for unrelated changes instead of building that image.
+image select its packaging even if no Rust crate changed. The `select-image`
+job in the single `ci.yml` workflow checks the report against the exact
+accepted main source and skips packaging for unrelated changes, including
+explicitly known CI/operator-only maintenance files. It records impact evidence
+without launching the release image build on PRs.
 Local feedback shows the same selections, but defers external Docker/provider
 E2E and all release packaging to canonical CI; it cannot be accepted as CI PASS.
 
