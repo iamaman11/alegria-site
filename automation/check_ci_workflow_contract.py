@@ -132,7 +132,9 @@ def check() -> None:
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "  rust-contract-smokes:\n" not in workflow
-    assert "cargo metadata --format-version 1 --no-deps --locked" in verify
+    assert "cargo metadata --format-version 1 --no-deps --locked" not in verify
+    assert "uses: dtolnay/rust-toolchain" not in verify
+    assert "uses: actions/cache" not in verify
     assert "python3 automation/check_crawler_invariants.py" in fast
     assert "python3 automation/check_module_boundaries.py" not in architecture
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):

@@ -11,7 +11,7 @@ from report_ci_cargo_cache import directory_bytes, record
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust", "verify")
+OWNERS = ("architecture-and-rust",)
 
 
 def validate_cache_policy(workflow: str) -> None:
@@ -28,7 +28,7 @@ def validate_cache_policy(workflow: str) -> None:
                 break
             body.append(line)
         blocks.append("\n".join(body))
-    saver, *readers = blocks
+    (saver,) = blocks
     if ("SCCACHE_GHA_ENABLED: \"on\"" not in saver
             or "uses: actions/github-script@v8" not in saver
             or "core.exportVariable('ACTIONS_RESULTS_URL', url)" not in saver
@@ -36,10 +36,9 @@ def validate_cache_policy(workflow: str) -> None:
         raise ValueError("sccache must receive authenticated GitHub cache service environment")
     if saver.count("uses: actions/cache@v4") != 1:
         raise ValueError("architecture must be the sole registry cache writer")
-    if any("uses: actions/cache@v4" in block for block in readers):
-        raise ValueError("read-only jobs must not publish a competing cache")
-    if any(block.count("uses: actions/cache/restore@v4") != 1 for block in readers):
-        raise ValueError("read-only jobs must restore dependency sources")
+    verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
+    if "uses: actions/cache" in verify or "dtolnay/rust-toolchain" in verify or "cargo metadata" in verify:
+        raise ValueError("Python verify must not initialize a second Cargo owner")
     for block in blocks:
         # Reject target *cache payloads*, not valid references to a job-local
         # build directory in an unrelated environment variable or test step.
@@ -66,10 +65,10 @@ class CargoCachePolicy(unittest.TestCase):
     def test_actual_ci_has_one_registry_writer_and_no_target_archive(self) -> None:
         validate_cache_policy((ROOT / ".github/workflows/ci.yml").read_text())
 
-    def test_a_second_saver_is_rejected(self) -> None:
+    def test_a_second_saver_in_python_verify_is_rejected(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
-        changed = original.replace("uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1)
-        with self.assertRaisesRegex(ValueError, "read-only jobs"):
+        changed = original.replace("  verify:\n", "  verify:\n    # uses: actions/cache@v4\n", 1)
+        with self.assertRaisesRegex(ValueError, "second Cargo owner"):
             validate_cache_policy(changed)
 
     def test_unbounded_target_regression_is_rejected(self) -> None:
@@ -101,27 +100,27 @@ class CargoCachePolicy(unittest.TestCase):
             target = root / "target"
             target.mkdir()
             (target / "b").write_bytes(b"y" * 234)
-            report = record("verify", "false", SOURCE, root, target)
+            report = record("architecture-and-rust", "false", SOURCE, root, target)
             self.assertEqual(report["source_sha"], SOURCE)
             self.assertFalse(report["registry_cache_hit"])
             self.assertGreaterEqual(report["registry_bytes"], 123)
             self.assertGreaterEqual(report["target_bytes_uncached"], 234)
             self.assertEqual(report["git_bytes"], 0)
 
-    def test_verify_owner_has_a_valid_cache_report(self) -> None:
+    def test_architecture_owner_has_a_valid_cache_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            report = record("verify", "true", SOURCE, root, root / "target")
-            self.assertEqual(report["owner"], "verify")
+            report = record("architecture-and-rust", "true", SOURCE, root, root / "target")
+            self.assertEqual(report["owner"], "architecture-and-rust")
             self.assertTrue(report["registry_cache_hit"])
 
     def test_rejects_invalid_cache_signal_and_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with self.assertRaises(ValueError):
-                record("verify", "unknown", SOURCE, root, root)
+                record("architecture-and-rust", "unknown", SOURCE, root, root)
             with self.assertRaises(ValueError):
-                record("verify", "true", "not-sha", root, root)
+                record("architecture-and-rust", "true", "not-sha", root, root)
             with self.assertRaises(ValueError):
                 record("unrecognized", "true", SOURCE, root, root)
 

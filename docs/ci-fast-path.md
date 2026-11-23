@@ -52,6 +52,8 @@ lightweight-PR runs as cold-run proof.
 - Source-only crawler, protobuf and run-report checks run once in `verify`.
   The former parallel `rust-contract-smokes` job was removed; real Rust-backed
   deep checks still execute in `comprehensive`, never as a synthetic PR PASS.
+  Cargo metadata and its toolchain/cache setup remain only with the actual
+  Rust impact/compilation owner; Python-only `verify` needs no Rust setup.
 - The dependency-impact report is produced on PRs and used by the single Rust
   compilation owner. No other PR job compiles the same broad Cargo graph.
 

@@ -423,27 +423,11 @@ jobs:
       - name: Install Python audit tools
         run: python -m pip install --disable-pip-version-check ruff==0.17.6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore shared Cargo dependency sources (read-only)
-        id: cargo_registry
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
       - name: Install lightweight Python policy tool
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Fast source contracts and policy
-        run: |
-          cargo metadata --format-version 1 --no-deps --locked --manifest-path app/rust/Cargo.toml > /dev/null
-          bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
+        run: bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
 
       - name: Fast integration and consistency checks
         run: bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
