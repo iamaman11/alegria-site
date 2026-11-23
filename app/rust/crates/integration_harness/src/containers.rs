@@ -6,6 +6,7 @@ use neo4rs::{query, Graph};
 use qdrant_client::Qdrant;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::time::Instant;
 use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions};
 use temporalio_sdk_core::Url;
@@ -200,26 +201,15 @@ impl Neo4jHarness {
 impl InfraHarness {
     pub async fn start() -> Result<Self> {
         let started = Instant::now();
-        let postgres = PostgresHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=postgres elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let qdrant = QdrantHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=qdrant elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let neo4j = Neo4jHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=neo4j elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
-        let temporal = TemporalHarness::start().await?;
-        eprintln!(
-            "CI_HARNESS_READY stage=temporal elapsed_ms={}",
-            started.elapsed().as_millis()
-        );
+        // These four disposables have independent ports and credentials. Start
+        // them concurrently: readiness is proven by each service's own probe,
+        // not by completing unrelated service startup first.
+        let (postgres, qdrant, neo4j, temporal) = tokio::try_join!(
+            start_with_readiness("postgres", started, PostgresHarness::start()),
+            start_with_readiness("qdrant", started, QdrantHarness::start()),
+            start_with_readiness("neo4j", started, Neo4jHarness::start()),
+            start_with_readiness("temporal", started, TemporalHarness::start()),
+        )?;
         Ok(Self {
             postgres,
             qdrant,
@@ -256,6 +246,20 @@ impl InfraHarness {
     pub fn apply_runtime_env(&self) -> EnvOverrideGuard {
         EnvOverrideGuard::apply(self.runtime_env())
     }
+}
+
+async fn start_with_readiness<T>(
+    stage: &str,
+    started: Instant,
+    startup: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let value = startup.await?;
+    eprintln!(
+        "CI_HARNESS_READY stage={} elapsed_ms={}",
+        stage,
+        started.elapsed().as_millis()
+    );
+    Ok(value)
 }
 
 impl TemporalHarness {
