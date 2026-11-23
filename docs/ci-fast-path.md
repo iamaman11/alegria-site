@@ -1,8 +1,10 @@
 # CI for the experimental Alegria app
 
 The pull-request gate is intentionally a **fast feedback** gate; deep runtime
-certification is available separately through GitHub Actions → `ci-deep` →
-**Run workflow**, or locally with `bash automation/ci_verify.sh all`.
+certification runs on demand through GitHub Actions → `ci` →
+**Run workflow** (`comprehensive` job), or locally with
+`bash automation/ci_verify.sh all`. All CI jobs are defined in
+`.github/workflows/ci.yml`; release-image packaging remains independent.
 
 ## Measured result (GitHub Actions, 21 November 2026)
 
@@ -14,6 +16,7 @@ certification is available separately through GitHub Actions → `ci-deep` →
 | [#39](https://github.com/iamaman11/alegria-site/actions/runs/44934597524) | **8m 33s** | Cold Rust workspace tests 5m 12s, then E2E feature-graph rebuild 2m 20s |
 | [#40, first attempt](https://github.com/iamaman11/alegria-site/actions/runs/44935699114) | **6m 46s** | Cold unit tests of all operational crates still exceeded the PR budget |
 | [#40, lightweight gate](https://github.com/iamaman11/alegria-site/actions/runs/44936425556) | **1m 14s** | All ten mandatory jobs passed with Rust model regressions and no full-workspace compilation |
+| [#62, new PR canary](https://github.com/iamaman11/alegria-site/actions/runs/45238064039) | **9m 13s** | Scoped integration harness, 2 real CMS E2E and 2 Temporal E2E tests; 65.47% compiler cache hit rate |
 
 The three earlier runs passed every then-required job. After the version refresh, a cold
 Docker rebuild revealed a separate release-compilation bottleneck, so Docker
@@ -27,23 +30,24 @@ the second E2E feature graph made the cold PR gate exceed five minutes.
 Removing the E2E rebuild was insufficient (#40). The regular prototype PR
 gate now exercises lightweight Rust model regressions, source/format/contract
 checks and operational container checks; the full workspace and E2E feature
-graph are checked in `ci-deep` before release. The five-minute goal must be
-confirmed against exact completed CI runs; it is not a cold-run SLA.
+graph are available in the manual `comprehensive` job before release.
+The current impact-selected PR Rust path can invoke real PostgreSQL and
+Temporal tests; #62 exceeded the five-minute target. Do not treat earlier
+lightweight-PR runs as cold-run proof.
 
 ## On each pull request
 
-- Real `cargo test -p runtime_models --locked` for the lightweight model
-  regressions and `cargo fmt --all -- --check`. Full workspace Rust tests,
-  `integration_harness`, and PostgreSQL E2E run in `ci-deep`, not on every
-  experimental PR. The PR gate by itself **does not certify full Rust compilation**.
+- Real Rust model regressions and `cargo fmt --all -- --check`.
+  The impact-selected Rust owner checks dependent crates and selected
+  PostgreSQL/Temporal E2E; whole-workspace tests and *all* fixtures remain
+  manual. The PR gate does not certify every unselected feature combination.
 - Python/SQLx/SEO/Truth policy contracts and native Windows operator checks.
 - RustSec dependency audit, Cloudflare static build, Temporal/PostgreSQL and
   storage/graph container checks, plus source-level Docker boundary checks.
 - A single Rust compilation owner; the static contract jobs no longer compile
   or repeatedly bootstrap Rust/Temporal/PostgreSQL.
-- The dependency-impact report is produced on PRs, while the optional scoped
-  `cargo check` remains a developer command. A direct Rust-only edit no longer
-  starts an unpredictable second cold compile in PR CI.
+- The dependency-impact report is produced on PRs and used by the single Rust
+  compilation owner. No other PR job compiles the same broad Cargo graph.
 
 ## Release Worker image (independent of PR feedback)
 
@@ -59,7 +63,7 @@ release work rather than a requirement before each experimental PR review.
 
 ## Deep verification on demand
 
-The manually dispatched `ci-deep.yml` retains all 16 real-worker Truth
+The manually dispatched `comprehensive` job in `ci.yml` retains all 16 real-worker Truth
 certification fixtures, Qdrant REST→gRPC transport, the manual LLM lifecycle,
 rebuild/extraction Rust-backed checks, semantic fixtures, protocol checks,
 and the remaining PostgreSQL regressions.
@@ -67,6 +71,16 @@ and the remaining PostgreSQL regressions.
 Run it before a release, or after changes to Temporal workflow behavior,
 truth admission, publishing, or SQL schema. These checks were **moved out of
 the PR critical path**, not deleted or represented as having run on PR.
+
+## Trusted compiler-cache warm-up
+
+The `rust-cache-prime` job also lives in `ci.yml`. Only successful,
+provenance-checked main pushes may run it, and it performs heavy work only if
+Rust source changed. CI-only changes do not launch another long compiler build.
+It prepares the three Rust CI profiles but
+does not execute tests. PRs read the shared compiler cache without uploading
+PR-local compiler objects. This is *not* proof that a cold PR will finish
+within five minutes; exact new-PR timings and cache errors must be measured.
 
 ## Dependency strategy
 

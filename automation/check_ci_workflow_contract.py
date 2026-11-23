@@ -20,14 +20,18 @@ OWNERS = (
 def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
-    deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
-    prime = (ROOT / ".github/workflows/rust-cache-prime.yml").read_text(encoding="utf-8")
+    # All acceptance/seed CI jobs live in one workflow: no competing CI runs.
+    assert not (ROOT / ".github/workflows/ci-deep.yml").exists()
+    assert not (ROOT / ".github/workflows/rust-cache-prime.yml").exists()
+    deep = workflow.split("  comprehensive:\n", 1)[1].split("  rust-cache-prime:\n", 1)[0]
+    prime = workflow.split("  rust-cache-prime:\n", 1)[1]
     release = (ROOT / ".github/workflows/worker-image.yml").read_text(encoding="utf-8")
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     assert workflow.startswith("name: ci\n")
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
-    assert "  gate:\n    name: CI\n    if: always()\n" in workflow
+    assert "  workflow_dispatch:\n" in workflow
+    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')\n" in workflow
     assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
     assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
@@ -99,11 +103,10 @@ def check() -> None:
     # all 16 Truth fixtures and Temporal/manual E2E. It must never start
     # automatically when a PR is marked Ready or synchronized: exact-head
     # scoped suites already run in the required `ci` workflow.
-    assert deep.startswith("name: ci-deep\n")
-    assert "  workflow_dispatch:\n" in deep
+    assert "    if: github.event_name == 'workflow_dispatch'\n" in deep
     assert "  pull_request:\n" not in deep
-    assert "types: [ready_for_review" not in deep
-    assert "github.event.pull_request.draft == false" not in deep
+    assert "types: [ready_for_review" not in workflow
+    assert "github.event.pull_request.draft == false" not in workflow
     assert "ref: ${{ github.sha }}" in deep
     assert "bash automation/ci_verify.sh all" in deep
     assert "cargo test --workspace --locked" in deep
@@ -114,14 +117,19 @@ def check() -> None:
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
 
-    # Main-only compiler warm-up remains separate from mandatory PR CI and
-    # cannot be invoked with a pull_request or workflow_run trigger.
-    assert prime.startswith("name: rust-cache-prime\n")
-    assert "  push:\n    branches: [main]\n    paths:\n" in prime
-    assert "  workflow_dispatch:\n" in prime
-    for forbidden in ("  pull_request:\n", "  pull_request_target:\n", "  workflow_run:\n"):
-        assert forbidden not in prime
-    assert "    if: github.ref == 'refs/heads/main'" in prime
+    # Main-only compiler warm-up runs after an accepted main CI gate, never on
+    # a PR or a manual deep dispatch, and skips every non-Rust push, including
+    # workflow-only changes (which must not queue another long Rust build).
+    for forbidden in ("  pull_request_target:\n", "  workflow_run:\n"):
+        assert forbidden not in workflow
+    assert "    needs: gate\n" in prime
+    assert "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'" in prime
+    assert 'BEFORE_SHA: ${{ github.event.before }}' in prime
+    assert 'git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA"' in prime
+    assert "grep -Eq '^app/rust/'" in prime
+    assert "MAIN_CACHE_PRIME=SKIPPED no Rust source changes" in prime
+    assert prime.count("if: steps.cache_scope.outputs.needed == 'true'") >= 6
+    assert "if: always() && steps.cache_scope.outputs.needed == 'true'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
     assert 'CARGO_BUILD_JOBS: "2"' in prime
     assert "SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log" in prime

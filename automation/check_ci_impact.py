@@ -310,8 +310,6 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_exact_ci_only_inputs_run_verify_without_rust_compilation(self) -> None:
         for path in (
-            ".github/workflows/ci-deep.yml",
-            ".github/workflows/rust-cache-prime.yml",
             "automation/check_ci_workflow_contract.py",
             "automation/report_sccache_failures.py",
         ):
@@ -327,6 +325,8 @@ class ImpactFixtures(unittest.TestCase):
     def test_unknown_ci_and_impact_control_files_still_fail_closed(self) -> None:
         for path in (
             ".github/workflows/ci.yml",
+            ".github/workflows/ci-deep.yml",
+            ".github/workflows/rust-cache-prime.yml",
             ".github/workflows/worker-image.yml",
             ".github/workflows/future-build.yml",
             "automation/ci_impact.py",
@@ -341,7 +341,7 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_ci_only_file_does_not_hide_a_real_runtime_change(self) -> None:
         result = self.impact(
-            ".github/workflows/rust-cache-prime.yml",
+            "automation/check_ci_workflow_contract.py",
             "app/rust/services/temporal/src/workflows/seo_site_build.rs",
         )
         self.assertEqual(result["scope"], "scoped")
