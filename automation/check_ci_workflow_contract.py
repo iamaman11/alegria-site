@@ -5,8 +5,10 @@ The project is experimental: don't lock every test to a CI job forever.
 Check actual gates and that expensive integration suites remain executable.
 """
 from pathlib import Path
+import ast
 import re
 import subprocess
+import textwrap
 from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,15 +26,17 @@ def check() -> None:
     # All acceptance/seed CI jobs live in one workflow: no competing CI runs.
     assert not (ROOT / ".github/workflows/ci-deep.yml").exists()
     assert not (ROOT / ".github/workflows/rust-cache-prime.yml").exists()
+    assert sorted(path.name for path in (ROOT / ".github/workflows").glob("*.yml")) == ["ci.yml"]
     deep = workflow.split("  comprehensive:\n", 1)[1].split("  rust-cache-prime:\n", 1)[0]
-    prime = workflow.split("  rust-cache-prime:\n", 1)[1]
-    release = (ROOT / ".github/workflows/worker-image.yml").read_text(encoding="utf-8")
+    prime = workflow.split("  rust-cache-prime:\n", 1)[1].split("  select-image:\n", 1)[0]
+    release = workflow.split("  select-image:\n", 1)[1].split("  dependency-refresh:\n", 1)[0]
+    refresh = workflow.split("  dependency-refresh:\n", 1)[1]
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
     assert workflow.startswith("name: ci\n")
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
     assert "  workflow_dispatch:\n" in workflow
-    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')\n" in workflow
+    assert "  gate:\n    name: CI\n    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main'))\n" in workflow
     assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
     assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
@@ -52,20 +56,63 @@ def check() -> None:
     assert "actions/runs?head_sha={source_sha}" in workflow
     assert "job[\"conclusion\"]" in workflow
     assert "temporal-worker-docker" not in workflow
-    assert release.startswith("name: worker-image\n")
-    assert "  push:\n    branches: [main]\n" in release
-    assert "  workflow_dispatch:\n" in release
-    assert "  select-image:\n" in release
+    assert "  select-image:\n" in workflow
+    assert "  package:\n" in workflow
+    assert "    needs: gate\n" in release
+    assert "(github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main')" in release
     assert "python3 automation/ci_impact.py" in release
     assert "--head \"$SOURCE_SHA\"" in release
     assert "status = report.get('image_status', {}).get('temporal-worker')" in release
-    assert "if: needs.select-image.outputs.worker_required == 'true'" in release
+    assert "    needs: [gate, select-image]" in release
+    assert "needs.gate.result == 'success' && needs.select-image.result == 'success'" in release
+    assert "needs.select-image.outputs.worker_required == 'true' && github.ref == 'refs/heads/main'" in release
+    assert "      id-token: write\n      attestations: write\n      artifact-metadata: write\n" in release
     assert "worker-image-impact-${{ env.SOURCE_SHA }}" in release
     assert "SOURCE_SHA: ${{ github.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
+    assert "if set(changed) <= no_image_inputs and os.environ['MANUAL_PACKAGE'] != 'true':" in release
+    assert "WORKER_IMAGE_SELECTION=SKIPPED known CI/operator maintenance only" in release
+    assert "report['worker_release_decision']" in release
+    assert "'reason': decision_reason" in release
+    selection_script = textwrap.dedent(
+        release.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    )
+    parsed = ast.parse(selection_script)  # The actual inline release selector must be Python.
+    allowed = next(
+        ast.literal_eval(node.value)
+        for node in parsed.body
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "no_image_inputs"
+            for target in node.targets
+        )
+    )
+    assert allowed == {
+        ".github/workflows/ci.yml",
+        ".github/workflows/worker-image.yml",
+        ".github/workflows/dependency-refresh-branch.yml",
+        "automation/check_ci_workflow_contract.py",
+        "automation/check_windows_staging_rollback.py",
+        "infra/local/windows_staging.ps1",
+        "docs/ci-fast-path.md",
+        "docs/ARCHITECTURE_BOUNDARIES.md",
+    }, "only explicitly proven non-image maintenance inputs may skip packaging"
+    for changed, skip in (
+        ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
+        (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
+        (["app/rust/services/temporal/src/main.rs"], False),
+        (["automation/deploy_seo_static_cloudflare.py"], False),
+        ([".github/workflows/ci.yml", "app/rust/Cargo.lock"], False),
+        ([".github/workflows/ci.yml", "automation/ci_impact.py"], False),
+        ([".github/workflows/new-workflow.yml"], False),
+    ):
+        assert (set(changed) <= allowed) == skip, changed
+    assert "  dependency-refresh:\n" in workflow
+    assert "inputs.operation == 'dependency-refresh' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'" in refresh
+    assert "    permissions:\n      contents: write\n" in refresh
+    assert "git add app/rust/Cargo.lock" in refresh
     # A fresh runner must not waste ~3 minutes compiling the audit CLI itself.
     assert "cargo install cargo-audit" not in workflow
     assert "cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz" in workflow
@@ -104,7 +151,7 @@ def check() -> None:
     # all 16 Truth fixtures and Temporal/manual E2E. It must never start
     # automatically when a PR is marked Ready or synchronized: exact-head
     # scoped suites already run in the required `ci` workflow.
-    assert "    if: github.event_name == 'workflow_dispatch'\n" in deep
+    assert "    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'comprehensive'\n" in deep
     assert "  pull_request:\n" not in deep
     assert "types: [ready_for_review" not in workflow
     assert "github.event.pull_request.draft == false" not in workflow

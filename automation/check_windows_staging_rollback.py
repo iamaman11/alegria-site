@@ -37,10 +37,13 @@ def check(script: str) -> None:
         "$observed.Image -ne $newImage -and $observed.Image -ne $rollbackImage",
         ". (Join-Path $PSScriptRoot 'windows_staging_image.ps1')",
         "& gh run download $imageRunId -R $repo -n $artifactName -D $artifactDir",
-        "$_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit",
+        "$_.workflowName -eq 'ci' -and $_.headSha -eq $Commit",
+        "$jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs",
+        "$_.name -eq 'package' -and $_.conclusion -eq 'success'",
+        "throw \"Worker image NO-GO: no successful package job in ci",
         "Read-Staging-Verified-Worker-Image -ArtifactDirectory $artifactDir -ExpectedSha $Commit",
         "& gh attestation verify $artifact.Archive -R $repo",
-        "--signer-workflow \"$repo/.github/workflows/worker-image.yml\" --deny-self-hosted-runners --format json",
+        "--signer-workflow \"$repo/.github/workflows/ci.yml\" --deny-self-hosted-runners --format json",
         "Assert-Exit 'verify signed GitHub Worker provenance'",
         "throw 'GitHub Worker archive has no valid signed provenance'",
         "& $docker image load --input $artifact.Archive",
@@ -145,10 +148,10 @@ def check(script: str) -> None:
     assert "  push:\n    branches: [main]" in workflow, (
         "canonical main must run single CI automatically for exact-SHA staging CI"
     )
-    assert "foreach ($name in @('ci'))" in script
+    assert "$acceptedRuns = @($runs | Where-Object {" in script
     assert "name: CI" in workflow and "if: always()" in workflow
-    release = (ROOT / ".github" / "workflows" / "worker-image.yml").read_text(encoding="utf-8")
-    assert "name: worker-image" in release and "  push:\n    branches: [main]" in release
+    assert "  select-image:\n" in workflow and "  package:\n" in workflow
+    assert not (ROOT / ".github" / "workflows" / "worker-image.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "quality-gate.yml").exists()
     assert not (ROOT / ".github" / "workflows" / "automation-verify.yml").exists()
     assert script.index("if ($oldSha -eq $Commit)") > script.index("effective Compose config")
@@ -187,6 +190,9 @@ def main() -> None:
         "$rollbackImage = ((& $docker image inspect $rollbackTag --format '{{.Id}}')",
         "$startProcess.WaitForExit(20000)",
         "WHERE status NOT IN ('done','failed');",
+        "$jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs",
+        "$_.name -eq 'package' -and $_.conclusion -eq 'success'",
+        "--signer-workflow \"$repo/.github/workflows/ci.yml\"",
         "Remove-Item -LiteralPath ('Env:' + $key) -ErrorAction SilentlyContinue",
     ):
         mutated = source.replace(fragment, "", 1)

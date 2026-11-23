@@ -62,25 +62,33 @@ if ($remote -ne $Commit) { throw 'GitHub commit SHA does not match' }
 $runJson = & gh run list -R $repo --commit $Commit --json databaseId,workflowName,conclusion,status,headSha --limit 100
 Assert-Exit 'GitHub Actions lookup'
 $runs = $runJson | ConvertFrom-Json
-foreach ($name in @('ci')) {
-    $latest = @($runs | Where-Object { $_.workflowName -eq $name -and $_.headSha -eq $Commit } | Sort-Object databaseId -Descending | Select-Object -First 1)
-    if ($latest.Count -ne 1 -or $latest[0].status -ne 'completed' -or $latest[0].conclusion -ne 'success') {
-        throw "CI NO-GO: $name not SUCCESS at $Commit"
-    }
-    $verifiedRunId = [string]$latest[0].databaseId
+$acceptedRuns = @($runs | Where-Object {
+    $_.workflowName -eq 'ci' -and $_.headSha -eq $Commit -and
+    $_.status -eq 'completed' -and $_.conclusion -eq 'success'
+} | Sort-Object databaseId -Descending)
+if ($acceptedRuns.Count -lt 1) {
+    throw "CI NO-GO: ci not SUCCESS at $Commit"
 }
-# The release image is deliberately compiled after the fast PR check. A
-# successful PR CI proves the source; a successful, exact-SHA worker-image run
-# separately proves the deployable artifact. Both must match -Commit.
+$verifiedRunId = [string]$acceptedRuns[0].databaseId
+# A single CI workflow both proves the source and (when required) packages the
+# release artifact. The accepted image must come from its successful package
+# job, not from a manually dispatched deep or dependency-refresh run.
 if ($Service -eq 'temporal-worker') {
-    $images = @($runs | Where-Object {
-        $_.workflowName -eq 'worker-image' -and $_.headSha -eq $Commit
-    } | Sort-Object databaseId -Descending | Select-Object -First 1)
-    if ($images.Count -ne 1 -or $images[0].status -ne 'completed' -or
-        $images[0].conclusion -ne 'success') {
-        throw "Worker image NO-GO: run the worker-image release workflow for $Commit before deployment"
+    $imageRunId = $null
+    foreach ($run in $acceptedRuns) {
+        $jobsJson = & gh run view ([string]$run.databaseId) -R $repo --json jobs
+        Assert-Exit 'GitHub CI package job lookup'
+        $jobs = @((($jobsJson | ConvertFrom-Json).jobs) | Where-Object {
+            $_.name -eq 'package' -and $_.conclusion -eq 'success'
+        })
+        if ($jobs.Count -eq 1) {
+            $imageRunId = [string]$run.databaseId
+            break
+        }
     }
-    $imageRunId = [string]$images[0].databaseId
+    if (-not $imageRunId) {
+        throw "Worker image NO-GO: no successful package job in ci for $Commit; dispatch ci / worker-image on main"
+    }
 }
 Write-Output "CI=PASS COMMIT=$Commit"
 $target = if ($Service -eq 'temporal-worker') {'alegria_temporal_worker'} else {'alegria_outbox_worker'}
@@ -244,7 +252,7 @@ if ($Service -eq 'temporal-worker') {
         # Sigstore check additionally ties those bytes to GitHub's own signed
         # build provenance for the precise canonical workflow identity.
         $attestJson = & gh attestation verify $artifact.Archive -R $repo `
-            --signer-workflow "$repo/.github/workflows/worker-image.yml" --deny-self-hosted-runners --format json
+            --signer-workflow "$repo/.github/workflows/ci.yml" --deny-self-hosted-runners --format json
         Assert-Exit 'verify signed GitHub Worker provenance'
         if (@(($attestJson | Out-String | ConvertFrom-Json)).Count -lt 1) {
             throw 'GitHub Worker archive has no valid signed provenance'
