@@ -23,7 +23,7 @@ SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
     "impact",
-    "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security",
+    "architecture-and-rust", "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
 )
@@ -85,7 +85,8 @@ def execute_pr_gate(
 
 
 def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
-                 skipped_job: str | None = None,
+                 skipped_job: str | None = None, delayed_pr_indexes: int = 0,
+                 missing_pr: bool = False,
                  accepted_run: bool = True) -> tuple[bool, str, set[str]]:
     calls: set[str] = set()
     jobs = [{"name": name, "conclusion": "skipped" if name == skipped_job else "success"}
@@ -104,25 +105,35 @@ def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
         "actions/runs/42/jobs?per_page=100": {"jobs": jobs},
     }
     base_url = "https://api.github.com/repos/iamaman11/alegria-site/"
+    pr_queries = 0
 
     def urlopen(request: urllib.request.Request, *, timeout: int) -> io.BytesIO:
+        nonlocal pr_queries
         if timeout != 20 or not request.full_url.startswith(base_url):
             raise AssertionError("unexpected GitHub request")
         path = request.full_url[len(base_url):]
         calls.add(path)
         if path not in responses:
             raise AssertionError(f"unknown GitHub endpoint: {path}")
+        if path == f"commits/{MERGE}/pulls":
+            pr_queries += 1
+            if missing_pr or pr_queries <= delayed_pr_indexes:
+                return io.BytesIO(b"[]")
         return io.BytesIO(json.dumps(responses[path]).encode("utf-8"))
 
     output = io.StringIO()
     with contextlib.redirect_stdout(output), patch.dict(os.environ, {
         "REPO_NAME": "iamaman11/alegria-site", "MERGE_SHA": MERGE,
         "GITHUB_TOKEN": "offline-test-token",
-    }), patch("urllib.request.urlopen", side_effect=urlopen):
+    }), patch("urllib.request.urlopen", side_effect=urlopen), patch("time.sleep") as sleep:
         try:
             exec(main_gate_source(), {"__name__": "__main__"})
         except SystemExit as failure:
+            if delayed_pr_indexes and not missing_pr:
+                assert sleep.call_count == min(delayed_pr_indexes, 10)
             return False, str(failure), calls
+    if delayed_pr_indexes:
+        assert sleep.call_count == min(delayed_pr_indexes, 10)
     return True, output.getvalue(), calls
 
 
@@ -144,10 +155,20 @@ class MainMergeProvenanceTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
 
-    def test_missing_parallel_rust_smoke_rejects_previous_pr_proof(self) -> None:
-        ok, message, _ = execute_gate(omit_job="rust-contract-smokes")
+    def test_missing_verify_owner_rejects_previous_pr_proof(self) -> None:
+        ok, message, _ = execute_gate(omit_job="verify")
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
+
+    def test_fresh_merge_waits_for_github_pr_indexing_then_accepts(self) -> None:
+        ok, message, _ = execute_gate(delayed_pr_indexes=2)
+        self.assertTrue(ok, message)
+        self.assertIn("CI_GATE=PASS", message)
+
+    def test_permanently_missing_pr_fails_closed_after_bounded_poll(self) -> None:
+        ok, message, _ = execute_gate(missing_pr=True)
+        self.assertFalse(ok)
+        self.assertIn("merge commit does not match one accepted PR head", message)
 
     def test_no_accepted_exact_head_run_rejects_reuse(self) -> None:
         ok, message, _ = execute_gate(accepted_run=False)

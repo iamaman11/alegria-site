@@ -11,7 +11,7 @@ from report_ci_cargo_cache import directory_bytes, record
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust", "rust-contract-smokes", "verify")
+OWNERS = ("architecture-and-rust", "verify")
 
 
 def validate_cache_policy(workflow: str) -> None:
@@ -108,11 +108,11 @@ class CargoCachePolicy(unittest.TestCase):
             self.assertGreaterEqual(report["target_bytes_uncached"], 234)
             self.assertEqual(report["git_bytes"], 0)
 
-    def test_independent_smoke_owner_has_a_valid_cache_report(self) -> None:
+    def test_verify_owner_has_a_valid_cache_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            report = record("rust-contract-smokes", "true", SOURCE, root, root / "target")
-            self.assertEqual(report["owner"], "rust-contract-smokes")
+            report = record("verify", "true", SOURCE, root, root / "target")
+            self.assertEqual(report["owner"], "verify")
             self.assertTrue(report["registry_cache_hit"])
 
     def test_rejects_invalid_cache_signal_and_source(self) -> None:

@@ -90,8 +90,7 @@ class SccacheDiagnosticContract(unittest.TestCase):
 
     def test_python_only_product_does_not_launch_rust_cache_diagnostics(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
-        architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  rust-contract-smokes:\n", 1)[0]
-        smokes = source.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
+        architecture = source.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
         product = source.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         verify = source.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
         self.assertIn("bash automation/ci_fast_verify.sh product", product)
@@ -99,10 +98,9 @@ class SccacheDiagnosticContract(unittest.TestCase):
         self.assertNotIn("cargo test", product)
         self.assertNotIn("SCCACHE_LOG:", product)
         self.assertNotIn("report_ci_sccache_write_errors.py", product)
-        for other in (architecture, smokes, verify):
-            self.assertNotIn("SCCACHE_LOG:", other)
+        for other in (architecture, verify):
             self.assertNotIn("report_ci_sccache_write_errors.py", other)
-        self.assertNotIn("SCCACHE_ERROR_LOG:", source)
+        self.assertIn("SCCACHE_ERROR_LOG:", architecture)
 
 
 if __name__ == "__main__":

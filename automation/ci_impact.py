@@ -86,6 +86,27 @@ CI_ONLY_VERIFY_FILES = {
     "automation/report_sccache_failures.py",
 }
 
+# Release packaging has a narrower input graph than PR verification. These
+# reviewed maintenance files do not enter the shipped Worker Docker context;
+# they can still trigger fail-closed FULL PR CI if they alter selection logic.
+# Unknown or mixed inputs must retain the impact planner's image decision.
+NON_WORKER_DELIVERY_INPUTS = frozenset({
+    ".github/workflows/ci.yml",
+    "automation/check_ci_workflow_contract.py",
+    "automation/check_ci_merge_provenance.py",
+    "automation/check_ci_cargo_cache.py",
+    "automation/check_ci_rust_owned_check.py",
+    "automation/check_ci_sccache_diagnostics.py",
+    "automation/report_ci_cargo_cache.py",
+    "automation/ci_impact.py",
+    "automation/ci_fast_verify.sh",
+    "automation/run_rust_owned_check.sh",
+    "automation/check_windows_staging_rollback.py",
+    "infra/local/windows_staging.ps1",
+    "docs/ci-fast-path.md",
+    "docs/ARCHITECTURE_BOUNDARIES.md",
+})
+
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
 
@@ -313,11 +334,38 @@ IMAGE_OWNERS = {
     },
 }
 
+
+def worker_release_decision(report: dict[str, Any], changed: list[str], *, manual: bool) -> dict[str, Any]:
+    """Reuse the single impact report for an exact accepted-main image decision.
+
+    CI control changes still get full PR acceptance. They must not rebuild the
+    unchanged Worker on main merely because PR selection is conservative.
+    """
+    status = report.get("image_status", {}).get("temporal-worker")
+    if (report.get("schema_version") != SCHEMA_VERSION
+            or report.get("mandatory_full_ci_gate") is not True
+            or status not in ("selected", "not_applicable")
+            or (status == "selected") != ("temporal-worker" in report.get("selected_images", []))
+            or not changed or any(not isinstance(path, str) or not path for path in changed)
+            or sorted(set(changed)) != report.get("changed_paths")
+            or not isinstance(manual, bool)):
+        raise ValueError("WORKER_IMAGE_SELECTION=FAIL invalid exact-source impact")
+    if manual:
+        required, reason = True, "explicit_accepted_main_rebuild"
+    elif set(changed) <= NON_WORKER_DELIVERY_INPUTS:
+        required, reason = False, "ci_operator_maintenance_only"
+    else:
+        required, reason = status == "selected", "shared_impact_registry"
+    return {
+        "worker_required": required,
+        "reason": reason,
+        "changed_paths": sorted(set(changed)),
+    }
+
 # GitHub job IDs, not display names. The PR gate checks every one of these;
 # only this planner can mark an owner not applicable to an exact source diff.
 CI_PR_OWNERS = (
     "architecture-and-rust",
-    "rust-contract-smokes",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
@@ -347,7 +395,7 @@ def ci_jobs_for_change(
         selected.setdefault(name, []).append(why)
 
     if scope == "scoped" or suites:
-        for name in ("architecture-and-rust", "rust-contract-smokes", "rust-security", "verify"):
+        for name in ("architecture-and-rust", "rust-security", "verify"):
             require(name, "affected Rust workspace or integration suite")
 
     if changed & SOURCE_POLICY_DOCUMENTS:
