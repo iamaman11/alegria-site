@@ -40,6 +40,7 @@ case "${1:-}" in
     python3 automation/smoke_first_site_release.py
     ;;
   integration)
+    python3 automation/check_expert_core_activation_contract.py
     python3 automation/check_temporal_build_id_policy.py
     python3 automation/check_quality_policy_registry.py
     python3 automation/check_run_report_completeness.py

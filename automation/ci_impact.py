@@ -83,6 +83,7 @@ WORKER_PACKAGING_FILES = {
 # the required gate actually executes.
 CI_ONLY_VERIFY_FILES = {
     "automation/check_ci_workflow_contract.py",
+    "automation/check_expert_core_activation_contract.py",
     "automation/report_sccache_failures.py",
 }
 
@@ -93,6 +94,7 @@ CI_ONLY_VERIFY_FILES = {
 NON_WORKER_DELIVERY_INPUTS = frozenset({
     ".github/workflows/ci.yml",
     "automation/check_ci_workflow_contract.py",
+    "automation/check_expert_core_activation_contract.py",
     "automation/check_ci_impact.py",
     "automation/check_ci_merge_provenance.py",
     "automation/check_ci_cargo_cache.py",
@@ -362,6 +364,22 @@ def worker_release_decision(report: dict[str, Any], changed: list[str], *, manua
         "reason": reason,
         "changed_paths": sorted(set(changed)),
     }
+
+
+def main_cache_prime_required(changed: list[str]) -> bool:
+    """Warm Rust objects only for compilation inputs, including rename sources.
+
+    The main job obtains these paths from ``changed_paths``; its old
+    ``git diff --name-only`` dropped the source of a rename. Test-only harness
+    changes are verified by PR CI and never need a second compiler warm-up.
+    """
+    if not changed or any(not isinstance(path, str) or not path for path in changed):
+        raise ValueError("MAIN_CACHE_PRIME=FAIL invalid changed paths")
+    return any(
+        path.startswith("app/rust/")
+        and not path.startswith("app/rust/crates/integration_harness/src/tests/")
+        for path in changed
+    )
 
 # GitHub job IDs, not display names. The PR gate checks every one of these;
 # only this planner can mark an owner not applicable to an exact source diff.

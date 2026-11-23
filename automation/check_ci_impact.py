@@ -12,6 +12,7 @@ from unittest.mock import patch
 from ci_impact import (
     CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
+    main_cache_prime_required,
     suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
     worker_release_decision, workspace_graph,
 )
@@ -86,6 +87,38 @@ class ImpactFixtures(unittest.TestCase):
                 decision = worker_release_decision(report, paths, manual=False)
                 self.assertTrue(decision["worker_required"])
                 self.assertEqual(decision["reason"], "shared_impact_registry")
+
+    def test_architecture_source_contract_needs_only_python_verify(self) -> None:
+        path = "automation/check_expert_core_activation_contract.py"
+        report = self.impact(path)
+        self.assertEqual(report["scope"], "none")
+        self.assertEqual(report["selected_ci_jobs"], ["verify"])
+        self.assertEqual(report["affected_crates"], [])
+        self.assertEqual(report["selected_images"], [])
+        self.assertFalse(worker_release_decision(report, [path], manual=False)["worker_required"])
+
+        # A policy-file change cannot hide actual executable Rust inputs.
+        source = "app/rust/services/temporal/src/main.rs"
+        mixed = self.impact(path, source)
+        self.assertEqual(mixed["scope"], "scoped")
+        self.assertIn("architecture-and-rust", mixed["selected_ci_jobs"])
+        self.assertTrue(worker_release_decision(mixed, [path, source], manual=False)["worker_required"])
+
+    def test_main_cache_prime_uses_rename_aware_rust_source_paths(self) -> None:
+        old = "app/rust/crates/truth_domain/src/old.rs"
+        new = "docs/renamed.md"
+        with patch("subprocess.check_output", return_value=f"R100\0{old}\0{new}\0".encode()):
+            renamed = changed_paths("OLD", "NEW", root=self.root)
+        self.assertTrue(main_cache_prime_required(renamed))
+        self.assertTrue(main_cache_prime_required(["app/rust/Cargo.lock"]))
+        self.assertFalse(main_cache_prime_required([".github/workflows/ci.yml"]))
+        self.assertFalse(main_cache_prime_required(["infra/cloudflare/seo-static/package.json"]))
+        self.assertFalse(main_cache_prime_required(["app/rust/crates/integration_harness/src/tests/foo.rs"]))
+        self.assertTrue(main_cache_prime_required([
+            "app/rust/crates/integration_harness/src/tests/foo.rs", old,
+        ]))
+        with self.assertRaises(ValueError):
+            main_cache_prime_required([])
 
     def test_explicit_worker_rebuild_overrides_maintenance_skip(self) -> None:
         paths = [".github/workflows/ci.yml"]
@@ -362,6 +395,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_exact_ci_only_inputs_run_verify_without_rust_compilation(self) -> None:
         for path in (
             "automation/check_ci_workflow_contract.py",
+            "automation/check_expert_core_activation_contract.py",
             "automation/report_sccache_failures.py",
         ):
             with self.subTest(path=path):
@@ -562,9 +596,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["selected_images"], ["outbox-worker"])
 
     def test_cloudflare_static_is_worker_image_input_without_cargo(self) -> None:
-        outcome = self.impact("infra/cloudflare/seo-static/package.json")
+        asset = "infra/cloudflare/seo-static/package.json"
+        outcome = self.impact(asset)
         self.assertEqual(outcome["scope"], "none")
         self.assertEqual(outcome["selected_images"], ["temporal-worker"])
+        self.assertNotIn("architecture-and-rust", outcome["selected_ci_jobs"])
+        self.assertIn("cloudflare-static-build", outcome["selected_ci_jobs"])
+        self.assertTrue(worker_release_decision(outcome, [asset], manual=False)["worker_required"])
+        self.assertFalse(main_cache_prime_required([asset]))
 
     def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
         outcome = self.impact("automation/ci_impact.py")

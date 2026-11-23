@@ -743,20 +743,22 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
-          git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" > "$RUNNER_TEMP/main-changed-paths"
-          # A test-only harness edit needs its own PR run, not a second
-          # multi-profile compiler warm-up on the accepted main branch.
-          # Mixed changes with production Rust still warm the shared cache.
-          if awk '
-            /^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }
-            END { exit !needed }
-          ' "$RUNNER_TEMP/main-changed-paths"; then
-            echo 'needed=true' >> "$GITHUB_OUTPUT"
-            echo 'MAIN_CACHE_PRIME=SELECTED cached Rust compilation input changed'
-          else
-            echo 'needed=false' >> "$GITHUB_OUTPUT"
-            echo 'MAIN_CACHE_PRIME=SKIPPED no cached Rust compilation input changed'
-          fi
+          python3 - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, 'automation')
+          from ci_impact import changed_paths, main_cache_prime_required
+
+          # Same rename-aware source diff as PR impact and Worker packaging.
+          # Test-only harness inputs do not prime the compiler a second time.
+          changed = changed_paths(os.environ['BEFORE_SHA'], os.environ['SOURCE_SHA'])
+          needed = main_cache_prime_required(changed)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('needed=' + str(needed).lower() + '\n')
+          print('MAIN_CACHE_PRIME=' + ('SELECTED cached Rust compilation input changed'
+                                       if needed else 'SKIPPED no cached Rust compilation input changed'))
+          PY
 
       - name: Install native Rust build dependencies
         if: steps.cache_scope.outputs.needed == 'true'
@@ -952,20 +954,31 @@ jobs:
           cache-from: type=gha,scope=alegria-temporal-worker
           cache-to: type=gha,scope=alegria-temporal-worker,mode=max
 
-      - name: Verify runtime includes its native deployment tools
+      - name: Verify runtime startup, source identity and native deployment tools
         run: |
-          docker run --rm --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
+          docker run --rm -e SOURCE_SHA --entrypoint /bin/sh alegria-seo-temporal:ci -ec '
             command -v python3
             command -v node
             command -v temporal_worker
             command -v temporal_starter
             temporal_starter --help >/dev/null
+            # Execute the real Worker binary through its earliest expected
+            # configuration boundary, without starting network services.
+            if output="$(env -u DATABASE_URL temporal_worker 2>&1)"; then
+              echo "unexpected Worker startup without DATABASE_URL" >&2
+              exit 1
+            fi
+            case "$output" in
+              *"DATABASE_URL must be set"*) ;;
+              *) printf "%s\n" "$output" >&2; exit 1 ;;
+            esac
             test -x /app/infra/cloudflare/seo-static/node_modules/.bin/cf
             test -f /app/infra/cloudflare/seo-static/vite.config.ts
             python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
             python3 -m py_compile /app/automation/check_first_site_release.py
             test -f /app/automation/check_first_site_release.py
             test -f /app/worker-context.json
+            python3 -c "import json, os; assert json.load(open(\"/app/worker-context.json\"))[\"source_sha\"] == os.environ[\"SOURCE_SHA\"]"
           '
 
       - name: Archive exact image for no-build Windows staging

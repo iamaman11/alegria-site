@@ -7,9 +7,8 @@ Check actual gates and that expensive integration suites remain executable.
 from pathlib import Path
 import ast
 import re
-import subprocess
 import textwrap
-from ci_impact import NON_WORKER_DELIVERY_INPUTS, SCHEMA_VERSION, worker_release_decision
+from ci_impact import NON_WORKER_DELIVERY_INPUTS, SCHEMA_VERSION, main_cache_prime_required, worker_release_decision
 from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +76,14 @@ def check() -> None:
     assert "--source-sha \"$SOURCE_SHA\" --destination \"$RELEASE_CONTEXT\"" in release
     assert "context: ${{ runner.temp }}/alegria-worker-context" in release
     assert "test -f /app/worker-context.json" in release
+    assert "env -u DATABASE_URL temporal_worker" in release
+    assert "DATABASE_URL must be set" in release
+    assert 'python3 -c "import json, os; assert json.load' in release
+    worker_main = (ROOT / "app/rust/services/temporal/src/main.rs").read_text(encoding="utf-8")
+    assert "DATABASE_URL must be set" in worker_main
+    dockerfile = (ROOT / "app/rust/services/temporal/Dockerfile").read_text(encoding="utf-8")
+    assert dockerfile.index("RUN cargo build --release --locked") < dockerfile.index("FROM node:")
+    assert dockerfile.index("FROM node:") < dockerfile.index("COPY infra/cloudflare/seo-static")
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
@@ -89,6 +96,15 @@ def check() -> None:
     assert "from ci_impact import SCHEMA_VERSION, changed_paths, worker_release_decision" in selection_script
     assert "changed = changed_paths('HEAD^1', source)" in selection_script
     assert "'--name-only'" not in selection_script
+    prime_script = textwrap.dedent(
+        prime.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+    )
+    ast.parse(prime_script)
+    assert "from ci_impact import changed_paths, main_cache_prime_required" in prime_script
+    assert "changed = changed_paths(os.environ['BEFORE_SHA'], os.environ['SOURCE_SHA'])" in prime_script
+    assert "needed = main_cache_prime_required(changed)" in prime_script
+    assert "git diff --name-only" not in prime
+    assert "MAIN_CACHE_PRIME=" in prime_script
     for changed, skip in (
         ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
         (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
@@ -177,12 +193,9 @@ def check() -> None:
     assert "    needs: gate\n" in prime
     assert "    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success' }}" in prime
     assert 'BEFORE_SHA: ${{ github.event.before }}' in prime
-    assert 'git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA"' in prime
-    selector = (
-        r"/^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }"
-        "\nEND { exit !needed }"
-    )
-    assert r"/^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }" in prime
+    assert "changed_paths(os.environ['BEFORE_SHA'], os.environ['SOURCE_SHA'])" in prime
+    assert "main_cache_prime_required(changed)" in prime
+    assert "python3 automation/check_expert_core_activation_contract.py" in fast
     for paths, expected in (
         (["docs/ci-fast-path.md"], False),
         ([".github/workflows/ci.yml"], False),
@@ -192,12 +205,9 @@ def check() -> None:
         (["app/rust/crates/integration_harness/src/containers.rs"], True),
         (["app/rust/Cargo.lock"], True),
     ):
-        selected = subprocess.run(
-            ["awk", selector], input="\n".join(paths) + "\n",
-            text=True, capture_output=True, check=False,
-        )
-        assert (selected.returncode == 0) == expected, (paths, selected.stderr)
-    assert "MAIN_CACHE_PRIME=SKIPPED no cached Rust compilation input changed" in prime
+        assert main_cache_prime_required(paths) == expected, paths
+    assert "MAIN_CACHE_PRIME=" in prime
+    assert "SKIPPED no cached Rust compilation input changed" in prime
     assert prime.count("if: steps.cache_scope.outputs.needed == 'true'") >= 6
     assert "if: always() && steps.cache_scope.outputs.needed == 'true'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
