@@ -108,6 +108,18 @@ OUTBOX_A14_PATHS = {
     "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
 }
 
+# An actual PostgreSQL revision-bound human review exercises the domain
+# decision, typed port, SQL transaction and active-workflow ownership. It is
+# distinct from the public release/readback A17 integration.
+CMS_REVIEW_PATHS = {
+    "app/rust/crates/seo_domain/src/review_decision.rs",
+    "app/rust/crates/seo_application/src/cms_review.rs",
+    "app/rust/crates/seo_ports/src/lib.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
+    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
+    "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+}
+
 
 # Both live Temporal restart and Truth certification spawn these actual Rust
 # processes. Prepare them once in the ordinary Cargo target, not recursively
@@ -149,6 +161,17 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    "cms_review_revision": {
+        "paths": CMS_REVIEW_PATHS,
+        "prefixes": (),
+        "lock_crates": {"seo_domain", "seo_application", "seo_ports", "infrastructure"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "published_page_review_requires_exact_pending_revision_and_active_workflow",
+            "--locked", "--", "--nocapture",
+        ),
+    },
     "publishing_a17": {
         "paths": PUBLISHING_A17_PATHS,
         "prefixes": (),

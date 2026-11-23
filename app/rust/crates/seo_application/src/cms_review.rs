@@ -1,4 +1,5 @@
 use primitives::errors::DomainError;
+use seo_domain::review_decision::{validate_human_reviewer, HumanReviewDecision};
 use seo_ports::{CmsReviewDecisionPort, CmsReviewDecisionRequest, SeoWorkflowControlPort};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,35 +19,15 @@ pub struct ApplyHumanReviewDecisionResult {
     pub workflow_id: String,
 }
 
-fn validate_request(request: &ApplyHumanReviewDecisionInput) -> Result<(), DomainError> {
-    if request.page_node_key.trim().is_empty() {
-        return Err(DomainError::ValidationFailure {
-            message: "page_node_key is required".to_string(),
-        });
-    }
-    if request
-        .revision_id
-        .as_deref()
-        .is_some_and(|revision| revision.trim().is_empty())
-    {
-        return Err(DomainError::ValidationFailure {
-            message: "revision_id must be an exact non-empty review candidate".to_string(),
-        });
-    }
-    if request.actor_role.trim().is_empty() || request.actor_role == "seo_system" {
-        return Err(DomainError::ValidationFailure {
-            message: "human actor_role is required".to_string(),
-        });
-    }
-    match request.decision.as_str() {
-        "approved" | "blocked" | "reopened" => {}
-        other => {
-            return Err(DomainError::ValidationFailure {
-                message: format!("unsupported decision: {other}"),
-            });
-        }
-    }
-    Ok(())
+fn validate_request(
+    request: &ApplyHumanReviewDecisionInput,
+) -> Result<HumanReviewDecision, DomainError> {
+    validate_human_reviewer(
+        &request.page_node_key,
+        request.revision_id.as_deref(),
+        &request.actor_role,
+    )?;
+    HumanReviewDecision::parse(&request.decision)
 }
 
 pub async fn apply_human_review_decision<R, W>(
@@ -58,13 +39,13 @@ where
     R: CmsReviewDecisionPort,
     W: SeoWorkflowControlPort,
 {
-    validate_request(request)?;
+    let decision = validate_request(request)?;
     let outcome = repo
         .apply_human_review_decision(&CmsReviewDecisionRequest {
             page_node_key: request.page_node_key.clone(),
             revision_id: request.revision_id.clone(),
             actor_role: request.actor_role.clone(),
-            decision: request.decision.clone(),
+            decision,
             reason: request.reason.clone(),
             source: request.source.clone(),
         })
@@ -92,7 +73,7 @@ mod tests {
             request: &CmsReviewDecisionRequest,
         ) -> Result<seo_ports::CmsReviewDecisionOutcome, DomainError> {
             Ok(seo_ports::CmsReviewDecisionOutcome {
-                decision_key: format!("decision:{}", request.decision),
+                decision_key: format!("decision:{}", request.decision.as_str()),
                 revision_id: "revision-1".to_string(),
                 workflow_id: "workflow-1".to_string(),
             })
@@ -123,6 +104,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result.workflow_id, "workflow-1");
+        assert_eq!(result.decision_key, "decision:approved");
     }
 
     #[tokio::test]
@@ -135,6 +117,25 @@ mod tests {
                 revision_id: Some("revision-1".to_string()),
                 actor_role: "seo_system".to_string(),
                 decision: "approved".to_string(),
+                reason: String::new(),
+                source: "test".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.class_str(), "validation_failure");
+    }
+
+    #[tokio::test]
+    async fn cms_review_rejects_unsupported_decision() {
+        let err = apply_human_review_decision(
+            &FakeRepo,
+            &FakeWorkflow,
+            &ApplyHumanReviewDecisionInput {
+                page_node_key: "page-1".to_string(),
+                revision_id: Some("revision-1".to_string()),
+                actor_role: "editor".to_string(),
+                decision: "published".to_string(),
                 reason: String::new(),
                 source: "test".to_string(),
             },

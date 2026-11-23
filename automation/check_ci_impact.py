@@ -30,6 +30,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/infrastructure": "infrastructure",
             "app/rust/crates/integration_harness": "integration_harness",
             "app/rust/crates/seo_application": "seo_application",
+            "app/rust/crates/seo_domain": "seo_domain",
             "app/rust/crates/seo_ports": "seo_ports",
             "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
@@ -45,6 +46,7 @@ class ImpactFixtures(unittest.TestCase):
             "infrastructure": set(),
             "integration_harness": set(),
             "seo_application": set(),
+            "seo_domain": {"seo_application", "seo_ports"},
             "seo_ports": set(),
             "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
@@ -203,6 +205,22 @@ class ImpactFixtures(unittest.TestCase):
     def test_publishing_change_selects_real_a17_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
         self.assertEqual(result["selected_suites"], ["publishing_a17"])
+
+    def test_cms_review_domain_port_and_sql_select_real_revision_e2e(self) -> None:
+        for path in (
+            "app/rust/crates/seo_domain/src/review_decision.rs",
+            "app/rust/crates/seo_application/src/cms_review.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["analysis"], "scoped")
+                self.assertIn("cms_review_revision", result["selected_suites"])
+        suite = SUITE_OWNERS["cms_review_revision"]
+        self.assertIn(
+            "published_page_review_requires_exact_pending_revision_and_active_workflow",
+            suite["command"],
+        )
 
     def test_outbox_change_selects_real_a14_integration(self) -> None:
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs")
@@ -437,7 +455,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
         outcome = self.impact("automation/ci_impact.py")
         self.assertEqual(outcome["scope"], "full")
-        self.assertEqual(len(outcome["selected_suites"]), 3)
+        self.assertEqual(len(outcome["selected_suites"]), 4)
         self.assertEqual(len(outcome["selected_images"]), 4)
         self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
         self.assertTrue(outcome["full_scope_reasons"])

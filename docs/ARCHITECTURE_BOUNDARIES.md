@@ -11,7 +11,7 @@ The current dependency graph is evidence of coupling, not the desired design.
 | Acquisition | `acquisition::html_sections::{extract_meta_typed,extract_sections_typed,HtmlSection}` and `acquisition::pdf_parser`: parse source documents without judging their truth | `primitives` for stable hashes, parser libraries. Existing fetch/store effects remain in `infrastructure::adapters::raw_crawl_adapter` until their own adapter-boundary slice. No dependency on Truth, SEO or Publishing. |
 | Truth / review | **Implemented:** `truth_domain::{truth_candidates,fact_verifier,truth_governance,contradictions,review_decisions,evidence,procedural_candidates,persisted_candidates,semantic_truth_write}` owns validated candidates, governance, contradictions, scoped review veto, evidence, procedural mapping, persisted eligibility/canonical selection and per-semantic-slot Truth write decisions. CLI retains its JSON transport wrapper. **Planned:** remaining review operations | Temporal orchestrates source-registry reads and SQL/projection writes and now consumes a typed Truth write outcome; `infrastructure` retains SQL persistence and JSON conversion. `primitives::facts_extractor` remains dormant (not exported). |
 | Knowledge / retrieval | `seo_ports::knowledge` defines typed verified-rule, canonical-vector, diagnostic-neighbor, editorial source-context and verified-rule projection contracts. `seo_application::knowledge` owns their use cases, including `reconcile_verified_rule_projection`. PostgreSQL verified rules alone authorize factual support; Qdrant hits are advisory. | SQLx reads authoritative Truth. `VerifiedRuleProjectionAdapter` owns Voyage embedding, Qdrant deletion and atomic PostgreSQL point-metadata+Outbox staging; the actual Qdrant upsert remains asynchronous Outbox delivery. Temporal only passes Truth's prevalidated global-rule delta. Source-context selection policy stays in Knowledge. Remaining projection operations are planned. |
-| SEO / editorial | `seo_domain::{identity,artifact_identity,writer,block_validator}` owns pure SEO scope validation, artifact keys, content-gap detector identity, deterministic HTML composition and typed block QA; `seo_application` owns content operations. **Planned:** typed draft/revision decisions | `seo_steps::seo_identity` now maps Temporal's `SeoScopePayload` at the existing transport boundary; `seo_domain` no longer depends on `contracts`. Other `seo_steps` and `seo_ports` transport coupling remains for subsequent operations. JSON decoding stays in `infrastructure::adapters::editorial_block_validation_adapter`. |
+| SEO / editorial | `seo_domain::{identity,artifact_identity,writer,block_validator,review_decision}` owns pure scope validation, artifact keys, content-gap detector identity, deterministic HTML, block QA and typed human review/HITL state transitions; `seo_application` owns content operations. **Planned:** remaining draft/revision decisions | `seo_steps::seo_identity` maps Temporal's `SeoScopePayload` at the transport boundary; `seo_domain` has no `contracts` dependency. `CmsReviewDecisionPort` now accepts a typed `HumanReviewDecision` rather than a free-form decision string; both Application and direct SQL calls validate human reviewer identity through the same domain rule. Remaining `seo_steps`/`seo_ports` transport coupling requires later slices. JSON decoding stays in adapters. |
 | Publishing | **Implemented:** `seo_domain::publishing::{ReleaseReadiness,PublicReleaseOutcome,plan_recovery}` and `seo_ports::PublicReleaseDelivery`; `seo_steps::finalize_publish_step` computes readiness, while `infrastructure::adapters::sqlx_seo_cms_adapter` owns external release effects and PostgreSQL/Outbox transaction. **Planned:** remaining editorial revision transitions | Files/SQL/Cloudflare/HTTP are effects, not Truth decisions. Editorial approval, release readiness and verified publication are distinct. Isolated PostgreSQL/HTTP A17 passed; no real public release was performed. |
 | Runtime / composition | Existing `services/{temporal,outbox_worker,cli_tools,...}`: wiring, scheduling, retries, telemetry. Outbox's typed `DispatchError` belongs to the concrete projection operation; SQLx claims carry run/lease identifiers | Runtime logs `run_id`, target, event and stable class/stage; status updates are lease-fenced, and terminal failure and dead-letter insertion share one PostgreSQL transaction. A14 live-container verification is required before acceptance. Domain/application must not import runtime or implementation crates. |
 
@@ -61,6 +61,14 @@ Voyage/Qdrant/SQLx implementation is replaceable, and Qdrant point metadata
 and corresponding Outbox intent stage in one PostgreSQL transaction. The
 deduplicated Outbox transport, not an immediate direct write, owns projection
 materialization; a demoted point's deletion remains an explicit Qdrant effect.
+The active CMS human-review decision now parses the external decision string
+once in Application, passes `HumanReviewDecision` through its existing port,
+and uses the same `seo_domain::review_decision` policy in the SQL adapter.
+The adapter alone checks the exact pending PostgreSQL revision and active
+Temporal workflow and commits the decision and HITL queue state together.
+The existing disposable PostgreSQL revision-bound E2E is selected by the
+shared `cms_review_revision` suite owner for future changes to this path;
+this does not imply all editorial approval/revision operations are migrated.
 
 ### Shared change-impact owner registry (in progress)
 
@@ -129,7 +137,8 @@ Unknown/global impacts and Dockerfiles without a narrow verified build owner
 retain all nine owners. This is source-policy acceptance, not certification
 that every selected image was built, deployed or smoke-tested.
 
-**Remaining:** live PR evidence for a documentation-only skip, fine-grained
-known `Cargo.lock`/schema consumers, broader Temporal/graph coverage and
+**Remaining:** known Cargo.lock/protobuf inputs have scoped exact-SHA canary
+evidence (Issue #43 A6), while unknown schemas still fail closed to `full`.
+Full editorial decision ownership, broader Temporal/graph coverage and
 complete signed/no-build release provenance still require separate evidence.
 Keep Issue #43 open and PR #44 Draft until those scenarios are proven.

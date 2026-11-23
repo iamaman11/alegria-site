@@ -23,6 +23,7 @@ use knowledge::{
     VerifiedRuleProjectionChange, VerifiedRulesQuery, VerifiedRulesView,
 };
 use primitives::errors::DomainError;
+pub use seo_domain::review_decision::HumanReviewDecision;
 use runtime_models::GraphPlanningContext;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -152,7 +153,7 @@ pub struct CmsReviewDecisionRequest {
     /// route, which must fail closed if that revision is already published.
     pub revision_id: Option<String>,
     pub actor_role: String,
-    pub decision: String,
+    pub decision: HumanReviewDecision,
     pub reason: String,
     pub source: String,
 }

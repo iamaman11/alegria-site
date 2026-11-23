@@ -97,6 +97,20 @@ def main() -> int:
             )
             if references:
                 raise ValueError(f"{name} has forbidden source references in {source}: {references}")
+
+    # Human-review decisions have one pure owner, not a second free-form
+    # decision-to-HITL mapping inside the SQL adapter or Application.
+    review_domain = (RUST / "crates/seo_domain/src/review_decision.rs").read_text(encoding="utf-8")
+    review_port = (RUST / "crates/seo_ports/src/lib.rs").read_text(encoding="utf-8")
+    review_app = (RUST / "crates/seo_application/src/cms_review.rs").read_text(encoding="utf-8")
+    review_sql = (RUST / "crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs").read_text(encoding="utf-8")
+    if ("enum HumanReviewDecision" not in review_domain
+            or "pub decision: HumanReviewDecision" not in review_port
+            or "validate_human_reviewer(" not in review_app
+            or "validate_human_reviewer(" not in review_sql
+            or "hitl_queue_state()" not in review_sql
+            or "match request.decision.as_str()" in review_sql):
+        raise ValueError("CMS review decision policy must have one typed domain owner")
     for independent, allowed in ADAPTER_ALLOWED.items():
         if f"crates/{independent}" not in members:
             raise ValueError(f"missing workspace member: {independent}")

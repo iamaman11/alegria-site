@@ -786,7 +786,7 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
 #[serial]
 async fn published_page_review_requires_exact_pending_revision_and_active_workflow() {
     use infrastructure::adapters::sqlx_seo_cms_adapter;
-    use seo_ports::CmsReviewDecisionRequest;
+    use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -830,7 +830,7 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
         page_node_key: page.clone(),
         revision_id: revision_id.map(str::to_string),
         actor_role: "real_editor_fixture".to_string(),
-        decision: "approved".to_string(),
+        decision: HumanReviewDecision::Approved,
         reason: "Review of exact pending revision".to_string(),
         source: "e2e_revision_bound_human_gate".to_string(),
     };
