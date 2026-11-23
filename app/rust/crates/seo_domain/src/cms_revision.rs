@@ -96,7 +96,13 @@ mod tests {
             CmsPublishIntent::parse("approved_publish").unwrap(),
             CmsPublishIntent::ApproveForRelease
         );
-        for invalid in ["", "publish_with_hitl", "approve", "published", "APPROVED_PUBLISH"] {
+        for invalid in [
+            "",
+            "publish_with_hitl",
+            "approve",
+            "published",
+            "APPROVED_PUBLISH",
+        ] {
             assert_eq!(
                 CmsPublishIntent::parse(invalid).unwrap_err().class_str(),
                 "validation_failure"
@@ -119,7 +125,10 @@ mod tests {
         assert_eq!(approved.planned_verdict(), "approved");
         assert_eq!(approved.event_type(), "seo_page_approved");
 
-        for mode in [CmsPublishIntent::RequestReview, CmsPublishIntent::ApproveForRelease] {
+        for mode in [
+            CmsPublishIntent::RequestReview,
+            CmsPublishIntent::ApproveForRelease,
+        ] {
             let blocked = CmsRevisionState::decide(mode, true);
             assert_eq!(blocked, CmsRevisionState::Blocked);
             assert_eq!(blocked.status(), "blocked");
