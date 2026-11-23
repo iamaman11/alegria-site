@@ -95,7 +95,7 @@ jobs:
       # Release-like CI compiles use a shared compiler-object cache;
       # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
-      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_ENABLED: "on"
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
@@ -118,6 +118,21 @@ jobs:
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
+
+      # GitHub's cache URL and runtime token are present in action processes,
+      # not automatically in the shell steps that invoke rustc/sccache. Follow
+      # sccache's documented GHA setup; never print the token to job logs.
+      - name: Authorize sccache against the GitHub Actions cache service
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const url = process.env.ACTIONS_RESULTS_URL;
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!url || !token) {
+              throw new Error('GitHub Actions cache service credentials are unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', url);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);
 
       - name: Rust formatting
         working-directory: app/rust

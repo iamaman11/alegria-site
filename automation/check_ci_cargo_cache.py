@@ -29,6 +29,11 @@ def validate_cache_policy(workflow: str) -> None:
             body.append(line)
         blocks.append("\n".join(body))
     saver, *readers = blocks
+    if ("SCCACHE_GHA_ENABLED: \"on\"" not in saver
+            or "uses: actions/github-script@v8" not in saver
+            or "core.exportVariable('ACTIONS_RESULTS_URL', url)" not in saver
+            or "core.exportVariable('ACTIONS_RUNTIME_TOKEN', token)" not in saver):
+        raise ValueError("sccache must receive authenticated GitHub cache service environment")
     if saver.count("uses: actions/cache@v4") != 1:
         raise ValueError("architecture must be the sole registry cache writer")
     if any("uses: actions/cache@v4" in block for block in readers):
@@ -81,6 +86,12 @@ class CargoCachePolicy(unittest.TestCase):
         product = original.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         self.assertNotIn("cargo-registry-", product)
         validate_cache_policy(original)
+
+    def test_missing_authenticated_sccache_backend_is_rejected(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        changed = original.replace("core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);", "// missing token export")
+        with self.assertRaisesRegex(ValueError, "authenticated"):
+            validate_cache_policy(changed)
 
     def test_metrics_distinguish_uncached_target_and_missing_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
