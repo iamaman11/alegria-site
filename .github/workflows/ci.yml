@@ -763,7 +763,7 @@ jobs:
     needs: gate
     # A successful aggregate CI has intentionally skipped PR-only ancestors.
     # Override GitHub's implicit success() while still requiring gate=success.
-    if: !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:

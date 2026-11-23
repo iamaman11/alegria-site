@@ -177,7 +177,7 @@ def check() -> None:
     for forbidden in ("  pull_request_target:\n", "  workflow_run:\n"):
         assert forbidden not in workflow
     assert "    needs: gate\n" in prime
-    assert "    if: !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'" in prime
+    assert "    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success' }}" in prime
     assert 'BEFORE_SHA: ${{ github.event.before }}' in prime
     assert 'git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA"' in prime
     selector = (
