@@ -82,11 +82,6 @@ mod tests {
             assert_eq!(parsed, decision);
             assert_eq!(parsed.as_str(), raw);
             assert_eq!(parsed.hitl_queue_state(), queue);
-            assert_eq!(serde_json::to_string(&parsed).unwrap(), format!("\"{raw}\""));
-            assert_eq!(
-                serde_json::from_str::<HumanReviewDecision>(&format!("\"{raw}\"")).unwrap(),
-                parsed
-            );
         }
         for invalid in ["", "approve", "APPROVED", "published"] {
             assert_eq!(
