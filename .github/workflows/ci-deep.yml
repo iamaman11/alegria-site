@@ -80,8 +80,9 @@ jobs:
           cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
           cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
           cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
-          cargo test -p integration_harness --features e2e --locked --lib published_page_review_requires_exact_pending_revision_and_active_workflow
-          cargo test -p integration_harness --features e2e --locked --lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections
+          # Run both renamed CMS revision tests; the historical filters above
+          # would silently report `0 tests` after the domain ownership cutover.
+          cargo test -p integration_harness --features e2e --locked --lib cms_revision_
           cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
           cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
 

@@ -94,6 +94,9 @@ def check() -> None:
     assert "bash automation/ci_verify.sh all" in deep
     assert "cargo test --workspace --locked" in deep
     assert "cargo test -p integration_harness --features e2e" in deep
+    assert "--lib cms_revision_" in deep
+    assert "--lib published_page_review_requires_exact_pending_revision_and_active_workflow" not in deep
+    assert "--lib cms_publish_keeps_verified_links_structured_without_duplicate_body_sections" not in deep
     assert "bash automation/run_truth_certification_gate.sh" in legacy
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
 
