@@ -5,6 +5,23 @@
 #[tokio::test]
 #[serial]
 async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
+    run_canonical_manual_editorial("draft_only", false).await;
+}
+
+// Unlike the restart smoke above, this runs the *real* publish_with_hitl
+// workflow through CMS request_review, the persisted human decision and the
+// Temporal resume signal. A blocked exact revision must terminate for rework
+// without executing approved publication. The separate PG revision test also
+// covers preservation of an existing published live pointer.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn canonical_temporal_blocked_review_ends_for_rework_without_publication() {
+    run_canonical_manual_editorial("publish_with_hitl", true).await;
+}
+
+#[cfg(feature = "e2e")]
+async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     let started = std::time::Instant::now();
     let checkpoint = |stage: &str| {
         eprintln!(
@@ -74,7 +91,7 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
         run_id.clone(),
         format!("manual-temporal-batch-{run_id}"),
         fixture.source_inputs.query.clone(),
-        fixture.run_mode.clone(),
+        run_mode.to_string(),
     )
     .await;
     reset_truth_certification_state(&infra.postgres.pool, &input.context_key).await;
@@ -359,6 +376,147 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
+    if block_review {
+        use infrastructure::adapters::{
+            seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
+            temporalio_sdk_adapter::{
+                temporalio_common::data_converters::PayloadConverter, UntypedQuery,
+                WorkflowQueryOptions,
+            },
+        };
+        use seo_application::cms_review::{
+            apply_human_review_decision, ApplyHumanReviewDecisionInput,
+        };
+        use seo_ports::HumanReviewDecision;
+
+        let (page_node_key, revision_id): (String, String) =
+            timeout(Duration::from_secs(180), async {
+                loop {
+                    if let Some(row) = sqlx::query_as::<_, (String, String)>(
+                        "SELECT page_node_key, revision_id
+                         FROM site.cms_publish_events
+                         WHERE event_type='seo_page_review_requested'
+                           AND event_payload->>'run_id'=$1
+                         ORDER BY occurred_at LIMIT 1",
+                    )
+                    .bind(&run_id)
+                    .fetch_optional(&infra.postgres.pool)
+                    .await
+                    .unwrap()
+                    {
+                        break row;
+                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                }
+            })
+            .await
+            .unwrap_or_else(|_| {
+                panic!("publish_with_hitl did not request an exact CMS review: {run_id}")
+            });
+        checkpoint("cms_review_requested");
+
+        // The request event may be committed before the workflow has entered
+        // its durable signal wait. Query the actual Temporal workflow to avoid
+        // an early resume signal being ignored by waiting_hitl=false.
+        let converter = PayloadConverter::serde_json();
+        timeout(Duration::from_secs(30), async {
+            loop {
+                if let Ok(reply) = handle
+                    .query(
+                        UntypedQuery::new("status"),
+                        RawValue::default(),
+                        WorkflowQueryOptions::default(),
+                    )
+                    .await
+                {
+                    let state: serde_json::Value = reply.to_value(&converter);
+                    if state["paused"] == true
+                        && state["phase"]
+                            .as_str()
+                            .is_some_and(|phase| phase.starts_with("human_approval_wait"))
+                    {
+                        break;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .expect("canonical workflow never entered the durable human-review wait");
+        checkpoint("temporal_hitl_waiting");
+
+        let repo = SqlxSeoRuntimeRepository::new(&infra.postgres.pool);
+        let control = TemporalSeoWorkflowControlAdapter::new(
+            infra.temporal.temporal_url.clone(),
+            format!("blocked-review-signal-{run_id}"),
+            infra.temporal.namespace.clone(),
+        );
+        let outcome = apply_human_review_decision(
+            &repo,
+            &control,
+            &ApplyHumanReviewDecisionInput {
+                page_node_key: page_node_key.clone(),
+                revision_id: Some(revision_id.clone()),
+                actor_role: "editorial_e2e_reviewer".to_string(),
+                decision: HumanReviewDecision::Blocked,
+                reason: "Exact revision requires rewriting".to_string(),
+                source: "canonical_temporal_publish_mode_e2e".to_string(),
+            },
+        )
+        .await
+        .expect("real CMS human-review transaction and Temporal resume must succeed");
+        assert_eq!(outcome.workflow_id, run_id);
+        assert_eq!(outcome.revision_id, revision_id);
+
+        let completed = timeout(
+            Duration::from_secs(120),
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("blocked review did not terminate for editorial rework")
+            .expect("canonical Temporal workflow failed after human block");
+        let result: String = completed.to_value(&converter);
+        assert!(
+            result.contains("blocked:editorial_rework_required"),
+            "{result}"
+        );
+        assert!(result.contains("published_pages=0"), "{result}");
+        checkpoint("blocked_rework_completed");
+
+        let saved_decision: String = sqlx::query_scalar(
+            "SELECT decision FROM site.cms_approval_decisions WHERE page_node_key=$1 AND revision_id=$2",
+        )
+        .bind(&page_node_key)
+        .bind(&revision_id)
+        .fetch_one(&infra.postgres.pool)
+        .await
+        .unwrap();
+        assert_eq!(saved_decision, "blocked");
+        let (current_revision, current_status): (String, String) = sqlx::query_as(
+            "SELECT current_revision_id, current_status FROM site.cms_pages WHERE page_node_key=$1",
+        )
+        .bind(&page_node_key)
+        .fetch_one(&infra.postgres.pool)
+        .await
+        .unwrap();
+        assert_eq!(current_revision, revision_id);
+        assert_eq!(
+            current_status, "review_required",
+            "human block promoted the CMS revision"
+        );
+        let published_events: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM site.cms_publish_events WHERE event_type='seo_page_published' AND event_payload->>'run_id'=$1",
+        )
+        .bind(&run_id)
+        .fetch_one(&infra.postgres.pool)
+        .await
+        .unwrap();
+        assert_eq!(published_events, 0, "a blocked review was published");
+        driver.abort();
+        drop(worker);
+        return;
+    }
+
     let result = timeout(
         Duration::from_secs(240),
         handle.get_result(WorkflowGetResultOptions::default()),
