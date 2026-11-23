@@ -66,7 +66,7 @@ class ImpactFixtures(unittest.TestCase):
         )
 
     def test_ci_only_main_merge_is_full_pr_but_not_a_new_worker_image(self) -> None:
-        paths = [".github/workflows/ci.yml", "automation/ci_impact.py"]
+        paths = [".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"]
         report = self.impact(*paths)
         self.assertEqual(report["scope"], "full")
         self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))

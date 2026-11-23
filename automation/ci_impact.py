@@ -93,6 +93,7 @@ CI_ONLY_VERIFY_FILES = {
 NON_WORKER_DELIVERY_INPUTS = frozenset({
     ".github/workflows/ci.yml",
     "automation/check_ci_workflow_contract.py",
+    "automation/check_ci_impact.py",
     "automation/check_ci_merge_provenance.py",
     "automation/check_ci_cargo_cache.py",
     "automation/check_ci_rust_owned_check.py",

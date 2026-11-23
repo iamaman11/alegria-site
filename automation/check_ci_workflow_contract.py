@@ -89,7 +89,7 @@ def check() -> None:
     for changed, skip in (
         ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
         (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
-        ([".github/workflows/ci.yml", "automation/ci_impact.py"], True),
+        ([".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"], True),
         (["app/rust/services/temporal/src/main.rs"], False),
         (["automation/deploy_seo_static_cloudflare.py"], False),
         ([".github/workflows/ci.yml", "app/rust/Cargo.lock"], False),
