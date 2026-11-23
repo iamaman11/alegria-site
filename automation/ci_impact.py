@@ -94,7 +94,9 @@ TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
 # unrelated leaf-crate edits must not pay for a Docker-backed publication test.
 PUBLISHING_A17_PATHS = {
     "app/rust/crates/seo_domain/src/publishing.rs",
+    "app/rust/crates/seo_domain/src/render_preview.rs",
     "app/rust/crates/seo_steps/src/finalize_publish_step.rs",
+    "app/rust/crates/seo_steps/src/render_preview_validate_step.rs",
     "app/rust/crates/seo_application/src/review_publish.rs",
     "app/rust/crates/seo_ports/src/lib.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
