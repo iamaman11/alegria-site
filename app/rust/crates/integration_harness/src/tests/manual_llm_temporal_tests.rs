@@ -100,8 +100,13 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     seed_truth_certification_support_bundle(&infra.postgres.pool, &input.context_key, &fixture)
         .await;
     let _outbox = spawn_outbox_worker(&worker_env);
-    let worker = spawn_temporal_worker(&worker_env);
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    let mut worker = spawn_temporal_worker(&worker_env);
+    // Temporal persists the workflow task until a poller is available.
+    // The real workflow outcome below proves readiness, not a fixed sleep.
+    assert!(
+        worker.child.try_wait().unwrap().is_none(),
+        "canonical worker exited before workflow start"
+    );
     let client = connect_client(
         &infra.temporal.temporal_url,
         format!("manual-temporal-client-{run_id}"),
@@ -302,7 +307,8 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     // Temporal history + PostgreSQL queue survive losing the worker process.
     drop(worker);
     let mut worker = spawn_temporal_worker(&worker_env);
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // The durable signal can arrive before the restarted poller; completion
+    // below proves that this exact restarted process resumed the workflow.
     assert!(
         worker.child.try_wait().unwrap().is_none(),
         "restarted canonical worker exited"
