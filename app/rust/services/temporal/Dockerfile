@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
+# CI supplies a Cargo dependency-scoped exact-source context, containing
+# original manifests but only actual release consumers' Rust sources.
 COPY app ./app
 
 ENV SQLX_OFFLINE=true
@@ -37,6 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
+# Source provenance is added only after Rust compilation, preserving cache.
+COPY worker-context.json /app/worker-context.json
 COPY --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
 COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
 COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools

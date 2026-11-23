@@ -69,7 +69,11 @@ def check() -> None:
     assert "      id-token: write\n      attestations: write\n      artifact-metadata: write\n" in release
     assert "worker-image-impact-${{ env.SOURCE_SHA }}" in release
     assert "SOURCE_SHA: ${{ github.sha }}" in release
-    assert "file: app/rust/services/temporal/Dockerfile" in release
+    assert "file: ${{ github.workspace }}/app/rust/services/temporal/Dockerfile" in release
+    assert "python3 automation/prepare_worker_build_context.py" in release
+    assert "--source-sha \"$SOURCE_SHA\" --destination \"$RELEASE_CONTEXT\"" in release
+    assert "context: ${{ runner.temp }}/alegria-worker-context" in release
+    assert "test -f /app/worker-context.json" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
@@ -91,8 +95,6 @@ def check() -> None:
     )
     assert allowed == {
         ".github/workflows/ci.yml",
-        ".github/workflows/worker-image.yml",
-        ".github/workflows/dependency-refresh-branch.yml",
         "automation/check_ci_workflow_contract.py",
         "automation/check_windows_staging_rollback.py",
         "infra/local/windows_staging.ps1",
@@ -124,6 +126,8 @@ def check() -> None:
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
+    assert "Verify dependency-scoped Worker release context resolves locked Cargo" in architecture
+    assert "cargo metadata --locked --format-version=1 --no-deps" in architecture
     # A new PR restores cache objects from the trusted default branch. It does
     # not flood the service with cache writes in its PR-local merge ref.
     assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in architecture
@@ -206,7 +210,7 @@ def check() -> None:
     assert "cargo check --locked --package integration_harness" in prime
     assert "cargo test --locked --package integration_harness --no-run" in prime
     assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" in prime
-    assert "cargo build --locked -p temporal_worker -p outbox_worker" in prime
+    assert "cargo build --locked -p temporal_worker -p outbox_worker" not in prime
     assert "core.exportVariable('ACTIONS_RUNTIME_TOKEN', token)" in prime
     assert "cache-mode: write" not in prime
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in prime

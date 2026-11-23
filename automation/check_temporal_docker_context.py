@@ -7,7 +7,11 @@ omit known test-only sources that cannot affect the release Worker binaries.
 """
 
 from pathlib import Path
+import sys
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from prepare_worker_build_context import context_files, release_closure
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +39,8 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
 
     if "COPY app ./app" not in dockerfile:
         errors.append("Docker build context contract changed: update this check before modifying COPY")
+    if "COPY worker-context.json /app/worker-context.json" not in dockerfile:
+        errors.append("Worker image must preserve exact-source context provenance")
     if "cargo build --release --locked" not in dockerfile:
         errors.append("Docker must retain the locked release build")
     if "-p temporal_worker -p cli_tools" not in dockerfile:
@@ -69,6 +75,48 @@ class TemporalDockerContextTests(unittest.TestCase):
         wrong = self.dockerfile.replace("-p temporal_worker -p cli_tools", "-p integration_harness -p cli_tools")
         self.assertTrue(boundary_errors(self.base, self.worker, wrong))
 
+
+    def test_dependency_closure_and_independent_service_exclusion(self) -> None:
+        # Same reverse edge representation as ci_impact.py.
+        owners = {
+            "app/rust/services/temporal": "temporal_worker",
+            "app/rust/services/cli_tools": "cli_tools",
+            "app/rust/services/outbox_worker": "outbox_worker",
+            "app/rust/crates/infrastructure": "infrastructure",
+        }
+        reverse = {
+            "temporal_worker": set(),
+            "cli_tools": set(),
+            "outbox_worker": set(),
+            "infrastructure": {"temporal_worker", "cli_tools", "outbox_worker"},
+        }
+        release = release_closure(owners, reverse)
+        self.assertEqual(release, {"temporal_worker", "cli_tools", "infrastructure"})
+        tracked = {
+            "app/rust/Cargo.toml", "app/rust/Cargo.lock",
+            *(f"{directory}/Cargo.toml" for directory in owners),
+            "app/rust/services/temporal/src/main.rs",
+            "app/rust/services/outbox_worker/src/main.rs",
+            "app/rust/crates/infrastructure/src/lib.rs",
+            "app/rust/.sqlx/query.json",
+            "automation/deploy_seo_static_cloudflare.py",
+            "infra/cloudflare/seo-static/package.json",
+            "app/contracts/proto/read_api.proto", "app/contracts/proto/rules.proto",
+            "app/contracts/proto/condition.proto", "app/contracts/proto/sync.proto",
+            "app/contracts/proto/temporal_payloads.proto",
+            "app/analytics_lab/proto/analytics.proto",
+        }
+        copied = context_files(tracked, owners, release)
+        self.assertIn("app/rust/services/temporal/src/main.rs", copied)
+        self.assertIn("app/rust/crates/infrastructure/src/lib.rs", copied)
+        self.assertIn("app/rust/services/outbox_worker/Cargo.toml", copied)
+        self.assertNotIn("app/rust/services/outbox_worker/src/main.rs", copied)
+        self.assertIn("automation/deploy_seo_static_cloudflare.py", copied)
+        self.assertIn("infra/cloudflare/seo-static/package.json", copied)
+
+    def test_missing_manifest_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "workspace manifest"):
+            context_files(set(), {"app/rust/services/temporal": "temporal_worker"}, {"temporal_worker"})
 
 if __name__ == "__main__":
     unittest.main()
