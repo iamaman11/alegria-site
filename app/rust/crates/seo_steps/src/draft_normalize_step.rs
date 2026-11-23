@@ -162,8 +162,10 @@ mod immutable_run_revision_tests {
             crate::cms_publish_step::execute(&CmsPublishInputPayload {
                 page_node: input.page_node.clone(),
                 draft: Some(draft),
+                publish_mode: "request_review".to_string(),
                 ..Default::default()
             })
+            .unwrap()
             .revision_id
         };
         assert_ne!(revision(first), revision(next));

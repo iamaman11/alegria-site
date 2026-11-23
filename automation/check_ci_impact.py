@@ -212,6 +212,7 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_cms_review_domain_port_and_sql_select_real_revision_e2e(self) -> None:
         for path in (
+            "app/rust/crates/seo_domain/src/cms_revision.rs",
             "app/rust/crates/seo_domain/src/review_decision.rs",
             "app/rust/crates/seo_application/src/cms_review.rs",
             "app/rust/services/cli_tools/src/cli/cms_decision.rs",
@@ -226,7 +227,7 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertIn("cms_review_revision", result["selected_suites"])
         suite = SUITE_OWNERS["cms_review_revision"]
         self.assertIn(
-            "published_page_review_requires_exact_pending_revision_and_active_workflow",
+            "cms_revision_",
             suite["command"],
         )
 

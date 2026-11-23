@@ -1,10 +1,13 @@
 use contracts::generated::alegria::temporal::v1::{
     CmsPublishInputPayload, CmsPublishOutputPayload,
 };
+use primitives::errors::DomainError;
+use seo_domain::cms_revision::{CmsPublishIntent, CmsRevisionState};
 
 use crate::seo_step_support::artifact_key;
 
-pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
+pub fn execute(input: &CmsPublishInputPayload) -> Result<CmsPublishOutputPayload, DomainError> {
+    let intent = CmsPublishIntent::parse(&input.publish_mode)?;
     let page_node = input.page_node.clone().unwrap_or_default();
     let draft = input.draft.clone().unwrap_or_default();
     let mut blocking_reasons = Vec::new();
@@ -27,7 +30,7 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
     if draft.llm_provider_key == "deterministic_fallback" {
         blocking_reasons.push("deterministic_fallback_publish_blocked".to_string());
     }
-    if input.publish_mode == "approved_publish" {
+    if intent.requires_human_approval() {
         let approval = input.approval_decision.as_ref();
         let human_approved = approval
             .and_then(|decision| crate::cms_review_wire::from_wire(decision).ok())
@@ -56,17 +59,9 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
     } else {
         artifact_key("cms_document", &[&page_node.page_node_key])
     };
-    let verdict = if blocking_reasons.is_empty() {
-        if input.publish_mode == "approved_publish" {
-            "approved"
-        } else {
-            "review_requested"
-        }
-    } else {
-        "publish_blocked"
-    };
+    let verdict = CmsRevisionState::decide(intent, !blocking_reasons.is_empty()).planned_verdict();
 
-    CmsPublishOutputPayload {
+    Ok(CmsPublishOutputPayload {
         page_node_key: page_node.page_node_key,
         page_draft_key: draft.page_draft_key,
         revision_id,
@@ -75,7 +70,7 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
         blocking_reasons,
         outbox_emitted: 0,
         publish_artifact: None,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -104,7 +99,8 @@ mod tests {
             actor_role: "seo_system".to_string(),
             publish_mode: "request_review".to_string(),
             approval_decision: None,
-        });
+        })
+        .unwrap();
 
         assert_eq!(output.verdict, "publish_blocked");
         assert!(output
@@ -139,8 +135,19 @@ mod tests {
                 reason: "test".to_string(),
                 decided_at: "2026-05-15T00:00:00Z".to_string(),
             }),
-        });
+        })
+        .unwrap();
 
         assert_eq!(output.verdict, "publish_blocked");
+    }
+
+    #[test]
+    fn unknown_publish_mode_is_rejected_before_a_revision_can_be_planned() {
+        let error = execute(&CmsPublishInputPayload {
+            publish_mode: "publish_with_hitl".to_string(),
+            ..Default::default()
+        })
+        .unwrap_err();
+        assert_eq!(error.class_str(), "validation_failure");
     }
 }

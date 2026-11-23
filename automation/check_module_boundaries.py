@@ -124,6 +124,19 @@ def main() -> int:
             or "pub fn from_wire(" not in review_wire
             or "pub fn to_wire(" not in review_wire):
         raise ValueError("CMS review decision policy must have one typed domain owner")
+    revision_domain = (RUST / "crates/seo_domain/src/cms_revision.rs").read_text(encoding="utf-8")
+    revision_step = (RUST / "crates/seo_steps/src/cms_publish_step.rs").read_text(encoding="utf-8")
+    revision_adapter = (RUST / "crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs").read_text(encoding="utf-8")
+    if ("enum CmsPublishIntent" not in revision_domain
+            or "enum CmsRevisionState" not in revision_domain
+            or "CmsRevisionState::decide(" not in revision_step
+            or "CmsRevisionState::decide(" not in revision_adapter
+            or "CmsPublishIntent::parse(" not in revision_step
+            or "CmsPublishIntent::parse(" not in revision_adapter
+            or "match input.publish_mode" in revision_adapter
+            or "if input.publish_mode ==" in revision_step
+            or "if input.publish_mode ==" in revision_adapter):
+        raise ValueError("CMS revision state transitions must have one typed domain owner")
     for independent, allowed in ADAPTER_ALLOWED.items():
         if f"crates/{independent}" not in members:
             raise ValueError(f"missing workspace member: {independent}")
