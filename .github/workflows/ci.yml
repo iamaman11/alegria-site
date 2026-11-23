@@ -96,6 +96,13 @@ jobs:
       # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
       SCCACHE_GHA_ENABLED: "on"
+      # PR caches are isolated by merge ref. Reuse compiler objects created by
+      # trusted main without uploading hundreds of PR-only entries or competing
+      # for GitHub's per-repository cache-write rate limit. sccache 0.16 counts
+      # read-only skips as write "errors"; the diagnostic distinguishes them.
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      SCCACHE_ERROR_LOG: /tmp/sccache-pr-errors.log
+      SCCACHE_LOG: sccache::server=debug
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
@@ -201,6 +208,10 @@ jobs:
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
         run: sccache --show-stats
+
+      - name: Classify cache write errors without publishing daemon logs
+        if: always()
+        run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"
 
       - name: Measure Cargo dependency and compilation footprints
         if: always()
