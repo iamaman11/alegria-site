@@ -18,6 +18,7 @@ case "${1:-}" in
     python3 automation/check_rust_adapter_boundaries.py
     python3 automation/check_rust_layer_isolation.py
     python3 automation/check_module_boundaries.py
+    python3 automation/check_crawler_invariants.py
     python3 automation/check_seo_crate_graph.py
     python3 automation/check_temporal_runtime_purity.py
     python3 automation/check_seo_publish_gates.py

@@ -9,11 +9,12 @@ import ast
 import re
 import subprocess
 import textwrap
+from ci_impact import NON_WORKER_DELIVERY_INPUTS, SCHEMA_VERSION, worker_release_decision
 from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
-    "architecture-and-rust", "rust-contract-smokes", "product-truth",
+    "architecture-and-rust", "product-truth",
     "rust-security", "cloudflare-static-build",
     "stack-temporal-postgres18", "stack-storage-graph", "verify",
     "windows-operator-smoke",
@@ -64,7 +65,7 @@ def check() -> None:
     assert "(github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main')" in release
     assert "python3 automation/ci_impact.py" in release
     assert "--head \"$SOURCE_SHA\"" in release
-    assert "status = report.get('image_status', {}).get('temporal-worker')" in release
+    assert "worker_release_decision(" in release
     assert "    needs: [gate, select-image]" in release
     assert "needs.gate.result == 'success' && needs.select-image.result == 'success'" in release
     assert "needs.select-image.outputs.worker_required == 'true' && github.ref == 'refs/heads/main'" in release
@@ -79,40 +80,31 @@ def check() -> None:
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
     assert "uses: actions/attest@v4" in release
     assert "temporal-worker-image-${{ env.SOURCE_SHA }}" in release
-    assert "if set(changed) <= no_image_inputs and os.environ['MANUAL_PACKAGE'] != 'true':" in release
-    assert "WORKER_IMAGE_SELECTION=SKIPPED known CI/operator maintenance only" in release
     assert "report['worker_release_decision']" in release
-    assert "'reason': decision_reason" in release
+    assert "print('WORKER_IMAGE_REASON=' + decision['reason'])" in release
     selection_script = textwrap.dedent(
         release.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
     )
-    parsed = ast.parse(selection_script)  # The actual inline release selector must be Python.
-    allowed = next(
-        ast.literal_eval(node.value)
-        for node in parsed.body
-        if isinstance(node, ast.Assign) and any(
-            isinstance(target, ast.Name) and target.id == "no_image_inputs"
-            for target in node.targets
-        )
-    )
-    assert allowed == {
-        ".github/workflows/ci.yml",
-        "automation/check_ci_workflow_contract.py",
-        "automation/check_windows_staging_rollback.py",
-        "infra/local/windows_staging.ps1",
-        "docs/ci-fast-path.md",
-        "docs/ARCHITECTURE_BOUNDARIES.md",
-    }, "only explicitly proven non-image maintenance inputs may skip packaging"
+    ast.parse(selection_script)
     for changed, skip in (
         ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
         (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
+        ([".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"], True),
         (["app/rust/services/temporal/src/main.rs"], False),
         (["automation/deploy_seo_static_cloudflare.py"], False),
         ([".github/workflows/ci.yml", "app/rust/Cargo.lock"], False),
-        ([".github/workflows/ci.yml", "automation/ci_impact.py"], False),
         ([".github/workflows/new-workflow.yml"], False),
     ):
-        assert (set(changed) <= allowed) == skip, changed
+        report = {
+            "schema_version": SCHEMA_VERSION,
+            "mandatory_full_ci_gate": True,
+            "image_status": {"temporal-worker": "selected"},
+            "selected_images": ["temporal-worker"],
+            "changed_paths": sorted(set(changed)),
+        }
+        decision = worker_release_decision(report, changed, manual=False)
+        assert (not decision["worker_required"]) == skip, changed
+        assert (set(changed) <= NON_WORKER_DELIVERY_INPUTS) == skip, changed
     assert "  dependency-refresh:\n" in workflow
     assert "inputs.operation == 'dependency-refresh' && startsWith(github.ref, 'refs/heads/') && github.ref != 'refs/heads/main'" in refresh
     assert "    permissions:\n      contents: write\n" in refresh
@@ -123,8 +115,7 @@ def check() -> None:
     assert "b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59" in workflow
 
     # No repeated expensive Rust compilation in three independent PR runners.
-    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  rust-contract-smokes:\n", 1)[0]
-    rust_smokes = workflow.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
@@ -140,15 +131,19 @@ def check() -> None:
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
-    assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
-    assert "cargo metadata --format-version 1 --no-deps --locked" in rust_smokes
+    assert "  rust-contract-smokes:\n" not in workflow
+    assert "cargo metadata --format-version 1 --no-deps --locked" not in verify
+    assert "uses: dtolnay/rust-toolchain" not in verify
+    assert "uses: actions/cache" not in verify
+    assert "python3 automation/check_crawler_invariants.py" in fast
+    assert "python3 automation/check_module_boundaries.py" not in architecture
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):
         invocation = f"bash automation/measure_ci_phase.sh {phase} bash automation/ci_fast_verify.sh {phase}"
         assert workflow.count(invocation) == 1, phase
         assert invocation in owner
         assert f"  {phase})" in fast
         assert f'"$PHASE" == "{phase}"' in legacy
-    for block in (rust_smokes, product, verify):
+    for block in (product, verify):
         assert "bash automation/run_truth_certification_gate.sh" not in block
         assert "python3 automation/smoke_manual_llm_queue.py" not in block
         assert "bash automation/ci_verify.sh" not in block

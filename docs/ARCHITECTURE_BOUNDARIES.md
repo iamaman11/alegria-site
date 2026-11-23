@@ -157,7 +157,7 @@ E2E and all release packaging to canonical CI; it cannot be accepted as CI PASS.
 
 The PR workflow now runs the source-bound `impact` job first, then schedules
 only the named owners. Every skipped owner is visible as `skipped`, never as a
-test PASS. The `CI` aggregate requires all nine known owner results: `success`
+test PASS. The `CI` aggregate requires all eight known owner results: `success`
 for selected jobs and `skipped` for explicitly non-applicable jobs, plus an
 accepted impact plan tied to the exact PR workflow SHA. Missing jobs, missing
 plans, a wrong SHA, unexpected execution/skips or a failed selector all fail
@@ -166,7 +166,7 @@ exact-source PR `impact` and `CI` result and the complete owner result set.
 The mandatory selector also runs the existing documentation layout contract,
 so a docs-only PR cannot hide an invalid nested docs tree by skipping `verify`.
 Unknown/global impacts and Dockerfiles without a narrow verified build owner
-retain all nine owners. This is source-policy acceptance, not certification
+retain all eight owners. This is source-policy acceptance, not certification
 that every selected image was built, deployed or smoke-tested.
 
 **Remaining:** known Cargo.lock/protobuf inputs have scoped exact-SHA canary

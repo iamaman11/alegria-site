@@ -18,6 +18,8 @@ accepted-main packaging and dependency maintenance are defined in
 | [#40, first attempt](https://github.com/iamaman11/alegria-site/actions/runs/44935699114) | **6m 46s** | Cold unit tests of all operational crates still exceeded the PR budget |
 | [#40, lightweight gate](https://github.com/iamaman11/alegria-site/actions/runs/44936425556) | **1m 14s** | All ten mandatory jobs passed with Rust model regressions and no full-workspace compilation |
 | [#62, new PR canary](https://github.com/iamaman11/alegria-site/actions/runs/45238064039) | **9m 13s** | Scoped integration harness, 2 real CMS E2E and 2 Temporal E2E tests; 65.47% compiler cache hit rate |
+| [#70, exact PR](https://github.com/iamaman11/alegria-site/actions/runs/45265863563) | **4m 49s** | Dependency-scoped Worker Docker context; PR gate passed, release not built |
+| [#71, exact PR](https://github.com/iamaman11/alegria-site/actions/runs/45267484566) | **4m 57s** | Main release gating fixes; architecture-and-rust 281s, other owners ≤54s |
 
 The three earlier runs passed every then-required job. After the version refresh, a cold
 Docker rebuild revealed a separate release-compilation bottleneck, so Docker
@@ -47,6 +49,11 @@ lightweight-PR runs as cold-run proof.
   storage/graph container checks, plus source-level Docker boundary checks.
 - A single Rust compilation owner; the static contract jobs no longer compile
   or repeatedly bootstrap Rust/Temporal/PostgreSQL.
+- Source-only crawler, protobuf and run-report checks run once in `verify`.
+  The former parallel `rust-contract-smokes` job was removed; real Rust-backed
+  deep checks still execute in `comprehensive`, never as a synthetic PR PASS.
+  Cargo metadata and its toolchain/cache setup remain only with the actual
+  Rust impact/compilation owner; Python-only `verify` needs no Rust setup.
 - The dependency-impact report is produced on PRs and used by the single Rust
   compilation owner. No other PR job compiles the same broad Cargo graph.
 
@@ -61,6 +68,18 @@ archive, and publishes an exact-source artifact **in the same CI run**.
 Changes limited to an explicit allowlist of CI/Windows operator maintenance
 do not rebuild unchanged runtime bytes, even though their PR verification
 remains fail-closed. Mixed or unknown source changes retain image selection.
+The maintenance allowlist and release-decision function now belong to the same
+`ci_impact.py` registry as the Cargo and image graph, not to copied YAML
+conditions. CI control changes can require full PR tests while leaving the
+shipped image unchanged; a mixed CI + Worker input still requires packaging.
+
+GitHub can briefly report no associated PR for a merge immediately after the
+`main` push. The exact-head provenance gate retries that one association lookup
+for at most 30 seconds, then fails closed. It never accepts a mismatching PR,
+different source tree, failed or absent PR job as release proof. The original
+main run [#45268441516](https://github.com/iamaman11/alegria-site/actions/runs/45268441516)
+failed before image selection because of this indexing window; a fixed main
+push must still prove the complete accepted-main release path.
 
 Before Buildx, automation/prepare_worker_build_context.py uses the existing
 ci_impact.py Cargo graph and Worker image roots to create a reduced exact-source

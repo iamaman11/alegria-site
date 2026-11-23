@@ -13,7 +13,7 @@ from ci_impact import (
     CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
     suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
-    workspace_graph,
+    worker_release_decision, workspace_graph,
 )
 from dev_rust_feedback import commands_for_report
 from run_scoped_cargo_feedback import require_clean_truth_filter_environment
@@ -64,6 +64,46 @@ class ImpactFixtures(unittest.TestCase):
             list(paths), self.owners, self.reverse, head="HEAD", base="BASE",
             lock_snapshots=lock_snapshots,
         )
+
+    def test_ci_only_main_merge_is_full_pr_but_not_a_new_worker_image(self) -> None:
+        paths = [".github/workflows/ci.yml", "automation/ci_impact.py", "automation/check_ci_impact.py"]
+        report = self.impact(*paths)
+        self.assertEqual(report["scope"], "full")
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertIn("temporal-worker", report["selected_images"])
+        decision = worker_release_decision(report, paths, manual=False)
+        self.assertFalse(decision["worker_required"])
+        self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
+
+    def test_worker_release_rebuilds_mixed_unknown_and_real_delivery_inputs(self) -> None:
+        for paths in (
+            [".github/workflows/ci.yml", "automation/deploy_seo_static_cloudflare.py"],
+            [".github/workflows/ci.yml", "automation/new_runtime_script.py"],
+            ["app/rust/services/temporal/src/main.rs"],
+        ):
+            with self.subTest(paths=paths):
+                report = self.impact(*paths)
+                decision = worker_release_decision(report, paths, manual=False)
+                self.assertTrue(decision["worker_required"])
+                self.assertEqual(decision["reason"], "shared_impact_registry")
+
+    def test_explicit_worker_rebuild_overrides_maintenance_skip(self) -> None:
+        paths = [".github/workflows/ci.yml"]
+        decision = worker_release_decision(self.impact(*paths), paths, manual=True)
+        self.assertTrue(decision["worker_required"])
+        self.assertEqual(decision["reason"], "explicit_accepted_main_rebuild")
+
+    def test_image_selector_rejects_unsafe_status_or_empty_main_diff(self) -> None:
+        report = self.impact(".github/workflows/ci.yml")
+        for changed, malformed in (
+            ([], report),
+            ([".github/workflows/ci.yml"], {**report, "image_status": {"temporal-worker": "skipped"}}),
+            ([".github/workflows/ci.yml"], {**report, "selected_images": []}),
+            (["docs/ci-fast-path.md"], report),
+        ):
+            with self.subTest(changed=changed, malformed=malformed):
+                with self.assertRaises(ValueError):
+                    worker_release_decision(malformed, changed, manual=False)
 
     @staticmethod
     def lock(*packages: tuple[str, str, tuple[str, ...]]) -> str:

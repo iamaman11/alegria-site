@@ -14,7 +14,7 @@ import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OWNERS = ("architecture-and-rust", "rust-contract-smokes", "product-truth", "verify")
+OWNERS = ("architecture-and-rust",)
 
 
 def directory_bytes(path: Path) -> int:

@@ -158,9 +158,6 @@ jobs:
         working-directory: app/rust
         run: cargo fmt --all -- --check
 
-      - name: Verify isolated Rust service dependency boundaries
-        run: python3 automation/check_module_boundaries.py
-
       - name: Regression-test fail-closed Rust impact and local developer feedback
         run: |
           python3 automation/check_ci_impact.py
@@ -247,45 +244,6 @@ jobs:
           name: cargo-cache-architecture
           path: automation/reports/cargo_cache_architecture-and-rust.json
           if-no-files-found: error
-
-  # Fast source-level contract checks. Real Rust-backed checks are retained
-  # in the manually dispatched comprehensive job, without a fourth Cargo build.
-  rust-contract-smokes:
-    needs: impact
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-contract-smokes')
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
-    steps:
-      - name: Checkout exact PR source and assert provenance
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-
-      - name: Verify exact source
-        run: test "$(git rev-parse HEAD)" = "$CI_SOURCE_SHA"
-
-      - name: Pin stable Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore shared Cargo dependency sources (read-only)
-        id: cargo_registry
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
-      - name: Fast Rust manifest, crawler and proto contracts
-        run: |
-          cargo metadata --format-version 1 --no-deps --locked --manifest-path app/rust/Cargo.toml > /dev/null
-          python3 automation/check_crawler_invariants.py
-          python3 automation/gen_proto_contracts.py --out automation/PROTO_CONTRACTS.md --check
-          python3 automation/check_run_report_completeness.py
 
   # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
   # remains callable through manual dispatch, not on every experimental PR.
@@ -465,20 +423,6 @@ jobs:
       - name: Install Python audit tools
         run: python -m pip install --disable-pip-version-check ruff==0.17.6
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore shared Cargo dependency sources (read-only)
-        id: cargo_registry
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
-          restore-keys: |
-            cargo-registry-${{ runner.os }}-
-
       - name: Install lightweight Python policy tool
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
@@ -538,7 +482,6 @@ jobs:
     needs:
       - impact
       - architecture-and-rust
-      - rust-contract-smokes
       - product-truth
       - rust-security
       - cloudflare-static-build
@@ -601,6 +544,7 @@ jobs:
           import json
           import os
           import sys
+          import time
           import urllib.request
 
           repo = os.environ["REPO_NAME"]
@@ -608,7 +552,7 @@ jobs:
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
               "impact",
-              "architecture-and-rust", "rust-contract-smokes", "product-truth", "rust-security", "cloudflare-static-build",
+              "architecture-and-rust", "product-truth", "rust-security", "cloudflare-static-build",
               "stack-temporal-postgres18",
               "stack-storage-graph", "verify",
               "Native Windows first-site operator regression", "CI",
@@ -635,12 +579,19 @@ jobs:
           parents = [parent["sha"] for parent in commit["parents"]]
           require(len(parents) == 2, "main commit must be a two-parent GitHub PR merge")
           source_sha = parents[1]
-          pull_requests = fetch(f"commits/{merge_sha}/pulls")
-          matches = [
-              pr for pr in pull_requests
-              if pr["merged_at"] and pr["merge_commit_sha"] == merge_sha
-              and pr["head"]["sha"] == source_sha and pr["base"]["ref"] == "main"
-          ]
+          # GitHub may index the commit->PR association a few seconds after
+          # the main push. Do not weaken provenance: retry this single lookup
+          # for up to 30 seconds and still fail closed on a missing/mismatched PR.
+          for attempt in range(11):
+              pull_requests = fetch(f"commits/{merge_sha}/pulls")
+              matches = [
+                  pr for pr in pull_requests
+                  if pr["merged_at"] and pr["merge_commit_sha"] == merge_sha
+                  and pr["head"]["sha"] == source_sha and pr["base"]["ref"] == "main"
+              ]
+              if len(matches) == 1 or attempt == 10:
+                  break
+              time.sleep(3)
           require(len(matches) == 1, "merge commit does not match one accepted PR head")
           merge_tree = fetch(f"git/commits/{merge_sha}")["tree"]["sha"]
           source_tree = fetch(f"git/commits/{source_sha}")["tree"]["sha"]
@@ -909,59 +860,33 @@ jobs:
           import sys
 
           sys.path.insert(0, 'automation')
-          from ci_impact import SCHEMA_VERSION
+          from ci_impact import SCHEMA_VERSION, worker_release_decision
 
           with open('automation/reports/worker_image_impact.json', encoding='utf-8') as f:
               report = json.load(f)
           source = os.environ['SOURCE_SHA']
-          status = report.get('image_status', {}).get('temporal-worker')
           if (report.get('schema_version') != SCHEMA_VERSION
                   or report.get('mandatory_full_ci_gate') is not True
                   or report.get('source_sha') != source
-                  or report.get('head_sha') != source
-                  or status not in ('selected', 'not_applicable')
-                  or (status == 'selected') != ('temporal-worker' in report.get('selected_images', []))):
+                  or report.get('head_sha') != source):
               raise SystemExit('WORKER_IMAGE_SELECTION=FAIL source/owner/report mismatch')
 
-          # The conservative PR planner marks all global CI controls FULL.
-          # An exact allowlist of non-image maintenance files must not turn a
-          # documentation/CI-only merge into a 25-minute Docker compilation.
-          # Any mixed or unknown path still obeys fail-closed owner selection.
-          no_image_inputs = {
-              '.github/workflows/ci.yml',
-              'automation/check_ci_workflow_contract.py',
-              'automation/check_windows_staging_rollback.py',
-              'infra/local/windows_staging.ps1',
-              'docs/ci-fast-path.md',
-              'docs/ARCHITECTURE_BOUNDARIES.md',
-          }
           changed = subprocess.check_output(
               ['git', 'diff', '--name-only', 'HEAD^1', 'HEAD'], text=True,
           ).splitlines()
-          if not changed:
-              raise SystemExit('WORKER_IMAGE_SELECTION=FAIL empty main merge delta')
-          if set(changed) <= no_image_inputs and os.environ['MANUAL_PACKAGE'] != 'true':
-              status = 'not_applicable'
-              decision_reason = 'ci_operator_maintenance_only'
-              print('WORKER_IMAGE_SELECTION=SKIPPED known CI/operator maintenance only')
-          elif os.environ['MANUAL_PACKAGE'] == 'true':
-              status = 'selected'
-              decision_reason = 'explicit_accepted_main_rebuild'
-              print('WORKER_IMAGE_SELECTION=EXPLICIT accepted-main manual rebuild')
-          else:
-              decision_reason = 'shared_impact_registry'
-              print('WORKER_IMAGE_SELECTION=' + status)
-          # Keep the conservative source impact unchanged and record the
-          # actual release decision separately for audit and operator review.
-          report['worker_release_decision'] = {
-              'worker_required': status == 'selected',
-              'reason': decision_reason,
-              'changed_paths': changed,
-          }
+          # PR validation can be fail-closed FULL without changing any input
+          # actually delivered inside the Worker image. One impact owner
+          # decides the release; unknown or mixed inputs still rebuild.
+          report['worker_release_decision'] = worker_release_decision(
+              report, changed, manual=os.environ['MANUAL_PACKAGE'] == 'true',
+          )
+          decision = report['worker_release_decision']
+          print('WORKER_IMAGE_SELECTION=' + ('SELECTED' if decision['worker_required'] else 'SKIPPED'))
+          print('WORKER_IMAGE_REASON=' + decision['reason'])
           with open('automation/reports/worker_image_impact.json', 'w', encoding='utf-8') as f:
               json.dump(report, f, indent=2, sort_keys=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
-              f.write('worker_required=' + str(status == 'selected').lower() + '\n')
+              f.write('worker_required=' + str(decision['worker_required']).lower() + '\n')
           PY
 
       - name: Preserve image-selection evidence even when packaging is unnecessary
