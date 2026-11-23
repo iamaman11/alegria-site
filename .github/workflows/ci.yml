@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Full-stack certification is opt-in, never a Ready-for-review side effect.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,7 +13,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Manual deep certification must not cancel a push provenance check.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -226,7 +229,7 @@ jobs:
           if-no-files-found: error
 
   # Fast source-level contract checks. Real Rust-backed checks are retained
-  # in the explicitly runnable ci-deep.yml, without a fourth Cargo build.
+  # in the manually dispatched comprehensive job, without a fourth Cargo build.
   rust-contract-smokes:
     needs: impact
     if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-contract-smokes')
@@ -265,7 +268,7 @@ jobs:
           python3 automation/check_run_report_completeness.py
 
   # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification
-  # remains callable through ci-deep.yml, not on every experimental PR.
+  # remains callable through manual dispatch, not on every experimental PR.
   product-truth:
     needs: impact
     if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'product-truth')
@@ -511,7 +514,7 @@ jobs:
 
   gate:
     name: CI
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || github.event_name == 'push')
     needs:
       - impact
       - architecture-and-rust
@@ -647,3 +650,188 @@ jobs:
           )
           print(f"CI_GATE=PASS merge={merge_sha} pr={matches[0]['number']} source={source_sha} full_ci={run['id']}")
           PY
+
+  # Opt-in full-stack acceptance, never on a PR or an ordinary main push.
+  # Scoped PR tests and the aggregate CI gate above do not depend on this job.
+  comprehensive:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SQLX_OFFLINE: "true"
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: sccache
+      # Same Cargo target for workspace units and real PostgreSQL regressions.
+      TRUTH_CERT_SUITE_TARGET_DIR: ${{ github.workspace }}/app/rust/target
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+      DATABASE_URL: postgres://alegria_ci:alegria_ci_only@127.0.0.1:5432/alegria_ci
+      ALEGRIA_SCOPED_TRUTH_TEST: "true"
+    services:
+      postgres:
+        image: postgres:18.7-alpine
+        env:
+          POSTGRES_USER: alegria_ci
+          POSTGRES_PASSWORD: alegria_ci_only
+          POSTGRES_DB: alegria_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U alegria_ci -d alegria_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Preflight publication source contract
+        run: python3 automation/smoke_incremental_publish_path.py
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.15"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Install full regression tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          python -m pip install --disable-pip-version-check ruff==0.17.6
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
+
+      - name: Workspace unit tests
+        working-directory: app/rust
+        run: cargo test --workspace --locked
+
+      - name: All retained-source/editorial PostgreSQL regressions
+        working-directory: app/rust
+        run: |
+          cargo test -p integration_harness --features e2e --locked --lib retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisition
+          cargo test -p integration_harness --features e2e --locked --lib retained_raw_retrieval_requires_prior_receipts_and_exact_current_page_points
+          cargo test -p integration_harness --features e2e --locked --lib changed_editorial_request_supersedes_only_pending_same_page_task
+          cargo test -p integration_harness --features e2e --locked --lib cms_revision_
+          cargo test -p integration_harness --features e2e --locked --lib content_gap_owner_identity_is_idempotent_and_independently_resolved
+          cargo test -p integration_harness --features e2e --locked --lib keyword_cluster_natural_owner_survives_changed_serp_family
+
+      - name: Full product truth, service integration, contracts and Rust-backed checks
+        run: bash automation/ci_verify.sh all
+
+      - name: Rust compiler cache statistics
+        if: always()
+        run: sccache --show-stats
+
+      - name: Preserve deep regression evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deep-ci-evidence
+          path: |
+            automation/reports/ci_phase_timings.jsonl
+            automation/reports/consistency_report.json
+          if-no-files-found: ignore
+
+  # Compiler objects can be written only from an accepted main merge.
+  # This remains INSIDE the single CI workflow; PRs consume cache read-only.
+  rust-cache-prime:
+    needs: gate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: "0"
+      # Pace writes below the GitHub cache service's burst rate limit.
+      CARGO_BUILD_JOBS: "2"
+      SQLX_OFFLINE: "true"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_WRITE
+      SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log
+      SCCACHE_LOG: sccache::server=debug
+      RUSTC_WRAPPER: sccache
+    steps:
+      - name: Checkout exact trusted main commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify main source and select cache-relevant changes
+        id: cache_scope
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
+          git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" > "$RUNNER_TEMP/main-changed-paths"
+          if grep -Eq '^app/rust/' "$RUNNER_TEMP/main-changed-paths"; then
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
+            echo 'MAIN_CACHE_PRIME=SELECTED Rust source changed'
+          else
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            echo 'MAIN_CACHE_PRIME=SKIPPED no Rust source changes'
+          fi
+
+      - name: Install native Rust build dependencies
+        if: steps.cache_scope.outputs.needed == 'true'
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Pin stable Rust toolchain
+        if: steps.cache_scope.outputs.needed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install shared Rust compiler-object cache
+        if: steps.cache_scope.outputs.needed == 'true'
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Authorize sccache on trusted main only
+        if: steps.cache_scope.outputs.needed == 'true'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const url = process.env.ACTIONS_RESULTS_URL;
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!url || !token) {
+              throw new Error('GitHub Actions cache service credentials are unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', url);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);
+
+      - name: Populate shared Cargo dependency sources
+        if: steps.cache_scope.outputs.needed == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      # Precompile the three actual CI profiles, without executing tests.
+      - name: Prime shared test and worker compilation units
+        if: steps.cache_scope.outputs.needed == 'true'
+        working-directory: app/rust
+        run: |
+          cargo check --locked --package integration_harness
+          cargo test --locked --package integration_harness --no-run
+          cargo test -p integration_harness --features e2e --lib --no-run --locked
+          cargo build --locked -p temporal_worker -p outbox_worker \
+            --bin temporal_worker --bin outbox_worker
+
+      - name: Report main cache hits, misses and write errors
+        if: always() && steps.cache_scope.outputs.needed == 'true'
+        run: sccache --show-stats
+
+      - name: Classify cache failures without exposing tokens or service URLs
+        if: always() && steps.cache_scope.outputs.needed == 'true'
+        run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"

@@ -135,9 +135,9 @@ def main() -> int:
         return 1
 
     # The PR Rust owner executes impact-selected Cargo tests. The isolated
-    # E2E harness and real PostgreSQL tests also live in ci-deep.
+    # E2E harness and real PostgreSQL tests also live in the opt-in CI job.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+    deep = workflow.split("  comprehensive:\n", 1)[1].split("  rust-cache-prime:\n", 1)[0]
     if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
         print("FAIL integration_harness missing Rust owner")
         return 1

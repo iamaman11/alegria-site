@@ -82,8 +82,6 @@ WORKER_PACKAGING_FILES = {
 # workflows and arbitrary automation scripts fail-closed: they can change what
 # the required gate actually executes.
 CI_ONLY_VERIFY_FILES = {
-    ".github/workflows/ci-deep.yml",
-    ".github/workflows/rust-cache-prime.yml",
     "automation/check_ci_workflow_contract.py",
     "automation/report_sccache_failures.py",
 }

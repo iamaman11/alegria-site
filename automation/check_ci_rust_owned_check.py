@@ -58,7 +58,7 @@ class RustOwnedCheckContract(unittest.TestCase):
     def test_original_smoke_remains_runnable_in_explicit_deep_gate(self) -> None:
         source = PRODUCT_GATE.read_text(encoding="utf-8")
         workflow = WORKFLOW.read_text(encoding="utf-8")
-        deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
+        deep = workflow.split("  comprehensive:\n", 1)[1].split("  rust-cache-prime:\n", 1)[0]
         owner_section = workflow.split("  architecture-and-rust:", 1)[1].split("  product-truth:", 1)[0]
         product_section = workflow.split("  product-truth:", 1)[1].split("  rust-security:", 1)[0]
         for command in PRODUCT_COMMANDS:
