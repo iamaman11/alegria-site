@@ -53,10 +53,17 @@ def commands_for_report(report: dict, *, check_only: bool) -> list[list[str]]:
         raise ValueError("unknown impact scope")
     if not affected:
         return []
-    command = ["cargo", "check", "--locked"]
-    for package in affected:
-        command.extend(["--package", package])
-    commands = [command]
+    # A real package unit-test compile already checks the directly changed
+    # package and its dependencies. Checking it once more in Cargo's separate
+    # check profile is redundant. Reverse consumers still need an explicit
+    # check, because their own tests were not selected.
+    check_packages = affected if check_only or not direct else sorted(set(affected) - set(direct))
+    commands = []
+    if check_packages:
+        command = ["cargo", "check", "--locked"]
+        for package in check_packages:
+            command.extend(["--package", package])
+        commands.append(command)
     if not check_only and direct:
         tests = ["cargo", "test", "--locked"]
         for package in direct:

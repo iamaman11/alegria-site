@@ -74,9 +74,19 @@ class DevRustFeedbackTests(unittest.TestCase):
             report("app/rust/crates/http_client/src/lib.rs"), check_only=False
         )
         self.assertEqual(commands, [
-            ["cargo", "check", "--locked", "--package", "gsc_sync", "--package", "http_client"],
+            ["cargo", "check", "--locked", "--package", "gsc_sync"],
             ["cargo", "test", "--locked", "--package", "http_client"],
         ])
+
+    def test_direct_crate_without_reverse_consumers_is_compiled_once(self) -> None:
+        self.assertEqual(commands_for_report(
+            report("app/rust/services/temporal/src/main.rs"), check_only=False,
+        ), [["cargo", "test", "--locked", "--package", "temporal_worker"]])
+
+    def test_direct_crate_still_uses_explicit_check_in_check_only_mode(self) -> None:
+        self.assertEqual(commands_for_report(
+            report("app/rust/services/temporal/src/main.rs"), check_only=True,
+        ), [["cargo", "check", "--locked", "--package", "temporal_worker"]])
 
     def test_check_only_skips_test_execution(self) -> None:
         commands = commands_for_report(

@@ -483,15 +483,22 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         assert!(result.contains("published_pages=0"), "{result}");
         checkpoint("blocked_rework_completed");
 
-        let saved_decision: String = sqlx::query_scalar(
-            "SELECT decision FROM site.cms_approval_decisions WHERE page_node_key=$1 AND revision_id=$2",
+        // The revision-bound transaction must persist who blocked publication
+        // and why, not merely wake Temporal with an untraceable boolean.
+        let (saved_decision, saved_reason, saved_source): (String, String, String) = sqlx::query_as(
+            "SELECT decision, reason, decision_payload->>'source'
+             FROM site.cms_approval_decisions
+             WHERE page_node_key=$1 AND revision_id=$2 AND actor_role=$3",
         )
         .bind(&page_node_key)
         .bind(&revision_id)
+        .bind("editorial_e2e_reviewer")
         .fetch_one(&infra.postgres.pool)
         .await
         .unwrap();
         assert_eq!(saved_decision, "blocked");
+        assert_eq!(saved_reason, "Exact revision requires rewriting");
+        assert_eq!(saved_source, "canonical_temporal_publish_mode_e2e");
         let (current_revision, current_status): (String, String) = sqlx::query_as(
             "SELECT current_revision_id, current_status FROM site.cms_pages WHERE page_node_key=$1",
         )
