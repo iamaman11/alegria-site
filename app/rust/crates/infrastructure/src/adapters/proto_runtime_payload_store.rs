@@ -43,7 +43,8 @@ mod truth_review_payload_tests {
         );
 
         let decoded = Input::decode_payload_bytes(&encoded).unwrap();
-        let result = completeness::execute(&decoded).encode_payload_bytes().unwrap();
+        let output = completeness::execute(&decoded);
+        let result = output.encode_payload_bytes().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(json["needs_hitl"], true);
         assert_eq!(json["hitl_reason"], "completeness_gaps_detected");
@@ -74,13 +75,14 @@ mod truth_review_payload_tests {
             "conflict_count": 0,
             "loss_count": 0
         });
-        let input = Input::decode_payload_bytes(&serde_json::to_vec(&input_json).unwrap())
-            .unwrap();
+        let json_bytes = serde_json::to_vec(&input_json).unwrap();
+        let input = Input::decode_payload_bytes(&json_bytes).unwrap();
         let encoded = input.encode_payload_bytes().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(json, input_json);
 
-        let result = hitl_decision::execute(&input).encode_payload_bytes().unwrap();
+        let output = hitl_decision::execute(&input);
+        let result = output.encode_payload_bytes().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&result).unwrap();
         assert_eq!(
             json,
