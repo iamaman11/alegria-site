@@ -59,6 +59,8 @@ def check() -> None:
     assert "  select-image:\n" in workflow
     assert "  package:\n" in workflow
     assert "    needs: gate\n" in release
+    assert "!cancelled() && needs.gate.result == 'success'" in release
+    assert "!cancelled() && needs.gate.result == 'success' && needs.select-image.result == 'success'" in release
     assert "(github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' && github.ref == 'refs/heads/main')" in release
     assert "python3 automation/ci_impact.py" in release
     assert "--head \"$SOURCE_SHA\"" in release
@@ -175,7 +177,7 @@ def check() -> None:
     for forbidden in ("  pull_request_target:\n", "  workflow_run:\n"):
         assert forbidden not in workflow
     assert "    needs: gate\n" in prime
-    assert "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'" in prime
+    assert "    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success' }}" in prime
     assert 'BEFORE_SHA: ${{ github.event.before }}' in prime
     assert 'git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA"' in prime
     selector = (
