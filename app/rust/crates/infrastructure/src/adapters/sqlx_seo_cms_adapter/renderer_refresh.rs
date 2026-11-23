@@ -239,6 +239,7 @@ pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, 
         return Err(validation_failure(err));
     }
     let mut activation = PublicationActivation {
+        delivery: &CloudflareStaticDelivery,
         public_path: public,
         previous: Some(previous.clone()),
         journal_path: refresh_journal,

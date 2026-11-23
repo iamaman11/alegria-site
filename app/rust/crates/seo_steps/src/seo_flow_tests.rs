@@ -7,7 +7,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 fn scope() -> SeoScopePayload {
-    let scope_signature = primitives::seo::scope_signature(&[
+    let scope_signature = seo_domain::artifact_identity::scope_signature(&[
         ("market", "alegria-site"),
         ("locale", "ru-RU"),
         ("country_code", "ES"),
@@ -50,7 +50,7 @@ fn llm_candidate(
     verified_support: &[SeoVerifiedFactSupportState],
 ) -> LlmDraftCandidate {
     LlmDraftCandidate {
-        candidate_key: primitives::seo::seo_artifact_key(
+        candidate_key: seo_domain::artifact_identity::seo_artifact_key(
             "llm_candidate",
             &[page_node_key, "fixture"],
         ),
@@ -63,7 +63,7 @@ fn llm_candidate(
         claim_ledger: verified_support
             .iter()
             .map(|support| ClaimLedgerEntry {
-                claim_key: primitives::seo::seo_artifact_key(
+                claim_key: seo_domain::artifact_identity::seo_artifact_key(
                     "claim",
                     &[page_node_key, &support.role_type, &support.support_ref],
                 ),
@@ -91,7 +91,7 @@ fn seo_steps_form_publish_ready_pipeline() {
     let scope = scope();
     let ingest = crate::serp_ingest_step::execute(&SerpIngestInputPayload {
         run_id: run_id.clone(),
-        query_batch_key: primitives::seo::seo_artifact_key(
+        query_batch_key: seo_domain::artifact_identity::seo_artifact_key(
             "query_batch",
             &[&run_id, &scope.scope_signature],
         ),

@@ -181,7 +181,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 }
             }
             if !input.page_blueprints.is_empty() {
-                use primitives::seo::ContentGapDetector;
+                use seo_domain::artifact_identity::ContentGapDetector;
                 let identity = |gap: &contracts::generated::alegria::temporal::v1::ContentGapState| {
                     ContentGapDetector::from_reason(&gap.reason_code)
                         .map(|detector| detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic))

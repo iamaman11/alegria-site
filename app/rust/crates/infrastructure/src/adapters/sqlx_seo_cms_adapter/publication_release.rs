@@ -2,12 +2,7 @@
 // The web server must serve SEO_STATIC_OUTPUT_DIR; no separate deploy runner.
 use std::path::{Path as ReleasePath, PathBuf as ReleasePathBuf};
 
-#[derive(Debug)]
-struct ReleaseArtifact {
-    relative_path: String,
-    public_route: String,
-    bytes: Vec<u8>,
-}
+type ReleaseArtifact = PublicReleaseFile;
 
 fn publication_origin(raw: &str) -> Result<reqwest::Url, String> {
     let url = reqwest::Url::parse(raw).map_err(|err| format!("invalid origin: {err}"))?;
@@ -310,7 +305,6 @@ fn swap_public_release(
 }
 
 #[cfg(unix)]
-#[cfg(unix)]
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 struct PendingPublication {
     new_release: ReleasePathBuf,
@@ -381,6 +375,7 @@ async fn verify_pending_first_publication(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     public: &ReleasePath,
     journal: &PendingPublication,
+    delivery: &dyn PublicReleaseDelivery,
 ) -> Result<(), DomainError> {
     if journal.previous.is_some()
         || std::fs::read_link(public).ok().as_deref() != Some(journal.new_release.as_path())
@@ -455,7 +450,8 @@ async fn verify_pending_first_publication(
     )
     .map_err(validation_failure)?;
     verify_existing_immutable_release(&expected_release, &files).map_err(validation_failure)?;
-    verify_live_release(&origin, &files).await.map_err(validation_failure)?;
+    delivery.verify(origin.as_str(), &files).await
+        .map_err(|err| validation_failure(err.to_string()))?;
     Ok(())
 }
 
@@ -521,8 +517,60 @@ fn require_cloudflare_publication_backend() -> Result<(), String> {
     Ok(())
 }
 
+/// The production binding of the narrow Publishing delivery port. No test
+/// environment variable or optional Cloudflare bypass is exposed at runtime.
+pub struct CloudflareStaticDelivery;
+
+#[async_trait::async_trait]
+impl PublicReleaseDelivery for CloudflareStaticDelivery {
+    fn preflight(&self) -> Result<(), ReleaseDeliveryError> {
+        require_cloudflare_publication_backend().map_err(|detail| ReleaseDeliveryError {
+            stage: ReleaseDeliveryStage::Preflight,
+            detail,
+        })
+    }
+
+    #[cfg(unix)]
+    fn deploy(&self, release: &ReleasePath, previous: Option<&ReleasePath>)
+        -> Result<(), ReleaseDeliveryError> {
+        deploy_cloudflare_static_release(release, previous).map_err(|detail| ReleaseDeliveryError {
+            stage: ReleaseDeliveryStage::Upload,
+            detail,
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn deploy(&self, _release: &ReleasePath, _previous: Option<&ReleasePath>)
+        -> Result<(), ReleaseDeliveryError> {
+        Err(ReleaseDeliveryError {
+            stage: ReleaseDeliveryStage::Upload,
+            detail: "atomic static deployment requires a Unix filesystem".into(),
+        })
+    }
+
+    async fn verify(&self, origin: &str, files: &[PublicReleaseFile])
+        -> Result<(), ReleaseDeliveryError> {
+        let origin = publication_origin(origin).map_err(|detail| ReleaseDeliveryError {
+            stage: ReleaseDeliveryStage::Readback,
+            detail,
+        })?;
+        verify_live_release(&origin, files).await.map_err(|detail| ReleaseDeliveryError {
+            stage: ReleaseDeliveryStage::Readback,
+            detail,
+        })
+    }
+}
+
 #[cfg(unix)]
 pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainError> {
+    recover_pending_publication_with_delivery(pool, &CloudflareStaticDelivery).await
+}
+
+#[cfg(unix)]
+pub async fn recover_pending_publication_with_delivery(
+    pool: &PgPool,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<(), DomainError> {
     let public = ReleasePathBuf::from(std::env::var("SEO_STATIC_OUTPUT_DIR")
         .unwrap_or_else(|_| "app/rust/dist/static-site".to_string()));
     let journal_path = pending_publication_path(&public).map_err(validation_failure)?;
@@ -566,39 +614,70 @@ pub async fn recover_pending_publication(pool: &PgPool) -> Result<(), DomainErro
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
         Err(err) => return Err(validation_failure(format!("read live publication pointer: {err}"))),
     };
-    require_cloudflare_publication_backend().map_err(validation_failure)?;
-    if committed {
-        if live.as_deref() != Some(journal.new_release.as_path()) {
-            return Err(validation_failure("committed publication no longer matches live pointer"));
-        }
-        // The live Worker is the public truth: a local symlink check is not
-        // sufficient after a worker crash. Idempotently restore the committed
-        // Cloudflare asset version and independently verify public HTTPS.
-        deploy_cloudflare_static_release(&journal.new_release, None)
-            .map_err(validation_failure)?;
+    delivery.preflight().map_err(|err| validation_failure(err.to_string()))?;
+    use seo_domain::publishing::{LiveReleasePointer, RecoveryAction, RecoveryRefusal};
+    let pointer = if live.as_deref() == Some(journal.new_release.as_path()) {
+        LiveReleasePointer::Candidate
+    } else if live.as_deref() == journal.previous.as_deref() {
+        LiveReleasePointer::Previous
     } else {
-        if live.as_deref() != Some(journal.new_release.as_path())
-            && live.as_deref() != journal.previous.as_deref()
-        {
-            return Err(validation_failure("pending publication has unknown live pointer; manual recovery required"));
+        LiveReleasePointer::Unknown
+    };
+    let recovery = seo_domain::publishing::plan_recovery(
+        committed, pointer, journal.previous.is_some(),
+    ).map_err(|refusal| match refusal {
+        RecoveryRefusal::CommittedPointerMismatch =>
+            validation_failure("committed publication no longer matches live pointer"),
+        RecoveryRefusal::UnknownLivePointer =>
+            validation_failure("pending publication has unknown live pointer; manual recovery required"),
+    })?;
+    match recovery {
+        RecoveryAction::ReassertCommitted => {
+            // A local symlink is insufficient after a worker crash. Restore the
+            // committed Cloudflare version; verify public bytes independently.
+            // The journal remains until both external effects are proven.
+            delivery.deploy(&journal.new_release, None)
+                .map_err(|err| validation_failure(err.to_string()))?;
+            let persisted: (String, Json<serde_json::Value>) = sqlx::query_as(
+                "SELECT artifact_uri, manifest_json FROM site.publish_artifacts \
+                 WHERE artifact_key=$1 AND page_node_key=$2 AND revision_id=$3 AND status='ready'",
+            )
+            .bind(&journal.artifact_key)
+            .bind(&journal.page_node_key)
+            .bind(&journal.revision_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?;
+            let artifact = PublishArtifact {
+                artifact_key: journal.artifact_key.clone(),
+                artifact_uri: persisted.0,
+                manifest_json: persisted.1.0.to_string(),
+                ..Default::default()
+            };
+            verify_committed_release(&artifact, &journal.page_node_key, &journal.revision_id, delivery)
+                .await.map_err(validation_failure)?;
         }
-        // On a first publication there is no safe earlier release to restore.
-        // Permit startup ONLY when the exact still-approved release is already
-        // publicly verified. Keep the journal; only the original finalizer
-        // can commit CMS/outbox status. Unknown/mismatched output stays closed.
-        let Some(previous) = journal.previous.as_deref() else {
-            verify_pending_first_publication(&mut tx, &public, &journal).await?;
+        RecoveryAction::VerifyPendingFirst => {
+            // No safe predecessor: do not claim a release or clear its journal.
+            // The original finalizer alone may commit after public readback.
+            verify_pending_first_publication(&mut tx, &public, &journal, delivery).await?;
             tx.commit().await.map_err(classify_sqlx)?;
             tracing::info!(
                 revision_id = %journal.revision_id,
                 "verified pending first release; awaiting canonical finalization"
             );
             return Ok(());
-        };
-        deploy_cloudflare_static_release(previous, None).map_err(validation_failure)?;
-        if live.as_deref() == Some(journal.new_release.as_path()) {
-            restore_public_release(&public, Some(previous))
-                .map_err(validation_failure)?;
+        }
+        RecoveryAction::RestorePrevious => {
+            let previous = journal.previous.as_deref().ok_or_else(||
+                validation_failure("pending publication has no previous release")
+            )?;
+            delivery.deploy(previous, None)
+                .map_err(|err| validation_failure(err.to_string()))?;
+            if live.as_deref() == Some(journal.new_release.as_path()) {
+                restore_public_release(&public, Some(previous))
+                    .map_err(validation_failure)?;
+            }
         }
     }
     std::fs::remove_file(&journal_path)
@@ -659,7 +738,11 @@ async fn verify_live_release(
 
 // The activation guard restores the prior release if DB finalization fails.
 // Only a committed DB transaction may disarm it.
-struct PublicationActivation {
+struct PublicationActivation<'a> {
+    #[cfg(unix)]
+    delivery: &'a dyn PublicReleaseDelivery,
+    #[cfg(not(unix))]
+    _lifetime: std::marker::PhantomData<&'a ()>,
     #[cfg(unix)]
     public_path: ReleasePathBuf,
     #[cfg(unix)]
@@ -671,7 +754,7 @@ struct PublicationActivation {
     armed: bool,
 }
 
-impl PublicationActivation {
+impl PublicationActivation<'_> {
     // COMMIT may have succeeded even when the database connection drops or the
     // activity is cancelled. Once COMMIT begins, leave the on-disk journal and
     // public pointer intact until the next database-aware reconciliation.
@@ -689,12 +772,12 @@ impl PublicationActivation {
 }
 
 #[cfg(unix)]
-impl Drop for PublicationActivation {
+impl Drop for PublicationActivation<'_> {
     fn drop(&mut self) {
         if self.armed {
             if self.remote_activated {
                 if let Some(previous) = self.previous.as_deref() {
-                    if let Err(err) = deploy_cloudflare_static_release(previous, None) {
+                    if let Err(err) = self.delivery.deploy(previous, None) {
                         tracing::error!(reason = %err, "remote rollback failed; journal retained for recovery");
                         return;
                     }
@@ -717,14 +800,68 @@ impl Drop for PublicationActivation {
     }
 }
 
+// An uncertain COMMIT may cause the same canonical workflow to retry. The
+// committed revision is idempotent only when its immutable files, live pointer
+// and public HTTP bytes still match; no new DB event or upload is needed.
 #[cfg(unix)]
-async fn promote_and_verify_public_release(
+async fn verify_committed_release(
+    artifact: &PublishArtifact,
+    page_node_key: &str,
+    revision_id: &str,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<(), String> {
+    let meta: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
+        .map_err(|err| format!("persisted committed metadata: {err}"))?;
+    let candidate_raw = meta.get("candidate_output_dir").and_then(|v| v.as_str())
+        .ok_or("missing committed candidate path")?;
+    let origin_raw = meta.get("base_url").and_then(|v| v.as_str())
+        .ok_or("missing committed public origin")?;
+    let run_id = meta.get("run_id").and_then(|v| v.as_str())
+        .ok_or("missing committed run_id")?;
+    if meta.get("page_node_key").and_then(|v| v.as_str()) != Some(page_node_key)
+        || meta.get("revision_id").and_then(|v| v.as_str()) != Some(revision_id)
+        || artifact.artifact_uri != candidate_raw
+    {
+        return Err("committed artifact identity mismatch".into());
+    }
+    publication_origin(origin_raw)?;
+    if std::env::var("SEO_STATIC_BASE_URL").ok().as_deref() != Some(origin_raw) {
+        return Err("committed public origin differs from configuration".into());
+    }
+    let candidate = std::fs::canonicalize(candidate_raw)
+        .map_err(|err| format!("resolve committed candidate: {err}"))?;
+    let files = publication_files(&candidate, page_node_key, revision_id, origin_raw, run_id)?;
+    let name = candidate.file_name().and_then(|x| x.to_str())
+        .ok_or("invalid committed candidate name")?;
+    let release = candidate.with_file_name(format!("{name}-published"));
+    verify_existing_immutable_release(&release, &files)?;
+    let public = ReleasePathBuf::from(std::env::var("SEO_STATIC_OUTPUT_DIR")
+        .unwrap_or_else(|_| "app/rust/dist/static-site".into()));
+    if std::fs::read_link(&public).ok().as_deref() != Some(release.as_path()) {
+        return Err("committed release no longer matches the public pointer".into());
+    }
+    delivery.verify(origin_raw, &files).await.map_err(|err| err.to_string())
+}
+
+#[cfg(not(unix))]
+async fn verify_committed_release(
+    _artifact: &PublishArtifact,
+    _page_node_key: &str,
+    _revision_id: &str,
+    _delivery: &dyn PublicReleaseDelivery,
+) -> Result<(), String> {
+    Err("atomic static deployment requires a Unix filesystem".into())
+}
+
+#[cfg(unix)]
+async fn promote_and_verify_public_release<'a>(
     artifact: &PublishArtifact,
     page_node_key: &str,
     revision_id: &str,
     allow_first_publication: bool,
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> Result<PublicationActivation, String> {
+    delivery: &'a dyn PublicReleaseDelivery,
+) -> Result<PublicationActivation<'a>, String> {
     let meta: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
         .map_err(|err| format!("persisted candidate metadata: {err}"))?;
     let candidate_raw = meta.get("candidate_output_dir")
@@ -748,7 +885,7 @@ async fn promote_and_verify_public_release(
         return Err("SEO_STATIC_BASE_URL must explicitly name the public HTTPS origin".into());
     }
     // Fail before writing a pending journal when deployment is not configured.
-    require_cloudflare_publication_backend()?;
+    delivery.preflight().map_err(|err| err.to_string())?;
     let public = ReleasePathBuf::from(public_raw);
     let configured_public = std::env::var("SEO_STATIC_OUTPUT_DIR")
         .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
@@ -780,9 +917,10 @@ async fn promote_and_verify_public_release(
             {
                 return Err("pending publication must first be reconciled".into());
             }
-            verify_pending_first_publication(tx, &public, &journal).await
+            verify_pending_first_publication(tx, &public, &journal, delivery).await
                 .map_err(|err| err.to_string())?;
             return Ok(PublicationActivation {
+                delivery,
                 public_path: public,
                 previous: None,
                 journal_path,
@@ -808,6 +946,7 @@ async fn promote_and_verify_public_release(
     // Construct the rollback guard before the HTTPS await. The journal also
     // survives a worker/process crash until startup reconciliation.
     let mut activation = PublicationActivation {
+        delivery,
         public_path: public,
         previous,
         journal_path,
@@ -817,19 +956,21 @@ async fn promote_and_verify_public_release(
     // Only the explicitly configured native Cloudflare deployment may
     // promote files to the public origin. A local symlink is not deployment.
     activation.remote_activated = true;
-    deploy_cloudflare_static_release(&release, activation.previous.as_deref())?;
-    verify_live_release(&origin, &files).await?;
+    delivery.deploy(&release, activation.previous.as_deref())
+        .map_err(|err| err.to_string())?;
+    delivery.verify(origin.as_str(), &files).await.map_err(|err| err.to_string())?;
     Ok(activation)
 }
 
 #[cfg(not(unix))]
-async fn promote_and_verify_public_release(
+async fn promote_and_verify_public_release<'a>(
     _artifact: &PublishArtifact,
     _page_node_key: &str,
     _revision_id: &str,
     _allow_first_publication: bool,
     _tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-) -> Result<PublicationActivation, String> {
+    _delivery: &'a dyn PublicReleaseDelivery,
+) -> Result<PublicationActivation<'a>, String> {
     Err("atomic static deployment requires a Unix filesystem".into())
 }
 
@@ -1063,6 +1204,7 @@ mod publication_release_tests {
         let previous = swap_public_release(&live, &new).unwrap();
         {
             let _activation = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),
@@ -1096,6 +1238,7 @@ mod publication_release_tests {
         swap_public_release(&live, &new).unwrap();
         {
             let mut activation = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous: None,
                 journal_path: journal.clone(),
@@ -1131,6 +1274,7 @@ mod publication_release_tests {
         let previous = swap_public_release(&live, &new).unwrap();
         {
             let mut receipt = PublicationActivation {
+                delivery: &CloudflareStaticDelivery,
                 public_path: live.clone(),
                 previous,
                 journal_path: journal.clone(),

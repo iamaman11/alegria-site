@@ -9,7 +9,7 @@ where
         + CrawlIngestRepository
         + DraftRepository
         + SectionTemplateRepository
-        + SourceContextRepository
+        + SourceContextSearchPort
         + EditorialGenerationPort
         + CmsReviewPort
         + PublishArtifactRepository

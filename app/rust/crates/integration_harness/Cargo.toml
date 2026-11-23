@@ -33,10 +33,13 @@ temporalio-sdk-core = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
+outbox_worker = { path = "../../services/outbox_worker" }
+async-trait = "0.1"
 contracts = { path = "../contracts" }
 primitives = { path = "../primitives" }
 infrastructure = { path = "../infrastructure" }
 seo_application = { path = "../seo_application" }
+seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 serial_test = "3.2.0"

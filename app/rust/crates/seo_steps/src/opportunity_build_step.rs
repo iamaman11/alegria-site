@@ -6,7 +6,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature};
-use primitives::seo::ContentGapDetector;
+use seo_domain::artifact_identity::ContentGapDetector;
 
 fn topic_tokens(value: &str) -> BTreeSet<String> {
     value

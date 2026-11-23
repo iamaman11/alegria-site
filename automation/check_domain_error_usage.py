@@ -10,7 +10,7 @@ ACTIVITIES_MOD = ACTIVITIES_DIR / "mod.rs"
 ACTIVITIES_RUNTIME = ACTIVITIES_DIR / "runtime.rs"
 ACTIVITIES_FACT = ACTIVITIES_DIR / "fact_extraction.rs"
 PURE_RUST_LAYERS = [
-    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "context_bundle.rs",
+    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "knowledge.rs",
     ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "hitl.rs",
     ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs",
 ]

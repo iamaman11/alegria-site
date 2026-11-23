@@ -3,6 +3,17 @@ pub async fn persist_finalize_publish_output(
     input: &FinalizePublishInputPayload,
     planned: &FinalizePublishOutputPayload,
 ) -> Result<FinalizePublishOutputPayload, DomainError> {
+    persist_finalize_publish_output_with_delivery(
+        pool, input, planned, &CloudflareStaticDelivery,
+    ).await
+}
+
+pub async fn persist_finalize_publish_output_with_delivery(
+    pool: &PgPool,
+    input: &FinalizePublishInputPayload,
+    planned: &FinalizePublishOutputPayload,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<FinalizePublishOutputPayload, DomainError> {
     let artifact = input.publish_artifact.as_ref().cloned().unwrap_or_default();
     let render_validation = input
         .render_validation
@@ -11,13 +22,15 @@ pub async fn persist_finalize_publish_output(
         .unwrap_or_default();
     let mut blocking_reasons = planned.blocking_reasons.clone();
     blocking_reasons.extend(render_validation.blocking_reasons.clone());
-    let mut is_published = planned.verdict == "published"
-        && render_validation.verdict == "render_ready"
-        && blocking_reasons.is_empty();
+    let readiness = seo_domain::publishing::ReleaseReadiness::from_render_validation(
+        &render_validation.verdict,
+        &blocking_reasons,
+    );
+    let should_activate = readiness.can_activate(&planned.verdict);
     // Lock all publication effects for this public site, across workers and
     // processes. The transaction owns the lock until the outbox commits.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    if is_published {
+    if should_activate {
         let public_dir = std::env::var("SEO_STATIC_OUTPUT_DIR")
             .unwrap_or_else(|_| "app/rust/dist/static-site".to_string());
         sqlx::query("SELECT pg_advisory_xact_lock(21917, hashtext($1))")
@@ -25,10 +38,50 @@ pub async fn persist_finalize_publish_output(
             .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
+
+        // A retry after an ambiguous COMMIT is not a new publish attempt.
+        // Preserve the committed revision and its one logical Outbox event,
+        // but never claim success without re-reading the exact public bytes.
+        let committed: Option<(String, Json<serde_json::Value>)> = sqlx::query_as(
+            r#"
+            SELECT a.artifact_uri, a.manifest_json
+            FROM site.cms_pages p
+            JOIN site.cms_page_revisions r ON r.revision_id = p.current_revision_id
+            JOIN site.publish_artifacts a ON a.revision_id = r.revision_id
+            WHERE p.page_node_key = $1 AND p.current_revision_id = $2
+              AND p.current_status = 'published' AND r.revision_status = 'published'
+              AND a.artifact_key = $3 AND a.status = 'ready'
+            FOR UPDATE OF p, r, a
+            "#,
+        )
+        .bind(&input.page_node_key)
+        .bind(&input.revision_id)
+        .bind(&artifact.artifact_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if let Some((uri, Json(persisted_meta))) = committed {
+            let supplied: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
+                .map_err(|err| validation_failure(format!("retry artifact JSON: {err}")))?;
+            if uri != artifact.artifact_uri || persisted_meta != supplied
+                || supplied.get("run_id").and_then(|v| v.as_str()) != Some(input.run_id.as_str())
+            {
+                return Err(validation_failure("replayed publication artifact/run identity changed"));
+            }
+            verify_committed_release(&artifact, &input.page_node_key, &input.revision_id, delivery)
+                .await.map_err(validation_failure)?;
+            tx.commit().await.map_err(classify_sqlx)?;
+            return Ok(FinalizePublishOutputPayload {
+                verdict: "published".into(),
+                current_status: "published".into(),
+                blocking_reasons: Vec::new(),
+                publish_artifact: Some(PublishArtifact { status: "ready".into(), ..artifact }),
+            });
+        }
     }
 
     let mut activation: Option<PublicationActivation> = None;
-    if is_published {
+    if should_activate {
         // Render readiness is NOT publication. Activate an immutable,
         // approved release and prove real HTTPS bytes before DB commit.
         let allow_first_publication: bool = sqlx::query_scalar(
@@ -43,6 +96,7 @@ pub async fn persist_finalize_publish_output(
             &input.revision_id,
             allow_first_publication,
             &mut tx,
+            delivery,
         )
         .await
         {
@@ -55,13 +109,17 @@ pub async fn persist_finalize_publish_output(
                     "public release promotion/readback failed; refusing published state"
                 );
                 blocking_reasons.push("public_deployment_unverified".to_string());
-                is_published = false;
             }
         }
     }
     blocking_reasons.sort();
     blocking_reasons.dedup();
-    let final_verdict = if is_published { "published" } else { "blocked" };
+    let outcome = seo_domain::publishing::PublicReleaseOutcome::after_readback(
+        readiness,
+        activation.is_some(),
+    );
+    let is_published = outcome.is_published();
+    let final_verdict = outcome.verdict();
 
     // Database status, artifact, event, HITL, and outbox commit together.
     // On any SQL error the activation guard restores the prior public release.
@@ -75,7 +133,7 @@ pub async fn persist_finalize_publish_output(
         WHERE revision_id = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.revision_id)
     .execute(&mut *tx)
     .await
@@ -99,7 +157,7 @@ pub async fn persist_finalize_publish_output(
         WHERE page_node_key = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.page_node_key)
     .bind(&input.revision_id)
     .execute(&mut *tx)
@@ -119,7 +177,7 @@ pub async fn persist_finalize_publish_output(
         WHERE page_node_key = $2
         "#,
     )
-    .bind(if is_published { "published" } else { "blocked" })
+    .bind(final_verdict)
     .bind(&input.page_node_key)
     .execute(&mut *tx)
     .await
@@ -134,19 +192,15 @@ pub async fn persist_finalize_publish_output(
             WHERE artifact_key = $2
             "#,
         )
-        .bind(if is_published { "ready" } else { "blocked" })
+        .bind(outcome.artifact_status())
         .bind(&artifact.artifact_key)
         .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
 
-    let event_type = if is_published {
-        "seo_page_published"
-    } else {
-        "seo_page_publish_blocked"
-    };
-    let event_key = primitives::seo::seo_artifact_key(
+    let event_type = outcome.event_type();
+    let event_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_event",
         &[
             &input.page_node_key,
@@ -216,7 +270,7 @@ pub async fn persist_finalize_publish_output(
     }
     if !is_published {
         for blocker_reason in &blocking_reasons {
-            let task_key = primitives::seo::seo_artifact_key(
+            let task_key = seo_domain::artifact_identity::seo_artifact_key(
                 "seo_hitl_task",
                 &[
                     &input.page_node_key,
@@ -273,18 +327,10 @@ pub async fn persist_finalize_publish_output(
 
     Ok(FinalizePublishOutputPayload {
         verdict: final_verdict.to_string(),
-        current_status: if is_published {
-            "published".to_string()
-        } else {
-            "blocked".to_string()
-        },
+        current_status: final_verdict.to_string(),
         blocking_reasons,
         publish_artifact: Some(PublishArtifact {
-            status: if is_published {
-                "ready".to_string()
-            } else {
-                "blocked".to_string()
-            },
+            status: outcome.artifact_status().to_string(),
             ..artifact
         }),
     })

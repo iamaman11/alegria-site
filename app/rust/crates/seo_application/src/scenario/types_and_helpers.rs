@@ -19,7 +19,7 @@ use seo_ports::{
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     GraphCapabilityPort, GraphReasoningPort, PlanningRepository, ProjectionStatusRepository,
     PublishArtifactRepository, RebuildRepository, SectionTemplateRepository,
-    SemanticLinkSearchPort, SeoBuildInputRepository, SerpSearchPort, SourceContextRepository,
+    SemanticLinkSearchPort, SeoBuildInputRepository, SerpSearchPort, SourceContextSearchPort,
     VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
 

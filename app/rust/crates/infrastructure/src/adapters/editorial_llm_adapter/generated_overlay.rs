@@ -171,7 +171,7 @@ fn overlay_typed_claims(
                     ))
                 })?;
             let claim = ClaimLedgerEntry {
-                claim_key: primitives::seo::seo_artifact_key(
+                claim_key: seo_domain::artifact_identity::seo_artifact_key(
                     "claim",
                     &[&brief.page_node_key, role, &source.support_ref],
                 ),

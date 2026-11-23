@@ -8,6 +8,9 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter"
 OPS_RUNTIME = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations"
+KNOWLEDGE_USE_CASE = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "knowledge.rs"
+KNOWLEDGE_PORT = ROOT / "app" / "rust" / "crates" / "seo_ports" / "src" / "lib.rs"
+VECTOR_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "canonical_vector_search_adapter.rs"
 SEO_STEPS_CANONICAL = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "canonical_mapping_step.rs"
 REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 OPS = ROOT / "docs" / "OPS_RUNTIME_RUNBOOK.md"
@@ -33,6 +36,9 @@ def read_surface(path: Path) -> str:
 def main() -> int:
     starter = read_surface(STARTER)
     ops_runtime = read_surface(OPS_RUNTIME)
+    knowledge_use_case = read(KNOWLEDGE_USE_CASE)
+    knowledge_port = read(KNOWLEDGE_PORT)
+    vector_adapter = read(VECTOR_ADAPTER)
     seo_steps_canonical = read(SEO_STEPS_CANONICAL)
     registry = read(REGISTRY)
     ops = read(OPS)
@@ -107,7 +113,8 @@ def main() -> int:
             failures.append(f"retrieval contract gate missing `{needle}`")
 
     for needle in [
-        "resolve_canonical_vector_mappings(output.mappings).await?;",
+        "seo_application::knowledge::resolve_canonical_vector_mappings(",
+        "&infrastructure::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter",
         "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
         "VOYAGE_RERANK_REQUIRED",
         "\"kb_canonical_4\"",
@@ -117,6 +124,35 @@ def main() -> int:
 
     if "resolve_canonical_vector_fallbacks(output.mappings).await" in ops_runtime:
         failures.append("operations still reference legacy canonical vector fallback resolver")
+
+    # The canonical matching decision is Knowledge-owned. Temporal wires the
+    # typed port to the infrastructure adapter; it must not own vector policy.
+    for needle in [
+        "pub async fn resolve_canonical_vector_mappings<S: CanonicalVectorSearchPort + ?Sized>(",
+        "search.search_canonical_concepts(&mapping.raw_text).await?",
+        "CanonicalVectorLookup::Unavailable",
+        "resolve_canonical_candidates(&mapping, &candidates)",
+    ]:
+        if needle not in knowledge_use_case:
+            failures.append(f"Knowledge canonical vector use case missing `{needle}`")
+
+    for needle in [
+        "pub trait CanonicalVectorSearchPort: Send + Sync",
+        "async fn search_canonical_concepts(",
+    ]:
+        if needle not in knowledge_port:
+            failures.append(f"canonical vector port missing `{needle}`")
+
+    for needle in [
+        "impl CanonicalVectorSearchPort for CanonicalVectorSearchAdapter",
+        "semantic_search_adapter::search_by_text_with_surface(",
+        "semantic_search_adapter::rerank_records(",
+        "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
+        "VOYAGE_RERANK_REQUIRED",
+        "\"kb_canonical_4\"",
+    ]:
+        if needle not in vector_adapter:
+            failures.append(f"canonical vector adapter missing `{needle}`")
 
     for needle in [
         "matching_stage: MatchingStage::VectorQdrant",

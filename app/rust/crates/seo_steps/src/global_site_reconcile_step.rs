@@ -1,4 +1,4 @@
-use primitives::seo::ContentGapDetector;
+use seo_domain::artifact_identity::ContentGapDetector;
 use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{
@@ -13,7 +13,7 @@ fn link_key(
     link_role: &str,
     anchor_strategy: &str,
 ) -> String {
-    primitives::seo::seo_artifact_key(
+    seo_domain::artifact_identity::seo_artifact_key(
         "link_recommendation",
         &[
             scope_signature,
@@ -238,7 +238,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         if let Some(previous_owner) =
             canonical_owner.insert(page.canonical_url_path.clone(), page.page_node_key.clone())
         {
-            cannibalization_conflict_keys.push(primitives::seo::seo_artifact_key(
+            cannibalization_conflict_keys.push(seo_domain::artifact_identity::seo_artifact_key(
                 "cannibalization_conflict",
                 &[
                     &page.scope_signature,

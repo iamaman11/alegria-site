@@ -30,11 +30,8 @@ pub fn execute(input: &CmsPublishInputPayload) -> CmsPublishOutputPayload {
     if input.publish_mode == "approved_publish" {
         let approval = input.approval_decision.as_ref();
         let human_approved = approval
-            .map(|decision| {
-                decision.decision == "approved"
-                    && !decision.actor_role.trim().is_empty()
-                    && decision.actor_role != "seo_system"
-            })
+            .and_then(|decision| crate::cms_review_wire::from_wire(decision).ok())
+            .map(|decision| decision.is_human_approved())
             .unwrap_or(false);
         if !human_approved {
             blocking_reasons.push("human_approval_required".to_string());

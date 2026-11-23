@@ -1,26 +1,78 @@
 use async_trait::async_trait;
-use contracts::generated::alegria::read_api::v1::ContextBundle;
+pub mod knowledge;
+
 use contracts::generated::alegria::temporal::v1::{
-    CmsApprovalDecision, CmsPublishInputPayload, CmsPublishOutputPayload,
-    ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
-    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
-    DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,
-    DraftQaOutputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
-    GlobalSiteReconcileOutputPayload, HitlDecision, HitlTaskContext, IaBuildInputPayload,
-    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
-    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PageNodeState,
-    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload, ContentContractValidateInputPayload,
+    ContentContractValidateOutputPayload, CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
+    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
+    DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
+    EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
+    HitlTaskContext, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
+    LinkRecommendOutputPayload, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
+    PageNodeState, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
     RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
-    SourceContextChunkState,
+};
+use knowledge::{
+    CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,
+    SourceContextChunk, SourceContextCollection, VerifiedRuleEmbeddingBatch,
+    VerifiedRuleProjectionChange, VerifiedRulesQuery, VerifiedRulesView,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
+pub use seo_domain::review_decision::{CmsApproval, HumanReviewDecision};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::path::Path;
+
+/// Exact bytes and public route of one file in an immutable approved release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicReleaseFile {
+    pub relative_path: String,
+    pub public_route: String,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseDeliveryStage {
+    Preflight,
+    Upload,
+    Readback,
+}
+
+#[derive(Debug)]
+pub struct ReleaseDeliveryError {
+    pub stage: ReleaseDeliveryStage,
+    pub detail: String,
+}
+
+impl std::fmt::Display for ReleaseDeliveryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "public release {:?} failed: {}", self.stage, self.detail)
+    }
+}
+
+impl std::error::Error for ReleaseDeliveryError {}
+
+/// One replaceable external effect: deploy an immutable release and read back
+/// its actual public bytes. The caller owns approval, PostgreSQL and Outbox.
+#[async_trait]
+pub trait PublicReleaseDelivery: Send + Sync {
+    fn preflight(&self) -> Result<(), ReleaseDeliveryError>;
+
+    /// Synchronous so an activation guard can safely restore the previous
+    /// release during Drop without spawning a detached deployment.
+    fn deploy(&self, release: &Path, previous: Option<&Path>) -> Result<(), ReleaseDeliveryError>;
+
+    async fn verify(
+        &self,
+        origin: &str,
+        files: &[PublicReleaseFile],
+    ) -> Result<(), ReleaseDeliveryError>;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VerifiedSupportBundleRequest {
@@ -100,7 +152,7 @@ pub struct CmsReviewDecisionRequest {
     /// route, which must fail closed if that revision is already published.
     pub revision_id: Option<String>,
     pub actor_role: String,
-    pub decision: String,
+    pub decision: HumanReviewDecision,
     pub reason: String,
     pub source: String,
 }
@@ -175,12 +227,40 @@ pub trait CrawlIngestRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait SourceContextRepository: Send + Sync {
-    async fn load_source_context_chunks(
+pub trait SourceContextSearchPort: Send + Sync {
+    /// Runtime configuration is an effect; the application owns required/optional behavior.
+    fn provider_configured(&self) -> bool;
+    fn retrieval_required(&self) -> bool;
+
+    async fn search_source_context_collection(
         &self,
+        collection: SourceContextCollection,
         query: &str,
         limit: usize,
-    ) -> Result<Vec<SourceContextChunkState>, DomainError>;
+    ) -> Result<Vec<SourceContextChunk>, DomainError>;
+}
+
+/// External effects of one Truth-to-Knowledge materialization. The adapter
+/// owns network I/O and an atomic PostgreSQL metadata+Outbox transaction.
+#[async_trait]
+pub trait VerifiedRuleProjectionPort: Send + Sync {
+    fn retrieval_required(&self) -> bool;
+
+    async fn delete_rule_points(
+        &self,
+        run_id: &str,
+        rule_ids: &[String],
+    ) -> Result<(), DomainError>;
+    async fn embed_rule_texts(
+        &self,
+        run_id: &str,
+        texts: &[String],
+    ) -> Result<Option<VerifiedRuleEmbeddingBatch>, DomainError>;
+    async fn stage_rule_upserts(
+        &self,
+        change: &VerifiedRuleProjectionChange,
+        embeddings: VerifiedRuleEmbeddingBatch,
+    ) -> Result<(), DomainError>;
 }
 
 #[async_trait]
@@ -239,6 +319,37 @@ pub trait SemanticLinkSearchPort: Send + Sync {
         &self,
         queries: &[String],
     ) -> Result<Vec<SemanticDemandCluster>, DomainError>;
+}
+
+/// Candidate discovery only; canonical mapping policy belongs to Knowledge.
+#[async_trait]
+pub trait CanonicalVectorSearchPort: Send + Sync {
+    async fn search_canonical_concepts(
+        &self,
+        raw_text: &str,
+    ) -> Result<CanonicalVectorLookup, DomainError>;
+}
+
+/// Replaceable Qdrant/Voyage effects for Truth's read-only retrieval diagnostics.
+/// Keeping search and rerank separate allows the use case to distinguish a
+/// best-effort search failure from a failed evidence-bearing rerank.
+#[async_trait]
+pub trait SemanticNeighborSearchPort: Send + Sync {
+    fn provider_configured(&self) -> bool;
+
+    async fn search_semantic_neighbors(
+        &self,
+        query: &str,
+        collection: SemanticNeighborCollection,
+        limit: usize,
+    ) -> Result<Vec<SemanticNeighborCandidate>, DomainError>;
+
+    async fn rerank_semantic_neighbors(
+        &self,
+        query: &str,
+        candidates: Vec<SemanticNeighborCandidate>,
+        limit: usize,
+    ) -> Result<Vec<SemanticNeighborCandidate>, DomainError>;
 }
 
 #[async_trait]
@@ -390,7 +501,7 @@ pub trait CmsReviewPort: Send + Sync {
         &self,
         page_node_key: &str,
         revision_id: &str,
-    ) -> Result<Option<CmsApprovalDecision>, DomainError>;
+    ) -> Result<Option<CmsApproval>, DomainError>;
 }
 
 #[async_trait]
@@ -429,8 +540,13 @@ pub trait PublishArtifactRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait ContextBundleRepository: Send + Sync {
-    async fn load_context_bundle(&self, context_key: &str) -> Result<ContextBundle, DomainError>;
+pub trait VerifiedRulesReader: Send + Sync {
+    /// None means the requested context is not active. An active context
+    /// with no admissible verified rules is returned with an empty rules list.
+    async fn read_verified_rules(
+        &self,
+        query: &VerifiedRulesQuery,
+    ) -> Result<Option<VerifiedRulesView>, DomainError>;
 }
 
 #[async_trait]

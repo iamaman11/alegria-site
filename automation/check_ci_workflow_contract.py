@@ -26,12 +26,19 @@ def check() -> None:
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
     assert "  gate:\n    name: CI\n    if: always()\n" in workflow
-    assert "toJSON(needs)" in workflow and 'result != "success"' in workflow
+    assert "toJSON(needs)" in workflow and "CI_PLAN_SHA" in workflow
+    assert "selected = json.loads(os.environ['SELECTED_CI_JOBS'])" in workflow
     gate = workflow.split("  gate:\n", 1)[1]
+    assert "  impact:\n" in workflow
+    assert "      - impact\n" in gate
+    assert "run: python3 automation/check_docs_layout.py" in workflow
+    assert "python3 automation/ci_impact.py --base" in workflow
+    assert "CI_IMPACT=PASS selected=" in workflow
     for owner in OWNERS:
         assert f"  {owner}:\n" in workflow, owner
         assert f"      - {owner}\n" in gate, owner
-    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request'$", workflow)) == len(OWNERS)
+        assert f"contains(fromJSON(needs.impact.outputs.selected_ci_jobs), '{owner}')" in workflow, owner
+    assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request' && needs\.impact\.result == 'success' && contains\(", workflow)) == len(OWNERS)
 
     # Main verifies exact source + the accepted PR before release/deployment.
     assert "commits/{merge_sha}/pulls" in workflow
@@ -41,6 +48,12 @@ def check() -> None:
     assert release.startswith("name: worker-image\n")
     assert "  push:\n    branches: [main]\n" in release
     assert "  workflow_dispatch:\n" in release
+    assert "  select-image:\n" in release
+    assert "python3 automation/ci_impact.py" in release
+    assert "--head \"$SOURCE_SHA\"" in release
+    assert "status = report.get('image_status', {}).get('temporal-worker')" in release
+    assert "if: needs.select-image.outputs.worker_required == 'true'" in release
+    assert "worker-image-impact-${{ env.SOURCE_SHA }}" in release
     assert "SOURCE_SHA: ${{ github.sha }}" in release
     assert "file: app/rust/services/temporal/Dockerfile" in release
     assert "by.alegria.source-head-sha=${{ env.SOURCE_SHA }}" in release
@@ -56,8 +69,7 @@ def check() -> None:
     rust_smokes = workflow.split("  rust-contract-smokes:\n", 1)[1].split("  product-truth:\n", 1)[0]
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
-    assert "cargo test -p runtime_models --locked" in architecture
-    assert "cargo test --workspace" not in architecture
+    assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "cargo test" not in rust_smokes and "cargo check" not in rust_smokes
     assert "cargo metadata --format-version 1 --no-deps --locked" in rust_smokes

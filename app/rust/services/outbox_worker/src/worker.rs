@@ -8,12 +8,10 @@ use tokio::time::timeout;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use infrastructure::adapters::sqlx_dead_letter_adapter::write_external_dead_letter;
 use infrastructure::adapters::sqlx_outbox_adapter::{
-    claim_outbox_batch, mark_done, mark_failed, mark_retry, read_sync_status,
+    claim_outbox_batch, mark_done, mark_failed_with_dead_letter, mark_retry, read_sync_status,
+    LeaseUpdate,
 };
-use primitives::errors::ErrorClass;
-use primitives::hash::blake3_hex;
 use telemetry::fbs_writer::write_runtime_window;
 
 use crate::materialize::dispatch_event;
@@ -24,32 +22,6 @@ const DEFAULT_LEASE_SECONDS: i64 = 120;
 const DEFAULT_IDLE_POLL_MS: u64 = 1500;
 const DEFAULT_MAX_RETRIES: i32 = 10;
 const OUTBOX_NOTIFY_CHANNEL: &str = "sync_outbox_channel";
-
-fn classify_dispatch_error(msg: &str) -> ErrorClass {
-    let lower = msg.to_lowercase();
-    if lower.contains("decode")
-        || lower.contains("unsupported payload")
-        || lower.contains("unknown payload_type")
-        || lower.contains("unknown event_type")
-        || lower.contains("invalid")
-        || lower.contains("contract")
-        || lower.contains("schema")
-    {
-        ErrorClass::ContractViolation
-    } else if lower.contains("timeout") {
-        ErrorClass::TransportTimeout
-    } else if lower.contains("rate limit") || lower.contains("too many requests") {
-        ErrorClass::RemoteRateLimit
-    } else if lower.contains("connection")
-        || lower.contains("unavailable")
-        || lower.contains("refused")
-        || lower.contains("reset")
-    {
-        ErrorClass::InfraUnavailable
-    } else {
-        ErrorClass::UnexpectedBug
-    }
-}
 
 fn current_build_id() -> String {
     std::env::var("OUTBOX_WORKER_BUILD_ID")
@@ -183,6 +155,7 @@ pub async fn run_worker_loop(
             info!(
                 worker_id,
                 %event_id,
+                run_id = %event.run_id,
                 event_type,
                 aggregate_type,
                 aggregate_key,
@@ -202,61 +175,56 @@ pub async fn run_worker_loop(
             .await
             {
                 Ok(_) => {
-                    mark_done(pool, event_id).await?;
+                    if mark_done(pool, &event).await? == LeaseUpdate::Lost {
+                        warn!(worker_id, %event_id, run_id = %event.run_id,
+                            "outbox completion rejected: another worker owns the lease");
+                    } else {
+                        info!(worker_id, %event_id, run_id = %event.run_id,
+                            target_system = %event.target_system,
+                            operation = %event.event_type,
+                            attempt = event.retry_count + 1, result = "done",
+                            "outbox event delivered");
+                    }
                 }
                 Err(err) => {
                     let msg = err.to_string();
                     if event.retry_count + 1 >= DEFAULT_MAX_RETRIES {
-                        error!(
-                            worker_id,
-                            %event_id,
-                            event_type,
-                            retries = event.retry_count + 1,
-                            error = %msg,
-                            "outbox event marked as failed"
-                        );
-                        mark_failed(pool, event_id, &msg).await?;
-                        let error_class = classify_dispatch_error(&msg);
-                        let payload_hash = blake3_hex(&event.payload_bytes);
-                        let idempotency_key = if event.idempotency_key.is_empty() {
-                            event_id.to_string()
-                        } else {
-                            event.idempotency_key.clone()
-                        };
-                        if let Err(dlq_err) = write_external_dead_letter(
+                        let result = mark_failed_with_dead_letter(
                             pool,
+                            &event,
                             "sync_outbox_dispatch",
-                            &event_id.to_string(),
-                            error_class,
-                            &event.payload_type,
-                            event.schema_version,
-                            &event.payload_bytes,
-                            &payload_hash,
-                            &idempotency_key,
+                            err.class,
                             &current_build_id(),
                             &msg,
                         )
-                        .await
-                        {
-                            error!(
-                                worker_id,
-                                %event_id,
-                                error = %dlq_err,
-                                "failed to persist outbox dead letter"
-                            );
+                        .await?;
+                        if result == LeaseUpdate::Applied {
+                            error!(worker_id, %event_id, run_id = %event.run_id,
+                                target_system = %event.target_system,
+                                operation = %event.event_type,
+                                retries = event.retry_count + 1,
+                                result = "dead_letter",
+                                error_class = err.class.as_str(), stage = ?err.stage,
+                                error = %msg,
+                                "outbox terminal failure and dead letter committed together");
+                        } else {
+                            warn!(worker_id, %event_id, run_id = %event.run_id,
+                                "outbox failure rejected: another worker owns the lease");
                         }
                     } else {
                         let delay = next_retry_delay_sec(event.retry_count);
-                        warn!(
-                            worker_id,
-                            %event_id,
-                            event_type,
-                            retries = event.retry_count + 1,
-                            retry_in_sec = delay,
-                            error = %msg,
-                            "outbox event scheduled for retry"
-                        );
-                        mark_retry(pool, event_id, &msg, delay).await?;
+                        if mark_retry(pool, &event, &msg, delay).await? == LeaseUpdate::Lost {
+                            warn!(worker_id, %event_id, run_id = %event.run_id,
+                                "outbox retry rejected: another worker owns the lease");
+                        } else {
+                            warn!(worker_id, %event_id, run_id = %event.run_id,
+                                operation = %event.event_type,
+                                target_system = %event.target_system,
+                                error_class = err.class.as_str(), stage = ?err.stage,
+                                attempt = event.retry_count + 1, result = "retry",
+                                retry_in_sec = delay, error = %msg,
+                                "outbox event scheduled for retry");
+                        }
                     }
                 }
             }

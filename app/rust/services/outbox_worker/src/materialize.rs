@@ -1,4 +1,4 @@
-use anyhow::Result;
+use infrastructure::adapters::projection_materialize_adapter::DispatchError;
 
 pub async fn dispatch_event(
     target_system: &str,
@@ -6,7 +6,7 @@ pub async fn dispatch_event(
     aggregate_key: &str,
     payload_type: &str,
     payload_bytes: &[u8],
-) -> Result<()> {
+) -> Result<(), DispatchError> {
     infrastructure::adapters::projection_materialize_adapter::dispatch_event(
         target_system,
         event_type,

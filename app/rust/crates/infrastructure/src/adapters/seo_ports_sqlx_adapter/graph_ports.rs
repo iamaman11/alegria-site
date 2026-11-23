@@ -74,7 +74,7 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
             context
                 .link_recommendations
                 .push(runtime_models::LinkRecommendation {
-                    link_recommendation_key: primitives::seo::seo_artifact_key(
+                    link_recommendation_key: seo_domain::artifact_identity::seo_artifact_key(
                         "link_recommendation",
                         &[
                             scope_signature,

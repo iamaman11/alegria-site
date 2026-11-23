@@ -71,7 +71,7 @@ impl CmsReviewPort for SqlxSeoRuntimeRepository<'_> {
         &self,
         page_node_key: &str,
         revision_id: &str,
-    ) -> Result<Option<CmsApprovalDecision>, DomainError> {
+    ) -> Result<Option<CmsApproval>, DomainError> {
         sqlx_seo_cms_adapter::load_latest_approval_decision(self.pool, page_node_key, revision_id)
             .await
     }
@@ -114,59 +114,66 @@ impl PublishArtifactRepository for SqlxSeoRuntimeRepository<'_> {
 }
 
 #[async_trait]
-impl ContextBundleRepository for SqlxSeoRuntimeRepository<'_> {
-    async fn load_context_bundle(&self, context_key: &str) -> Result<ContextBundle, DomainError> {
-        let Some(ctx) =
-            sqlx_context_bundle_adapter::load_context_bundle_base(self.pool, context_key).await?
-        else {
-            return Ok(ContextBundle {
-                context_key: context_key.to_string(),
-                country_code: String::new(),
-                visa_family: String::new(),
-                visa_subtype: String::new(),
-                citizenship_code: String::new(),
-                ontology_rules: vec![],
-                citation_facts: vec![],
-                related_links: vec![],
-            });
-        };
-
-        let rules_rows =
-            sqlx_context_bundle_adapter::load_context_bundle_rules(self.pool, context_key).await?;
-        let mut facts = Vec::new();
-        for r in rules_rows {
-            let citation = if let Some(sk) = r.source_key.clone() {
-                Some(SourceCitation {
-                    source_key: sk,
-                    source_label: r.source_label.unwrap_or_default(),
-                    base_url: r.base_url.unwrap_or_default(),
-                })
-            } else {
-                None
-            };
-
-            facts.push(CitationFact {
-                rule_instance_id: r.rule_instance_id,
-                rule_type_key: r.rule_type_key,
-                status: r.status,
-                effective_from: r.effective_from,
-                effective_to: r.effective_to,
-                citation,
-                role_type: read_role_type(&r.role_type),
-                params: map_params(&r.params),
-            });
+impl VerifiedRulesReader for SqlxSeoRuntimeRepository<'_> {
+    async fn read_verified_rules(
+        &self,
+        query: &VerifiedRulesQuery,
+    ) -> Result<Option<VerifiedRulesView>, DomainError> {
+        let context_key = &query.context_key;
+        let active = sqlx_context_bundle_adapter::active_context_exists(self.pool, context_key)
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!(
+                    "knowledge.read_verified_rules stage=active_context run_id={} context_key={context_key}: {err}",
+                    query.run_id
+                ),
+            })?;
+        if !active {
+            return Ok(None);
         }
 
-        Ok(ContextBundle {
-            context_key: context_key.to_string(),
-            country_code: ctx.country_code,
-            visa_family: ctx.visa_family,
-            visa_subtype: ctx.visa_subtype,
-            citizenship_code: ctx.citizenship_code,
-            ontology_rules: vec![],
-            citation_facts: facts,
-            related_links: vec![],
-        })
+        let rules_rows = sqlx_context_bundle_adapter::load_admissible_verified_rules(self.pool, context_key)
+            .await
+            .map_err(|err| match err {
+                DomainError::ContractViolation { message } => DomainError::ContractViolation {
+                    message: format!(
+                        "knowledge.read_verified_rules stage=verified_rows run_id={} context_key={context_key}: {message}",
+                        query.run_id
+                    ),
+                },
+                other => DomainError::InfraUnavailable {
+                    message: format!(
+                        "knowledge.read_verified_rules stage=verified_rows run_id={} context_key={context_key}: {other}",
+                        query.run_id
+                    ),
+                },
+            })?;
+        let rules = rules_rows
+            .into_iter()
+            .map(|r| {
+                let role = RuleRoleType::parse(&r.role_type).ok_or_else(|| {
+                    DomainError::ContractViolation {
+                        message: format!(
+                            "knowledge.read_verified_rules stage=role_decode run_id={} rule_id={} unknown role_type={}",
+                            query.run_id, r.rule_instance_id, r.role_type
+                        ),
+                    }
+                })?;
+                Ok(VerifiedRule {
+                    rule_instance_id: r.rule_instance_id,
+                    rule_type_key: r.rule_type_key,
+                    role,
+                    params: r.params,
+                    effective_from: r.effective_from,
+                    effective_to: r.effective_to,
+                    source_key: r.source_key,
+                })
+            })
+            .collect::<Result<Vec<_>, DomainError>>()?;
+        Ok(Some(VerifiedRulesView {
+            context_key: context_key.clone(),
+            rules,
+        }))
     }
 }
 

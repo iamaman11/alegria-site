@@ -1,14 +1,3 @@
-// A single owner of factual candidates per run. Deterministic procedural
-// extraction can still drive structure and page diagnostics, but its loose
-// numeric/keyword heuristics must not compete with strict chat_manual truth.
-fn active_heuristic_truth_rules<T>(rules: &[T], manual_selected: bool) -> &[T] {
-    if manual_selected {
-        &[]
-    } else {
-        rules
-    }
-}
-
 pub(crate) async fn extraction_schema_validate_impl(
     input: &ExtractionSchemaValidateInput,
 ) -> Result<ExtractionSchemaValidateOutput, DomainError> {
@@ -56,7 +45,6 @@ pub(crate) async fn extraction_schema_validate_impl(
         sections,
     })
 }
-
 pub(crate) async fn candidate_validation_impl(
     acts: &AlegriaActivities,
     input: &CandidateValidationInput,
@@ -142,7 +130,7 @@ pub(crate) async fn candidate_validation_impl(
             .iter()
             .enumerate()
         {
-            let (role, concept_key) = role_and_concept_for_rule(rule);
+            let (role, concept_key) = role_and_concept_for_rule(&rule.rule_key);
             // The FIRST numeric token determines rule parameters; never
             // cite a different amount or duration merely because it appears
             // elsewhere in this raw section.
@@ -170,7 +158,7 @@ pub(crate) async fn candidate_validation_impl(
                 role: role.to_string(),
                 concept_canonical_key: concept_key.clone(),
                 raw_mention: evidence_quote.clone(),
-                params: params_for_rule(rule),
+                params: params_for_rule(&rule.rule_key, &rule.numeric_tokens),
                 scope: TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()),
                 unresolved_applicability: false,
                 severity: "mandatory".to_string(),
@@ -181,7 +169,7 @@ pub(crate) async fn candidate_validation_impl(
                 span_start,
                 span_end,
                 source_key: raw.source_url.clone(),
-                source_tier: section_source_tier(raw),
+                source_tier: section_source_tier(&raw.source_dtype, &raw.source_domain),
                 source_snapshot_hash: if raw.content_hash.trim().is_empty() {
                     content_hash_v1(&raw.content_md)
                 } else {
@@ -303,7 +291,7 @@ pub(crate) async fn candidate_validation_impl(
                     span_start: rule.span_start,
                     span_end: rule.span_end,
                     source_key: raw.source_url.clone(),
-                    source_tier: section_source_tier(raw),
+                    source_tier: section_source_tier(&raw.source_dtype, &raw.source_domain),
                     source_snapshot_hash: current_snapshot_hash.clone(),
                     is_numeric: rule.is_numeric,
                     is_range: rule.is_range,
@@ -400,19 +388,4 @@ pub(crate) async fn candidate_validation_impl(
             .sum(),
         sections: section_states,
     })
-}
-
-#[cfg(test)]
-mod candidate_source_ownership_tests {
-    use super::active_heuristic_truth_rules;
-
-    #[test]
-    fn manual_truth_never_mixes_with_heuristic_candidates() {
-        let proposed = ["passport", "insurance", "fee"];
-        assert!(active_heuristic_truth_rules(&proposed, true).is_empty());
-        assert_eq!(
-            active_heuristic_truth_rules(&proposed, false),
-            proposed.as_slice()
-        );
-    }
 }

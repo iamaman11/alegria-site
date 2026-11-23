@@ -8,7 +8,7 @@ use ego_tree::NodeRef;
 use scraper::{node::Node, Html, Selector};
 use serde::{Deserialize, Serialize};
 
-use crate::hash::content_hash_v1;
+use primitives::hash::content_hash_v1;
 
 // (section_type, keywords) — checked as case-insensitive substrings of heading text.
 static SECTION_PATTERNS: &[(&str, &[&str])] = &[

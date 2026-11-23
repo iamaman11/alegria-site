@@ -786,7 +786,7 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
 #[serial]
 async fn published_page_review_requires_exact_pending_revision_and_active_workflow() {
     use infrastructure::adapters::sqlx_seo_cms_adapter;
-    use seo_ports::CmsReviewDecisionRequest;
+    use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -830,7 +830,7 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
         page_node_key: page.clone(),
         revision_id: revision_id.map(str::to_string),
         actor_role: "real_editor_fixture".to_string(),
-        decision: "approved".to_string(),
+        decision: HumanReviewDecision::Approved,
         reason: "Review of exact pending revision".to_string(),
         source: "e2e_revision_bound_human_gate".to_string(),
     };
@@ -855,6 +855,18 @@ async fn published_page_review_requires_exact_pending_revision_and_active_workfl
         .await.unwrap();
     assert_eq!(result.revision_id, replacement);
     assert_eq!(result.workflow_id, run_id);
+    let repository =
+        infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository::new(pool);
+    let readback = seo_application::review_publish::load_cms_approval_decision(
+        &repository,
+        &page,
+        &replacement,
+    )
+    .await
+    .unwrap();
+    assert_eq!(readback.decision_key, result.decision_key);
+    assert!(readback.approves_revision(&page, &replacement));
+    assert!(!readback.approves_revision(&page, &original));
     let (live_revision, live_status): (String, String) = sqlx::query_as(
         "SELECT current_revision_id,current_status FROM site.cms_pages WHERE page_node_key=$1",
     ).bind(&page).fetch_one(pool).await.unwrap();
@@ -1373,7 +1385,8 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
     use infrastructure::adapters::{
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
     };
-    use primitives::{errors::ErrorClass, seo::ContentGapDetector};
+    use primitives::errors::ErrorClass;
+    use seo_domain::artifact_identity::ContentGapDetector;
     use seo_application::registration::register_site_build_input;
     use seo_ports::SeoSiteBuildRegistrationRequest;
 

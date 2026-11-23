@@ -2,10 +2,13 @@ pub async fn apply_human_review_decision(
     pool: &PgPool,
     request: &CmsReviewDecisionRequest,
 ) -> Result<CmsReviewDecisionOutcome, DomainError> {
+    seo_domain::review_decision::validate_human_reviewer(
+        &request.page_node_key,
+        request.revision_id.as_deref(),
+        &request.actor_role,
+    )?;
     let actor_role = request.actor_role.trim();
-    if actor_role.is_empty() || actor_role == "seo_system" {
-        return Err(validation_failure("human actor_role is required"));
-    }
+    let decision = request.decision.as_str();
 
     // The live pointer intentionally stays on the published revision while a
     // replacement waits for review. Never let a page-key-only decision select
@@ -36,13 +39,13 @@ pub async fn apply_human_review_decision(
         .ok_or_else(|| {
             validation_failure("seo workflow run_id not found for current review revision")
         })?;
-    let decision_key = primitives::seo::seo_artifact_key(
+    let decision_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_approval_decision",
         &[
             &request.page_node_key,
             &revision_id,
             actor_role,
-            &request.decision,
+            decision,
         ],
     );
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
@@ -62,7 +65,7 @@ pub async fn apply_human_review_decision(
     .bind(&request.page_node_key)
     .bind(&revision_id)
     .bind(actor_role)
-    .bind(&request.decision)
+    .bind(decision)
     .bind(&request.reason)
     .bind(Json(json!({
         "reason": request.reason.clone(),
@@ -72,12 +75,7 @@ pub async fn apply_human_review_decision(
     .await
     .map_err(classify_sqlx)?;
 
-    let queue_state = match request.decision.as_str() {
-        "approved" => "resolved",
-        "blocked" => "reopened",
-        "reopened" => "reopened",
-        other => return Err(validation_failure(format!("unsupported decision: {other}"))),
-    };
+    let queue_state = request.decision.hitl_queue_state();
     sqlx::query(
         r#"
         UPDATE site.seo_hitl_tasks

@@ -1,49 +1,3 @@
-// The canonical contradiction gate must examine proposals from both
-// deterministic extraction and ChatGPT. The typed params use the existing
-// canonical stable signature, never Rust Debug formatting.
-// No evidence/source attributes are accepted from the LLM here.
-fn validated_candidate_assertions(
-    state: &CandidateValidationSectionState,
-) -> Vec<seo_steps::contradiction_gate_step::FactAssertion> {
-    state
-        .candidates
-        .iter()
-        .filter(|candidate| candidate.epistemic_status != "rejected")
-        .flat_map(|candidate| {
-            // Different properties of the same rule are complementary:
-            // passport validity, passport requirement, and insurance coverage
-            // must not conflict solely because their JSON objects differ.
-            // Compare the SAME typed parameter key within the SAME explicit
-            // source scope. Real conflicting amounts remain contradictions.
-            let subject = format!(
-                "section:{}:{}:{}:scope:{}",
-                state.section_id,
-                candidate.role,
-                candidate.concept_canonical_key,
-                candidate.scope.stable_signature(),
-            );
-            let assertion = |predicate_key: String, value_normalized: String| {
-                seo_steps::contradiction_gate_step::FactAssertion {
-                    subject_key: subject.clone(),
-                    predicate_key,
-                    value_normalized,
-                    source_key: Some(candidate.source_key.clone()),
-                    confidence: candidate.confidence as f32,
-                }
-            };
-            match candidate.params.as_object() {
-                Some(fields) if !fields.is_empty() => fields
-                    .iter()
-                    .map(|(key, value)| assertion(format!("param:{key}"), value.stable_signature()))
-                    .collect::<Vec<_>>(),
-                _ => vec![assertion(
-                    "structured_params".to_string(),
-                    candidate.params.stable_signature(),
-                )],
-            }
-        })
-        .collect()
-}
 
 #[cfg(test)]
 mod typed_contradiction_regressions {
@@ -83,7 +37,7 @@ mod typed_contradiction_regressions {
 
     fn check(
         candidates: Vec<ValidatedTruthCandidateRecord>,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
+    ) -> truth_domain::contradictions::ContradictionGateOutput {
         let state = CandidateValidationSectionState {
             section_id: 1248,
             page_id: 133,
@@ -94,8 +48,8 @@ mod typed_contradiction_regressions {
             blocked_by_gate: false,
             status: "accepted".to_string(),
         };
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: "same-evidence".to_string(),
                 facts: validated_candidate_assertions(&state),
             },
@@ -209,119 +163,6 @@ mod typed_contradiction_regressions {
     }
 }
 
-// An unresolved *low-trust* repetition of the exact same assertion is
-// not negative evidence against two independent structured primary sources.
-// It stays needs_hitl itself. Any differing params/scope, official uncertainty,
-// source-level contradiction, or negative review still holds the semantic slot.
-fn independently_confirmed_weak_duplicate(
-    weak: &TruthAdjudicationCandidateDecision,
-    sections: &[CandidateValidationSectionState],
-    decisions: &[TruthAdjudicationCandidateDecision],
-    registry: &BTreeMap<String, SourceGovernanceRecord>,
-) -> bool {
-    if weak.decision != "needs_hitl"
-        || weak.adjudication_reason != "candidate_validation_requires_hitl"
-    {
-        return false;
-    }
-    let Some(source) = registry.get(&weak.source_key) else {
-        return false;
-    };
-    if source.authority_class != "forum" || source.trust_level > 1 {
-        return false;
-    }
-    let decided = decisions
-        .iter()
-        .map(|decision| decision.rule_candidate_id.as_str())
-        .collect::<BTreeSet<_>>();
-    let mut independent_primary_groups = BTreeSet::new();
-    for section in sections.iter().filter(|section| !section.blocked_by_gate) {
-        for candidate in &section.candidates {
-            if candidate.epistemic_status != "structured"
-                || decided.contains(candidate.rule_candidate_id.as_str())
-                || candidate.role != weak.role
-                || candidate.concept_canonical_key != weak.concept_canonical_key
-                || candidate.params.stable_signature() != weak.params.stable_signature()
-                || candidate.scope.stable_signature() != weak.scope.stable_signature()
-            {
-                continue;
-            }
-            let Some(governance) = registry.get(&candidate.source_key) else {
-                continue;
-            };
-            if governance.authority_class == "primary_authority"
-                && governance.trust_level >= 5
-                && !governance.independence_group_key.trim().is_empty()
-            {
-                independent_primary_groups.insert(governance.independence_group_key.clone());
-            }
-        }
-    }
-    independent_primary_groups.len() >= 2
-}
-
-// A blocked section holds overlapping scope, not every applicant profile.
-// A global or unrepresentable scope conservatively overlaps all profiles.
-fn held_scope_key(scope: &TruthParamValue) -> String {
-    if primitives::truth_candidates::truth_scope_target(scope).is_some() {
-        scope.stable_signature()
-    } else {
-        TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature()
-    }
-}
-
-fn semantic_identity_is_held(
-    held: &BTreeSet<(String, String, String)>,
-    role: &str,
-    concept: &str,
-    scope: &TruthParamValue,
-) -> bool {
-    let own_scope = scope.stable_signature();
-    let global_scope =
-        TruthParamValue::object(Vec::<(String, TruthParamValue)>::new()).stable_signature();
-    held.iter().any(|(held_role, held_concept, held_scope)| {
-        held_role == role
-            && held_concept == concept
-            && (held_scope == &own_scope
-                || held_scope == &global_scope
-                || own_scope == global_scope)
-    })
-}
-
-fn held_semantic_identities(
-    sections: &[CandidateValidationSectionState],
-    decisions: &[TruthAdjudicationCandidateDecision],
-    registry: &BTreeMap<String, SourceGovernanceRecord>,
-) -> BTreeSet<(String, String, String)> {
-    let mut held = decisions
-        .iter()
-        .filter(|decision| {
-            (decision.decision == "needs_hitl"
-                || decision.adjudication_reason == "contradiction_block")
-                && !independently_confirmed_weak_duplicate(decision, sections, decisions, registry)
-        })
-        .map(|decision| {
-            (
-                decision.role.clone(),
-                decision.concept_canonical_key.clone(),
-                held_scope_key(&decision.scope),
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    for section in sections.iter().filter(|section| section.blocked_by_gate) {
-        for candidate in &section.candidates {
-            if candidate.epistemic_status != "rejected" {
-                held.insert((
-                    candidate.role.clone(),
-                    candidate.concept_canonical_key.clone(),
-                    held_scope_key(&candidate.scope),
-                ));
-            }
-        }
-    }
-    held
-}
-
 pub(crate) async fn contradiction_gate_sweep_impl(
     acts: &AlegriaActivities,
     input: &ContradictionGateSweepInput,
@@ -364,7 +205,7 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 } else {
                     rule.rule_key.clone()
                 };
-                seo_steps::contradiction_gate_step::FactAssertion {
+                truth_domain::contradictions::FactAssertion {
                     subject_key: format!("section:{}:{}", section.section_id, rule.rule_key),
                     predicate_key: predicate.to_string(),
                     value_normalized,
@@ -376,8 +217,8 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         // Preserve procedural conflict checks and add every validated
         // structured proposition before the independent adjudication step.
         facts.extend(validated_candidate_assertions(candidate_state));
-        let output = seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+        let output = truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: input.run_id.clone(),
                 facts,
             },
@@ -394,19 +235,18 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                     .collect::<Vec<_>>()
                     .join(" ")
             );
-            let (_, neighbors, reason_codes) = retrieve_semantic_neighbors(
+            let lookup = retrieve_semantic_neighbors(
                 &contradiction_query,
-                "verified_rules_4",
-                semantic_search_adapter::VoyageSearchSurface::Standard,
+                SemanticNeighborCollection::VerifiedRules,
                 None,
                 4,
             )
             .await?;
-            semantic_neighbor_refs = neighbors
+            semantic_neighbor_refs = lookup.neighbors
                 .into_iter()
                 .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
                 .collect();
-            semantic_neighbor_reason_codes.extend(reason_codes);
+            semantic_neighbor_reason_codes.extend(lookup.reason_codes);
             if output.needs_hitl && !semantic_neighbor_refs.is_empty() {
                 semantic_neighbor_reason_codes
                     .push("semantic_neighbor_conflict_review_required".to_string());
@@ -446,47 +286,6 @@ pub(crate) async fn contradiction_gate_sweep_impl(
             .sum(),
         sections,
     })
-}
-
-/// Rejection removes evidence and conservatively holds the *same scoped*
-/// semantic identity. It never manufactures independent corroboration.
-fn apply_exact_review_rejection_veto(
-    decisions: &mut [TruthAdjudicationCandidateDecision],
-    rejected_ids: &BTreeSet<String>,
-) -> BTreeSet<i64> {
-    let held_slots = decisions
-        .iter()
-        .filter(|d| rejected_ids.contains(&d.rule_candidate_id))
-        .map(|d| {
-            (
-                d.role.clone(),
-                d.concept_canonical_key.clone(),
-                d.scope.stable_signature(),
-            )
-        })
-        .collect::<BTreeSet<_>>();
-    let mut affected = BTreeSet::new();
-    for decision in decisions {
-        let slot = (
-            decision.role.clone(),
-            decision.concept_canonical_key.clone(),
-            decision.scope.stable_signature(),
-        );
-        if rejected_ids.contains(&decision.rule_candidate_id) {
-            decision.decision = "rejected".to_string();
-            decision.publish_admissibility = "not_admissible".to_string();
-            decision.verification_method = "truth_review_veto@1".to_string();
-            decision.adjudication_reason = "human_rejected_exact_source_evidence".to_string();
-            affected.insert(decision.section_id);
-        } else if held_slots.contains(&slot) && decision.decision == "verified" {
-            decision.decision = "needs_hitl".to_string();
-            decision.publish_admissibility = "needs_hitl".to_string();
-            decision.adjudication_reason =
-                "reviewed_rejection_blocks_semantic_identity".to_string();
-            affected.insert(decision.section_id);
-        }
-    }
-    affected
 }
 
 pub(crate) async fn truth_adjudication_sweep_impl(
@@ -977,9 +776,9 @@ mod manual_candidate_contradiction_tests {
 
     fn gate(
         state: &CandidateValidationSectionState,
-    ) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
-        seo_steps::contradiction_gate_step::execute(
-            &seo_steps::contradiction_gate_step::ContradictionGateInput {
+    ) -> truth_domain::contradictions::ContradictionGateOutput {
+        truth_domain::contradictions::execute(
+            &truth_domain::contradictions::ContradictionGateInput {
                 run_id: "manual-contradiction-test".to_string(),
                 facts: validated_candidate_assertions(state),
             },

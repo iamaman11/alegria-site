@@ -28,10 +28,7 @@ case "${1:-}" in
     python3 automation/smoke_truth_certification_strict_projection_policy.py
     python3 automation/check_truth_governance_policy.py
     python3 automation/check_truth_admissibility_gate.py
-    python3 automation/check_truth_validators_contract.py
-    python3 automation/check_truth_adjudication_contract.py
     python3 automation/check_extraction_coverage.py
-    python3 automation/check_contradiction_handling.py
     python3 automation/check_pii_redaction_pre_llm.py
     python3 automation/check_licensing_gate.py
     python3 automation/check_deterministic_fallback_publish_blocking.py

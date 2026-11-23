@@ -5,18 +5,15 @@ use contracts::generated::alegria::temporal::v1::{
 pub fn execute(input: &FinalizePublishInputPayload) -> FinalizePublishOutputPayload {
     let validation = input.render_validation.clone().unwrap_or_default();
     let publish_artifact = input.publish_artifact.clone();
-    let verdict = if validation.verdict == "render_ready" {
-        "published"
-    } else {
-        "blocked"
-    };
+    // A render-ready artifact is not yet a published revision. The repository
+    // must independently verify public HTTPS bytes before returning success.
+    let gate = seo_domain::publishing::ReleaseReadiness::from_render_validation(
+        &validation.verdict,
+        &validation.blocking_reasons,
+    );
     FinalizePublishOutputPayload {
-        verdict: verdict.to_string(),
-        current_status: if verdict == "published" {
-            "published".to_string()
-        } else {
-            "blocked".to_string()
-        },
+        verdict: gate.verdict().to_string(),
+        current_status: gate.current_status().to_string(),
         blocking_reasons: validation.blocking_reasons,
         publish_artifact,
     }

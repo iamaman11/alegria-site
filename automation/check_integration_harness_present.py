@@ -134,16 +134,16 @@ def main() -> int:
         print("FAIL integration_harness ci_missing=" + ",".join(missing_ci))
         return 1
 
-    # Fast PRs test lightweight Rust models; the full workspace, isolated E2E
-    # harness and real PostgreSQL tests live in ci-deep before release.
+    # The PR Rust owner executes impact-selected Cargo tests. The isolated
+    # E2E harness and real PostgreSQL tests also live in ci-deep.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     deep = (ROOT / ".github/workflows/ci-deep.yml").read_text(encoding="utf-8")
     if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
         print("FAIL integration_harness missing Rust owner")
         return 1
     rust_job = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
-    if "run: cargo test -p runtime_models --locked" not in rust_job:
-        print("FAIL integration_harness missing fast Rust model regressions")
+    if "python3 automation/run_scoped_cargo_feedback.py" not in rust_job:
+        print("FAIL integration_harness missing impact-selected Rust tests")
         return 1
     for snippet in (
         "run: cargo test --workspace --locked",

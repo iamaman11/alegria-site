@@ -20,7 +20,7 @@ pub fn execute(input: &PublishMaterializeInputPayload) -> PublishMaterializeOutp
         blocking_reasons.push("missing_base_url".to_string());
     }
     let artifact = input.publish_artifact.clone().unwrap_or(PublishArtifact {
-        artifact_key: primitives::seo::seo_artifact_key(
+        artifact_key: seo_domain::artifact_identity::seo_artifact_key(
             "publish_artifact",
             &[
                 &input.page_node_key,

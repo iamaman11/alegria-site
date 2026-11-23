@@ -152,23 +152,40 @@ pub(crate) async fn projection_sync_impl(
         .await
         {
             Ok(_) => {
-                sqlx_outbox_adapter::mark_done(&acts.pool, event.event_id)
+                let status = sqlx_outbox_adapter::mark_done(&acts.pool, &event)
                     .await
                     .map_err(AlegriaActivities::classify_error)?;
-                processed_events += 1;
+                if status == sqlx_outbox_adapter::LeaseUpdate::Applied {
+                    processed_events += 1;
+                }
+                tracing::info!(run_id = %event.run_id, event_id = %event.event_id,
+                    target_system = %event.target_system, operation = %event.event_type,
+                    attempt = event.retry_count + 1, lease = ?status,
+                    "projection sync delivery completed");
             }
             Err(err) => {
                 let message = err.to_string();
-                if event.retry_count + 1 >= 10 {
-                    sqlx_outbox_adapter::mark_failed(&acts.pool, event.event_id, &message)
+                let terminal = event.retry_count + 1 >= 10;
+                let status = if terminal {
+                    sqlx_outbox_adapter::mark_failed_with_dead_letter(
+                        &acts.pool, &event, "projection_sync", err.class,
+                        &AlegriaActivities::current_build_id(), &message,
+                    )
                         .await
-                        .map_err(AlegriaActivities::classify_error)?;
+                        .map_err(AlegriaActivities::classify_error)?
                 } else {
-                    sqlx_outbox_adapter::mark_retry(&acts.pool, event.event_id, &message, 30)
+                    sqlx_outbox_adapter::mark_retry(&acts.pool, &event, &message, 30)
                         .await
-                        .map_err(AlegriaActivities::classify_error)?;
-                }
-                return Err(DomainError::InfraUnavailable { message });
+                        .map_err(AlegriaActivities::classify_error)?
+                };
+                tracing::warn!(run_id = %event.run_id, event_id = %event.event_id,
+                    target_system = %event.target_system, operation = %event.event_type,
+                    attempt = event.retry_count + 1,
+                    error_class = err.class.as_str(), stage = ?err.stage,
+                    result = if terminal { "dead_letter" } else { "retry" },
+                    lease = ?status, error = %message,
+                    "projection sync delivery failed");
+                return Err(err.into_domain_error());
             }
         }
     }
@@ -281,7 +298,7 @@ pub(crate) async fn seo_preflight_impl(
     input: &SeoPreflightInput,
 ) -> Result<SeoPreflightOutput, DomainError> {
     sqlx_seo_adapter::ensure_seo_runtime_registries(&acts.pool).await?;
-    let scope = seo_domain::identity::derive_scope_from_payload(&input.scope)?;
+    let scope = seo_steps::seo_identity::derive_scope_from_payload(&input.scope)?;
     let normalized_profile = sqlx_seo_adapter::validate_applicant_profile_reference(
         &acts.pool,
         &scope.applicant_profile,

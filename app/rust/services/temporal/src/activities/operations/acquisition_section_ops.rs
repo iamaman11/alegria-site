@@ -420,7 +420,11 @@ pub(crate) async fn canonical_mapping_sweep_impl(
                     .collect(),
             },
         );
-        output.mappings = resolve_canonical_vector_mappings(output.mappings).await?;
+        output.mappings = seo_application::knowledge::resolve_canonical_vector_mappings(
+            &infrastructure::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
+            output.mappings,
+        )
+        .await?;
         let needs_hitl = output.mappings.iter().any(|mapping| mapping.needs_hitl);
         let decision = if section.blocked_by_gate {
             "blocked_by_gate"

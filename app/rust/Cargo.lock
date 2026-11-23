@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "acquisition"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ego-tree",
+ "lopdf",
+ "primitives",
+ "regex",
+ "scraper",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,6 +617,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+ "truth_domain",
  "uuid",
 ]
 
@@ -2071,6 +2086,7 @@ dependencies = [
 name = "infrastructure"
 version = "0.1.0"
 dependencies = [
+ "acquisition",
  "anyhow",
  "async-trait",
  "bytes",
@@ -2109,6 +2125,7 @@ dependencies = [
  "tonic-prost-build",
  "tower",
  "tracing",
+ "truth_domain",
  "uuid",
  "vector_qdrant",
 ]
@@ -2128,15 +2145,18 @@ name = "integration_harness"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "contracts",
  "infrastructure",
  "neo4rs",
+ "outbox_worker",
  "primitives",
  "prost",
  "qdrant-client",
  "reqwest 0.13.5",
  "seo_application",
+ "seo_domain",
  "seo_ports",
  "seo_steps",
  "serde",
@@ -3469,14 +3489,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blake3",
- "contracts",
- "ego-tree",
  "idna",
- "lopdf",
- "regex",
- "scraper",
- "serde",
- "serde_json",
  "thiserror 2.0.21",
  "url",
  "uuid",
@@ -4333,8 +4346,9 @@ dependencies = [
 name = "seo_domain"
 version = "0.1.0"
 dependencies = [
- "contracts",
  "primitives",
+ "regex",
+ "scraper",
  "serde",
  "serde_json",
 ]
@@ -4348,6 +4362,7 @@ dependencies = [
  "primitives",
  "prost",
  "runtime_models",
+ "seo_domain",
  "serde",
  "serde_json",
 ]
@@ -5051,6 +5066,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "truth_domain",
  "url",
  "uuid",
 ]
@@ -5791,6 +5807,15 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "truth_domain"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

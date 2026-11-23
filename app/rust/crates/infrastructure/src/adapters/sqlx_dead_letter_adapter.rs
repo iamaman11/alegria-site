@@ -120,35 +120,3 @@ where
     )
     .await
 }
-
-pub async fn write_external_dead_letter(
-    pool: &PgPool,
-    step_name: &str,
-    workflow_id: &str,
-    error_class: ErrorClass,
-    payload_type: &str,
-    schema_version: i32,
-    payload_bytes: &[u8],
-    payload_hash: &str,
-    idempotency_key: &str,
-    build_id: &str,
-    error_message: &str,
-) -> std::result::Result<(), DomainError> {
-    commands::insert_dead_letter(
-        pool,
-        None,
-        step_name,
-        workflow_id,
-        error_class.as_str(),
-        payload_type,
-        schema_version,
-        payload_bytes,
-        payload_hash,
-        payload_hash,
-        idempotency_key,
-        build_id,
-        error_message,
-    )
-    .await
-    .map_err(classify_sqlx)
-}

@@ -432,7 +432,7 @@ Critical path:
 - `automation/check_extraction_runtime_contract.py` подтверждает, что `facts_extractor` удалён, regex extraction path отсутствует, а raw ingestion не имеет source-tier shortcut verdicts.
 - `automation/check_extracted_rule_candidates_schema.py` подтверждает shape нового `extracted.rule_candidates`.
 - `automation/check_llm_extraction_contract.py` подтверждает strict JSON output contract, evidence span requirements и запрет direct verified writes.
-- `automation/check_truth_adjudication_contract.py` подтверждает source-tier-is-signal-only policy, contradiction handling, freshness/completeness checks и HITL branching.
+- `cargo test -p truth_domain --locked` проверяет действующие source-tier, contradiction, freshness/completeness и HITL domain decisions; архивные source-string/PASS checks не считаются приёмкой.
 - `automation/check_verified_storage_invariants.py` подтверждает наличие evidence-grade полей и pre-storage guards в `verified.rule_instances`.
 - `automation/check_truth_admissibility_gate.py` подтверждает, что page generation читает только admissible verified truth.
 - `cargo test -p integration_harness --features e2e truth_runtime_promotes_corroborated_candidates_into_admissible_verified_truth`

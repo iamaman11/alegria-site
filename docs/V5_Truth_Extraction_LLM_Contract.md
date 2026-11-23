@@ -31,7 +31,7 @@ Truth-extraction LLM не делает:
 Live implementation:
 
 - extraction adapter: [app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs](/home/bose/projects/alegria-site/app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs)
-- validator/adjudication logic: [app/rust/crates/primitives/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/primitives/src/truth_candidates.rs)
+- validator/adjudication logic: [app/rust/crates/truth_domain/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/truth_domain/src/truth_candidates.rs)
 
 ---
 
@@ -413,7 +413,7 @@ Candidate выбрасывается до persistence, если:
 ## 7. Deterministic validator: кто это и что делает
 
 Validator — это не LLM и не человек.
-Это deterministic Rust logic в [app/rust/crates/primitives/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/primitives/src/truth_candidates.rs).
+Это deterministic Rust logic в [app/rust/crates/truth_domain/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/truth_domain/src/truth_candidates.rs).
 
 Главная функция:
 
@@ -547,7 +547,7 @@ Editorial LLM пишет текст секций страницы только �
 ## 12. Related live sources of truth
 
 - runtime extraction adapter: [app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs](/home/bose/projects/alegria-site/app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs)
-- validator/adjudication logic: [app/rust/crates/primitives/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/primitives/src/truth_candidates.rs)
+- validator/adjudication logic: [app/rust/crates/truth_domain/src/truth_candidates.rs](/home/bose/projects/alegria-site/app/rust/crates/truth_domain/src/truth_candidates.rs)
 - crawl + raw ingestion runtime: [app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs](/home/bose/projects/alegria-site/app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs)
 - page-build gate: [app/rust/crates/seo_application/src/seo_runtime.rs](/home/bose/projects/alegria-site/app/rust/crates/seo_application/src/seo_runtime.rs)
 - runtime operations: [OPS_RUNTIME_RUNBOOK.md](OPS_RUNTIME_RUNBOOK.md)

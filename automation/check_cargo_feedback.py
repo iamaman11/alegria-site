@@ -83,6 +83,24 @@ class CargoFeedbackTests(unittest.TestCase):
                 run_cargo(["cargo", "build", "--release"], cwd=WORKSPACE)
         popen.assert_not_called()
 
+    def test_locked_debug_worker_build_and_explicit_runtime_env_are_measured(self) -> None:
+        command = ["cargo", "build", "--locked", "-p", "temporal_worker", "--bin", "temporal_worker"]
+        with patch("cargo_feedback.subprocess.Popen", return_value=FakeProcess([
+            artifact("temporal_worker", fresh=False),
+            json.dumps({"reason": "build-finished", "success": True}) + "\n",
+        ])) as popen:
+            got = run_cargo(command, cwd=WORKSPACE, output=io.StringIO(),
+                            env={"INTEGRATION_TEMPORAL_WORKER_BIN": "/fake/prebuilt/temporal_worker"})
+        self.assertEqual(got["command"], command)
+        self.assertIn("temporal_worker", got["rebuilt_workspace_targets"])
+        self.assertEqual(popen.call_args.kwargs["env"]["INTEGRATION_TEMPORAL_WORKER_BIN"],
+                         "/fake/prebuilt/temporal_worker")
+
+        with patch("cargo_feedback.subprocess.Popen") as forbidden:
+            with self.assertRaises(ValueError):
+                run_cargo(["cargo", "build", "-p", "temporal_worker"], cwd=WORKSPACE)
+        forbidden.assert_not_called()
+
     def test_malformed_artifact_does_not_count_as_compiled(self) -> None:
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": {}}, WORKSPACE))
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": None}, WORKSPACE))

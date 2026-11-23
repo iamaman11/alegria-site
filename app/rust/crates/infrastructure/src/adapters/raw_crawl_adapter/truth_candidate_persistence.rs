@@ -291,7 +291,7 @@ async fn adjudicate_persisted_rule_candidates(
                         .await?;
                     }
                 }
-                let canonical = pick_canonical_candidate(&group_candidates, &adjudication)?;
+                let canonical = pick_canonical_candidate(&group_candidates, &structured, &adjudication)?;
                 upsert_verified_rule_instance_from_candidate(
                     pool,
                     &semantic_slot_id,

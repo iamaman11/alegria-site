@@ -10,7 +10,7 @@ pub struct ContradictionGateSweepInput {
 pub struct ContradictionGateSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub output: seo_steps::contradiction_gate_step::ContradictionGateOutput,
+    pub output: truth_domain::contradictions::ContradictionGateOutput,
     pub status: String,
     pub semantic_neighbor_refs: Vec<String>,
     pub semantic_neighbor_reason_codes: Vec<String>,
@@ -32,37 +32,6 @@ pub struct TruthAdjudicationSweepInput {
     pub candidate_validation: CandidateValidationOutput,
     pub resolution: ResolutionLoopOutput,
     pub contradiction: ContradictionGateSweepOutput,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TruthAdjudicationCandidateDecision {
-    pub section_id: i64,
-    pub page_id: i64,
-    pub rule_candidate_id: String,
-    pub role: String,
-    pub concept_canonical_key: String,
-    pub params: TruthParamValue,
-    #[serde(default)]
-    pub scope: TruthParamValue,
-    pub source_key: String,
-    pub source_tier: String,
-    pub confidence: f64,
-    pub freshness_class: String,
-    pub completeness_class: String,
-    pub evidence_quote: String,
-    pub span_start: usize,
-    pub span_end: usize,
-    pub source_snapshot_hash: String,
-    #[serde(default)]
-    pub provider_key: String,
-    #[serde(default)]
-    pub model_key: String,
-    #[serde(default)]
-    pub prompt_version: String,
-    pub decision: String,
-    pub publish_admissibility: String,
-    pub verification_method: String,
-    pub adjudication_reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

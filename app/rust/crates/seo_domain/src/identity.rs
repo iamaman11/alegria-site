@@ -1,9 +1,6 @@
-use contracts::generated::alegria::temporal::v1::SeoScopePayload;
-use primitives::{
-    context_key,
-    errors::DomainError,
-    seo::{canonical_scope_tuple, scope_signature},
-};
+use primitives::{context_key, errors::DomainError};
+
+use crate::artifact_identity::{canonical_scope_tuple, scope_signature};
 
 const ALLOWED_APPLICANT_PROFILES: &[&str] = &["standard", "minor", "student", "family"];
 
@@ -49,9 +46,7 @@ fn require_non_empty(value: &str, label: &str) -> Result<(), DomainError> {
 pub fn normalize_applicant_profile(value: &str) -> Result<String, DomainError> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized.is_empty() {
-        return Err(validation_failure(
-            "SeoScopePayload.applicant_profile is required",
-        ));
+        return Err(validation_failure("SEO applicant_profile is required"));
     }
     if !ALLOWED_APPLICANT_PROFILES.contains(&normalized.as_str()) {
         return Err(validation_failure(format!(
@@ -121,10 +116,10 @@ pub fn derive_scope(
     let country_code = country_code.trim().to_ascii_uppercase();
     let visa_type = visa_type.trim().to_ascii_lowercase();
     let applicant_profile = normalize_applicant_profile(applicant_profile)?;
-    require_non_empty(&market, "SeoScopePayload.market")?;
-    require_non_empty(&locale, "SeoScopePayload.locale")?;
-    require_non_empty(&country_code, "SeoScopePayload.country_code")?;
-    require_non_empty(&visa_type, "SeoScopePayload.visa_type")?;
+    require_non_empty(&market, "SEO market")?;
+    require_non_empty(&locale, "SEO locale")?;
+    require_non_empty(&country_code, "SEO country_code")?;
+    require_non_empty(&visa_type, "SEO visa_type")?;
     let raw_scope_tuple = canonical_scope_tuple(&[
         ("market", &market),
         ("locale", &locale),
@@ -150,48 +145,6 @@ pub fn derive_scope(
     })
 }
 
-pub fn derive_scope_from_payload(
-    scope: &SeoScopePayload,
-) -> Result<ValidatedSeoScope, DomainError> {
-    let validated = derive_scope(
-        &scope.market,
-        &scope.locale,
-        &scope.country_code,
-        &scope.visa_type,
-        &scope.applicant_profile,
-    )?;
-    if !scope.raw_scope_tuple.trim().is_empty()
-        && scope.raw_scope_tuple.trim() != validated.raw_scope_tuple
-    {
-        return Err(validation_failure(
-            "SeoScopePayload.raw_scope_tuple does not match canonical normalized scope",
-        ));
-    }
-    if !scope.scope_signature.trim().is_empty()
-        && scope.scope_signature.trim() != validated.scope_signature
-    {
-        return Err(validation_failure(
-            "SeoScopePayload.scope_signature does not match normalized scope",
-        ));
-    }
-    Ok(validated)
-}
-
-pub fn scope_signature_from_payload(scope: Option<&SeoScopePayload>) -> String {
-    match scope {
-        Some(scope) => derive_scope_from_payload(scope)
-            .map(|validated| validated.scope_signature)
-            .unwrap_or_else(|_| {
-                if !scope.scope_signature.trim().is_empty() {
-                    scope.scope_signature.trim().to_string()
-                } else {
-                    scope_signature(&[("scope", "default")])
-                }
-            }),
-        None => scope_signature(&[("scope", "default")]),
-    }
-}
-
 pub fn assert_scope_matches_context(
     scope: &ValidatedSeoScope,
     truth: &ValidatedTruthIdentity,
@@ -200,22 +153,10 @@ pub fn assert_scope_matches_context(
         || !scope.visa_type.eq_ignore_ascii_case(&truth.visa_family)
     {
         return Err(validation_failure(
-            "SeoScopePayload must match truth identity country_code and visa_family",
+            "SEO scope must match truth identity country_code and visa_family",
         ));
     }
     Ok(())
-}
-
-pub fn build_scope_payload(scope: &ValidatedSeoScope) -> SeoScopePayload {
-    SeoScopePayload {
-        market: scope.market.clone(),
-        locale: scope.locale.clone(),
-        country_code: scope.country_code.clone(),
-        visa_type: scope.visa_type.clone(),
-        applicant_profile: scope.applicant_profile.clone(),
-        raw_scope_tuple: scope.raw_scope_tuple.clone(),
-        scope_signature: scope.scope_signature.clone(),
-    }
 }
 
 #[cfg(test)]
@@ -228,22 +169,5 @@ mod tests {
         assert_eq!(scope.country_code, "ES");
         assert_eq!(scope.visa_type, "tourist");
         assert_eq!(scope.applicant_profile, "standard");
-    }
-
-    #[test]
-    fn payload_raw_scope_tuple_must_match_canonical_scope() {
-        let err = derive_scope_from_payload(&SeoScopePayload {
-            market: "alegria-site".to_string(),
-            locale: "ru-RU".to_string(),
-            country_code: "ES".to_string(),
-            visa_type: "tourist".to_string(),
-            applicant_profile: "standard".to_string(),
-            raw_scope_tuple: "scope=bad".to_string(),
-            scope_signature: String::new(),
-        })
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("raw_scope_tuple does not match canonical normalized scope"));
     }
 }

@@ -42,7 +42,7 @@ pub async fn persist_cms_publish_output(
     }
 
     let revision_id = if planned.revision_id.trim().is_empty() {
-        primitives::seo::seo_artifact_key(
+        seo_domain::artifact_identity::seo_artifact_key(
             "cms_revision",
             &[
                 &row.page_node_key,
@@ -55,22 +55,25 @@ pub async fn persist_cms_publish_output(
         planned.revision_id.clone()
     };
     let cms_document_id = if planned.cms_document_id.trim().is_empty() {
-        primitives::seo::seo_artifact_key("cms_document", &[&row.page_node_key])
+        seo_domain::artifact_identity::seo_artifact_key("cms_document", &[&row.page_node_key])
     } else {
         planned.cms_document_id.clone()
     };
     let valid_human_approval = if input.publish_mode == "approved_publish" {
         let persisted =
             load_latest_approval_decision(pool, &row.page_node_key, &revision_id).await?;
-        input
+        let supplied = input
             .approval_decision
+            .as_ref()
+            .and_then(|wire| seo_steps::cms_review_wire::from_wire(wire).ok());
+        supplied
             .as_ref()
             .zip(persisted.as_ref())
             .is_some_and(|(supplied, saved)| {
                 supplied.decision_key == saved.decision_key
                     && supplied.actor_role == saved.actor_role
-                    && approval_decision_valid(supplied, &row, &revision_id)
-                    && approval_decision_valid(saved, &row, &revision_id)
+                    && supplied.approves_revision(&row.page_node_key, &revision_id)
+                    && saved.approves_revision(&row.page_node_key, &revision_id)
             })
     } else {
         false
@@ -255,7 +258,7 @@ pub async fn persist_cms_publish_output(
     .await
     .map_err(classify_sqlx)?;
 
-    let event_key = primitives::seo::seo_artifact_key(
+    let event_key = seo_domain::artifact_identity::seo_artifact_key(
         "cms_event",
         &[
             &row.page_node_key,
@@ -298,7 +301,7 @@ pub async fn persist_cms_publish_output(
 
     if !blockers.is_empty() {
         for blocker in &blockers {
-            let task_key = primitives::seo::seo_artifact_key(
+            let task_key = seo_domain::artifact_identity::seo_artifact_key(
                 "seo_hitl_task",
                 &[&row.page_node_key, &revision_id, blocker, "seo_hitl@1"],
             );
@@ -367,7 +370,7 @@ pub async fn persist_cms_publish_output(
             "content_contract": "headless_cms_blocks@1",
         });
         let artifact = PublishArtifact {
-            artifact_key: primitives::seo::seo_artifact_key(
+            artifact_key: seo_domain::artifact_identity::seo_artifact_key(
                 "publish_artifact",
                 &[&row.page_node_key, &revision_id, "headless_snapshot"],
             ),

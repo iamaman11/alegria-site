@@ -74,9 +74,9 @@ pub(crate) fn run_completeness_judge(
 
 pub(crate) fn run_contradiction_gate(
     _acts: &AlegriaActivities,
-    input: &seo_steps::contradiction_gate_step::ContradictionGateInput,
-) -> seo_steps::contradiction_gate_step::ContradictionGateOutput {
-    seo_steps::contradiction_gate_step::execute(input)
+    input: &truth_domain::contradictions::ContradictionGateInput,
+) -> truth_domain::contradictions::ContradictionGateOutput {
+    truth_domain::contradictions::execute(input)
 }
 
 pub(crate) fn run_hitl_decision(

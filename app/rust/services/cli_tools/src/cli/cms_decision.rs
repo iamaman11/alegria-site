@@ -7,6 +7,9 @@ async fn cms_review_decision(
     decision: &str,
     reason: &str,
 ) -> Result<(String, String, String)> {
+    // Parse the external CLI string before opening PostgreSQL or Temporal.
+    let decision = seo_ports::HumanReviewDecision::parse(decision)
+        .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
@@ -22,7 +25,7 @@ async fn cms_review_decision(
             page_node_key: page_node_key.to_string(),
             revision_id: revision_id.map(str::to_string),
             actor_role: actor_role.to_string(),
-            decision: decision.to_string(),
+            decision,
             reason: reason.to_string(),
             source: "cli_tools_headless_cms@1".to_string(),
         },
@@ -30,5 +33,26 @@ async fn cms_review_decision(
     .await
     .map_err(|err| anyhow::anyhow!(err.to_string()))?;
     Ok((result.decision_key, result.revision_id, result.workflow_id))
+}
+
+#[cfg(test)]
+mod cms_review_decision_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn unsupported_decision_is_rejected_before_database_connection() {
+        let error = cms_review_decision(
+            Some("postgres://not-a-real-host.invalid/alegria".to_string()),
+            None,
+            "page-1",
+            Some("revision-1"),
+            "editor",
+            "published",
+            "",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported decision: published"));
+    }
 }
 

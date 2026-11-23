@@ -152,8 +152,8 @@ pub async fn delete_qdrant_rule_points(
     Ok(())
 }
 
-pub async fn upsert_qdrant_rule_point(
-    pool: &PgPool,
+pub async fn upsert_qdrant_rule_point_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     point_id: &str,
     rule_instance_id: &str,
     collection_name: &str,
@@ -175,7 +175,7 @@ pub async fn upsert_qdrant_rule_point(
     .bind(collection_name)
     .bind(embedding_model)
     .bind(embedding_version)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     Ok(())
@@ -394,12 +394,12 @@ pub struct VerifiedRuleInstanceWrite {
 /// Unsupported scopes are never accepted as global facts.
 fn verified_scope_target(
     scope: &Value,
-) -> Option<primitives::truth_candidates::TruthScopeTarget> {
-    let typed = serde_json::from_value::<primitives::truth_candidates::TruthParamValue>(
+) -> Option<truth_domain::truth_candidates::TruthScopeTarget> {
+    let typed = serde_json::from_value::<truth_domain::truth_candidates::TruthParamValue>(
         scope.clone(),
     )
     .ok()?;
-    primitives::truth_candidates::truth_scope_target(&typed)
+    truth_domain::truth_candidates::truth_scope_target(&typed)
 }
 
 pub async fn upsert_verified_rule_instance(
@@ -424,7 +424,7 @@ pub async fn upsert_verified_rule_instance(
         validation_failure("verified rule scope is not a supported exact applicant_profile")
     })?;
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
+    if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
              WHERE profile_key = $1 AND status = 'active' FOR SHARE",
@@ -506,7 +506,7 @@ pub async fn upsert_verified_rule_instance(
 
     // Never erase curated profile restrictions while refreshing a verified
     // rule. A global rule may already have explicit human-defined overrides.
-    if let primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
+    if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = target {
         let has_conflicting_binding: bool = sqlx::query_scalar(
             "SELECT EXISTS (
                  SELECT 1 FROM verified.rule_instance_profiles
@@ -577,11 +577,11 @@ mod verified_scope_persistence_tests {
     fn final_sqlx_writer_accepts_only_exact_profile_or_global_scope() {
         assert!(matches!(
             verified_scope_target(&serde_json::json!({})),
-            Some(primitives::truth_candidates::TruthScopeTarget::Global)
+            Some(truth_domain::truth_candidates::TruthScopeTarget::Global)
         ));
         assert!(matches!(
             verified_scope_target(&serde_json::json!({"applicant_profile":"student"})),
-            Some(primitives::truth_candidates::TruthScopeTarget::ApplicantProfile(p))
+            Some(truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(p))
                 if p == "student"
         ));
         for scope in [
