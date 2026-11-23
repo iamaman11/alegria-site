@@ -771,12 +771,18 @@ jobs:
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
           git fetch --no-tags --depth=1 origin "$BEFORE_SHA"
           git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA" > "$RUNNER_TEMP/main-changed-paths"
-          if grep -Eq '^app/rust/' "$RUNNER_TEMP/main-changed-paths"; then
+          # A test-only harness edit needs its own PR run, not a second
+          # multi-profile compiler warm-up on the accepted main branch.
+          # Mixed changes with production Rust still warm the shared cache.
+          if awk '
+            /^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }
+            END { exit !needed }
+          ' "$RUNNER_TEMP/main-changed-paths"; then
             echo 'needed=true' >> "$GITHUB_OUTPUT"
-            echo 'MAIN_CACHE_PRIME=SELECTED Rust source changed'
+            echo 'MAIN_CACHE_PRIME=SELECTED cached Rust compilation input changed'
           else
             echo 'needed=false' >> "$GITHUB_OUTPUT"
-            echo 'MAIN_CACHE_PRIME=SKIPPED no Rust source changes'
+            echo 'MAIN_CACHE_PRIME=SKIPPED no cached Rust compilation input changed'
           fi
 
       - name: Install native Rust build dependencies

@@ -6,6 +6,7 @@ Check actual gates and that expensive integration suites remain executable.
 """
 from pathlib import Path
 import re
+import subprocess
 from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -118,16 +119,34 @@ def check() -> None:
     assert "python3 automation/smoke_manual_llm_queue.py" in legacy
 
     # Main-only compiler warm-up runs after an accepted main CI gate, never on
-    # a PR or a manual deep dispatch, and skips every non-Rust push, including
-    # workflow-only changes (which must not queue another long Rust build).
+    # a PR or a manual deep dispatch, and skips non-Rust AND test-only pushes.
+    # A changed production source alongside tests must still prime main.
     for forbidden in ("  pull_request_target:\n", "  workflow_run:\n"):
         assert forbidden not in workflow
     assert "    needs: gate\n" in prime
     assert "    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.gate.result == 'success'" in prime
     assert 'BEFORE_SHA: ${{ github.event.before }}' in prime
     assert 'git diff --name-only "$BEFORE_SHA" "$SOURCE_SHA"' in prime
-    assert "grep -Eq '^app/rust/'" in prime
-    assert "MAIN_CACHE_PRIME=SKIPPED no Rust source changes" in prime
+    selector = (
+        r"/^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }"
+        "\nEND { exit !needed }"
+    )
+    assert r"/^app\/rust\// && !/^app\/rust\/crates\/integration_harness\/src\/tests\// { needed=1 }" in prime
+    for paths, expected in (
+        (["docs/ci-fast-path.md"], False),
+        ([".github/workflows/ci.yml"], False),
+        (["app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs"], False),
+        (["app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+          "app/rust/crates/seo_domain/src/cms_revision.rs"], True),
+        (["app/rust/crates/integration_harness/src/containers.rs"], True),
+        (["app/rust/Cargo.lock"], True),
+    ):
+        selected = subprocess.run(
+            ["awk", selector], input="\n".join(paths) + "\n",
+            text=True, capture_output=True, check=False,
+        )
+        assert (selected.returncode == 0) == expected, (paths, selected.stderr)
+    assert "MAIN_CACHE_PRIME=SKIPPED no cached Rust compilation input changed" in prime
     assert prime.count("if: steps.cache_scope.outputs.needed == 'true'") >= 6
     assert "if: always() && steps.cache_scope.outputs.needed == 'true'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
