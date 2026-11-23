@@ -123,11 +123,14 @@ def check() -> None:
         assert forbidden not in prime
     assert "    if: github.ref == 'refs/heads/main'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
+    assert 'CARGO_BUILD_JOBS: "2"' in prime
     assert "SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log" in prime
     assert "SCCACHE_LOG: sccache::server=debug" in prime
     assert "runner.temp" not in prime
     assert "SCCACHE_GHA_ENABLED: \"on\"" in prime
     assert "version: \"v0.16.0\"" in prime
+    assert "cargo check --locked --package integration_harness" in prime
+    assert "cargo test --locked --package integration_harness --no-run" in prime
     assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" in prime
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in prime
     assert "core.exportVariable('ACTIONS_RUNTIME_TOKEN', token)" in prime

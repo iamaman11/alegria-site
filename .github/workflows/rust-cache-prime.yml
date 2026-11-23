@@ -24,6 +24,9 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_INCREMENTAL: "0"
+      # Pace compiler-object uploads below GitHub Cache's 200/minute burst
+      # limit (317 HTTP 429 failures in the first unrestricted main prime).
+      CARGO_BUILD_JOBS: "2"
       SQLX_OFFLINE: "true"
       SCCACHE_GHA_ENABLED: "on"
       SCCACHE_GHA_RW_MODE: READ_WRITE
@@ -74,12 +77,17 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      # Match the actual integration feature/profile and worker binaries used
-      # by scoped PR E2Es. This is a non-gating, main-only warm-up, not a claim
-      # that a fresh Rust PR itself finished in under five minutes.
+      # A scoped integration-harness PR executes three DISTINCT Rust profiles:
+      # cargo check, default-feature unit tests and e2e-feature tests. The
+      # initial prime covered only e2e and left the PR recompiling all five
+      # default-unit-test targets (~200s on #62). Prime the exact profiles
+      # used by CI while running NO real tests in this trusted warm-up.
+      # This is non-gating for PR acceptance; selected tests still run on PRs.
       - name: Prime shared test and worker compilation units
         working-directory: app/rust
         run: |
+          cargo check --locked --package integration_harness
+          cargo test --locked --package integration_harness --no-run
           cargo test -p integration_harness --features e2e --lib --no-run --locked
           cargo build --locked -p temporal_worker -p outbox_worker \
             --bin temporal_worker --bin outbox_worker
