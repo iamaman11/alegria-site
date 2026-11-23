@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from ci_impact import (
     CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, analyze, changed_paths,
+    affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
     suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
     workspace_graph,
 )
@@ -52,8 +53,114 @@ class ImpactFixtures(unittest.TestCase):
             "outbox_worker": set(),
         }
 
-    def impact(self, *paths: str) -> dict:
-        return analyze(list(paths), self.owners, self.reverse, head="HEAD", base="BASE")
+    def impact(self, *paths: str, lock_snapshots: tuple[str, str] | None = None) -> dict:
+        return analyze(
+            list(paths), self.owners, self.reverse, head="HEAD", base="BASE",
+            lock_snapshots=lock_snapshots,
+        )
+
+    @staticmethod
+    def lock(*packages: tuple[str, str, tuple[str, ...]]) -> str:
+        """Minimal real-format lockfiles, including local workspace packages."""
+        result = ["version = 4"]
+        for name, version, dependencies in packages:
+            result.extend(("", "[[package]]", f"name = {json.dumps(name)}", f"version = {json.dumps(version)}"))
+            if version != "0.1.0":
+                result.append('source = "registry+https://github.com/rust-lang/crates.io-index"')
+            result.append(f"dependencies = {json.dumps(list(dependencies))}")
+        return "\n".join(result) + "\n"
+
+    def test_lock_only_temporal_dependency_is_consumer_aware(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("temporalio-client 1.0.0",)),
+                        ("temporalio-client", "1.0.0", ()))
+        new = self.lock(("temporal_worker", "0.1.0", ("temporalio-client 1.1.0",)),
+                        ("temporalio-client", "1.1.0", ()))
+        impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(impact["affected_crates"], ["temporal_worker"])
+        self.assertEqual(impact["selected_suites"], ["temporal_restart"])
+        self.assertEqual(impact["selected_images"], ["temporal-worker"])
+        self.assertNotIn("stack-storage-graph", impact["selected_ci_jobs"])
+        self.assertIn("Cargo.lock", str(impact["reasons"]["temporal_worker"]))
+
+    def test_lock_shared_external_dependency_includes_all_consumers(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("shared 1.0.0",)),
+                        ("outbox_worker", "0.1.0", ("shared 1.0.0",)),
+                        ("shared", "1.0.0", ()))
+        new = self.lock(("temporal_worker", "0.1.0", ("shared 1.1.0",)),
+                        ("outbox_worker", "0.1.0", ("shared 1.1.0",)),
+                        ("shared", "1.1.0", ()))
+        impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
+        self.assertEqual(set(impact["affected_crates"]), {"temporal_worker", "outbox_worker"})
+        self.assertEqual(set(impact["selected_images"]), {"temporal-worker", "outbox-worker"})
+        self.assertEqual(set(impact["selected_suites"]), {"temporal_restart", "outbox_a14"})
+
+    def test_removed_lock_dependency_uses_old_graph(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("removed 1.0.0",)),
+                        ("removed", "1.0.0", ()))
+        new = self.lock(("temporal_worker", "0.1.0", ()))
+        self.assertEqual(affected_crates_for_lock_change(old, new, set(self.reverse))[0], {"temporal_worker"})
+        impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
+        self.assertEqual(impact["selected_suites"], ["temporal_restart"])
+
+    def test_manifest_and_lock_change_do_not_force_full(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("sdk 1.0.0",)), ("sdk", "1.0.0", ()))
+        new = self.lock(("temporal_worker", "0.1.0", ("sdk 1.1.0",)), ("sdk", "1.1.0", ()))
+        impact = self.impact("app/rust/Cargo.lock", "app/rust/services/temporal/Cargo.toml",
+                             lock_snapshots=(old, new))
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(impact["affected_crates"], ["temporal_worker"])
+
+    def test_known_protobuf_contract_tracks_workspace_and_live_consumers(self) -> None:
+        result = self.impact("app/contracts/proto/temporal_payloads.proto")
+        self.assertEqual(result["scope"], "scoped")
+        self.assertEqual(set(result["affected_crates"]), {"contracts", "primitives", "temporal_worker"})
+        self.assertEqual(result["selected_suites"], ["temporal_restart"])
+        self.assertIn("product-truth", result["selected_ci_jobs"])
+
+    def test_unknown_schema_contract_and_toolchain_fail_closed(self) -> None:
+        for path in ("app/contracts/proto/unknown.proto", "app/db/new_schema.sql", "app/rust/rust-toolchain.toml"):
+            with self.subTest(path=path):
+                self.assertEqual(self.impact(path)["scope"], "full")
+
+    def test_invalid_missing_or_ambiguous_lock_graph_fails_closed(self) -> None:
+        valid = self.lock(("temporal_worker", "0.1.0", ("sdk 1.0.0",)), ("sdk", "1.0.0", ()))
+        invalid = ("[[package]]\nname = ", self.lock(("temporal_worker", "0.1.0", ("missing",))),
+                   self.lock(("sdk", "1.0.0", ()), ("sdk", "1.0.0", ())))
+        for before in invalid:
+            with self.subTest(before=before[:35]):
+                impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(before, valid))
+                self.assertEqual(impact["scope"], "full")
+                self.assertTrue(impact["full_scope_reasons"])
+
+    def test_no_resolved_lock_change_is_not_mistaken_for_no_impact(self) -> None:
+        locked = self.lock(("temporal_worker", "0.1.0", ()))
+        impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(locked, locked))
+        self.assertEqual(impact["scope"], "full")
+
+    def test_real_workspace_lock_graph_is_complete(self) -> None:
+        lock = (Path(__file__).resolve().parents[1] / "app/rust/Cargo.lock").read_text(encoding="utf-8")
+        version, packages, reverse = parsed_lock_graph(lock)
+        self.assertEqual(version, 4)
+        self.assertGreater(len(packages), len(self.owners))
+        self.assertTrue(any(dependents for dependents in reverse.values()))
+
+    def test_locked_checksum_change_selects_same_consumers(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("sdk 1.0.0",)), ("sdk", "1.0.0", ()))
+        new = old.replace('dependencies = []', 'checksum = "changed"\ndependencies = []')
+        result = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
+        self.assertEqual(result["affected_crates"], ["temporal_worker"])
+
+    def test_cargo_metadata_failure_forces_full_and_preserves_all_crates(self) -> None:
+        owners, reverse = declared_workspace_owners()
+        self.assertGreaterEqual(len(owners), 20)
+        result = analyze(
+            ["app/rust/Cargo.lock"], owners, reverse, base="BASE", head="HEAD",
+            forced_full_reasons=("full: cargo metadata failure",),
+        )
+        self.assertEqual(result["scope"], "full")
+        self.assertEqual(set(result["affected_crates"]), set(reverse))
+        self.assertEqual(set(result["selected_ci_jobs"]), set(CI_PR_OWNERS))
 
     def test_isolated_gsc_does_not_trigger_other_services(self) -> None:
         result = self.impact("app/rust/services/gsc_sync/src/main.rs")
@@ -140,7 +247,6 @@ class ImpactFixtures(unittest.TestCase):
         paths = (
             "contracts/proto/temporal_payloads.proto",
             "app/db/schema.sql",
-            "app/rust/Cargo.lock",
             ".github/workflows/ci.yml",
             "automation/check_seo_crate_graph.py",
             "docker-compose.yml",

@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import subprocess
+import tomllib
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -33,9 +34,18 @@ GLOBAL_PREFIXES = (
 GLOBAL_FILES = {
     "docker-compose.yml",
     "app/rust/Cargo.toml",
-    "app/rust/Cargo.lock",
     "app/rust/rust-toolchain.toml",
     "rust-toolchain.toml",
+}
+
+# Only contracts with a verified generator/consumer are scoped. Other schemas
+# and wire inputs retain the existing fail-closed full-workspace behavior.
+KNOWN_CONTRACT_CRATES = {
+    "app/contracts/proto/read_api.proto": "contracts",
+    "app/contracts/proto/rules.proto": "contracts",
+    "app/contracts/proto/condition.proto": "contracts",
+    "app/contracts/proto/sync.proto": "contracts",
+    "app/contracts/proto/temporal_payloads.proto": "contracts",
 }
 
 # These files do not change a Rust compilation unit. Historical run evidence
@@ -141,6 +151,7 @@ SUITE_OWNERS = {
     "publishing_a17": {
         "paths": PUBLISHING_A17_PATHS,
         "prefixes": (),
+        "lock_crates": {"seo_domain", "seo_application", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
@@ -151,6 +162,7 @@ SUITE_OWNERS = {
     "outbox_a14": {
         "paths": OUTBOX_A14_PATHS,
         "prefixes": ("app/rust/services/outbox_worker/src/",),
+        "lock_crates": {"outbox_worker", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
@@ -160,6 +172,7 @@ SUITE_OWNERS = {
     "knowledge_a13": {
         "paths": KNOWLEDGE_A13_PATHS,
         "prefixes": (),
+        "lock_crates": {"seo_application", "seo_ports", "vector_qdrant", "infrastructure"},
         "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
@@ -181,6 +194,7 @@ SUITE_OWNERS = {
     "graph_query": {
         "paths": {"app/rust/crates/infrastructure/src/adapters/graph_capability_adapter.rs"},
         "prefixes": ("app/rust/crates/graph_neo4j/",),
+        "lock_crates": {"graph_neo4j"},
         "on_unknown_global_input": False,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
@@ -190,6 +204,7 @@ SUITE_OWNERS = {
     "vector_projection": {
         "paths": set(),
         "prefixes": ("app/rust/crates/vector_qdrant/",),
+        "lock_crates": {"vector_qdrant"},
         "on_unknown_global_input": False,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
@@ -198,8 +213,9 @@ SUITE_OWNERS = {
         ),
     },
     "temporal_restart": {
-        "paths": {"app/rust/services/temporal/Cargo.toml"},
+        "paths": {"app/rust/services/temporal/Cargo.toml", "app/contracts/proto/temporal_payloads.proto"},
         "prefixes": ("app/rust/services/temporal/src/",),
+        "lock_crates": {"temporal_worker"},
         # This separate live E2E also opens the canonical happy-path JSON and
         # its HTML pages. Do not let fixture-only narrowing skip its consumer.
         "fixture_ids": {"happy_path_publish_allowed"},
@@ -285,6 +301,9 @@ def ci_jobs_for_change(
     if changed & SOURCE_POLICY_DOCUMENTS:
         require("product-truth", "Markdown is a source-policy input, not just explanatory documentation")
         require("verify", "source-policy documents are read by acceptance scripts")
+
+    if changed & KNOWN_CONTRACT_CRATES.keys():
+        require("product-truth", "generated protobuf contracts feed live source-policy checks")
 
     if any(path.startswith("docs/runs/") for path in changed):
         require("product-truth", "historical Truth evidence is consumed by Python policy checks")
@@ -477,6 +496,99 @@ def changed_worktree_paths(base: str, *, root: Path = ROOT) -> list[str]:
     return sorted(tracked)
 
 
+LockPackage = tuple[str, str, str]  # name, version, source (empty for local packages)
+LockSignature = tuple[str, tuple[str, ...]]  # checksum, resolved dependency entries
+
+
+def parsed_lock_graph(
+    contents: str,
+) -> tuple[int, dict[LockPackage, LockSignature], dict[LockPackage, set[LockPackage]]]:
+    """Read the *resolved* Cargo.lock graph, including external package edges.
+
+    Unqualified dependencies can reference more than one locked version. In
+    that case all matching versions are followed rather than guessing one.
+    """
+    document = tomllib.loads(contents)
+    version = document.get("version")
+    raw_packages = document.get("package")
+    if version not in (3, 4) or not isinstance(raw_packages, list) or not raw_packages:
+        raise ValueError("unsupported or empty Cargo.lock graph")
+
+    packages: dict[LockPackage, LockSignature] = {}
+    by_name: dict[str, set[LockPackage]] = {}
+    for item in raw_packages:
+        if not isinstance(item, dict):
+            raise ValueError("invalid Cargo.lock package")
+        name, package_version, source = item.get("name"), item.get("version"), item.get("source", "")
+        checksum, dependencies = item.get("checksum", ""), item.get("dependencies", [])
+        if (not isinstance(name, str) or not name or not isinstance(package_version, str)
+                or not package_version or not isinstance(source, str) or not isinstance(checksum, str)
+                or not isinstance(dependencies, list)
+                or any(not isinstance(dep, str) or not dep for dep in dependencies)):
+            raise ValueError("incomplete Cargo.lock package identity or dependencies")
+        key: LockPackage = (name, package_version, source)
+        if key in packages:
+            raise ValueError(f"duplicate Cargo.lock package: {key}")
+        packages[key] = (checksum, tuple(sorted(dependencies)))
+        by_name.setdefault(name, set()).add(key)
+
+    reverse: dict[LockPackage, set[LockPackage]] = {key: set() for key in packages}
+    for dependent, (_, dependencies) in packages.items():
+        for dependency in dependencies:
+            fields = dependency.split(" ", 2)
+            if len(fields) == 3 and not (fields[2].startswith("(") and fields[2].endswith(")")):
+                raise ValueError(f"invalid Cargo.lock dependency: {dependency}")
+            candidates = {
+                key for key in by_name.get(fields[0], set())
+                if (len(fields) < 2 or key[1] == fields[1])
+                and (len(fields) < 3 or key[2] == fields[2][1:-1])
+            }
+            if not candidates:
+                raise ValueError(f"unresolved Cargo.lock dependency: {dependent} -> {dependency}")
+            for target in candidates:
+                reverse[target].add(dependent)
+    return version, packages, reverse
+
+
+def affected_crates_for_lock_change(
+    before: str, after: str, workspace_crates: set[str],
+) -> tuple[set[str], list[str]]:
+    """Use both resolved lock graphs so removals retain their old consumers."""
+    old_version, old_packages, old_reverse = parsed_lock_graph(before)
+    new_version, new_packages, new_reverse = parsed_lock_graph(after)
+    if old_version != new_version:
+        raise ValueError("Cargo.lock format version changed")
+    changed = {
+        key for key in old_packages.keys() | new_packages.keys()
+        if old_packages.get(key) != new_packages.get(key)
+    }
+    if not changed:
+        raise ValueError("Cargo.lock changed without a resolved package change")
+
+    affected: set[str] = set()
+    for packages, reverse in ((old_packages, old_reverse), (new_packages, new_reverse)):
+        pending = deque(sorted(changed & packages.keys()))
+        seen: set[LockPackage] = set()
+        while pending:
+            package = pending.popleft()
+            if package in seen:
+                continue
+            seen.add(package)
+            if not package[2] and package[0] in workspace_crates:
+                affected.add(package[0])
+            pending.extend(sorted(reverse[package] - seen))
+    if not affected:
+        raise ValueError("changed locked packages have no known workspace consumers")
+    names = sorted({key[0] for key in changed})
+    return affected, ["Cargo.lock resolved package change: " + ", ".join(names)]
+
+
+def git_lock_contents(ref: str, *, root: Path = ROOT) -> str:
+    return subprocess.check_output(
+        ["git", "show", f"{ref}:app/rust/Cargo.lock"], cwd=root, text=True,
+    )
+
+
 def load_cargo_metadata(*, workspace: Path = WORKSPACE) -> dict[str, Any]:
     output = subprocess.check_output(
         [
@@ -531,6 +643,32 @@ def workspace_graph(
     return manifest_owner, reverse
 
 
+def declared_workspace_owners(
+    *, root: Path = ROOT,
+) -> tuple[dict[str, str], dict[str, set[str]]]:
+    """Enumerate every member for a full fallback if Cargo metadata fails.
+
+    No dependency edges are inferred here: the caller MUST force full scope.
+    This lets a broken lockfile produce a visible fail-closed impact report.
+    """
+    workspace = root / "app/rust"
+    manifest = tomllib.loads((workspace / "Cargo.toml").read_text(encoding="utf-8"))
+    members = manifest.get("workspace", {}).get("members")
+    if not isinstance(members, list) or not members:
+        raise ValueError("workspace members cannot be recovered")
+    owners: dict[str, str] = {}
+    for member in members:
+        if not isinstance(member, str) or Path(member).is_absolute() or ".." in Path(member).parts:
+            raise ValueError("invalid workspace member in fallback")
+        manifest_path = workspace / member / "Cargo.toml"
+        package = tomllib.loads(manifest_path.read_text(encoding="utf-8")).get("package", {})
+        name = package.get("name")
+        if not isinstance(name, str) or not name or name in owners.values():
+            raise ValueError("ambiguous workspace member in fallback")
+        owners[manifest_path.parent.relative_to(root).as_posix()] = name
+    return owners, {name: set() for name in owners.values()}
+
+
 def analyze(
     paths: list[str],
     owners: dict[str, str],
@@ -538,12 +676,15 @@ def analyze(
     *,
     head: str,
     base: str,
+    lock_snapshots: tuple[str, str] | None = None,
+    forced_full_reasons: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     """Build an auditable, no-false-negative conservative affected closure."""
     reason: dict[str, set[str]] = {name: set() for name in reverse}
     direct: set[str] = set()
-    broad_reasons: list[str] = []
+    broad_reasons: list[str] = list(forced_full_reasons)
     classified_inputs: dict[str, str] = {}
+    lock_changed = False
 
     for path in sorted(set(paths)):
         if path in DOCUMENTATION_FILES or (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md")):
@@ -559,6 +700,19 @@ def analyze(
             # include_str!. The selected real suite compiles the required Rust
             # graph; an extra Cargo check/test is duplicate work.
             classified_inputs[path] = "live Truth runtime fixture: consumed by selected e2e suite"
+            continue
+        if path == "app/rust/Cargo.lock":
+            lock_changed = True
+            classified_inputs[path] = "resolved Cargo dependency graph: base and head"
+            continue
+        if path in KNOWN_CONTRACT_CRATES:
+            owner = KNOWN_CONTRACT_CRATES[path]
+            if owner not in reason:
+                broad_reasons.append(f"unknown generated contract owner: {owner}")
+            else:
+                direct.add(owner)
+                reason[owner].add(f"known generated contract: {path}")
+                classified_inputs[path] = f"known protobuf generator owner: {owner}"
             continue
         if path in WORKER_PACKAGING_FILES or path.startswith("infra/cloudflare/seo-static/"):
             classified_inputs[path] = "known non-Rust input: temporal-worker image"
@@ -579,6 +733,16 @@ def analyze(
         _, name = matches[0]
         direct.add(name)
         reason[name].add(f"changed: {path}")
+
+    if lock_changed and not broad_reasons:
+        try:
+            before, after = lock_snapshots or (git_lock_contents(base), git_lock_contents(head))
+            locked_crates, lock_reasons = affected_crates_for_lock_change(before, after, set(reason))
+            for name in locked_crates:
+                direct.add(name)
+                reason[name].update(lock_reasons)
+        except (ValueError, OSError, subprocess.CalledProcessError, UnicodeError, TypeError, KeyError) as error:
+            broad_reasons.append(f"full: unresolved Cargo.lock consumer graph ({type(error).__name__}: {error})")
 
     if broad_reasons:
         affected = set(reverse)
@@ -604,6 +768,11 @@ def analyze(
     suite_reasons: dict[str, list[str]] = {}
     for name, rule in SUITE_OWNERS.items():
         matched = [path for path in sorted(set(paths)) if path in rule["paths"] or path.startswith(rule["prefixes"])]
+        if lock_changed and not broad_reasons:
+            matched.extend(
+                f"locked dependency affects: {crate}"
+                for crate in sorted(rule.get("lock_crates", set()) & affected)
+            )
         # Long service-specific E2E suites follow their known live owners; a
         # planner edit does not silently claim that they were run. The broad
         # Rust gate plus core A13/A14/A17 remain mandatory on unknown inputs.
@@ -683,10 +852,19 @@ def main() -> int:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
 
-    metadata = load_cargo_metadata()
-    owners, reverse = workspace_graph(metadata)
     paths = changed_paths(args.base, args.head)
-    report = analyze(paths, owners, reverse, base=args.base, head=args.head)
+    forced_full_reasons: tuple[str, ...] = ()
+    try:
+        owners, reverse = workspace_graph(load_cargo_metadata())
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError) as error:
+        if "app/rust/Cargo.lock" not in paths:
+            raise
+        owners, reverse = declared_workspace_owners()
+        forced_full_reasons = (f"full: Cargo metadata unavailable ({type(error).__name__}: {error})",)
+    report = analyze(
+        paths, owners, reverse, base=args.base, head=args.head,
+        forced_full_reasons=forced_full_reasons,
+    )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(

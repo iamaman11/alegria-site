@@ -22,6 +22,7 @@ from ci_impact import (
     WORKSPACE,
     analyze,
     changed_worktree_paths,
+    git_lock_contents,
     load_cargo_metadata,
     workspace_graph,
 )
@@ -81,7 +82,18 @@ def main() -> int:
     paths = changed_worktree_paths(args.base)
     metadata = load_cargo_metadata()
     owners, reverse = workspace_graph(metadata)
-    report = analyze(paths, owners, reverse, base=args.base, head=head)
+    lock_snapshots = None
+    if "app/rust/Cargo.lock" in paths:
+        try:
+            # A local diff includes staged and unstaged content, not merely the
+            # HEAD commit used by the exact-source CI planner.
+            lock_snapshots = (
+                git_lock_contents(args.base),
+                (WORKSPACE / "Cargo.lock").read_text(encoding="utf-8"),
+            )
+        except (OSError, subprocess.CalledProcessError, UnicodeError):
+            lock_snapshots = ("", "")  # analyze() explicitly falls back to full.
+    report = analyze(paths, owners, reverse, base=args.base, head=head, lock_snapshots=lock_snapshots)
     report["local_worktree"] = True
     report["exact_source_sha"] = False  # HEAD does not cover uncommitted edits.
     report["deferred_external_suites"] = {
