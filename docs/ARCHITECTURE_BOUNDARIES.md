@@ -75,6 +75,12 @@ eligibility policy, used by the publish adapter and scenario. The wire mapper
 in `seo_steps` is used by both Temporal activities and the existing legacy
 scenario input; malformed persisted decision values fail closed. No deprecated
 protobuf read port or duplicate approval predicate is retained.
+The CLI now parses the external review decision before any SQL/Temporal I/O;
+the Application input is a `HumanReviewDecision`, and it returns the port's
+typed `CmsReviewDecisionOutcome` directly, without another equivalent result
+DTO. Fake-port unit tests prove that invalid human/page requests cause no
+storage or workflow calls; the CLI binary test proves unsupported strings are
+refused before a database connection.
 
 ### Shared change-impact owner registry (in progress)
 

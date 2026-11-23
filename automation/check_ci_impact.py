@@ -35,6 +35,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/seo_steps": "seo_steps",
             "app/rust/crates/vector_qdrant": "vector_qdrant",
             "app/rust/services/gsc_sync": "gsc_sync",
+            "app/rust/services/cli_tools": "cli_tools",
             "app/rust/services/analytics_svc": "analytics_svc",
             "app/rust/services/temporal": "temporal_worker",
             "app/rust/services/outbox_worker": "outbox_worker",
@@ -52,6 +53,7 @@ class ImpactFixtures(unittest.TestCase):
             "seo_steps": {"seo_application", "temporal_worker"},
             "vector_qdrant": {"temporal_worker"},
             "gsc_sync": set(),
+            "cli_tools": set(),
             "analytics_svc": set(),
             "temporal_worker": set(),
             "outbox_worker": set(),
@@ -212,6 +214,7 @@ class ImpactFixtures(unittest.TestCase):
         for path in (
             "app/rust/crates/seo_domain/src/review_decision.rs",
             "app/rust/crates/seo_application/src/cms_review.rs",
+            "app/rust/services/cli_tools/src/cli/cms_decision.rs",
             "app/rust/crates/seo_application/src/review_publish.rs",
             "app/rust/crates/seo_steps/src/cms_review_wire.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",

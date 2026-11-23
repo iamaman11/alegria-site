@@ -103,6 +103,7 @@ def main() -> int:
     review_domain = (RUST / "crates/seo_domain/src/review_decision.rs").read_text(encoding="utf-8")
     review_port = (RUST / "crates/seo_ports/src/lib.rs").read_text(encoding="utf-8")
     review_app = (RUST / "crates/seo_application/src/cms_review.rs").read_text(encoding="utf-8")
+    review_cli = (RUST / "services/cli_tools/src/cli/cms_decision.rs").read_text(encoding="utf-8")
     review_sql = (RUST / "crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs").read_text(encoding="utf-8")
     approval_sql = (RUST / "crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs").read_text(encoding="utf-8")
     review_wire = (RUST / "crates/seo_steps/src/cms_review_wire.rs").read_text(encoding="utf-8")
@@ -111,6 +112,11 @@ def main() -> int:
             or "pub decision: HumanReviewDecision" not in review_port
             or "Result<Option<CmsApproval>, DomainError>" not in review_port
             or "validate_human_reviewer(" not in review_app
+            or "pub decision: HumanReviewDecision" not in review_app
+            or "pub struct ApplyHumanReviewDecisionResult" in review_app
+            or "HumanReviewDecision::parse(&request.decision)" in review_app
+            or "HumanReviewDecision::parse(decision)" not in review_cli
+            or review_cli.index("HumanReviewDecision::parse(decision)") > review_cli.index("connect_pg(")
             or "validate_human_reviewer(" not in review_sql
             or "hitl_queue_state()" not in review_sql
             or "match request.decision.as_str()" in review_sql
