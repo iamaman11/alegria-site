@@ -211,6 +211,16 @@ jobs:
             automation/reports/ci_impact.json
           if-no-files-found: ignore
 
+      # Validate the reduced workspace before the accepted-main release.
+      # This compiles nothing and leaves PR image packaging disabled.
+      - name: Verify dependency-scoped Worker release context resolves locked Cargo
+        run: |
+          python3 automation/prepare_worker_build_context.py \
+            --source-sha "$(git rev-parse HEAD)" \
+            --destination "$RUNNER_TEMP/alegria-worker-context"
+          cargo metadata --locked --format-version=1 --no-deps \
+            --manifest-path "$RUNNER_TEMP/alegria-worker-context/app/rust/Cargo.toml" >/dev/null
+
       # Same impact report drives local and CI Cargo feedback. Broad or
       # unclassifiable inputs fail closed to the workspace, not a fake PASS.
       - name: Changed Rust crates and dependent consumers
@@ -833,16 +843,15 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      # Precompile the three actual CI profiles, without executing tests.
-      - name: Prime shared test and worker compilation units
+      # Seed test/check compiler units for PR feedback. A debug Worker binary
+      # cannot be reused as a release artifact by Docker BuildKit.
+      - name: Prime shared test compilation units
         if: steps.cache_scope.outputs.needed == 'true'
         working-directory: app/rust
         run: |
           cargo check --locked --package integration_harness
           cargo test --locked --package integration_harness --no-run
           cargo test -p integration_harness --features e2e --lib --no-run --locked
-          cargo build --locked -p temporal_worker -p outbox_worker \
-            --bin temporal_worker --bin outbox_worker
 
       - name: Report main cache hits, misses and write errors
         if: always() && steps.cache_scope.outputs.needed == 'true'
@@ -916,8 +925,6 @@ jobs:
           # Any mixed or unknown path still obeys fail-closed owner selection.
           no_image_inputs = {
               '.github/workflows/ci.yml',
-              '.github/workflows/worker-image.yml',
-              '.github/workflows/dependency-refresh-branch.yml',
               'automation/check_ci_workflow_contract.py',
               'automation/check_windows_staging_rollback.py',
               'infra/local/windows_staging.ps1',
@@ -989,14 +996,24 @@ jobs:
           [[ "$SOURCE_SHA" =~ ^[a-f0-9]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
+      - name: Pin Rust for exact Cargo dependency metadata
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Prepare exact-source dependency-scoped Worker Docker context
+        env:
+          RELEASE_CONTEXT: ${{ runner.temp }}/alegria-worker-context
+        run: |
+          python3 automation/prepare_worker_build_context.py \
+            --source-sha "$SOURCE_SHA" --destination "$RELEASE_CONTEXT"
+
       - name: Set up official Docker Buildx builder
         uses: docker/setup-buildx-action@v4
 
       - name: Build canonical Temporal Worker release image with persistent layers
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: app/rust/services/temporal/Dockerfile
+          context: ${{ runner.temp }}/alegria-worker-context
+          file: ${{ github.workspace }}/app/rust/services/temporal/Dockerfile
           push: false
           load: true
           tags: alegria-seo-temporal:ci
@@ -1019,6 +1036,7 @@ jobs:
             python3 -m py_compile /app/automation/deploy_seo_static_cloudflare.py
             python3 -m py_compile /app/automation/check_first_site_release.py
             test -f /app/automation/check_first_site_release.py
+            test -f /app/worker-context.json
           '
 
       - name: Archive exact image for no-build Windows staging

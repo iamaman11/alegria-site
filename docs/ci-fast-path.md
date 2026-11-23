@@ -62,6 +62,25 @@ Changes limited to an explicit allowlist of CI/Windows operator maintenance
 do not rebuild unchanged runtime bytes, even though their PR verification
 remains fail-closed. Mixed or unknown source changes retain image selection.
 
+Before Buildx, automation/prepare_worker_build_context.py uses the existing
+ci_impact.py Cargo graph and Worker image roots to create a reduced exact-source
+Docker context. Cargo still sees every original workspace manifest and the
+unchanged Cargo.lock; unrelated workspace members get only inert source
+placeholders. Only live Worker/CLI consumer Rust sources, SQLx offline data,
+protobuf inputs and delivered Python/Cloudflare assets are copied. Independent
+changes to analytics_svc, gsc_sync, integration_harness, outbox_worker or
+reconcile therefore cannot invalidate the release compilation layer unless
+the Cargo dependency graph changes. BuildKit's existing GHA cache is reused;
+no second impact selector, release workflow or cargo-chef was added.
+
+The Dockerfile now requires worker-context.json produced by that exact-SHA
+preparation. For local reproduction, prepare the context from a clean checked
+out commit using Cargo and build with that directory as context, specifying
+the repository Dockerfile using -f. The repository root is intentionally not
+a release context. PR CI checks that the prepared workspace still resolves
+with cargo metadata --locked; it does not pay for a release build.
+The five-minute target still requires real accepted-main warm-cache timings.
+
 For an explicit rebuild, dispatch `ci` on **main** with
 `operation: worker-image`: it re-verifies the accepted-PR provenance before
 packaging, and never packages an arbitrary unreviewed branch. Windows staging
@@ -96,7 +115,8 @@ provenance-checked main pushes may run it, and it performs heavy work only if
 Rust compilation inputs changed. Changes limited to CI files or the
 `integration_harness/src/tests/` regression sources do not launch another
 long compiler build. Mixed changes including production Rust still prime.
-It prepares the three Rust CI profiles but
+It prepares the three Rust CI test/check profiles and no longer builds
+additional debug Worker binaries that release Docker cannot reuse; it
 does not execute tests. PRs read the shared compiler cache without uploading
 PR-local compiler objects. This is *not* proof that a cold PR will finish
 within five minutes; exact new-PR timings and cache errors must be measured.

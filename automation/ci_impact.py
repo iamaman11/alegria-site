@@ -288,8 +288,8 @@ SUITE_OWNERS = {
 # Each image is selected from the actual binaries compiled by its Dockerfile
 # plus explicitly COPIED delivery inputs. No other Rust service is an implicit
 # Worker dependency. Only temporal-worker is currently packaged by
-# worker-image.yml; selection for other images is diagnostic until their release
-# owners use this same report.
+# the package job in the one ci.yml; other image selection remains diagnostic
+# until their release owners use this same report.
 IMAGE_OWNERS = {
     "temporal-worker": {
         "crates": {"temporal_worker", "cli_tools"},
