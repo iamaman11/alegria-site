@@ -10,10 +10,10 @@ INFRA_CARGO = ROOT / "app" / "rust" / "crates" / "infrastructure" / "Cargo.toml"
 EXPERT_CORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "expert_extraction_core.rs"
 RAW_CRAWL = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter.rs"
 SEO_STEPS_LIB = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "lib.rs"
+SEO_DOMAIN_LIB = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "lib.rs"
 TRUTH_DOMAIN_LIB = ROOT / "app" / "rust" / "crates" / "truth_domain" / "src" / "lib.rs"
 
 REQUIRED_EXPORTS = [
-    "pub mod canonical_mapping_step;",
     "pub mod entity_span_detection_step;",
     "pub mod procedural_extraction_step;",
 ]
@@ -71,6 +71,7 @@ def main() -> int:
     expert_core = read_file_resolved(EXPERT_CORE)
     raw_crawl = read_file_resolved(RAW_CRAWL)
     seo_steps_lib = read(SEO_STEPS_LIB)
+    seo_domain_lib = read(SEO_DOMAIN_LIB)
     truth_domain_lib = read(TRUTH_DOMAIN_LIB)
 
     if 'seo_steps = { path = "../seo_steps" }' not in cargo:
@@ -79,6 +80,13 @@ def main() -> int:
     for export in REQUIRED_EXPORTS:
         if export not in seo_steps_lib:
             failures.append(f"seo_steps/lib.rs missing export `{export}`")
+
+    if "pub mod canonical_mapping;" not in seo_domain_lib:
+        failures.append("seo_domain/lib.rs must export the canonical mapping domain")
+    if "pub mod canonical_mapping_step;" in seo_steps_lib:
+        failures.append("seo_steps/lib.rs still exports the deprecated canonical mapping policy")
+    if "seo_domain::canonical_mapping::execute(&mapping_input)" not in expert_core:
+        failures.append("expert core must call the canonical mapping domain owner")
 
     for export in TRUTH_REVIEW_EXPORTS:
         if export not in truth_domain_lib:
@@ -129,6 +137,7 @@ def main() -> int:
     print(
         "EXPERT_CORE_ACTIVATION_CONTRACT: OK "
         f"stages={len(REQUIRED_STAGE_NAMES)} step_exports={len(REQUIRED_EXPORTS)} "
+        "canonical_domain_owner=1 "
         f"truth_review_exports={len(TRUTH_REVIEW_EXPORTS)}"
     )
     return 0

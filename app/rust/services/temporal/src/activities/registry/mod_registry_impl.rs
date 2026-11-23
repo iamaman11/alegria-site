@@ -104,8 +104,8 @@ impl AlegriaActivities {
     pub async fn run_canonical_mapping_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::canonical_mapping_step::CanonicalMappingInput,
-    ) -> Result<seo_steps::canonical_mapping_step::CanonicalMappingOutput, ActivityError> {
+        input: seo_domain::canonical_mapping::CanonicalMappingInput,
+    ) -> Result<seo_domain::canonical_mapping::CanonicalMappingOutput, ActivityError> {
         self.execute_step(
             &input.section_id,
             "canonical_mapping",

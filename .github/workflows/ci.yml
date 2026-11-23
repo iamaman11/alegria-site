@@ -215,8 +215,9 @@ jobs:
           python3 automation/prepare_worker_build_context.py \
             --source-sha "$(git rev-parse HEAD)" \
             --destination "$RUNNER_TEMP/alegria-worker-context"
-          cargo metadata --locked --format-version=1 --no-deps \
-            --manifest-path "$RUNNER_TEMP/alegria-worker-context/app/rust/Cargo.toml" >/dev/null
+          python3 automation/check_worker_dependency_skeleton.py \
+            "$RUNNER_TEMP/alegria-worker-context/app/rust/Cargo.toml" \
+            "$RUNNER_TEMP/alegria-worker-context/dependency-skeleton/app/rust/Cargo.toml"
 
       # Same impact report drives local and CI Cargo feedback. Broad or
       # unclassifiable inputs fail closed to the workspace, not a fake PASS.

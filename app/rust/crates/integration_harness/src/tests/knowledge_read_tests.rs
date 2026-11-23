@@ -233,6 +233,34 @@ async fn knowledge_a13_verified_context_reads_only_admissible_global_truth() {
     assert!(inactive.to_string().contains("stage=active_context"));
 }
 
+/// Domain ownership changes cannot alter the registered Temporal JSON shape.
+/// Keep this serialization assertion at the transport boundary, not in Domain.
+#[test]
+fn knowledge_canonical_mapping_temporal_wire_contract_is_stable() {
+    use seo_domain::canonical_mapping::{execute, CanonicalMappingInput, MentionForMapping};
+
+    let input = CanonicalMappingInput {
+        section_id: "section-1".into(),
+        mentions: vec![MentionForMapping {
+            raw_text: "ПАСПОРТ".into(),
+            entity_type: "concept".into(),
+        }],
+    };
+    assert_eq!(
+        serde_json::to_value(&input).unwrap(),
+        serde_json::json!({
+            "section_id": "section-1",
+            "mentions": [{"raw_text": "ПАСПОРТ", "entity_type": "concept"}]
+        })
+    );
+    let output = execute(&input);
+    let json = serde_json::to_value(&output).unwrap();
+    assert_eq!(json["mappings"][0]["matching_stage"], "normalized_alias");
+    assert_eq!(json["mappings"][0]["canonical_key"], "passport");
+    assert_eq!(json["mappings"][0]["needs_hitl"], false);
+    assert_eq!(json["mappings"][0]["qdrant_score"], serde_json::Value::Null);
+}
+
 /// A13: exercise the exact production canonical-search adapter against real
 /// Qdrant, with only the paid Voyage HTTP boundary replaced by a local stub.
 /// A vector suggestion changes a mapping, never PostgreSQL verified Truth.
@@ -247,10 +275,10 @@ async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate
     };
     use prost::Message;
     use seo_application::knowledge::resolve_canonical_vector_mappings;
-    use seo_ports::{knowledge::CanonicalVectorLookup, CanonicalVectorSearchPort};
-    use seo_steps::canonical_mapping_step::{
+    use seo_domain::canonical_mapping::{
         execute, CanonicalMappingInput, MatchingStage, MentionForMapping,
     };
+    use seo_ports::{knowledge::CanonicalVectorLookup, CanonicalVectorSearchPort};
 
     let qdrant = QdrantHarness::start().await.unwrap();
     let voyage = stub_servers::spawn_voyage_contract_stub().await.unwrap();

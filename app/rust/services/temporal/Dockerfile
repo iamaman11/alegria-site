@@ -9,10 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# CI supplies a Cargo dependency-scoped exact-source context, containing
-# original manifests but only actual release consumers' Rust sources.
-COPY app ./app
-
 ENV SQLX_OFFLINE=true
 # Experimental deployment: ship native binaries with a fast Rust codegen
 # profile. Optimized release codegen was the cold Docker CI bottleneck.
@@ -20,11 +16,27 @@ ENV CARGO_PROFILE_RELEASE_OPT_LEVEL=0
 ENV CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols
 
-# Build the existing worker, starter and native CMS CLI in one Cargo resolve/
-# compilation graph. Separate release invocations replayed a costly second
-# dependency-compile wave even though all three binaries share infrastructure.
-# The CLI remains an operator command, not a new running service.
+# CI generates a stable, source-free Cargo skeleton from the *actual* workspace
+# metadata. This native Cargo step caches third-party .rlib dependencies in an
+# ordinary Docker layer, so `cache-to: type=gha,mode=max` exports the objects
+# to future GitHub runners. BuildKit cache mounts alone would NOT survive.
+COPY dependency-skeleton/app ./app
 RUN cargo build --release --locked \
+    --manifest-path /app/app/rust/Cargo.toml \
+    -p temporal_worker -p cli_tools \
+    --bin temporal_worker --bin temporal_starter --bin cli_tools
+
+# A production Rust edit invalidates only this second COPY and actual codegen,
+# not the preceding locked dependency compilation layer. Real build.rs files,
+# generated-protobuf inputs and .sqlx queries enter only in this second phase.
+COPY app ./app
+
+# Build the real Worker, Starter and native CMS CLI in the SAME Cargo graph.
+# Touch real Rust sources/build scripts to make Cargo's timestamp-sensitive freshness
+# checks independent of Docker COPY preserving older checkout mtimes.
+RUN find /app/app/rust -type f -name '*.rs' \
+    \( -path '*/src/*' -o -name 'build.rs' \) -exec touch {} + \
+    && cargo build --release --locked \
     --manifest-path /app/app/rust/Cargo.toml \
     -p temporal_worker -p cli_tools \
     --bin temporal_worker --bin temporal_starter --bin cli_tools

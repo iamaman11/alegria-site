@@ -232,11 +232,11 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.EntitySpanOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::canonical_mapping_step::CanonicalMappingInput,
+    seo_domain::canonical_mapping::CanonicalMappingInput,
     "alegria.runtime.json.CanonicalMappingInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::canonical_mapping_step::CanonicalMappingOutput,
+    seo_domain::canonical_mapping::CanonicalMappingOutput,
     "alegria.runtime.json.CanonicalMappingOutput"
 );
 impl_json_runtime_payload!(

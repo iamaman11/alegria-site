@@ -1,6 +1,7 @@
 pub mod applicability;
 pub mod artifact_identity;
 pub mod block_validator;
+pub mod canonical_mapping;
 pub mod cms_revision;
 pub mod identity;
 pub mod publishing;

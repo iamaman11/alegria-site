@@ -91,7 +91,7 @@ pub struct CanonicalMappingSweepInput {
 pub struct CanonicalMappingSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub mappings: Vec<seo_steps::canonical_mapping_step::MappingResult>,
+    pub mappings: Vec<seo_domain::canonical_mapping::MappingResult>,
     pub blocked_by_gate: bool,
     pub needs_hitl: bool,
     pub decision: String,

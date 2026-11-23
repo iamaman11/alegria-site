@@ -154,6 +154,30 @@ def main() -> int:
             or "if input.publish_mode ==" in revision_step
             or "if input.publish_mode ==" in revision_adapter):
         raise ValueError("CMS revision state transitions must have one typed domain owner")
+
+    # Canonical concept mapping is one Knowledge/SEO domain decision: symbolic
+    # aliases and non-authoritative Qdrant scores share the same typed result.
+    # Temporal and SQL payload adapters preserve wire identity without owning
+    # the matching/HITL thresholds or a deprecated seo_steps re-export.
+    mapping_domain = (RUST / "crates/seo_domain/src/canonical_mapping.rs").read_text(encoding="utf-8")
+    mapping_app = (RUST / "crates/seo_application/src/knowledge.rs").read_text(encoding="utf-8")
+    mapping_ports = (RUST / "crates/seo_ports/src/knowledge.rs").read_text(encoding="utf-8")
+    mapping_runtime = (RUST / "services/temporal/src/activities/step_catalog.rs").read_text(encoding="utf-8")
+    mapping_wire = (RUST / "crates/infrastructure/src/adapters/proto_runtime_payload_store/registered_payload_impls.rs").read_text(encoding="utf-8")
+    if ((RUST / "crates/seo_steps/src/canonical_mapping_step.rs").exists()
+            or "pub mod canonical_mapping_step" in (RUST / "crates/seo_steps/src/lib.rs").read_text(encoding="utf-8")
+            or "pub struct CanonicalMappingInput" not in mapping_domain
+            or "pub struct MappingResult" not in mapping_domain
+            or "pub struct CanonicalVectorCandidate" not in mapping_domain
+            or "pub fn resolve_vector_candidates(" not in mapping_domain
+            or "canonical_mapping::resolve_vector_candidates(" not in mapping_app
+            or "struct CanonicalVectorCandidate" in mapping_ports
+            or "seo_domain::canonical_mapping::CanonicalVectorCandidate" not in mapping_ports
+            or "seo_domain::canonical_mapping::execute(input)" not in mapping_runtime
+            or "seo_domain::canonical_mapping::CanonicalMappingInput" not in mapping_wire
+            or '"alegria.runtime.json.CanonicalMappingInput"' not in mapping_wire
+            or '"alegria.runtime.json.CanonicalMappingOutput"' not in mapping_wire):
+        raise ValueError("canonical mapping and vector HITL policy must have one domain owner")
     for independent, allowed in ADAPTER_ALLOWED.items():
         if f"crates/{independent}" not in members:
             raise ValueError(f"missing workspace member: {independent}")

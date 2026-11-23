@@ -32,9 +32,9 @@ pub(crate) fn run_entity_span_detection(
 
 pub(crate) fn run_canonical_mapping(
     _acts: &AlegriaActivities,
-    input: &seo_steps::canonical_mapping_step::CanonicalMappingInput,
-) -> seo_steps::canonical_mapping_step::CanonicalMappingOutput {
-    seo_steps::canonical_mapping_step::execute(input)
+    input: &seo_domain::canonical_mapping::CanonicalMappingInput,
+) -> seo_domain::canonical_mapping::CanonicalMappingOutput {
+    seo_domain::canonical_mapping::execute(input)
 }
 
 pub(crate) fn run_procedural_extraction(

@@ -191,20 +191,20 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let mapping_input = seo_steps::canonical_mapping_step::CanonicalMappingInput {
+        let mapping_input = seo_domain::canonical_mapping::CanonicalMappingInput {
             section_id: section.id.to_string(),
             mentions: entity_output
                 .mentions
                 .iter()
                 .map(
-                    |mention| seo_steps::canonical_mapping_step::MentionForMapping {
+                    |mention| seo_domain::canonical_mapping::MentionForMapping {
                         raw_text: mention.raw_text.clone(),
                         entity_type: mention.entity_type.clone(),
                     },
                 )
                 .collect(),
         };
-        let mapping_output = seo_steps::canonical_mapping_step::execute(&mapping_input);
+        let mapping_output = seo_domain::canonical_mapping::execute(&mapping_input);
         stage_records.push(stage_record(
             "canonical_mapping",
             section,
