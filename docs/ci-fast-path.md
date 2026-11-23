@@ -76,7 +76,9 @@ the PR critical path**, not deleted or represented as having run on PR.
 
 The `rust-cache-prime` job also lives in `ci.yml`. Only successful,
 provenance-checked main pushes may run it, and it performs heavy work only if
-Rust source changed. CI-only changes do not launch another long compiler build.
+Rust compilation inputs changed. Changes limited to CI files or the
+`integration_harness/src/tests/` regression sources do not launch another
+long compiler build. Mixed changes including production Rust still prime.
 It prepares the three Rust CI profiles but
 does not execute tests. PRs read the shared compiler cache without uploading
 PR-local compiler objects. This is *not* proof that a cold PR will finish
