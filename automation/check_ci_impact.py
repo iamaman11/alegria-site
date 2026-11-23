@@ -118,6 +118,25 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["selected_suites"], ["temporal_restart"])
         self.assertIn("product-truth", result["selected_ci_jobs"])
 
+    def test_known_proto_with_generated_inventory_stays_scoped(self) -> None:
+        result = self.impact(
+            "app/contracts/proto/temporal_payloads.proto", "automation/PROTO_CONTRACTS.md",
+        )
+        self.assertEqual(result["scope"], "scoped")
+        self.assertEqual(set(result["affected_crates"]), {"contracts", "primitives", "temporal_worker"})
+        self.assertEqual(result["selected_suites"], ["temporal_restart"])
+        self.assertIn("generated manifest", result["classified_inputs"]["automation/PROTO_CONTRACTS.md"])
+
+    def test_orphan_or_unknown_generated_contract_inventory_fails_closed(self) -> None:
+        for paths in (
+            ("automation/PROTO_CONTRACTS.md",),
+            ("automation/PROTO_CONTRACTS.md", "app/contracts/proto/unknown.proto"),
+            ("automation/PROTO_CONTRACTS.md", "app/contracts/proto/temporal_payloads.proto",
+             "automation/gen_proto_contracts.py"),
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual(self.impact(*paths)["scope"], "full")
+
     def test_unknown_schema_contract_and_toolchain_fail_closed(self) -> None:
         for path in ("app/contracts/proto/unknown.proto", "app/db/new_schema.sql", "app/rust/rust-toolchain.toml"):
             with self.subTest(path=path):

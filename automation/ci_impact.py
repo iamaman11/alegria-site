@@ -47,6 +47,7 @@ KNOWN_CONTRACT_CRATES = {
     "app/contracts/proto/sync.proto": "contracts",
     "app/contracts/proto/temporal_payloads.proto": "contracts",
 }
+KNOWN_CONTRACT_MANIFEST = "automation/PROTO_CONTRACTS.md"
 
 # These files do not change a Rust compilation unit. Historical run evidence
 # can still be checked by the ordinary source-policy CI owners, but must not be
@@ -704,6 +705,17 @@ def analyze(
         if path == "app/rust/Cargo.lock":
             lock_changed = True
             classified_inputs[path] = "resolved Cargo dependency graph: base and head"
+            continue
+        if path == KNOWN_CONTRACT_MANIFEST:
+            # This checked-in generator output contains byte-level hashes of
+            # the live proto inputs. A genuine proto change must update it;
+            # that paired update is not an unrelated CI-planner modification.
+            if set(paths) & KNOWN_CONTRACT_CRATES.keys() and "contracts" in reason:
+                direct.add("contracts")
+                reason["contracts"].add("generated contract inventory for changed known proto")
+                classified_inputs[path] = "generated manifest paired with known protobuf source"
+            else:
+                broad_reasons.append("global: unpaired generated contract inventory")
             continue
         if path in KNOWN_CONTRACT_CRATES:
             owner = KNOWN_CONTRACT_CRATES[path]
