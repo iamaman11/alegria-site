@@ -163,11 +163,17 @@ mod tests {
 
     #[test]
     fn missing_preview_and_missing_render_require_different_actions() {
-        assert_eq!(validate_render_preview(&[]), vec![RenderBlocker::EmptyPreview]);
+        assert_eq!(
+            validate_render_preview(&[]),
+            vec![RenderBlocker::EmptyPreview]
+        );
         let blockers = validate_render_preview(&[page("")]);
         assert!(blockers.contains(&RenderBlocker::EmptyHtml));
         assert!(blockers.contains(&RenderBlocker::MissingRequiredMarker));
-        assert_eq!(RenderBlocker::EmptyPreview.reason_code(), "empty_render_preview");
+        assert_eq!(
+            RenderBlocker::EmptyPreview.reason_code(),
+            "empty_render_preview"
+        );
         assert_eq!(
             RenderBlocker::EmptyHtml.required_next_action(),
             "Render non-empty HTML before publish finalization."

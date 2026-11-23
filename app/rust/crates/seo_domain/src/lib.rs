@@ -4,7 +4,7 @@ pub mod block_validator;
 pub mod cms_revision;
 pub mod identity;
 pub mod publishing;
-pub mod render_preview;
 pub mod rebuild;
+pub mod render_preview;
 pub mod review_decision;
 pub mod writer;
