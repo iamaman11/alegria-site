@@ -9,6 +9,7 @@ QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
 PUBLISH = ROOT / "app/rust/crates/seo_steps/src/cms_publish_step.rs"
 REVISION = ROOT / "app/rust/crates/seo_domain/src/cms_revision.rs"
 RENDER_VALIDATE = ROOT / "app/rust/crates/seo_steps/src/render_preview_validate_step.rs"
+RENDER_POLICY = ROOT / "app/rust/crates/seo_domain/src/render_preview.rs"
 PAGE_PUBLISH = (
     ROOT
     / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs"
@@ -20,6 +21,8 @@ def main() -> int:
     publish = PUBLISH.read_text(encoding="utf-8")
     revision = REVISION.read_text(encoding="utf-8")
     render_validate = RENDER_VALIDATE.read_text(encoding="utf-8")
+    render_adapter = render_validate.split("#[cfg(test)]", 1)[0]
+    render_policy = RENDER_POLICY.read_text(encoding="utf-8")
     page_publish = PAGE_PUBLISH.read_text(encoding="utf-8")
     failures: list[str] = []
 
@@ -85,11 +88,26 @@ def main() -> int:
         '"<link rel=\\\"canonical\\\" href=\\\""',
         '"<meta name=\\\"description\\\" content=\\\""',
         '"<html lang=\\\""',
+    ]:
+        if needle not in render_policy:
+            failures.append(f"render_preview domain missing security/product gate `{needle}`")
+    for needle in [
+        "validate_render_preview(&pages)",
+        "required_next_action()",
         "rejects_active_content_markers",
         "rejects_non_json_ld_script_elements",
+        "maps_domain_findings_to_stable_temporal_blockers_once",
     ]:
         if needle not in render_validate:
-            failures.append(f"render_preview_validate_step missing security/product gate `{needle}`")
+            failures.append(f"render_preview wire adapter missing typed mapping/test `{needle}`")
+    for duplicate in [
+        "page.rendered_link_count < page.required_link_count",
+        '"unsafe_active_content_marker"',
+        '"unsafe_script_structure"',
+        '"<html lang=\\\""',
+    ]:
+        if duplicate in render_adapter:
+            failures.append(f"render_preview wire adapter duplicates domain policy `{duplicate}`")
 
     if failures:
         print("SEO_PUBLISH_GATES: FAILED")
