@@ -91,6 +91,17 @@ def main() -> int:
     if "persist_from_pipeline_state" in raw_crawl or "ensure_extracted_concepts" in raw_crawl:
         failures.append("raw_knowledge_ingestion still contains verified-truth bridge helpers")
 
+    # The old regex/keyword Truth path was never compiled after the module
+    # ownership migration. Keep its dead sources from silently reappearing.
+    legacy_sources = [
+        ROOT / "app/rust/crates/primitives/src/facts_extractor.rs",
+        ROOT / "app/rust/crates/primitives/src/facts_extractor_json.rs",
+        ROOT / "app/rust/services/temporal/src/activities/fact_extraction.rs",
+    ]
+    for path in legacy_sources:
+        if path.exists():
+            failures.append(f"legacy extraction source still exists: {path.relative_to(ROOT)}")
+
     if failures:
         print("EXTRACTION_RUNTIME_CONTRACT: FAILED")
         for failure in failures:

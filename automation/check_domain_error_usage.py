@@ -8,7 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 ACTIVITIES_DIR = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities"
 ACTIVITIES_MOD = ACTIVITIES_DIR / "mod.rs"
 ACTIVITIES_RUNTIME = ACTIVITIES_DIR / "runtime.rs"
-ACTIVITIES_FACT = ACTIVITIES_DIR / "fact_extraction.rs"
+ACTIVE_EXTRACTION_CONTRACT = (
+    ACTIVITIES_DIR / "operations" / "contracts" / "preamble.rs"
+)
+ACTIVE_CANDIDATE_VALIDATION = (
+    ACTIVITIES_DIR / "operations" / "truth_extraction_ops" / "candidate_validation.rs"
+)
 PURE_RUST_LAYERS = [
     ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "knowledge.rs",
     ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "hitl.rs",
@@ -45,14 +50,12 @@ def main() -> int:
                 f"missing `{needle}` in {ACTIVITIES_RUNTIME.relative_to(ROOT)}"
             )
 
-    fact_text = ACTIVITIES_FACT.read_text(encoding="utf-8")
-    required_fact = [
-        "DomainError::ValidationFailure",
-        "DomainError::ContractViolation",
-    ]
-    for needle in required_fact:
-        if needle not in fact_text:
-            failures.append(f"missing `{needle}` in {ACTIVITIES_FACT.relative_to(ROOT)}")
+    for path, error_variant in [
+        (ACTIVE_EXTRACTION_CONTRACT, "DomainError::ContractViolation"),
+        (ACTIVE_CANDIDATE_VALIDATION, "DomainError::ValidationFailure"),
+    ]:
+        if error_variant not in path.read_text(encoding="utf-8"):
+            failures.append(f"missing `{error_variant}` in {path.relative_to(ROOT)}")
 
     mod_text = read_file_resolved(ACTIVITIES_MOD)
     required_mod = [
