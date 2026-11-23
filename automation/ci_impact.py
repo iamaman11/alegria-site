@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from collections import deque
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT / "app" / "rust"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # Includes changes to generated contracts, integration fixtures, build tooling,
 # container contents and runtime configuration; they are NOT Rust crate-local.
@@ -65,6 +66,7 @@ WORKER_PACKAGING_FILES = {
 }
 
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
+TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
 
 # Publishing A17 exercises the real PostgreSQL transaction and a replaceable
 # controlled HTTP delivery adapter. Reuse this same impact report in local/CI;
@@ -93,6 +95,20 @@ OUTBOX_A14_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/projection_materialize_adapter.rs",
     "app/rust/services/temporal/src/activities/operations/runtime_support_ops.rs",
     "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+}
+
+
+# Both live Temporal restart and Truth certification spawn these actual Rust
+# processes. Prepare them once in the ordinary Cargo target, not recursively
+# inside the integration harness's isolated nested compilation directory.
+WORKER_E2E_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_worker", "-p", "outbox_worker",
+    "--bin", "temporal_worker", "--bin", "outbox_worker",
+)
+WORKER_E2E_RUNTIME_BINARIES = {
+    "INTEGRATION_TEMPORAL_WORKER_BIN": "temporal_worker",
+    "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
 }
 
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
@@ -154,6 +170,8 @@ SUITE_OWNERS = {
         "paths": set(),
         "prefixes": (TRUTH_FIXTURE_PREFIX,),
         "on_unknown_global_input": False,
+        "prepare": WORKER_E2E_PREPARE,
+        "runtime_binaries": WORKER_E2E_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "truth_certification_suite_matches_fixture_expectations",
@@ -182,19 +200,15 @@ SUITE_OWNERS = {
     "temporal_restart": {
         "paths": {"app/rust/services/temporal/Cargo.toml"},
         "prefixes": ("app/rust/services/temporal/src/",),
+        # This separate live E2E also opens the canonical happy-path JSON and
+        # its HTML pages. Do not let fixture-only narrowing skip its consumer.
+        "fixture_ids": {"happy_path_publish_allowed"},
         "on_unknown_global_input": False,
         # Build the actual processes in the SAME Cargo target as the preceding
         # workspace tests. The harness already accepts these binary paths;
         # otherwise it compiles both workers again in an isolated target.
-        "prepare": (
-            "cargo", "build", "--locked",
-            "-p", "temporal_worker", "-p", "outbox_worker",
-            "--bin", "temporal_worker", "--bin", "outbox_worker",
-        ),
-        "runtime_binaries": {
-            "INTEGRATION_TEMPORAL_WORKER_BIN": "temporal_worker",
-            "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
-        },
+        "prepare": WORKER_E2E_PREPARE,
+        "runtime_binaries": WORKER_E2E_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "canonical_temporal_manual_editorial_resumes_after_worker_restart",
@@ -319,11 +333,79 @@ def ci_jobs_for_change(
                  and not (path.startswith("docs/runs/") and path.endswith(".json"))
                  and not path.startswith(("infra/analytics_lab/", "app/analytics_lab/"))
                  and not path.startswith("infra/cloudflare/seo-static/")
+                 and not path.startswith(TRUTH_FIXTURE_PREFIX)
                  and path not in WORKER_PACKAGING_FILES}
     if scope == "none" and uncovered:
         return {name: ["fail-closed: unowned non-Rust input"] for name in CI_PR_OWNERS}
 
     return {name: selected[name] for name in CI_PR_OWNERS if name in selected}
+
+
+def truth_fixture_ids_for_paths(
+    changed_paths: list[str], *, root: Path = ROOT,
+) -> tuple[list[str] | None, list[str]]:
+    """Resolve live HTML consumers from the same JSON manifests as Rust.
+
+    `None` means run *all* certification fixtures. Never scope changed
+    manifests, deletes/renames, malformed inventories or unowned HTML by guess.
+    """
+    changed = sorted(path for path in set(changed_paths) if path.startswith(TRUTH_FIXTURE_PREFIX))
+    if not changed:
+        return None, ["full: no changed live HTML input to resolve"]
+    if any(not path.endswith(".html") for path in changed):
+        return None, ["full: fixture manifest or non-HTML input changed"]
+
+    folder = root / TRUTH_FIXTURE_PREFIX
+    manifests = sorted(folder.glob("*.json"))
+    if not manifests:
+        return None, ["full: no readable Truth fixture manifests"]
+
+    references: dict[str, set[str]] = {}
+    seen_ids: set[str] = set()
+    try:
+        for manifest in manifests:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            fixture_id = data["fixture_id"]
+            pages = data["source_inputs"]["pages"]
+            if (not isinstance(fixture_id, str) or not TRUTH_FIXTURE_ID.fullmatch(fixture_id)
+                    or fixture_id != manifest.stem or fixture_id in seen_ids
+                    or not isinstance(pages, list) or not pages):
+                raise ValueError("invalid or duplicate fixture ID/pages")
+            seen_ids.add(fixture_id)
+            for page in pages:
+                html_file = page["html_file"]
+                if (not isinstance(html_file, str) or Path(html_file).name != html_file
+                        or not html_file.endswith(".html")
+                        or not (folder / html_file).is_file()):
+                    raise ValueError("unsafe or missing referenced HTML input")
+                references.setdefault(TRUTH_FIXTURE_PREFIX + html_file, set()).add(fixture_id)
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        return None, [f"full: incomplete Truth fixture inventory ({type(error).__name__})"]
+
+    unmatched = sorted(set(changed) - set(references))
+    if unmatched:
+        return None, ["full: changed HTML lacks a live JSON fixture consumer: " + ", ".join(unmatched)]
+
+    fixture_ids = sorted(set().union(*(references[path] for path in changed)))
+    return fixture_ids, ["changed live HTML is read by: " + ", ".join(fixture_ids)]
+
+
+def suite_environment_for_report(report: dict[str, Any], name: str) -> dict[str, str]:
+    """Validate test filters before passing them to the real Cargo process."""
+    scoped = report.get("suite_fixture_ids")
+    selected = report.get("selected_suites")
+    if not isinstance(scoped, dict) or not isinstance(selected, list) or any(
+        suite != "truth_certification" or suite not in selected for suite in scoped
+    ):
+        raise ValueError("invalid integration fixture owner selection")
+    if name != "truth_certification" or name not in scoped:
+        return {}
+    ids = scoped[name]
+    if (not isinstance(ids, list) or not ids
+            or any(not isinstance(value, str) or not TRUTH_FIXTURE_ID.fullmatch(value) for value in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError("invalid exact Truth fixture IDs")
+    return {"TRUTH_CERT_FIXTURE_IDS": ",".join(ids)}
 
 
 def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[str]]]:
@@ -335,6 +417,12 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
         not isinstance(name, str) or name not in SUITE_OWNERS for name in suites
     ):
         raise ValueError("impact report has missing, duplicate or unknown integration suites")
+    if not isinstance(report.get("suite_fixture_ids"), dict):
+        raise ValueError("impact report lacks typed fixture owner selection")
+    for name in suites:
+        suite_environment_for_report(report, name)
+    if report.get("suite_fixture_ids") and "truth_certification" not in suites:
+        raise ValueError("fixture selection without its executable suite")
     return [(name, list(SUITE_OWNERS[name]["command"])) for name in suites]
 
 
@@ -466,6 +554,12 @@ def analyze(
         if path.startswith("docs/runs/") and path.endswith(".json"):
             classified_inputs[path] = "historical run evidence: not a live test input or a Rust regression"
             continue
+        if path.startswith(TRUTH_FIXTURE_PREFIX):
+            # Runtime files are opened by the e2e harness, not compiled via
+            # include_str!. The selected real suite compiles the required Rust
+            # graph; an extra Cargo check/test is duplicate work.
+            classified_inputs[path] = "live Truth runtime fixture: consumed by selected e2e suite"
+            continue
         if path in WORKER_PACKAGING_FILES or path.startswith("infra/cloudflare/seo-static/"):
             classified_inputs[path] = "known non-Rust input: temporal-worker image"
             continue
@@ -530,6 +624,20 @@ def analyze(
         if matched:
             image_reasons[name] = matched
 
+    suite_fixture_ids: dict[str, list[str]] = {}
+    suite_fixture_reasons: dict[str, list[str]] = {}
+    if "truth_certification" in suite_reasons:
+        ids, reasons = truth_fixture_ids_for_paths(paths)
+        suite_fixture_reasons["truth_certification"] = reasons
+        if ids is not None:
+            suite_fixture_ids["truth_certification"] = ids
+        for name, rule in SUITE_OWNERS.items():
+            consuming_ids = rule.get("fixture_ids", set())
+            if consuming_ids and (ids is None or set(ids) & consuming_ids):
+                suite_reasons.setdefault(name, []).append(
+                    "live Truth input also feeds this E2E: " + ", ".join(sorted(consuming_ids))
+                )
+
     ci_job_reasons = ci_jobs_for_change(paths, scope, set(suite_reasons), set(image_reasons))
 
     return {
@@ -549,6 +657,8 @@ def analyze(
         "reasons": {pkg: sorted(reason[pkg]) for pkg in sorted(affected)},
         "selected_suites": sorted(suite_reasons),
         "suite_reasons": suite_reasons,
+        "suite_fixture_ids": suite_fixture_ids,
+        "suite_fixture_reasons": suite_fixture_reasons,
         "selected_images": sorted(image_reasons),
         "image_status": {
             name: "selected" if name in image_reasons else "not_applicable"

@@ -12,10 +12,20 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from typing import Mapping
 
 from cargo_feedback import run_cargo
-from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report
+from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report, suite_environment_for_report
 from dev_rust_feedback import commands_for_report
+
+
+def require_clean_truth_filter_environment(
+    name: str, *, environment: Mapping[str, str] = os.environ,
+) -> None:
+    if name == "truth_certification" and (
+        "TRUTH_CERT_FIXTURE_IDS" in environment or "TRUTH_CERT_LIMIT" in environment
+    ):
+        raise ValueError("externally supplied Truth fixture filters cannot shrink exact-source CI")
 
 
 def main() -> int:
@@ -38,12 +48,18 @@ def main() -> int:
 
     # All real integration commands and their owners come from ci_impact.py.
     # The runner deliberately has no suite-specific branch or path logic.
+    prepared: set[tuple[str, ...]] = set()
     for name, command in integration_commands:
         owner = SUITE_OWNERS[name]
+        require_clean_truth_filter_environment(name)
         preparation = owner.get("prepare")
         if preparation:
-            print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
-            measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
+            if preparation not in prepared:
+                print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
+                measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
+                prepared.add(preparation)
+            else:
+                print(f"CI_SUITE_PREPARE_REUSED={name}", flush=True)
 
         # The prebuilt-binary hook is generic. A runtime suite can use its
         # existing override variables without recompiling the same Rust graph
@@ -51,7 +67,9 @@ def main() -> int:
         target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
         if not target.is_absolute():
             target = WORKSPACE / target
-        runtime_env = {}
+        runtime_env = suite_environment_for_report(report, name)
+        if name == "truth_certification":
+            print("CI_SUITE_FIXTURE_IDS=" + runtime_env.get("TRUTH_CERT_FIXTURE_IDS", "ALL"), flush=True)
         for variable, binary in owner.get("runtime_binaries", {}).items():
             path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
             if not path.is_file() or not os.access(path, os.X_OK):

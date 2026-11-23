@@ -4,10 +4,18 @@
 from __future__ import annotations
 
 import unittest
+import json
+from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import patch
 
-from ci_impact import CI_PR_OWNERS, SUITE_OWNERS, analyze, changed_paths, suite_commands_for_report, workspace_graph
+from ci_impact import (
+    CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, analyze, changed_paths,
+    suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
+    workspace_graph,
+)
+from dev_rust_feedback import commands_for_report
+from run_scoped_cargo_feedback import require_clean_truth_filter_environment
 
 
 class ImpactFixtures(unittest.TestCase):
@@ -184,15 +192,95 @@ class ImpactFixtures(unittest.TestCase):
     def test_live_truth_fixture_selects_its_real_e2e_without_other_images(self) -> None:
         path = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/happy_path_publish_allowed_source.html"
         outcome = self.impact(path)
-        self.assertEqual(outcome["scope"], "scoped")
-        self.assertEqual(outcome["direct_crates"], ["integration_harness"])
-        self.assertEqual(outcome["selected_suites"], ["truth_certification"])
+        self.assertEqual(outcome["scope"], "none")
+        self.assertEqual(outcome["direct_crates"], [])
+        self.assertEqual(outcome["affected_crates"], [])
+        self.assertEqual(outcome["selected_suites"], ["temporal_restart", "truth_certification"])
+        self.assertEqual(commands_for_report(outcome, check_only=False), [])
+        self.assertEqual(outcome["suite_fixture_ids"], {"truth_certification": ["happy_path_publish_allowed"]})
+        self.assertEqual(SUITE_OWNERS["temporal_restart"]["prepare"],
+                         SUITE_OWNERS["truth_certification"]["prepare"])
+        self.assertEqual(SUITE_OWNERS["temporal_restart"]["runtime_binaries"],
+                         SUITE_OWNERS["truth_certification"]["runtime_binaries"])
+        self.assertEqual(suite_environment_for_report(outcome, "truth_certification"), {
+            "TRUTH_CERT_FIXTURE_IDS": "happy_path_publish_allowed",
+        })
         self.assertEqual(outcome["selected_images"], [])
         self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
         self.assertIn("product-truth", outcome["selected_ci_jobs"])
-        suite_name, command = suite_commands_for_report(outcome)[0]
-        self.assertEqual(suite_name, "truth_certification")
+        self.assertNotIn("stack-temporal-postgres18", outcome["selected_ci_jobs"])
+        self.assertNotIn("stack-storage-graph", outcome["selected_ci_jobs"])
+        selected_commands = dict(suite_commands_for_report(outcome))
+        self.assertIn("temporal_restart", selected_commands)
+        command = selected_commands["truth_certification"]
         self.assertIn("truth_certification_suite_matches_fixture_expectations", command)
+
+    def test_unrelated_live_html_selects_only_truth_e2e_without_manual_restart(self) -> None:
+        outcome = self.impact(TRUTH_FIXTURE_PREFIX + "agency_override_denied.html")
+        self.assertEqual(outcome["selected_suites"], ["truth_certification"])
+        self.assertEqual(outcome["suite_fixture_ids"], {"truth_certification": ["agency_override_denied"]})
+        self.assertEqual(commands_for_report(outcome, check_only=False), [])
+
+    def test_truth_manifest_change_or_unowned_html_runs_full_suite(self) -> None:
+        for path in (
+            TRUTH_FIXTURE_PREFIX + "happy_path_publish_allowed.json",
+            TRUTH_FIXTURE_PREFIX + "unowned_fixture.html",
+        ):
+            with self.subTest(path=path):
+                outcome = self.impact(path)
+                self.assertEqual(outcome["selected_suites"], ["temporal_restart", "truth_certification"])
+                self.assertEqual(outcome["suite_fixture_ids"], {})
+                self.assertIn("full:", outcome["suite_fixture_reasons"]["truth_certification"][0])
+                self.assertEqual(suite_environment_for_report(outcome, "truth_certification"), {})
+
+    def test_shared_html_input_selects_every_manifest_consumer(self) -> None:
+        with TemporaryDirectory() as tmp:
+            folder = Path(tmp) / TRUTH_FIXTURE_PREFIX
+            folder.mkdir(parents=True)
+            (folder / "shared.html").write_text("<html></html>", encoding="utf-8")
+            for fixture_id in ("consumer_a", "consumer_b"):
+                (folder / (fixture_id + ".json")).write_text(json.dumps({
+                    "fixture_id": fixture_id,
+                    "source_inputs": {"pages": [{"html_file": "shared.html"}]},
+                }), encoding="utf-8")
+            ids, reasons = truth_fixture_ids_for_paths(
+                [TRUTH_FIXTURE_PREFIX + "shared.html"], root=Path(tmp),
+            )
+            self.assertEqual(ids, ["consumer_a", "consumer_b"])
+            self.assertIn("consumer_b", reasons[0])
+
+    def test_incomplete_manifest_never_selects_one_fixture_silently(self) -> None:
+        with TemporaryDirectory() as tmp:
+            folder = Path(tmp) / TRUTH_FIXTURE_PREFIX
+            folder.mkdir(parents=True)
+            (folder / "source.html").write_text("<html></html>", encoding="utf-8")
+            (folder / "bad.json").write_text("{malformed", encoding="utf-8")
+            ids, reasons = truth_fixture_ids_for_paths(
+                [TRUTH_FIXTURE_PREFIX + "source.html"], root=Path(tmp),
+            )
+            self.assertIsNone(ids)
+            self.assertIn("full:", reasons[0])
+
+    def test_malformed_or_unowned_filter_plan_is_rejected(self) -> None:
+        outcome = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path_publish_allowed_source.html")
+        for ids in ([], ["bad,other"], ["happy_path_publish_allowed"] * 2, [123]):
+            with self.subTest(ids=ids):
+                invalid = dict(outcome, suite_fixture_ids={"truth_certification": ids})
+                with self.assertRaises(ValueError):
+                    suite_commands_for_report(invalid)
+        invalid = dict(outcome, suite_fixture_ids={"unknown": ["happy_path_publish_allowed"]})
+        with self.assertRaises(ValueError):
+            suite_commands_for_report(invalid)
+
+    def test_external_fixture_filter_cannot_override_exact_source_plan(self) -> None:
+        for variable in ("TRUTH_CERT_LIMIT", "TRUTH_CERT_FIXTURE_IDS"):
+            with self.subTest(variable=variable):
+                with self.assertRaises(ValueError):
+                    require_clean_truth_filter_environment(
+                        "truth_certification", environment={variable: "1"},
+                    )
+        require_clean_truth_filter_environment("truth_certification", environment={})
+        require_clean_truth_filter_environment("knowledge_a13", environment={"TRUTH_CERT_LIMIT": "1"})
 
     def test_delivery_script_selects_temporal_worker_image_without_rust(self) -> None:
         path = "automation/deploy_seo_static_cloudflare.py"

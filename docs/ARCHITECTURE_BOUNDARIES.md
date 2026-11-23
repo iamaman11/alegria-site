@@ -87,6 +87,27 @@ selects Product/Truth and source verification; explanatory Markdown needs no
 owner beyond the mandatory impact selector and aggregate CI gate. A live
 `integration_harness/fixtures/visa_truth_certification`
 input selects the actual Temporal/Truth certification E2E, not an archived PASS.
+The fixture-only fast path resolves modified `.html` names through every live
+JSON manifest's `source_inputs.pages[].html_file`, selects all consuming
+`fixture_id`s and passes those IDs via the harness's existing
+`TRUTH_CERT_FIXTURE_IDS` input. A manifest change, unreferenced/renamed HTML or
+incomplete mapping keeps the **entire** 16-fixture certification suite. The
+separate Temporal restart/manual-editorial E2E reads the canonical
+`happy_path_publish_allowed` fixture too; that ID (or an unresolved fixture
+mapping) also selects its real worker-restart test and prebuilt binary preparation.
+Other HTML fixtures do not trigger the restart test without a live consumer.
+The runner rejects externally supplied `TRUTH_CERT_LIMIT` or fixture IDs so that
+an accidental environment filter cannot weaken canonical CI. Runtime fixture
+files do not modify a compiled Rust unit: the selected E2E compiles the
+required harness, without a preceding redundant scoped Cargo check/test.
+The Truth and Temporal restart E2Es both use the same prebuilt real
+`temporal_worker`/`outbox_worker` binaries in the existing Cargo target; the
+runner prepares that shared pair once even when both suites are selected.
+This removes the measured 188.7s nested-worker compilation from the prior
+full Truth canary without replacing its actual PostgreSQL/Temporal processes.
+This optimization is **not** evidence that the full 16-fixture suite ran when
+only one ID is selected; the exact scope is reported in `suite_fixture_ids`
+and printed as `CI_SUITE_FIXTURE_IDS` in the Rust job.
 The Cloudflare static tree and the four Python scripts COPY'd into the Temporal
 image select its packaging even if no Rust crate changed. The `worker-image`
 release workflow now checks this report against its exact source commit and
