@@ -856,11 +856,10 @@ jobs:
           python3 - <<'PY'
           import json
           import os
-          import subprocess
           import sys
 
           sys.path.insert(0, 'automation')
-          from ci_impact import SCHEMA_VERSION, worker_release_decision
+          from ci_impact import SCHEMA_VERSION, changed_paths, worker_release_decision
 
           with open('automation/reports/worker_image_impact.json', encoding='utf-8') as f:
               report = json.load(f)
@@ -871,9 +870,10 @@ jobs:
                   or report.get('head_sha') != source):
               raise SystemExit('WORKER_IMAGE_SELECTION=FAIL source/owner/report mismatch')
 
-          changed = subprocess.check_output(
-              ['git', 'diff', '--name-only', 'HEAD^1', 'HEAD'], text=True,
-          ).splitlines()
+          # Use the same rename-aware path set as the source-bound impact
+          # report; --name-only drops a renamed file's old path and breaks
+          # exact-source Worker selection after a perfectly valid PR merge.
+          changed = changed_paths('HEAD^1', source)
           # PR validation can be fail-closed FULL without changing any input
           # actually delivered inside the Worker image. One impact owner
           # decides the release; unknown or mixed inputs still rebuild.

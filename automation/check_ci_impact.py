@@ -607,6 +607,18 @@ class ImpactFixtures(unittest.TestCase):
                 ["app/rust/crates/graph_neo4j/src/new.rs", "app/rust/crates/graph_neo4j/src/old.rs"],
             )
 
+    def test_rename_aware_main_worker_selection_matches_exact_source_impact(self) -> None:
+        old = "app/rust/services/temporal/src/old.rs"
+        new = "app/rust/services/temporal/src/new.rs"
+        with patch("subprocess.check_output", return_value=f"R100\0{old}\0{new}\0".encode()):
+            changed = changed_paths("HEAD^1", "MERGE_SHA", root=self.root)
+        self.assertEqual(changed, [new, old])
+        report = self.impact(*changed)
+        decision = worker_release_decision(report, changed, manual=False)
+        self.assertTrue(decision["worker_required"])
+        with self.assertRaisesRegex(ValueError, "invalid exact-source impact"):
+            worker_release_decision(report, [new], manual=False)
+
     def test_git_deletion_is_retained(self) -> None:
         with patch("subprocess.check_output", return_value=b"D\0app/rust/services/gsc_sync/src/main.rs\0"):
             self.assertEqual(changed_paths("BASE", "HEAD", root=self.root), ["app/rust/services/gsc_sync/src/main.rs"])

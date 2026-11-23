@@ -86,6 +86,9 @@ def check() -> None:
         release.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
     )
     ast.parse(selection_script)
+    assert "from ci_impact import SCHEMA_VERSION, changed_paths, worker_release_decision" in selection_script
+    assert "changed = changed_paths('HEAD^1', source)" in selection_script
+    assert "'--name-only'" not in selection_script
     for changed, skip in (
         ([".github/workflows/ci.yml", "infra/local/windows_staging.ps1"], True),
         (["docs/ci-fast-path.md", "automation/check_ci_workflow_contract.py"], True),
