@@ -125,6 +125,8 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
+    "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+    "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
     "app/rust/services/cli_tools/src/cli/cms_decision.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }

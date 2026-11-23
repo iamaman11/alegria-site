@@ -867,6 +867,13 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
     assert_eq!(readback.decision_key, result.decision_key);
     assert!(readback.approves_revision(&page, &replacement));
     assert!(!readback.approves_revision(&page, &original));
+    assert_eq!(
+        seo_steps::cms_review_wire::workflow_disposition(
+            &seo_steps::cms_review_wire::to_wire(readback.clone()),
+            true,
+        ),
+        seo_domain::review_decision::EditorialReviewDisposition::Approved,
+    );
     let (live_revision, live_status): (String, String) = sqlx::query_as(
         "SELECT current_revision_id,current_status FROM site.cms_pages WHERE page_node_key=$1",
     ).bind(&page).fetch_one(pool).await.unwrap();
@@ -876,6 +883,41 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
     ).bind(&page).fetch_all(pool).await.unwrap();
     assert_eq!(decided, vec![replacement.clone()]);
 
+    // A second immutable candidate proves that persisted human blocking is
+    // terminal only for newly patched workflow histories. It never replaces
+    // the published live pointer or approves either review candidate.
+    let blocked_draft = format!("cms-hitl-draft-blocked-{marker}");
+    let blocked_revision = format!("cms-hitl-revision-blocked-{marker}");
+    sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,draft_revision,body_markdown) VALUES ($1,$2,$3,3,'Rejected content')")
+        .bind(&blocked_draft).bind(&page).bind(&brief).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.cms_page_revisions (revision_id,page_node_key,page_draft_key,page_brief_key,title,h1,blueprint_key,revision_status) VALUES ($1,$2,$3,$4,'Rejected page','Rejected page',$5,'review_required')")
+        .bind(&blocked_revision).bind(&page).bind(&blocked_draft).bind(&brief).bind(&blueprint)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.cms_publish_events (event_key,event_type,page_node_key,scope_signature,revision_id,event_payload) VALUES ($1,'seo_page_review_requested',$2,$3,$4,$5)")
+        .bind(format!("cms-blocked-event-{marker}")).bind(&page).bind(&scope).bind(&blocked_revision)
+        .bind(serde_json::json!({"run_id": run_id})).execute(pool).await.unwrap();
+    let mut rejected = request(Some(&blocked_revision));
+    rejected.decision = HumanReviewDecision::Blocked;
+    sqlx_seo_cms_adapter::apply_human_review_decision(pool, &rejected)
+        .await.unwrap();
+    let blocked = seo_application::review_publish::load_cms_approval_decision(
+        &repository, &page, &blocked_revision,
+    ).await.unwrap();
+    assert!(!blocked.approves_revision(&page, &blocked_revision));
+    let blocked_wire = seo_steps::cms_review_wire::to_wire(blocked);
+    assert_eq!(
+        seo_steps::cms_review_wire::workflow_disposition(&blocked_wire, true),
+        seo_domain::review_decision::EditorialReviewDisposition::ReworkRequired,
+    );
+    assert_eq!(
+        seo_steps::cms_review_wire::workflow_disposition(&blocked_wire, false),
+        seo_domain::review_decision::EditorialReviewDisposition::Wait,
+    );
+    let live_after_block: String = sqlx::query_scalar(
+        "SELECT current_revision_id FROM site.cms_pages WHERE page_node_key=$1",
+    ).bind(&page).fetch_one(pool).await.unwrap();
+    assert_eq!(live_after_block, original);
+
     sqlx::query("UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1")
         .bind(Uuid::parse_str(&run_id).unwrap()).execute(pool).await.unwrap();
     let mut after_terminal = request(Some(&replacement));
@@ -884,7 +926,7 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM site.cms_approval_decisions WHERE page_node_key=$1",
     ).bind(&page).fetch_one(pool).await.unwrap();
-    assert_eq!(count, 1);
+    assert_eq!(count, 2);
 }
 
 #[cfg(feature = "e2e")]

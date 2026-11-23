@@ -3,7 +3,9 @@
 
 use contracts::generated::alegria::temporal::v1::CmsApprovalDecision;
 use primitives::errors::DomainError;
-use seo_domain::review_decision::{CmsApproval, HumanReviewDecision};
+use seo_domain::review_decision::{
+    editorial_review_disposition, CmsApproval, EditorialReviewDisposition, HumanReviewDecision,
+};
 
 pub fn from_wire(input: &CmsApprovalDecision) -> Result<CmsApproval, DomainError> {
     Ok(CmsApproval {
@@ -29,9 +31,37 @@ pub fn to_wire(input: CmsApproval) -> CmsApprovalDecision {
     }
 }
 
+/// Translate a previously recorded Temporal payload into a domain decision.
+/// An unknown historical string can only wait, never authorize publication or
+/// terminal rework. The strict `from_wire` remains mandatory for persistence.
+pub fn workflow_disposition(
+    input: &CmsApprovalDecision,
+    terminal_rework_enabled: bool,
+) -> EditorialReviewDisposition {
+    editorial_review_disposition(
+        HumanReviewDecision::parse(&input.decision).ok(),
+        terminal_rework_enabled,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_temporal_decisions_are_fail_closed() {
+        use EditorialReviewDisposition::{Approved, ReworkRequired, Wait};
+        let mut wire = CmsApprovalDecision::default();
+        wire.decision = "approved".to_string();
+        assert_eq!(workflow_disposition(&wire, false), Approved);
+        wire.decision = "blocked".to_string();
+        assert_eq!(workflow_disposition(&wire, true), ReworkRequired);
+        assert_eq!(workflow_disposition(&wire, false), Wait);
+        for raw in ["reopened", "", "unexpected", "APPROVED"] {
+            wire.decision = raw.to_string();
+            assert_eq!(workflow_disposition(&wire, true), Wait);
+        }
+    }
 
     #[test]
     fn wire_mapping_preserves_immutable_revision_and_rejects_unknown_decision() {

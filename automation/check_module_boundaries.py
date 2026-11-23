@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -124,6 +125,22 @@ def main() -> int:
             or "pub fn from_wire(" not in review_wire
             or "pub fn to_wire(" not in review_wire):
         raise ValueError("CMS review decision policy must have one typed domain owner")
+    # Temporal owns the durable wait/replay, but cannot independently decide
+    # which human decision permits a page to advance or requires rework.
+    if ("enum EditorialReviewDisposition" not in review_domain
+            or "pub fn editorial_review_disposition(" not in review_domain
+            or "pub fn workflow_disposition(" not in review_wire):
+        raise ValueError("editorial review disposition must be owned by seo_domain")
+    for relative in (
+        "services/temporal/src/workflows/seo_site_build.rs",
+        "services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
+    ):
+        text = (RUST / relative).read_text(encoding="utf-8")
+        if ("cms_review_wire::workflow_disposition(" not in text
+                or "enum EditorialReviewDisposition" in text
+                or "fn editorial_review_disposition(" in text
+                or re.search(r'\.decision\s*(?:==|!=)\s*"(?:approved|blocked|reopened)"', text)):
+            raise ValueError(f"Temporal workflow duplicates editorial review policy: {relative}")
     revision_domain = (RUST / "crates/seo_domain/src/cms_revision.rs").read_text(encoding="utf-8")
     revision_step = (RUST / "crates/seo_steps/src/cms_publish_step.rs").read_text(encoding="utf-8")
     revision_adapter = (RUST / "crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs").read_text(encoding="utf-8")

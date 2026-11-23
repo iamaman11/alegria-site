@@ -15,26 +15,7 @@ impl PagePublishLoopOutcome {
     }
 }
 
-// A blocked editorial revision must not trap its business run at the same
-// immutable approval gate. A new draft belongs to a new, auditable run; a
-// reopened review is the only non-approval decision that keeps this gate open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EditorialReviewDisposition {
-    Approved,
-    ReworkRequired,
-    Wait,
-}
-
-fn editorial_review_disposition(
-    decision: &str,
-    terminal_rework_patch: bool,
-) -> EditorialReviewDisposition {
-    match decision {
-        "approved" => EditorialReviewDisposition::Approved,
-        "blocked" if terminal_rework_patch => EditorialReviewDisposition::ReworkRequired,
-        _ => EditorialReviewDisposition::Wait,
-    }
-}
+use seo_domain::review_decision::EditorialReviewDisposition;
 
 async fn run_page_publish_phases(
     ctx: &mut WorkflowContext<SeoSiteBuildCanonicalCutoverWorkflow>,
@@ -422,8 +403,8 @@ async fn run_page_publish_phases(
                                 // Old histories replay the original wait behavior.
                                 let terminal_rework_patch =
                                     ctx.patched("seo-editorial-terminal-rework-v1");
-                                match editorial_review_disposition(
-                                    &approval_decision.decision,
+                                match seo_steps::cms_review_wire::workflow_disposition(
+                                    &approval_decision,
                                     terminal_rework_patch,
                                 ) {
                                     EditorialReviewDisposition::Approved => break,
@@ -484,7 +465,11 @@ async fn run_page_publish_phases(
                                     db_opts(30),
                                 )
                                 .await?;
-                            if approval_decision.decision != "approved" {
+                            if seo_steps::cms_review_wire::workflow_disposition(
+                                &approval_decision,
+                                false,
+                            ) != EditorialReviewDisposition::Approved
+                            {
                                 page_blocked = true;
                                 ctx.state_mut(|s| {
                                     s.waiting_hitl = false;
@@ -740,10 +725,20 @@ async fn run_page_publish_phases(
 mod editorial_review_disposition_tests {
     use super::*;
 
+    fn disposition(raw: &str, terminal_rework_patch: bool) -> EditorialReviewDisposition {
+        seo_steps::cms_review_wire::workflow_disposition(
+            &CmsApprovalDecision {
+                decision: raw.to_string(),
+                ..Default::default()
+            },
+            terminal_rework_patch,
+        )
+    }
+
     #[test]
     fn approved_revision_may_continue_to_publication() {
         assert_eq!(
-            editorial_review_disposition("approved", true),
+            disposition("approved", true),
             EditorialReviewDisposition::Approved
         );
     }
@@ -751,7 +746,7 @@ mod editorial_review_disposition_tests {
     #[test]
     fn blocked_revision_ends_the_attempt_for_rework() {
         assert_eq!(
-            editorial_review_disposition("blocked", true),
+            disposition("blocked", true),
             EditorialReviewDisposition::ReworkRequired
         );
     }
@@ -760,7 +755,7 @@ mod editorial_review_disposition_tests {
     fn reopened_or_unknown_decision_must_not_publish_or_end_review() {
         for decision in ["reopened", "", "unexpected"] {
             assert_eq!(
-                editorial_review_disposition(decision, true),
+                disposition(decision, true),
                 EditorialReviewDisposition::Wait
             );
         }
@@ -769,7 +764,7 @@ mod editorial_review_disposition_tests {
     #[test]
     fn old_history_without_patch_still_waits_on_blocked_decision() {
         assert_eq!(
-            editorial_review_disposition("blocked", false),
+            disposition("blocked", false),
             EditorialReviewDisposition::Wait
         );
     }

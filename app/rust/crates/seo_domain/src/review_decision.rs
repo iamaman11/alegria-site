@@ -41,6 +41,31 @@ impl HumanReviewDecision {
     }
 }
 
+/// What an editorial workflow may do after reading a human decision.
+/// The Temporal version patch is an input, not a domain dependency: histories
+/// written before the terminal-rework change must keep waiting on `blocked`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorialReviewDisposition {
+    Approved,
+    ReworkRequired,
+    Wait,
+}
+
+pub fn editorial_review_disposition(
+    decision: Option<HumanReviewDecision>,
+    terminal_rework_enabled: bool,
+) -> EditorialReviewDisposition {
+    match decision {
+        Some(HumanReviewDecision::Approved) => EditorialReviewDisposition::Approved,
+        Some(HumanReviewDecision::Blocked) if terminal_rework_enabled => {
+            EditorialReviewDisposition::ReworkRequired
+        }
+        Some(HumanReviewDecision::Blocked | HumanReviewDecision::Reopened) | None => {
+            EditorialReviewDisposition::Wait
+        }
+    }
+}
+
 /// A persisted editorial decision, independent of Temporal payloads and SQL
 /// rows. The identity and human actor are part of the approval, not incidental
 /// adapter metadata.
@@ -104,6 +129,30 @@ pub fn validate_human_reviewer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editorial_workflow_disposition_is_owned_by_the_domain() {
+        use EditorialReviewDisposition::{Approved, ReworkRequired, Wait};
+        assert_eq!(
+            editorial_review_disposition(Some(HumanReviewDecision::Approved), true),
+            Approved
+        );
+        assert_eq!(
+            editorial_review_disposition(Some(HumanReviewDecision::Blocked), true),
+            ReworkRequired
+        );
+        for decision in [
+            Some(HumanReviewDecision::Blocked),
+            Some(HumanReviewDecision::Reopened),
+            None,
+        ] {
+            assert_eq!(editorial_review_disposition(decision, false), Wait);
+        }
+        assert_eq!(
+            editorial_review_disposition(Some(HumanReviewDecision::Reopened), true),
+            Wait
+        );
+    }
 
     #[test]
     fn human_review_transitions_are_a_typed_domain_decision() {
