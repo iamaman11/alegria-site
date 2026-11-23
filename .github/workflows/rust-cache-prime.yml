@@ -28,7 +28,7 @@ jobs:
       SCCACHE_GHA_ENABLED: "on"
       SCCACHE_GHA_RW_MODE: READ_WRITE
       SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log
-      SCCACHE_LOG: sccache::compiler::compiler=debug
+      SCCACHE_LOG: sccache::server=debug
       RUSTC_WRAPPER: sccache
     steps:
       - name: Checkout exact trusted main commit

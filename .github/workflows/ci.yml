@@ -98,10 +98,11 @@ jobs:
       SCCACHE_GHA_ENABLED: "on"
       # PR caches are isolated by merge ref. Reuse compiler objects created by
       # trusted main without uploading hundreds of PR-only entries or competing
-      # for GitHub's per-repository cache-write rate limit.
+      # for GitHub's per-repository cache-write rate limit. sccache 0.16 counts
+      # read-only skips as write "errors"; the diagnostic distinguishes them.
       SCCACHE_GHA_RW_MODE: READ_ONLY
       SCCACHE_ERROR_LOG: /tmp/sccache-pr-errors.log
-      SCCACHE_LOG: sccache::compiler::compiler=debug
+      SCCACHE_LOG: sccache::server=debug
       RUSTC_WRAPPER: sccache
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
     steps:

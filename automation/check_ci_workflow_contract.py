@@ -77,6 +77,7 @@ def check() -> None:
     assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in architecture
     assert "SCCACHE_ERROR_LOG:" in architecture
     assert "SCCACHE_ERROR_LOG: /tmp/sccache-pr-errors.log" in architecture
+    assert "SCCACHE_LOG: sccache::server=debug" in architecture
     assert "runner.temp" not in architecture
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
     assert "cache-mode: write" not in workflow
@@ -123,6 +124,7 @@ def check() -> None:
     assert "    if: github.ref == 'refs/heads/main'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
     assert "SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log" in prime
+    assert "SCCACHE_LOG: sccache::server=debug" in prime
     assert "runner.temp" not in prime
     assert "SCCACHE_GHA_ENABLED: \"on\"" in prime
     assert "version: \"v0.16.0\"" in prime
@@ -134,13 +136,14 @@ def check() -> None:
 
     # Only safe aggregates may leave the disposable sccache daemon log.
     classified = summarize([
-        "sccache cache write error: 429 Too Many Requests token=private-secret",
+        "sccache Error executing cache write: 429 Too Many Requests token=private-secret",
         "sccache Cache write error: 403 Forbidden url=https://private.example.test",
+        "sccache Error executing cache write: Cannot write to read-only storage",
         "sccache Cache write error: unexpected backend failure token=private-secret",
         "sccache request succeeded token=private-secret",
     ])
-    assert classified == {"write_failure_log_lines": 3, "classes": {
-        "rate_limited_429": 1, "forbidden_403": 1, "unclassified": 1,
+    assert classified == {"write_failure_log_lines": 4, "classes": {
+        "rate_limited_429": 1, "forbidden_403": 1, "read_only_skip": 1, "unclassified": 1,
     }}
     assert "private-secret" not in str(classified)
 

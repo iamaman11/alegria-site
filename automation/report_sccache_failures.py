@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
 
 
-WRITE_FAILURE = re.compile(r"cache write error|failed to write (?:to )?cache|cache write failed", re.I)
+WRITE_FAILURE = re.compile(
+    r"cache write error|error executing cache write|failed to write (?:to )?cache|cache write failed", re.I,
+)
 CLASSIFIERS = (
+    ("read_only_skip", re.compile(r"cannot write to read.only storage", re.I)),
     ("rate_limited_429", re.compile(r"\b429\b|too many requests|rate.limit", re.I)),
     ("unauthorized_401", re.compile(r"\b401\b|unauthoriz", re.I)),
     ("forbidden_403", re.compile(r"\b403\b|forbidden|permission denied", re.I)),
@@ -40,6 +44,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--log", type=Path, required=True)
     args = parser.parse_args()
+    # sccache 0.16.0's ReadOnlyStorage::put returns an error, so its stats
+    # count each deliberately skipped write as a "Cache write error".
+    mode = os.environ.get("SCCACHE_GHA_RW_MODE", "UNSET")
     try:
         # Never print file contents or an exception that could expose the path.
         with args.log.open(encoding="utf-8", errors="replace") as file:
@@ -47,6 +54,8 @@ def main() -> None:
         report["log_available"] = True
     except OSError:
         report = {"log_available": False, "write_failure_log_lines": 0, "classes": {}}
+    report["cache_mode"] = mode if mode in {"READ_ONLY", "READ_WRITE"} else "UNSET"
+    report["read_only_skip_counter_expected"] = mode == "READ_ONLY"
     print("SCCACHE_WRITE_DIAGNOSTIC=" + json.dumps(report, sort_keys=True))
 
 
