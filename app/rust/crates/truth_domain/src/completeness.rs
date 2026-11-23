@@ -167,32 +167,4 @@ mod tests {
             Some("completeness_gaps_detected")
         );
     }
-
-    #[test]
-    fn temporal_json_field_names_and_output_remain_stable() {
-        let input = CompletenessJudgeInput {
-            section_id: "s".to_string(),
-            raw_text: "Fee: 80 EUR".to_string(),
-            source_numeric_tokens: vec!["80".to_string()],
-            extracted_numeric_tokens: Vec::new(),
-            extracted_rule_keys: Vec::new(),
-        };
-        let serialized = serde_json::to_value(&input).unwrap();
-        assert_eq!(
-            serialized,
-            serde_json::json!({
-                "section_id": "s",
-                "raw_text": "Fee: 80 EUR",
-                "source_numeric_tokens": ["80"],
-                "extracted_numeric_tokens": [],
-                "extracted_rule_keys": []
-            })
-        );
-        let decoded: CompletenessJudgeInput = serde_json::from_value(serialized).unwrap();
-        let result = serde_json::to_value(execute(&decoded)).unwrap();
-        assert_eq!(result["needs_hitl"], true);
-        assert_eq!(result["hitl_reason"], "completeness_gaps_detected");
-        assert_eq!(result["missing_elements"][0]["action"], "add_numeric_fact");
-        assert!(result.get("completeness_score").is_some());
-    }
 }

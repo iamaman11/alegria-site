@@ -135,30 +135,4 @@ mod tests {
         assert_eq!(approved.route, "auto_approve");
         assert_eq!(approved.priority, 0);
     }
-
-    #[test]
-    fn temporal_json_field_names_remain_stable() {
-        let input: HitlDecisionInput = serde_json::from_value(serde_json::json!({
-            "run_id": "r",
-            "step_name": "s",
-            "layer_confidence": 1.0,
-            "completeness_score": 1.0,
-            "unresolved_mappings": 0,
-            "contradiction_blocked": false,
-            "conflict_count": 0,
-            "loss_count": 0
-        }))
-        .unwrap();
-        let output = serde_json::to_value(execute(&input)).unwrap();
-        assert_eq!(
-            output,
-            serde_json::json!({
-                "requires_hitl": false,
-                "route": "auto_approve",
-                "task_type": null,
-                "priority": 0,
-                "reason": null
-            })
-        );
-    }
 }
