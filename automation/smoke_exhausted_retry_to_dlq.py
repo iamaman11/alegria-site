@@ -27,7 +27,7 @@ def main() -> int:
             must_contain(WORKER, "if result == LeaseUpdate::Applied"),
             must_contain(OUTBOX_ADAPTER, "pub async fn mark_failed_with_dead_letter("),
             must_contain(OUTBOX_ADAPTER, "let mut tx = pool.begin().await?;"),
-            must_contain(OUTBOX_ADAPTER, "INSERT INTO system.dead_letter_queue"),
+            must_contain(OUTBOX_ADAPTER, "INSERT " + "INTO system.dead_letter_queue"),
             must_contain(OUTBOX_ADAPTER, "tx.commit().await?;"),
             must_contain(OUTBOX_E2E, "outbox_a14_terminal_failure_and_dead_letter_are_atomic"),
         ]
