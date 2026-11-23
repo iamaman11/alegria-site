@@ -160,9 +160,12 @@ mod tests {
             .map(|element| element.loss_type.as_str())
             .collect();
 
-        assert_eq!(loss_types, ["exception", "alternative"]);
+        assert_eq!(loss_types.as_slice(), &["exception", "alternative"]);
         assert!((output.completeness_score - 0.76).abs() < f32::EPSILON);
-        assert_eq!(output.hitl_reason.as_deref(), Some("completeness_gaps_detected"));
+        assert_eq!(
+            output.hitl_reason.as_deref(),
+            Some("completeness_gaps_detected")
+        );
     }
 
     #[test]
