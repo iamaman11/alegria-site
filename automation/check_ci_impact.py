@@ -210,6 +210,17 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
         self.assertEqual(result["selected_suites"], ["publishing_a17"])
 
+    def test_render_preview_policy_and_wire_changes_select_publishing_a17(self) -> None:
+        for path in (
+            "app/rust/crates/seo_domain/src/render_preview.rs",
+            "app/rust/crates/seo_steps/src/render_preview_validate_step.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "scoped")
+                self.assertEqual(result["selected_suites"], ["publishing_a17"])
+                self.assertIn("architecture-and-rust", result["selected_ci_jobs"])
+
     def test_cms_review_domain_port_and_sql_select_real_revision_e2e(self) -> None:
         for path in (
             "app/rust/crates/seo_domain/src/cms_revision.rs",
