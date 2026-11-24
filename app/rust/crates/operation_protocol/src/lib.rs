@@ -43,7 +43,9 @@ identity!(EffectId);
 identity!(PlanHash);
 identity!(ContractHash);
 
-pub const PLAN_SCHEMA_REVISION: u16 = 1;
+// Revision 2 pins owner-declared invalidation semantics. A revision-1 plan
+// cannot be reinterpreted as safe merely because its ports still match.
+pub const PLAN_SCHEMA_REVISION: u16 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +78,11 @@ pub struct OperationContract {
     pub owner: OperationOwnerId,
     pub inputs: BTreeMap<PortId, ArtifactSchema>,
     pub outputs: BTreeMap<PortId, ArtifactSchema>,
+    /// The owner declares artifact *types* made stale by this operation.
+    /// A plan may reorder otherwise independent operations, but it may not
+    /// read an invalidated type until a causally later producer refreshes it.
+    /// These declarations participate in the pinned contract fingerprint.
+    pub invalidates: BTreeSet<ArtifactTypeId>,
     pub effects: BTreeSet<EffectId>,
     pub idempotency: IdempotencyPolicy,
 }
@@ -241,7 +248,7 @@ pub enum PlanError {
     UnexpectedPinnedContract(OperationRef),
     #[error("plan pins operation contract more than once: {0:?}")]
     DuplicatePinnedContract(OperationRef),
-    #[error("contract owner, schemas, effects or idempotency changed for pinned operation: {0:?}")]
+    #[error("contract owner, schemas, invalidations, effects or idempotency changed for pinned operation: {0:?}")]
     ContractFingerprintMismatch(OperationRef),
     #[error("duplicate operation instance: {0:?}")]
     DuplicateInstance(OperationInstanceId),
@@ -289,6 +296,25 @@ pub enum PlanError {
         instance: OperationInstanceId,
         effect: EffectId,
     },
+    #[error("reader {consumer:?} of artifact type {artifact_type:?} is unordered relative to invalidator {invalidator:?}")]
+    UnorderedArtifactHazard {
+        invalidator: OperationInstanceId,
+        consumer: OperationInstanceId,
+        artifact_type: ArtifactTypeId,
+    },
+    #[error("consumer {consumer:?} reads artifact {artifact:?} of type {artifact_type:?} made stale by {invalidator:?}")]
+    StaleArtifact {
+        invalidator: OperationInstanceId,
+        consumer: OperationInstanceId,
+        artifact: ArtifactId,
+        artifact_type: ArtifactTypeId,
+    },
+    #[error("invalidators {first:?} and {second:?} of artifact type {artifact_type:?} have no causal order")]
+    UnorderedInvalidations {
+        first: OperationInstanceId,
+        second: OperationInstanceId,
+        artifact_type: ArtifactTypeId,
+    },
     #[error("operation dependency graph contains a cycle")]
     Cycle,
     #[error("immutable plan hash differs from its canonical contents")]
@@ -329,6 +355,9 @@ fn verify_contract(contract: &OperationContract) -> Result<(), PlanError> {
     }
     for effect in &contract.effects {
         nonempty(effect.as_str(), "effect_id")?;
+    }
+    for artifact_type in &contract.invalidates {
+        nonempty(artifact_type.as_str(), "invalidated_artifact_type_id")?;
     }
     if contract.idempotency == IdempotencyPolicy::Pure && !contract.effects.is_empty() {
         return Err(PlanError::InvalidContract(
@@ -604,6 +633,19 @@ impl ExecutionPlan {
         if order.len() != self.nodes.len() {
             return Err(PlanError::Cycle);
         }
+        // A deterministic tie-break for unrelated nodes does NOT create a
+        // happens-before edge. Invalidation safety uses the transitive closure
+        // of explicit `after` and produced-artifact dependencies only.
+        let mut ancestors = BTreeMap::<OperationInstanceId, BTreeSet<OperationInstanceId>>::new();
+        for id in &order {
+            let mut prior = BTreeSet::new();
+            for predecessor in &dependencies[id] {
+                prior.insert(predecessor.clone());
+                prior.extend(ancestors[predecessor].iter().cloned());
+            }
+            ancestors.insert(id.clone(), prior);
+        }
+        self.verify_freshness_dependencies(catalog, &by_id, &order, &ancestors)?;
         Ok(ValidatedPlan {
             hash: self.hash.clone(),
             execution_order: order,
@@ -614,6 +656,166 @@ impl ExecutionPlan {
                 .collect(),
         })
     }
+
+    fn verify_freshness_dependencies(
+        &self,
+        catalog: &ContractCatalog,
+        by_id: &BTreeMap<OperationInstanceId, &OperationNode>,
+        order: &[OperationInstanceId],
+        ancestors: &BTreeMap<OperationInstanceId, BTreeSet<OperationInstanceId>>,
+    ) -> Result<(), PlanError> {
+        // Conservatively inherit ALL input artifact types through every
+        // output. An old support bundle embedded in a draft is still stale
+        // after the support changes, even if its direct output type is Draft.
+        // Owner-specific narrower lineage needs a separately pinned contract;
+        // a missing declaration must never silently certify fresh artifacts.
+        let mut lineage = self
+            .external_artifacts
+            .iter()
+            .map(|(id, artifact)| {
+                (id.clone(), BTreeSet::from([artifact.schema.id.clone()]))
+            })
+            .collect::<BTreeMap<ArtifactId, BTreeSet<ArtifactTypeId>>>();
+        for id in order {
+            let node = by_id[id];
+            let contract = catalog
+                .contract(&node.operation)
+                .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
+            let mut inherited = BTreeSet::new();
+            for binding in node.inputs.values() {
+                let artifact = match binding {
+                    ArtifactBinding::External { artifact }
+                    | ArtifactBinding::Produced { artifact, .. } => artifact,
+                };
+                inherited.extend(
+                    lineage
+                        .get(artifact)
+                        .ok_or_else(|| PlanError::MissingExternalArtifact(artifact.clone()))?
+                        .iter()
+                        .cloned(),
+                );
+            }
+            for (port, artifact) in &node.outputs {
+                let schema = contract
+                    .outputs
+                    .get(port)
+                    .ok_or_else(|| PlanError::UnexpectedPort {
+                        instance: id.clone(),
+                        port: port.clone(),
+                        direction: "output",
+                    })?;
+                let mut inherited_output = inherited.clone();
+                inherited_output.insert(schema.id.clone());
+                lineage.insert(artifact.clone(), inherited_output);
+            }
+        }
+
+        let mut invalidators = Vec::<(OperationInstanceId, ArtifactTypeId)>::new();
+        for (id, node) in by_id {
+            let contract = catalog
+                .contract(&node.operation)
+                .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
+            for artifact_type in &contract.invalidates {
+                invalidators.push((id.clone(), artifact_type.clone()));
+            }
+        }
+
+        // Without a declared aggregate-key partition, two changes to the
+        // same artifact type cannot run concurrently: each may invalidate the
+        // other's output, even when no reader appears in this particular DAG.
+        for (index, (first, artifact_type)) in invalidators.iter().enumerate() {
+            for (second, other_type) in invalidators.iter().skip(index + 1) {
+                if artifact_type == other_type
+                    && !is_causal_ancestor(first, second, ancestors)
+                    && !is_causal_ancestor(second, first, ancestors)
+                {
+                    return Err(PlanError::UnorderedInvalidations {
+                        first: first.clone(),
+                        second: second.clone(),
+                        artifact_type: artifact_type.clone(),
+                    });
+                }
+            }
+        }
+
+        for (consumer, node) in by_id {
+            let contract = catalog
+                .contract(&node.operation)
+                .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
+            for (port, binding) in &node.inputs {
+                let expected = contract
+                    .inputs
+                    .get(port)
+                    .ok_or_else(|| PlanError::UnexpectedPort {
+                        instance: consumer.clone(),
+                        port: port.clone(),
+                        direction: "input",
+                    })?;
+                let (artifact, producer) = match binding {
+                    ArtifactBinding::External { artifact } => (artifact, None),
+                    ArtifactBinding::Produced {
+                        artifact, producer, ..
+                    } => (artifact, Some(producer)),
+                };
+                let source_lineage = lineage
+                    .get(artifact)
+                    .ok_or_else(|| PlanError::ArtifactSchemaMismatch {
+                        instance: consumer.clone(),
+                        port: port.clone(),
+                        artifact: artifact.clone(),
+                    })?;
+                // The declared direct input schema is already checked in the
+                // earlier pass; this pass additionally checks ALL inherited
+                // dependencies of the concrete artifact being consumed.
+                debug_assert!(source_lineage.contains(&expected.id));
+                for (invalidator, artifact_type) in &invalidators {
+                    if !source_lineage.contains(artifact_type) || invalidator == consumer {
+                        // A node may read the old value before invalidating
+                        // it itself. Distinct nodes require explicit order.
+                        continue;
+                    }
+                    if is_causal_ancestor(consumer, invalidator, ancestors) {
+                        // The consumer completes BEFORE this invalidation.
+                        continue;
+                    }
+                    if !is_causal_ancestor(invalidator, consumer, ancestors) {
+                        return Err(PlanError::UnorderedArtifactHazard {
+                            invalidator: invalidator.clone(),
+                            consumer: consumer.clone(),
+                            artifact_type: artifact_type.clone(),
+                        });
+                    }
+                    if producer.is_some_and(|producer| {
+                        (producer == invalidator && expected.id == *artifact_type)
+                            || is_causal_ancestor(invalidator, producer, ancestors)
+                    }) {
+                        // An explicitly dependent producer of the exact type
+                        // has refreshed this binding after the invalidation.
+                        // An invalidator's own *different* output derived
+                        // from the old type is not a certified refresh.
+                        continue;
+                    }
+                    return Err(PlanError::StaleArtifact {
+                        invalidator: invalidator.clone(),
+                        consumer: consumer.clone(),
+                        artifact: artifact.clone(),
+                        artifact_type: artifact_type.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_causal_ancestor(
+    earlier: &OperationInstanceId,
+    later: &OperationInstanceId,
+    ancestors: &BTreeMap<OperationInstanceId, BTreeSet<OperationInstanceId>>,
+) -> bool {
+    ancestors
+        .get(later)
+        .is_some_and(|prior| prior.contains(earlier))
 }
 
 fn verify_ports<V>(

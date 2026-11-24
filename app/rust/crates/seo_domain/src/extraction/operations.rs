@@ -42,6 +42,10 @@ fn pure_contract(id: &str, input_schema: &str, output_schema: &str) -> Operation
                 revision: 1,
             },
         )]),
+        // These semantic transformations do not alter an authoritative Truth
+        // revision; no previously admitted artifact becomes stale by running
+        // a pure extraction operation.
+        invalidates: BTreeSet::new(),
         effects: BTreeSet::new(),
         idempotency: IdempotencyPolicy::Pure,
     }

@@ -56,6 +56,7 @@ def check() -> None:
     assert "python3 automation/check_reliability_contracts.py" in architecture
     assert "python3 automation/test_causal_revision_contract.py" in architecture
     assert "python3 automation/test_neo4j_schema_contract.py" in architecture
+    assert "python3 automation/test_operation_freshness_contract.py" in architecture
 
     # Main verifies exact source + the accepted PR before release/deployment.
     assert "commits/{merge_sha}/pulls" in workflow

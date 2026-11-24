@@ -101,3 +101,45 @@ NEO4J_PASSWORD="${NEO4J_PASSWORD:?}" \
 The existing `automation/run_graph_contract_gate.sh` is a **local smoke gate**, not a production migration tool. Only when it successfully starts its own `postgres neo4j` Docker Compose services (`GRAPH_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=1`) does it invoke that same `temporal_starter neo4j-schema-install` once, with fixed loopback `127.0.0.1:7687` and the local Compose test credentials, before `seo-preflight`. It reuses the test CLI build target and aborts if installation fails. With `GRAPH_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=0`, it performs **no schema DDL**; the operator must have installed and verified the external database beforehand.
 
 The existing `integration_harness::Neo4jHarness` must explicitly install and verify on a *real* disposable Neo4j instance before any projection test writes. A real concurrent-replay E2E must run via the **existing** `graph_query` selector (`--lib graph_capability_`) in the one `ci.yml` architecture owner, and the offline contract/mutation checks guard against accidentally removing schema installation, production verification or that E2E selector. No extra crate, process, job or workflow is justified by the repair. Verification of this owner invariant does **not** prove independent Cargo rebuilds, a ≤180-second green gate, causal graph revision semantics or freely composable business operations: those remain separate open acceptance blockers.
+
+## Generic operation freshness before effectful composition
+
+The legacy SEO recipe has a concrete `RawKnowledgeIngestion` -> stale
+`VerifiedSupport` rule, but a fixed site-phase list cannot be the abstraction
+for future business operations. `operation_protocol` therefore needs a
+**versioned, owner-declared invalidation contract** on the artifact *type*; it
+must not refer to 22 old phases, a remembered 56 steps, or the 73 Temporal
+`#[activity]` wrappers as if those were a complete functional inventory.
+
+The v2 generic contract adds `OperationContract.invalidates`, covered by the
+owner fingerprint pinned in the immutable plan. The DAG validator must reject:
+
+- reading an external or older produced artifact after an operation invalidates
+  its schema type, unless a causally ordered producer explicitly refreshes it;
+- placing an invalidator and reader on independent branches with no ordering
+  edge, even if a deterministic topological sort happens to put them in a
+  convenient order;
+- independent operations which both invalidate the same artifact type: the
+  planner cannot silently invent the order of competing state mutations.
+
+For each produced artifact the validator conservatively inherits the artifact
+types of **all its inputs**. Thus a `Draft` derived from old `VerifiedSupport`
+still depends on that support after its direct schema changed to `Draft`:
+invalidating `VerifiedSupport` also makes this previously derived `Draft` stale
+for later consumers until its lineage is rebuilt in a causally ordered path.
+This propagation is deliberately generic and contains no site-specific phase
+names in the protocol implementation itself.
+
+Independent business operations that have no causal conflict remain freely
+reorderable. The existing five real pure semantic owners declare no invalidated
+artifact types, and PostgreSQL's outbox lease reconciliation declares none:
+neither is allowed to claim it refreshed authoritative Verified Truth.
+
+**Important limit:** this is *in-plan* causal validation only. A nonempty
+external `provenance` string is NOT verification that Truth is current. A future
+effectful production Temporal runner must independently authorize effects and
+admit external artifacts **and their inherited lineage** against authoritative
+PostgreSQL revisions before
+running a single Activity. No V1/V2 replay history is changed by this protocol
+cut; no publication or Qdrant write is enabled by it. Only after real replay,
+DB admission and durable effect-fence E2E may one effectful owner be opted in.

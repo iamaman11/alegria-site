@@ -46,6 +46,10 @@ impl Operation for ReconcileOutbox {
                     revision: 1,
                 },
             )]),
+            // Lease/retry maintenance does not revise a business artifact.
+            // Do not claim that this port invalidates VerifiedSupport; it
+            // has no such authoritative write contract.
+            invalidates: BTreeSet::new(),
             effects: BTreeSet::from([EffectId::from("postgres.outbox.reconcile")]),
             // This is a maintenance mutation; the report and row set can
             // change between calls. Never auto-retry an ambiguous outcome.

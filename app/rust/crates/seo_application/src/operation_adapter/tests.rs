@@ -122,6 +122,25 @@ fn result<T: serde::de::DeserializeOwned>(result: &ExecutionResult, id: &str) ->
 }
 
 #[test]
+fn real_pure_owners_declare_no_truth_invalidation_under_plan_revision_two() {
+    assert_eq!(PLAN_SCHEMA_REVISION, 2);
+    for contract in [
+        LayerRoute::contract(),
+        EntitySpans::contract(),
+        CanonicalizeMentions::contract(),
+        EditorialTopics::contract(),
+        OperationalEntities::contract(),
+    ] {
+        assert!(contract.invalidates.is_empty());
+        assert!(contract.effects.is_empty());
+        assert_eq!(
+            contract.idempotency,
+            operation_protocol::IdempotencyPolicy::Pure
+        );
+    }
+}
+
+#[test]
 fn real_operations_execute_in_a_composable_order_without_a_site_pipeline() {
     let registry = semantic_extraction_registry().unwrap();
     let mut entity = node::<EntitySpans>("entity", "entity-input", "entity-output");

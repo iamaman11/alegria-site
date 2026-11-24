@@ -38,6 +38,10 @@ NEO4J_REAL_E2E = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src
 NEO4J_OPERATOR_TYPES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter" / "types.rs"
 NEO4J_OPERATOR_DISPATCH = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter" / "main_dispatch.rs"
 NEO4J_LOCAL_GRAPH_GATE = ROOT / "automation" / "run_graph_contract_gate.sh"
+OPERATION_PROTOCOL_OWNER = ROOT / "app" / "rust" / "crates" / "operation_protocol" / "src" / "lib.rs"
+OPERATION_PROTOCOL_TESTS = ROOT / "app" / "rust" / "crates" / "operation_protocol" / "src" / "tests.rs"
+SEMANTIC_EXTRACTION_OPERATIONS = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "extraction" / "operations.rs"
+SEMANTIC_OPERATION_RUNNER_TESTS = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "operation_adapter" / "tests.rs"
 CI_IMPACT_PLANNER = ROOT / "automation" / "ci_impact.py"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 UNCERTAIN_MARKER = "projection_outcome_uncertain:v1"
@@ -545,6 +549,59 @@ def must_contain(path: Path, needle: str) -> str | None:
     return None
 
 
+def operation_freshness_contract_failures(
+    protocol: str, protocol_tests: str, semantic_owner: str,
+    postgres_owner: str, runner_tests: str, workflow: str,
+) -> list[str]:
+    """Keep generic causal freshness in its owner and on the mandatory CI path.
+
+    This is a mutation-sensitive source gate; the Rust tests are the actual
+    behavioral proof. Neither a verified provenance string nor this graph
+    check authorizes future effectful Temporal execution.
+    """
+    failures: list[str] = []
+    for needle in (
+        "pub const PLAN_SCHEMA_REVISION: u16 = 2",
+        "pub invalidates: BTreeSet<ArtifactTypeId>",
+        "serde_json::to_vec(self)",
+        "verify_freshness_dependencies(",
+        "UnorderedArtifactHazard",
+        "StaleArtifact",
+        "UnorderedInvalidations",
+        "return Err(PlanError::UnorderedArtifactHazard {",
+        "return Err(PlanError::StaleArtifact {",
+        "return Err(PlanError::UnorderedInvalidations {",
+    ):
+        if needle not in protocol:
+            failures.append(f"generic operation freshness owner missing `{needle}`")
+    if protocol.count("verify_freshness_dependencies(") < 2:
+        failures.append("ExecutionPlan::validate must invoke freshness dependency validation")
+    if "contract.invalidates" not in protocol:
+        failures.append("operation owner invalidations are not inspected during validation")
+    if any(site_phase in protocol for site_phase in (
+        "RawKnowledgeIngestion", "VerifiedSupport", "SeoPhaseKey",
+    )):
+        failures.append("generic freshness contract is coupled to legacy SEO site phases")
+
+    for kind in ("StaleArtifact", "UnorderedArtifactHazard", "UnorderedInvalidations"):
+        if f"PlanError::{kind}" not in protocol_tests:
+            failures.append(f"generic operation freshness Rust tests missing `{kind}` rejection")
+    if "invalidates: BTreeSet::new()" not in semantic_owner:
+        failures.append("five real pure semantic operations must declare no Truth invalidation")
+    if "invalidates: BTreeSet::new()" not in postgres_owner:
+        failures.append("PostgreSQL outbox lease maintenance cannot claim Truth invalidation")
+    for needle in (
+        "real_pure_owners_declare_no_truth_invalidation_under_plan_revision_two",
+        "assert!(contract.invalidates.is_empty())",
+    ):
+        if needle not in runner_tests:
+            failures.append(f"real operation runner tests missing `{needle}`")
+    architecture = workflow.split("  architecture-and-rust:\n", 1)
+    if len(architecture) != 2 or "python3 automation/test_operation_freshness_contract.py" not in architecture[1].split("  product-truth:\n", 1)[0]:
+        failures.append("mandatory architecture job must execute freshness mutation tests")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
     failures.extend(
@@ -669,6 +726,22 @@ def main() -> int:
     else:
         failures.extend(neo4j_schema_contract_failures(
             *(path.read_text(encoding="utf-8") for path in neo4j_paths)
+        ))
+
+    freshness_paths = (
+        OPERATION_PROTOCOL_OWNER, OPERATION_PROTOCOL_TESTS,
+        SEMANTIC_EXTRACTION_OPERATIONS, POSTGRES_RECONCILE,
+        SEMANTIC_OPERATION_RUNNER_TESTS, CI_WORKFLOW,
+    )
+    missing_freshness = [path for path in freshness_paths if not path.is_file()]
+    if missing_freshness:
+        failures.extend(
+            f"missing generic operation freshness owner: {path.relative_to(ROOT)}"
+            for path in missing_freshness
+        )
+    else:
+        failures.extend(operation_freshness_contract_failures(
+            *(path.read_text(encoding="utf-8") for path in freshness_paths)
         ))
 
     if failures:
