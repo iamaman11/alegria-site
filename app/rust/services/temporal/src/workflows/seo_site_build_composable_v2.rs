@@ -9,8 +9,8 @@
 use std::time::Duration;
 
 use contracts::generated::alegria::temporal::v1::{
-    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, SeoScopePayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, SeoScopePayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload,
 };
 use seo_application::execution::{SeoDurablePlan, SeoDurableStep, SEO_RUN_MODE_CRAWL_ONLY};
 use seo_ports::VerifiedSupportBundleRequest;
@@ -107,9 +107,7 @@ impl SeoSiteBuildComposableV2Workflow {
         for &step in immutable_plan.ordered_steps() {
             match step {
                 SeoDurableStep::LoadVerifiedSupport => {
-                    ctx.state_mut(|state| {
-                        state.phase = "load_verified_support_bundle".to_string()
-                    });
+                    ctx.state_mut(|state| state.phase = "load_verified_support_bundle".to_string());
                     let support_request = serde_json::to_string(&VerifiedSupportBundleRequest {
                         run_id: run_id.clone(),
                         context_key: site_input.context_key.clone(),
@@ -134,9 +132,8 @@ impl SeoSiteBuildComposableV2Workflow {
         }
 
         // `validate` proves this result is present before any Activity runs.
-        let crawled = crawl_result.ok_or_else(|| {
-            workflow_contract_failure("V2 plan did not produce crawled evidence")
-        })?;
+        let crawled = crawl_result
+            .ok_or_else(|| workflow_contract_failure("V2 plan did not produce crawled evidence"))?;
         ctx.state_mut(|state| state.phase = "source_acquisition_complete".to_string());
         Ok(format!(
             "seo_source_acquisition_v2_ok run_id={run_id} source_status={} crawled={} verified_support={verified_support_count}",
@@ -212,9 +209,10 @@ async fn acquire_sources(
             ctx.timer(Duration::from_secs(60)).await;
             ctx.wait_condition(|state| !state.paused).await?;
         }
-        crawl_input.sweep_index = crawl_input.sweep_index.checked_add(1).ok_or_else(|| {
-            workflow_contract_failure("V2 crawl sweep index exhausted")
-        })?;
+        crawl_input.sweep_index = crawl_input
+            .sweep_index
+            .checked_add(1)
+            .ok_or_else(|| workflow_contract_failure("V2 crawl sweep index exhausted"))?;
         let next = ctx
             .start_activity(
                 AlegriaActivities::run_crawl_sources_step,
@@ -223,7 +221,9 @@ async fn acquire_sources(
             )
             .await?;
         if crawled.status == "more" && next.claimed_count == 0 {
-            return Err(workflow_contract_failure("V2 crawl backlog is not claimable"));
+            return Err(workflow_contract_failure(
+                "V2 crawl backlog is not claimable",
+            ));
         }
         crawled.claimed_count = crawled.claimed_count.saturating_add(next.claimed_count);
         crawled.crawled_count = crawled.crawled_count.saturating_add(next.crawled_count);

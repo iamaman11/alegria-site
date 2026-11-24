@@ -89,7 +89,10 @@ impl fmt::Display for SeoDurablePlanError {
             }
             Self::DuplicateStep(step) => write!(f, "durable SEO step {step:?} is repeated"),
             Self::MissingInput { step, artifact } => {
-                write!(f, "durable SEO step {step:?} requires unavailable {artifact:?}")
+                write!(
+                    f,
+                    "durable SEO step {step:?} requires unavailable {artifact:?}"
+                )
             }
             Self::MissingRequiredStep(step) => {
                 write!(f, "durable SEO scenario requires {step:?}")

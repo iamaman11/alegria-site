@@ -413,8 +413,8 @@ pub fn advance_cursor(cursor: &mut SeoExecutionCursor) {
 // The site-build scenario and the durable Temporal workflow share one typed
 // description of step inputs, outputs and supported ordering. A recipe does
 // not run steps or own their side effects; execution remains with each owner.
-mod recipe;
 mod durable_plan;
+mod recipe;
 pub use durable_plan::{
     SeoDurableArtifact, SeoDurablePlan, SeoDurablePlanError, SeoDurableScenario, SeoDurableStep,
     SeoDurableStepContract, SEO_DURABLE_PLAN_SCHEMA_VERSION,

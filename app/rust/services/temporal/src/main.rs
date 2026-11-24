@@ -17,7 +17,9 @@ async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(argument) = args.next() {
         if argument == std::ffi::OsStr::new("--replay-history") {
-            let path = args.next().context("--replay-history requires one JSON file")?;
+            let path = args
+                .next()
+                .context("--replay-history requires one JSON file")?;
             anyhow::ensure!(args.next().is_none(), "unexpected extra replay arguments");
             workflows::replay_history(std::path::Path::new(&path)).await?;
             println!("CI_TEMPORAL_HISTORY_REPLAY=PASS");
