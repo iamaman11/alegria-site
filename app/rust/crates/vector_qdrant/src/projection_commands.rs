@@ -146,7 +146,9 @@ impl ProjectionUpsert {
 /// The Outbox's PG transaction/fence is resolved before entering this owner.
 pub async fn upsert_projection(command: ProjectionUpsert) -> Result<(), ProjectionError> {
     let url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
-    let client = connect_qdrant(&url).await.map_err(ProjectionError::Provider)?;
+    let client = connect_qdrant(&url)
+        .await
+        .map_err(ProjectionError::Provider)?;
     ensure_dense_collection(
         &client,
         &command.identity.collection_name,
@@ -184,13 +186,18 @@ impl ProjectionDelete {
                 "Qdrant delete requires collection and point ID".into(),
             ));
         }
-        Ok(Self { collection_name, point_id })
+        Ok(Self {
+            collection_name,
+            point_id,
+        })
     }
 }
 
 pub async fn delete_projection(command: ProjectionDelete) -> Result<(), ProjectionError> {
     let url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
-    let client = connect_qdrant(&url).await.map_err(ProjectionError::Provider)?;
+    let client = connect_qdrant(&url)
+        .await
+        .map_err(ProjectionError::Provider)?;
     // No collection after a retry/demotion is a valid idempotent tombstone.
     if !client
         .collection_exists(&command.collection_name)

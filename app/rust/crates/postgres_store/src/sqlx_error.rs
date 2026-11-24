@@ -17,9 +17,7 @@ pub fn classify_sqlx(error: sqlx::Error) -> DomainError {
             match code.as_str() {
                 "23505" | "23P01" => DomainError::ConflictViolation { message },
                 "23503" => DomainError::ForeignKeyViolation { message },
-                "23502" | "23514" | "22001" | "22P02" => {
-                    DomainError::ValidationFailure { message }
-                }
+                "23502" | "23514" | "22001" | "22P02" => DomainError::ValidationFailure { message },
                 _ if code.starts_with("42") => DomainError::ContractViolation { message },
                 _ => DomainError::InfraUnavailable { message },
             }

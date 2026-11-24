@@ -233,11 +233,19 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchErro
     }
 
     let point_id = if cmd.point_id.is_empty() {
-        qdrant_point_id_v1(collection_name, identity.entity_type(), identity.entity_key())
+        qdrant_point_id_v1(
+            collection_name,
+            identity.entity_type(),
+            identity.entity_key(),
+        )
     } else if is_valid_qdrant_point_id(&cmd.point_id) {
         cmd.point_id.clone()
     } else {
-        qdrant_point_id_v1(collection_name, identity.entity_type(), identity.entity_key())
+        qdrant_point_id_v1(
+            collection_name,
+            identity.entity_type(),
+            identity.entity_key(),
+        )
     };
     let entity_payload_value = qdrant_payload_value(cmd.payload, cmd.metadata);
     let projection = ProjectionUpsert::new(
@@ -249,9 +257,7 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchErro
         entity_payload_value,
     )
     .map_err(qdrant_error)?;
-    upsert_projection(projection)
-    .await
-    .map_err(qdrant_error)?;
+    upsert_projection(projection).await.map_err(qdrant_error)?;
     Ok(())
 }
 
@@ -274,11 +280,9 @@ async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchErro
             "QdrantDeleteCommand.point_id does not match canonical identity",
         ));
     }
-    let projection = ProjectionDelete::new(cmd.collection_name, expected_point_id)
-        .map_err(qdrant_error)?;
-    delete_projection(projection)
-        .await
-        .map_err(qdrant_error)
+    let projection =
+        ProjectionDelete::new(cmd.collection_name, expected_point_id).map_err(qdrant_error)?;
+    delete_projection(projection).await.map_err(qdrant_error)
 }
 
 /// Outbox delivery may retry out of order (SKIP LOCKED claims). For verified
