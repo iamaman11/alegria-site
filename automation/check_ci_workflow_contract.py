@@ -138,7 +138,8 @@ def check() -> None:
     assert "cargo-audit-x86_64-unknown-linux-gnu-v0.23.0.tgz" in workflow
     assert "b77993532b253fcbf550996d7716465ec3d734d4e74e7f87bfb65a19add0fb59" in workflow
 
-    # No repeated expensive Rust compilation in three independent PR runners.
+    # The full workspace unit suite runs in the existing verify owner while
+    # architecture runs Worker/E2E. Scoped edits retain Rust's narrow runner.
     architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
@@ -154,12 +155,36 @@ def check() -> None:
     assert "SCCACHE_LOG: sccache::server=debug" in architecture
     assert "runner.temp" not in architecture
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
+    assert "cargo_scope: ${{ steps.decide.outputs.cargo_scope }}" in workflow
+    assert "report.get('scope') not in {'none', 'scoped', 'full'}" in workflow
+    assert "not {'architecture-and-rust', 'verify'}.issubset(selected)" in workflow
+    assert "f.write('cargo_scope=' + report['scope'] + '\\n')" in workflow
+    assert "if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then" in architecture
+    assert "args+=(--delegate-workspace-unit-tests-to-verify)" in architecture
+    assert 'python3 automation/run_scoped_cargo_feedback.py \\' in architecture
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture
     assert "  rust-contract-smokes:\n" not in workflow
     assert "cargo metadata --format-version 1 --no-deps --locked" not in verify
-    assert "uses: dtolnay/rust-toolchain" not in verify
-    assert "uses: actions/cache" not in verify
+    assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in verify
+    assert "uses: actions/cache@v4" not in verify
+    assert "uses: actions/cache/save" not in verify
+    assert verify.count("uses: actions/cache/restore@v4") == 1
+    assert verify.count("run: cargo test --workspace --locked") == 1
+    assert "cargo test --workspace --locked" not in architecture
+    for step_name in (
+        "Install native Rust test build dependencies",
+        "Pin Rust for full workspace tests",
+        "Reuse trusted main Rust compiler objects for full workspace tests",
+        "Authorize full-scope Rust cache reads",
+        "Restore shared Cargo dependency sources without a second writer",
+        "Full workspace Rust unit tests (parallel with real E2E)",
+    ):
+        step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+        assert "        if: needs.impact.outputs.cargo_scope == 'full'" in step, step_name
+    for step_name in ("Full-scope compiler cache statistics", "Classify full-scope Rust cache failures"):
+        step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+        assert "        if: always() && needs.impact.outputs.cargo_scope == 'full'" in step, step_name
     assert "python3 automation/check_crawler_invariants.py" in fast
     assert "python3 automation/check_module_boundaries.py" not in architecture
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):

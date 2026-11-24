@@ -19,6 +19,33 @@ from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report, 
 from dev_rust_feedback import commands_for_report
 
 
+FULL_WORKSPACE_UNIT_TEST = ["cargo", "test", "--workspace", "--locked"]
+
+
+def cargo_commands_for_ci(
+    report: dict, *, delegate_workspace_unit_tests_to_verify: bool,
+) -> tuple[list[list[str]], bool]:
+    """Run all scoped tests here; delegate only full workspace tests to the gated verify job.
+
+    The impact planner already owns the suite and Cargo package selection.
+    This runner may move the single full-workspace test command to the
+    existing parallel CI owner, but may not drop any narrower Cargo command.
+    """
+    commands = commands_for_report(report, check_only=False)
+    if not delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":
+        return commands, False
+
+    owners = report.get("selected_ci_jobs")
+    if (
+        commands != [FULL_WORKSPACE_UNIT_TEST]
+        or not isinstance(owners, list)
+        or not all(isinstance(owner, str) for owner in owners)
+        or not {"verify", "architecture-and-rust"}.issubset(owners)
+    ):
+        raise ValueError("full workspace unit test delegation requires both selected CI owners")
+    return [], True
+
+
 def require_clean_truth_filter_environment(
     name: str, *, environment: Mapping[str, str] = os.environ,
 ) -> None:
@@ -52,6 +79,10 @@ def selected_preparations(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument(
+        "--delegate-workspace-unit-tests-to-verify", action="store_true",
+        help="For full impact only, require the parallel verify job to run cargo test --workspace",
+    )
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
     actual_sha = subprocess.check_output(
@@ -59,11 +90,16 @@ def main() -> int:
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
-    commands = commands_for_report(report, check_only=False)
+    commands, delegated = cargo_commands_for_ci(
+        report,
+        delegate_workspace_unit_tests_to_verify=args.delegate_workspace_unit_tests_to_verify,
+    )
     integration_commands = suite_commands_for_report(report)
     preparations = selected_preparations(integration_commands)
 
     measurements = []
+    if delegated:
+        print(f"CI_WORKSPACE_UNIT_TESTS=DELEGATED_TO_VERIFY source_sha={actual_sha}", flush=True)
     for command in commands:
         print("CI_RUST_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
@@ -106,6 +142,7 @@ def main() -> int:
     output.write_text(
         json.dumps(
             {"source_sha": actual_sha, "impact": report["analysis"],
+             "delegated_workspace_unit_tests_to": "verify" if delegated else None,
              "measurements": measurements}, indent=2
         ) + "\n",
         encoding="utf-8",

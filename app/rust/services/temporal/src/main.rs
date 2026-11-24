@@ -3,65 +3,10 @@ use infrastructure::adapters::sqlx_adapter::connect_pg;
 use infrastructure::adapters::temporalio_sdk_adapter::{build_runtime, connect_client, Worker};
 use std::env;
 use std::sync::Arc;
-#[cfg(unix)]
-use std::time::Duration;
 
 mod activities;
 mod metrics;
 mod workflows;
-
-/// PostgreSQL notifies only after Global Reconcile commits an actually changed
-/// navigation tree. A bounded fallback also catches notifications missed while
-/// this Worker was stopped or disconnected, without another rebuild service.
-#[cfg(unix)]
-async fn refresh_published_site_loop(pool: Arc<sqlx::PgPool>, database_url: String) {
-    use sqlx::postgres::PgListener;
-    use tokio::time::timeout;
-
-    const FALLBACK: Duration = Duration::from_secs(60);
-    let mut listener: Option<PgListener> = None;
-    loop {
-        if listener.is_none() {
-            match PgListener::connect(&database_url).await {
-                Ok(mut connection) => {
-                    match connection
-                        .listen(
-                            infrastructure::adapters::sqlx_seo_adapter::NAVIGATION_NOTIFY_CHANNEL,
-                        )
-                        .await
-                    {
-                        Ok(()) => listener = Some(connection),
-                        Err(err) => tracing::warn!(reason = %err, "navigation LISTEN unavailable"),
-                    }
-                }
-                Err(err) => tracing::warn!(reason = %err, "navigation LISTEN disconnected"),
-            }
-        }
-
-        match infrastructure::adapters::sqlx_seo_cms_adapter::refresh_published_renderer_if_stale(
-            &pool,
-        )
-        .await
-        {
-            Ok(true) => {
-                tracing::info!("published static HTML refreshed for navigation or renderer change")
-            }
-            Ok(false) => {}
-            Err(err) => tracing::warn!(reason = %err, "published static HTML refresh deferred"),
-        }
-        if let Some(connection) = listener.as_mut() {
-            match timeout(FALLBACK, connection.recv()).await {
-                Ok(Ok(_)) | Err(_) => {}
-                Ok(Err(err)) => {
-                    tracing::warn!(reason = %err, "navigation notification lost; reconnecting");
-                    listener = None;
-                }
-            }
-        } else {
-            tokio::time::sleep(FALLBACK).await;
-        }
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -105,7 +50,13 @@ async fn main() -> Result<()> {
     #[cfg(unix)]
     {
         let refresh_pool = Arc::clone(&pool);
-        tokio::spawn(refresh_published_site_loop(refresh_pool, db_url.clone()));
+        tokio::spawn(
+            infrastructure::adapters::sqlx_seo_cms_adapter::run_published_navigation_refresh_loop(
+                refresh_pool,
+                db_url.clone(),
+                Arc::new(infrastructure::adapters::sqlx_seo_cms_adapter::CloudflareStaticDelivery),
+            ),
+        );
     }
     let acts = activities::AlegriaActivities { pool };
 

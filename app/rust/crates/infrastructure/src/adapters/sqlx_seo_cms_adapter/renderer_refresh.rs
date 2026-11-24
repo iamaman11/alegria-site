@@ -191,9 +191,56 @@ pub async fn recover_pending_renderer_refresh_with_delivery(
     Ok(())
 }
 
+/// One owner for navigation signals and the resulting published HTML refresh.
+/// LISTEN is the prompt path; the bounded poll also catches missed events on
+/// disconnect or restart. The production Worker supplies Cloudflare delivery,
+/// while integration tests use the existing delivery port to verify real HTML.
 #[cfg(unix)]
-pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, DomainError> {
-    refresh_published_renderer_if_stale_with_delivery(pool, &CloudflareStaticDelivery).await
+pub async fn run_published_navigation_refresh_loop(
+    pool: std::sync::Arc<PgPool>,
+    database_url: String,
+    delivery: std::sync::Arc<dyn PublicReleaseDelivery>,
+) {
+    use sqlx::postgres::PgListener;
+    use tokio::time::{timeout, Duration};
+
+    const FALLBACK: Duration = Duration::from_secs(60);
+    let mut listener: Option<PgListener> = None;
+    loop {
+        if listener.is_none() {
+            match PgListener::connect(&database_url).await {
+                Ok(mut connection) => {
+                    match connection
+                        .listen(super::sqlx_seo_adapter::NAVIGATION_NOTIFY_CHANNEL)
+                        .await
+                    {
+                        Ok(()) => listener = Some(connection),
+                        Err(err) => tracing::warn!(reason = %err, "navigation LISTEN unavailable"),
+                    }
+                }
+                Err(err) => tracing::warn!(reason = %err, "navigation LISTEN disconnected"),
+            }
+        }
+
+        match refresh_published_renderer_if_stale_with_delivery(&pool, delivery.as_ref()).await {
+            Ok(true) => {
+                tracing::info!("published static HTML refreshed for navigation or renderer change")
+            }
+            Ok(false) => {}
+            Err(err) => tracing::warn!(reason = %err, "published static HTML refresh deferred"),
+        }
+        if let Some(connection) = listener.as_mut() {
+            match timeout(FALLBACK, connection.recv()).await {
+                Ok(Ok(_)) | Err(_) => {}
+                Ok(Err(err)) => {
+                    tracing::warn!(reason = %err, "navigation notification lost; reconnecting");
+                    listener = None;
+                }
+            }
+        } else {
+            tokio::time::sleep(FALLBACK).await;
+        }
+    }
 }
 
 #[cfg(unix)]

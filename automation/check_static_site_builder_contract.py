@@ -207,6 +207,9 @@ def main() -> int:
             ("keep_published_content_provenance", "original approval provenance retention"),
             ('manifest["publication_run_id"]', "originating Temporal workflow identity"),
             ('manifest["publication_revision_id"]', "originating published revision identity"),
+            ("pub async fn run_published_navigation_refresh_loop", "navigation refresh loop owner"),
+            ("refresh_published_renderer_if_stale_with_delivery(&pool", "navigation refresh invokes real publication"),
+            ("NAVIGATION_NOTIFY_CHANNEL", "navigation change notification listener"),
         ]:
             failures += require(renderer_refresh, needle, label)
         for needle, label in [
@@ -217,7 +220,8 @@ def main() -> int:
             failures += require(publication_release, needle, label)
         for needle, label in [
             ("recover_pending_renderer_refresh", "worker startup publication recovery"),
-            ("refresh_published_renderer_if_stale", "automatic renderer refresh"),
+            ("run_published_navigation_refresh_loop(", "automatic renderer refresh invocation"),
+            ("tokio::spawn(", "automatic renderer refresh background execution"),
         ]:
             failures += require(temporal_worker, needle, label)
 

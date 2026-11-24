@@ -3280,6 +3280,39 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
         "identical navigation triggered a redundant rebuild"
     );
 
+    // Use the same long-running NOTIFY/catch-up loop as the Temporal Worker,
+    // with the existing delivery port bound to our local public HTTP fixture.
+    // PostgreSQL exposes the last LISTEN statement, so this is a real
+    // readiness barrier rather than a guessed startup sleep.
+    let listener_name = format!("alegria_navigation_e2e_{marker}");
+    let listener_url = format!("{}&application_name={listener_name}", pg.database_url);
+    let refresh_delivery: Arc<dyn PublicReleaseDelivery> = delivery.clone();
+    let refresh_loop = tokio::spawn(
+        sqlx_seo_cms_adapter::run_published_navigation_refresh_loop(
+            Arc::new(pool.clone()),
+            listener_url,
+            refresh_delivery,
+        ),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let listening: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM pg_stat_activity \
+                 WHERE application_name=$1 AND state='idle' AND query LIKE 'LISTEN%')",
+            )
+            .bind(&listener_name)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+            if listening {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("published navigation refresh listener did not become ready");
+
     let child_html_path = live.join(child_path.trim_matches('/')).join("index.html");
     let original_html = std::fs::read_to_string(&child_html_path).unwrap();
     assert!(original_html.contains("Tourist Visa"));
@@ -3300,16 +3333,24 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
         .expect("navigation change must notify the Worker")
         .unwrap();
     assert_eq!(event.payload(), changed.navigation_tree_key);
-    assert!(
-        sqlx_seo_cms_adapter::refresh_published_renderer_if_stale_with_delivery(
-            pool,
-            delivery.as_ref()
-        )
-        .await
-        .unwrap(),
-        "navigation-only change did not trigger a real public refresh"
-    );
-    let updated_html = std::fs::read_to_string(&child_html_path).unwrap();
+    // No direct refresh call: the background listener must publish and
+    // finish its atomic commit before this test observes the real HTML.
+    let updated_html = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let html = std::fs::read_to_string(&child_html_path).unwrap();
+            if html.contains("Visitor Visa")
+                && !html.contains("Tourist Visa")
+                && !root.join(".alegria-pending-render-refresh.json").exists()
+            {
+                break html;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("automatic Worker navigation refresh did not publish updated HTML");
+    refresh_loop.abort();
+    let _ = refresh_loop.await;
     assert!(updated_html.contains("Visitor Visa"));
     assert!(!updated_html.contains("Tourist Visa"));
     let updated_manifest: serde_json::Value =
