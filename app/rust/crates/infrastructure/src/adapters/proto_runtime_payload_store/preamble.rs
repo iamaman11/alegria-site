@@ -88,6 +88,14 @@ pub(crate) fn contract_violation(message: impl Into<String>) -> DomainError {
     }
 }
 
+// A general domain validator, used by source, SEO and CMS adapters. Unlike
+// SQLSTATE classification, it is not PostgreSQL-provider-specific.
+pub(crate) fn validation_failure(message: impl Into<String>) -> DomainError {
+    DomainError::ValidationFailure {
+        message: message.into(),
+    }
+}
+
 pub(crate) fn decode_prost<T: Message + Default>(
     payload_bytes: &[u8],
     label: &str,
