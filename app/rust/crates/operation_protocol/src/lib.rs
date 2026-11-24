@@ -208,14 +208,9 @@ impl ValidatedPlan {
             .get(instance)
             .ok_or_else(|| PlanError::UnknownInstance(instance.clone()))?;
         nonempty(input_hash, "input_hash")?;
-        let encoded = serde_json::to_vec(&(
-            &self.scope,
-            &self.hash,
-            instance,
-            operation,
-            input_hash,
-        ))
-        .map_err(|error| PlanError::Serialization(error.to_string()))?;
+        let encoded =
+            serde_json::to_vec(&(&self.scope, &self.hash, instance, operation, input_hash))
+                .map_err(|error| PlanError::Serialization(error.to_string()))?;
         Ok(blake3::hash(&encoded).to_hex().to_string())
     }
 }
@@ -431,7 +426,9 @@ impl ExecutionPlan {
             for (port, id) in &node.outputs {
                 nonempty(id.as_str(), "output_artifact_id")?;
                 if self.external_artifacts.contains_key(id)
-                    || outputs.insert(id.clone(), (node.instance.clone(), port.clone())).is_some()
+                    || outputs
+                        .insert(id.clone(), (node.instance.clone(), port.clone()))
+                        .is_some()
                 {
                     return Err(PlanError::AmbiguousArtifact(id.clone()));
                 }
@@ -475,16 +472,21 @@ impl ExecutionPlan {
                 .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
             let mut after = node.after.clone();
             for (port, binding) in &node.inputs {
-                let expected = contract.inputs.get(port).ok_or_else(|| PlanError::UnexpectedPort {
-                    instance: node.instance.clone(),
-                    port: port.clone(),
-                    direction: "input",
-                })?;
+                let expected =
+                    contract
+                        .inputs
+                        .get(port)
+                        .ok_or_else(|| PlanError::UnexpectedPort {
+                            instance: node.instance.clone(),
+                            port: port.clone(),
+                            direction: "input",
+                        })?;
                 match binding {
                     ArtifactBinding::External { artifact } => {
-                        let actual = self.external_artifacts.get(artifact).ok_or_else(|| {
-                            PlanError::MissingExternalArtifact(artifact.clone())
-                        })?;
+                        let actual = self
+                            .external_artifacts
+                            .get(artifact)
+                            .ok_or_else(|| PlanError::MissingExternalArtifact(artifact.clone()))?;
                         if &actual.schema != expected {
                             return Err(PlanError::ArtifactSchemaMismatch {
                                 instance: node.instance.clone(),
@@ -493,13 +495,16 @@ impl ExecutionPlan {
                             });
                         }
                     }
-                    ArtifactBinding::Produced { producer, port: producer_port, artifact } => {
-                        let predecessor = by_id.get(producer).ok_or_else(|| {
-                            PlanError::UnknownInstance(producer.clone())
-                        })?;
-                        let previous_contract = catalog
-                            .contract(&predecessor.operation)
-                            .ok_or_else(|| {
+                    ArtifactBinding::Produced {
+                        producer,
+                        port: producer_port,
+                        artifact,
+                    } => {
+                        let predecessor = by_id
+                            .get(producer)
+                            .ok_or_else(|| PlanError::UnknownInstance(producer.clone()))?;
+                        let previous_contract =
+                            catalog.contract(&predecessor.operation).ok_or_else(|| {
                                 PlanError::UnknownOperation(predecessor.operation.clone())
                             })?;
                         let produced_schema = previous_contract.outputs.get(producer_port);
@@ -535,7 +540,10 @@ impl ExecutionPlan {
         for (id, deps) in &dependencies {
             degree.insert(id.clone(), deps.len());
             for previous in deps {
-                dependents.entry(previous.clone()).or_default().insert(id.clone());
+                dependents
+                    .entry(previous.clone())
+                    .or_default()
+                    .insert(id.clone());
             }
         }
         let mut ready: BTreeSet<_> = degree
@@ -547,9 +555,9 @@ impl ExecutionPlan {
             order.push(id.clone());
             if let Some(children) = dependents.get(&id) {
                 for child in children {
-                    let remaining = degree.get_mut(child).ok_or_else(|| {
-                        PlanError::UnknownInstance(child.clone())
-                    })?;
+                    let remaining = degree
+                        .get_mut(child)
+                        .ok_or_else(|| PlanError::UnknownInstance(child.clone()))?;
                     *remaining -= 1;
                     if *remaining == 0 {
                         ready.insert(child.clone());

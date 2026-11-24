@@ -181,11 +181,20 @@ fn two_identical_operations_with_identical_input_are_distinct_instances() {
             OperationInstanceId::from("score-2")
         ]
     );
-    let once = checked.execution_key(&"score-1".into(), "same-input-bytes").unwrap();
-    let retry = checked.execution_key(&"score-1".into(), "same-input-bytes").unwrap();
-    let other = checked.execution_key(&"score-2".into(), "same-input-bytes").unwrap();
+    let once = checked
+        .execution_key(&"score-1".into(), "same-input-bytes")
+        .unwrap();
+    let retry = checked
+        .execution_key(&"score-1".into(), "same-input-bytes")
+        .unwrap();
+    let other = checked
+        .execution_key(&"score-2".into(), "same-input-bytes")
+        .unwrap();
     assert_eq!(once, retry, "retry must use the original idempotency key");
-    assert_ne!(once, other, "intentional second node must not be deduplicated");
+    assert_ne!(
+        once, other,
+        "intentional second node must not be deduplicated"
+    );
     assert!(matches!(
         checked.execution_key(&"unknown".into(), "same-input-bytes"),
         Err(PlanError::UnknownInstance(_))
@@ -199,10 +208,16 @@ fn canonical_plan_hash_and_schedule_ignore_unrelated_node_order() {
     let left = plan(vec![first.clone(), second.clone()]);
     let right = plan(vec![second, first]);
     assert_eq!(left.hash, right.hash);
-    assert_eq!(left.validate(&catalog()).unwrap(), right.validate(&catalog()).unwrap());
+    assert_eq!(
+        left.validate(&catalog()).unwrap(),
+        right.validate(&catalog()).unwrap()
+    );
     assert_eq!(
         left.validate(&catalog()).unwrap().execution_order,
-        [OperationInstanceId::from("a"), OperationInstanceId::from("z")]
+        [
+            OperationInstanceId::from("a"),
+            OperationInstanceId::from("z")
+        ]
     );
 }
 
@@ -220,24 +235,32 @@ fn produced_artifact_binding_forms_a_real_multi_operation_dag() {
         permitted_effects: BTreeSet::new(),
     };
     let mut score = score_node("score", "generated-score");
-    score.inputs.insert("evidence".into(), ArtifactBinding::Produced {
-        producer: "source".into(),
-        port: "evidence".into(),
-        artifact: "generated-evidence".into(),
-    });
+    score.inputs.insert(
+        "evidence".into(),
+        ArtifactBinding::Produced {
+            producer: "source".into(),
+            port: "evidence".into(),
+            artifact: "generated-evidence".into(),
+        },
+    );
     let publish = OperationNode {
         instance: "publish".into(),
         operation: reference("release.commit"),
-        inputs: BTreeMap::from([("score".into(), ArtifactBinding::Produced {
-            producer: "score".into(),
-            port: "score".into(),
-            artifact: "generated-score".into(),
-        })]),
+        inputs: BTreeMap::from([(
+            "score".into(),
+            ArtifactBinding::Produced {
+                producer: "score".into(),
+                port: "score".into(),
+                artifact: "generated-score".into(),
+            },
+        )]),
         outputs: BTreeMap::from([("release".into(), "generated-release".into())]),
         after: BTreeSet::new(),
         permitted_effects: BTreeSet::from([EffectId::from("release.write")]),
     };
-    let checked = plan(vec![publish, score, source]).validate(&catalog()).unwrap();
+    let checked = plan(vec![publish, score, source])
+        .validate(&catalog())
+        .unwrap();
     assert_eq!(
         checked.execution_order,
         [
@@ -253,17 +276,26 @@ fn version_and_unknown_operation_fail_closed() {
     let mut scenario = plan(vec![score_node("score", "out")]);
     scenario.schema_revision += 1;
     scenario = scenario.seal(&catalog()).unwrap();
-    assert_eq!(scenario.validate(&catalog()), Err(PlanError::UnsupportedPlanRevision(2)));
+    assert_eq!(
+        scenario.validate(&catalog()),
+        Err(PlanError::UnsupportedPlanRevision(2))
+    );
 
     let mut scenario = plan(vec![score_node("score", "out")]);
     scenario.nodes[0].operation.revision = 2;
     scenario.hash = scenario.canonical_hash().unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::UnknownOperation(_))));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::UnknownOperation(_))
+    ));
 
     let mut scenario = plan(vec![score_node("score", "out")]);
     scenario.nodes[0].operation.id = "not.registered".into();
     scenario.hash = scenario.canonical_hash().unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::UnknownOperation(_))));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::UnknownOperation(_))
+    ));
 }
 
 #[test]
@@ -272,18 +304,32 @@ fn missing_or_wrong_schema_is_rejected_before_runner_can_schedule_io() {
     scenario.external_artifacts.clear();
     scenario = scenario.seal(&catalog()).unwrap();
     let side_effects = std::sync::atomic::AtomicUsize::new(0);
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::MissingExternalArtifact(_))));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::MissingExternalArtifact(_))
+    ));
     assert_eq!(side_effects.load(std::sync::atomic::Ordering::Relaxed), 0);
 
     let mut scenario = plan(vec![score_node("score", "out")]);
-    scenario.external_artifacts.get_mut(&"external-evidence".into()).unwrap().schema.revision += 1;
+    scenario
+        .external_artifacts
+        .get_mut(&"external-evidence".into())
+        .unwrap()
+        .schema
+        .revision += 1;
     scenario = scenario.seal(&catalog()).unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::ArtifactSchemaMismatch { .. })));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::ArtifactSchemaMismatch { .. })
+    ));
 
     let mut scenario = plan(vec![score_node("score", "out")]);
     scenario.nodes[0].inputs.clear();
     scenario = scenario.seal(&catalog()).unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::MissingPort { .. })));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::MissingPort { .. })
+    ));
 }
 
 #[test]
@@ -296,33 +342,64 @@ fn scope_and_provenance_are_not_interchangeable() {
         .scope
         .tenant_id = "tenant-b".to_owned();
     scenario = scenario.seal(&catalog()).unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::CrossScopeArtifact(_))));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::CrossScopeArtifact(_))
+    ));
 
     let mut scenario = plan(vec![score_node("score", "out")]);
-    scenario.external_artifacts.get_mut(&"external-evidence".into()).unwrap().provenance.clear();
+    scenario
+        .external_artifacts
+        .get_mut(&"external-evidence".into())
+        .unwrap()
+        .provenance
+        .clear();
     scenario = scenario.seal(&catalog()).unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::MissingProvenance(_))));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::MissingProvenance(_))
+    ));
 }
 
 #[test]
 fn effect_policies_and_plan_hash_reject_unapproved_execution() {
     let mut scenario = plan(vec![score_node("score", "out")]);
-    scenario.nodes[0].permitted_effects.insert("release.write".into());
+    scenario.nodes[0]
+        .permitted_effects
+        .insert("release.write".into());
     scenario = scenario.seal(&catalog()).unwrap();
-    assert!(matches!(scenario.validate(&catalog()), Err(PlanError::ForbiddenEffect { .. })));
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::ForbiddenEffect { .. })
+    ));
 
     let mut scenario = plan(vec![score_node("score", "out")]);
     scenario.hash = "forged-hash".into();
-    assert_eq!(scenario.validate(&catalog()), Err(PlanError::PlanHashMismatch));
+    assert_eq!(
+        scenario.validate(&catalog()),
+        Err(PlanError::PlanHashMismatch)
+    );
 }
 
 #[test]
 fn duplicate_instance_ambiguous_artifact_and_cycle_fail_closed() {
-    let dup = plan(vec![score_node("score", "out-a"), score_node("score", "out-b")]);
-    assert!(matches!(dup.validate(&catalog()), Err(PlanError::DuplicateInstance(_))));
+    let dup = plan(vec![
+        score_node("score", "out-a"),
+        score_node("score", "out-b"),
+    ]);
+    assert!(matches!(
+        dup.validate(&catalog()),
+        Err(PlanError::DuplicateInstance(_))
+    ));
 
-    let conflict = plan(vec![score_node("a", "same-out"), score_node("b", "same-out")]);
-    assert!(matches!(conflict.validate(&catalog()), Err(PlanError::AmbiguousArtifact(_))));
+    let conflict = plan(vec![
+        score_node("a", "same-out"),
+        score_node("b", "same-out"),
+    ]);
+    assert!(matches!(
+        conflict.validate(&catalog()),
+        Err(PlanError::AmbiguousArtifact(_))
+    ));
 
     let mut a = score_node("a", "out-a");
     let mut b = score_node("b", "out-b");
@@ -335,12 +412,18 @@ fn duplicate_instance_ambiguous_artifact_and_cycle_fail_closed() {
 #[test]
 fn binding_must_name_the_real_producer_port_and_artifact() {
     let mut score = score_node("score", "out");
-    score.inputs.insert("evidence".into(), ArtifactBinding::Produced {
-        producer: "missing".into(),
-        port: "evidence".into(),
-        artifact: "bad".into(),
-    });
-    assert!(matches!(plan(vec![score]).validate(&catalog()), Err(PlanError::UnknownInstance(_))));
+    score.inputs.insert(
+        "evidence".into(),
+        ArtifactBinding::Produced {
+            producer: "missing".into(),
+            port: "evidence".into(),
+            artifact: "bad".into(),
+        },
+    );
+    assert!(matches!(
+        plan(vec![score]).validate(&catalog()),
+        Err(PlanError::UnknownInstance(_))
+    ));
 
     let source = OperationNode {
         instance: "source".into(),
@@ -351,9 +434,14 @@ fn binding_must_name_the_real_producer_port_and_artifact() {
         permitted_effects: BTreeSet::new(),
     };
     let mut score = score_node("score", "out");
-    score.inputs.insert("evidence".into(), ArtifactBinding::Produced {
-        producer: "source".into(), port: "evidence".into(), artifact: "different-id".into(),
-    });
+    score.inputs.insert(
+        "evidence".into(),
+        ArtifactBinding::Produced {
+            producer: "source".into(),
+            port: "evidence".into(),
+            artifact: "different-id".into(),
+        },
+    );
     assert!(matches!(
         plan(vec![source, score]).validate(&catalog()),
         Err(PlanError::MissingProducedArtifact { .. })
@@ -371,7 +459,10 @@ fn unknown_manifest_fields_and_duplicate_contract_are_rejected() {
     assert!(serde_json::from_str::<ExecutionPlan>(&invalid).is_err());
 
     let mut catalog = catalog();
-    assert!(matches!(catalog.register::<Score>(), Err(PlanError::DuplicateContract(_))));
+    assert!(matches!(
+        catalog.register::<Score>(),
+        Err(PlanError::DuplicateContract(_))
+    ));
 }
 
 #[test]
