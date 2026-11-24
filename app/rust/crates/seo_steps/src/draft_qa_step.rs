@@ -65,7 +65,7 @@ fn typed_claim_block_valid(
         && support_views
             .iter()
             .filter(|entry| role_matches_section(entry.role_type, &block.section_role))
-            .map(|entry| entry.support_ref.as_str())
+            .map(|entry| entry.support_ref)
             .collect::<BTreeSet<_>>()
             != refs
     {
