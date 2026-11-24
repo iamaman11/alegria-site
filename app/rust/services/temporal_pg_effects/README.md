@@ -52,7 +52,8 @@ Configure a separately created PostgreSQL LOGIN role, distinct from the
 operator/schema owner. Its grants must be limited to:
 
 ```sql
-GRANT USAGE ON SCHEMA pipeline, extracted, raw, site TO alegria_pg_effect_worker;
+GRANT USAGE ON SCHEMA pipeline, extracted, raw, site, verified, system
+    TO alegria_pg_effect_worker;
 GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
     pipeline.pg_effect_v3_admissions TO alegria_pg_effect_worker;
 GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO alegria_pg_effect_worker;
@@ -68,6 +69,8 @@ access to canonical `verified.rule_instances`, `extracted.rule_candidates`,
 `system.sync_outbox`, and `site.cms_approval_decisions`. `REVOKE FROM PUBLIC`
 in the schema does not revoke owner privileges or inherited membership; a
 separate unprivileged user is mandatory.
+The `verified` and `system` schema grants provide name resolution solely for
+these negative privilege checks; they grant no table read or write rights.
 
 An authorized operator issues each admission through their own audited SQL
 process, **not** an Activity, Workflow, or DAG input. Validate canonical

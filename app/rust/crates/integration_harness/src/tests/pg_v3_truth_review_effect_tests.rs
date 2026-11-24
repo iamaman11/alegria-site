@@ -163,7 +163,7 @@ async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgP
     let grant_sql = format!(
         "CREATE ROLE {role} LOGIN PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {role};
-         GRANT USAGE ON SCHEMA pipeline, site, extracted, raw TO {role};
+         GRANT USAGE ON SCHEMA pipeline, site, extracted, raw, verified, system TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
                          pipeline.pg_effect_v3_admissions TO {role};
          GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO {role};
