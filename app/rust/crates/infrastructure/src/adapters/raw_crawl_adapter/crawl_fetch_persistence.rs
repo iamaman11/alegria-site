@@ -191,7 +191,11 @@ pub async fn evaluate_robots_policy(source_url: &str) -> Result<RobotsDecisionTr
         .text()
         .await
         .with_context(|| format!("read robots body: {robots_url}"))?;
-    let parsed = parse_robots_rules(&body, CRAWL_USER_AGENT, source.path());
+    let parsed = acquisition::crawl_policy::evaluate_robots_rules(
+        &body,
+        CRAWL_USER_AGENT,
+        source.path(),
+    );
     trace.allow_rules = parsed.allow_rules;
     trace.disallow_rules = parsed.disallow_rules;
     trace.allowed = parsed.allowed;

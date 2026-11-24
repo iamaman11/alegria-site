@@ -1,7 +1,10 @@
 use async_trait::async_trait;
 use primitives::errors::DomainError;
 use runtime_models::{GraphPlanningContext, RuleRoleType};
-use seo_domain::identity;
+use seo_domain::{
+    identity,
+    rebuild::{RebuildDetectRequest, RebuildDetectResult},
+};
 use seo_ports::{
     CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
@@ -39,7 +42,7 @@ use contracts::generated::alegria::temporal::v1::{
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PageNodeState,
     PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
-    RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
+    SectionTemplateBinding,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };

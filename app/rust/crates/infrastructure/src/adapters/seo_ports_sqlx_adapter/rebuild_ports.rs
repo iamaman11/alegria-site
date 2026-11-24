@@ -19,8 +19,8 @@ impl RebuildRepository for SqlxSeoRuntimeRepository<'_> {
 
     async fn persist_rebuild_detect_output(
         &self,
-        input: &RebuildDetectInputPayload,
-        output: &RebuildDetectOutputPayload,
+        input: &RebuildDetectRequest,
+        output: &RebuildDetectResult,
     ) -> Result<(), DomainError> {
         sqlx_seo_adapter::persist_rebuild_detect_output(self.pool, input, output).await
     }
@@ -28,7 +28,7 @@ impl RebuildRepository for SqlxSeoRuntimeRepository<'_> {
     async fn semantic_neighbor_impacts(
         &self,
         changed_truth_keys: &[String],
-        page_nodes: &[PageNodeState],
+        page_node_keys: &[String],
     ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
         let retrieval_required = std::env::var("RETRIEVAL_CAPABILITY_REQUIRED")
             .ok()
@@ -80,9 +80,9 @@ impl RebuildRepository for SqlxSeoRuntimeRepository<'_> {
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("semantic rebuild widening rerank failed: {err}"),
         })?;
-        let page_node_set = page_nodes
+        let page_node_set = page_node_keys
             .iter()
-            .map(|node| node.page_node_key.as_str())
+            .map(String::as_str)
             .collect::<std::collections::BTreeSet<_>>();
         for candidate in reranked {
             let page_node_key = candidate

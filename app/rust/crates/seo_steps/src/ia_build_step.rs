@@ -3,20 +3,12 @@ use contracts::generated::alegria::temporal::v1::{
     PageNodeState,
 };
 
-use crate::seo_step_support::{artifact_key, scope_signature, slug};
+use crate::seo_step_support::{artifact_key, scope_signature};
 use runtime_models::seo_blocks::is_opaque_topic_identifier;
+use seo_domain::ia_planning::{self, IaClusterCandidate, IaClusterDisposition, IaScope};
 
-fn locale_lang(locale: &str) -> String {
-    locale
-        .split(['-', '_'])
-        .next()
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or("und")
-        .to_ascii_lowercase()
-}
-
-// A stable storage identifier is never a publishable topic. Use the
-// shared slug policy for both IA and the final publication gate.
+// A stable storage identifier is never a publishable topic. Resolve the
+// runtime classifier at the boundary before passing semantic text to domain.
 fn semantic_keyword<'a>(seed: &'a str, topic_keys: &'a [String]) -> Option<&'a str> {
     if !seed.trim().is_empty() && !is_opaque_topic_identifier(seed) {
         return Some(seed);
@@ -25,133 +17,6 @@ fn semantic_keyword<'a>(seed: &'a str, topic_keys: &'a [String]) -> Option<&'a s
         .iter()
         .map(String::as_str)
         .find(|topic| !topic.trim().is_empty() && !is_opaque_topic_identifier(topic))
-}
-
-fn multi_section_demand(seed: &str) -> bool {
-    let text = seed.to_lowercase();
-    [
-        ["document", "requirement", "документ"],
-        ["cost", "fee", "стоим"],
-        ["time", "processing", "срок"],
-    ]
-    .iter()
-    .filter(|terms| terms.iter().any(|term| text.contains(*term)))
-    .count()
-        > 1
-}
-
-fn page_type_for_keyword(seed_keyword: &str) -> &'static str {
-    let query = seed_keyword.to_lowercase();
-    if query.contains("document") || query.contains("requirements") || query.contains("документ")
-    {
-        "requirement_page"
-    } else if query.contains("cost")
-        || query.contains("fee")
-        || query.contains("price")
-        || query.contains("стоим")
-    {
-        "fee_page"
-    } else if query.contains("time") || query.contains("processing") || query.contains("срок") {
-        "timeline_page"
-    } else if query.contains("faq") || query.contains("вопрос") {
-        "faq_page"
-    } else {
-        "detail_page"
-    }
-}
-
-fn country_slug(country_code: &str) -> String {
-    match country_code.to_ascii_uppercase().as_str() {
-        "ES" => "spain".to_string(),
-        "TH" => "thailand".to_string(),
-        "PL" => "poland".to_string(),
-        "FR" => "france".to_string(),
-        "IT" => "italy".to_string(),
-        "DE" => "germany".to_string(),
-        "GR" => "greece".to_string(),
-        "PT" => "portugal".to_string(),
-        "CZ" => "czech-republic".to_string(),
-        other => other.to_ascii_lowercase(),
-    }
-}
-
-fn page_type_path_segment(page_type: &str, canonical_slug: &str) -> String {
-    match page_type {
-        "requirement_page" => format!("requirements/{canonical_slug}"),
-        "fee_page" => format!("fees/{canonical_slug}"),
-        "timeline_page" => format!("processing-times/{canonical_slug}"),
-        "faq_page" => format!("faq/{canonical_slug}"),
-        "checklist_page" => format!("checklist/{canonical_slug}"),
-        "troubleshooting_page" => format!("problems/{canonical_slug}"),
-        "comparison_page" => format!("compare/{canonical_slug}"),
-        "supporting_editorial" => format!("guides/{canonical_slug}"),
-        _ => canonical_slug.to_string(),
-    }
-}
-
-fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
-    let roles: &[&str] = match page_type {
-        "country_hub_page" => &[
-            "overview",
-            "who_fits",
-            "where_to_apply",
-            "related_pages",
-            "cta_disclaimer",
-        ],
-        "fee_page" => &["overview", "fees", "faq", "related_pages", "cta_disclaimer"],
-        "timeline_page" => &[
-            "overview",
-            "timing",
-            "process",
-            "faq",
-            "related_pages",
-            "cta_disclaimer",
-        ],
-        "requirement_page" | "checklist_page" => &[
-            "overview",
-            "documents",
-            "faq",
-            "related_pages",
-            "cta_disclaimer",
-        ],
-        "faq_page" => &["overview", "faq", "related_pages", "cta_disclaimer"],
-        _ => &[
-            "overview",
-            "who_fits",
-            "documents",
-            "process",
-            "fees",
-            "timing",
-            "where_to_apply",
-            "faq",
-            "related_pages",
-            "cta_disclaimer",
-        ],
-    };
-    roles.iter().map(|role| (*role).to_string()).collect()
-}
-
-fn canonical_prefix(input: &IaBuildInputPayload) -> String {
-    let Some(scope) = input.scope.as_ref() else {
-        return "/und/visa/all/all".to_string();
-    };
-    format!(
-        "/{}/visa/{}/{}",
-        locale_lang(&scope.locale),
-        country_slug(&scope.country_code),
-        slug(&scope.visa_type)
-    )
-}
-
-fn country_prefix(input: &IaBuildInputPayload) -> String {
-    let Some(scope) = input.scope.as_ref() else {
-        return "/und/visa/all".to_string();
-    };
-    format!(
-        "/{}/visa/{}",
-        locale_lang(&scope.locale),
-        country_slug(&scope.country_code)
-    )
 }
 
 fn push_blueprint(
@@ -176,7 +41,7 @@ fn push_blueprint(
             scope_class: scope_class.to_string(),
             blueprint_version: 1,
             status: "active".to_string(),
-            required_sections: required_sections_for_page_type(page_type_key),
+            required_sections: ia_planning::required_sections_for_page_type(page_type_key),
             title_pattern: format!("{{country}} {{visa_type}} {page_type_key}"),
             canonical_url_family: canonical_url_family.to_string(),
         });
@@ -193,29 +58,16 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
     let mut cannibalization_conflicts = Vec::new();
     let mut seen_topic_families = std::collections::BTreeMap::<String, String>::new();
 
-    let country_prefix = country_prefix(input);
-    let canonical_prefix = canonical_prefix(input);
-    let country_segment = input
-        .scope
-        .as_ref()
-        .map(|scope| country_slug(&scope.country_code))
-        .unwrap_or_else(|| "all".to_string());
-    let country_hub_slug = input
-        .scope
-        .as_ref()
-        .map(|scope| slug(&format!("{} visa", country_slug(&scope.country_code))))
-        .unwrap_or_else(|| "visa-country-hub".to_string());
-    let visa_hub_slug = input
-        .scope
-        .as_ref()
-        .map(|scope| {
-            slug(&format!(
-                "{} {} visa",
-                country_slug(&scope.country_code),
-                scope.visa_type
-            ))
-        })
-        .unwrap_or_else(|| "visa-hub".to_string());
+    let paths = ia_planning::scope_paths(input.scope.as_ref().map(|scope| IaScope {
+        locale: &scope.locale,
+        country_code: &scope.country_code,
+        visa_type: &scope.visa_type,
+    }));
+    let country_prefix = &paths.country_prefix;
+    let canonical_prefix = &paths.canonical_prefix;
+    let country_segment = &paths.country_segment;
+    let country_hub_slug = paths.country_hub_slug;
+    let visa_hub_slug = paths.visa_hub_slug;
 
     let country_blueprint_key = push_blueprint(
         &mut page_blueprints,
@@ -284,40 +136,28 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
         } else {
             cluster.scope_signature.clone()
         };
-        let graph_confidence = cluster.graph_confidence;
-        let ambiguous_topic_family = cluster.topic_keys.len() > 1 && graph_confidence < 0.6;
-        // Source-discovery operators must never become publishable landing pages.
-        let source_discovery_query = cluster
-            .seed_keyword
-            .split_whitespace()
-            .any(|term| term.to_ascii_lowercase().starts_with("site:"));
-        let topic_family_key = if cluster.topic_keys.is_empty() {
-            cluster.seed_keyword.clone()
-        } else {
-            cluster.topic_keys.join("|")
-        };
+        // The wire adapter resolves opaque storage IDs into a semantic seed.
+        // The domain owns page classification, hierarchy and disposition.
         let semantic_seed = semantic_keyword(&cluster.seed_keyword, &cluster.topic_keys);
-        // Broad multi-section demand belongs to the existing hub.
-        if !input.verified_support.is_empty()
-            && !source_discovery_query
-            && semantic_seed.is_some_and(multi_section_demand)
-        {
+        let IaClusterDisposition::Plan(plan) = ia_planning::plan_cluster(&IaClusterCandidate {
+            seed_keyword: &cluster.seed_keyword,
+            topic_keys: &cluster.topic_keys,
+            semantic_keyword: semantic_seed,
+            graph_confidence: cluster.graph_confidence,
+            dominant_intent: &cluster.dominant_intent,
+            has_verified_support: !input.verified_support.is_empty(),
+            canonical_prefix,
+        }) else {
             continue;
-        }
-        let canonical_slug = semantic_seed
-            .map(slug)
-            .unwrap_or_else(|| "needs-editorial-review".to_string());
-        let page_type_key = semantic_seed
-            .map(page_type_for_keyword)
-            .unwrap_or("detail_page")
-            .to_string();
-        let path_segment = page_type_path_segment(&page_type_key, &canonical_slug);
-        let canonical_url_path = format!("{canonical_prefix}/{path_segment}/");
-        let dominant_intent = if cluster.dominant_intent.is_empty() {
-            "informational".to_string()
-        } else {
-            cluster.dominant_intent.clone()
         };
+        let ia_planning::IaClusterPlan {
+            topic_family_key,
+            canonical_slug,
+            page_type_key,
+            canonical_url_path,
+            dominant_intent,
+            lifecycle,
+        } = plan;
         let blueprint_key = push_blueprint(
             &mut page_blueprints,
             &page_type_key,
@@ -382,14 +222,7 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             dominant_intent,
             canonical_slug,
             canonical_url_path,
-            lifecycle_state: if ambiguous_topic_family
-                || source_discovery_query
-                || semantic_seed.is_none()
-            {
-                "blocked".to_string()
-            } else {
-                "planned".to_string()
-            },
+            lifecycle_state: lifecycle.as_str().to_string(),
             parent_page_node_key: hub_page_node_key.clone(),
             hierarchy_depth: 4,
             menu_group: format!("visa:{country_segment}"),
@@ -399,11 +232,7 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
     }
 
     // Evidence-derived plans are not fabricated SERP keywords or ranks.
-    for (page_type, factual_section, route) in [
-        ("requirement_page", "documents", "documents"),
-        ("fee_page", "fees", "fees"),
-        ("timeline_page", "timing", "processing-times"),
-    ] {
+    for (page_type, factual_section, route) in ia_planning::EVIDENCE_DERIVED_PAGES {
         if page_nodes
             .iter()
             .any(|page| page.page_type_key == page_type && page.lifecycle_state == "planned")
@@ -677,6 +506,62 @@ mod tests {
         assert!(output.page_nodes.iter().any(
             |page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"
         ));
+    }
+
+    #[test]
+    fn three_duplicate_topic_candidates_keep_original_conflict_owner_order() {
+        let keywords = ["visa refusal guide", "visa refusal appeal", "visa refusal checklist"];
+        let clusters = keywords
+            .into_iter()
+            .enumerate()
+            .map(|(index, seed)| {
+                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: format!("cluster-{index}"),
+                    seed_keyword: seed.into(),
+                    topic_keys: vec!["visa_refusal".into()],
+                    ..Default::default()
+                }
+            })
+            .collect();
+        let output = execute(&IaBuildInputPayload {
+            keyword_clusters: clusters,
+            ..Default::default()
+        });
+        assert_eq!(output.page_nodes.len(), 3); // country + visa hubs + first topic
+        assert_eq!(output.cannibalization_conflicts.len(), 2);
+        assert_eq!(
+            output.cannibalization_conflicts[0].conflict_reason,
+            "duplicate_topic_family"
+        );
+        // A suppressed second page still becomes the later conflict owner;
+        // preserve the established observable identity and ordering.
+        assert_eq!(
+            output.cannibalization_conflicts[1].page_key_a,
+            output.cannibalization_conflicts[0].page_key_b
+        );
+    }
+
+    #[test]
+    fn two_topic_families_with_one_canonical_path_keep_blocking_conflict() {
+        let clusters = ["family_a", "family_b"]
+            .into_iter()
+            .map(|family| contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                cluster_key: family.into(),
+                seed_keyword: "visa fees".into(),
+                topic_keys: vec![family.into()],
+                ..Default::default()
+            })
+            .collect();
+        let output = execute(&IaBuildInputPayload {
+            keyword_clusters: clusters,
+            ..Default::default()
+        });
+        assert_eq!(output.page_nodes.len(), 4);
+        assert_eq!(output.cannibalization_conflicts.len(), 1);
+        let conflict = &output.cannibalization_conflicts[0];
+        assert_eq!(conflict.conflict_reason, "duplicate_canonical_url");
+        assert_eq!(conflict.severity, "blocking");
+        assert_eq!(conflict.status, "open");
     }
 }
 

@@ -7,6 +7,9 @@ use primitives::errors::DomainError;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use truth_domain::candidate_intake::{
+    normalized_proposal_metadata, validate_evidence, EvidenceSection, SuggestedEvidence,
+};
 
 type ClientFuture<'a> =
     Pin<Box<dyn Future<Output = Result<TruthExtractionResponse, DomainError>> + Send + 'a>>;
@@ -645,41 +648,24 @@ fn validate_candidate(
     input: &TruthExtractionInput,
     mut candidate: TruthRuleCandidate,
 ) -> Result<TruthRuleCandidate, &'static str> {
-    candidate.role = normalize_role(&candidate.role).ok_or("unsupported candidate role")?;
-    if candidate.concept_canonical_key.trim().is_empty() {
-        return Err("concept_canonical_key is required");
-    }
-    if candidate.evidence_quote.trim().is_empty() {
-        return Err("evidence_quote is required");
-    }
-    if candidate.evidence_section_id != Some(input.raw_section_id) {
-        return Err("evidence_section_id does not match source section");
-    }
-    if candidate.span_start >= candidate.span_end {
-        return Err("evidence span must be nonempty");
-    }
-    if candidate.span_end > input.raw_text.len()
-        || !input.raw_text.is_char_boundary(candidate.span_start)
-        || !input.raw_text.is_char_boundary(candidate.span_end)
-    {
-        return Err("evidence span is outside source text or not UTF-8 aligned");
-    }
-    let snippet = input
-        .raw_text
-        .get(candidate.span_start..candidate.span_end)
-        .ok_or("evidence span is invalid")?;
-    if snippet.trim().is_empty() || candidate.evidence_quote != snippet {
-        return Err("evidence_quote must match the exact source bytes");
-    }
-    if candidate.raw_mention.trim().is_empty() {
-        candidate.raw_mention = snippet.to_string();
-    }
-    if !candidate.confidence.is_finite()
-        || candidate.confidence <= 0.0
-        || candidate.confidence > 1.0
-    {
-        return Err("confidence must be in (0, 1]");
-    }
+    let accepted = validate_evidence(
+        &EvidenceSection {
+            id: input.raw_section_id,
+            text: &input.raw_text,
+        },
+        &SuggestedEvidence {
+            role: &candidate.role,
+            concept_key: &candidate.concept_canonical_key,
+            evidence_quote: &candidate.evidence_quote,
+            evidence_section_id: candidate.evidence_section_id,
+            span_start: candidate.span_start,
+            span_end: candidate.span_end,
+            raw_mention: &candidate.raw_mention,
+            confidence: candidate.confidence,
+        },
+    )?;
+    candidate.role = accepted.role.to_string();
+    candidate.raw_mention = accepted.raw_mention;
     if !candidate.params.is_object() {
         return Err("params must be an object");
     }
@@ -689,27 +675,9 @@ fn validate_candidate(
     if !candidate.alternatives.is_array() {
         return Err("alternatives must be an array");
     }
-    if candidate.severity.trim().is_empty() {
-        candidate.severity = "unknown".to_string();
-    }
-    if candidate.derivation_type.trim().is_empty() {
-        candidate.derivation_type = "direct".to_string();
-    }
+    (candidate.severity, candidate.derivation_type) =
+        normalized_proposal_metadata(&candidate.severity, &candidate.derivation_type);
     Ok(candidate)
-}
-
-fn normalize_role(role: &str) -> Option<String> {
-    match role.trim().to_ascii_uppercase().as_str() {
-        "DOCUMENT_REQUIRED" => Some("DOCUMENT_REQUIRED".to_string()),
-        "ELIGIBILITY_RULE" => Some("ELIGIBILITY_RULE".to_string()),
-        "FEE_ITEM" => Some("FEE_ITEM".to_string()),
-        "TIMELINE_ITEM" => Some("TIMELINE_ITEM".to_string()),
-        "WHERE_TO_APPLY" => Some("WHERE_TO_APPLY".to_string()),
-        "APPOINTMENT_RULE" => Some("APPOINTMENT_RULE".to_string()),
-        "FORM_REQUIRED" => Some("FORM_REQUIRED".to_string()),
-        "STEP" => Some("STEP".to_string()),
-        _ => None,
-    }
 }
 
 fn request_timeout() -> Duration {

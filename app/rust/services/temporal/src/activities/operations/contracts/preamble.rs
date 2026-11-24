@@ -53,6 +53,7 @@ use truth_domain::truth_candidates::{
 use runtime_models::ReconcileTargetReportRecord;
 use serde::{Deserialize, Serialize};
 use serde_json::value::Value;
+pub use seo_domain::whole_page::WholePageSemanticPageState;
 
 use super::AlegriaActivities;
 

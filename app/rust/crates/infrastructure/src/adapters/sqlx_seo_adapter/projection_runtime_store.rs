@@ -6,10 +6,9 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, IaBuildInputPayload, IaBuildOutputPayload,
     LinkRecommendInputPayload, LinkRecommendOutputPayload, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, RebuildDetectInputPayload, RebuildDetectOutputPayload,
-    SectionTemplateBinding, SeoScopePayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    OpportunityBuildOutputPayload, SectionTemplateBinding, SeoScopePayload, SeoSiteBuildInputPayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpIngestOutputPayload,
+    SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
 use primitives::qdrant_point_id::qdrant_point_id_v1;
@@ -18,6 +17,7 @@ use runtime_models::{
     ContentGap, GraphPlanningContext, GraphPlanningCoverageSignal, GraphPlanningTopicSignal,
     GraphPlanningTripleSignal, KeywordCluster, LinkRecommendation, PageNode,
 };
+use seo_domain::rebuild::{RebuildDetectRequest, RebuildDetectResult, RebuildVerdict};
 use seo_domain::{applicability, identity, rebuild};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};

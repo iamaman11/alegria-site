@@ -10,11 +10,12 @@ use contracts::generated::alegria::temporal::v1::{
     IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
-    RawKnowledgeIngestionOutputPayload, RebuildDetectInputPayload,
-    RenderPreviewValidateInputPayload, SeoSiteBuildInputPayload, SerpIngestInputPayload,
+    RawKnowledgeIngestionOutputPayload, RenderPreviewValidateInputPayload,
+    SeoSiteBuildInputPayload, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use primitives::errors::DomainError;
+use seo_domain::rebuild::RebuildDetectRequest;
 use seo_ports::{
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     GraphCapabilityPort, GraphReasoningPort, PlanningRepository, ProjectionStatusRepository,

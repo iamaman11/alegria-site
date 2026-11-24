@@ -2,7 +2,7 @@ use contracts::generated::alegria::temporal::v1::{
     ClaimLedgerEntry, CmsPublishInputPayload, DraftAssembleInputPayload,
     DraftNormalizeInputPayload, DraftQaInputPayload, IaBuildInputPayload,
     LinkRecommendInputPayload, LlmDraftCandidate, OpportunityBuildInputPayload,
-    RebuildDetectInputPayload, SeoScopePayload, SeoVerifiedFactSupportState,
+    SeoScopePayload, SeoVerifiedFactSupportState,
     SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 
@@ -361,11 +361,15 @@ fn seo_steps_form_publish_ready_pipeline() {
     assert_eq!(cms.verdict, "review_requested");
     assert!(cms.blocking_reasons.is_empty());
 
-    let rebuild = crate::rebuild_detect_step::execute(&RebuildDetectInputPayload {
+    let rebuild = seo_domain::rebuild::detect_rebuild(&seo_domain::rebuild::RebuildDetectRequest {
         run_id,
         changed_truth_keys: vec!["verified.rule_instance:fee".to_string()],
-        page_nodes: ia.page_nodes,
+        page_node_keys: ia
+            .page_nodes
+            .iter()
+            .map(|page| page.page_node_key.clone())
+            .collect(),
     });
-    assert_eq!(rebuild.verdict, "rebuild_required");
+    assert_eq!(rebuild.verdict.as_str(), "rebuild_required");
     assert_eq!(rebuild.impacted_page_node_keys.len(), 4);
 }

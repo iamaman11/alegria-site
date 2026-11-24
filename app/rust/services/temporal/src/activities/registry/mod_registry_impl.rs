@@ -1221,7 +1221,32 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "rebuild_detect", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::rebuild_detect::execute(&repo, &input).await
+            let request = seo_domain::rebuild::RebuildDetectRequest {
+                run_id: input.run_id.clone(),
+                changed_truth_keys: input.changed_truth_keys.clone(),
+                page_node_keys: input
+                    .page_nodes
+                    .iter()
+                    .map(|page| page.page_node_key.clone())
+                    .collect(),
+            };
+            let result = seo_application::rebuild_detect::execute(&repo, &request).await?;
+            Ok(RebuildDetectOutputPayload {
+                impacted_page_node_keys: result.impacted_page_node_keys,
+                verdict: result.verdict.as_str().to_string(),
+                impacts: result
+                    .impacts
+                    .into_iter()
+                    .map(|impact| {
+                        contracts::generated::alegria::temporal::v1::RebuildImpactState {
+                            page_node_key: impact.page_node_key,
+                            trigger_type: impact.trigger_type,
+                            reason_package_json: impact.reason_package.to_string(),
+                            priority: impact.priority,
+                        }
+                    })
+                    .collect(),
+            })
         })
         .await
     }

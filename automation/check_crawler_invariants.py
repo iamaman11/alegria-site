@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 PORTS = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+CRAWL_POLICY = ROOT / "app/rust/crates/acquisition/src/crawl_policy.rs"
 
 
 def read_with_includes(path: Path) -> str:
@@ -26,6 +27,7 @@ def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     raw = read_with_includes(RAW)
     ports = read_with_includes(PORTS)
+    policy = CRAWL_POLICY.read_text(encoding="utf-8")
 
     failures: list[str] = []
 
@@ -47,8 +49,6 @@ def main() -> int:
         "pub async fn evaluate_robots_policy(",
         "pub async fn fetch_html(",
         "pub async fn mark_crawl_retry(",
-        "pub fn should_retry_http_status(",
-        "pub fn should_retry_crawl_attempt(",
         "redirect_chain: Vec<String>",
         "robots_trace: &RobotsDecisionTrace",
         # The source snapshot is append-only. Field-bind assignment checks
@@ -61,9 +61,31 @@ def main() -> int:
         "fetch_error: Option<String>",
         "matched_rule: Option<String>",
         "next_attempt_at = now() + make_interval(secs => $3::int)",
+        "retry_after: acquisition::crawl_policy::RetryDelaySeconds",
+        ".bind(retry_after.as_i32())",
     ]:
         if needle not in raw:
             failures.append(f"raw_crawl_adapter missing `{needle}`")
+
+    for needle in [
+        "pub struct RobotsRules",
+        "pub fn evaluate_robots_rules(",
+        "pub struct RetryDelaySeconds",
+        "pub fn retry_after_http_response(",
+        "pub fn retry_after_recoverable_failure(",
+        "MAX_CRAWL_ATTEMPTS",
+    ]:
+        if needle not in policy:
+            failures.append(f"acquisition crawl policy missing `{needle}`")
+    # No second crawl-eligibility or retry classifier may live beside SQL/HTTP.
+    for forbidden in (
+        "fn parse_robots_rules(",
+        "fn should_retry_http_status(",
+        "fn should_retry_crawl_attempt(",
+        "fn next_crawl_retry_delay_sec(",
+    ):
+        if forbidden in raw:
+            failures.append(f"adapter duplicates acquisition decision `{forbidden}`")
 
     for needle in [
         "evaluate_robots_policy(&item.url).await",
@@ -73,12 +95,14 @@ def main() -> int:
         "&fetched.redirect_chain",
         "&robots_trace",
         "robots disallow:",
-        "should_retry_http_status(fetched.status_code)",
-        "should_retry_crawl_attempt(item.attempt_count)",
+        "acquisition::crawl_policy::retry_after_http_response(",
+        "acquisition::crawl_policy::retry_after_recoverable_failure(",
         "mark_crawl_retry(",
     ]:
         if needle not in ports:
             failures.append(f"crawl ingest path missing `{needle}`")
+    if "raw_crawl_adapter::should_retry_" in ports:
+        failures.append("crawl ingest still relies on adapter-owned retry policy")
 
     if failures:
         print("CRAWLER_INVARIANTS: FAILED")

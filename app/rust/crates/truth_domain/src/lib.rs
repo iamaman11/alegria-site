@@ -1,6 +1,7 @@
 //! Typed, deterministic Truth candidate and verification decisions.
 //! External effects and durable workflow orchestration belong to adapters/runtime.
 
+pub mod candidate_intake;
 pub mod completeness;
 pub mod contradictions;
 pub mod evidence;

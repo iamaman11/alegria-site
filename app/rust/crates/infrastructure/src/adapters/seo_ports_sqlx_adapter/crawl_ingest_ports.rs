@@ -81,13 +81,17 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                                     Ok(emitted) => emitted,
                                     Err(err) => {
                                         let error = format!("raw section embedding failed: {err}");
-                                        if raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count) {
+                                        if let Some(retry_after) =
+                                            acquisition::crawl_policy::retry_after_recoverable_failure(
+                                                item.attempt_count,
+                                            )
+                                        {
                                             raw_crawl_adapter::mark_crawl_retry(
                                                 self.pool,
                                                 &item.url_norm,
                                                 Some(fetched.status_code),
                                                 &error,
-                                                item.attempt_count,
+                                                retry_after,
                                             )
                                             .await?;
                                         } else {
@@ -151,15 +155,16 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                         fetched.source_url,
                         fetched.final_url
                     );
-                    if raw_crawl_adapter::should_retry_http_status(fetched.status_code)
-                        && raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count)
-                    {
+                    if let Some(retry_after) = acquisition::crawl_policy::retry_after_http_response(
+                        fetched.status_code,
+                        item.attempt_count,
+                    ) {
                         raw_crawl_adapter::mark_crawl_retry(
                             self.pool,
                             &item.url_norm,
                             Some(fetched.status_code),
                             &error,
-                            item.attempt_count,
+                            retry_after,
                         )
                         .await?;
                     } else {
@@ -176,13 +181,17 @@ impl CrawlIngestRepository for SqlxSeoRuntimeRepository<'_> {
                 }
                 Err(err) => {
                     let error = format!("fetch failed: {err}");
-                    if raw_crawl_adapter::should_retry_crawl_attempt(item.attempt_count) {
+                    if let Some(retry_after) =
+                        acquisition::crawl_policy::retry_after_recoverable_failure(
+                            item.attempt_count,
+                        )
+                    {
                         raw_crawl_adapter::mark_crawl_retry(
                             self.pool,
                             &item.url_norm,
                             None,
                             &error,
-                            item.attempt_count,
+                            retry_after,
                         )
                         .await?;
                     } else {

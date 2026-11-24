@@ -491,6 +491,10 @@ mod tests {
     #[test]
     fn whole_page_semantic_fixture_pack_matches_expectations() {
         let fixtures = load_whole_page_fixtures();
+        assert!(
+            fixtures.len() >= 8,
+            "the eight historical whole-page fixtures must remain available"
+        );
         let mut reports = Vec::new();
         let mut failures = Vec::new();
 
@@ -530,6 +534,13 @@ mod tests {
                     fixture_failures.join("; ")
                 ));
             }
+            // JSON belongs at this registered Temporal activity boundary,
+            // not in seo_domain's pure policy tests.
+            let wire_json = serde_json::to_value(&actual).expect("page state JSON");
+            assert_eq!(wire_json.as_object().expect("page object").len(), 15);
+            let round_trip: WholePageSemanticPageState =
+                serde_json::from_value(wire_json.clone()).expect("page state round-trip");
+            assert_eq!(serde_json::to_value(round_trip).unwrap(), wire_json);
             reports.push(WholePageSemanticFixtureReport {
                 fixture_id: fixture.fixture_id,
                 description: fixture.description,

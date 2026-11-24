@@ -11,6 +11,9 @@ ARTIFACT = ROOT / "docs" / "runs" / "r4_rebuild_queue_execution_path.json"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
 ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
 APPLICATION = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "rebuild_detect.rs"
+DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "rebuild.rs"
+PORTS = ROOT / "app" / "rust" / "crates" / "seo_ports" / "src" / "lib.rs"
+OBSOLETE_STEP = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "rebuild_detect_step.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
 WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
 
@@ -70,6 +73,8 @@ def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     adapter = read_file_resolved(ADAPTER)
     application = APPLICATION.read_text(encoding="utf-8")
+    domain = DOMAIN.read_text(encoding="utf-8")
+    ports = PORTS.read_text(encoding="utf-8")
     activities = read_file_resolved(ACTIVITIES)
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
@@ -91,16 +96,35 @@ def main() -> int:
             failures.append(f"adapter missing `{needle}`")
 
     for needle in [
-        "execute_rebuild_detect",
+        "rebuild::detect_rebuild(&narrowed_input)",
         "persist_rebuild_detect_output(input, &",
-        "narrowed_input.page_nodes",
+        "narrowed_input.page_node_keys",
     ]:
         if needle not in application:
             failures.append(f"rebuild application missing `{needle}`")
 
     for needle in [
+        "pub fn detect_rebuild(input: &RebuildDetectRequest)",
+        "pub struct RebuildDetectResult",
+        "pub enum RebuildVerdict",
+    ]:
+        if needle not in domain:
+            failures.append(f"rebuild domain missing `{needle}`")
+    for needle in [
+        "input: &RebuildDetectRequest",
+        "output: &RebuildDetectResult",
+        "page_node_keys: &[String]",
+    ]:
+        if needle not in ports:
+            failures.append(f"rebuild port missing `{needle}`")
+    if OBSOLETE_STEP.exists():
+        failures.append("obsolete duplicate rebuild detection step still exists")
+
+    for needle in [
         "run_rebuild_detect_step",
         "run_rebuild_detect_step(",
+        "seo_application::rebuild_detect::execute(&repo, &request)",
+        "reason_package_json: impact.reason_package.to_string()",
     ]:
         if needle not in activities:
             failures.append(f"activities missing `{needle}`")

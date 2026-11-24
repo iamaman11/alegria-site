@@ -409,10 +409,10 @@ pub async fn persist_draft_qa_output(
 
 pub async fn persist_rebuild_detect_output(
     pool: &PgPool,
-    input: &RebuildDetectInputPayload,
-    output: &RebuildDetectOutputPayload,
+    input: &RebuildDetectRequest,
+    output: &RebuildDetectResult,
 ) -> Result<(), DomainError> {
-    if output.verdict != "rebuild_required" {
+    if output.verdict != RebuildVerdict::RebuildRequired {
         return Ok(());
     }
 
@@ -422,15 +422,13 @@ pub async fn persist_rebuild_detect_output(
         .impacts
         .iter()
         .map(|impact| {
-            let reason_package = serde_json::from_str::<Value>(&impact.reason_package_json)
-                .unwrap_or_else(|_| {
-                    json!({
-                        "fallback_reason": impact.reason_package_json,
-                    })
-                });
             (
                 impact.page_node_key.clone(),
-                (impact.trigger_type.clone(), reason_package, impact.priority),
+                (
+                    impact.trigger_type.clone(),
+                    impact.reason_package.clone(),
+                    impact.priority,
+                ),
             )
         })
         .collect::<BTreeMap<_, _>>();
