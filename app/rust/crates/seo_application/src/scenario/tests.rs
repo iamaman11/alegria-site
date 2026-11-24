@@ -14,7 +14,8 @@ mod tests {
         PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
         PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
         SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
-        SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
+        SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpIngestRepository,
+        SerpSearchPort,
         SourceContextSearchPort, VerifiedSupportBundleRequest, VerifiedSupportRepository,
     };
 
@@ -181,15 +182,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl PlanningRepository for FakeRepo {
-        async fn existing_page_owners_by_cluster(
-            &self,
-            _scope_signature: &str,
-            _cluster_keys: &[String],
-        ) -> Result<Vec<(String, String)>, DomainError> {
-            Ok(Vec::new())
-        }
-
+    impl SerpIngestRepository for FakeRepo {
         async fn persist_serp_ingest_output(
             &self,
             _input: &SerpIngestInputPayload,
@@ -207,6 +200,18 @@ mod tests {
         ) -> Result<(), DomainError> {
             Ok(())
         }
+    }
+
+    #[async_trait]
+    impl PlanningRepository for FakeRepo {
+        async fn existing_page_owners_by_cluster(
+            &self,
+            _scope_signature: &str,
+            _cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            Ok(Vec::new())
+        }
+
         async fn persist_serp_normalize_output(
             &self,
             _input: &SerpNormalizeInputPayload,
@@ -480,6 +485,329 @@ mod tests {
             retained_source_run_id: String::new(),
             run_mode: "publish_with_hitl".to_string(),
         }
+    }
+
+    // These two test types intentionally implement *only* the ports named by
+    // their functional scenario, even though the shared fixture they delegate
+    // to implements the complete runtime surface. The calls below therefore
+    // compile only if the focused public executors have genuinely narrow
+    // bounds (not a hidden aggregate runtime repository constraint).
+    #[derive(Default)]
+    struct CrawlPortsOnly {
+        fixture: FakeRepo,
+    }
+
+    #[derive(Default)]
+    struct PlanningPortsOnly {
+        fixture: FakeRepo,
+    }
+
+    macro_rules! impl_ingestion_ports_only {
+        ($owner:ty) => {
+            #[async_trait]
+            impl VerifiedSupportRepository for $owner {
+                async fn load_verified_support_bundle(
+                    &self,
+                    request: &VerifiedSupportBundleRequest,
+                ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+                    self.fixture.load_verified_support_bundle(request).await
+                }
+            }
+
+            #[async_trait]
+            impl SerpIngestRepository for $owner {
+                async fn persist_serp_ingest_output(
+                    &self,
+                    input: &SerpIngestInputPayload,
+                    output: &SerpIngestOutputPayload,
+                ) -> Result<(), DomainError> {
+                    self.fixture.persist_serp_ingest_output(input, output).await
+                }
+
+                async fn persist_live_serp_query_results(
+                    &self,
+                    run_id: &str,
+                    query_batch_key: &str,
+                    ordinal: usize,
+                    query: &str,
+                    response: &OrganicSerpResponse,
+                ) -> Result<(), DomainError> {
+                    self.fixture
+                        .persist_live_serp_query_results(
+                            run_id,
+                            query_batch_key,
+                            ordinal,
+                            query,
+                            response,
+                        )
+                        .await
+                }
+            }
+
+            #[async_trait]
+            impl CrawlIngestRepository for $owner {
+                async fn crawl_sources(
+                    &self,
+                    input: &CrawlSourcesInputPayload,
+                ) -> Result<CrawlSourcesOutputPayload, DomainError> {
+                    self.fixture.crawl_sources(input).await
+                }
+
+                async fn ingest_raw_knowledge(
+                    &self,
+                    input: &RawKnowledgeIngestionInputPayload,
+                ) -> Result<RawKnowledgeIngestionOutputPayload, DomainError> {
+                    self.fixture.ingest_raw_knowledge(input).await
+                }
+            }
+
+            #[async_trait]
+            impl SerpSearchPort for $owner {
+                async fn fetch_google_organic_standard(
+                    &self,
+                    run_id: &str,
+                    locale: Option<&str>,
+                    query: &str,
+                ) -> Result<Option<OrganicSerpResponse>, DomainError> {
+                    self.fixture
+                        .fetch_google_organic_standard(run_id, locale, query)
+                        .await
+                }
+            }
+
+            #[async_trait]
+            impl ProjectionStatusRepository for $owner {
+                async fn load_projection_barrier_status(
+                    &self,
+                    run_id: &str,
+                ) -> Result<ProjectionBarrierStatus, DomainError> {
+                    self.fixture.load_projection_barrier_status(run_id).await
+                }
+            }
+        };
+    }
+
+    impl_ingestion_ports_only!(CrawlPortsOnly);
+    impl_ingestion_ports_only!(PlanningPortsOnly);
+
+    #[async_trait]
+    impl PlanningRepository for PlanningPortsOnly {
+        async fn existing_page_owners_by_cluster(
+            &self,
+            scope_signature: &str,
+            cluster_keys: &[String],
+        ) -> Result<Vec<(String, String)>, DomainError> {
+            self.fixture
+                .existing_page_owners_by_cluster(scope_signature, cluster_keys)
+                .await
+        }
+
+        async fn persist_serp_normalize_output(
+            &self,
+            input: &SerpNormalizeInputPayload,
+            output: &SerpNormalizeOutputPayload,
+        ) -> Result<(), DomainError> {
+            self.fixture.persist_serp_normalize_output(input, output).await
+        }
+
+        async fn persist_opportunity_build_output(
+            &self,
+            input: &OpportunityBuildInputPayload,
+            output: &OpportunityBuildOutputPayload,
+        ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+            self.fixture
+                .persist_opportunity_build_output(input, output)
+                .await
+        }
+
+        async fn persist_ia_build_output(
+            &self,
+            input: &IaBuildInputPayload,
+            output: &IaBuildOutputPayload,
+        ) -> Result<(), DomainError> {
+            self.fixture.persist_ia_build_output(input, output).await
+        }
+
+        async fn persist_link_recommend_output(
+            &self,
+            input: &LinkRecommendInputPayload,
+            output: &LinkRecommendOutputPayload,
+        ) -> Result<(), DomainError> {
+            self.fixture.persist_link_recommend_output(input, output).await
+        }
+
+        async fn persist_global_site_reconcile_output(
+            &self,
+            input: &GlobalSiteReconcileInputPayload,
+            output: &GlobalSiteReconcileOutputPayload,
+        ) -> Result<(), DomainError> {
+            self.fixture
+                .persist_global_site_reconcile_output(input, output)
+                .await
+        }
+    }
+
+    #[async_trait]
+    impl GraphReasoningPort for PlanningPortsOnly {
+        async fn load_planning_graph_context(
+            &self,
+            scope_signature: &str,
+            run_id: &str,
+        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
+            self.fixture
+                .load_planning_graph_context(scope_signature, run_id)
+                .await
+        }
+    }
+
+    #[async_trait]
+    impl GraphCapabilityPort for PlanningPortsOnly {
+        async fn ensure_graph_contract(&self, context_key: &str) -> Result<(), DomainError> {
+            self.fixture.ensure_graph_contract(context_key).await
+        }
+    }
+
+    #[async_trait]
+    impl SemanticLinkSearchPort for PlanningPortsOnly {
+        async fn search_link_targets(
+            &self,
+            query: &str,
+            limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            self.fixture.search_link_targets(query, limit).await
+        }
+
+        async fn search_keyword_clusters(
+            &self,
+            query: &str,
+            limit: usize,
+        ) -> Result<Vec<SemanticLinkCandidate>, DomainError> {
+            self.fixture.search_keyword_clusters(query, limit).await
+        }
+
+        async fn cluster_demand_queries(
+            &self,
+            queries: &[String],
+        ) -> Result<Vec<seo_ports::SemanticDemandCluster>, DomainError> {
+            self.fixture.cluster_demand_queries(queries).await
+        }
+    }
+
+    fn narrow_scenario_request(scenario: SeoScenarioKind) -> SeoScenarioRequest {
+        SeoScenarioRequest {
+            scenario,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        }
+    }
+
+    #[tokio::test]
+    async fn crawl_only_executes_with_five_ports_and_alternate_order() {
+        use SeoPhaseKey::*;
+        let repo = CrawlPortsOnly::default();
+        let request = narrow_scenario_request(SeoScenarioKind::CrawlIngestOnly);
+        let result = execute_crawl_ingest_only(&repo, &request).await.unwrap();
+        assert_eq!(result.published_pages, 0);
+        assert_eq!(result.page_total, 0);
+        assert_eq!(result.changed_truth_keys.len(), 1);
+
+        let alternate = SeoPhaseRecipe::compose(
+            vec![SerpIngest, LoadVerifiedSupportBundle, CrawlSources, RawKnowledgeIngestion],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let alternative_result = execute_crawl_ingest_only_with_recipe(&repo, &request, &alternate)
+            .await
+            .unwrap();
+        assert_eq!(alternative_result.phase_reports[0].phase, "serp_ingest");
+        assert_eq!(alternative_result.phase_reports[1].phase, "load_verified_support_bundle");
+    }
+
+    #[tokio::test]
+    async fn crawl_only_rejects_foreign_steps_and_scenarios_without_io() {
+        let repo = CrawlPortsOnly::default();
+        let request = narrow_scenario_request(SeoScenarioKind::CrawlIngestOnly);
+        let planning_recipe = SeoPhaseRecipe::for_plan(
+            &build_execution_plan(&narrow_scenario_request(SeoScenarioKind::PlanningOnly)),
+            true,
+        )
+        .unwrap();
+        let result = execute_crawl_ingest_only_with_recipe(&repo, &request, &planning_recipe).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+
+        let wrong_scenario = narrow_scenario_request(SeoScenarioKind::Full);
+        let result = execute_crawl_ingest_only(&repo, &wrong_scenario).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+        assert_eq!(
+            repo.fixture
+                .support_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn planning_only_compiles_without_editorial_cms_publish_or_rebuild_ports() {
+        use SeoPhaseKey::*;
+        let repo = PlanningPortsOnly::default();
+        let request = narrow_scenario_request(SeoScenarioKind::PlanningOnly);
+        let result = execute_planning_only(&repo, &request).await.unwrap();
+        assert_eq!(result.published_pages, 0);
+        assert!(result.phase_reports.iter().any(|report| report.phase == "global_site_reconcile"));
+
+        let interleaved = SeoPhaseRecipe::compose_pre_page(
+            vec![
+                SerpIngest, SerpNormalize, OpportunityBuild, LoadVerifiedSupportBundle,
+                CrawlSources, RawKnowledgeIngestion, RefreshVerifiedSupportBundle,
+                IaBuild, LinkRecommend, GlobalSiteReconcile,
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let result = execute_planning_only_with_recipe(&repo, &request, &interleaved)
+            .await
+            .unwrap();
+        let phases = result
+            .phase_reports
+            .iter()
+            .map(|report| report.phase.as_str())
+            .collect::<Vec<_>>();
+        assert!(phases.iter().position(|p| *p == "serp_normalize").unwrap()
+            < phases.iter().position(|p| *p == "crawl_sources").unwrap());
+        assert!(phases.contains(&"global_site_reconcile"));
+    }
+
+    #[tokio::test]
+    async fn planning_only_rejects_foreign_recipe_and_request_without_io() {
+        let repo = PlanningPortsOnly::default();
+        let request = narrow_scenario_request(SeoScenarioKind::PlanningOnly);
+        let full_recipe = SeoPhaseRecipe::for_plan(
+            &build_execution_plan(&narrow_scenario_request(SeoScenarioKind::Full)),
+            true,
+        )
+        .unwrap();
+        assert!(matches!(
+            execute_planning_only_with_recipe(&repo, &request, &full_recipe).await,
+            Err(DomainError::ContractViolation { .. })
+        ));
+        assert!(matches!(
+            execute_planning_only(
+                &repo,
+                &narrow_scenario_request(SeoScenarioKind::CrawlIngestOnly)
+            )
+            .await,
+            Err(DomainError::ContractViolation { .. })
+        ));
+        assert_eq!(
+            repo.fixture.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[tokio::test]

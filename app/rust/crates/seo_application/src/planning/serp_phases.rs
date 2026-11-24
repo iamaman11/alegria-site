@@ -1,4 +1,4 @@
-pub async fn run_serp_ingest<R: PlanningRepository, S: SerpSearchPort>(
+pub async fn run_serp_ingest<R: SerpIngestRepository, S: SerpSearchPort>(
     repo: &R,
     search_port: &S,
     input: &SerpIngestInputPayload,

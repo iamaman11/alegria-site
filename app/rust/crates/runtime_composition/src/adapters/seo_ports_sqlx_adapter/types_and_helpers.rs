@@ -13,7 +13,7 @@ use seo_ports::{
     CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
     GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
-    PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
+    PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository, SerpIngestRepository,
     PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository, SectionTemplate,
     SectionTemplateRepository, SemanticDemandCluster, SemanticLinkCandidate,
     SemanticLinkSearchPort, SeoBuildInputRepository, SeoBuildRegistrationRepository,

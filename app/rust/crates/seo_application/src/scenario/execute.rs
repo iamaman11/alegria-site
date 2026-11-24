@@ -1,10 +1,321 @@
+/// Shared recipe traversal: scenario-specific handlers provide only the ports
+/// needed by their functional steps. Validation happens before this function
+/// performs any I/O; the handler never silently skips an unsupported step.
+#[async_trait::async_trait]
+trait PrePageStepExecutor: Send {
+    fn raw_knowledge_unchanged(&self) -> bool;
+
+    async fn execute_step(&mut self, key: SeoPhaseKey) -> Result<Option<String>, DomainError>;
+}
+
+async fn traverse_pre_page_recipe<E: PrePageStepExecutor>(
+    executor: &mut E,
+    recipe: &SeoPhaseRecipe,
+) -> Result<String, DomainError> {
+    let mut final_status = "done".to_string();
+    for (index, &key) in recipe.pre_page_steps().iter().enumerate() {
+        // The refresh is necessary when no earlier producer loaded support or
+        // when ingest changed truth. Independent recipes can interleave steps.
+        if key == SeoPhaseKey::RefreshVerifiedSupportBundle
+            && executor.raw_knowledge_unchanged()
+            && recipe.pre_page_steps()[..index].contains(&SeoPhaseKey::LoadVerifiedSupportBundle)
+        {
+            continue;
+        }
+        if let Some(status) = executor.execute_step(key).await? {
+            final_status = status;
+        }
+    }
+    Ok(final_status)
+}
+
+async fn execute_initial_step<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+    state: &mut ScenarioState,
+    key: SeoPhaseKey,
+    phase_reports: &mut Vec<SeoPhaseReport>,
+) -> Result<Option<String>, DomainError>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository,
+{
+    run_initial_phase(repo, request, state, key, phase_reports).await?;
+    if key == SeoPhaseKey::RawKnowledgeIngestion {
+        enforce_projection_policy(
+            repo,
+            &request.site_input.run_id,
+            request.policy.projection,
+            phase_label(key),
+            phase_reports,
+        )
+        .await
+    } else {
+        Ok(None)
+    }
+}
+
+struct InitialStepExecutor<'a, R> {
+    repo: &'a R,
+    request: &'a SeoScenarioRequest,
+    state: &'a mut ScenarioState,
+    phase_reports: &'a mut Vec<SeoPhaseReport>,
+}
+
+#[async_trait::async_trait]
+impl<R> PrePageStepExecutor for InitialStepExecutor<'_, R>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository,
+{
+    fn raw_knowledge_unchanged(&self) -> bool {
+        raw_knowledge_unchanged(self.state)
+    }
+
+    async fn execute_step(&mut self, key: SeoPhaseKey) -> Result<Option<String>, DomainError> {
+        if key.contract().segment != SeoExecutionSegment::Initial {
+            return Err(execution_plan_invariant_error("unsupported_crawl_ingest_step"));
+        }
+        execute_initial_step(
+            self.repo,
+            self.request,
+            self.state,
+            key,
+            self.phase_reports,
+        )
+        .await
+    }
+}
+
+struct PlanningStepExecutor<'a, R> {
+    repo: &'a R,
+    request: &'a SeoScenarioRequest,
+    state: &'a mut ScenarioState,
+    phase_reports: &'a mut Vec<SeoPhaseReport>,
+}
+
+#[async_trait::async_trait]
+impl<R> PrePageStepExecutor for PlanningStepExecutor<'_, R>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository
+        + PlanningRepository
+        + GraphReasoningPort
+        + SemanticLinkSearchPort
+        + GraphCapabilityPort,
+{
+    fn raw_knowledge_unchanged(&self) -> bool {
+        raw_knowledge_unchanged(self.state)
+    }
+
+    async fn execute_step(&mut self, key: SeoPhaseKey) -> Result<Option<String>, DomainError> {
+        match key.contract().segment {
+            SeoExecutionSegment::Initial => {
+                execute_initial_step(
+                    self.repo,
+                    self.request,
+                    self.state,
+                    key,
+                    self.phase_reports,
+                )
+                .await
+            }
+            SeoExecutionSegment::Planning => {
+                run_planning_phase(
+                    self.repo,
+                    self.request,
+                    self.state,
+                    key,
+                    self.phase_reports,
+                )
+                .await
+            }
+            SeoExecutionSegment::PerPage | SeoExecutionSegment::Finalize => {
+                Err(execution_plan_invariant_error("unsupported_pre_page_step"))
+            }
+        }
+    }
+}
+
+fn raw_knowledge_unchanged(state: &ScenarioState) -> bool {
+    state
+        .raw_knowledge
+        .as_ref()
+        .is_some_and(|output| output.changed_truth_keys.is_empty())
+}
+
+fn require_scenario(
+    request: &SeoScenarioRequest,
+    expected: SeoScenarioKind,
+) -> Result<(), DomainError> {
+    if request.scenario != expected {
+        return Err(execution_plan_invariant_error("scenario_kind_mismatch"));
+    }
+    Ok(())
+}
+
+fn validate_recipe_for_request(
+    request: &SeoScenarioRequest,
+    recipe: &SeoPhaseRecipe,
+) -> Result<(), DomainError> {
+    recipe
+        .validate_for_scenario(&build_execution_plan(request))
+        .map_err(|error| execution_plan_invariant_error(&error.to_string()))
+}
+
+/// Crawl ingestion only compiles against source, truth-support, SERP and
+/// projection ports; no CMS, publishing, drafting or Neo4j port is required.
+pub async fn execute_crawl_ingest_only<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+) -> Result<SeoScenarioResult, DomainError>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository,
+{
+    require_scenario(request, SeoScenarioKind::CrawlIngestOnly)?;
+    let recipe = SeoPhaseRecipe::for_plan(&build_execution_plan(request), true)
+        .map_err(|error| execution_plan_invariant_error(&error.to_string()))?;
+    execute_crawl_ingest_only_with_recipe(repo, request, &recipe).await
+}
+
+pub async fn execute_crawl_ingest_only_with_recipe<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+    recipe: &SeoPhaseRecipe,
+) -> Result<SeoScenarioResult, DomainError>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository,
+{
+    require_scenario(request, SeoScenarioKind::CrawlIngestOnly)?;
+    validate_recipe_for_request(request, recipe)?;
+    let mut state = ScenarioState::default();
+    let mut phase_reports = Vec::new();
+    let status = traverse_pre_page_recipe(
+        &mut InitialStepExecutor {
+            repo,
+            request,
+            state: &mut state,
+            phase_reports: &mut phase_reports,
+        },
+        recipe,
+    )
+    .await?;
+    let raw_knowledge =
+        require_state_ref(&state.raw_knowledge, "raw_knowledge_ingestion_required")?;
+    Ok(SeoScenarioResult {
+        scenario: kind_label(request.scenario).to_string(),
+        mode: mode_label(request.mode).to_string(),
+        status: if status == "done" {
+            raw_knowledge.status.clone()
+        } else {
+            status
+        },
+        page_total: 0,
+        published_pages: 0,
+        changed_truth_keys: raw_knowledge.changed_truth_keys.clone(),
+        phase_reports,
+    })
+}
+
+/// Planning uses graph/search/planning ports but has no compilation dependency
+/// on any CMS review, editorial generation, publication or rebuild adapter.
+pub async fn execute_planning_only<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+) -> Result<SeoScenarioResult, DomainError>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository
+        + PlanningRepository
+        + GraphReasoningPort
+        + SemanticLinkSearchPort
+        + GraphCapabilityPort,
+{
+    require_scenario(request, SeoScenarioKind::PlanningOnly)?;
+    let recipe = SeoPhaseRecipe::for_plan(&build_execution_plan(request), true)
+        .map_err(|error| execution_plan_invariant_error(&error.to_string()))?;
+    execute_planning_only_with_recipe(repo, request, &recipe).await
+}
+
+pub async fn execute_planning_only_with_recipe<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+    recipe: &SeoPhaseRecipe,
+) -> Result<SeoScenarioResult, DomainError>
+where
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
+        + CrawlIngestRepository
+        + SerpSearchPort
+        + ProjectionStatusRepository
+        + PlanningRepository
+        + GraphReasoningPort
+        + SemanticLinkSearchPort
+        + GraphCapabilityPort,
+{
+    require_scenario(request, SeoScenarioKind::PlanningOnly)?;
+    validate_recipe_for_request(request, recipe)?;
+    let mut state = ScenarioState::default();
+    let mut phase_reports = Vec::new();
+    let status = traverse_pre_page_recipe(
+        &mut PlanningStepExecutor {
+            repo,
+            request,
+            state: &mut state,
+            phase_reports: &mut phase_reports,
+        },
+        recipe,
+    )
+    .await?;
+    let changed_truth_keys = require_state_ref(
+        &state.raw_knowledge,
+        "raw_knowledge_ingestion_required",
+    )?
+    .changed_truth_keys
+    .clone();
+    let (page_nodes, _) = page_nodes_and_links(&state)?;
+    Ok(SeoScenarioResult {
+        scenario: kind_label(request.scenario).to_string(),
+        mode: mode_label(request.mode).to_string(),
+        status: if page_nodes.is_empty() && status == "done" {
+            "done:no_pages".to_string()
+        } else {
+            status
+        },
+        page_total: page_nodes.len() as u32,
+        published_pages: 0,
+        changed_truth_keys,
+        phase_reports,
+    })
+}
+
 pub async fn execute_site_build_scenario<R>(
     repo: &R,
     request: &SeoScenarioRequest,
 ) -> Result<SeoScenarioResult, DomainError>
 where
-    R: SeoBuildInputRepository
-        + VerifiedSupportRepository
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
         + PlanningRepository
         + CrawlIngestRepository
         + DraftRepository
@@ -36,8 +347,8 @@ pub async fn execute_site_build_scenario_with_recipe<R>(
     recipe: &SeoPhaseRecipe,
 ) -> Result<SeoScenarioResult, DomainError>
 where
-    R: SeoBuildInputRepository
-        + VerifiedSupportRepository
+    R: VerifiedSupportRepository
+        + SerpIngestRepository
         + PlanningRepository
         + CrawlIngestRepository
         + DraftRepository
@@ -53,64 +364,32 @@ where
         + GraphReasoningPort
         + GraphCapabilityPort,
 {
-    let plan = build_execution_plan(request);
+    // Route existing callers through the same focused implementations, so
+    // there is one source of truth for short-scenario results and policy.
+    match request.scenario {
+        SeoScenarioKind::CrawlIngestOnly => {
+            return execute_crawl_ingest_only_with_recipe(repo, request, recipe).await;
+        }
+        SeoScenarioKind::PlanningOnly => {
+            return execute_planning_only_with_recipe(repo, request, recipe).await;
+        }
+        _ => {}
+    }
     // Validate all step contracts and publication policy before *any* I/O.
-    recipe
-        .validate_for_scenario(&plan)
-        .map_err(|error| execution_plan_invariant_error(&error.to_string()))?;
+    validate_recipe_for_request(request, recipe)?;
     let mut state = ScenarioState::default();
     let mut phase_reports = Vec::new();
-    let mut final_status = "done".to_string();
-
-    // Execute one dependency-validated pre-page recipe. Initial and planning
-    // operations may interleave; the step contract identifies the owner that
-    // executes each operation, not a predetermined site-building sequence.
-    for (index, &key) in recipe.pre_page_steps().iter().enumerate() {
-        match key.contract().segment {
-            SeoExecutionSegment::Initial => {
-                run_initial_phase(repo, request, &mut state, key, &mut phase_reports).await?;
-                if key == SeoPhaseKey::RawKnowledgeIngestion {
-                    if let Some(status) = enforce_projection_policy(
-                        repo,
-                        &request.site_input.run_id,
-                        request.policy.projection,
-                        phase_label(key),
-                        &mut phase_reports,
-                    )
-                    .await?
-                    {
-                        final_status = status;
-                    }
-                }
-            }
-            SeoExecutionSegment::Planning => {
-                // A clean truth batch does not need a second support read if
-                // the first read has already happened in this recipe. When
-                // there is no earlier producer, refresh is indispensable.
-                let unchanged_truth = state
-                    .raw_knowledge
-                    .as_ref()
-                    .is_some_and(|output| output.changed_truth_keys.is_empty());
-                let support_already_loaded = recipe.pre_page_steps()[..index]
-                    .contains(&SeoPhaseKey::LoadVerifiedSupportBundle);
-                if key == SeoPhaseKey::RefreshVerifiedSupportBundle
-                    && unchanged_truth
-                    && support_already_loaded
-                {
-                    continue;
-                }
-                if let Some(status) =
-                    run_planning_phase(repo, request, &mut state, key, &mut phase_reports).await?
-                {
-                    final_status = status;
-                }
-            }
-            // Guaranteed by compose_pre_page / validate_for_scenario before IO.
-            SeoExecutionSegment::PerPage | SeoExecutionSegment::Finalize => {
-                unreachable!("invalid pre-page recipe step")
-            }
-        }
-    }
+    // The same traversal drives both focused scenarios and the full runner.
+    let final_status = traverse_pre_page_recipe(
+        &mut PlanningStepExecutor {
+            repo,
+            request,
+            state: &mut state,
+            phase_reports: &mut phase_reports,
+        },
+        recipe,
+    )
+    .await?;
 
     let raw_knowledge_changed_truth_keys = state
         .raw_knowledge
@@ -118,29 +397,6 @@ where
         .ok_or_else(|| execution_plan_invariant_error("raw_knowledge_ingestion_required"))?
         .changed_truth_keys
         .clone();
-    if matches!(request.scenario, SeoScenarioKind::CrawlIngestOnly) {
-        return Ok(SeoScenarioResult {
-            scenario: kind_label(request.scenario).to_string(),
-            mode: mode_label(request.mode).to_string(),
-            status: if final_status == "done" {
-                state
-                    .raw_knowledge
-                    .as_ref()
-                    .ok_or_else(|| {
-                        execution_plan_invariant_error("raw_knowledge_ingestion_required")
-                    })?
-                    .status
-                    .clone()
-            } else {
-                final_status
-            },
-            page_total: 0,
-            published_pages: 0,
-            changed_truth_keys: raw_knowledge_changed_truth_keys.clone(),
-            phase_reports,
-        });
-    }
-
     let (page_nodes, link_recommendations) = page_nodes_and_links(&state)?;
     let page_total = page_nodes.len() as u32;
     let factual_fragments = state
@@ -148,22 +404,6 @@ where
         .iter()
         .map(|support| support.fragment_text.clone())
         .collect::<Vec<_>>();
-
-    if matches!(request.scenario, SeoScenarioKind::PlanningOnly) {
-        return Ok(SeoScenarioResult {
-            scenario: kind_label(request.scenario).to_string(),
-            mode: mode_label(request.mode).to_string(),
-            status: if page_nodes.is_empty() && final_status == "done" {
-                "done:no_pages".to_string()
-            } else {
-                final_status
-            },
-            page_total,
-            published_pages: 0,
-            changed_truth_keys: raw_knowledge_changed_truth_keys.clone(),
-            phase_reports,
-        });
-    }
 
     let mut cursor;
     let mut scenario_status = final_status;

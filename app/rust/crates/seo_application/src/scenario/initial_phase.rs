@@ -1,5 +1,5 @@
 async fn run_initial_phase<
-    R: VerifiedSupportRepository + PlanningRepository + CrawlIngestRepository + SerpSearchPort,
+    R: VerifiedSupportRepository + SerpIngestRepository + CrawlIngestRepository + SerpSearchPort,
 >(
     repo: &R,
     request: &SeoScenarioRequest,
