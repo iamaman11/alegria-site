@@ -294,16 +294,8 @@ pub async fn persist_draft_assemble_output(
             ]),
         );
         event.run_id = run_id.to_string();
-        // Protobuf map iteration order is not stable. Retrying the same
-        // immutable draft must not create another Qdrant projection event.
-        event.idempotency_key = primitives::hash::content_hash_v1(&format!(
-            "draft_assemble@4|{}|{}|{}|{}|{}",
-            run_id,
-            draft.page_draft_key,
-            draft.truth_snapshot_ref,
-            draft.qa_verdict,
-            primitives::hash::blake3_hex(draft.body_markdown.as_bytes()),
-        ));
+        // The shared Qdrant projection owner hashes sorted, complete metadata
+        // and body text. Same-run retry is stable; a new revision is distinct.
         projection_events.push(event);
     }
 
@@ -427,23 +419,24 @@ pub async fn persist_draft_qa_output(
                 ("page_brief_key".to_string(), draft.page_brief_key.clone()),
                 ("qa_verdict".to_string(), output.verdict.clone()),
                 (
+                    "truth_snapshot_ref".to_string(),
+                    draft.truth_snapshot_ref.clone(),
+                ),
+                (
+                    "supported_claims".to_string(),
+                    output.supported_claims.to_string(),
+                ),
+                (
+                    "unsupported_claims".to_string(),
+                    output.unsupported_claims.to_string(),
+                ),
+                (
                     "blocking_reasons".to_string(),
                     output.blocking_reasons.join("|"),
                 ),
             ]),
         );
     event.run_id = input.run_id.clone();
-    // Protobuf map fields may serialize in a different order on replay. QA
-    // identity is therefore based on stable inputs, never encoded map bytes.
-    event.idempotency_key = primitives::hash::content_hash_v1(&format!(
-        "draft_qa@1|{}|{}|{}|{}|{}|{}",
-        input.run_id,
-        draft.page_draft_key,
-        output.verdict,
-        output.supported_claims,
-        output.unsupported_claims,
-        output.blocking_reasons.join("|"),
-    ));
     super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(&mut tx, &[event]).await?;
     tx.commit().await.map_err(classify_sqlx)?;
 

@@ -7,7 +7,6 @@ use contracts::generated::alegria::temporal::v1::{
 use seo_domain::content_contract::{
     self, ContentContract, Evidence, LinkObligation, PublishLinkCoverage,
 };
-use seo_domain::editorial::ContentBlock;
 
 fn blocker(violation: content_contract::Violation) -> SeoPublishBlockerState {
     crate::seo_step_support::publish_blocker(
@@ -23,18 +22,7 @@ fn validate_with_coverage(
 ) -> Vec<SeoPublishBlockerState> {
     let empty = DraftState::default();
     let draft = input.draft.as_ref().unwrap_or(&empty);
-    let blocks = draft
-        .content_blocks
-        .iter()
-        .map(|block| ContentBlock {
-            role: &block.section_role,
-            block_type: &block.block_type,
-            heading: &block.heading,
-            markdown: &block.markdown,
-            required: block.required,
-            support_refs: &block.support_refs,
-        })
-        .collect::<Vec<_>>();
+    let blocks = crate::editorial_wire::content_block_views(&draft.content_blocks);
     let claims = draft
         .claim_ledger
         .iter()

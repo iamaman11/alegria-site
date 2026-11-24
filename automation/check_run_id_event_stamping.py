@@ -31,7 +31,12 @@ REQUIRED = {
         "pub async fn persist_draft_assemble_output(",
         "run_id: &str,",
         "non_empty(run_id, \"run_id\")?;",
-        "emit_projection_events_for_run(pool, run_id, projection_events).await?;",
+        # Draft Assemble and planning steps now persist SQL + Outbox inside
+        # the same transaction. Require those active paths, not the obsolete
+        # pool-level emitter whose use would permit a partial commit.
+        "outbox_emit_many_in_tx(&mut tx, &projection_events)",
+        "emit_projection_events_for_run_in_tx(tx, &input.run_id, projection_events).await?;",
+        "emit_projection_events_for_run_in_tx(&mut tx, &input.run_id, projection_events).await?;",
         "persist_draft_assemble_output(pool, &input.run_id, &output_as_assemble).await",
         "if event.run_id.trim().is_empty() {",
         "event.run_id = run_id.to_string();",

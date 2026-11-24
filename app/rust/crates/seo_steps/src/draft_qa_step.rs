@@ -2,7 +2,6 @@ use contracts::generated::alegria::temporal::v1::{
     DraftQaInputPayload, DraftQaOutputPayload, DraftState,
 };
 use seo_domain::draft_quality::{self, DraftQuality, Section, Traceability};
-use seo_domain::editorial::ContentBlock;
 
 pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     let empty = DraftState::default();
@@ -41,18 +40,7 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
             required: section.required,
         })
         .collect::<Vec<_>>();
-    let blocks = draft
-        .content_blocks
-        .iter()
-        .map(|block| ContentBlock {
-            role: &block.section_role,
-            block_type: &block.block_type,
-            heading: &block.heading,
-            markdown: &block.markdown,
-            required: block.required,
-            support_refs: &block.support_refs,
-        })
-        .collect::<Vec<_>>();
+    let blocks = crate::editorial_wire::content_block_views(&draft.content_blocks);
     let traceability = draft
         .traceability_entries
         .iter()

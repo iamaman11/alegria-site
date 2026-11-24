@@ -4,6 +4,23 @@ pub async fn persist_global_navigation_from_active_pages(
     locale: &str,
     reason: &str,
 ) -> Result<GlobalNavigationReport, DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let report = persist_global_navigation_from_active_pages_in_tx(
+        &mut tx, market, locale, reason,
+    )
+    .await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(report)
+}
+
+/// Compose navigation with the surrounding Global Reconcile transaction.
+/// Its page snapshot sees IA, Link and retirement changes in that same tx.
+pub async fn persist_global_navigation_from_active_pages_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    market: &str,
+    locale: &str,
+    reason: &str,
+) -> Result<GlobalNavigationReport, DomainError> {
     let market = if market.trim().is_empty() {
         "global"
     } else {
@@ -33,10 +50,10 @@ pub async fn persist_global_navigation_from_active_pages(
         FROM site.page_nodes p
         LEFT JOIN site.keyword_clusters k ON k.cluster_key = p.keyword_cluster_key
         WHERE p.lifecycle_state NOT IN ('blocked', 'deprecated')
-        ORDER BY p.scope_signature, p.hierarchy_depth, p.canonical_url_path
+        ORDER BY p.scope_signature, p.hierarchy_depth, p.canonical_url_path, p.page_node_key
         "#,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     let pages = rows
@@ -57,9 +74,8 @@ pub async fn persist_global_navigation_from_active_pages(
             applicant_profile: row.get("applicant_profile"),
         })
         .collect::<Vec<_>>();
-    if pages.is_empty() {
-        return Ok(GlobalNavigationReport::default());
-    }
+    // Zero active pages is itself a valid revision. Reconcile an empty tree
+    // instead of leaving the previous menu visible after all pages retire.
 
     let mut scope_page_counts = BTreeMap::<String, i32>::new();
     let mut scope_fields_by_signature = BTreeMap::<
@@ -97,6 +113,10 @@ pub async fn persist_global_navigation_from_active_pages(
             });
     }
 
+    // The reconciled tree is one result: readers must never observe the tree
+    // after its old items were deleted but before its replacement is complete.
+    // This also rolls back scope counts, silo groups and the rebuild request
+    // if a late write fails.
     let mut scope_count = 0u64;
     for (
         scope_signature,
@@ -128,7 +148,7 @@ pub async fn persist_global_navigation_from_active_pages(
         .bind(visa_type)
         .bind(applicant_profile)
         .bind(*scope_page_counts.get(scope_signature).unwrap_or(&0))
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         scope_count += 1;
@@ -152,13 +172,13 @@ pub async fn persist_global_navigation_from_active_pages(
     .bind(&navigation_tree_key)
     .bind(market)
     .bind(locale)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
 
     sqlx::query("DELETE FROM site.navigation_items WHERE navigation_tree_key = $1")
         .bind(&navigation_tree_key)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -187,7 +207,7 @@ pub async fn persist_global_navigation_from_active_pages(
         .bind(&silo_group_key)
         .bind(blank_as_none(&page.scope_signature))
         .bind(label_from_slug(&menu_group.replace(':', "-")))
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         silo_group_by_menu.insert(menu_group, silo_group_key);
@@ -261,14 +281,42 @@ pub async fn persist_global_navigation_from_active_pages(
         .bind(&page.canonical_url_path)
         .bind(page.hierarchy_depth)
         .bind(idx as i32)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         page_item_count += 1;
     }
 
-    let rebuild_plan_key =
-        seo_domain::artifact_identity::seo_artifact_key("global_rebuild_plan", &[&navigation_tree_key, reason]);
+    // The reason is usually a stable workflow label, not a revision. A replay
+    // of identical navigation must preserve a completed request, while a new
+    // active-page snapshot needs a distinct rebuild even with the same label.
+    // The input order is deterministic (page_node_key breaks SQL sort ties).
+    let navigation_revision = primitives::hash::content_hash_v1(
+        &json!({
+            "market": market,
+            "locale": locale,
+            "pages": pages.iter().map(|page| json!({
+                "page_node_key": page.page_node_key,
+                "scope_signature": page.scope_signature,
+                "parent_page_node_key": page.parent_page_node_key,
+                "page_type_key": page.page_type_key,
+                "canonical_slug": page.canonical_slug,
+                "canonical_url_path": page.canonical_url_path,
+                "hierarchy_depth": page.hierarchy_depth,
+                "menu_group": page.menu_group,
+                "market": page.market,
+                "locale": page.locale,
+                "country_code": page.country_code,
+                "visa_type": page.visa_type,
+                "applicant_profile": page.applicant_profile,
+            })).collect::<Vec<_>>(),
+        })
+        .to_string(),
+    );
+    let rebuild_plan_key = seo_domain::artifact_identity::seo_artifact_key(
+        "global_rebuild_plan",
+        &[&navigation_tree_key, reason, &navigation_revision],
+    );
     sqlx::query(
         r#"
         INSERT INTO site.global_rebuild_plan
@@ -276,18 +324,19 @@ pub async fn persist_global_navigation_from_active_pages(
         VALUES ($1, 'navigation_reconciled', 2, $2, 'queued')
         ON CONFLICT (rebuild_plan_key) DO UPDATE
         SET reason_payload = EXCLUDED.reason_payload,
-            status = 'queued',
             updated_at = now()
+        WHERE site.global_rebuild_plan.status = 'queued'
         "#,
     )
     .bind(&rebuild_plan_key)
     .bind(Json(json!({
         "reason": reason,
         "navigation_tree_key": navigation_tree_key,
+        "navigation_revision": navigation_revision,
         "scope_count": scope_count,
         "page_item_count": page_item_count,
     })))
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
 

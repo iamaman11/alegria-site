@@ -219,6 +219,21 @@ fn seo_qdrant_projection_event(
         "seo_projection_bootstrap@1".to_string(),
     );
 
+    // Prost serializes map fields in HashMap iteration order. A retry of the
+    // very same logical projection can therefore have different payload
+    // bytes. Derive the one authoritative Outbox identity from sorted,
+    // semantically complete inputs, while keeping the wire payload intact.
+    // Including run_id and all metadata allows a new run/revision to project
+    // again, instead of making one point immutable forever.
+    let stable_identity = json!({
+        "projection_contract": "qdrant_upsert_command@1",
+        "collection_name": collection_name,
+        "artifact_type": artifact_type,
+        "artifact_key": artifact_key,
+        "scope_signature": scope_signature,
+        "metadata": metadata.iter().collect::<BTreeMap<_, _>>(),
+    });
+    let idempotency_key = primitives::hash::content_hash_v1(&stable_identity.to_string());
     let vector = fingerprint_vector(embedding_text);
     let payload_bytes = encode_payload(&QdrantUpsertCommand {
         event_id: String::new(),
@@ -240,7 +255,76 @@ fn seo_qdrant_projection_event(
         event_type: "QdrantUpsertCommand".to_string(),
         payload_type: "alegria.outbox.qdrant_upsert_command.v1".to_string(),
         schema_version: 1,
-        idempotency_key: make_idempotency_key(artifact_key, "QdrantUpsertCommand", &payload_bytes),
+        idempotency_key,
         payload_bytes,
+    }
+}
+
+#[cfg(test)]
+mod qdrant_projection_identity_tests {
+    use super::*;
+
+    fn command_with_body(
+        run: &str,
+        body: &str,
+        metadata: HashMap<String, String>,
+    ) -> OutboxEnvelope {
+        seo_qdrant_projection_event(
+            run,
+            "editorial_topics_4",
+            "page_draft",
+            "draft-1",
+            "scope-1",
+            body,
+            metadata,
+        )
+    }
+
+    fn command(run: &str, metadata: HashMap<String, String>) -> OutboxEnvelope {
+        command_with_body(run, "same editorial body", metadata)
+    }
+
+    #[test]
+    fn retry_has_one_identity_regardless_of_map_insertion_order() {
+        let a = command(
+            "run-1",
+            HashMap::from([
+                ("qa_verdict".to_string(), "pass".to_string()),
+                ("truth_snapshot_ref".to_string(), "truth-1".to_string()),
+            ]),
+        );
+        let b = command(
+            "run-1",
+            HashMap::from([
+                ("truth_snapshot_ref".to_string(), "truth-1".to_string()),
+                ("qa_verdict".to_string(), "pass".to_string()),
+            ]),
+        );
+        assert_eq!(a.idempotency_key, b.idempotency_key);
+    }
+
+    #[test]
+    fn new_run_or_changed_content_has_distinct_identity() {
+        let fields = HashMap::from([
+            ("qa_verdict".to_string(), "pass".to_string()),
+            ("truth_snapshot_ref".to_string(), "truth-1".to_string()),
+        ]);
+        let original = command("run-1", fields.clone());
+        assert_ne!(original.idempotency_key, command("run-2", fields.clone()).idempotency_key);
+        let mut revised = fields;
+        revised.insert("truth_snapshot_ref".to_string(), "truth-2".to_string());
+        assert_ne!(original.idempotency_key, command("run-1", revised).idempotency_key);
+        assert_ne!(
+            original.idempotency_key,
+            command_with_body(
+                "run-1",
+                "corrected editorial body",
+                HashMap::from([
+                    ("qa_verdict".to_string(), "pass".to_string()),
+                    ("truth_snapshot_ref".to_string(), "truth-1".to_string()),
+                ]),
+            )
+            .idempotency_key
+        );
     }
 }
