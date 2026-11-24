@@ -376,11 +376,13 @@ fn durable_pure_dag_executes_real_operations_with_immutable_payloads() {
     let encoded_receipt = serde_json::to_vec(&receipt).unwrap();
     let replayed: PureDagReceipt = serde_json::from_slice(&encoded_receipt).unwrap();
     assert_eq!(serde_json::to_vec(&replayed).unwrap(), encoded_receipt);
-    let faq: editorial_topics::EditorialExtractionOutput = serde_json::from_slice(
-        &replayed.artifacts[&ArtifactId::from("faq-output")].payload,
-    )
-    .unwrap();
-    assert!(faq.topics.iter().any(|topic| topic.topic_type == "faq_topic"));
+    let faq: editorial_topics::EditorialExtractionOutput =
+        serde_json::from_slice(&replayed.artifacts[&ArtifactId::from("faq-output")].payload)
+            .unwrap();
+    assert!(faq
+        .topics
+        .iter()
+        .any(|topic| topic.topic_type == "faq_topic"));
 }
 
 #[test]
@@ -405,7 +407,10 @@ fn pure_dag_rejects_changed_or_effectful_input_without_repinning() {
     ));
 
     let mut effects = original;
-    effects.plan.allowed_effects.insert("publication.write".into());
+    effects
+        .plan
+        .allowed_effects
+        .insert("publication.write".into());
     effects.plan = effects.plan.seal(registry.catalog()).unwrap();
     assert!(matches!(
         execute_pure_dag("test-run", &effects),
@@ -428,10 +433,13 @@ fn pure_dag_rejects_empty_success_before_any_domain_execution() {
     .seal(registry.catalog())
     .unwrap();
     assert!(matches!(
-        execute_pure_dag("test-run", &PureDagRun {
-            plan,
-            admitted: BTreeMap::new()
-        }),
+        execute_pure_dag(
+            "test-run",
+            &PureDagRun {
+                plan,
+                admitted: BTreeMap::new()
+            }
+        ),
         Err(OperationRunError::EmptyPurePlan)
     ));
 }
@@ -487,8 +495,7 @@ fn pure_dag_enforces_exact_json_input_limit_without_serialization_allocation() {
         vec![node::<EntitySpans>("spans", "input", "output")],
         vec![seed::<EntitySpans>("input", &entity_input())],
     );
-    admitted.get_mut(&"input".into()).unwrap().payload =
-        vec![b'x'; PURE_DAG_MAX_INPUT_BYTES];
+    admitted.get_mut(&"input".into()).unwrap().payload = vec![b'x'; PURE_DAG_MAX_INPUT_BYTES];
     // Even though this payload is not a valid typed EntitySpans input, the
     // wire budget must be rejected before any operation deserialization.
     assert!(matches!(
@@ -519,11 +526,9 @@ fn pure_dag_node_budget_rejects_oversize_before_executor_validation() {
     );
     let mut run = PureDagRun { plan, admitted };
     enforce_pure_dag_input_budget(&run).unwrap();
-    run.plan.nodes.push(node::<EntitySpans>(
-        "node-extra",
-        "input",
-        "output-extra",
-    ));
+    run.plan
+        .nodes
+        .push(node::<EntitySpans>("node-extra", "input", "output-extra"));
     // The mutated manifest also has a stale hash. A too-large manifest must
     // be rejected first without ever reaching the operation executor.
     assert!(matches!(

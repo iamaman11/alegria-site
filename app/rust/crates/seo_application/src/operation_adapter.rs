@@ -12,11 +12,11 @@ use operation_protocol::{
     ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, ExecutionPlan, IdempotencyPolicy,
     Operation, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId, RunScope,
 };
-use serde::{Deserialize, Serialize};
 use seo_domain::extraction::operations::{
     CanonicalizeMentions, EditorialTopics, EntitySpans, LayerRoute, OperationalEntities,
     PureExtractionOperation,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +113,9 @@ fn enforce_pure_dag_input_budget(run: &PureDagRun) -> Result<(), OperationRunErr
     let raw_bytes = run
         .admitted
         .values()
-        .try_fold(0usize, |total, value| total.checked_add(value.payload.len()))
+        .try_fold(0usize, |total, value| {
+            total.checked_add(value.payload.len())
+        })
         .unwrap_or(usize::MAX);
     if raw_bytes > PURE_DAG_MAX_INPUT_BYTES {
         return Err(OperationRunError::ResourceBudgetExceeded {

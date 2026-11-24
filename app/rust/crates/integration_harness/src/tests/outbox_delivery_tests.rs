@@ -465,6 +465,10 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
 #[serial]
 async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retries() {
     use infrastructure::adapters::{raw_crawl_adapter, sqlx_hitl_adapter, sqlx_seo_adapter};
+    use infrastructure::adapters::verified_rule_projection_adapter::stage_rule_upserts_in_tx;
+    use seo_ports::knowledge::{
+        VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
+    };
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -801,30 +805,27 @@ async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retr
     sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(&mut fresh_tx, &newest_rule)
         .await
         .unwrap();
-    let projection = seo_steps::outbox_builder::qdrant_rule_upsert(
-        &fresh_run, &newest_rule.rule_instance_id, &context_key,
-        &newest_rule.rule_type_key, &newest_rule.concept_key, &newest_rule.role_type,
-        &newest_rule.source_key, "verified_rules_4", vec![0.1; 1024],
-    );
-    let event = infrastructure::adapters::sqlx_outbox_adapter::OutboxEnvelope {
-        run_id: fresh_run.clone(),
-        aggregate_type: projection.aggregate_type,
-        aggregate_key: projection.aggregate_key,
-        target_system: projection.target_system,
-        event_type: projection.event_type,
-        payload_type: projection.payload_type,
-        schema_version: projection.schema_version,
-        idempotency_key: projection.idempotency_key,
-        payload_bytes: projection.payload_bytes,
-    };
-    assert_eq!(
-        infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(
-            &mut fresh_tx, &[event],
-        )
-        .await
-        .unwrap(),
-        1
-    );
+    // This is a genuine projected Truth write, not a generic Outbox event.
+    // The PostgreSQL owner must reserve the revision and update the registry
+    // alongside the command before the completed-step journal can commit.
+    stage_rule_upserts_in_tx(
+        &mut fresh_tx,
+        &VerifiedRuleUpsertBatch {
+            run_id: fresh_run.clone(),
+            context_key: context_key.clone(),
+            upserts: vec![VerifiedRuleProjectionCandidate {
+                rule_instance_id: newest_rule.rule_instance_id.clone(),
+                role_type: newest_rule.role_type.clone(),
+                concept_key: newest_rule.concept_key.clone(),
+                source_key: newest_rule.source_key.clone(),
+                evidence_quote: newest_rule.evidence_quote.clone(),
+            }],
+        },
+        VerifiedRuleEmbeddingBatch {
+            model: "fixture".into(),
+            vectors: vec![vec![0.1; 1024]],
+        },
+    ).await.unwrap();
     let fresh_output = format!("newest-truth-output-{marker}");
     ledger::complete_step_execution_with_output_in_tx(
         &mut fresh_tx, &fresh_run, "verified_truth_write", 1, &fresh_input, &fresh_output,
@@ -832,6 +833,20 @@ async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retr
     .await
     .unwrap();
     fresh_tx.commit().await.unwrap();
+
+    let (staged_revision, staged_this_tx, registry_points): (i64, bool, i64) = sqlx::query_as(
+        "SELECT o.projection_revision, o.staged_xid IS NOT NULL,
+                (SELECT count(*) FROM kb.qdrant_points p
+                 WHERE p.collection_name='verified_rules_4' AND p.entity_type='rule_instance'
+                   AND p.entity_key=o.aggregate_key)
+         FROM system.sync_outbox o
+         WHERE o.run_id=$1 AND o.aggregate_key=$2 AND o.target_system='qdrant'",
+    )
+    .bind(&fresh_run)
+    .bind(&newest_rule.rule_instance_id)
+    .fetch_one(pool).await.unwrap();
+    assert_eq!((staged_revision, staged_this_tx, registry_points), (1, true, 1),
+        "newest Truth must stage a causal, server-stamped Qdrant intent and registry point");
 
     for (stale_run, stale_input) in [
         (&old_first_run, &old_input),

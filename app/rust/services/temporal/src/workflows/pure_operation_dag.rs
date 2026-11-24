@@ -56,7 +56,6 @@ impl AlegriaPureOperationDagV1Workflow {
         // Carry typed artifact envelopes through a canonical JSON result so
         // callers can inspect actual output. Only a future admission protocol
         // may promote those values to trusted persistent evidence.
-        serde_json::to_string(&result)
-            .map_err(|error| workflow_contract_failure(error.to_string()))
+        serde_json::to_string(&result).map_err(|error| workflow_contract_failure(error.to_string()))
     }
 }
