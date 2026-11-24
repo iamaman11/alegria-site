@@ -3,7 +3,6 @@
 // through the same Rust PostgreSQL inbox + dedicated Temporal signal.
 #[cfg(feature = "e2e")]
 #[tokio::test]
-#[serial]
 async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     run_canonical_manual_editorial("draft_only", false).await;
 }
@@ -15,7 +14,6 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
 // covers preservation of an existing published live pointer.
 #[cfg(feature = "e2e")]
 #[tokio::test]
-#[serial]
 async fn canonical_temporal_blocked_review_ends_for_rework_without_publication() {
     run_canonical_manual_editorial("publish_with_hitl", true).await;
 }
