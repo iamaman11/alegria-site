@@ -3290,7 +3290,7 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
     let refresh_loop = tokio::spawn(
         sqlx_seo_cms_adapter::run_published_navigation_refresh_loop(
             Arc::new(pool.clone()),
-            listener_url,
+            listener_url.clone(),
             refresh_delivery,
         ),
     );
@@ -3349,8 +3349,6 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
     })
     .await
     .expect("automatic Worker navigation refresh did not publish updated HTML");
-    refresh_loop.abort();
-    let _ = refresh_loop.await;
     assert!(updated_html.contains("Visitor Visa"));
     assert!(!updated_html.contains("Tourist Visa"));
     let updated_manifest: serde_json::Value =
@@ -3402,6 +3400,7 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
         .unwrap()
     );
     assert_eq!(*delivery.deploys.lock().unwrap(), count_after_change);
+    let release_before_failure = std::fs::read_link(&live).unwrap();
 
     sqlx_seo_adapter::persist_global_navigation_from_active_pages(pool, &market, "ru")
         .await
@@ -3413,8 +3412,12 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
         "unchanged menu must not trigger another release"
     );
 
-    // Failure after upload but before HTTPS confirmation restores both local
-    // serving pointer and remote bytes. The next tick retries the real change.
+    // Failure after upload but before HTTPS confirmation must be rolled back
+    // by the live Worker listener itself, without a test-driven refresh call.
+    // A restarted listener must catch up from PostgreSQL even if the original
+    // notification was already consumed by the failed attempt.
+    let deployments_before_failure = *delivery.deploys.lock().unwrap();
+    *delivery.fail_next_readback.lock().unwrap() = true;
     sqlx::query("UPDATE site.page_nodes SET canonical_slug='updated' WHERE page_node_key=$1")
         .bind(&child)
         .execute(pool)
@@ -3423,15 +3426,29 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
     sqlx_seo_adapter::persist_global_navigation_from_active_pages(pool, &market, "ru")
         .await
         .unwrap();
-    *delivery.fail_next_readback.lock().unwrap() = true;
-    assert!(
-        sqlx_seo_cms_adapter::refresh_published_renderer_if_stale_with_delivery(
-            pool,
-            delivery.as_ref()
-        )
-        .await
-        .is_err()
-    );
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let deployments = *delivery.deploys.lock().unwrap();
+            let local = std::fs::read_to_string(&child_html_path).unwrap();
+            let rolled_back = {
+                let remote = delivery.remote.lock().unwrap();
+                remote
+                    .get(child_path.trim_end_matches('/'))
+                    .is_some_and(|bytes| bytes == updated_html.as_bytes())
+            };
+            if deployments >= deployments_before_failure + 2
+                && local == updated_html
+                && rolled_back
+                && !root.join(".alegria-pending-render-refresh.json").exists()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("navigation listener did not roll back failed public readback");
+    assert_eq!(std::fs::read_link(&live).unwrap(), release_before_failure);
     assert_eq!(
         std::fs::read_to_string(&child_html_path).unwrap(),
         updated_html
@@ -3446,17 +3463,57 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
             .as_slice(),
         updated_html.as_bytes()
     );
-    assert!(
-        sqlx_seo_cms_adapter::refresh_published_renderer_if_stale_with_delivery(
-            pool,
-            delivery.as_ref(),
-        )
-        .await
-        .unwrap()
+    refresh_loop.abort();
+    let _ = refresh_loop.await;
+
+    let resumed_delivery: Arc<dyn PublicReleaseDelivery> = delivery.clone();
+    let resumed_loop = tokio::spawn(
+        sqlx_seo_cms_adapter::run_published_navigation_refresh_loop(
+            Arc::new(pool.clone()),
+            listener_url,
+            resumed_delivery,
+        ),
     );
-    assert!(std::fs::read_to_string(&child_html_path)
-        .unwrap()
-        .contains("Updated Visa"));
+    let recovered_html = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        loop {
+            let html = std::fs::read_to_string(&child_html_path).unwrap();
+            if html.contains("Updated Visa")
+                && !root.join(".alegria-pending-render-refresh.json").exists()
+            {
+                break html;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("restarted navigation listener did not catch up the missed release");
+    resumed_loop.abort();
+    let _ = resumed_loop.await;
+    assert!(!recovered_html.contains("Visitor Visa"));
+    assert_ne!(std::fs::read_link(&live).unwrap(), release_before_failure);
+    assert_eq!(
+        delivery
+            .remote
+            .lock()
+            .unwrap()
+            .get(child_path.trim_end_matches('/'))
+            .unwrap()
+            .as_slice(),
+        recovered_html.as_bytes()
+    );
+    for (page, revision) in [
+        (&parent, &original_revisions[0]),
+        (&child, &original_revisions[1]),
+    ] {
+        let current: String = sqlx::query_scalar(
+            "SELECT current_revision_id FROM site.cms_pages WHERE page_node_key=$1",
+        )
+        .bind(page)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(&current, revision, "navigation recovery invented a CMS revision");
+    }
     assert!(!root.join(".alegria-pending-render-refresh.json").exists());
     drop(_env);
     std::fs::remove_dir_all(&root).unwrap();

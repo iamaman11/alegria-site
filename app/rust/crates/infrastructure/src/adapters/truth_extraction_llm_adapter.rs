@@ -635,7 +635,15 @@ pub fn validate_manual_truth_response(
     model_key: &str,
     response_json: &str,
 ) -> Result<TruthExtractionResponse, DomainError> {
-    response_from_generated_text(input, "chat_manual", model_key, response_json)
+    response_from_generated_text(input, "chat_manual", model_key, response_json).map_err(|err| {
+        // Invalid remote-provider output can be retried as an infrastructure
+        // fault. A human-submitted response is an invalid input instead: the
+        // same task stays pending until its author corrects the evidence.
+        match err {
+            DomainError::InfraUnavailable { message } => DomainError::ValidationFailure { message },
+            other => other,
+        }
+    })
 }
 
 fn extraction_contract_error(message: &str) -> DomainError {
@@ -937,5 +945,48 @@ mod tests {
         let mut bad_extra = valid;
         bad_extra["verified"] = serde_json::json!(true);
         assert!(parse(bad_extra).is_err());
+    }
+
+    #[test]
+    fn manual_invalid_section_is_validation_failure_without_changing_provider_retry_class() {
+        let input = sample_input();
+        let candidate = serde_json::json!({
+            "role": "FEE_ITEM",
+            "concept_canonical_key": "consular_fee",
+            "raw_mention": "Consular fee is 35 EUR",
+            "params": {"amount": 35, "currency": "EUR"},
+            "scope": {},
+            "alternatives": [],
+            "confidence": 0.95,
+            "evidence_section_id": 42,
+            "evidence_quote": "Consular fee is 35 EUR",
+            "span_start": 0,
+            "span_end": 22
+        });
+        let valid = serde_json::json!({"candidates": [candidate]}).to_string();
+        assert_eq!(
+            validate_manual_truth_response(&input, "chatgpt", &valid)
+                .unwrap()
+                .candidates
+                .len(),
+            1
+        );
+        let mut invalid: Value = serde_json::from_str(&valid).unwrap();
+        invalid["candidates"][0]["evidence_section_id"] = serde_json::json!(43);
+        let invalid = invalid.to_string();
+        let manual = validate_manual_truth_response(&input, "chatgpt", &invalid).unwrap_err();
+        assert_eq!(
+            manual.class(),
+            primitives::errors::ErrorClass::ValidationFailure
+        );
+        assert!(manual
+            .to_string()
+            .contains("evidence_section_id does not match source section"));
+        let provider = response_from_generated_text(&input, "local_compatible", "model", &invalid)
+            .unwrap_err();
+        assert_eq!(
+            provider.class(),
+            primitives::errors::ErrorClass::InfraUnavailable
+        );
     }
 }

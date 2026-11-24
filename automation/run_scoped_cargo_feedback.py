@@ -11,6 +11,9 @@ import argparse
 import json
 import os
 import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from io import StringIO
 from pathlib import Path
 from typing import Mapping
 
@@ -76,6 +79,52 @@ def selected_preparations(
     return schedule
 
 
+def run_verify_suites_in_parallel(
+    report: dict, integration_commands: list[tuple[str, list[str]]],
+) -> list[dict]:
+    """Run independent disposable-container suites in two isolated processes.
+
+    All selected commands still execute once. Prebuild the shared e2e test
+    binary before starting Cargo processes so target-directory locks never
+    serialize an expensive feature-graph compilation in the critical path.
+    The existing verify owner, not a new CI job, retains every suite result.
+    """
+    compile_command = [
+        "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+        "--lib", "--no-run", "--locked",
+    ]
+    print("CI_VERIFY_E2E_PRECOMPILE=" + " ".join(compile_command), flush=True)
+    measurements = [run_cargo(compile_command, cwd=WORKSPACE)]
+    jobs: list[tuple[str, list[str], dict[str, str], StringIO]] = []
+    for name, command in integration_commands:
+        if SUITE_OWNERS[name].get("runtime_binaries"):
+            raise ValueError(f"verify cannot parallelize runtime-dependent suite {name}")
+        require_clean_truth_filter_environment(name)
+        jobs.append((name, command, suite_environment_for_report(report, name), StringIO()))
+
+    print(f"CI_VERIFY_E2E_PARALLEL=2 suites={len(jobs)}", flush=True)
+    failed: Exception | None = None
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        running = [
+            executor.submit(run_cargo, command, cwd=WORKSPACE, output=output, env=env or None)
+            for _, command, env, output in jobs
+        ]
+        for (name, command, _, output), future in zip(jobs, running):
+            print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
+            try:
+                measurements.append(future.result())
+            except Exception as error:
+                if failed is None:
+                    failed = error
+                print(f"CI_SUITE_FAILED={name} error={type(error).__name__}", flush=True)
+            finally:
+                sys.stdout.write(output.getvalue())
+                sys.stdout.flush()
+    if failed is not None:
+        raise failed
+    return measurements
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
@@ -129,25 +178,28 @@ def main() -> int:
 
     # All real integration commands and owners come from ci_impact.py; the
     # runner has no suite-specific compilation or filter-selection branches.
-    for name, command in integration_commands:
-        owner = SUITE_OWNERS[name]
-        # The prebuilt-binary hook is generic. A runtime suite can use its
-        # existing override variables without recompiling the same Rust graph
-        # under a second Cargo target directory inside the test process.
-        target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
-        if not target.is_absolute():
-            target = WORKSPACE / target
-        runtime_env = suite_environment_for_report(report, name)
-        if name == "truth_certification":
-            print("CI_SUITE_FIXTURE_IDS=" + runtime_env.get("TRUTH_CERT_FIXTURE_IDS", "ALL"), flush=True)
-        for variable, binary in owner.get("runtime_binaries", {}).items():
-            path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
-            if not path.is_file() or not os.access(path, os.X_OK):
-                raise FileNotFoundError(f"selected suite {name} lacks prebuilt runtime binary: {path}")
-            runtime_env[variable] = str(path)
-            print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
-        print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
-        measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
+    if args.suite_job == "verify" and len(integration_commands) > 1:
+        measurements.extend(run_verify_suites_in_parallel(report, integration_commands))
+    else:
+        for name, command in integration_commands:
+            owner = SUITE_OWNERS[name]
+            # The prebuilt-binary hook is generic. A runtime suite can use its
+            # existing override variables without recompiling the same Rust graph
+            # under a second Cargo target directory inside the test process.
+            target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
+            if not target.is_absolute():
+                target = WORKSPACE / target
+            runtime_env = suite_environment_for_report(report, name)
+            if name == "truth_certification":
+                print("CI_SUITE_FIXTURE_IDS=" + runtime_env.get("TRUTH_CERT_FIXTURE_IDS", "ALL"), flush=True)
+            for variable, binary in owner.get("runtime_binaries", {}).items():
+                path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
+                if not path.is_file() or not os.access(path, os.X_OK):
+                    raise FileNotFoundError(f"selected suite {name} lacks prebuilt runtime binary: {path}")
+                runtime_env[variable] = str(path)
+                print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
+            print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
+            measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
 
     output = ROOT / (
         "automation/reports/scoped_cargo_feedback.json"

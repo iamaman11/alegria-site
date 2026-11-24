@@ -3,7 +3,6 @@
 // through the same Rust PostgreSQL inbox + dedicated Temporal signal.
 #[cfg(feature = "e2e")]
 #[tokio::test]
-#[serial]
 async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
     run_canonical_manual_editorial("draft_only", false).await;
 }
@@ -15,7 +14,6 @@ async fn canonical_temporal_manual_editorial_resumes_after_worker_restart() {
 // covers preservation of an existing published live pointer.
 #[cfg(feature = "e2e")]
 #[tokio::test]
-#[serial]
 async fn canonical_temporal_blocked_review_ends_for_rework_without_publication() {
     run_canonical_manual_editorial("publish_with_hitl", true).await;
 }
@@ -147,10 +145,11 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
             truth_namespace,
         );
         let mut count = 0usize;
+        let mut rejected_foreign_section = false;
         loop {
             if let Some(job) = manual_llm_queue::next_job(&truth_pool).await.unwrap() {
                 if job.operation == "editorial_draft" {
-                    return count;
+                    return (count, rejected_foreign_section);
                 }
                 assert_eq!(job.operation, "truth_candidates");
                 assert_eq!(
@@ -183,6 +182,76 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
                         "response": {"candidates": candidates},
                     }))
                     .unwrap();
+                if !block_review
+                    && !rejected_foreign_section
+                    && !submission.response.candidates.is_empty()
+                {
+                    // This is the same durable PostgreSQL inbox consumed by
+                    // the real Temporal worker. An LLM proposal citing another
+                    // section must be rejected atomically, leaving the task
+                    // pending so the correct answer can resume this run.
+                    let mut invalid = serde_json::to_value(&submission.response).unwrap();
+                    invalid["candidates"][0]["evidence_section_id"] =
+                        serde_json::json!(section_id + 1);
+                    let invalid: manual_llm_queue::ManualTruthSubmission =
+                        serde_json::from_value(serde_json::json!({
+                            "task_id": submission.task_id,
+                            "schema_version": submission.schema_version,
+                            "input_sha256": submission.input_sha256,
+                            "response": invalid,
+                        }))
+                        .unwrap();
+                    let before: (i64, i64, i64) = sqlx::query_as(
+                        "SELECT (SELECT count(*)::bigint FROM extracted.rule_candidates),
+                                (SELECT count(*)::bigint FROM verified.rule_instances),
+                                (SELECT count(*)::bigint FROM system.sync_outbox)",
+                    )
+                    .fetch_one(&truth_pool)
+                    .await
+                    .unwrap();
+                    let error = manual_llm_queue::submit_truth(&truth_pool, &invalid, "gpt-6")
+                        .await
+                        .expect_err("a different source section cannot supply evidence");
+                    assert_eq!(
+                        error.class(),
+                        primitives::errors::ErrorClass::ValidationFailure,
+                    );
+                    assert!(
+                        error
+                            .to_string()
+                            .contains("evidence_section_id does not match source section"),
+                        "unexpected typed error: {error}"
+                    );
+                    let pending: (String, Option<serde_json::Value>) = sqlx::query_as(
+                        "SELECT job_status, output_json
+                         FROM pipeline.manual_llm_jobs WHERE task_id = $1",
+                    )
+                    .bind(&submission.task_id)
+                    .fetch_one(&truth_pool)
+                    .await
+                    .unwrap();
+                    assert_eq!(
+                        pending.0, "pending",
+                        "failed submission may not complete the task"
+                    );
+                    assert!(
+                        pending.1.is_none(),
+                        "failed submission may not persist candidates"
+                    );
+                    let after: (i64, i64, i64) = sqlx::query_as(
+                        "SELECT (SELECT count(*)::bigint FROM extracted.rule_candidates),
+                                (SELECT count(*)::bigint FROM verified.rule_instances),
+                                (SELECT count(*)::bigint FROM system.sync_outbox)",
+                    )
+                    .fetch_one(&truth_pool)
+                    .await
+                    .unwrap();
+                    assert_eq!(
+                        before, after,
+                        "rejected evidence must not change Truth or Outbox"
+                    );
+                    rejected_foreign_section = true;
+                }
                 manual_llm_queue::submit_truth(&truth_pool, &submission, "gpt-6")
                     .await
                     .unwrap();
@@ -273,10 +342,17 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     assert_eq!(first.payload.run_id, run_id);
     checkpoint("editorial_task_ready");
     assert_eq!(first.operation, "editorial_draft");
+    let (submitted_truth, rejected_foreign_section) = truth_driver.await.unwrap();
     assert!(
-        truth_driver.await.unwrap() > 0,
+        submitted_truth > 0,
         "canonical workflow skipped manual source-proposal stage"
     );
+    if !block_review {
+        assert!(
+            rejected_foreign_section,
+            "canonical workflow did not verify source-section rejection and recovery"
+        );
+    }
     assert_eq!(
         manual_llm_queue::truth_run_status(&infra.postgres.pool, &run_id)
             .await

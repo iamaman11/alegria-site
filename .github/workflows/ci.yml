@@ -1083,13 +1083,13 @@ jobs:
             org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             by.alegria.source-head-sha=${{ env.SOURCE_SHA }}
           cache-from: type=gha,scope=alegria-temporal-worker
-          # The previous successful image already cached the entire native
-          # builder for assets-only changes. Rebasing assets does not change
-          # Cargo objects or Node dependencies, so skip a redundant multi-GB
-          # max-mode export. Any changed compiled source, dependency, Docker
-          # recipe, unknown input or explicit rebuild exports the cache for
-          # future source and asset releases. Keep cache-from and runtime
-          # startup/source verification unchanged even when export is skipped.
+          # Keep the existing rich dependency-skeleton cache on source-only
+          # Rust and assets-only releases. Exporting that multi-GB builder
+          # after every source edit cost 169s in main CI #450, while the real
+          # source compile took 39s. A later assets-only image may compile
+          # those Rust sources again; it still uses this exact main SHA and
+          # must pass runtime verification, archive signing and attestation.
+          # Dependency/recipe/unknown changes still refresh the max-mode cache.
           cache-to: ${{ needs.select-image.outputs.cache_export_required == 'true' && 'type=gha,scope=alegria-temporal-worker,mode=max,compression=zstd,compression-level=1' || '' }}
 
       - name: Verify runtime startup, source identity and native deployment tools
