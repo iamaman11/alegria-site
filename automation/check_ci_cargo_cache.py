@@ -16,7 +16,7 @@ import report_sccache_failures as sccache_reporter
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust",)
+OWNERS = ("architecture-and-rust", "verify")
 
 
 def validate_cache_policy(workflow: str) -> None:
@@ -33,12 +33,12 @@ def validate_cache_policy(workflow: str) -> None:
                 break
             body.append(line)
         blocks.append("\n".join(body))
-    (saver,) = blocks
+    saver, verify = blocks
     # The trusted-main compiler cache is useful only when its rustc profile
     # matches the PR reader. A one-sided DEBUG=0 change silently invalidates
     # every sccache entry, turning a warm regression into a cold build.
     prime = workflow.split("  rust-cache-prime:\n", 1)[1].split("  select-image:\n", 1)[0]
-    for name, block in (("PR", saver), ("accepted-main", prime)):
+    for name, block in (("PR architecture", saver), ("PR verify", verify), ("accepted-main", prime)):
         for profile in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{profile}_DEBUG: "0"'
             if block.count(key) != 1:
@@ -52,9 +52,22 @@ def validate_cache_policy(workflow: str) -> None:
         raise ValueError("sccache must receive authenticated GitHub cache service environment")
     if saver.count("uses: actions/cache@v4") != 1:
         raise ValueError("architecture must be the sole registry cache writer")
-    verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
-    if "uses: actions/cache" in verify or "dtolnay/rust-toolchain" in verify or "cargo metadata" in verify:
-        raise ValueError("Python verify must not initialize a second Cargo owner")
+    if "uses: actions/cache@v4" in verify or "uses: actions/cache/save" in verify:
+        raise ValueError("verify must not initialize a second Cargo registry writer")
+    if verify.count("uses: actions/cache/restore@v4") != 1:
+        raise ValueError("verify must restore Cargo sources without writing cache")
+    if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in verify:
+        raise ValueError("verify Cargo compilation must use read-only compiler cache")
+    for step_name in (
+        "Pin Rust for full workspace tests",
+        "Reuse trusted main Rust compiler objects for full workspace tests",
+        "Authorize full-scope Rust cache reads",
+        "Restore shared Cargo dependency sources without a second writer",
+        "Full workspace Rust unit tests (parallel with real E2E)",
+    ):
+        step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
+        if "        if: needs.impact.outputs.cargo_scope == 'full'" not in step:
+            raise ValueError(f"verify Cargo step {step_name} must be full-only")
     for block in blocks:
         # Reject target *cache payloads*, not valid references to a job-local
         # build directory in an unrelated environment variable or test step.
@@ -83,8 +96,20 @@ class CargoCachePolicy(unittest.TestCase):
 
     def test_a_second_saver_in_python_verify_is_rejected(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
-        changed = original.replace("  verify:\n", "  verify:\n    # uses: actions/cache@v4\n", 1)
-        with self.assertRaisesRegex(ValueError, "second Cargo owner"):
+        changed = original.replace("uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1)
+        with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
+            validate_cache_policy(changed)
+
+    def test_verify_cargo_setup_cannot_run_for_scoped_or_non_rust_changes(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        changed = original.replace(
+            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "        if: needs.impact.outputs.cargo_scope == 'full'",
+            "      - name: Full workspace Rust unit tests (parallel with real E2E)\n"
+            "        if: needs.impact.outputs.cargo_scope != 'none'",
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "must be full-only"):
             validate_cache_policy(changed)
 
     def test_unbounded_target_regression_is_rejected(self) -> None:
@@ -106,7 +131,7 @@ class CargoCachePolicy(unittest.TestCase):
         original = (ROOT / ".github/workflows/ci.yml").read_text()
         for name in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{name}_DEBUG: "0"'
-            for occurrence in (1, 2):
+            for occurrence in (1, 2, 3):
                 position = original.find(key)
                 if occurrence == 2:
                     position = original.find(key, position + len(key))

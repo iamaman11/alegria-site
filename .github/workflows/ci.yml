@@ -35,6 +35,7 @@ jobs:
     outputs:
       selected_ci_jobs: ${{ steps.decide.outputs.selected_ci_jobs }}
       source_sha: ${{ steps.decide.outputs.source_sha }}
+      cargo_scope: ${{ steps.decide.outputs.cargo_scope }}
     steps:
       - name: Checkout exact CI source
         uses: actions/checkout@v7
@@ -75,18 +76,22 @@ jobs:
           selected = report.get('selected_ci_jobs')
           if (report.get('schema_version') != SCHEMA_VERSION
                   or report.get('mandatory_full_ci_gate') is not True
+                  or report.get('scope') not in {'none', 'scoped', 'full'}
                   or report.get('source_sha') != os.environ['CI_HEAD_SHA']
                   or report.get('head_sha') != os.environ['CI_HEAD_SHA']
                   or subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() != os.environ['CI_HEAD_SHA']
                   or not isinstance(selected, list)
                   or len(set(selected)) != len(selected)
                   or any(name not in CI_PR_OWNERS for name in selected)
+                  or (report['scope'] == 'full'
+                      and not {'architecture-and-rust', 'verify'}.issubset(selected))
                   or any(report['ci_job_status'][name] != ('required' if name in selected else 'not_applicable')
                          for name in CI_PR_OWNERS)):
               raise SystemExit('CI_IMPACT=FAIL source/owner selection mismatch')
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write('selected_ci_jobs=' + json.dumps(selected, separators=(',', ':')) + '\n')
               f.write('source_sha=' + os.environ['CI_HEAD_SHA'] + '\n')
+              f.write('cargo_scope=' + report['scope'] + '\n')
           print('CI_IMPACT=PASS selected=' + ','.join(selected))
           PY
 
@@ -230,7 +235,15 @@ jobs:
       - name: Changed Rust crates and dependent consumers
         env:
           SQLX_OFFLINE: "true"
-        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json
+        run: |
+          args=()
+          if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then
+            # The same exact-source full scope makes the existing verify job
+            # mandatory; it executes the workspace unit tests in parallel.
+            args+=(--delegate-workspace-unit-tests-to-verify)
+          fi
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json "${args[@]}"
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -415,12 +428,22 @@ jobs:
     needs: impact
     if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'verify')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # A cold compiler cache may exceed the warmed five-minute CI target.
+    timeout-minutes: 30
     env:
       CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      SCCACHE_ERROR_LOG: /tmp/sccache-verify-errors.log
+      SCCACHE_LOG: sccache::server=debug
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
 
       - name: Setup Python
         uses: actions/setup-python@v7
@@ -438,6 +461,65 @@ jobs:
 
       - name: Fast integration and consistency checks
         run: bash automation/measure_ci_phase.sh integration bash automation/ci_fast_verify.sh integration
+
+      # Only broad/unclassifiable changes require the whole Rust workspace.
+      # The existing verification owner runs its unit tests concurrently with
+      # architecture's Worker binaries and real PostgreSQL/Temporal E2E suites.
+      - name: Install native Rust test build dependencies
+        if: needs.impact.outputs.cargo_scope == 'full'
+        run: bash automation/install_ci_native_tools.sh protoc
+
+      - name: Pin Rust for full workspace tests
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Reuse trusted main Rust compiler objects for full workspace tests
+        if: needs.impact.outputs.cargo_scope == 'full'
+        id: verify_sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+
+      - name: Authorize full-scope Rust cache reads
+        if: needs.impact.outputs.cargo_scope == 'full'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const url = process.env.ACTIONS_RESULTS_URL;
+            const token = process.env.ACTIONS_RUNTIME_TOKEN;
+            if (!url || !token) {
+              throw new Error('GitHub Actions cache service credentials are unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', url);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', token);
+
+      - name: Restore shared Cargo dependency sources without a second writer
+        if: needs.impact.outputs.cargo_scope == 'full'
+        id: rust_registry
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+
+      - name: Full workspace Rust unit tests (parallel with real E2E)
+        if: needs.impact.outputs.cargo_scope == 'full'
+        working-directory: app/rust
+        env:
+          SQLX_OFFLINE: "true"
+          RUSTC_WRAPPER: sccache
+        run: cargo test --workspace --locked
+
+      - name: Full-scope compiler cache statistics
+        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
+        run: sccache --show-stats
+
+      - name: Classify full-scope Rust cache failures
+        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
+        run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"
 
       - name: Upload measured Contracts/Integration phase timings
         if: always()

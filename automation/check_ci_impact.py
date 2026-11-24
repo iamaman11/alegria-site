@@ -687,6 +687,39 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(outcome["analysis"], "full")
                 self.assertEqual(len(outcome["affected_crates"]), len(self.reverse))
 
+    def test_full_workspace_tests_can_use_existing_verify_owner_without_coverage_gap(self) -> None:
+        # The two existing jobs may execute separate Cargo phases in parallel
+        # only if every FULL plan requires both of them. Scoped Rust edits keep
+        # their package-level feedback; non-Rust edits need no Cargo run.
+        for path in (
+            "app/rust/Cargo.toml",
+            "app/db/schema.sql",
+            ".github/workflows/ci.yml",
+            "automation/ci_impact.py",
+            "unmapped/new_input.txt",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "full")
+                self.assertEqual(result["ci_job_status"]["architecture-and-rust"], "required")
+                self.assertEqual(result["ci_job_status"]["verify"], "required")
+                self.assertEqual(commands_for_report(result, check_only=False), [
+                    ["cargo", "test", "--workspace", "--locked"],
+                ])
+
+        scoped = self.impact("app/rust/crates/http_client/src/lib.rs")
+        self.assertEqual(scoped["scope"], "scoped")
+        self.assertIn("architecture-and-rust", scoped["selected_ci_jobs"])
+        self.assertIn("verify", scoped["selected_ci_jobs"])
+        self.assertNotIn("--workspace", str(commands_for_report(scoped, check_only=False)))
+
+        for path in ("docs/ARCHITECTURE_BOUNDARIES.md", "automation/report_sccache_failures.py"):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "none")
+                self.assertEqual(commands_for_report(result, check_only=False), [])
+                self.assertNotIn("architecture-and-rust", result["selected_ci_jobs"])
+
     def test_exact_ci_only_inputs_run_verify_without_rust_compilation(self) -> None:
         for path in (
             "automation/check_ci_workflow_contract.py",

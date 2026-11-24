@@ -15,7 +15,9 @@ from unittest.mock import patch
 
 from cargo_feedback import run_cargo, workspace_artifact
 from ci_impact import SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE, suite_commands_for_report
-from run_scoped_cargo_feedback import main as run_scoped_cargo_feedback, selected_preparations
+from run_scoped_cargo_feedback import (
+    cargo_commands_for_ci, main as run_scoped_cargo_feedback, selected_preparations,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -122,9 +124,14 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             "selected_suites": suites,
             "suite_fixture_ids": {},
             "analysis": "full",
+            "direct_crates": [],
+            "affected_crates": [],
+            "selected_ci_jobs": ["architecture-and-rust", "verify"],
         }
 
-    def run_plan(self, suites: list[str]) -> tuple[list[tuple[list[str], dict]], str, dict]:
+    def run_plan(
+        self, suites: list[str], *, delegated: bool = False,
+    ) -> tuple[list[tuple[list[str], dict]], str, dict]:
         report = self.report(suites)
         executions: list[tuple[list[str], dict]] = []
 
@@ -154,7 +161,10 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 patch("run_scoped_cargo_feedback.commands_for_report",
                       return_value=[["cargo", "test", "--workspace", "--locked"]]),
                 patch("run_scoped_cargo_feedback.run_cargo", side_effect=record),
-                patch.object(sys, "argv", ["runner", "--report", str(report_path)]),
+                patch.object(sys, "argv", [
+                    "runner", "--report", str(report_path),
+                    *(["--delegate-workspace-unit-tests-to-verify"] if delegated else []),
+                ]),
                 patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}, clear=True),
                 patch("sys.stdout", new_callable=io.StringIO) as output,
             ):
@@ -196,6 +206,48 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         ])
         self.assertNotIn("CI_SUITE_PREPARE=", output)
         self.assertNotIn("CI_SUITE_PREPARE_REUSED=", output)
+
+    def test_full_workspace_tests_delegated_only_to_parallel_verify_owner(self) -> None:
+        suites = ["cms_review_revision", "knowledge_a13", "temporal_restart"]
+        executions, output, evidence = self.run_plan(suites, delegated=True)
+        expected = [
+            list(WORKER_E2E_PREPARE),
+            *(command for _, command in suite_commands_for_report(self.report(suites))),
+        ]
+        self.assertEqual([command for command, _ in executions], expected)
+        self.assertEqual(evidence["delegated_workspace_unit_tests_to"], "verify")
+        self.assertIn(
+            "CI_WORKSPACE_UNIT_TESTS=DELEGATED_TO_VERIFY source_sha=exact-test-source-sha", output,
+        )
+        self.assertEqual(len(evidence["measurements"]), len(expected))
+        self.assertIn("CI_SUITE_PREBUILT=temporal_restart", output)
+
+    def test_delegation_rejects_ungated_verify_and_noncanonical_full_command(self) -> None:
+        report = self.report([])
+        report["selected_ci_jobs"] = ["architecture-and-rust"]
+        with self.assertRaisesRegex(ValueError, "requires both selected CI owners"):
+            cargo_commands_for_ci(report, delegate_workspace_unit_tests_to_verify=True)
+
+        report["selected_ci_jobs"] = ["architecture-and-rust", "verify"]
+        with patch("run_scoped_cargo_feedback.commands_for_report", return_value=[
+            ["cargo", "check", "--workspace", "--locked"],
+        ]):
+            with self.assertRaisesRegex(ValueError, "requires both selected CI owners"):
+                cargo_commands_for_ci(report, delegate_workspace_unit_tests_to_verify=True)
+
+    def test_scoped_cargo_commands_cannot_be_delegated(self) -> None:
+        report = self.report([])
+        report.update({
+            "analysis": "scoped", "direct_crates": ["cms_domain"],
+            "affected_crates": ["cms_domain"], "selected_ci_jobs": ["architecture-and-rust"],
+        })
+        commands, delegated = cargo_commands_for_ci(
+            report, delegate_workspace_unit_tests_to_verify=True,
+        )
+        self.assertEqual(commands, [
+            ["cargo", "test", "--locked", "--package", "cms_domain"],
+        ])
+        self.assertFalse(delegated)
 
     def test_truth_filter_rejected_before_any_cargo_runs(self) -> None:
         selected = suite_commands_for_report(self.report(["truth_certification"]))

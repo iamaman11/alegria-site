@@ -23,13 +23,19 @@ def must_contain(path: Path, needle: str) -> str | None:
 def cargo_step_failures(workflow: str) -> list[str]:
     """Inspect step-local env, not a removed shell command or job-wide keyword."""
     failures: list[str] = []
-    if "  architecture-and-rust:\n" not in workflow or "\n  rust-security:\n" not in workflow:
-        return ["missing canonical Rust owner in ci.yml"]
-    rust = workflow.split("  architecture-and-rust:\n", 1)[1].split("\n  rust-security:\n", 1)[0]
     expected = (
-        ("Changed Rust crates and dependent consumers", "run: python3 automation/run_scoped_cargo_feedback.py"),
+        ("architecture-and-rust", "Changed Rust crates and dependent consumers",
+         "python3 automation/run_scoped_cargo_feedback.py"),
+        ("verify", "Full workspace Rust unit tests (parallel with real E2E)",
+         "run: cargo test --workspace --locked"),
     )
-    for name, command in expected:
+    for owner, name, command in expected:
+        owner_marker = f"  {owner}:\n"
+        if owner_marker not in workflow:
+            failures.append(f"missing Rust owner: {owner}")
+            continue
+        next_owner = {"architecture-and-rust": "product-truth", "verify": "windows-operator-smoke"}[owner]
+        rust = workflow.split(owner_marker, 1)[1].split(f"\n  {next_owner}:\n", 1)[0]
         marker = f"      - name: {name}\n"
         if marker not in rust:
             failures.append(f"missing Rust owner step: {name}")
@@ -39,6 +45,8 @@ def cargo_step_failures(workflow: str) -> list[str]:
             failures.append(f"SQLX_OFFLINE not enabled in Rust step: {name}")
         if command not in step:
             failures.append(f"missing Cargo command in Rust step: {name}")
+        if owner == "verify" and "if: needs.impact.outputs.cargo_scope == 'full'" not in step:
+            failures.append("full Rust workspace tests must not run for scoped changes")
     return failures
 
 
