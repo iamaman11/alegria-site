@@ -8,6 +8,11 @@ pub fn evaluate_whole_page_semantic_fixture(
         .map(|section| section.content_md.as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    let snapshot = deterministic_whole_page_snapshot(sections, &combined);
-    fuse_with_advisory_retrieval(sections, snapshot, advisory_hits)
+    let domain_sections = to_whole_page_sections(sections);
+    let snapshot = whole_page::deterministic_whole_page_snapshot(&domain_sections, &combined);
+    whole_page::fuse_with_advisory_retrieval(
+        &domain_sections,
+        snapshot,
+        &to_whole_page_advisory_hits(advisory_hits),
+    )
 }

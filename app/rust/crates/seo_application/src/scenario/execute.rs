@@ -220,16 +220,19 @@ where
                 SeoPhaseKey::RebuildDetect => {
                     let rebuild = rebuild_detect::execute(
                         repo,
-                        &RebuildDetectInputPayload {
+                        &RebuildDetectRequest {
                             run_id: request.site_input.run_id.clone(),
                             changed_truth_keys: raw_knowledge_changed_truth_keys.clone(),
-                            page_nodes: page_nodes.clone(),
+                            page_node_keys: page_nodes
+                                .iter()
+                                .map(|page| page.page_node_key.clone())
+                                .collect(),
                         },
                     )
                     .await?;
                     phase_reports.push(phase_report(
                         phase_label(input.key),
-                        &rebuild.verdict,
+                        rebuild.verdict.as_str(),
                         "",
                         format!("impacted_pages={}", rebuild.impacted_page_node_keys.len()),
                     ));

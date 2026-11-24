@@ -11,8 +11,7 @@ use contracts::generated::alegria::temporal::v1::{
     HitlTaskContext, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
     LinkRecommendOutputPayload, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
     PageNodeState, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
-    RebuildDetectInputPayload, RebuildDetectOutputPayload, SectionTemplateBinding,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, SectionTemplateBinding,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
@@ -23,6 +22,7 @@ use knowledge::{
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
+use seo_domain::rebuild::{RebuildDetectRequest, RebuildDetectResult};
 pub use seo_domain::review_decision::{CmsApproval, HumanReviewDecision};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -280,14 +280,14 @@ pub trait RebuildRepository: Send + Sync {
 
     async fn persist_rebuild_detect_output(
         &self,
-        input: &RebuildDetectInputPayload,
-        output: &RebuildDetectOutputPayload,
+        input: &RebuildDetectRequest,
+        output: &RebuildDetectResult,
     ) -> Result<(), DomainError>;
 
     async fn semantic_neighbor_impacts(
         &self,
         changed_truth_keys: &[String],
-        page_nodes: &[PageNodeState],
+        page_node_keys: &[String],
     ) -> Result<Vec<RebuildDependencyEvidence>, DomainError>;
 }
 

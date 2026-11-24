@@ -1,3 +1,34 @@
+// Preserve the expert-stage DTO field order: stage_record hashes its exact JSON.
+// The domain page state also has page_id/section_count; those are deliberately
+// excluded from this historical expert stage contract.
+fn whole_page_for_expert_section(section: &RawSectionRecord) -> WholePageSemanticPassOutput {
+    let semantic = seo_domain::whole_page::expert_section_semantics(
+        &seo_domain::whole_page::WholePageSection {
+            id: section.id,
+            page_id: section.page_id,
+            source_url: section.source_url.clone(),
+            heading_path: section.heading_path.clone(),
+            section_type: section.section_type.clone(),
+            content_md: section.content_md.clone(),
+        },
+    );
+    WholePageSemanticPassOutput {
+        page_mode_hint: semantic.page_mode_hint,
+        page_mode_confidence: semantic.page_mode_confidence,
+        dominant_layers: semantic.dominant_layers,
+        layer_scores: semantic.layer_scores,
+        page_summary: semantic.page_summary,
+        page_context_profile: semantic.page_context_profile,
+        mixed_section_ids: semantic.mixed_section_ids,
+        global_entities: semantic.global_entities,
+        advisory_model_used: semantic.advisory_model_used,
+        advisory_consensus: semantic.advisory_consensus,
+        advisory_prototype_families: semantic.advisory_prototype_families,
+        uncertainty_flags: semantic.uncertainty_flags,
+        reason_codes: semantic.reason_codes,
+    }
+}
+
 pub fn run_expert_extraction_core(
     run_id: &str,
     _context_key: &str,
@@ -11,32 +42,7 @@ pub fn run_expert_extraction_core(
 
     for section in sections {
         let mut stage_records = Vec::new();
-        let whole_page = WholePageSemanticPassOutput {
-            page_mode_hint: page_mode_hint(section),
-            page_mode_confidence: 0.70,
-            dominant_layers: dominant_layers(&section.content_md),
-            layer_scores: layer_scores_for_text(&section.content_md),
-            page_summary: summarize(&section.content_md),
-            page_context_profile: page_context_profile(
-                std::slice::from_ref(section),
-                &section.content_md,
-            ),
-            mixed_section_ids: if dominant_layers(&section.content_md).len() > 1 {
-                vec![section.id]
-            } else {
-                Vec::new()
-            },
-            global_entities: global_entities(&section.content_md),
-            advisory_model_used: false,
-            advisory_consensus: "not_used".to_string(),
-            advisory_prototype_families: Vec::new(),
-            uncertainty_flags: if dominant_layers(&section.content_md).len() > 1 {
-                vec!["multi_layer_page".to_string()]
-            } else {
-                Vec::new()
-            },
-            reason_codes: vec![format!("page_mode:{}", page_mode_hint(section))],
-        };
+        let whole_page = whole_page_for_expert_section(section);
         stage_records.push(stage_record(
             "whole_page_semantic_pass",
             section,
@@ -772,25 +778,7 @@ mod tests {
     #[test]
     fn whole_page_semantic_pass_emits_context_profile_and_mixed_section_hint() {
         let raw = "Spain tourist visa. Passport required. Appointment schedule applies through the consulate and VFS.";
-        let stage_output = WholePageSemanticPassOutput {
-            page_mode_hint: page_mode_hint(&section(7, raw)),
-            page_mode_confidence: 0.70,
-            dominant_layers: dominant_layers(raw),
-            layer_scores: layer_scores_for_text(raw),
-            page_summary: summarize(raw),
-            page_context_profile: page_context_profile(&[section(7, raw)], raw),
-            mixed_section_ids: if dominant_layers(raw).len() > 1 {
-                vec![7]
-            } else {
-                Vec::new()
-            },
-            global_entities: global_entities(raw),
-            advisory_model_used: false,
-            advisory_consensus: "not_used".to_string(),
-            advisory_prototype_families: Vec::new(),
-            uncertainty_flags: vec!["multi_layer_page".to_string()],
-            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(7, raw)))],
-        };
+        let stage_output = whole_page_for_expert_section(&section(7, raw));
 
         let report = run_expert_extraction_core(
             "run-semantic-page-context",
@@ -803,6 +791,15 @@ mod tests {
             .find(|record| record.stage_name == "whole_page_semantic_pass")
             .expect("whole_page_semantic_pass record");
         assert_eq!(whole_page_record.status, ExpertStageStatus::Executed);
+        let serialized = serde_json::to_value(&stage_output).expect("expert stage JSON");
+        assert!(serialized.get("page_id").is_none());
+        assert!(serialized.get("section_count").is_none());
+        assert_eq!(serialized.as_object().expect("object").len(), 13);
+        assert_eq!(stage_output.page_mode_confidence, 0.70);
+        assert_eq!(
+            whole_page_record.output_hash,
+            content_hash_v1(&serde_json::to_string(&stage_output).expect("serialize DTO"))
+        );
 
         assert!(stage_output
             .page_context_profile
@@ -832,25 +829,7 @@ mod tests {
     fn whole_page_semantic_pass_detects_utility_page_shape() {
         let raw =
             "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
-        let stage_output = WholePageSemanticPassOutput {
-            page_mode_hint: page_mode_hint(&section(8, raw)),
-            page_mode_confidence: 0.70,
-            dominant_layers: dominant_layers(raw),
-            layer_scores: layer_scores_for_text(raw),
-            page_summary: summarize(raw),
-            page_context_profile: page_context_profile(&[section(8, raw)], raw),
-            mixed_section_ids: if dominant_layers(raw).len() > 1 {
-                vec![8]
-            } else {
-                Vec::new()
-            },
-            global_entities: global_entities(raw),
-            advisory_model_used: false,
-            advisory_consensus: "not_used".to_string(),
-            advisory_prototype_families: Vec::new(),
-            uncertainty_flags: Vec::new(),
-            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(8, raw)))],
-        };
+        let stage_output = whole_page_for_expert_section(&section(8, raw));
         assert_eq!(stage_output.page_mode_hint, "utility_page");
     }
 
@@ -858,25 +837,7 @@ mod tests {
     fn whole_page_semantic_pass_marks_mixed_procedural_editorial_section() {
         let raw =
             "Tourist visa requirements. Passport and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid.";
-        let stage_output = WholePageSemanticPassOutput {
-            page_mode_hint: page_mode_hint(&section(9, raw)),
-            page_mode_confidence: 0.70,
-            dominant_layers: dominant_layers(raw),
-            layer_scores: layer_scores_for_text(raw),
-            page_summary: summarize(raw),
-            page_context_profile: page_context_profile(&[section(9, raw)], raw),
-            mixed_section_ids: if dominant_layers(raw).len() > 1 {
-                vec![9]
-            } else {
-                Vec::new()
-            },
-            global_entities: global_entities(raw),
-            advisory_model_used: false,
-            advisory_consensus: "not_used".to_string(),
-            advisory_prototype_families: Vec::new(),
-            uncertainty_flags: vec!["multi_layer_page".to_string()],
-            reason_codes: vec![format!("page_mode:{}", page_mode_hint(&section(9, raw)))],
-        };
+        let stage_output = whole_page_for_expert_section(&section(9, raw));
         assert!(stage_output
             .dominant_layers
             .contains(&"procedural".to_string()));

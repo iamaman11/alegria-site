@@ -150,7 +150,11 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
         page_nodes: &[PageNodeState],
     ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
         ensure_graph_contract_if_required("rebuild_impact_neighborhood").await?;
-        self.semantic_neighbor_impacts(changed_truth_keys, page_nodes)
+        let page_node_keys = page_nodes
+            .iter()
+            .map(|page| page.page_node_key.clone())
+            .collect::<Vec<_>>();
+        self.semantic_neighbor_impacts(changed_truth_keys, &page_node_keys)
             .await
     }
 

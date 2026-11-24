@@ -30,20 +30,13 @@ pub struct ExpertStageRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WholePageContextProfile {
-    pub country_hints: Vec<String>,
-    pub visa_type_hints: Vec<String>,
-    pub authority_hints: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WholePageSemanticPassOutput {
     pub page_mode_hint: String,
     pub page_mode_confidence: f32,
     pub dominant_layers: Vec<String>,
     pub layer_scores: BTreeMap<String, f32>,
     pub page_summary: String,
-    pub page_context_profile: WholePageContextProfile,
+    pub page_context_profile: seo_domain::whole_page::WholePageContextProfile,
     pub mixed_section_ids: Vec<i64>,
     pub global_entities: Vec<String>,
     pub advisory_model_used: bool,

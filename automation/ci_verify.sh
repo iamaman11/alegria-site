@@ -244,6 +244,9 @@ python3 automation/check_extraction_coverage.py
 echo "[38a/53] Expert core activation contract"
 python3 automation/check_expert_core_activation_contract.py
 
+echo "[38b/53] Whole-page semantic domain ownership"
+python3 automation/check_whole_page_owner_contract.py
+
 echo "[39/53] Extraction coverage smoke"
 bash automation/run_rust_owned_check.sh python3 automation/smoke_extraction_coverage.py
 

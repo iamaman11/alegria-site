@@ -1,8 +1,5 @@
-use contracts::generated::alegria::temporal::v1::{
-    RebuildDetectInputPayload, RebuildDetectOutputPayload, RebuildImpactState,
-};
 use primitives::errors::DomainError;
-use seo_domain::rebuild;
+use seo_domain::rebuild::{self, RebuildDetectRequest, RebuildDetectResult};
 use seo_ports::{GraphCapabilityPort, RebuildDependencyEvidence, RebuildRepository};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -20,8 +17,8 @@ async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
 
 pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
     repo: &R,
-    input: &RebuildDetectInputPayload,
-) -> Result<RebuildDetectOutputPayload, DomainError> {
+    input: &RebuildDetectRequest,
+) -> Result<RebuildDetectResult, DomainError> {
     ensure_graph_required_for_phase(repo, "rebuild_detect").await?;
     let mut narrowed_input = input.clone();
     let mut semantic_neighbor_evidence: Vec<RebuildDependencyEvidence> = Vec::new();
@@ -30,7 +27,7 @@ pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
             .narrow_rebuild_impacts(&input.changed_truth_keys)
             .await?;
         let semantic_impacted = repo
-            .semantic_neighbor_impacts(&input.changed_truth_keys, &input.page_nodes)
+            .semantic_neighbor_impacts(&input.changed_truth_keys, &input.page_node_keys)
             .await?;
         semantic_neighbor_evidence = semantic_impacted.clone();
         let combined = impacted
@@ -42,15 +39,15 @@ pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
                 .iter()
                 .map(|evidence| evidence.page_node_key.clone())
                 .collect::<HashSet<_>>();
-            narrowed_input.page_nodes = input
-                .page_nodes
+            narrowed_input.page_node_keys = input
+                .page_node_keys
                 .iter()
-                .filter(|page| impacted_keys.contains(&page.page_node_key))
+                .filter(|page| impacted_keys.contains(*page))
                 .cloned()
                 .collect();
         }
     }
-    let output = execute_rebuild_detect(&narrowed_input);
+    let output = rebuild::detect_rebuild(&narrowed_input);
     let enriched_output = annotate_semantic_neighbor_evidence(output, &semantic_neighbor_evidence);
     repo.persist_rebuild_detect_output(input, &enriched_output)
         .await?;
@@ -58,9 +55,9 @@ pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
 }
 
 fn annotate_semantic_neighbor_evidence(
-    mut output: RebuildDetectOutputPayload,
+    mut output: RebuildDetectResult,
     evidence: &[RebuildDependencyEvidence],
-) -> RebuildDetectOutputPayload {
+) -> RebuildDetectResult {
     if evidence.is_empty() {
         return output;
     }
@@ -75,57 +72,15 @@ fn annotate_semantic_neighbor_evidence(
         let Some(page_evidence) = by_page.get(&impact.page_node_key) else {
             continue;
         };
-        let mut reason = serde_json::from_str::<Value>(&impact.reason_package_json)
-            .unwrap_or_else(|_| Value::Object(Default::default()));
-        if let Value::Object(map) = &mut reason {
+        if let Value::Object(map) = &mut impact.reason_package {
             map.insert("semantic_neighbor_widening".to_string(), Value::Bool(true));
             map.insert(
                 "semantic_neighbor_evidence".to_string(),
                 Value::Array(page_evidence.clone()),
             );
         }
-        impact.reason_package_json = reason.to_string();
     }
     output
-}
-
-fn execute_rebuild_detect(input: &RebuildDetectInputPayload) -> RebuildDetectOutputPayload {
-    if input.changed_truth_keys.is_empty() {
-        return RebuildDetectOutputPayload {
-            impacted_page_node_keys: Vec::new(),
-            verdict: "no_rebuild_required".to_string(),
-            impacts: Vec::new(),
-        };
-    }
-    let trigger_type = rebuild::classify_trigger(&input.changed_truth_keys);
-    let priority = rebuild::trigger_priority(&trigger_type);
-    let changed_keys = input
-        .changed_truth_keys
-        .iter()
-        .map(|key| key.trim().to_string())
-        .filter(|key| !key.is_empty())
-        .collect::<Vec<_>>();
-    let reason: Value = rebuild::canonical_reason_package(&trigger_type, &changed_keys);
-    let impacts = input
-        .page_nodes
-        .iter()
-        .map(|page| page.page_node_key.trim().to_string())
-        .filter(|key| !key.is_empty())
-        .map(|page_node_key| RebuildImpactState {
-            page_node_key: page_node_key.clone(),
-            trigger_type: trigger_type.clone(),
-            reason_package_json: reason.to_string(),
-            priority,
-        })
-        .collect::<Vec<_>>();
-    RebuildDetectOutputPayload {
-        impacted_page_node_keys: impacts
-            .iter()
-            .map(|impact| impact.page_node_key.clone())
-            .collect(),
-        verdict: "rebuild_required".to_string(),
-        impacts,
-    }
 }
 
 #[cfg(test)]
@@ -134,8 +89,12 @@ mod tests {
     use async_trait::async_trait;
     use seo_ports::{GraphCapabilityPort, RebuildDependencyEvidence};
     use serde_json::json;
+    use std::sync::Mutex;
 
-    struct FakeRepo;
+    #[derive(Default)]
+    struct FakeRepo {
+        persisted_run_ids: Mutex<Vec<String>>,
+    }
 
     #[async_trait]
     impl GraphCapabilityPort for FakeRepo {
@@ -158,16 +117,20 @@ mod tests {
 
         async fn persist_rebuild_detect_output(
             &self,
-            _input: &RebuildDetectInputPayload,
-            _output: &RebuildDetectOutputPayload,
+            input: &RebuildDetectRequest,
+            _output: &RebuildDetectResult,
         ) -> Result<(), DomainError> {
+            self.persisted_run_ids
+                .lock()
+                .expect("record rebuild run ID")
+                .push(input.run_id.clone());
             Ok(())
         }
 
         async fn semantic_neighbor_impacts(
             &self,
             _changed_truth_keys: &[String],
-            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+            _page_node_keys: &[String],
         ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
             Ok(vec![RebuildDependencyEvidence {
                 page_node_key: "page:a".to_string(),
@@ -178,22 +141,13 @@ mod tests {
 
     #[tokio::test]
     async fn narrows_pages_before_rebuild_detect() {
-        let repo = FakeRepo;
+        let repo = FakeRepo::default();
         let output = execute(
             &repo,
-            &RebuildDetectInputPayload {
+            &RebuildDetectRequest {
                 run_id: "run-1".to_string(),
                 changed_truth_keys: vec!["verified.rule_instance:passport".to_string()],
-                page_nodes: vec![
-                    contracts::generated::alegria::temporal::v1::PageNodeState {
-                        page_node_key: "page:a".to_string(),
-                        ..Default::default()
-                    },
-                    contracts::generated::alegria::temporal::v1::PageNodeState {
-                        page_node_key: "page:b".to_string(),
-                        ..Default::default()
-                    },
-                ],
+                page_node_keys: vec!["page:a".to_string(), "page:b".to_string()],
             },
         )
         .await
@@ -205,8 +159,30 @@ mod tests {
             .collect::<HashSet<_>>();
         assert!(keys.contains("page:a"));
         assert!(keys.contains("page:b"));
-        assert!(output.impacts.iter().any(|impact| impact
-            .reason_package_json
-            .contains("semantic_neighbor_widening")));
+        assert!(output
+            .impacts
+            .iter()
+            .any(|impact| impact.reason_package["semantic_neighbor_widening"] == true));
+        let semantic_reason = &output
+            .impacts
+            .iter()
+            .find(|impact| impact.page_node_key == "page:a")
+            .expect("semantic widening impact")
+            .reason_package;
+        assert_eq!(
+            semantic_reason["semantic_neighbor_evidence"],
+            json!([{"semantic_neighbor_widening":true}])
+        );
+        assert_eq!(
+            semantic_reason["changed_truth_keys"],
+            json!(["verified.rule_instance:passport"])
+        );
+        assert_eq!(
+            *repo
+                .persisted_run_ids
+                .lock()
+                .expect("persisted rebuild run ID"),
+            vec!["run-1".to_string()]
+        );
     }
 }

@@ -16,8 +16,11 @@ pub(crate) async fn whole_page_semantic_pass_impl(
                 .map(|section| section.content_md.as_str())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let snapshot = deterministic_whole_page_snapshot(&sections, &combined);
-            let page_sketch = build_page_sketch(sections[0].page_id, &sections, &snapshot);
+            let domain_sections = to_whole_page_sections(&sections);
+            let snapshot =
+                whole_page::deterministic_whole_page_snapshot(&domain_sections, &combined);
+            let page_sketch =
+                whole_page::build_page_sketch(sections[0].page_id, &domain_sections, &snapshot);
             let advisory_hits =
                 match whole_page_advisory_adapter::search_whole_page_prototypes(
                     &page_sketch,
@@ -35,7 +38,11 @@ pub(crate) async fn whole_page_semantic_pass_impl(
                         Vec::new()
                     }
                 };
-            fuse_with_advisory_retrieval(&sections, snapshot, &advisory_hits)
+            whole_page::fuse_with_advisory_retrieval(
+                &domain_sections,
+                snapshot,
+                &to_whole_page_advisory_hits(&advisory_hits),
+            )
         })
         .collect::<Vec<_>>();
     let mut resolved_pages = Vec::with_capacity(pages.len());

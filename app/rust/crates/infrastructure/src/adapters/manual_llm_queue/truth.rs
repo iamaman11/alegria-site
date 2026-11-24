@@ -32,40 +32,18 @@ pub fn validated_candidate_values(
     ),
     DomainError,
 > {
+    use truth_domain::candidate_intake::canonicalize_fee_parameters;
     use truth_domain::truth_candidates::TruthParamValue;
     let mut params: TruthParamValue = serde_json::from_value(candidate.params.clone())
         .map_err(|err| validation(format!("manual truth params malformed: {err}")))?;
     let scope = serde_json::from_value(candidate.scope.clone())
         .map_err(|err| validation(format!("manual truth scope malformed: {err}")))?;
 
-    // The procedural fee extractor represents amounts as Decimal. JSON LLM
-    // answers often encode whole amounts as Integer. Without this narrow
-    // canonicalization, the SAME 80 EUR quote has two different stable truth
-    // signatures ("int:80" versus "decimal:80.00000000"), which the strict
-    // contradiction gate correctly treats as conflicting values and blocks
-    // all source-section evidence. Do not alter the global signature contract
-    // or normalize unrelated integer fields such as processing days.
-    if candidate.role == "FEE_ITEM" {
-        if let TruthParamValue::Object(fields) = &mut params {
-            for name in ["amount", "min_amount", "max_amount"] {
-                if let Some(value) = fields.get_mut(name) {
-                    if let TruthParamValue::Integer(integer) = value {
-                        let original = *integer;
-                        // f64 represents integers exactly only through 2^53.
-                        // Never round an oversized financial claim silently.
-                        if !(-9_007_199_254_740_992..=9_007_199_254_740_992)
-                            .contains(&original)
-                        {
-                            return Err(validation(format!(
-                                "manual truth fee {name} cannot be represented exactly as decimal"
-                            )));
-                        }
-                        *value = TruthParamValue::Decimal(original as f64);
-                    }
-                }
-            }
-        }
-    }
+    canonicalize_fee_parameters(&candidate.role, &mut params).map_err(|name| {
+        validation(format!(
+            "manual truth fee {name} cannot be represented exactly as decimal"
+        ))
+    })?;
     Ok((params, scope))
 }
 

@@ -1,24 +1,23 @@
-fn dominant_layers(text: &str) -> Vec<String> {
+//! Deterministic whole-page scoring; no runtime, persistence or SDK dependencies.
+
+use std::collections::BTreeMap;
+
+use super::context_profile::{
+    global_entities, page_context_profile, section_is_noise, summarize, weighted_family_score,
+};
+use super::{WholePageDeterministicSnapshot, WholePageSection, WholePageSemanticPageState};
+
+pub(super) fn dominant_layers(text: &str) -> Vec<String> {
     let scores = layer_scores_for_text(text);
-    let mut layers = select_layers_from_scores(&scores);
+    dominant_layers_for_scores(&scores)
+}
+
+fn dominant_layers_for_scores(scores: &BTreeMap<String, f32>) -> Vec<String> {
+    let mut layers = select_layers_from_scores(scores);
     if layers.is_empty() {
         layers.push("procedural".to_string());
     }
     layers
-}
-
-#[derive(Debug, Clone)]
-struct WholePageDeterministicSnapshot {
-    page_mode_hint: String,
-    page_mode_confidence: f32,
-    dominant_layers: Vec<String>,
-    layer_scores: BTreeMap<String, f32>,
-    page_summary: String,
-    page_context_profile: WholePageContextProfile,
-    mixed_section_ids: Vec<i64>,
-    global_entities: Vec<String>,
-    uncertainty_flags: Vec<String>,
-    reason_codes: Vec<String>,
 }
 
 fn normalized_marker_score(text: &str, markers: &[&str]) -> f32 {
@@ -50,7 +49,17 @@ fn layer_marker_score(text: &str, markers: &[&str], multi_hit_floor: f32) -> f32
     }
 }
 
-fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
+#[derive(Debug, Clone, Copy)]
+enum LayerScoringProfile {
+    TemporalPage,
+    ExpertSection,
+}
+
+pub(super) fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
+    layer_scores_for_profile(text, LayerScoringProfile::TemporalPage)
+}
+
+fn layer_scores_for_profile(text: &str, profile: LayerScoringProfile) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
     scores.insert(
         "procedural".to_string(),
@@ -111,17 +120,12 @@ fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
             0.24,
         ),
     );
-    scores.insert(
-        "seo".to_string(),
-        normalized_marker_score(
-            text,
+    // The live whole-page and in-process expert passes have different
+    // historically accepted source scopes. Name them explicitly; neither is
+    // a fallback for the other, and all shared marker families have one owner.
+    let (seo_markers, commercial_markers): (&[&str], &[&str]) = match profile {
+        LayerScoringProfile::TemporalPage => (
             &["seo", "serp", "ключев", "ranking", "organic traffic"],
-        ),
-    );
-    scores.insert(
-        "commercial".to_string(),
-        normalized_marker_score(
-            text,
             &[
                 "consultation",
                 "book now",
@@ -131,6 +135,18 @@ fn layer_scores_for_text(text: &str) -> BTreeMap<String, f32> {
                 "service package",
             ],
         ),
+        LayerScoringProfile::ExpertSection => (
+            &["seo", "serp", "ранжир", "ключев"],
+            &["консультац", "заказать", "услуга", "под ключ"],
+        ),
+    };
+    scores.insert(
+        "seo".to_string(),
+        normalized_marker_score(text, seo_markers),
+    );
+    scores.insert(
+        "commercial".to_string(),
+        normalized_marker_score(text, commercial_markers),
     );
     scores
 }
@@ -149,10 +165,7 @@ fn select_layers_from_scores(scores: &BTreeMap<String, f32>) -> Vec<String> {
         .collect()
 }
 
-fn page_mode_scores(
-    _text: &str,
-    sections: &[raw_crawl_adapter::RawSectionRecord],
-) -> BTreeMap<String, f32> {
+fn page_mode_scores(_text: &str, sections: &[WholePageSection]) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
     let source_url = sections
         .first()
@@ -220,7 +233,14 @@ fn page_mode_scores(
     );
     let navigation_markers = marker_hit_count(
         &primary_content,
-        &["breadcrumb", "menu", "directory", "sitemap", "category", "sidebar"],
+        &[
+            "breadcrumb",
+            "menu",
+            "directory",
+            "sitemap",
+            "category",
+            "sidebar",
+        ],
     );
     let primary_has_functional_mode = utility_markers >= 2 || navigation_markers >= 2;
     let content_support = if !primary_has_substantive_content && primary_has_functional_mode {
@@ -291,16 +311,16 @@ fn select_page_mode_and_confidence(scores: &BTreeMap<String, f32>) -> (String, f
     }
 }
 
-fn section_mixed_layer_score(text: &str) -> usize {
+pub(super) fn section_mixed_layer_score(text: &str) -> usize {
     layer_scores_for_text(text)
         .values()
         .filter(|score| **score >= 0.20)
         .count()
 }
 
-fn build_page_sketch(
+pub fn build_page_sketch(
     page_id: i64,
-    sections: &[raw_crawl_adapter::RawSectionRecord],
+    sections: &[WholePageSection],
     snapshot: &WholePageDeterministicSnapshot,
 ) -> String {
     let source_url = sections
@@ -351,8 +371,8 @@ fn build_page_sketch(
     )
 }
 
-fn deterministic_whole_page_snapshot(
-    sections: &[raw_crawl_adapter::RawSectionRecord],
+pub fn deterministic_whole_page_snapshot(
+    sections: &[WholePageSection],
     combined: &str,
 ) -> WholePageDeterministicSnapshot {
     let layer_scores = layer_scores_for_text(combined);
@@ -405,5 +425,59 @@ fn deterministic_whole_page_snapshot(
         global_entities: global_entities(combined),
         uncertainty_flags,
         reason_codes,
+    }
+}
+
+fn expert_page_mode_hint(section: &WholePageSection) -> String {
+    let text = format!(
+        "{}\n{}\n{}",
+        section.source_url, section.heading_path, section.content_md
+    )
+    .to_lowercase();
+    if text.contains("sitemap") || text.contains("directory") || text.contains("каталог") {
+        "directory_page".to_string()
+    } else if text.contains("breadcrumb") || text.contains("menu") || text.contains("навигац")
+    {
+        "menu_page".to_string()
+    } else if text.contains("privacy") || text.contains("cookie") || text.contains("login") {
+        "utility_page".to_string()
+    } else if text.contains("consultation") || text.contains("book now") {
+        "landing_page".to_string()
+    } else {
+        "content_page".to_string()
+    }
+}
+
+/// The expert in-process runner records exactly one section as a whole-page
+/// semantic stage. Its accepted section-level confidence/mode and two marker
+/// families differ from Temporal's multi-section policy and stay explicit.
+pub fn expert_section_semantics(section: &WholePageSection) -> WholePageSemanticPageState {
+    let scores = layer_scores_for_profile(&section.content_md, LayerScoringProfile::ExpertSection);
+    let layers = dominant_layers_for_scores(&scores);
+    let page_mode_hint = expert_page_mode_hint(section);
+    let mixed = layers.len() > 1;
+    WholePageSemanticPageState {
+        page_id: section.page_id,
+        section_count: 1,
+        page_mode_hint: page_mode_hint.clone(),
+        page_mode_confidence: 0.70,
+        dominant_layers: layers,
+        layer_scores: scores,
+        page_summary: summarize(&section.content_md),
+        page_context_profile: page_context_profile(
+            std::slice::from_ref(section),
+            &section.content_md,
+        ),
+        mixed_section_ids: if mixed { vec![section.id] } else { Vec::new() },
+        global_entities: global_entities(&section.content_md),
+        advisory_model_used: false,
+        advisory_consensus: "not_used".to_string(),
+        advisory_prototype_families: Vec::new(),
+        uncertainty_flags: if mixed {
+            vec!["multi_layer_page".to_string()]
+        } else {
+            Vec::new()
+        },
+        reason_codes: vec![format!("page_mode:{page_mode_hint}")],
     }
 }

@@ -508,21 +508,6 @@ mod tests {
     }
 
     #[test]
-    fn crawl_retry_policy_staggers_attempts() {
-        assert_eq!(next_crawl_retry_delay_sec(0), 60);
-        assert_eq!(next_crawl_retry_delay_sec(1), 60);
-        assert_eq!(next_crawl_retry_delay_sec(2), 300);
-        assert_eq!(next_crawl_retry_delay_sec(3), 1800);
-        assert_eq!(next_crawl_retry_delay_sec(4), 7200);
-        assert!(should_retry_http_status(429));
-        assert!(should_retry_http_status(500));
-        assert!(!should_retry_http_status(404));
-        assert!(should_retry_crawl_attempt(1));
-        assert!(should_retry_crawl_attempt(3));
-        assert!(!should_retry_crawl_attempt(4));
-    }
-
-    #[test]
     fn crawl_observation_trace_serializes_provenance_fields() {
         let trace = CrawlObservationTrace {
             source_url: "https://example.com/source".to_string(),

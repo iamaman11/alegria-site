@@ -1,3 +1,5 @@
+use truth_domain::candidate_intake::{decide_disposition, CandidateDisposition, CandidateGates};
+
 pub(crate) async fn extraction_schema_validate_impl(
     input: &ExtractionSchemaValidateInput,
 ) -> Result<ExtractionSchemaValidateOutput, DomainError> {
@@ -187,16 +189,20 @@ pub(crate) async fn candidate_validation_impl(
                 .is_none_or(|token| contains_exact_evidence_token(&evidence_quote, token.trim()));
             let rule_context_supported = amount_or_duration_matches
                 && deterministic_evidence_has_role_context(&rule.rule_key, &evidence_quote);
-            let mut epistemic_status = validation.epistemic_status.clone();
-            if !rule_context_supported && epistemic_status != "rejected" {
-                epistemic_status = "needs_hitl".to_string();
-            }
-            if ontology.needs_hitl && epistemic_status != "rejected" {
-                epistemic_status = "needs_hitl".to_string();
-            }
-            if schema.status == "invalid" && epistemic_status != "rejected" {
-                epistemic_status = "rejected".to_string();
-            }
+            let original_status = CandidateDisposition::from_wire(&validation.epistemic_status)
+                .map_err(|reason| DomainError::ValidationFailure {
+                    message: reason.to_string(),
+                })?;
+            let epistemic_status = decide_disposition(
+                original_status,
+                CandidateGates {
+                    role_context_supported: rule_context_supported,
+                    ontology_needs_hitl: ontology.needs_hitl,
+                    schema_invalid: schema.status == "invalid",
+                },
+            )
+            .as_wire()
+            .to_string();
             candidates.push(ValidatedTruthCandidateRecord {
                 section_id: section.section_id,
                 page_id: section.page_id,
@@ -299,13 +305,23 @@ pub(crate) async fn candidate_validation_impl(
                     uncertainty_flags: uncertainty_flags.clone(),
                 };
                 let validation = validate_truth_candidate(&runtime, &raw.content_md);
-                let mut epistemic_status = validation.epistemic_status.clone();
-                if ontology.needs_hitl && epistemic_status != "rejected" {
-                    epistemic_status = "needs_hitl".to_string();
-                }
-                if schema.status == "invalid" && epistemic_status != "rejected" {
-                    epistemic_status = "rejected".to_string();
-                }
+                let original_status = CandidateDisposition::from_wire(&validation.epistemic_status)
+                    .map_err(|reason| DomainError::ValidationFailure {
+                        message: reason.to_string(),
+                    })?;
+                let epistemic_status = decide_disposition(
+                    original_status,
+                    CandidateGates {
+                        // Only deterministic procedural rules have a separate
+                        // rule-context proof. Manual candidates are revalidated
+                        // against the bound source quotation above.
+                        role_context_supported: true,
+                        ontology_needs_hitl: ontology.needs_hitl,
+                        schema_invalid: schema.status == "invalid",
+                    },
+                )
+                .as_wire()
+                .to_string();
                 candidates.push(ValidatedTruthCandidateRecord {
                     section_id: section.section_id,
                     page_id: section.page_id,

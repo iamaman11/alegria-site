@@ -40,7 +40,6 @@ use super::voyage_api_adapter::{
 
 const CRAWL_USER_AGENT: &str = "AlegriaBot/1.0 (+https://alegria.local/seo-research)";
 const MAX_REDIRECT_HOPS: usize = 10;
-const MAX_CRAWL_ATTEMPTS: i32 = 4;
 // Byte budgets bound even multilingual text below Voyage context windows.
 const MAX_RAW_SECTION_BYTES: usize = 8 * 1024;
 const MAX_CONTEXTUAL_GROUP_BYTES: usize = 20 * 1024;

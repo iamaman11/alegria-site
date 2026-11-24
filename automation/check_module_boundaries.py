@@ -99,6 +99,20 @@ def main() -> int:
             if references:
                 raise ValueError(f"{name} has forbidden source references in {source}: {references}")
 
+    # IA canonical routes, topic disposition and blueprint section policy have
+    # one typed domain owner. The Temporal step may map protobuf and retain
+    # conflict identity, but must not reintroduce another page-planning policy.
+    ia_domain = (RUST / "crates/seo_domain/src/ia_planning.rs").read_text(encoding="utf-8")
+    ia_step = (RUST / "crates/seo_steps/src/ia_build_step.rs").read_text(encoding="utf-8")
+    if ("pub enum IaClusterDisposition" not in ia_domain
+            or "pub fn plan_cluster(" not in ia_domain
+            or "pub fn scope_paths(" not in ia_domain
+            or "pub fn required_sections_for_page_type(" not in ia_domain
+            or "ia_planning::plan_cluster(" not in ia_step
+            or "ia_planning::scope_paths(" not in ia_step
+            or re.search(r"\bfn\s+(?:multi_section_demand|page_type_for_keyword|page_type_path_segment|required_sections_for_page_type|canonical_prefix|country_prefix)\s*\(", ia_step)):
+        raise ValueError("IA page classification, routes and section policy must have one domain owner")
+
     # Human-review decisions have one pure owner, not a second free-form
     # decision-to-HITL mapping inside the SQL adapter or Application.
     review_domain = (RUST / "crates/seo_domain/src/review_decision.rs").read_text(encoding="utf-8")

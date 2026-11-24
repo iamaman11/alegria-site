@@ -445,8 +445,8 @@ mod tests {
         }
         async fn persist_rebuild_detect_output(
             &self,
-            _input: &RebuildDetectInputPayload,
-            _output: &contracts::generated::alegria::temporal::v1::RebuildDetectOutputPayload,
+            _input: &RebuildDetectRequest,
+            _output: &seo_domain::rebuild::RebuildDetectResult,
         ) -> Result<(), DomainError> {
             Ok(())
         }
@@ -454,7 +454,7 @@ mod tests {
         async fn semantic_neighbor_impacts(
             &self,
             _changed_truth_keys: &[String],
-            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
+            _page_node_keys: &[String],
         ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
             Ok(Vec::new())
         }

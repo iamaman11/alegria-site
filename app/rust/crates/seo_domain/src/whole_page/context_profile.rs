@@ -1,4 +1,9 @@
-fn summarize(text: &str) -> String {
+//! Page context hints and source framing, independent of runtime adapters.
+
+use super::scoring::dominant_layers;
+use super::{WholePageContextProfile, WholePageSection};
+
+pub(super) fn summarize(text: &str) -> String {
     text.lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
@@ -6,7 +11,7 @@ fn summarize(text: &str) -> String {
         .unwrap_or_default()
 }
 
-fn global_entities(text: &str) -> Vec<String> {
+pub(super) fn global_entities(text: &str) -> Vec<String> {
     let lowered = text.to_lowercase();
     let mut entities = Vec::new();
     for token in [
@@ -26,7 +31,7 @@ fn global_entities(text: &str) -> Vec<String> {
     entities
 }
 
-fn section_is_noise(section: &raw_crawl_adapter::RawSectionRecord) -> bool {
+pub(super) fn section_is_noise(section: &WholePageSection) -> bool {
     let lowered_type = section.section_type.to_ascii_lowercase();
     lowered_type.contains("footer")
         || lowered_type.contains("nav")
@@ -34,7 +39,7 @@ fn section_is_noise(section: &raw_crawl_adapter::RawSectionRecord) -> bool {
         || lowered_type.contains("menu")
 }
 
-fn weighted_family_score(inputs: &[(&str, f32)], markers: &[&str]) -> f32 {
+pub(super) fn weighted_family_score(inputs: &[(&str, f32)], markers: &[&str]) -> f32 {
     if markers.is_empty() {
         return 0.0;
     }
@@ -60,8 +65,8 @@ fn push_hint_if_supported(
     }
 }
 
-fn page_context_profile(
-    sections: &[raw_crawl_adapter::RawSectionRecord],
+pub(super) fn page_context_profile(
+    sections: &[WholePageSection],
     text: &str,
 ) -> WholePageContextProfile {
     let source_url = sections
@@ -180,7 +185,10 @@ fn page_context_profile(
     }
 }
 
-fn merge_unique_strings(left: &mut Vec<String>, right: impl IntoIterator<Item = String>) {
+pub(super) fn merge_unique_strings(
+    left: &mut Vec<String>,
+    right: impl IntoIterator<Item = String>,
+) {
     for item in right {
         if !left.contains(&item) {
             left.push(item);
@@ -188,8 +196,8 @@ fn merge_unique_strings(left: &mut Vec<String>, right: impl IntoIterator<Item = 
     }
 }
 
-fn supportive_section_count_for_layer(
-    sections: &[raw_crawl_adapter::RawSectionRecord],
+pub(super) fn supportive_section_count_for_layer(
+    sections: &[WholePageSection],
     layer: &str,
 ) -> usize {
     sections

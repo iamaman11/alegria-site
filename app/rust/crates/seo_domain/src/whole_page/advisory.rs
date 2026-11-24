@@ -1,6 +1,15 @@
-fn advisory_signal_from_hits(
-    advisory_hits: &[whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit],
-) -> WholePageAdvisorySignal {
+//! Pure fusion of advisory retrieval evidence with deterministic page decisions.
+
+use std::collections::BTreeMap;
+
+use super::context_profile::{merge_unique_strings, supportive_section_count_for_layer};
+use super::scoring::section_mixed_layer_score;
+use super::{
+    WholePageAdvisoryHit, WholePageAdvisorySignal, WholePageContextProfile,
+    WholePageDeterministicSnapshot, WholePageSection, WholePageSemanticPageState,
+};
+
+fn advisory_signal_from_hits(advisory_hits: &[WholePageAdvisoryHit]) -> WholePageAdvisorySignal {
     let mut page_mode_candidates = Vec::new();
     let mut layer_candidates = Vec::new();
     let mut country_hints = Vec::new();
@@ -38,18 +47,10 @@ fn advisory_signal_from_hits(
     }
 }
 
-fn advisory_hit_limit() -> u64 {
-    std::env::var("WHOLE_PAGE_ADVISORY_LIMIT")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(3)
-}
-
-fn fuse_with_advisory_retrieval(
-    sections: &[raw_crawl_adapter::RawSectionRecord],
+pub fn fuse_with_advisory_retrieval(
+    sections: &[WholePageSection],
     snapshot: WholePageDeterministicSnapshot,
-    advisory_hits: &[whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit],
+    advisory_hits: &[WholePageAdvisoryHit],
 ) -> WholePageSemanticPageState {
     let mut dominant_layers = snapshot.dominant_layers.clone();
     let mut layer_scores = snapshot.layer_scores.clone();
