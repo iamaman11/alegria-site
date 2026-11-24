@@ -10,10 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci_impact import (
-    CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, WORKER_E2E_PREPARE, analyze, changed_paths,
+    CI_PR_OWNERS, FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
+    WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
     main_cache_prime_required,
-    suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
+    suite_commands_by_ci_job, suite_commands_for_report, suite_environment_for_report,
+    truth_fixture_ids_for_paths,
     worker_release_decision, workspace_graph,
 )
 from dev_rust_feedback import commands_for_report
@@ -95,6 +97,51 @@ class ImpactFixtures(unittest.TestCase):
         decision = worker_release_decision(report, paths, manual=False)
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
+
+    def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
+        report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
+        self.assertEqual(report["scope"], "full")
+        self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
+        assignments = suite_commands_by_ci_job(report)
+        architecture = dict(assignments["architecture-and-rust"])
+        verify = dict(assignments["verify"])
+        selected = dict(suite_commands_for_report(report))
+        self.assertFalse(set(architecture) & set(verify))
+        self.assertEqual(architecture | verify, selected)
+        self.assertEqual(set(verify), FULL_VERIFY_E2E_SUITES)
+        self.assertIn("cms_review_revision", verify)
+        self.assertIn("truth_adjudication_integrity", verify)
+        self.assertIn("temporal_restart", architecture)
+        self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
+
+    def test_scoped_ci_keeps_every_selected_real_suite_in_architecture(self) -> None:
+        for path in (
+            "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs",
+            "app/rust/services/temporal/src/main.rs",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertEqual(report["scope"], "scoped")
+                assignments = suite_commands_by_ci_job(report)
+                self.assertEqual(assignments["verify"], [])
+                self.assertEqual(
+                    assignments["architecture-and-rust"], suite_commands_for_report(report),
+                )
+
+    def test_full_ci_suite_rebalance_rejects_ungated_or_mismatched_impact(self) -> None:
+        report = self.impact(".github/workflows/ci.yml")
+        for mutation in (
+            {"selected_ci_jobs": ["architecture-and-rust"]},
+            {"selected_ci_jobs": ["verify"]},
+            {"analysis": "scoped"},
+            {"scope": "scoped"},
+            {"mandatory_full_ci_gate": False},
+        ):
+            with self.subTest(mutation=mutation):
+                invalid = {**report, **mutation}
+                with self.assertRaises(ValueError):
+                    suite_commands_by_ci_job(invalid)
 
     def test_compiler_cache_and_feedback_tools_do_not_ship_into_worker(self) -> None:
         # A change to compiler orchestration still receives the full PR gate:
@@ -613,6 +660,24 @@ class ImpactFixtures(unittest.TestCase):
                 result = self.impact(path)
                 self.assertIn("outbox_a14", result["selected_suites"])
                 self.assertIn("outbox_a14_", dict(suite_commands_for_report(result))["outbox_a14"])
+
+    def test_truth_adjudication_change_selects_real_postgres_integrity_suite(self) -> None:
+        for path in (
+            "app/rust/crates/truth_domain/src/contradictions.rs",
+            "app/rust/crates/truth_domain/src/review_decisions.rs",
+            "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
+            "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+            "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertIn("truth_adjudication_integrity", result["selected_suites"])
+                self.assertIn(
+                    "truth_adjudication_",
+                    dict(suite_commands_for_report(result))["truth_adjudication_integrity"],
+                )
+                if path.startswith("app/rust/services/temporal/"):
+                    self.assertIn("temporal_restart", result["selected_suites"])
 
     def test_public_static_render_change_selects_real_cms_and_pg_suite(self) -> None:
         for path in (

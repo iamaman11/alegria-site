@@ -14,7 +14,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cargo_feedback import run_cargo, workspace_artifact
-from ci_impact import SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE, suite_commands_for_report
+from ci_impact import (
+    SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE,
+    suite_commands_by_ci_job, suite_commands_for_report,
+)
 from run_scoped_cargo_feedback import (
     cargo_commands_for_ci, main as run_scoped_cargo_feedback, selected_preparations,
 )
@@ -130,7 +133,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         }
 
     def run_plan(
-        self, suites: list[str], *, delegated: bool = False,
+        self, suites: list[str], *, delegated: bool = False, suite_job: str = "architecture-and-rust",
     ) -> tuple[list[tuple[list[str], dict]], str, dict]:
         report = self.report(suites)
         executions: list[tuple[list[str], dict]] = []
@@ -164,6 +167,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 patch.object(sys, "argv", [
                     "runner", "--report", str(report_path),
                     *(["--delegate-workspace-unit-tests-to-verify"] if delegated else []),
+                    *(["--suite-job", suite_job] if suite_job != "architecture-and-rust" else []),
                 ]),
                 patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}, clear=True),
                 patch("sys.stdout", new_callable=io.StringIO) as output,
@@ -171,13 +175,17 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 self.assertEqual(run_scoped_cargo_feedback(), 0)
                 lines = output.getvalue()
             measurements = json.loads(
-                (root / "automation/reports/scoped_cargo_feedback.json").read_text(encoding="utf-8")
+                (root / (
+                    "automation/reports/scoped_cargo_feedback.json"
+                    if suite_job == "architecture-and-rust"
+                    else "automation/reports/scoped_cargo_feedback_verify.json"
+                )).read_text(encoding="utf-8")
             )
         return executions, lines, measurements
 
     def test_runtime_prebuild_runs_once_before_any_e2e_without_changing_tests(self) -> None:
         suites = ["cms_review_revision", "truth_certification", "knowledge_a13", "temporal_restart"]
-        commands = suite_commands_for_report(self.report(suites))
+        commands = suite_commands_by_ci_job(self.report(suites))["architecture-and-rust"]
         executions, output, measurements = self.run_plan(suites)
         expected = [
             ["cargo", "test", "--workspace", "--locked"],
@@ -188,7 +196,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         self.assertEqual(len(measurements["measurements"]), len(expected))
         self.assertEqual(output.count("CI_SUITE_PREPARE=truth_certification COMMAND="), 1)
         self.assertIn("CI_SUITE_PREPARE_REUSED=temporal_restart", output)
-        self.assertEqual(output.count("CI_SUITE="), len(suites))
+        self.assertEqual(output.count("CI_SUITE="), len(commands))
         self.assertTrue(all(kwargs.get("env") is None for _, kwargs in executions[:2]))
         for (name, _), (_, kwargs) in zip(commands, executions[2:]):
             if name in {"truth_certification", "temporal_restart"}:
@@ -202,7 +210,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         executions, output, _ = self.run_plan(suites)
         self.assertEqual([command for command, _ in executions], [
             ["cargo", "test", "--workspace", "--locked"],
-            *(command for _, command in suite_commands_for_report(self.report(suites))),
+            *(command for _, command in suite_commands_by_ci_job(self.report(suites))["architecture-and-rust"]),
         ])
         self.assertNotIn("CI_SUITE_PREPARE=", output)
         self.assertNotIn("CI_SUITE_PREPARE_REUSED=", output)
@@ -212,7 +220,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         executions, output, evidence = self.run_plan(suites, delegated=True)
         expected = [
             list(WORKER_E2E_PREPARE),
-            *(command for _, command in suite_commands_for_report(self.report(suites))),
+            *(command for _, command in suite_commands_by_ci_job(self.report(suites))["architecture-and-rust"]),
         ]
         self.assertEqual([command for command, _ in executions], expected)
         self.assertEqual(evidence["delegated_workspace_unit_tests_to"], "verify")
@@ -221,6 +229,25 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         )
         self.assertEqual(len(evidence["measurements"]), len(expected))
         self.assertIn("CI_SUITE_PREBUILT=temporal_restart", output)
+
+    def test_full_verify_runs_only_its_selected_real_e2e_after_workspace_units(self) -> None:
+        suites = [
+            "cms_review_revision", "draft_qa_scenario", "knowledge_a13",
+            "outbox_a14", "planning_atomicity", "publishing_a17",
+            "temporal_restart", "truth_adjudication_integrity",
+        ]
+        executions, output, evidence = self.run_plan(suites, suite_job="verify")
+        assigned = suite_commands_by_ci_job(self.report(suites))["verify"]
+        self.assertEqual([command for command, _ in executions], [command for _, command in assigned])
+        self.assertEqual({name for name, _ in assigned}, {
+            "cms_review_revision", "draft_qa_scenario", "knowledge_a13", "outbox_a14",
+            "planning_atomicity", "publishing_a17", "truth_adjudication_integrity",
+        })
+        self.assertNotIn("CI_SUITE_PREPARE=", output)
+        self.assertNotIn("CI_WORKSPACE_UNIT_TESTS=", output)
+        self.assertEqual(evidence["suite_job"], "verify")
+        self.assertEqual(evidence["selected_suites"], [name for name, _ in assigned])
+        self.assertEqual(len(evidence["measurements"]), len(assigned))
 
     def test_delegation_rejects_ungated_verify_and_noncanonical_full_command(self) -> None:
         report = self.report([])

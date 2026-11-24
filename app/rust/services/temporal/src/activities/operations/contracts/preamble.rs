@@ -24,7 +24,7 @@ use truth_domain::truth_governance::{
 };
 use truth_domain::review_decisions::{
     apply_exact_review_rejection_veto, held_semantic_identities, semantic_identity_is_held,
-    non_structured_candidate_reason, validated_candidate_assertions, CandidateValidationSectionState,
+    validated_candidate_assertions, CandidateValidationSectionState,
     TruthAdjudicationCandidateDecision, ValidatedTruthCandidateRecord,
 };
 use truth_domain::evidence::{

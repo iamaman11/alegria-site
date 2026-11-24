@@ -184,6 +184,19 @@ OUTBOX_A14_PATHS = {
     "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
 }
 
+# Truth adjudication is a real PostgreSQL/evidence operation distinct from
+# publication, outbox delivery and full Temporal restart. Its targeted E2E
+# must be selected by the same impact model, including for test-only changes.
+TRUTH_ADJUDICATION_PATHS = {
+    "app/rust/crates/truth_domain/src/contradictions.rs",
+    "app/rust/crates/truth_domain/src/truth_governance.rs",
+    "app/rust/crates/truth_domain/src/review_decisions.rs",
+    "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
+    "app/rust/services/temporal/src/activities/runtime.rs",
+    "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+    "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
+}
+
 # An actual PostgreSQL revision-bound human review exercises the domain
 # decision, typed port, SQL transaction and active-workflow ownership. It is
 # distinct from the public release/readback A17 integration.
@@ -336,6 +349,16 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "truth_adjudication_integrity": {
+        "paths": TRUTH_ADJUDICATION_PATHS,
+        "prefixes": (),
+        "lock_crates": {"truth_domain"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "truth_adjudication_", "--locked", "--", "--nocapture",
         ),
     },
     "knowledge_a13": {
@@ -682,6 +705,49 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
     if report.get("suite_fixture_ids") and "truth_certification" not in suites:
         raise ValueError("fixture selection without its executable suite")
     return [(name, list(SUITE_OWNERS[name]["command"])) for name in suites]
+
+
+# The full CI already runs independent workspace units in verify. Running
+# these real, Worker-independent E2E suites there uses the idle second runner
+# while architecture retains the Worker binaries and Temporal regressions.
+# Scoped changes keep their existing single-owner architecture fast path.
+FULL_VERIFY_E2E_SUITES = frozenset({
+    "draft_qa_scenario", "knowledge_a13", "outbox_a14",
+    "planning_atomicity", "publishing_a17", "cms_review_revision",
+    "truth_adjudication_integrity",
+})
+
+
+def suite_commands_by_ci_job(report: dict[str, Any]) -> dict[str, list[tuple[str, list[str]]]]:
+    """Partition the *same selected suites* between existing PR owners exactly once.
+
+    Impact still owns every suite's executable command and selection. This
+    function only chooses where the already-mandatory command is executed.
+    """
+    commands = suite_commands_for_report(report)
+    scope = report.get("analysis")
+    if scope not in {"none", "scoped", "full"} or report.get("scope", scope) != scope:
+        raise ValueError("invalid exact-source Cargo scope for suite assignment")
+    selected = report.get("selected_ci_jobs")
+    if (not isinstance(selected, list)
+            or any(not isinstance(job, str) or job not in CI_PR_OWNERS for job in selected)
+            or len(selected) != len(set(selected))):
+        raise ValueError("missing selected CI owners for suites")
+    if scope == "full":
+        required = {"architecture-and-rust", "verify"}
+    elif commands:
+        required = {"architecture-and-rust"}
+    else:
+        required = set()
+    if not required.issubset(selected):
+        raise ValueError("selected suite CI owner is absent from the mandatory gate")
+    assignments: dict[str, list[tuple[str, list[str]]]] = {
+        "architecture-and-rust": [], "verify": [],
+    }
+    for name, command in commands:
+        job = "verify" if scope == "full" and name in FULL_VERIFY_E2E_SUITES else "architecture-and-rust"
+        assignments[job].append((name, command))
+    return assignments
 
 
 def parse_name_status(raw: bytes) -> list[str]:

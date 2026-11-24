@@ -274,6 +274,7 @@
         role: &str,
         concept_canonical_key: &str,
         params: serde_json::Value,
+        evidence_section_id: i64,
     ) -> serde_json::Value {
         serde_json::json!({
             "candidates": [{
@@ -293,7 +294,7 @@
                 "is_range": false,
                 "is_incomplete": false,
                 "confidence": 0.94,
-                "evidence_section_id": 0,
+                "evidence_section_id": evidence_section_id,
                 "evidence_quote": raw_text,
                 "span_start": 0,
                 "span_end": raw_text.len(),
