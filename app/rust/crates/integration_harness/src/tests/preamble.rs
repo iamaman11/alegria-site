@@ -23,6 +23,11 @@
     };
     #[cfg(feature = "e2e")]
     use temporalio_common::data_converters::RawValue;
+    #[cfg(feature = "e2e")]
+    use temporalio_common::protos::temporal::api::{
+        enums::v1::EventType,
+        history::v1::{history_event::Attributes, History},
+    };
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
         scenario::{
@@ -351,29 +356,71 @@
     /// an empty command sequence.
     #[cfg(feature = "e2e")]
     fn scheduled_temporal_activities(history_json: &[u8]) -> Vec<String> {
-        let history: serde_json::Value =
-            serde_json::from_slice(history_json).expect("decode real V2 Temporal history JSON");
-        let events = history
-            .get("events")
-            .or_else(|| history.pointer("/history/events"))
-            .and_then(serde_json::Value::as_array)
-            .expect("real V2 history must contain a list of Temporal events");
-        events
+        // WorkflowHistory::to_json() serializes precisely this generated
+        // protobuf `History`; `HistoryEvent.attributes` is a nested oneof,
+        // not an `activityTaskScheduledEventAttributes` key on the event.
+        let history: History =
+            serde_json::from_slice(history_json).expect("decode SDK-generated Temporal History");
+        assert!(
+            !history.events.is_empty(),
+            "actual Temporal History must contain events"
+        );
+        history
+            .events
             .iter()
             .filter_map(|event| {
-                event
-                    .get("activityTaskScheduledEventAttributes")
-                    .or_else(|| event.get("activity_task_scheduled_event_attributes"))
-                    .and_then(|attributes| {
-                        attributes
-                            .get("activityType")
-                            .or_else(|| attributes.get("activity_type"))
-                    })
-                    .and_then(|activity_type| activity_type.get("name"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(str::to_owned)
+                if event.event_type != EventType::ActivityTaskScheduled as i32 {
+                    return None;
+                }
+                let Some(Attributes::ActivityTaskScheduledEventAttributes(attributes)) =
+                    event.attributes.as_ref()
+                else {
+                    panic!(
+                        "scheduled Temporal Activity event {} lacks matching attributes",
+                        event.event_id
+                    );
+                };
+                Some(
+                    attributes
+                        .activity_type
+                        .as_ref()
+                        .expect("scheduled Temporal Activity missing activity_type")
+                        .name
+                        .clone(),
+                )
             })
             .collect()
+    }
+
+    #[cfg(feature = "e2e")]
+    #[test]
+    fn canonical_temporal_activity_history_wire_shape() {
+        use temporalio_common::protos::temporal::api::{
+            common::v1::ActivityType,
+            history::v1::{ActivityTaskScheduledEventAttributes, HistoryEvent},
+        };
+
+        let event = |name: &str| {
+            let attributes = ActivityTaskScheduledEventAttributes {
+                activity_type: Some(ActivityType {
+                    name: name.to_string(),
+                }),
+                ..Default::default()
+            };
+            HistoryEvent {
+                event_type: EventType::ActivityTaskScheduled as i32,
+                attributes: Some(Attributes::ActivityTaskScheduledEventAttributes(attributes)),
+                ..Default::default()
+            }
+        };
+        let wire = serde_json::to_vec(&History {
+            events: vec![event("load_verified_support_bundle"), event("run_serp_ingest_step")],
+        })
+        .expect("serialize SDK-generated History envelope");
+        assert_eq!(
+            scheduled_temporal_activities(&wire),
+            vec!["load_verified_support_bundle", "run_serp_ingest_step"]
+        );
     }
 
     /// Assert the actual command stream persisted by Temporal, not merely the
