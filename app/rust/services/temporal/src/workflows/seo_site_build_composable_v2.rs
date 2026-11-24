@@ -15,6 +15,7 @@ use contracts::generated::alegria::temporal::v1::{
 use seo_application::execution::{SeoDurablePlan, SeoDurableStep, SEO_RUN_MODE_CRAWL_ONLY};
 use seo_ports::VerifiedSupportBundleRequest;
 use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
 use temporalio_sdk::{
     SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
 };
@@ -25,7 +26,7 @@ use crate::activities::AlegriaActivities;
 use super::runtime::{db_opts, workflow_contract_failure, BasicWorkflowStatus};
 
 #[workflow]
-pub struct SeoSiteBuildComposableV2Workflow {
+struct SeoSiteBuildComposableV2Workflow {
     /// Deserialized once from the Temporal start event; never mutated.
     plan: SeoDurablePlan,
     paused: bool,
@@ -33,6 +34,11 @@ pub struct SeoSiteBuildComposableV2Workflow {
 }
 
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<SeoSiteBuildComposableV2Workflow>()?;
+    Ok(())
+}
+
+pub(super) fn register_for_replay(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<SeoSiteBuildComposableV2Workflow>()?;
     Ok(())
 }

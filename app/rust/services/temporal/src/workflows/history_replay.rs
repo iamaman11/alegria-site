@@ -10,9 +10,6 @@ use anyhow::{Context, Result};
 use temporalio_client::WorkflowHistory;
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 
-use super::seo_site_build_canonical_cutover::SeoSiteBuildCanonicalCutoverWorkflow;
-use super::seo_site_build_composable_v2::SeoSiteBuildComposableV2Workflow;
-
 pub(crate) async fn replay_history(path: &Path) -> Result<()> {
     let bytes = std::fs::read(path)
         .with_context(|| format!("read actual Temporal history {}", path.display()))?;
@@ -21,14 +18,14 @@ pub(crate) async fn replay_history(path: &Path) -> Result<()> {
 
     // Both workflow definitions live in this binary. Keeping V1 registered is
     // necessary for histories started before the V2 command-plan rollout.
-    let options = WorkflowReplayerOptions::new()
+    let mut options = WorkflowReplayerOptions::new()
         .namespace("default".to_string())
         .task_queue("alegria-pipeline".to_string())
-        .register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()
-        .map_err(|error| anyhow::anyhow!("register V1 for replay: {error}"))?
-        .register_workflow::<SeoSiteBuildComposableV2Workflow>()
-        .map_err(|error| anyhow::anyhow!("register V2 for replay: {error}"))?
         .build();
+    super::seo_site_build_canonical_cutover::register_for_replay(&mut options)
+        .context("register canonical V1 workflow for history replay")?;
+    super::seo_site_build_composable_v2::register_for_replay(&mut options)
+        .context("register composable V2 workflow for history replay")?;
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct Temporal replayer: {error}"))?
         .replay_workflow(history)

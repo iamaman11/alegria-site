@@ -21,6 +21,7 @@ use seo_application::execution::{
 use seo_application::scenario::{SeoExecutionMode, SeoScenarioRequest};
 use seo_ports::VerifiedSupportBundleRequest;
 use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
 use temporalio_sdk::{
     SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
 };
@@ -51,7 +52,7 @@ use std::time::Duration;
 const SEMANTIC_SWEEP_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Default)]
-pub struct SeoSiteBuildCanonicalCutoverWorkflow {
+struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
     waiting_hitl: bool,
     resume_requested: bool,
@@ -60,6 +61,13 @@ pub struct SeoSiteBuildCanonicalCutoverWorkflow {
 }
 
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()?;
+    Ok(())
+}
+
+/// Register V1 for history replay without leaking the macro-generated private
+/// `Run` type into another module's public Temporal trait implementation.
+pub(super) fn register_for_replay(opts: &mut WorkflowReplayerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<SeoSiteBuildCanonicalCutoverWorkflow>()?;
     Ok(())
 }
