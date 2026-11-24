@@ -167,6 +167,7 @@ def check() -> None:
     assert "  rust-contract-smokes:\n" not in workflow
     assert "cargo metadata --format-version 1 --no-deps --locked" not in verify
     assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in verify
+    assert "      RUSTC_WRAPPER: sccache\n" not in verify.split("    steps:\n", 1)[0]
     assert "uses: actions/cache@v4" not in verify
     assert "uses: actions/cache/save" not in verify
     assert verify.count("uses: actions/cache/restore@v4") == 1
@@ -182,6 +183,8 @@ def check() -> None:
     ):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         assert "        if: needs.impact.outputs.cargo_scope == 'full'" in step, step_name
+        if step_name == "Full workspace Rust unit tests (parallel with real E2E)":
+            assert "          RUSTC_WRAPPER: sccache\n" in step
     for step_name in ("Full-scope compiler cache statistics", "Classify full-scope Rust cache failures"):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         assert "        if: always() && needs.impact.outputs.cargo_scope == 'full'" in step, step_name

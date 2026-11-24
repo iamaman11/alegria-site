@@ -439,7 +439,6 @@ jobs:
       SCCACHE_GHA_RW_MODE: READ_ONLY
       SCCACHE_ERROR_LOG: /tmp/sccache-verify-errors.log
       SCCACHE_LOG: sccache::server=debug
-      RUSTC_WRAPPER: sccache
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -510,6 +509,7 @@ jobs:
         working-directory: app/rust
         env:
           SQLX_OFFLINE: "true"
+          RUSTC_WRAPPER: sccache
         run: cargo test --workspace --locked
 
       - name: Full-scope compiler cache statistics
