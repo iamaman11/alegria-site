@@ -112,6 +112,176 @@ fn publication_files(
     Ok(artifacts)
 }
 
+// The static builder captures a snapshot before approval/finalization. The
+// snapshot may become obsolete while another run publishes a different page
+// or a newer revision. Compare the *entire* scoped release under the existing
+// site advisory lock, before creating files or invoking the delivery backend.
+async fn ensure_publication_candidate_fresh(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    artifact: &PublishArtifact,
+    page_node_key: &str,
+    revision_id: &str,
+    committed_retry: bool,
+) -> Result<(), DomainError> {
+    let stale = || DomainError::ConflictViolation {
+        message: "stale_publish_candidate".to_string(),
+    };
+    let metadata: serde_json::Value = serde_json::from_str(&artifact.manifest_json)
+        .map_err(|_| stale())?;
+    let candidate_raw = metadata.get("candidate_output_dir")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(stale)?;
+    if artifact.artifact_uri != candidate_raw
+        || metadata.get("page_node_key").and_then(serde_json::Value::as_str) != Some(page_node_key)
+        || metadata.get("revision_id").and_then(serde_json::Value::as_str) != Some(revision_id)
+    {
+        return Err(stale());
+    }
+    let candidate_manifest = release_file(
+        ReleasePath::new(candidate_raw), "alegria-static-manifest.json", "",
+    ).map_err(|_| stale())?;
+    let manifest: serde_json::Value = serde_json::from_slice(&candidate_manifest.bytes)
+        .map_err(|_| stale())?;
+    let pages = manifest.get("pages").and_then(serde_json::Value::as_array)
+        .ok_or_else(stale)?;
+    if pages.is_empty()
+        || manifest.get("page_count").and_then(serde_json::Value::as_u64)
+            != Some(pages.len() as u64)
+    {
+        return Err(stale());
+    }
+    let mut expected = std::collections::BTreeMap::new();
+    for page in pages {
+        let key = page.get("page_node_key").and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty()).ok_or_else(stale)?;
+        let revision = page.get("revision_id").and_then(serde_json::Value::as_str)
+            .filter(|value| !value.is_empty()).ok_or_else(stale)?;
+        let route = page.get("canonical_url_path").and_then(serde_json::Value::as_str)
+            .filter(|value| value.starts_with('/')).ok_or_else(stale)?;
+        let status = page.get("status").and_then(serde_json::Value::as_str)
+            .ok_or_else(stale)?;
+        if (key == page_node_key && (revision != revision_id || status != "approved"))
+            || (key != page_node_key && status != "published")
+            || expected.insert(key.to_string(), (revision.to_string(), route.to_string())).is_some()
+        {
+            return Err(stale());
+        }
+    }
+    if !expected.contains_key(page_node_key) {
+        return Err(stale());
+    }
+
+    // A published page remains the current pointer while its replacement is
+    // approved. A replacement must be *strictly newer* than that pointer and
+    // than every other approved/published revision (ties fail closed).
+    let target = sqlx::query(
+        r#"
+        SELECT p.scope_signature, p.canonical_url_path, p.current_status,
+               p.current_revision_id, r.revision_status,
+               EXISTS (
+                   SELECT 1 FROM site.cms_page_revisions later
+                   WHERE later.page_node_key = p.page_node_key
+                     AND later.revision_id <> r.revision_id
+                     AND later.revision_status IN ('approved','published')
+                     AND later.created_at >= r.created_at
+               ) AS newer_revision,
+               EXISTS (
+                   SELECT 1 FROM site.cms_page_revisions live
+                   WHERE live.revision_id = p.current_revision_id
+                     AND live.page_node_key = p.page_node_key
+                     AND live.revision_status = 'published'
+                     AND live.created_at < r.created_at
+               ) AS newer_than_live
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r ON r.page_node_key = p.page_node_key
+        WHERE p.page_node_key = $1 AND r.revision_id = $2
+        FOR SHARE OF p, r
+        "#,
+    )
+    .bind(page_node_key)
+    .bind(revision_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?
+    .ok_or_else(stale)?;
+    let scope: String = target.get("scope_signature");
+    let current_status: String = target.get("current_status");
+    let current_revision: Option<String> = target.get("current_revision_id");
+    let revision_status: String = target.get("revision_status");
+    let newer_revision: bool = target.get("newer_revision");
+    let newer_than_live: bool = target.get("newer_than_live");
+    let route: String = target.get("canonical_url_path");
+    if committed_retry {
+        if current_status != "published"
+            || current_revision.as_deref() != Some(revision_id)
+            || revision_status != "published"
+        {
+            return Err(stale());
+        }
+    } else if revision_status != "approved"
+        || newer_revision
+        || !(current_status == "published" && newer_than_live
+            || current_status == "approved" && current_revision.as_deref() == Some(revision_id))
+    {
+        return Err(stale());
+    }
+
+    let same_route = |a: &str, b: &str| {
+        if a == "/" || b == "/" { a == b } else { a.trim_end_matches('/') == b.trim_end_matches('/') }
+    };
+    let mut current = std::collections::BTreeMap::from([(
+        page_node_key.to_string(), (revision_id.to_string(), route),
+    )]);
+    let rows = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.canonical_url_path, p.current_revision_id,
+               r.revision_status
+        FROM site.cms_pages p
+        LEFT JOIN site.cms_page_revisions r
+          ON r.page_node_key = p.page_node_key
+         AND r.revision_id = p.current_revision_id
+        WHERE p.scope_signature = $1 AND p.page_node_key <> $2
+          AND p.current_status = 'published'
+        ORDER BY p.page_node_key
+        FOR SHARE OF p
+        "#,
+    )
+    .bind(&scope)
+    .bind(page_node_key)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    for row in rows {
+        let rev: Option<String> = row.get("current_revision_id");
+        let status: Option<String> = row.get("revision_status");
+        if status.as_deref() != Some("published") || rev.is_none() {
+            return Err(stale());
+        }
+        current.insert(row.get("page_node_key"), (rev.unwrap(), row.get("canonical_url_path")));
+    }
+    if current.len() != expected.len()
+        || current.iter().any(|(key, (revision, route))| {
+            expected.get(key).is_none_or(|(supplied_revision, supplied_route)| {
+                revision != supplied_revision || !same_route(route, supplied_route)
+            })
+        })
+    {
+        return Err(stale());
+    }
+    // Navigation is also content in the HTML release. A navigation-only
+    // reconcile may have changed its rendered menu since this candidate was
+    // built, even though every CMS revision above is still identical.
+    let supplied_navigation = manifest.get("navigation_fingerprint")
+        .and_then(serde_json::Value::as_str).ok_or_else(stale)?;
+    let current_navigation = super::sqlx_static_site_adapter::candidate_navigation_fingerprint_in_tx(
+        tx, &scope, page_node_key,
+    ).await?;
+    if supplied_navigation != current_navigation {
+        return Err(stale());
+    }
+    Ok(())
+}
+
 fn release_file(
     candidate: &ReleasePath,
     relative_path: &str,

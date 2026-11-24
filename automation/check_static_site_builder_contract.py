@@ -45,12 +45,16 @@ def main() -> int:
         ROOT
         / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/renderer_refresh.rs"
     )
+    publication_release = (
+        ROOT
+        / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/publication_release.rs"
+    )
     temporal_worker = ROOT / "app/rust/services/temporal/src/main.rs"
     adapter_mod = ROOT / "app/rust/crates/infrastructure/src/adapters/mod.rs"
     cargo = ROOT / "app/rust/services/cli_tools/Cargo.toml"
     compose = ROOT / "docker-compose.yml"
 
-    for path in [cli, adapter, builder, publish_materialize, renderer_refresh, temporal_worker, adapter_mod, cargo, compose]:
+    for path in [cli, adapter, builder, publish_materialize, renderer_refresh, publication_release, temporal_worker, adapter_mod, cargo, compose]:
         if not path.exists():
             failures.append(f"missing required file: {path.relative_to(ROOT)}")
 
@@ -197,14 +201,20 @@ def main() -> int:
             ("recover_pending_renderer_refresh", "crash-safe renderer recovery"),
             ("pg_advisory_xact_lock", "shared atomic publication lock"),
             ("create_immutable_release", "immutable renderer release"),
-            ("deploy_cloudflare_static_release", "native Cloudflare publishing"),
-            ("verify_live_release", "public HTTPS verification"),
+            ("delivery.deploy", "public release upload via production delivery port"),
+            ("delivery.verify", "public HTTPS readback via delivery port"),
             ("PublicationActivation", "automatic rollback"),
             ("keep_published_content_provenance", "original approval provenance retention"),
             ('manifest["publication_run_id"]', "originating Temporal workflow identity"),
             ('manifest["publication_revision_id"]', "originating published revision identity"),
         ]:
             failures += require(renderer_refresh, needle, label)
+        for needle, label in [
+            ("impl PublicReleaseDelivery for CloudflareStaticDelivery", "native production delivery binding"),
+            ("deploy_cloudflare_static_release", "native Cloudflare publishing"),
+            ("verify_live_release", "public HTTPS verification"),
+        ]:
+            failures += require(publication_release, needle, label)
         for needle, label in [
             ("recover_pending_renderer_refresh", "worker startup publication recovery"),
             ("refresh_published_renderer_if_stale", "automatic renderer refresh"),

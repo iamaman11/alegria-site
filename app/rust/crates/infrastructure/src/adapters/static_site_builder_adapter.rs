@@ -9,8 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::sqlx_static_site_adapter::{
-    load_static_site_candidate_snapshot, load_static_site_snapshot, StaticCmsLinkRow,
-    StaticCmsPageRow, StaticNavigationItemRow, StaticPublishedLinkTargetRow, StaticSiteSnapshot,
+    load_static_site_candidate_snapshot, load_static_site_scope_snapshot,
+    load_static_site_snapshot, navigation_fingerprint, StaticCmsLinkRow, StaticCmsPageRow,
+    StaticNavigationItemRow, StaticPublishedLinkTargetRow, StaticSiteSnapshot,
 };
 
 // Bump only when published HTML/layout semantics change. The Worker uses this
@@ -754,6 +755,7 @@ fn build_static_artifacts(
         bytes: serde_json::to_vec_pretty(&json!({
             "builder": STATIC_SITE_BUILDER_VERSION,
             "base_url": base_url,
+            "navigation_fingerprint": navigation_fingerprint(navigation_items),
             "page_count": pages.len(),
             "pages": manifest_pages,
         }))?,
@@ -831,6 +833,25 @@ pub async fn build_static_site(
     base_url: &str,
 ) -> Result<StaticBuildResult> {
     let snapshot = load_static_site_snapshot(pool).await?;
+    build_static_site_from_snapshot(snapshot, output_dir, base_url)
+}
+
+/// Refresh exactly the scope carried by the currently public release.
+pub async fn build_static_site_for_scope(
+    pool: &PgPool,
+    output_dir: &Path,
+    base_url: &str,
+    scope_signature: &str,
+) -> Result<StaticBuildResult> {
+    let snapshot = load_static_site_scope_snapshot(pool, Some(scope_signature)).await?;
+    build_static_site_from_snapshot(snapshot, output_dir, base_url)
+}
+
+fn build_static_site_from_snapshot(
+    snapshot: StaticSiteSnapshot,
+    output_dir: &Path,
+    base_url: &str,
+) -> Result<StaticBuildResult> {
     let (artifacts, previews) = build_static_artifacts(
         &snapshot.pages,
         &snapshot.links,

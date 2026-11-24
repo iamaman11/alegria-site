@@ -135,7 +135,7 @@ jobs:
           git checkout --detach FETCH_HEAD
 
       - name: Install native audit/build tools
-        run: sudo apt-get update && sudo apt-get install -y ripgrep protobuf-compiler
+        run: bash automation/install_ci_native_tools.sh ripgrep protoc
 
       - name: Pin the same stable Rust toolchain as the verify job
         uses: dtolnay/rust-toolchain@stable
@@ -431,7 +431,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check ruff==0.17.6
 
       - name: Install lightweight Python policy tool
-        run: sudo apt-get update && sudo apt-get install -y ripgrep
+        run: bash automation/install_ci_native_tools.sh ripgrep
 
       - name: Fast source contracts and policy
         run: bash automation/measure_ci_phase.sh contracts bash automation/ci_fast_verify.sh contracts
@@ -679,8 +679,8 @@ jobs:
 
       - name: Install full regression tooling
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ripgrep protobuf-compiler postgresql-client
+          bash automation/install_ci_native_tools.sh ripgrep protoc
+          sudo apt-get install -y postgresql-client
           python -m pip install --disable-pip-version-check ruff==0.17.6
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f app/db/schema.sql
 
@@ -774,7 +774,7 @@ jobs:
 
       - name: Install native Rust build dependencies
         if: steps.cache_scope.outputs.needed == 'true'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        run: bash automation/install_ci_native_tools.sh protoc
 
       - name: Pin stable Rust toolchain
         if: steps.cache_scope.outputs.needed == 'true'

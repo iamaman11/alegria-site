@@ -126,6 +126,14 @@ fn managed_previous_release(
 
 #[cfg(unix)]
 pub async fn recover_pending_renderer_refresh(pool: &PgPool) -> Result<(), DomainError> {
+    recover_pending_renderer_refresh_with_delivery(pool, &CloudflareStaticDelivery).await
+}
+
+#[cfg(unix)]
+pub async fn recover_pending_renderer_refresh_with_delivery(
+    pool: &PgPool,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<(), DomainError> {
     let Some(public_raw) = std::env::var("SEO_STATIC_OUTPUT_DIR").ok() else {
         return Ok(());
     };
@@ -170,10 +178,10 @@ pub async fn recover_pending_renderer_refresh(pool: &PgPool) -> Result<(), Domai
     if live != updated && live != previous {
         return Err(validation_failure("renderer refresh has unknown public pointer"));
     }
-    require_cloudflare_publication_backend().map_err(validation_failure)?;
+    delivery.preflight().map_err(|err| validation_failure(err.to_string()))?;
     // No DB content was ever changed. A pending renderer refresh is always
     // uncommitted: restore the last published release and retry on startup.
-    deploy_cloudflare_static_release(&previous, None).map_err(validation_failure)?;
+    delivery.deploy(&previous, None).map_err(|err| validation_failure(err.to_string()))?;
     if live == updated {
         restore_public_release(&public, Some(&previous)).map_err(validation_failure)?;
     }
@@ -185,6 +193,14 @@ pub async fn recover_pending_renderer_refresh(pool: &PgPool) -> Result<(), Domai
 
 #[cfg(unix)]
 pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, DomainError> {
+    refresh_published_renderer_if_stale_with_delivery(pool, &CloudflareStaticDelivery).await
+}
+
+#[cfg(unix)]
+pub async fn refresh_published_renderer_if_stale_with_delivery(
+    pool: &PgPool,
+    delivery: &dyn PublicReleaseDelivery,
+) -> Result<bool, DomainError> {
     let (Ok(public_raw), Ok(origin_raw), Ok(release_root_raw)) = (
         std::env::var("SEO_STATIC_OUTPUT_DIR"),
         std::env::var("SEO_STATIC_BASE_URL"),
@@ -209,22 +225,50 @@ pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, 
         .map_err(|err| validation_failure(format!("read currently published manifest: {err}")))?;
     let current: serde_json::Value = serde_json::from_slice(&current_manifest)
         .map_err(|err| validation_failure(format!("parse published manifest: {err}")))?;
+    let origin_page = current.get("publication_page_node_key").and_then(|v| v.as_str())
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| validation_failure("published release lacks CMS origin page"))?;
+    let scope_signature: String = sqlx::query_scalar(
+        "SELECT scope_signature FROM site.cms_pages WHERE page_node_key=$1",
+    )
+    .bind(origin_page)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let navigation = super::sqlx_static_site_adapter::published_navigation_fingerprint_in_tx(
+        &mut tx, &scope_signature,
+    ).await?;
     if current.get("builder").and_then(|v| v.as_str())
         == Some(static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION)
+        && current.get("navigation_fingerprint").and_then(|v| v.as_str())
+            == Some(navigation.as_str())
     {
         return Ok(false);
     }
-    require_cloudflare_publication_backend().map_err(validation_failure)?;
+    delivery.preflight().map_err(|err| validation_failure(err.to_string()))?;
     let origin = publication_origin(&origin_raw).map_err(validation_failure)?;
     let root = std::fs::canonicalize(release_root_raw)
         .map_err(|err| validation_failure(format!("renderer release root: {err}")))?;
     let previous = managed_previous_release(&public, &root).map_err(validation_failure)?;
     let candidate = root.join(format!("renderer-{}", uuid::Uuid::new_v4().simple()));
-    static_site_builder_adapter::build_static_site(pool, &candidate, &origin_raw)
+    static_site_builder_adapter::build_static_site_for_scope(
+        pool, &candidate, &origin_raw, &scope_signature,
+    )
         .await.map_err(|err| validation_failure(format!("build published renderer candidate: {err}")))?;
     let mut files = published_renderer_files(
         &candidate, &origin_raw, static_site_builder_adapter::STATIC_SITE_BUILDER_VERSION,
     ).map_err(validation_failure)?;
+    let candidate_navigation = files.iter()
+        .find(|file| file.relative_path == "alegria-static-manifest.json")
+        .and_then(|file| serde_json::from_slice::<serde_json::Value>(&file.bytes).ok())
+        .and_then(|manifest| manifest.get("navigation_fingerprint").and_then(|v| v.as_str()).map(str::to_string))
+        .ok_or_else(|| validation_failure("renderer candidate lacks navigation fingerprint"))?;
+    let current_navigation = super::sqlx_static_site_adapter::published_navigation_fingerprint_in_tx(
+        &mut tx, &scope_signature,
+    ).await?;
+    if candidate_navigation != current_navigation {
+        return Err(validation_failure("navigation changed during renderer candidate build"));
+    }
     keep_published_content_provenance(&mut files, &current).map_err(validation_failure)?;
     let release = create_immutable_release(&candidate, &files).map_err(validation_failure)?;
     write_pending_publication(&refresh_journal, &PendingPublication {
@@ -239,7 +283,7 @@ pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, 
         return Err(validation_failure(err));
     }
     let mut activation = PublicationActivation {
-        delivery: &CloudflareStaticDelivery,
+        delivery,
         public_path: public,
         previous: Some(previous.clone()),
         journal_path: refresh_journal,
@@ -248,8 +292,10 @@ pub async fn refresh_published_renderer_if_stale(pool: &PgPool) -> Result<bool, 
         remote_activated: true,
         armed: true,
     };
-    deploy_cloudflare_static_release(&release, Some(&previous)).map_err(validation_failure)?;
-    verify_live_release(&origin, &files).await.map_err(validation_failure)?;
+    delivery.deploy(&release, Some(&previous))
+        .map_err(|err| validation_failure(err.to_string()))?;
+    delivery.verify(origin.as_str(), &files).await
+        .map_err(|err| validation_failure(err.to_string()))?;
     tx.commit().await.map_err(classify_sqlx)?;
     activation.confirm();
     Ok(true)

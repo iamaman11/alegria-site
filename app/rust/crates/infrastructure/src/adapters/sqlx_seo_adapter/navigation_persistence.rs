@@ -1,3 +1,29 @@
+pub const NAVIGATION_NOTIFY_CHANNEL: &str = "alegria_navigation_changed";
+
+/// Ignore timestamps and write activity: Global Reconcile may replace the
+/// same tree many times without changing a single rendered navigation item.
+async fn navigation_projection_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    navigation_tree_key: &str,
+) -> Result<serde_json::Value, DomainError> {
+    sqlx::query_scalar(
+        r#"
+        SELECT COALESCE(jsonb_agg(jsonb_build_array(
+            i.page_node_key, i.parent_item_key, i.silo_group_key,
+            i.label, i.url_path, i.hierarchy_depth, i.sort_order, i.status,
+            COALESCE(g.sort_order, 1000), COALESCE(g.status, '')
+        ) ORDER BY i.navigation_item_key), '[]'::jsonb)
+        FROM site.navigation_items i
+        LEFT JOIN site.silo_groups g ON g.silo_group_key = i.silo_group_key
+        WHERE i.navigation_tree_key = $1
+        "#,
+    )
+    .bind(navigation_tree_key)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(classify_sqlx)
+}
+
 /// The scope tuple is authoritative even when a planned page has no keyword
 /// cluster. Do not infer an unknown page's market from the current caller.
 /// This metadata is also consumed by CMS and Temporal rebuild dispatch.
@@ -91,6 +117,7 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
     .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
+    let previous_navigation = navigation_projection_in_tx(tx, &navigation_tree_key).await?;
     let rows = sqlx::query(
         r#"
         SELECT
@@ -381,6 +408,17 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
+    }
+
+    if navigation_projection_in_tx(tx, &navigation_tree_key).await? != previous_navigation {
+        // PostgreSQL emits this only on COMMIT. A failed/rolled-back planning
+        // transaction cannot trigger an external HTML refresh.
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(NAVIGATION_NOTIFY_CHANNEL)
+            .bind(&navigation_tree_key)
+            .execute(&mut **tx)
+            .await
+            .map_err(classify_sqlx)?;
     }
 
     Ok(GlobalNavigationReport {
