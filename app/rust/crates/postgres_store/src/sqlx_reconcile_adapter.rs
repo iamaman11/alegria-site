@@ -79,7 +79,9 @@ fn validate_outbox_command(
         return Err(ReconcileOutboxFailure::InvalidCommand("max_retry_count"));
     }
     if opts.requeue_base_delay_sec < 0 || opts.requeue_base_delay_sec > i32::MAX as i64 {
-        return Err(ReconcileOutboxFailure::InvalidCommand("requeue_base_delay_sec"));
+        return Err(ReconcileOutboxFailure::InvalidCommand(
+            "requeue_base_delay_sec",
+        ));
     }
     if opts.requeue_jitter_sec < 0 || opts.requeue_jitter_sec > i32::MAX as i64 {
         return Err(ReconcileOutboxFailure::InvalidCommand("requeue_jitter_sec"));

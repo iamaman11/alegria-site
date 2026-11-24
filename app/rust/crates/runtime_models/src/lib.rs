@@ -3,8 +3,8 @@ use contracts::wire::condition::ConditionExprV1;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub mod reconcile_wire;
 pub mod outbox_reconcile;
+pub mod reconcile_wire;
 
 pub use outbox_reconcile::{ReconcileOutboxCommand, ReconcileOutboxOptions};
 
