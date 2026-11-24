@@ -39,4 +39,27 @@ The graph count covers all selected compile owners and optional edges, not infer
 
 **Candidate B — separate Temporal Activity processes:** NO-GO at this stage. No measured linker or E2E improvement justifies extra binaries, task queues, deployment topology or failure modes. Independently compiled crates are not independent runtime services.
 
-**≤180-second CI SLA: NOT YET ACCEPTED.** The next evidence must contain (1) one full exact-SHA Rust/PostgreSQL/Temporal/Qdrant/Neo4j CI run on the candidate, (2) an isolated edit/rebuild measurement for each of four provider classes with before/after compile units and changed release binaries, and (3) at least three successful full PR event→gate measurements plus accepted-main Worker image startup, source identity and attestation. A pass of Python guards or a successful `cargo metadata --no-deps` is not equivalent to those results. Keep #94 and #43 open until proven.
+## First complete candidate CI — observed, not an SLA pass
+
+The first refactor head `0ef65b20a1472402fcab197212f4673ee4ac7744` passed all required jobs in [PR #95 CI run #456](https://github.com/iamaman11/alegria-site/actions/runs/45373920986), including the full Rust workspace unit suite, PostgreSQL/Truth/Outbox/CMS/publishing E2E suites, graph capability E2E, canonical Temporal recovery E2E, Worker binary compilation, security, Windows and Cloudflare build checks. The application tests included **69/69** `seo_application` library tests. This evidence supersedes the earlier local-only candidate counts above; it does not establish isolated owner rebuilds.
+
+The run was created at `2026-11-24T10:20:53Z` and reached a successful gate at `2026-11-24T10:26:44Z`: **351 seconds event-to-gate**, against the required **≤180 seconds**. Its actual parallel critical path was:
+
+| Job or measured command | Wall-clock duration |
+| --- | ---: |
+| `impact` job | 21 s |
+| `verify` job | 315 s |
+| Within `verify`: full `cargo test --workspace` | ~110 s |
+| Within `verify`: first E2E feature-graph compilation | 89.44 s |
+| Within `verify`: seven mandatory E2E suites, actual test time | ~94.5 s |
+| `architecture-and-rust` job, parallel with `verify` | 268 s |
+| Within architecture: Worker build | 91.694 s |
+| Within architecture: graph E2E (compile + run) | 79.824 s |
+| Within architecture: canonical Temporal E2E (compile + run) | 74.329 s |
+| Final `CI` gate | 8 s |
+
+The measured seven `verify` E2E Cargo command wall-times sum to 183.968 s, **including** the first command's compiler time; these are not another 184 s of pure test execution. Job durations must not be added together because jobs run concurrently after `impact`.
+
+**Architectural limitation confirmed:** `graph_neo4j` still has seven downstream workspace packages, `vector_qdrant` six, and both are directly consumed by `infrastructure` and `temporal_worker`. Outbox's projection dispatcher also performs real provider-specific operations, so this is not just an unused Cargo edge. Moving provider re-exports into crates did not produce independent Worker rebuilds. Any future extraction or process boundary must justify its protocol, deployment, diagnostic and compilation costs with measured evidence.
+
+**≤180-second CI SLA: NOT ACCEPTED.** A promising *hypothesis* is to compile the E2E test binary once and run the exact mandatory filters in separate environment-isolated processes with bounded concurrency; the existing in-process `#[serial]` guards cannot simply be disabled. The actual benefit and resource behavior require full CI measurement. Remaining acceptance: (1) isolated edit/rebuild measurements for each provider class; (2) at least three successful full PR event-to-gate samples ≤180 seconds; (3) two executed alternative functional recipes, immutable Temporal command-plan/replay evidence, and an accepted-main Worker startup with source identity/attestation. Keep PR #95 Draft and issues #94/#43 OPEN until proven.

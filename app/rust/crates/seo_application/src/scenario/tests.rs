@@ -545,6 +545,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scenario_executes_planning_between_source_acquisition_steps() {
+        use SeoPhaseKey::*;
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::PlanningOnly,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let interleaved = SeoPhaseRecipe::compose_pre_page(
+            vec![
+                SerpIngest,
+                SerpNormalize,
+                OpportunityBuild,
+                LoadVerifiedSupportBundle,
+                CrawlSources,
+                RawKnowledgeIngestion,
+                RefreshVerifiedSupportBundle,
+                IaBuild,
+                LinkRecommend,
+                GlobalSiteReconcile,
+            ],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &interleaved)
+            .await
+            .unwrap();
+        let phases = result
+            .phase_reports
+            .iter()
+            .map(|report| report.phase.as_str())
+            .collect::<Vec<_>>();
+        let normalize = phases
+            .iter()
+            .position(|phase| *phase == "serp_normalize")
+            .unwrap();
+        let crawl = phases
+            .iter()
+            .position(|phase| *phase == "crawl_sources")
+            .unwrap();
+        assert!(normalize < crawl, "interleaved order must be actually executed");
+        assert!(phases.contains(&"global_site_reconcile"));
+    }
+
+    #[tokio::test]
+    async fn scenario_executes_a_small_draft_only_recipe_without_qa_side_effects() {
+        use SeoPhaseKey::*;
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::Full,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let standard = SeoPhaseRecipe::for_plan(&build_execution_plan(&request), true).unwrap();
+        let without_qa = SeoPhaseRecipe::compose_pre_page(
+            standard.pre_page_steps().to_vec(),
+            vec![DraftAssemble, EditorialDraftGenerate, DraftNormalize],
+            Vec::new(),
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &without_qa)
+            .await
+            .unwrap();
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|report| report.phase == "draft_normalize"));
+        assert!(!result
+            .phase_reports
+            .iter()
+            .any(|report| report.phase == "draft_qa"));
+        assert_eq!(result.published_pages, 0);
+    }
+
+    #[tokio::test]
     async fn late_support_producer_runs_even_without_truth_changes() {
         use SeoPhaseKey::*;
         let repo = FakeRepo {
@@ -601,6 +683,34 @@ mod tests {
         )
         .unwrap();
         let result = execute_site_build_scenario_with_recipe(&repo, &request, &full_publish).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn publish_enabled_recipe_cannot_silently_omit_publishing_before_io() {
+        use SeoPhaseKey::*;
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::Full,
+            mode: SeoExecutionMode::TemporalDurable,
+            policy: SeoRunPolicy::for_temporal_durable(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let standard = SeoPhaseRecipe::for_plan(&build_execution_plan(&request), true).unwrap();
+        let missing_publish = SeoPhaseRecipe::compose_pre_page(
+            standard.pre_page_steps().to_vec(),
+            vec![DraftAssemble, EditorialDraftGenerate, DraftNormalize],
+            Vec::new(),
+        )
+        .unwrap();
+        let result =
+            execute_site_build_scenario_with_recipe(&repo, &request, &missing_publish).await;
         assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
         assert_eq!(
             repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),

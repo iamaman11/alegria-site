@@ -61,6 +61,17 @@ fn env_flag(name: &str) -> bool {
     std::env::var(name).ok().as_deref() == Some("true")
 }
 
+/// A pinned deployment must refer to a concrete source revision, not a
+/// human-chosen label that can silently be reused for incompatible workflow
+/// command histories. Local workers with versioning disabled keep their
+/// existing flexible development Build IDs.
+fn immutable_source_build_id(build_id: &str) -> bool {
+    let value = build_id.trim();
+    value.len() == 40
+        && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && value.bytes().any(|byte| byte != b'0')
+}
+
 fn pinned_deployment_options(
     enabled: bool,
     build_id: &str,
@@ -69,8 +80,10 @@ fn pinned_deployment_options(
     if !enabled {
         return Ok(None);
     }
-    if matches!(build_id.trim(), "" | "dev-local" | "docker-dev") {
-        anyhow::bail!("TEMPORAL_WORKER_VERSIONING requires a unique immutable WORKER_BUILD_ID");
+    if !immutable_source_build_id(build_id) {
+        anyhow::bail!(
+            "TEMPORAL_WORKER_VERSIONING requires WORKER_BUILD_ID to be an immutable 40-hex source commit SHA"
+        );
     }
     if deployment_name.trim().is_empty() {
         anyhow::bail!("TEMPORAL_DEPLOYMENT_NAME must not be empty");
@@ -90,15 +103,28 @@ fn pinned_deployment_options(
 
 #[cfg(test)]
 mod deployment_version_tests {
-    use super::pinned_deployment_options;
+    use super::{immutable_source_build_id, pinned_deployment_options};
 
     #[test]
     fn native_pin_requires_real_immutable_build_identity() {
-        for build_id in ["", "docker-dev", "dev-local", " "] {
+        let source_sha = "0123456789abcdef0123456789abcdef01234567";
+        for build_id in [
+            "",
+            "docker-dev",
+            "dev-local",
+            " ",
+            "f00dead",
+            "0123456789abcdef0123456789abcdef0123456",
+            "0123456789abcdef0123456789abcdef012345678",
+            "0123456789abcdef0123456789abcdef0123456g",
+            "0000000000000000000000000000000000000000",
+        ] {
+            assert!(!immutable_source_build_id(build_id));
             assert!(pinned_deployment_options(true, build_id, "alegria-site").is_err());
         }
-        assert!(pinned_deployment_options(true, "f00dead", "").is_err());
-        assert!(pinned_deployment_options(true, "f00dead", "alegria-site")
+        assert!(immutable_source_build_id(source_sha));
+        assert!(pinned_deployment_options(true, source_sha, "").is_err());
+        assert!(pinned_deployment_options(true, source_sha, "alegria-site")
             .unwrap()
             .is_some());
     }

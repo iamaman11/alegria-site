@@ -414,7 +414,10 @@ pub fn advance_cursor(cursor: &mut SeoExecutionCursor) {
 // description of step inputs, outputs and supported ordering. A recipe does
 // not run steps or own their side effects; execution remains with each owner.
 mod recipe;
-pub use recipe::{SeoPhaseRecipe, SeoStepArtifact, SeoStepContract, SeoStepRecipeError};
+pub use recipe::{
+    SeoPhaseRecipe, SeoRecipeManifest, SeoStepArtifact, SeoStepContract, SeoStepRecipeError,
+    SEO_RECIPE_SCHEMA_VERSION,
+};
 
 #[cfg(test)]
 mod tests {

@@ -8,9 +8,11 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::{
-    final_phase_keys, initial_phase_keys, page_phase_keys, planning_phase_keys, should_publish,
-    SeoExecutionPlan, SeoExecutionSegment, SeoPhaseKey,
+    final_phase_keys, initial_phase_keys, page_phase_keys, phase_label, planning_phase_keys,
+    should_publish, SeoExecutionPlan, SeoExecutionSegment, SeoPhaseKey,
 };
 use crate::scenario::SeoScenarioKind;
 
@@ -48,6 +50,34 @@ pub struct SeoStepContract {
 }
 
 impl SeoPhaseKey {
+    pub fn from_stable_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "load_verified_support_bundle" => Self::LoadVerifiedSupportBundle,
+            "serp_ingest" => Self::SerpIngest,
+            "crawl_sources" => Self::CrawlSources,
+            "raw_knowledge_ingestion" => Self::RawKnowledgeIngestion,
+            "load_verified_support_bundle.refresh" => Self::RefreshVerifiedSupportBundle,
+            "serp_normalize" => Self::SerpNormalize,
+            "opportunity_build" => Self::OpportunityBuild,
+            "ia_build" => Self::IaBuild,
+            "link_recommend" => Self::LinkRecommend,
+            "global_site_reconcile" => Self::GlobalSiteReconcile,
+            "draft_assemble" => Self::DraftAssemble,
+            "editorial_draft_generate" => Self::EditorialDraftGenerate,
+            "draft_normalize" => Self::DraftNormalize,
+            "content_contract_validate" => Self::ContentContractValidate,
+            "draft_qa" => Self::DraftQa,
+            "cms_request_review" => Self::CmsRequestReview,
+            "human_approval_wait" => Self::HumanApprovalWait,
+            "cms_publish_approved" => Self::CmsPublishApproved,
+            "publish_materialize" => Self::PublishMaterialize,
+            "render_preview_validate" => Self::RenderPreviewValidate,
+            "finalize_publish" => Self::FinalizePublish,
+            "rebuild_detect" => Self::RebuildDetect,
+            _ => return None,
+        })
+    }
+
     /// Declare input/output ownership once, independently of any particular
     /// scenario, mode, or executor's hard-coded control flow.
     pub fn contract(self) -> SeoStepContract {
@@ -148,6 +178,8 @@ pub enum SeoStepRecipeError {
         step: SeoPhaseKey,
         input: SeoStepArtifact,
     },
+    UnsupportedManifestVersion(u16),
+    UnknownManifestStep(String),
 }
 
 impl fmt::Display for SeoStepRecipeError {
@@ -174,17 +206,37 @@ impl fmt::Display for SeoStepRecipeError {
             Self::MissingInput { step, input } => {
                 write!(f, "step {step:?} requires unavailable {input:?}")
             }
+            Self::UnsupportedManifestVersion(version) => {
+                write!(f, "unsupported SEO recipe manifest schema version {version}")
+            }
+            Self::UnknownManifestStep(step) => write!(f, "unknown SEO recipe step {step}"),
         }
     }
 }
 
 impl std::error::Error for SeoStepRecipeError {}
 
-/// One fully ordered recipe, with explicit boundaries where per-page state is
-/// created. The recipe is validated before execution; it does not imply that
-/// the existing Temporal workflow supports changing an in-flight history.
+/// Versioned, serializable step order. The manifest is intended to be pinned
+/// to the workflow's immutable input rather than regenerated on replay.
+pub const SEO_RECIPE_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeoRecipeManifest {
+    pub schema_version: u16,
+    pub pre_page: Vec<String>,
+    pub per_page: Vec<String>,
+    pub finalize: Vec<String>,
+}
+
+/// A recipe has one ordered pre-page sequence, one repeated-per-page sequence
+/// and optional finalizers. `Initial` and `Planning` classify step ownership,
+/// but do not force the pre-page order or require adjacent planning steps.
+/// The per-page boundary is an actual execution-scoping constraint because it
+/// creates one page-local state for each admitted page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeoPhaseRecipe {
+    pre_page: Vec<SeoPhaseKey>,
     initial: Vec<SeoPhaseKey>,
     planning: Vec<SeoPhaseKey>,
     per_page: Vec<SeoPhaseKey>,
@@ -200,7 +252,50 @@ impl SeoPhaseRecipe {
         per_page: Vec<SeoPhaseKey>,
         finalize: Vec<SeoPhaseKey>,
     ) -> Result<Self, SeoStepRecipeError> {
+        for (segment, steps) in [
+            (SeoExecutionSegment::Initial, initial.as_slice()),
+            (SeoExecutionSegment::Planning, planning.as_slice()),
+            (SeoExecutionSegment::PerPage, per_page.as_slice()),
+            (SeoExecutionSegment::Finalize, finalize.as_slice()),
+        ] {
+            for &step in steps {
+                let expected = step.contract().segment;
+                if segment != expected {
+                    return Err(SeoStepRecipeError::WrongSegment {
+                        step,
+                        expected,
+                        actual: segment,
+                    });
+                }
+            }
+        }
+        Self::compose_pre_page(
+            initial.into_iter().chain(planning).collect(),
+            per_page,
+            finalize,
+        )
+    }
+
+    /// Compose a dependency-checked sequence that can interleave any initial
+    /// and planning functions. Only the page-local and finalization scoping
+    /// boundaries are structural, as they use different state and inputs.
+    pub fn compose_pre_page(
+        pre_page: Vec<SeoPhaseKey>,
+        per_page: Vec<SeoPhaseKey>,
+        finalize: Vec<SeoPhaseKey>,
+    ) -> Result<Self, SeoStepRecipeError> {
+        let initial = pre_page
+            .iter()
+            .copied()
+            .filter(|step| step.contract().segment == SeoExecutionSegment::Initial)
+            .collect();
+        let planning = pre_page
+            .iter()
+            .copied()
+            .filter(|step| step.contract().segment == SeoExecutionSegment::Planning)
+            .collect();
         let recipe = Self {
+            pre_page,
             initial,
             planning,
             per_page,
@@ -240,6 +335,58 @@ impl SeoPhaseRecipe {
         }
     }
 
+    pub fn pre_page_steps(&self) -> &[SeoPhaseKey] {
+        &self.pre_page
+    }
+
+    /// Stable phase identities are explicit labels, not Rust's `Debug` output.
+    /// Consumers must reject unknown IDs rather than skip an unrecognized step.
+    pub fn manifest(&self) -> SeoRecipeManifest {
+        SeoRecipeManifest {
+            schema_version: SEO_RECIPE_SCHEMA_VERSION,
+            pre_page: self
+                .pre_page
+                .iter()
+                .copied()
+                .map(phase_label)
+                .map(str::to_string)
+                .collect(),
+            per_page: self
+                .per_page
+                .iter()
+                .copied()
+                .map(phase_label)
+                .map(str::to_string)
+                .collect(),
+            finalize: self
+                .finalize
+                .iter()
+                .copied()
+                .map(phase_label)
+                .map(str::to_string)
+                .collect(),
+        }
+    }
+
+    pub fn from_manifest(manifest: &SeoRecipeManifest) -> Result<Self, SeoStepRecipeError> {
+        if manifest.schema_version != SEO_RECIPE_SCHEMA_VERSION {
+            return Err(SeoStepRecipeError::UnsupportedManifestVersion(manifest.schema_version));
+        }
+        fn parse(ids: &[String]) -> Result<Vec<SeoPhaseKey>, SeoStepRecipeError> {
+            ids.iter()
+                .map(|id| {
+                    SeoPhaseKey::from_stable_id(id)
+                        .ok_or_else(|| SeoStepRecipeError::UnknownManifestStep(id.clone()))
+                })
+                .collect()
+        }
+        Self::compose_pre_page(
+            parse(&manifest.pre_page)?,
+            parse(&manifest.per_page)?,
+            parse(&manifest.finalize)?,
+        )
+    }
+
     /// Validate the entire graph *before* a step runs. A backwards edge, a
     /// missing producer, or an attempted cycle cannot pass this check.
     pub fn validate(&self) -> Result<(), SeoStepRecipeError> {
@@ -253,10 +400,16 @@ impl SeoPhaseRecipe {
         use SeoExecutionSegment::{Finalize, Initial, PerPage, Planning};
         let mut available = BTreeSet::new();
         let mut visited = BTreeSet::new();
-        for segment in [Initial, Planning, PerPage, Finalize] {
-            for &step in self.steps(segment) {
+        for (segment, steps) in [
+            (Initial, self.pre_page.as_slice()),
+            (PerPage, self.per_page.as_slice()),
+            (Finalize, self.finalize.as_slice()),
+        ] {
+            for &step in steps {
                 let contract = contract_for(step);
-                if contract.segment != segment {
+                if contract.segment != segment
+                    && !(segment == Initial && contract.segment == Planning)
+                {
                     return Err(SeoStepRecipeError::WrongSegment {
                         step,
                         expected: contract.segment,
@@ -313,6 +466,26 @@ impl SeoPhaseRecipe {
             && !self.planning.contains(&GlobalSiteReconcile)
         {
             return Err(SeoStepRecipeError::MissingRequiredStep(GlobalSiteReconcile));
+        }
+        if matches!(
+            plan.scenario,
+            SeoScenarioKind::Full
+                | SeoScenarioKind::DraftingOnly
+                | SeoScenarioKind::PublishOnly
+                | SeoScenarioKind::RebuildOnly
+        ) && !self.per_page.contains(&DraftNormalize)
+        {
+            return Err(SeoStepRecipeError::MissingRequiredStep(DraftNormalize));
+        }
+        if should_publish(plan) && !self.per_page.contains(&FinalizePublish) {
+            // A publish-enabled scenario must not silently report success
+            // when a caller removed every publishing operation.
+            return Err(SeoStepRecipeError::MissingRequiredStep(FinalizePublish));
+        }
+        if matches!(plan.scenario, SeoScenarioKind::RebuildOnly)
+            && !self.finalize.contains(&RebuildDetect)
+        {
+            return Err(SeoStepRecipeError::MissingRequiredStep(RebuildDetect));
         }
         if !should_publish(plan) {
             for step in [
@@ -400,6 +573,91 @@ mod tests {
     }
 
     #[test]
+    fn planning_can_interleave_initial_steps_when_data_contracts_allow_it() {
+        use SeoPhaseKey::*;
+        let standard = SeoPhaseRecipe::for_plan(&full_plan(), true).unwrap();
+        let interleaved = SeoPhaseRecipe::compose_pre_page(
+            vec![
+                SerpIngest,
+                SerpNormalize,
+                OpportunityBuild,
+                LoadVerifiedSupportBundle,
+                CrawlSources,
+                RawKnowledgeIngestion,
+                RefreshVerifiedSupportBundle,
+                IaBuild,
+                LinkRecommend,
+                GlobalSiteReconcile,
+            ],
+            standard.per_page.clone(),
+            standard.finalize.clone(),
+        )
+        .unwrap();
+        assert_eq!(interleaved.pre_page_steps()[1], SeoPhaseKey::SerpNormalize);
+        assert_eq!(
+            interleaved.steps(SeoExecutionSegment::Planning)[0],
+            SeoPhaseKey::SerpNormalize
+        );
+        assert_ne!(standard.manifest(), interleaved.manifest());
+    }
+
+    #[test]
+    fn recipe_manifest_round_trips_and_rejects_drift() {
+        let standard = SeoPhaseRecipe::for_plan(&full_plan(), true).unwrap();
+        let manifest = standard.manifest();
+        let encoded = serde_json::to_string(&manifest).unwrap();
+        let decoded: SeoRecipeManifest = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(SeoPhaseRecipe::from_manifest(&decoded).unwrap(), standard);
+
+        let mut future = decoded.clone();
+        future.schema_version += 1;
+        assert!(matches!(
+            SeoPhaseRecipe::from_manifest(&future),
+            Err(SeoStepRecipeError::UnsupportedManifestVersion(_))
+        ));
+        let mut unknown = decoded.clone();
+        unknown.pre_page[0] = "unknown_future_step".to_string();
+        assert_eq!(
+            SeoPhaseRecipe::from_manifest(&unknown),
+            Err(SeoStepRecipeError::UnknownManifestStep(
+                "unknown_future_step".to_string()
+            ))
+        );
+        let mut backwards = decoded;
+        backwards.pre_page.swap(1, 2);
+        assert!(matches!(
+            SeoPhaseRecipe::from_manifest(&backwards),
+            Err(SeoStepRecipeError::MissingInput { .. })
+        ));
+    }
+
+    #[test]
+    fn publishing_and_drafting_require_explicit_terminal_steps() {
+        use SeoPhaseKey::*;
+        let standard = SeoPhaseRecipe::for_plan(&full_plan(), true).unwrap();
+        let no_page = SeoPhaseRecipe::compose_pre_page(
+            standard.pre_page.clone(),
+            vec![],
+            standard.finalize.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            no_page.validate_for_scenario(&full_plan()),
+            Err(SeoStepRecipeError::MissingRequiredStep(DraftNormalize))
+        );
+        let no_publish = SeoPhaseRecipe::compose_pre_page(
+            standard.pre_page.clone(),
+            vec![DraftAssemble, EditorialDraftGenerate, DraftNormalize],
+            standard.finalize.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            no_publish.validate_for_scenario(&full_plan()),
+            Err(SeoStepRecipeError::MissingRequiredStep(FinalizePublish))
+        );
+    }
+
+    #[test]
     fn invalid_order_and_missing_input_are_rejected_before_execution() {
         use SeoPhaseKey::*;
         let bad = SeoPhaseRecipe::compose(
@@ -453,6 +711,7 @@ mod tests {
             [SerpIngest, LoadVerifiedSupportBundle],
         ] {
             let recipe = SeoPhaseRecipe {
+                pre_page: order.to_vec(),
                 initial: order.to_vec(),
                 planning: Vec::new(),
                 per_page: Vec::new(),

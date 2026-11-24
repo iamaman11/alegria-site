@@ -24,6 +24,7 @@ pub enum TruthWriteError {
     NoAdmissibleCandidate,
     VerifiedWithoutEvidence(String),
     UnsupportedScope(String),
+    NonFiniteCandidateValues(String),
 }
 
 impl fmt::Display for TruthWriteError {
@@ -44,6 +45,9 @@ impl fmt::Display for TruthWriteError {
             }
             Self::UnsupportedScope(id) => {
                 write!(f, "candidate {id} uses an unsupported scoped predicate")
+            }
+            Self::NonFiniteCandidateValues(id) => {
+                write!(f, "candidate {id} has a non-finite numeric parameter or scope")
             }
         }
     }
@@ -165,6 +169,11 @@ pub fn semantic_truth_write_outcome<'a>(
 pub fn validate_verified_truth_write_candidate(
     candidate: &TruthAdjudicationCandidateDecision,
 ) -> Result<(), TruthWriteError> {
+    if !candidate.params.decimals_are_finite() || !candidate.scope.decimals_are_finite() {
+        return Err(TruthWriteError::NonFiniteCandidateValues(
+            candidate.rule_candidate_id.clone(),
+        ));
+    }
     if candidate.decision != "verified" {
         return Ok(());
     }
@@ -440,6 +449,33 @@ mod tests {
         verified.decision = "rejected".into();
         verified.evidence_quote.clear();
         assert!(validate_verified_truth_write_candidate(&verified).is_ok());
+    }
+
+    #[test]
+    fn nested_non_finite_truth_values_fail_before_json_serialization() {
+        let mut candidate = candidate_verdict("official", "verified", 80, 0.95);
+        candidate.params = TruthParamValue::object([(
+            "nested",
+            TruthParamValue::List(vec![TruthParamValue::Decimal(f64::NAN)]),
+        )]);
+        assert_eq!(
+            validate_verified_truth_write_candidate(&candidate),
+            Err(TruthWriteError::NonFiniteCandidateValues("official".into()))
+        );
+        candidate.params = TruthParamValue::default();
+        candidate.scope = TruthParamValue::object([(
+            "scope",
+            TruthParamValue::Decimal(f64::INFINITY),
+        )]);
+        assert_eq!(
+            validate_verified_truth_write_candidate(&candidate),
+            Err(TruthWriteError::NonFiniteCandidateValues("official".into()))
+        );
+        candidate.decision = "rejected".into();
+        assert_eq!(
+            validate_verified_truth_write_candidate(&candidate),
+            Err(TruthWriteError::NonFiniteCandidateValues("official".into()))
+        );
     }
 
     #[test]

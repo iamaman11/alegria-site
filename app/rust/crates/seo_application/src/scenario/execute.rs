@@ -62,21 +62,19 @@ where
     let mut phase_reports = Vec::new();
     let mut final_status = "done".to_string();
 
-    let mut cursor = SeoExecutionCursor {
-        segment: Some(SeoExecutionSegment::Initial),
-        ..Default::default()
-    };
-    loop {
-        match next_phase(recipe.steps(SeoExecutionSegment::Initial), &cursor) {
-            SeoPhaseDecision::Complete(_) => break,
-            SeoPhaseDecision::Run(input) => {
-                run_initial_phase(repo, request, &mut state, input.key, &mut phase_reports).await?;
-                if input.key == SeoPhaseKey::RawKnowledgeIngestion {
+    // Execute one dependency-validated pre-page recipe. Initial and planning
+    // operations may interleave; the step contract identifies the owner that
+    // executes each operation, not a predetermined site-building sequence.
+    for (index, &key) in recipe.pre_page_steps().iter().enumerate() {
+        match key.contract().segment {
+            SeoExecutionSegment::Initial => {
+                run_initial_phase(repo, request, &mut state, key, &mut phase_reports).await?;
+                if key == SeoPhaseKey::RawKnowledgeIngestion {
                     if let Some(status) = enforce_projection_policy(
                         repo,
                         &request.site_input.run_id,
                         request.policy.projection,
-                        phase_label(input.key),
+                        phase_label(key),
                         &mut phase_reports,
                     )
                     .await?
@@ -85,8 +83,33 @@ where
                     }
                 }
             }
+            SeoExecutionSegment::Planning => {
+                // A clean truth batch does not need a second support read if
+                // the first read has already happened in this recipe. When
+                // there is no earlier producer, refresh is indispensable.
+                let unchanged_truth = state
+                    .raw_knowledge
+                    .as_ref()
+                    .is_some_and(|output| output.changed_truth_keys.is_empty());
+                let support_already_loaded = recipe.pre_page_steps()[..index]
+                    .contains(&SeoPhaseKey::LoadVerifiedSupportBundle);
+                if key == SeoPhaseKey::RefreshVerifiedSupportBundle
+                    && unchanged_truth
+                    && support_already_loaded
+                {
+                    continue;
+                }
+                if let Some(status) =
+                    run_planning_phase(repo, request, &mut state, key, &mut phase_reports).await?
+                {
+                    final_status = status;
+                }
+            }
+            // Guaranteed by compose_pre_page / validate_for_scenario before IO.
+            SeoExecutionSegment::PerPage | SeoExecutionSegment::Finalize => {
+                unreachable!("invalid pre-page recipe step")
+            }
         }
-        advance_cursor(&mut cursor);
     }
 
     let raw_knowledge_changed_truth_keys = state
@@ -118,35 +141,6 @@ where
         });
     }
 
-    cursor = SeoExecutionCursor {
-        segment: Some(SeoExecutionSegment::Planning),
-        ..Default::default()
-    };
-    let planning_keys = recipe.steps(SeoExecutionSegment::Planning);
-    loop {
-        match next_phase(planning_keys, &cursor) {
-            SeoPhaseDecision::Complete(_) => break,
-            SeoPhaseDecision::Run(input) => {
-                if input.key == SeoPhaseKey::RefreshVerifiedSupportBundle
-                    && raw_knowledge_changed_truth_keys.is_empty()
-                    && recipe
-                        .steps(SeoExecutionSegment::Initial)
-                        .contains(&SeoPhaseKey::LoadVerifiedSupportBundle)
-                {
-                    advance_cursor(&mut cursor);
-                    continue;
-                }
-                if let Some(status) =
-                    run_planning_phase(repo, request, &mut state, input.key, &mut phase_reports)
-                        .await?
-                {
-                    final_status = status;
-                }
-            }
-        }
-        advance_cursor(&mut cursor);
-    }
-
     let (page_nodes, link_recommendations) = page_nodes_and_links(&state)?;
     let page_total = page_nodes.len() as u32;
     let factual_fragments = state
@@ -171,6 +165,7 @@ where
         });
     }
 
+    let mut cursor;
     let mut scenario_status = final_status;
     let mut published_pages = 0u32;
     let page_keys = recipe.steps(SeoExecutionSegment::PerPage);

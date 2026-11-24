@@ -22,6 +22,9 @@ use super::{
     verified_rule_projection_adapter,
 };
 
+mod preflight;
+use preflight::{serialize_truth_value, validate_prepared_truth_write};
+
 /// Read-only idempotent replay before any external embedding call. The
 /// transaction below repeats this check under the context lock.
 pub async fn completed_verified_truth_write<O: RuntimeProtoPayload>(
@@ -77,6 +80,17 @@ where
         projection_embeddings,
     } = prepared;
 
+    validate_prepared_truth_write(
+        run_id,
+        context_key,
+        decisions,
+        semantic_slots,
+        &semantic_outcomes,
+        raw_by_section,
+        projection_change,
+        projection_embeddings.as_ref(),
+    )?;
+
     let mut tx = pool
         .begin()
         .await
@@ -101,20 +115,9 @@ where
     sqlx_seo_adapter::lock_truth_rule_projections_in_tx(&mut tx, semantic_outcomes.keys()).await?;
 
     let mut persisted_candidate_ids = BTreeMap::<String, String>::new();
-    if decisions.len() != semantic_slots.len() {
-        return Err(DomainError::ContractViolation {
-            message: "verified truth write semantic slot count differs from candidates".to_string(),
-        });
-    }
     for (decision, semantic_slot) in decisions.iter().zip(semantic_slots) {
-        let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
-            DomainError::ValidationFailure {
-                message: format!(
-                    "verified truth write missing raw section {} for candidate/source registration",
-                    decision.section_id
-                ),
-            }
-        })?;
+        // Validated above before acquiring any SQL locks.
+        let raw_section = &raw_by_section[&decision.section_id];
         raw_crawl_adapter::ensure_source_in_tx(&mut tx, raw_section).await?;
         let fields = truth_candidate_write_fields(decision);
         let slot_outcome =
@@ -134,9 +137,8 @@ where
                     role: decision.role.clone(),
                     concept_canonical_key: decision.concept_canonical_key.clone(),
                     evidence_quote: fields.evidence_quote,
-                    params: serde_json::to_value(&decision.params)
-                        .unwrap_or(serde_json::Value::Null),
-                    scope: serde_json::to_value(&decision.scope).unwrap_or(serde_json::Value::Null),
+                    params: serialize_truth_value(&decision.params, "candidate params")?,
+                    scope: serialize_truth_value(&decision.scope, "candidate scope")?,
                     severity: fields.severity,
                     is_numeric: fields.is_numeric,
                     is_incomplete: decision.completeness_class != "complete",
@@ -178,10 +180,8 @@ where
                         rule_type_key: role_type.clone(),
                         concept_key: decision.concept_canonical_key.clone(),
                         role_type: role_type.clone(),
-                        params: serde_json::to_value(&decision.params)
-                            .unwrap_or(serde_json::Value::Null),
-                        scope: serde_json::to_value(&decision.scope)
-                            .unwrap_or(serde_json::Value::Null),
+                        params: serialize_truth_value(&decision.params, "verified params")?,
+                        scope: serialize_truth_value(&decision.scope, "verified scope")?,
                         source_key: decision.source_key.clone(),
                         confidence: decision.confidence,
                         rule_candidate_id: persisted_candidate_ids

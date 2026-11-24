@@ -8,9 +8,13 @@ This is a runner, not a second impact planner. It consumes the single
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Mapping
 
@@ -20,6 +24,15 @@ from dev_rust_feedback import commands_for_report
 
 
 FULL_WORKSPACE_UNIT_TEST = ["cargo", "test", "--workspace", "--locked"]
+VERIFY_E2E_COMMAND_PREFIX = (
+    "cargo", "test", "-p", "integration_harness", "--features", "e2e", "--lib",
+)
+VERIFY_E2E_COMMAND_SUFFIX = ("--locked", "--", "--nocapture")
+VERIFY_E2E_COMPILE = [
+    *VERIFY_E2E_COMMAND_PREFIX, "--locked", "--no-run",
+]
+VERIFY_E2E_MAX_PROCESSES = 2
+TEST_RESULT_COUNT = re.compile(r"test result: ok\. (\d+) passed;")
 
 
 def cargo_commands_for_ci(
@@ -76,6 +89,154 @@ def selected_preparations(
     return schedule
 
 
+def suite_runtime_environment(report: dict, name: str) -> dict[str, str]:
+    """Preserve all exact-source suite overrides for Cargo and precompiled runs."""
+    owner = SUITE_OWNERS[name]
+    target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
+    if not target.is_absolute():
+        target = WORKSPACE / target
+    runtime_env = suite_environment_for_report(report, name)
+    if name == "truth_certification":
+        print("CI_SUITE_FIXTURE_IDS=" + runtime_env.get("TRUTH_CERT_FIXTURE_IDS", "ALL"), flush=True)
+    for variable, binary in owner.get("runtime_binaries", {}).items():
+        path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise FileNotFoundError(f"selected suite {name} lacks prebuilt runtime binary: {path}")
+        runtime_env[variable] = str(path)
+        print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
+    return runtime_env
+
+
+def exact_verify_e2e_filter(command: list[str]) -> str:
+    """Only replace the transport of a known immutable Cargo test invocation.
+
+    The suite owner still chooses and validates its filter. Any future Cargo
+    command shape change must be reviewed before enabling direct execution.
+    """
+    if (len(command) != 11
+            or tuple(command[:7]) != VERIFY_E2E_COMMAND_PREFIX
+            or tuple(command[8:]) != VERIFY_E2E_COMMAND_SUFFIX
+            or not command[7] or command[7].startswith("-")):
+        raise ValueError(f"parallel E2E requires an exact, locked integration harness filter: {command}")
+    return command[7]
+
+
+def precompiled_verify_executable(measurement: dict) -> Path:
+    """Bind execution to the actual Cargo-produced test artifact, not a glob."""
+    paths = [row["path"] for row in measurement.get("test_executables", [])
+             if row.get("target") == "integration_harness"]
+    if len(paths) != 1:
+        raise RuntimeError(f"expected one compiled integration_harness lib test executable, found {len(paths)}")
+    target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
+    if not target.is_absolute():
+        target = WORKSPACE / target
+    executable = Path(paths[0])
+    if not executable.is_absolute():
+        executable = WORKSPACE / executable
+    executable = executable.resolve()
+    # Cargo's test binary must be inside this exact workspace's selected
+    # target dir; do not execute an arbitrary path from a malformed JSON line.
+    if (not executable.is_relative_to(target.resolve() / "debug" / "deps")
+            or not executable.is_file()
+            or not os.access(executable, os.X_OK)):
+        raise RuntimeError(f"Cargo returned an unusable integration_harness test binary: {executable}")
+    return executable
+
+
+def run_precompiled_e2e_suite(
+    name: str, command: list[str], executable: Path,
+    runtime_env: Mapping[str, str], output_lock: threading.Lock,
+) -> dict:
+    """Execute one already-selected test filter in its own process/env scope."""
+    test_filter = exact_verify_e2e_filter(command)
+    executed = [str(executable), test_filter, "--nocapture"]
+    environment = {**os.environ, **runtime_env}
+    # Cargo usually appends target/debug/deps to the dynamic-loader path.
+    # Reproduce that execution contract for the already compiled test binary.
+    dependency_dir = str(executable.parent)
+    previous = environment.get("LD_LIBRARY_PATH")
+    environment["LD_LIBRARY_PATH"] = dependency_dir + (os.pathsep + previous if previous else "")
+    start = time.monotonic()
+    matched_count = 0
+    process = subprocess.Popen(
+        executed, cwd=WORKSPACE, env=environment, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True, errors="replace", bufsize=1,
+    )
+    assert process.stdout is not None
+    for line in process.stdout:
+        match = TEST_RESULT_COUNT.search(line)
+        if match:
+            matched_count = int(match.group(1))
+        with output_lock:
+            print(f"[{name}] {line}", end="", flush=True)
+    exit_code = process.wait()
+    measurement = {
+        "command": executed,
+        "selected_cargo_command": command,
+        "runner": "precompiled-e2e-test-process",
+        "suite": name,
+        "exit_code": exit_code,
+        "matched_tests": matched_count,
+        "elapsed_seconds": round(time.monotonic() - start, 3),
+        "compiler_seconds": None,
+        "post_compiler_seconds": None,
+        "rebuilt_workspace_targets": [],
+        "fresh_workspace_targets": [],
+        "artifact_evidence": "unavailable",
+    }
+    with output_lock:
+        print("CARGO_FEEDBACK_JSON=" + json.dumps(measurement, sort_keys=True), flush=True)
+    if exit_code or matched_count == 0:
+        raise RuntimeError(
+            f"E2E suite {name} failed (exit={exit_code}, matched_tests={matched_count})"
+        )
+    return measurement
+
+
+def run_parallel_verify_e2e(
+    report: dict, integration_commands: list[tuple[str, list[str]]],
+) -> list[dict]:
+    """Compile one exact-source harness and run distinct filters in <=2 processes.
+
+    The original suite registry, CI job partition and mandatory tests are not
+    modified. `#[serial]` inside the harness protects process-local env; two
+    distinct OS processes have independent env and Testcontainers mapped ports.
+    """
+    if len(integration_commands) < 2:
+        raise ValueError("parallel verify E2E needs at least two suites")
+    filters = [exact_verify_e2e_filter(command) for _, command in integration_commands]
+    if len(filters) != len(set(filters)):
+        raise ValueError("parallel verify E2E cannot execute duplicated filters")
+
+    print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(VERIFY_E2E_COMPILE), flush=True)
+    compilation = run_cargo(VERIFY_E2E_COMPILE, cwd=WORKSPACE)
+    executable = precompiled_verify_executable(compilation)
+    environments: list[dict[str, str]] = []
+    for name, command in integration_commands:
+        environments.append(suite_runtime_environment(report, name))
+        print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
+
+    output_lock = threading.Lock()
+    results: dict[str, dict] = {}
+    failures: list[Exception] = []
+    print(f"CI_E2E_PARALLEL_PROCESSES={VERIFY_E2E_MAX_PROCESSES} suites={len(filters)}", flush=True)
+    with ThreadPoolExecutor(max_workers=VERIFY_E2E_MAX_PROCESSES) as pool:
+        pending = {
+            pool.submit(run_precompiled_e2e_suite, name, command, executable, environment, output_lock): name
+            for (name, command), environment in zip(integration_commands, environments)
+        }
+        for future in as_completed(pending):
+            name = pending[future]
+            try:
+                results[name] = future.result()
+            except Exception as error:
+                failures.append(error)
+                print(f"CI_E2E_SUITE_FAILURE={name} reason={error}", flush=True)
+    if failures:
+        raise RuntimeError(f"{len(failures)} mandatory E2E suites failed") from failures[0]
+    return [compilation, *(results[name] for name, _ in integration_commands)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
@@ -87,6 +248,10 @@ def main() -> int:
         "--suite-job", choices=("architecture-and-rust", "verify"),
         default="architecture-and-rust",
         help="Existing CI owner executing this exact-source suite partition",
+    )
+    parser.add_argument(
+        "--parallel-verify-e2e", action="store_true",
+        help="Compile once and run mandatory verify E2E filters in two isolated processes",
     )
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
@@ -101,7 +266,11 @@ def main() -> int:
         # The same verify job has already executed its mandatory workspace
         # unit tests. Never re-run those Cargo commands through this runner.
         commands, delegated = [], False
+        if args.parallel_verify_e2e and report.get("analysis") != "full":
+            raise ValueError("parallel verify E2E requires exact-source full impact")
     else:
+        if args.parallel_verify_e2e:
+            raise ValueError("parallel verify E2E cannot run in architecture owner")
         commands, delegated = cargo_commands_for_ci(
             report,
             delegate_workspace_unit_tests_to_verify=args.delegate_workspace_unit_tests_to_verify,
@@ -129,25 +298,16 @@ def main() -> int:
 
     # All real integration commands and owners come from ci_impact.py; the
     # runner has no suite-specific compilation or filter-selection branches.
-    for name, command in integration_commands:
-        owner = SUITE_OWNERS[name]
-        # The prebuilt-binary hook is generic. A runtime suite can use its
-        # existing override variables without recompiling the same Rust graph
-        # under a second Cargo target directory inside the test process.
-        target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
-        if not target.is_absolute():
-            target = WORKSPACE / target
-        runtime_env = suite_environment_for_report(report, name)
-        if name == "truth_certification":
-            print("CI_SUITE_FIXTURE_IDS=" + runtime_env.get("TRUTH_CERT_FIXTURE_IDS", "ALL"), flush=True)
-        for variable, binary in owner.get("runtime_binaries", {}).items():
-            path = target / "debug" / (binary + (".exe" if os.name == "nt" else ""))
-            if not path.is_file() or not os.access(path, os.X_OK):
-                raise FileNotFoundError(f"selected suite {name} lacks prebuilt runtime binary: {path}")
-            runtime_env[variable] = str(path)
-            print(f"CI_SUITE_PREBUILT={name} {variable}={path}", flush=True)
-        print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
-        measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
+    if args.parallel_verify_e2e and len(integration_commands) >= 2:
+        measurements.extend(run_parallel_verify_e2e(report, integration_commands))
+    else:
+        for name, command in integration_commands:
+            # The prebuilt-binary hook is generic. A runtime suite can use its
+            # existing override variables without recompiling the same Rust graph
+            # under a second Cargo target directory inside the test process.
+            runtime_env = suite_runtime_environment(report, name)
+            print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
+            measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
 
     output = ROOT / (
         "automation/reports/scoped_cargo_feedback.json"

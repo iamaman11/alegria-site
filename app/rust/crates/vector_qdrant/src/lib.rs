@@ -53,14 +53,6 @@ pub fn normalize_payload(
     payload_value: Option<&Value>,
 ) -> Value {
     let mut merged = Map::new();
-    merged.insert(
-        "entity_type".to_string(),
-        Value::String(entity_type.to_string()),
-    );
-    merged.insert(
-        "entity_key".to_string(),
-        Value::String(entity_key.to_string()),
-    );
     if let Some(v) = payload_value {
         if let Some(obj) = v.as_object() {
             for (k, val) in obj {
@@ -70,7 +62,63 @@ pub fn normalize_payload(
             merged.insert("source_payload".to_string(), v.clone());
         }
     }
+    // Projection identity comes from the validated command, never from an
+    // arbitrary nested payload. Preserve every other caller-supplied field.
+    merged.insert(
+        "entity_type".to_string(),
+        Value::String(entity_type.to_string()),
+    );
+    merged.insert(
+        "entity_key".to_string(),
+        Value::String(entity_key.to_string()),
+    );
     Value::Object(merged)
+}
+
+#[cfg(test)]
+mod payload_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_entity_identity_cannot_be_overwritten_by_projection_payload() {
+        let supplied = serde_json::json!({
+            "entity_type": "other_type",
+            "entity_key": "other_key",
+            "rule_instance_id": "fact-1",
+            "source_key": "https://official.example/rule"
+        });
+        let payload = normalize_payload("rule_instance", "canonical-1", Some(&supplied));
+        assert_eq!(payload["entity_type"], "rule_instance");
+        assert_eq!(payload["entity_key"], "canonical-1");
+        assert_eq!(payload["rule_instance_id"], "fact-1");
+        assert_eq!(payload["source_key"], "https://official.example/rule");
+        // Do not mutate the source or let subsequent retries drift identity.
+        assert_eq!(supplied["entity_key"], "other_key");
+        assert_eq!(
+            normalize_payload("rule_instance", "canonical-1", Some(&supplied)),
+            payload
+        );
+    }
+
+    #[test]
+    fn scalar_payload_is_preserved_but_cannot_replace_identity() {
+        let supplied = serde_json::json!("source text");
+        assert_eq!(
+            normalize_payload("raw_section", "section-1", Some(&supplied)),
+            serde_json::json!({
+                "entity_type": "raw_section",
+                "entity_key": "section-1",
+                "source_payload": "source text"
+            })
+        );
+        assert_eq!(
+            normalize_payload("raw_section", "section-1", None),
+            serde_json::json!({
+                "entity_type": "raw_section",
+                "entity_key": "section-1"
+            })
+        );
+    }
 }
 
 pub async fn ensure_dense_collection(

@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,7 +20,9 @@ from ci_impact import (
     suite_commands_by_ci_job, suite_commands_for_report,
 )
 from run_scoped_cargo_feedback import (
-    cargo_commands_for_ci, main as run_scoped_cargo_feedback, selected_preparations,
+    VERIFY_E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
+    main as run_scoped_cargo_feedback, precompiled_verify_executable,
+    run_parallel_verify_e2e, run_precompiled_e2e_suite, selected_preparations,
 )
 
 
@@ -114,6 +117,24 @@ class CargoFeedbackTests(unittest.TestCase):
     def test_malformed_artifact_does_not_count_as_compiled(self) -> None:
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": {}}, WORKSPACE))
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": None}, WORKSPACE))
+
+    def test_no_run_cargo_artifact_records_the_exact_library_test_binary(self) -> None:
+        executable = str(WORKSPACE / "target/debug/deps/integration_harness-exact-hash")
+        record = json.dumps({
+            "reason": "compiler-artifact", "fresh": False,
+            "target": {
+                "name": "integration_harness", "kind": ["lib"],
+                "src_path": str(WORKSPACE / "crates/integration_harness/src/lib.rs"),
+            },
+            "executable": executable,
+        }) + "\n"
+        with patch("cargo_feedback.subprocess.Popen", return_value=FakeProcess([
+            record, json.dumps({"reason": "build-finished", "success": True}) + "\n",
+        ])):
+            result = run_cargo(VERIFY_E2E_COMPILE, cwd=WORKSPACE, output=io.StringIO())
+        self.assertEqual(result["test_executables"], [
+            {"target": "integration_harness", "path": executable},
+        ])
 
 
 class ScopedCargoFeedbackTests(unittest.TestCase):
@@ -281,6 +302,143 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         with patch.dict(os.environ, {"TRUTH_CERT_LIMIT": "1"}):
             with self.assertRaisesRegex(ValueError, "cannot shrink exact-source CI"):
                 selected_preparations(selected)
+
+    def test_parallel_verify_uses_only_exact_selected_suite_filters(self) -> None:
+        assigned = suite_commands_by_ci_job(self.report([
+            "cms_review_revision", "draft_qa_scenario", "knowledge_a13",
+        ]))["verify"]
+        self.assertEqual([exact_verify_e2e_filter(command) for _, command in assigned], [
+            "cms_revision_", "draft_qa_", "knowledge_a13_",
+        ])
+        with self.assertRaisesRegex(ValueError, "exact, locked"):
+            exact_verify_e2e_filter([
+                "cargo", "test", "-p", "integration_harness", "--lib", "cms_revision_",
+            ])
+
+    def test_parallel_verify_fails_closed_on_missing_or_outside_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            binary = target / "debug/deps/integration_harness-correct"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"compiled test binary")
+            binary.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                self.assertEqual(precompiled_verify_executable({
+                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
+                }), binary)
+                with self.assertRaisesRegex(RuntimeError, "expected one"):
+                    precompiled_verify_executable({"test_executables": []})
+                with self.assertRaisesRegex(RuntimeError, "unusable"):
+                    precompiled_verify_executable({"test_executables": [
+                        {"target": "integration_harness", "path": "/tmp/foreign-test"},
+                    ]})
+
+    def test_precompiled_filter_is_process_isolated_and_cannot_pass_zero_tests(self) -> None:
+        command = list(SUITE_OWNERS["cms_review_revision"]["command"])
+        with tempfile.TemporaryDirectory() as directory:
+            binary = Path(directory) / "integration_harness-exact"
+            binary.write_bytes(b"compiled test binary")
+            binary.chmod(0o755)
+            captured: list[tuple[list[str], dict]] = []
+
+            def run(command: list[str], **kwargs: object) -> FakeProcess:
+                captured.append((command, kwargs))
+                return FakeProcess(["running 4 tests\n", "test result: ok. 4 passed; 0 failed; finished\n"])
+
+            with patch("run_scoped_cargo_feedback.subprocess.Popen", side_effect=run):
+                result = run_precompiled_e2e_suite(
+                    "cms_review_revision", command, binary,
+                    {"TEST_ONLY_SUITE_ENV": "unique"}, threading.Lock(),
+                )
+            self.assertEqual(result["matched_tests"], 4)
+            self.assertEqual(result["selected_cargo_command"], command)
+            self.assertEqual(captured[0][0], [str(binary), "cms_revision_", "--nocapture"])
+            self.assertEqual(captured[0][1]["env"]["TEST_ONLY_SUITE_ENV"], "unique")
+            self.assertIn(str(binary.parent), captured[0][1]["env"]["LD_LIBRARY_PATH"])
+
+            with patch("run_scoped_cargo_feedback.subprocess.Popen", return_value=FakeProcess([
+                "running 0 tests\n", "test result: ok. 0 passed; 0 failed; finished\n",
+            ])):
+                with self.assertRaisesRegex(RuntimeError, "matched_tests=0"):
+                    run_precompiled_e2e_suite(
+                        "cms_review_revision", command, binary, {}, threading.Lock(),
+                    )
+            with patch("run_scoped_cargo_feedback.subprocess.Popen", return_value=FakeProcess([
+                "running 4 tests\n", "test result: FAILED. 3 passed; 1 failed\n",
+            ], exit_code=101)):
+                with self.assertRaisesRegex(RuntimeError, "exit=101"):
+                    run_precompiled_e2e_suite(
+                        "cms_review_revision", command, binary, {}, threading.Lock(),
+                    )
+
+    def test_parallel_verify_compiles_once_and_runs_every_suite_in_two_processes(self) -> None:
+        selected = ["cms_review_revision", "draft_qa_scenario", "knowledge_a13"]
+        suites = suite_commands_by_ci_job(self.report(selected))["verify"]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            binary = target / "debug/deps/integration_harness-exact"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"compiled test binary")
+            binary.chmod(0o755)
+            started = threading.Barrier(2, timeout=3)
+            seen: list[str] = []
+            lock = threading.Lock()
+
+            def execution(name: str, command: list[str], *_args: object) -> dict:
+                with lock:
+                    seen.append(name)
+                if len(seen) <= 2:
+                    started.wait()
+                return {"suite": name, "selected_cargo_command": command}
+
+            with (
+                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}),
+                patch("run_scoped_cargo_feedback.run_cargo", return_value={
+                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
+                }) as compile_cargo,
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
+            ):
+                results = run_parallel_verify_e2e(self.report(selected), suites)
+            compile_cargo.assert_called_once_with(VERIFY_E2E_COMPILE, cwd=WORKSPACE)
+            self.assertEqual(set(seen), set(selected))
+            self.assertEqual([result.get("suite") for result in results[1:]], selected)
+            self.assertEqual(len(results), len(selected) + 1)
+
+    def test_parallel_verify_does_not_turn_failed_process_into_green(self) -> None:
+        selected = ["cms_review_revision", "draft_qa_scenario"]
+        suites = suite_commands_by_ci_job(self.report(selected))["verify"]
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            binary = target / "debug/deps/integration_harness-exact"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"compiled test binary")
+            binary.chmod(0o755)
+            ran: list[str] = []
+
+            def execution(name: str, *_args: object) -> dict:
+                ran.append(name)
+                if name == "cms_review_revision":
+                    raise RuntimeError("intentional failure")
+                return {"suite": name}
+
+            with (
+                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}),
+                patch("run_scoped_cargo_feedback.run_cargo", return_value={
+                    "test_executables": [{"target": "integration_harness", "path": str(binary)}],
+                }),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "1 mandatory E2E suites failed"):
+                    run_parallel_verify_e2e(self.report(selected), suites)
+            self.assertEqual(set(ran), set(selected))
+
+    def test_duplicate_parallel_filter_rejected_before_cargo_compilation(self) -> None:
+        suite = ("cms_review_revision", list(SUITE_OWNERS["cms_review_revision"]["command"]))
+        with patch("run_scoped_cargo_feedback.run_cargo") as compile_cargo:
+            with self.assertRaisesRegex(ValueError, "duplicated filters"):
+                run_parallel_verify_e2e(self.report(["cms_review_revision"]), [suite, suite])
+        compile_cargo.assert_not_called()
 
 
 if __name__ == "__main__":

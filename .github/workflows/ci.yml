@@ -523,13 +523,16 @@ jobs:
           name: ci-owner-impact
           path: automation/reports
 
-      - name: Run assigned real PostgreSQL E2E after workspace unit tests
+      # The exact-source impact report still owns every mandatory test filter.
+      # Compile its shared harness once, then isolate environment-mutating tests
+      # in at most two OS processes (never concurrent threads in one harness).
+      - name: Compile and run assigned real E2E suites in isolated processes
         if: needs.impact.outputs.cargo_scope == 'full'
         env:
           SQLX_OFFLINE: "true"
           RUSTC_WRAPPER: sccache
           PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
-        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json --suite-job verify
+        run: python3 automation/run_scoped_cargo_feedback.py --report automation/reports/ci_impact.json --suite-job verify --parallel-verify-e2e
 
       - name: Full-scope compiler cache statistics
         if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
