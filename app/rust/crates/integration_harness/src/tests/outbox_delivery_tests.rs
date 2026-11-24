@@ -650,6 +650,84 @@ async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retr
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
+async fn outbox_a14_target_scoped_claim_never_leases_another_provider_event() {
+    use infrastructure::adapters::sqlx_outbox_adapter::{
+        claim_outbox_batch_for_target, mark_done, LeaseUpdate, OutboxEnvelope,
+    };
+    use infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_one;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let run_id = Uuid::new_v4().to_string();
+    let make_event = |target_system: &str, event_type: &str| OutboxEnvelope {
+        run_id: run_id.clone(),
+        aggregate_type: "claim-target-test".into(),
+        aggregate_key: Uuid::new_v4().to_string(),
+        target_system: target_system.to_owned(),
+        event_type: event_type.to_owned(),
+        payload_type: "a14.target-lease-fixture.v1".into(),
+        schema_version: 1,
+        idempotency_key: Uuid::new_v4().to_string(),
+        payload_bytes: vec![0x01],
+    };
+    let graph_id = outbox_emit_one(&pg.pool, &make_event("neo4j", "RuleInstanceUpserted"))
+        .await
+        .unwrap();
+    let vector_id = outbox_emit_one(&pg.pool, &make_event("qdrant", "QdrantUpsertCommand"))
+        .await
+        .unwrap();
+
+    let mut graph_claims = claim_outbox_batch_for_target(
+        &pg.pool,
+        "graph-only-worker",
+        "neo4j",
+        16,
+        120,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(graph_claims.len(), 1);
+    let graph = graph_claims.pop().unwrap();
+    assert_eq!(graph.event_id.to_string(), graph_id);
+    assert_eq!(graph.target_system, "neo4j");
+
+    let other_status: (String, Option<String>) = sqlx::query_as(
+        "SELECT status, worker_id FROM system.sync_outbox WHERE event_id=$1",
+    )
+    .bind(Uuid::parse_str(&vector_id).unwrap())
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(other_status, ("pending".into(), None), "graph owner stole a Qdrant lease");
+
+    let mut vector_claims = claim_outbox_batch_for_target(
+        &pg.pool,
+        "vector-only-worker",
+        "qdrant",
+        16,
+        120,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(vector_claims.len(), 1);
+    let vector = vector_claims.pop().unwrap();
+    assert_eq!(vector.event_id.to_string(), vector_id);
+    assert_eq!(vector.target_system, "qdrant");
+    assert_eq!(vector.lease_worker_id, "vector-only-worker");
+    assert!(claim_outbox_batch_for_target(&pg.pool, "cms-only-worker", "cms", 16, 120, None)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Release both fixture leases through the real PostgreSQL ownership CAS.
+    assert_eq!(mark_done(&pg.pool, &graph).await.unwrap(), LeaseUpdate::Applied);
+    assert_eq!(mark_done(&pg.pool, &vector).await.unwrap(), LeaseUpdate::Applied);
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
 async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
     use runtime_composition::adapters::projection_materialize_adapter::dispatch_event;

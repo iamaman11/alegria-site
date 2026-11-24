@@ -3051,7 +3051,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "contracts",
- "infrastructure",
+ "postgres_store",
  "primitives",
  "prost",
  "runtime_composition",

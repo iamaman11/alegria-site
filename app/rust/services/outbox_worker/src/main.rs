@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::env;
 
-use infrastructure::adapters::sqlx_adapter::connect_pg;
+use postgres_store::sqlx_adapter::connect_pg;
 use outbox_worker::worker;
 use tracing::info;
 

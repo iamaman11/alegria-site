@@ -1,16 +1,16 @@
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::postgres::PgListener;
 use sqlx::PgPool;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use infrastructure::adapters::sqlx_outbox_adapter::{
-    claim_outbox_batch, mark_done, mark_failed_with_dead_letter, mark_retry, read_sync_status,
-    LeaseUpdate,
+use postgres_store::sqlx_outbox_adapter::{
+    claim_outbox_batch, claim_outbox_batch_for_target, mark_done, mark_failed_with_dead_letter,
+    mark_retry, read_sync_status, LeaseUpdate,
 };
 use telemetry::fbs_writer::write_runtime_window;
 
@@ -22,6 +22,36 @@ const DEFAULT_LEASE_SECONDS: i64 = 120;
 const DEFAULT_IDLE_POLL_MS: u64 = 1500;
 const DEFAULT_MAX_RETRIES: i32 = 10;
 const OUTBOX_NOTIFY_CHANNEL: &str = "sync_outbox_channel";
+
+/// One target per future provider-owned worker. An omitted setting retains
+/// the current mixed-worker deployment until all targets have their own
+/// executors and have passed concurrent lease/fencing E2E.
+fn checked_target_system(value: &str) -> Result<&str> {
+    anyhow::ensure!(
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || byte == b'_'
+                    || byte == b'-'
+                    || byte == b'.'
+            }),
+        "OUTBOX_TARGET_SYSTEM must be a nonempty lowercase provider identifier"
+    );
+    Ok(value)
+}
+
+fn configured_target_system() -> Result<Option<String>> {
+    match std::env::var("OUTBOX_TARGET_SYSTEM") {
+        Ok(value) => {
+            checked_target_system(&value)?;
+            Ok(Some(value))
+        }
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error).context("invalid OUTBOX_TARGET_SYSTEM setting"),
+    }
+}
 
 fn current_build_id() -> String {
     std::env::var("OUTBOX_WORKER_BUILD_ID")
@@ -62,6 +92,8 @@ pub async fn run_worker_loop(
     worker_id: &str,
     max_cycles: Option<u32>,
 ) -> Result<()> {
+    let target_system = configured_target_system()?;
+    info!(worker_id, target_system = target_system.as_deref().unwrap_or("all"), "outbox claim scope selected");
     let only_event_id = std::env::var("OUTBOX_ONLY_EVENT_ID")
         .ok()
         .and_then(|value| Uuid::parse_str(&value).ok());
@@ -99,14 +131,29 @@ pub async fn run_worker_loop(
         cycle += 1;
         emit_sync_status(pool).await;
 
-        let batch = claim_outbox_batch(
-            pool,
-            worker_id,
-            DEFAULT_BATCH_SIZE,
-            DEFAULT_LEASE_SECONDS,
-            only_event_id,
-        )
-        .await?;
+        let batch = match target_system.as_deref() {
+            Some(target) => {
+                claim_outbox_batch_for_target(
+                    pool,
+                    worker_id,
+                    target,
+                    DEFAULT_BATCH_SIZE,
+                    DEFAULT_LEASE_SECONDS,
+                    only_event_id,
+                )
+                .await?
+            }
+            None => {
+                claim_outbox_batch(
+                    pool,
+                    worker_id,
+                    DEFAULT_BATCH_SIZE,
+                    DEFAULT_LEASE_SECONDS,
+                    only_event_id,
+                )
+                .await?
+            }
+        };
         if batch.is_empty() {
             emit_heartbeat(worker_id, cycle, 0);
             if let Some(l) = listener.as_mut() {
@@ -233,4 +280,19 @@ pub async fn run_worker_loop(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod target_selection_tests {
+    use super::checked_target_system;
+
+    #[test]
+    fn target_scoped_worker_is_not_tied_to_the_current_three_providers() {
+        for target in ["neo4j", "qdrant", "cms", "future_provider.v2"] {
+            assert_eq!(checked_target_system(target).unwrap(), target);
+        }
+        for invalid in ["", "Neo4j", " qdrant", "cms ", "../qdrant", "qdrant\n"] {
+            assert!(checked_target_system(invalid).is_err());
+        }
+    }
 }
