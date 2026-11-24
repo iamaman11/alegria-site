@@ -173,6 +173,7 @@ jobs:
         run: |
           python3 automation/check_ci_impact.py
           python3 automation/check_dev_rust_feedback.py
+          python3 automation/check_owner_rebuild.py
 
       - name: Regression-test fast CI timing and failure propagation
         run: |
@@ -245,6 +246,15 @@ jobs:
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json "${args[@]}"
 
+      # Diagnostic only. Explicitly label the Draft PR to profile four isolated
+      # owner edits on this same ephemeral runner; ordinary required PR CI never
+      # pays for these experiments. No new job or parallel Cargo compilation.
+      - name: Measure four actual owner-only rebuilds (opt-in)
+        if: contains(github.event.pull_request.labels.*.name, 'owner-build-probe')
+        env:
+          SQLX_OFFLINE: "true"
+        run: python3 automation/measure_owner_rebuild.py
+
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
         run: sccache --show-stats
@@ -262,7 +272,10 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: cargo-cache-architecture
-          path: automation/reports/cargo_cache_architecture-and-rust.json
+          path: |
+            automation/reports/cargo_cache_architecture-and-rust.json
+            automation/reports/owner_rebuild_probe.json
+            app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: error
 
   # Fast PR truth-policy acceptance. Full real-worker 16-fixture certification

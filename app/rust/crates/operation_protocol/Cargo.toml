@@ -1,0 +1,10 @@
+[package]
+name = "operation_protocol"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }
