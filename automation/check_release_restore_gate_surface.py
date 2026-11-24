@@ -30,7 +30,7 @@ def main() -> int:
         "seo_release_restore_gate(",
         "release_and_restore_gate",
         "\"automation/check_temporal_build_id_policy.py\"",
-        "\"automation/check_seo_rollout_compat_contract.py\"",
+        "\"automation/check_legacy_workflow_quarantine.py\"",
         "\"automation/check_backup_restore_layout.py\"",
         "\"automation/ci_verify.sh\"",
         "\"automation/temporal_production_gate.sh\"",

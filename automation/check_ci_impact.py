@@ -244,7 +244,6 @@ class ImpactFixtures(unittest.TestCase):
         # page outcome without touching Temporal workflow source. It must
         # select the live worker/restart path, not just a Cargo unit test.
         for path in (
-            "app/rust/crates/runtime_models/src/seo_blocks.rs",
             "app/rust/crates/seo_steps/src/editorial_wire.rs",
             "app/rust/crates/seo_steps/src/page_wire.rs",
             "app/rust/crates/seo_domain/src/editorial.rs",
@@ -263,7 +262,6 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertNotIn("publishing_a17", report["selected_suites"])
                 self.assertIn("architecture-and-rust", report["selected_ci_jobs"])
                 if path in {
-                    "app/rust/crates/runtime_models/src/seo_blocks.rs",
                     "app/rust/crates/seo_steps/src/editorial_wire.rs",
                     "app/rust/crates/seo_steps/src/page_wire.rs",
                     "app/rust/crates/seo_domain/src/editorial.rs",
@@ -520,7 +518,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/seo_steps/src/cms_review_wire.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
-            "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+            "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
             "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
         ):
             with self.subTest(path=path):
@@ -644,7 +642,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_ci_only_file_does_not_hide_a_real_runtime_change(self) -> None:
         result = self.impact(
             "automation/check_ci_workflow_contract.py",
-            "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+            "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
         )
         self.assertEqual(result["scope"], "scoped")
         self.assertIn("temporal_restart", result["selected_suites"])
@@ -663,6 +661,44 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(outcome["selected_ci_jobs"], [])
         self.assertEqual(set(outcome["ci_job_status"].values()), {"not_applicable"})
         self.assertIn("documentation", outcome["classified_inputs"]["docs/ARCHITECTURE_BOUNDARIES.md"])
+
+    def test_reviewed_automation_markdown_needs_only_fast_verify(self) -> None:
+        # PR #83 changed only this operator document but previously triggered
+        # a full workspace Rust/PG/Temporal run (~230s Rust + 71s verify).
+        # Preserve the policy check without treating Markdown as executable.
+        for path in (
+            "automation/00_ENTRYPOINT.md",
+            "automation/FSM_TYPED_PHASE_IMPERATIVE_PLAN.md",
+            "automation/INTEGRITY_RUNBOOK.md",
+            "automation/LAYER_MAP.md",
+            "automation/NEW_OPERATION_PLAYBOOK.md",
+            "automation/OPS_CANONICALS.md",
+            "automation/PROJECT_NAVIGATION_MAP.md",
+            "automation/README.md",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["scope"], "none")
+                self.assertEqual(result["affected_crates"], [])
+                self.assertEqual(result["selected_suites"], [])
+                self.assertEqual(result["selected_images"], [])
+                self.assertEqual(result["selected_ci_jobs"], ["verify"])
+                self.assertIn("source-policy Markdown", result["classified_inputs"][path])
+                self.assertFalse(main_cache_prime_required([path]))
+                self.assertFalse(worker_release_decision(result, [path], manual=False)["worker_required"])
+
+    def test_automation_markdown_cannot_hide_executable_input(self) -> None:
+        path = "automation/NEW_OPERATION_PLAYBOOK.md"
+        # New unknown Markdown and policy generator inventory stay fail-closed.
+        for unknown in ("automation/NEW_UNOWNED_POLICY.md", "automation/PROTO_CONTRACTS.md"):
+            self.assertEqual(self.impact(unknown)["scope"], "full")
+        # Mixed content selects the real runtime consumer, not just verify.
+        result = self.impact(path, "app/rust/services/temporal/src/main.rs")
+        self.assertEqual(result["scope"], "scoped")
+        self.assertIn("architecture-and-rust", result["selected_ci_jobs"])
+        self.assertIn("verify", result["selected_ci_jobs"])
+        self.assertIn("temporal_restart", result["selected_suites"])
+        self.assertTrue(worker_release_decision(result, result["changed_paths"], manual=False)["worker_required"])
 
     def test_historical_truth_report_is_not_a_live_rust_fixture(self) -> None:
         outcome = self.impact("docs/runs/r3_contradiction_handling.json")

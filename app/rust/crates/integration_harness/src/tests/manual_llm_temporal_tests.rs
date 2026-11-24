@@ -462,7 +462,7 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
             &control,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: page_node_key.clone(),
-                revision_id: Some(revision_id.clone()),
+                revision_id: revision_id.clone(),
                 actor_role: "editorial_e2e_reviewer".to_string(),
                 decision: HumanReviewDecision::Blocked,
                 reason: "Exact revision requires rewriting".to_string(),

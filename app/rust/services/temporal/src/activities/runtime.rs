@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::io::Error as IoError;
 
 use contracts::generated::alegria::temporal::v1::{RuntimeErrorPayload, StepContractMeta};
@@ -14,6 +13,15 @@ use super::AlegriaActivities;
 use crate::metrics::ActivityTimer;
 
 impl AlegriaActivities {
+    pub(crate) async fn finalize_run_impl(&self, run_id: &str) -> Result<String, DomainError> {
+        pipeline_storage::advance_execution_run(
+            &self.pool, run_id, "done", None, None, None, None, None,
+        )
+        .await
+        .map_err(Self::classify_error)?;
+        Ok(run_id.to_string())
+    }
+
     pub(crate) fn current_build_id() -> String {
         std::env::var("WORKER_BUILD_ID").unwrap_or_else(|_| "dev-local".to_string())
     }
@@ -134,17 +142,6 @@ impl AlegriaActivities {
                 | DomainError::ConflictViolation { .. }
         );
         Self::activity_error_with_policy(err.to_string(), non_retryable)
-    }
-
-    pub(crate) fn extract_block_htmls(
-        generation_result: &BTreeMap<String, String>,
-    ) -> Vec<(String, String)> {
-        let mut out = generation_result
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<_>>();
-        out.sort_by(|a, b| a.0.cmp(&b.0));
-        out
     }
 
     pub(crate) async fn execute_step<I, O, F, Fut>(

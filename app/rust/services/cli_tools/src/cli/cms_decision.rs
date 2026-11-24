@@ -2,7 +2,7 @@ async fn cms_review_decision(
     database_url: Option<String>,
     temporal_url: Option<&str>,
     page_node_key: &str,
-    revision_id: Option<&str>,
+    revision_id: &str,
     actor_role: &str,
     decision: &str,
     reason: &str,
@@ -23,7 +23,7 @@ async fn cms_review_decision(
         &workflow,
         &ApplyHumanReviewDecisionInput {
             page_node_key: page_node_key.to_string(),
-            revision_id: revision_id.map(str::to_string),
+            revision_id: revision_id.to_string(),
             actor_role: actor_role.to_string(),
             decision,
             reason: reason.to_string(),
@@ -39,13 +39,40 @@ async fn cms_review_decision(
 mod cms_review_decision_tests {
     use super::*;
 
+    #[test]
+    fn all_editorial_decisions_require_an_exact_revision_id() {
+        for command in ["cms-approve-publish", "cms-block", "cms-reopen"] {
+            let missing = Cli::try_parse_from([
+                "cli_tools",
+                command,
+                "--page-node-key",
+                "page-1",
+                "--actor-role",
+                "editor",
+            ]);
+            assert!(missing.is_err(), "{command} accepted missing --revision-id");
+
+            let exact = Cli::try_parse_from([
+                "cli_tools",
+                command,
+                "--page-node-key",
+                "page-1",
+                "--revision-id",
+                "revision-1",
+                "--actor-role",
+                "editor",
+            ]);
+            assert!(exact.is_ok(), "{command} rejected exact revision: {exact:?}");
+        }
+    }
+
     #[tokio::test]
     async fn unsupported_decision_is_rejected_before_database_connection() {
         let error = cms_review_decision(
             Some("postgres://not-a-real-host.invalid/alegria".to_string()),
             None,
             "page-1",
-            Some("revision-1"),
+            "revision-1",
             "editor",
             "published",
             "",

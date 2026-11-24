@@ -100,14 +100,12 @@ docker compose logs -f temporal-worker
 - rollback = вернуть старый worker fleet/build-id, а не менять workflow history “на месте”;
 - новый workflow type вводится параллельно старому, пока старые execution не будут завершены или выведены по отдельной процедуре.
 
-### SeoSiteBuildWorkflow compat / drain window
+### Retired legacy SEO workflow types and deployment gate
 
-- legacy `SeoSiteBuildWorkflow` остаётся доступным только как compat/drain workflow type;
-- окно compat/drain считается закрытым для конкретной среды только когда есть machine-readable evidence:
-  - legacy replay artifact показывает `total_runs=0` и `open_runs=0`, либо
-  - отдельный production drain artifact подтверждает, что все старые histories безопасно завершены;
-- до закрытия окна старый workflow type не удаляется из кода и не объявляется replay-irrelevant;
-- после закрытия окна новый product logic в legacy workflow запрещён, а его использование допускается только для controlled replay / investigation.
+- `SeoSiteBuildWorkflow` и `ContentGenerationWorkflow` удалены из исполняемого Worker: новые SEO-запуски используют только `SeoSiteBuildCanonicalCutoverWorkflow`;
+- локальное machine-readable replay evidence показывает `total_runs=0` и `open_runs=0` **только для проверенной локальной среды**, а не для staging/production;
+- **до развёртывания Worker** в каждой целевой среде необходимо независимо подтвердить `open_runs=0` для удалённых типов или завершить drain старым Worker/build-id. Если таких доказательств нет, не заменять старый Worker этим образом;
+- rollback для всё ещё выполняющихся старых histories — старый Worker/build-id, не переименование и не изменение сохранённой history. Не восстанавливать удалённый runtime ради пустых тестовых сценариев.
 
 ### Naming decision after cutover
 

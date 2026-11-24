@@ -3,10 +3,12 @@
 #[serial]
 async fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft() {
     use contracts::generated::alegria::temporal::v1::{
+        ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
         DraftAssembleOutputPayload, DraftQaInputPayload, DraftQaOutputPayload, DraftState,
     };
     use infrastructure::adapters::sqlx_seo_adapter::{
-        persist_draft_assemble_output, persist_draft_qa_output,
+        persist_content_contract_validate_output, persist_draft_assemble_output,
+        persist_draft_qa_output,
     };
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -163,6 +165,51 @@ async fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft(
         .await
         .unwrap();
     assert_eq!(two_verdicts, 2, "changed QA verdict must produce a distinct projection event");
+
+    // Content Contract runs before Draft QA and still has a replayable runtime
+    // result. It must NOT be a second writer of the durable QA decision. A
+    // repeated contract validation after QA cannot overwrite QA blockers.
+    sqlx::query("INSERT INTO pipeline.execution_runs (run_id,workflow_run_id,workflow_type,context_key) VALUES ($1,$2,'seo_site_build',$3)")
+        .bind(Uuid::parse_str(&run_id).unwrap())
+        .bind(format!("qa-atomic-workflow-{key}"))
+        .bind(&page)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    let qa_blockers_before: serde_json::Value =
+        sqlx::query_scalar("SELECT qa_blockers FROM site.page_drafts WHERE page_draft_key=$1")
+            .bind(&draft_key)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    persist_content_contract_validate_output(
+        &pg.pool,
+        &ContentContractValidateInputPayload {
+            run_id: run_id.clone(),
+            draft: Some(draft.clone()),
+            ..ContentContractValidateInputPayload::default()
+        },
+        &ContentContractValidateOutputPayload {
+            verdict: "blocked".into(),
+            blocking_reasons: vec!["missing_rendered_content_blocks".into()],
+            ..ContentContractValidateOutputPayload::default()
+        },
+    )
+    .await
+    .unwrap();
+    let qa_blockers_after: serde_json::Value =
+        sqlx::query_scalar("SELECT qa_blockers FROM site.page_drafts WHERE page_draft_key=$1")
+            .bind(&draft_key)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    assert_eq!(qa_blockers_after, qa_blockers_before);
+    let contract_blobs: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM pipeline.execution_run_blobs WHERE run_id=$1 AND field_name='content_contract_validation'")
+        .bind(Uuid::parse_str(&run_id).unwrap())
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(contract_blobs, 1, "the intermediate contract result remains durable");
 
     // A live release stays live while a newer draft is generated or re-QA'd.
     let live_revision = format!("qa-atomic-live-revision-{key}");

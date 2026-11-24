@@ -4,22 +4,12 @@ use seo_ports::{GraphCapabilityPort, RebuildDependencyEvidence, RebuildRepositor
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
-async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
-    repo: &R,
-    phase: &str,
-) -> Result<(), DomainError> {
-    repo.ensure_graph_contract(phase)
-        .await
-        .map_err(|err| DomainError::InfraUnavailable {
-            message: format!("graph capability contract failed for rebuild phase `{phase}`: {err}"),
-        })
-}
-
 pub async fn execute<R: RebuildRepository + GraphCapabilityPort>(
     repo: &R,
     input: &RebuildDetectRequest,
 ) -> Result<RebuildDetectResult, DomainError> {
-    ensure_graph_required_for_phase(repo, "rebuild_detect").await?;
+    repo.require_graph_contract("rebuild", "rebuild_detect")
+        .await?;
     let mut narrowed_input = input.clone();
     let mut semantic_neighbor_evidence: Vec<RebuildDependencyEvidence> = Vec::new();
     if !input.changed_truth_keys.is_empty() {

@@ -6,16 +6,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::editorial::{block_type_for_role, factual_role};
-
-#[derive(Clone, Copy)]
-pub struct ContentBlock<'a> {
-    pub role: &'a str,
-    pub block_type: &'a str,
-    pub markdown: &'a str,
-    pub required: bool,
-    pub support_refs: &'a [String],
-}
+use crate::editorial::{
+    block_type_for_role, factual_role, verified_traceability_evidence, ContentBlock,
+};
 
 #[derive(Clone, Copy)]
 pub struct Evidence<'a> {
@@ -25,9 +18,7 @@ pub struct Evidence<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct LinkObligation<'a> {
-    pub target_page_key: &'a str,
-    pub role: &'a str,
+pub struct LinkObligation {
     pub required: bool,
     /// Transport identity comparison, resolved at the adapter boundary.
     pub bound_exactly: bool,
@@ -35,7 +26,6 @@ pub struct LinkObligation<'a> {
 
 #[derive(Clone, Copy)]
 pub struct PublishLinkCoverage<'a> {
-    pub typed_editorial: bool,
     pub related_pages_body: &'a str,
 }
 
@@ -43,7 +33,7 @@ pub struct ContentContract<'a> {
     pub blocks: &'a [ContentBlock<'a>],
     pub claims: &'a [Evidence<'a>],
     pub traceability: &'a [Evidence<'a>],
-    pub links: &'a [LinkObligation<'a>],
+    pub links: &'a [LinkObligation],
     /// Only the final QA verifies link binding in assembled sections. The
     /// earlier contract phase verifies the existence of the content block.
     pub publish_links: Option<PublishLinkCoverage<'a>>,
@@ -107,11 +97,7 @@ fn supported_refs<'a>(entries: &[Evidence<'a>]) -> BTreeSet<&'a str> {
     entries
         .iter()
         .filter(|entry| {
-            entry.validation_verdict == "supported"
-                && matches!(
-                    entry.traceability_label,
-                    "verified_fact" | "verified_summary"
-                )
+            verified_traceability_evidence(entry.validation_verdict, entry.traceability_label)
         })
         .flat_map(|entry| entry.support_refs.iter().map(String::as_str))
         .collect()
@@ -161,24 +147,15 @@ pub fn validate(input: &ContentContract<'_>) -> Vec<Violation> {
         .blocks
         .iter()
         .find(|block| block.role == "related_pages");
-    let missing_links_block = !input.links.is_empty()
+    let missing_links_block = input.links.iter().any(|link| link.required)
         && related_block.is_none_or(|block| block.markdown.trim().is_empty());
     let missing_links_at_publish = input.publish_links.is_some_and(|coverage| {
-        let required = input
-            .links
-            .iter()
-            .filter(|link| link.required)
-            .collect::<Vec<_>>();
-        !required.is_empty()
-            && (if coverage.typed_editorial {
-                coverage.related_pages_body.trim().is_empty()
-                    || required.iter().any(|link| !link.bound_exactly)
-            } else {
-                required.iter().any(|link| {
-                    !coverage.related_pages_body.contains(link.target_page_key)
-                        && !coverage.related_pages_body.contains(link.role)
-                })
-            })
+        input.links.iter().any(|link| link.required)
+            && (coverage.related_pages_body.trim().is_empty()
+                || input
+                    .links
+                    .iter()
+                    .any(|link| link.required && !link.bound_exactly))
     });
     if missing_links_block || missing_links_at_publish {
         violations.push(Violation::MissingRequiredInternalLinks);
@@ -196,8 +173,6 @@ mod tests {
     #[test]
     fn repeated_link_failure_has_one_domain_reason_in_publish_qa() {
         let links = [LinkObligation {
-            target_page_key: "dest",
-            role: "hub_child",
             required: true,
             bound_exactly: false,
         }];
@@ -207,7 +182,6 @@ mod tests {
             traceability: &[],
             links: &links,
             publish_links: Some(PublishLinkCoverage {
-                typed_editorial: true,
                 related_pages_body: "",
             }),
         };
@@ -222,11 +196,57 @@ mod tests {
     }
 
     #[test]
+    fn optional_recommendations_never_create_a_required_publish_block() {
+        let optional = [LinkObligation {
+            required: false,
+            bound_exactly: false,
+        }];
+        let contract = ContentContract {
+            blocks: &[],
+            claims: &[],
+            traceability: &[],
+            links: &optional,
+            publish_links: Some(PublishLinkCoverage {
+                related_pages_body: "",
+            }),
+        };
+        assert!(!validate(&contract).contains(&Violation::MissingRequiredInternalLinks));
+    }
+
+    #[test]
+    fn mere_prose_containing_a_target_does_not_satisfy_a_required_typed_link() {
+        let required = [LinkObligation {
+            required: true,
+            bound_exactly: false,
+        }];
+        let body = "See target-page for details.";
+        let blocks = [ContentBlock {
+            role: "related_pages",
+            block_type: "related_links",
+            heading: "Related",
+            markdown: body,
+            required: true,
+            support_refs: &[],
+        }];
+        let contract = ContentContract {
+            blocks: &blocks,
+            claims: &[],
+            traceability: &[],
+            links: &required,
+            publish_links: Some(PublishLinkCoverage {
+                related_pages_body: body,
+            }),
+        };
+        assert!(validate(&contract).contains(&Violation::MissingRequiredInternalLinks));
+    }
+
+    #[test]
     fn exact_supported_ref_in_both_manifests_is_required() {
         let refs = ["rule:one".to_string()];
         let blocks = [ContentBlock {
             role: "fees",
             block_type: "fees_table",
+            heading: "Fees",
             markdown: "Fee from verified rule",
             required: true,
             support_refs: &refs,

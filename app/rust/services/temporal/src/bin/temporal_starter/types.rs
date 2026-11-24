@@ -139,8 +139,6 @@ enum Command {
         limit: i64,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        #[arg(long, value_enum, default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover)]
-        workflow: RebuildDispatchWorkflowKind,
         #[arg(long)]
         report_json: Option<String>,
     },
@@ -243,7 +241,6 @@ struct SeoPreflightReport {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum WorkflowKind {
-    ContentGeneration,
     ExpertDecomposedExtraction,
     ExpertExtraction,
     ExpertProjection,
@@ -251,14 +248,12 @@ enum WorkflowKind {
     FreshnessCheck,
     ProjectionReconcile,
     SeoSiteBuildCanonicalCutover,
-    SeoSiteBuild,
     TestHitl,
 }
 
 impl WorkflowKind {
     fn workflow_type(self) -> &'static str {
         match self {
-            WorkflowKind::ContentGeneration => "ContentGenerationWorkflow",
             WorkflowKind::ExpertDecomposedExtraction => "ExpertDecomposedExtractionWorkflow",
             WorkflowKind::ExpertExtraction => "ExpertExtractionWorkflow",
             WorkflowKind::ExpertProjection => "ExpertProjectionWorkflow",
@@ -266,14 +261,12 @@ impl WorkflowKind {
             WorkflowKind::FreshnessCheck => "FreshnessCheckWorkflow",
             WorkflowKind::ProjectionReconcile => "ProjectionReconcileWorkflow",
             WorkflowKind::SeoSiteBuildCanonicalCutover => "SeoSiteBuildCanonicalCutoverWorkflow",
-            WorkflowKind::SeoSiteBuild => "SeoSiteBuildWorkflow",
             WorkflowKind::TestHitl => "TestHitlWorkflow",
         }
     }
 
     fn id_prefix(self) -> &'static str {
         match self {
-            WorkflowKind::ContentGeneration => "content-gen",
             WorkflowKind::ExpertDecomposedExtraction => "expert-decomposed-extraction",
             WorkflowKind::ExpertExtraction => "expert-extraction",
             WorkflowKind::ExpertProjection => "expert-projection",
@@ -281,7 +274,6 @@ impl WorkflowKind {
             WorkflowKind::FreshnessCheck => "freshness-check",
             WorkflowKind::ProjectionReconcile => "projection-reconcile",
             WorkflowKind::SeoSiteBuildCanonicalCutover => "seo-site-build-canonical-cutover",
-            WorkflowKind::SeoSiteBuild => "seo-site-build",
             WorkflowKind::TestHitl => "test-hitl",
         }
     }
@@ -289,37 +281,62 @@ impl WorkflowKind {
     fn requires_uuid_run_id(self) -> bool {
         matches!(
             self,
-            WorkflowKind::ContentGeneration
-                | WorkflowKind::ExpertDecomposedExtraction
+            WorkflowKind::ExpertDecomposedExtraction
                 | WorkflowKind::ExpertExtraction
                 | WorkflowKind::ExpertProjection
                 | WorkflowKind::ExpertSemanticSlice
                 | WorkflowKind::SeoSiteBuildCanonicalCutover
-                | WorkflowKind::SeoSiteBuild
         )
     }
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
-enum RebuildDispatchWorkflowKind {
-    SeoSiteBuildCanonicalCutover,
-    SeoSiteBuildLegacyCompat,
-}
+#[cfg(test)]
+mod canonical_workflow_cli_tests {
+    use super::*;
 
-impl RebuildDispatchWorkflowKind {
-    fn workflow_type(self) -> &'static str {
-        match self {
-            RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover => {
-                "SeoSiteBuildCanonicalCutoverWorkflow"
+    #[test]
+    fn starter_exposes_only_the_canonical_seo_workflow() {
+        let valid = Cli::try_parse_from([
+            "temporal_starter",
+            "start",
+            "--workflow",
+            "seo-site-build-canonical-cutover",
+        ])
+        .expect("canonical workflow remains startable");
+        assert!(matches!(
+            valid.command,
+            Command::Start {
+                workflow: WorkflowKind::SeoSiteBuildCanonicalCutover,
+                ..
             }
-            RebuildDispatchWorkflowKind::SeoSiteBuildLegacyCompat => "SeoSiteBuildWorkflow",
+        ));
+
+        for legacy in ["seo-site-build", "content-generation"] {
+            assert!(
+                Cli::try_parse_from(["temporal_starter", "start", "--workflow", legacy])
+                    .is_err(),
+                "retired workflow must not be startable: {legacy}"
+            );
         }
     }
 
-    fn run_mode(self) -> &'static str {
-        match self {
-            RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover
-            | RebuildDispatchWorkflowKind::SeoSiteBuildLegacyCompat => "publish_with_hitl",
-        }
+    #[test]
+    fn rebuild_dispatch_always_starts_the_canonical_workflow() {
+        assert!(matches!(
+            Cli::try_parse_from(["temporal_starter", "rebuild-dispatch"])
+                .expect("canonical rebuild dispatch")
+                .command,
+            Command::RebuildDispatch { .. }
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "temporal_starter",
+                "rebuild-dispatch",
+                "--workflow",
+                "seo-site-build-legacy-compat",
+            ])
+            .is_err(),
+            "rebuild dispatch must not select a retired workflow"
+        );
     }
 }

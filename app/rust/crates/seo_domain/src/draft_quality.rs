@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 
 use crate::editorial::{
     editorial_cta, factual_role, render_editorial_claim, render_verified_source_list,
-    role_matches_section, validate_editorial_claim, EditorialClaim, VerifiedSupport,
+    role_matches_section, validate_editorial_claim, verified_traceability_evidence, ContentBlock,
+    EditorialClaim, VerifiedSupport,
 };
 
 #[derive(Clone, Copy)]
@@ -26,14 +27,6 @@ pub struct Section<'a> {
     pub body_markdown: &'a str,
     pub support_refs: &'a [String],
     pub required: bool,
-}
-
-#[derive(Clone, Copy)]
-pub struct ContentBlock<'a> {
-    pub role: &'a str,
-    pub heading: &'a str,
-    pub markdown: &'a str,
-    pub support_refs: &'a [String],
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +128,16 @@ pub struct Result {
     pub violations: Vec<Violation>,
 }
 
+/// Translate the QA verdict into the single review lifecycle decision. A
+/// successful QA must have no blockers; a failed QA must report at least one.
+/// Inconsistent persisted output must be rejected rather than inferred.
+pub fn review_lifecycle(verdict: &str, blocker_count: usize) -> Option<&'static str> {
+    match (verdict, blocker_count) {
+        ("publish_ready", 0) | ("qa_failed", 1..) => Some("review_required"),
+        _ => None,
+    }
+}
+
 fn valid_typed_block(draft: &DraftQuality<'_>, block: &ContentBlock<'_>) -> bool {
     let claims = draft
         .claims
@@ -206,11 +209,8 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
         .traceability
         .iter()
         .filter(|entry| {
-            matches!(
-                entry.traceability_label,
-                "verified_fact" | "verified_summary"
-            ) && !entry.support_refs.is_empty()
-                && entry.validation_verdict == "supported"
+            verified_traceability_evidence(entry.validation_verdict, entry.traceability_label)
+                && !entry.support_refs.is_empty()
                 && has_exact_evidence(entry.fragment_text)
         })
         .count() as u32;
@@ -405,6 +405,19 @@ mod tests {
     }
 
     #[test]
+    fn qa_verdict_and_blockers_have_one_review_lifecycle_owner() {
+        assert_eq!(
+            review_lifecycle("publish_ready", 0),
+            Some("review_required")
+        );
+        assert_eq!(review_lifecycle("qa_failed", 1), Some("review_required"));
+        assert_eq!(review_lifecycle("qa_failed", 4), Some("review_required"));
+        for (verdict, count) in [("publish_ready", 1), ("qa_failed", 0), ("unexpected", 0)] {
+            assert!(review_lifecycle(verdict, count).is_none());
+        }
+    }
+
+    #[test]
     fn exact_verified_editorial_claim_is_publish_quality_ready() {
         let refs = vec!["rule:one".to_string()];
         let spans = Vec::new();
@@ -432,8 +445,10 @@ mod tests {
         }];
         let blocks = [ContentBlock {
             role: "timing",
+            block_type: "timeline",
             heading: "Timing",
             markdown: &markdown,
+            required: true,
             support_refs: &refs,
         }];
         let traceability = [Traceability {
@@ -498,8 +513,10 @@ mod tests {
         let markdown = render_editorial_claim(claim, "ru").unwrap();
         let block = ContentBlock {
             role: "timing",
+            block_type: "timeline",
             heading: "Сроки",
             markdown: &markdown,
+            required: true,
             support_refs: &refs,
         };
         let sections = [Section {

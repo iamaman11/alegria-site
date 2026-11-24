@@ -274,23 +274,28 @@ approve_review_pages_until_wf_closed() {
 
     drain_open_outbox_events
 
-    local page_node_key
-    page_node_key="$(db_scalar "
-      select e.page_node_key
+    local pending_review_json page_node_key revision_id
+    pending_review_json="$(db_scalar "
+      select json_build_object('page_node_key', e.page_node_key, 'revision_id', e.revision_id)::text
       from site.cms_publish_events e
-      join site.cms_pages p on p.page_node_key = e.page_node_key
+      join site.cms_page_revisions r
+        on r.revision_id = e.revision_id and r.page_node_key = e.page_node_key
       where e.event_type = 'seo_page_review_requested'
         and e.event_payload ->> 'run_id' = '$rid'
-        and p.current_status = 'review_required'
+        and r.revision_status = 'review_required'
       order by e.occurred_at
-      limit 1;" | tr -d '[:space:]')"
-    if [ -n "$page_node_key" ]; then
-      log "approving review-required page page_node_key=$page_node_key"
+      limit 1;")"
+    if [ -n "$pending_review_json" ]; then
+      page_node_key="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["page_node_key"])' "$pending_review_json")"
+      revision_id="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["revision_id"])' "$pending_review_json")"
+      [ -n "$page_node_key" ] && [ -n "$revision_id" ] || die "invalid exact CMS review identity from persisted event"
+      log "approving review-required page page_node_key=$page_node_key revision_id=$revision_id"
       (
         cd app/rust
         cargo run -q -p cli_tools -- cms-approve-publish \
           --database-url "$DB_DSN" \
           --page-node-key "$page_node_key" \
+          --revision-id "$revision_id" \
           --actor-role "seo_ops_gate" \
           --reason "temporal production gate approval" \
           --output-dir "app/rust/dist/static-site" \

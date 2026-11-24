@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build.rs"
+WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
 ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
 STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 
@@ -41,7 +41,7 @@ def main() -> int:
 
     for needle in FORBIDDEN:
         if needle in workflow:
-            failures.append(f"SeoSiteBuildWorkflow still contains seed/demo fallback `{needle}`")
+            failures.append(f"canonical workflow still contains seed/demo fallback `{needle}`")
 
     for needle in [
         "load_seo_site_build_input",
@@ -49,7 +49,7 @@ def main() -> int:
         "SerpIngestInputPayload",
     ]:
         if needle not in workflow:
-            failures.append(f"SeoSiteBuildWorkflow missing production input needle `{needle}`")
+            failures.append(f"canonical workflow missing production input needle `{needle}`")
 
     if "load_seo_site_build_input" not in activities:
         failures.append("Temporal activities missing load_seo_site_build_input activity")

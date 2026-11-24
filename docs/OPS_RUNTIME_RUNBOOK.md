@@ -219,44 +219,6 @@ Hard rules:
     - `draft_only` and `dry_run` persist without publish
     - publish phases run only when publish policy and scenario both allow them
     - workflow may terminate early with `done:no_pages`
-- `SeoSiteBuildWorkflow`:
-  - compat/drain workflow only; retained for replay-safe legacy histories and controlled comparison
-  - disabled in the default production worker profile
-  - enable only with `ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW=true` or `TEMPORAL_WORKER_PROFILE=compat|all`
-  - `load_seo_site_build_input`
-  - `load_verified_support_bundle`
-  - `serp_ingest`
-  - `crawl_sources`
-  - `raw_knowledge_ingestion`
-  - optional `load_verified_support_bundle.refresh`
-  - `serp_normalize`
-  - `opportunity_build`
-  - `ia_build`
-  - `link_recommend`
-  - `global_site_reconcile`
-  - per-page:
-    - `draft_assemble`
-    - `editorial_draft_generate`
-    - `draft_normalize`
-    - `content_contract_validate`
-    - `draft_qa`
-    - conditional publish-control path:
-      - `cms_request_review`
-      - `human_approval_wait`
-      - `cms_publish_approved`
-      - `publish_materialize`
-      - `render_preview_validate`
-      - `finalize_publish`
-  - conditional final phase:
-    - `rebuild_detect`
-  - current execution plan is branch-sensitive to normalized `run_mode`, scenario, and policy:
-    - `crawl_only` stops before planning/drafting
-    - `draft_only` and `dry_run` persist without publish
-    - publish phases run only when publish policy and scenario both allow them
-    - workflow may terminate early with `done:no_pages`
-  - workflow checkpoints already observe projection barrier status after:
-    - `raw_knowledge_ingestion`
-    - `global_site_reconcile`
 - `ExpertExtractionWorkflow`:
   - migration-only diagnostic extraction surface
   - disabled by default; requires `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`
@@ -325,11 +287,6 @@ Hard rules:
 - `ProjectionReconcileWorkflow`:
   - `projection_reconcile.neo4j`
   - `projection_reconcile.qdrant`
-- `ContentGenerationWorkflow`:
-  - legacy-only
-  - excluded from production SEO launch path
-  - keep disabled by default outside explicit legacy cutover testing
-
 - `FreshnessCheckWorkflow`:
   - `check_data_freshness`
 
@@ -485,18 +442,13 @@ This wrapper does not create a new runtime gate. It bundles existing evidence su
 
 Its output is an env-scoped machine-readable artifact. `BLOCKED_ON_RETRIEVAL_CONTRACT` is the correct local verdict while hard-required Voyage/Qdrant readiness is not yet satisfied. `BLOCKED_ON_LIVE_PROVIDER` is valid only after retrieval contract readiness itself is already green.
 
-## 7.1 Compat / drain closure and naming
+## 7.1 Removed legacy workflows / deployment drain
 
-- `TEMPORAL_WORKER_PROFILE=production` is the default worker profile.
-- `TEMPORAL_WORKER_PROFILE=compat` enables the compatibility `SeoSiteBuildWorkflow` surface.
-- `TEMPORAL_WORKER_PROFILE=test` enables the diagnostic `TestHitlWorkflow` surface.
-- `TEMPORAL_WORKER_PROFILE=all` is for explicit local diagnostics only.
-- `ALLOW_COMPAT_SEO_SITE_BUILD_WORKFLOW=true` enables compat registration without changing the whole worker profile.
-- `ALLOW_TEST_HITL_WORKFLOW=true` enables HITL test registration without changing the whole worker profile.
-- `SeoSiteBuildWorkflow` remains in code only as compat/drain and controlled replay surface.
-- For the current local environment, the compat/drain window is considered closed because [docs/runs/seo_site_build_legacy_replay_evidence.json](/home/bose/projects/alegria-site/docs/runs/seo_site_build_legacy_replay_evidence.json) records `total_runs=0` and `open_runs=0`.
-- Local env bundle evidence is captured in [docs/runs/local_operational_evidence_bundle.json](/home/bose/projects/alegria-site/docs/runs/local_operational_evidence_bundle.json).
-- For any other environment, the window closes only with equivalent machine-readable legacy replay evidence or explicit production drain signoff.
+- Исполняемый Worker регистрирует `SeoSiteBuildCanonicalCutoverWorkflow`, а не удалённые `SeoSiteBuildWorkflow` / `ContentGenerationWorkflow`; legacy compat profile и env-переключатели больше не поддерживаются.
+- Для локального источника [replay evidence](runs/seo_site_build_legacy_replay_evidence.json) зафиксировано `total_runs=0`, `open_runs=0`. Это не доказательство отсутствия старых histories в staging/production.
+- Перед заменой Worker в любой другой среде оператор обязан проверить оставшиеся executions удалённых workflow types; если есть активные histories или отсутствуют данные о drain, требуется прежний Worker/build-id до их штатного завершения. Нельзя безопасно «переиграть» незавершённую history новым workflow type.
+- `TEMPORAL_WORKER_PROFILE=test` и `ALLOW_TEST_HITL_WORKFLOW=true` включают диагностический `TestHitlWorkflow`; `TEMPORAL_WORKER_PROFILE=all` более не нужен для compat, но может использоваться для явной диагностики.
+- [Local operational evidence](runs/local_operational_evidence_bundle.json) — отдельное local-only доказательство, не release authorization.
 - `Expert*Workflow` surfaces remain permanent narrow diagnostic surfaces, require `ALLOW_EXPERT_MIGRATION_WORKFLOWS=true`, and must never become a hidden forward-path fallback for product execution.
 - `SeoSiteBuildCanonicalCutoverWorkflow` remains the runtime workflow type after drain; there is no follow-up workflow-type rename just for naming cosmetics.
 

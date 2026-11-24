@@ -40,6 +40,33 @@ pub enum PageAdmissibility {
     Eligible,
 }
 
+/// Truth may be read before discovery, but a post-truth drafting barrier must
+/// reject incomplete or non-fresh support. Temporal only supplies the fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruthSupportDefect {
+    MissingMandatoryFields,
+    NonFresh,
+}
+
+pub fn truth_support_defect(
+    support_ref: &str,
+    fragment_text: &str,
+    role_type: &str,
+    source_label: &str,
+    freshness_class: &str,
+) -> Option<TruthSupportDefect> {
+    if [support_ref, fragment_text, role_type, source_label]
+        .iter()
+        .any(|field| field.trim().is_empty())
+    {
+        Some(TruthSupportDefect::MissingMandatoryFields)
+    } else if freshness_class != "fresh" {
+        Some(TruthSupportDefect::NonFresh)
+    } else {
+        None
+    }
+}
+
 pub fn is_opaque_topic_identifier(value: &str) -> bool {
     let trimmed = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
     let hex = trimmed.replace('-', "");
@@ -193,6 +220,31 @@ pub fn required_link_indices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truth_support_admissibility_has_one_typed_domain_policy() {
+        assert_eq!(
+            truth_support_defect("rule:1", "exact source", "fee_item", "Authority", "fresh"),
+            None
+        );
+        for (support_ref, text, role, source) in [
+            ("", "exact source", "fee_item", "Authority"),
+            ("rule:1", "", "fee_item", "Authority"),
+            ("rule:1", "exact source", " ", "Authority"),
+            ("rule:1", "exact source", "fee_item", ""),
+        ] {
+            assert_eq!(
+                truth_support_defect(support_ref, text, role, source, "fresh"),
+                Some(TruthSupportDefect::MissingMandatoryFields)
+            );
+        }
+        for freshness in ["watch", "stale", "", "unknown"] {
+            assert_eq!(
+                truth_support_defect("rule:1", "exact source", "fee_item", "Authority", freshness),
+                Some(TruthSupportDefect::NonFresh)
+            );
+        }
+    }
 
     fn support(role_type: &str) -> VerifiedSupport<'_> {
         VerifiedSupport {

@@ -14,7 +14,14 @@
   - файл: `src/bin/temporal_starter.rs`
   - запуск:
     - `cargo run -p temporal_worker --bin temporal_starter -- ping`
-    - `cargo run -p temporal_worker --bin temporal_starter -- start --workflow seo-site-build`
+    - `cargo run -p temporal_worker --bin temporal_starter -- start --workflow seo-site-build-canonical-cutover`
+
+В Worker зарегистрирован только один SEO site-build workflow:
+`SeoSiteBuildCanonicalCutoverWorkflow`. Удалены прежние
+`SeoSiteBuildWorkflow` и `ContentGenerationWorkflow`, а также выбор legacy
+workflow в rebuild-dispatch. Перед обновлением уже работающего Temporal Worker
+оператор должен подтвердить отсутствие незавершённых историй удалённых типов:
+их нельзя безопасно воспроизвести новым Worker.
 
 ## Что должно быть в окружении
 

@@ -79,7 +79,7 @@ def main() -> int:
     if '"section_role": "internal_links"' in cms:
         failures.append("CMS must not duplicate the static builder's related-links section")
     for needle in [
-        "r.revision_id = COALESCE($2, p.current_revision_id)",
+        "r.revision_id = $2",
         "r.revision_status = 'review_required'",
         "exact review_required revision not found",
     ]:

@@ -10,7 +10,7 @@ fn seo_release_restore_gate(
         "automation/temporal_production_gate.sh",
         "infra/backups/restore_drill.sh",
         "automation/check_temporal_build_id_policy.py",
-        "automation/check_seo_rollout_compat_contract.py",
+        "automation/check_legacy_workflow_quarantine.py",
         "automation/check_backup_restore_layout.py",
     ];
     let mut blocking_reasons = Vec::new();
@@ -31,14 +31,16 @@ fn seo_release_restore_gate(
     )?;
     evaluate_gate_status(&build_id_policy, &mut blocking_reasons);
 
-    let rollout_compat = run_gate_command(
+    // Verifies source quarantine and recorded local history only. Production
+    // drain requires separate target-environment operator evidence.
+    let legacy_quarantine = run_gate_command(
         root,
-        "check_seo_rollout_compat_contract",
+        "check_legacy_workflow_quarantine",
         "python3",
-        &["automation/check_seo_rollout_compat_contract.py"],
+        &["automation/check_legacy_workflow_quarantine.py"],
         true,
     )?;
-    evaluate_gate_status(&rollout_compat, &mut blocking_reasons);
+    evaluate_gate_status(&legacy_quarantine, &mut blocking_reasons);
 
     let backup_restore_layout = run_gate_command(
         root,
@@ -95,7 +97,7 @@ fn seo_release_restore_gate(
         "blocking_reasons": blocking_reasons,
         "checks": {
             "build_id_policy": build_id_policy,
-            "rollout_compat": rollout_compat,
+            "legacy_quarantine": legacy_quarantine,
             "backup_restore_layout": backup_restore_layout,
             "ci_verify": ci_verify,
             "temporal_production_gate": temporal_gate,

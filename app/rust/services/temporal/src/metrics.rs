@@ -117,29 +117,20 @@ pub fn global() -> &'static Metrics {
         // Pre-initialize required series so the metrics contract is visible even
         // before the first specific event path is exercised.
         for workflow_type in [
-            "ContentGenerationWorkflow",
             "FreshnessCheckWorkflow",
-            "SeoSiteBuildWorkflow",
+            "SeoSiteBuildCanonicalCutoverWorkflow",
             "TestHitlWorkflow",
         ] {
             let _ = workflow_starts_total.with_label_values(&[workflow_type]);
             let _ = workflow_completions_total.with_label_values(&[workflow_type]);
             let _ = workflow_failures_total.with_label_values(&[workflow_type]);
         }
-        for step_name in [
-            "generate_content",
-            "validate_blocks",
-            "finalize_run",
-            "check_data_freshness",
-            "bootstrap",
-        ] {
+        for step_name in ["finalize_run", "check_data_freshness", "bootstrap"] {
             let _ = activity_attempts_total.with_label_values(&[step_name]);
             let _ = step_execution_reused_total.with_label_values(&[step_name]);
             let _ = activity_duration_seconds.with_label_values(&[step_name]);
         }
         for (step_name, error_class) in [
-            ("generate_content", "bootstrap"),
-            ("validate_blocks", "bootstrap"),
             ("finalize_run", "bootstrap"),
             ("load_verified_support_bundle", "bootstrap"),
             ("editorial_draft_generate", "bootstrap"),

@@ -1,12 +1,14 @@
+const REBUILD_RUN_MODE: &str = "publish_with_hitl";
+
 async fn run_rebuild_dispatch(
     client: &infrastructure::adapters::temporalio_sdk_adapter::Client,
     task_queue: &str,
     database_url: Option<String>,
     limit: i64,
     dry_run: bool,
-    workflow: RebuildDispatchWorkflowKind,
     report_json: Option<String>,
 ) -> Result<i32> {
+    let workflow_type = WorkflowKind::SeoSiteBuildCanonicalCutover.workflow_type();
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
@@ -103,7 +105,7 @@ async fn run_rebuild_dispatch(
                 "status": "blocked",
                 "failure_class": "rebuild_dispatch_missing_scope_data",
                 "missing_fields": missing,
-                "workflow_type": workflow.workflow_type(),
+                "workflow_type": workflow_type,
                 "reason_package": reason_value,
             });
             if !dry_run {
@@ -156,9 +158,9 @@ async fn run_rebuild_dispatch(
         let query_batch_key = format!("rebuild:{}:{}", page_node_key, run_id);
         let dispatch_payload = json!({
             "status": if dry_run { "planned" } else { "running" },
-            "workflow_type": workflow.workflow_type(),
+            "workflow_type": workflow_type,
             "workflow_id": run_id,
-            "run_mode": workflow.run_mode(),
+            "run_mode": REBUILD_RUN_MODE,
             "seed_keyword": seed_keyword.as_deref().unwrap_or_default(),
             "query_batch_key": query_batch_key,
             "reason_package": reason_value,
@@ -181,7 +183,7 @@ async fn run_rebuild_dispatch(
                     queries: vec![seed_keyword.clone().unwrap_or_default()],
                     query_batch_key: Some(query_batch_key.clone()),
                     retained_source_run_id: None,
-                    run_mode: Some(workflow.run_mode().to_string()),
+                    run_mode: Some(REBUILD_RUN_MODE.to_string()),
                 },
             )
             .await
@@ -190,7 +192,7 @@ async fn run_rebuild_dispatch(
             let options = WorkflowStartOptions::new(task_queue.to_string(), run_id.clone()).build();
             client
                 .start_workflow(
-                    UntypedWorkflow::new(workflow.workflow_type()),
+                    UntypedWorkflow::new(workflow_type),
                     empty_payload(),
                     options,
                 )
@@ -198,7 +200,7 @@ async fn run_rebuild_dispatch(
                 .with_context(|| {
                     format!(
                         "failed to start {} for rebuild_request_key={}",
-                        workflow.workflow_type(),
+                        workflow_type,
                         rebuild_request_key
                     )
                 })?;
@@ -241,9 +243,9 @@ async fn run_rebuild_dispatch(
             "trigger_type": trigger_type,
             "priority": priority,
             "created_at": created_at,
-            "workflow_type": workflow.workflow_type(),
+            "workflow_type": workflow_type,
             "workflow_id": run_id,
-            "run_mode": workflow.run_mode(),
+            "run_mode": REBUILD_RUN_MODE,
             "query_batch_key": query_batch_key,
             "seed_keyword": seed_keyword,
             "scope_signature": scope_signature,
@@ -254,7 +256,7 @@ async fn run_rebuild_dispatch(
     let payload = json!({
         "status": "ok",
         "dry_run": dry_run,
-        "workflow_type": workflow.workflow_type(),
+        "workflow_type": workflow_type,
         "dispatched_count": dispatched.len(),
         "blocked_count": blocked.len(),
         "dispatched": dispatched,

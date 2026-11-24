@@ -40,7 +40,8 @@ pub async fn run_serp_normalize<R: PlanningRepository + GraphCapabilityPort>(
     input: &SerpNormalizeInputPayload,
 ) -> Result<SerpNormalizeOutputPayload, DomainError> {
     let mut output = seo_steps::serp_normalize_step::execute(input)?;
-    ensure_graph_required_for_phase(repo, "serp_normalize").await?;
+    repo.require_graph_contract("planning", "serp_normalize")
+        .await?;
     if voyage_retrieval_ready_or_optional()? {
         let clusters = search_port
             .cluster_demand_queries(&input.queries)

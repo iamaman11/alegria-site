@@ -12,9 +12,9 @@
 | Acquisition | `acquisition::{html_sections,pdf_parser,source_relevance,crawl_policy}`: парсинг, релевантность, robots и retry | `infrastructure::adapters::raw_crawl_adapter`: сеть, очередь, сохранение |
 | Truth | `truth_domain::{candidate_intake,completeness,hitl_decision,persisted_candidates,semantic_truth_write}` и соседние предметные модули | SQL/LLM/Temporal остаются у адаптеров и runtime; JSON не определяет решение |
 | Knowledge | `seo_domain::canonical_mapping`, `seo_application::knowledge`, типизированные порты в `seo_ports::knowledge` | SQLx — авторитетное VERIFIED состояние, Qdrant — необязательная подсказка, Outbox — доставка проекций |
-| SEO / editorial | `seo_domain::{editorial,page_readiness,content_contract,link_recommendation,ia_planning,whole_page,rebuild,review_decision,cms_revision,writer,block_validator}` | `seo_steps::{editorial_wire,page_wire,content_contract_validate_step,draft_qa_step,link_recommend_step}` адаптируют действующие Temporal DTO; решения остаются в домене |
-| Application | `seo_application::{drafting,scenario,review_publish,knowledge,rebuild_detect,cms_review}` | Координирует typed ports; не пишет SQL и не выбирает по transport DTO |
-| Publishing | `seo_domain::{publishing,render_preview}`; `seo_application::review_publish` | `infrastructure::adapters::sqlx_seo_cms_adapter` и `seo_ports::PublicReleaseDelivery`: PostgreSQL, Outbox, HTTP/CDN |
+| SEO / editorial | `seo_domain::{editorial,draft_quality,page_readiness,content_contract,link_recommendation,ia_planning,whole_page,rebuild,review_decision,cms_revision,writer,block_validator}`; один `editorial::ContentBlock` и общая проверка traceability | `seo_steps::{editorial_wire,page_wire,content_contract_validate_step,draft_qa_step,link_recommend_step}` адаптируют действующие Temporal DTO; решения остаются в домене |
+| Application | `seo_application::{drafting,scenario,review_publish,knowledge,rebuild_detect,cms_review}` | Координирует typed ports; единый `GraphCapabilityPort::require_graph_contract`, без дублирования допуска Graph в трёх фазах |
+| Publishing | `seo_domain::{publishing,render_preview,cms_revision,review_decision}`; `seo_application::review_publish` | `infrastructure::adapters::sqlx_seo_cms_adapter` и `seo_ports::PublicReleaseDelivery`: PostgreSQL, Outbox, HTTP/CDN; CMS human review требует точного обязательного `revision_id`, QA — единственный владелец persisted blockers |
 | Runtime | `services/temporal`, `services/outbox_worker`, `services/cli_tools` | Activity/workflow orchestration, регистрацию, retry, логи и вызов адаптеров; не копирует бизнес-условия |
 
 `contracts` содержит действующие protobuf wire-формы, не предметные решения.
@@ -35,6 +35,13 @@
    определяются `automation/ci_impact.py` по base/head SHA.
 5. Сохранить существующие persisted IDs и Temporal history/replay-семантику:
    удаление дублирующего Rust API не означает разрешения менять wire без теста.
+
+Удалённые тестовые/legacy `SeoSiteBuildWorkflow` и `ContentGenerationWorkflow`
+**больше не регистрируются**: новый путь — только
+`SeoSiteBuildCanonicalCutoverWorkflow`. Это безопасно для исходного кода,
+но **не доказывает готовность развертывания** в среде с незавершёнными
+legacy Temporal histories; перед заменой Worker нужны её собственные
+drain/replay-доказательства (см. `docs/OPS_TEMPORAL_BUILD_MODES.md`).
 
 ## CI и сборка
 
