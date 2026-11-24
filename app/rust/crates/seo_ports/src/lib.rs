@@ -8,12 +8,12 @@ use contracts::generated::alegria::temporal::v1::{
     DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
-    IaBuildOutputPayload, LinkRecommendInputPayload,
-    LinkRecommendOutputPayload, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
-    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
-    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
+    SerpNormalizeOutputPayload,
 };
 use knowledge::{
     CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,

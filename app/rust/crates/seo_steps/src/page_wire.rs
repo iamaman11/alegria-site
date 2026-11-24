@@ -48,12 +48,15 @@ pub fn page_admissibility(
     gaps: &[ContentGapState],
     requires_editorial: bool,
 ) -> PageAdmissibility {
-    let gaps = gaps.iter().map(|gap| ContentGap {
-        page_node_key: &gap.page_node_key,
-        status: &gap.status,
-        reason_code: &gap.reason_code,
-        missing_topic: &gap.missing_topic,
-    }).collect::<Vec<_>>();
+    let gaps = gaps
+        .iter()
+        .map(|gap| ContentGap {
+            page_node_key: &gap.page_node_key,
+            status: &gap.status,
+            reason_code: &gap.reason_code,
+            missing_topic: &gap.missing_topic,
+        })
+        .collect::<Vec<_>>();
     page_readiness::page_admissibility(
         PageNode {
             page_node_key: &page.page_node_key,
@@ -73,14 +76,17 @@ pub fn required_links_for_published_targets(
     source_page_key: &str,
     published: &BTreeSet<String>,
 ) -> Vec<LinkRecommendationState> {
-    let decisions = links.iter().map(|link| LinkRecommendation {
-        source_page_key: &link.source_page_key,
-        target_page_key: &link.target_page_key,
-        link_recommendation_key: &link.link_recommendation_key,
-        status: &link.status,
-        required: link.required_flag,
-        score: link.score,
-    }).collect::<Vec<_>>();
+    let decisions = links
+        .iter()
+        .map(|link| LinkRecommendation {
+            source_page_key: &link.source_page_key,
+            target_page_key: &link.target_page_key,
+            link_recommendation_key: &link.link_recommendation_key,
+            status: &link.status,
+            required: link.required_flag,
+            score: link.score,
+        })
+        .collect::<Vec<_>>();
     page_readiness::required_link_indices(&decisions, source_page_key, published)
         .into_iter()
         .map(|index| links[index].clone())
@@ -89,8 +95,8 @@ pub fn required_links_for_published_targets(
 #[cfg(test)]
 mod verified_page_readiness_tests {
     use super::*;
-    use seo_domain::page_readiness::is_opaque_topic_identifier;
     use seo_domain::editorial::{heading_for_role_locale, locale_from_canonical_path};
+    use seo_domain::page_readiness::is_opaque_topic_identifier;
 
     fn support(role_type: &str) -> SeoVerifiedFactSupportState {
         SeoVerifiedFactSupportState {

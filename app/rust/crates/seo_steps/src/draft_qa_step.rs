@@ -220,8 +220,7 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
             .filter(|block| !factual_role(&block.section_role))
             .all(|block| match block.section_role.as_str() {
                 "cta_disclaimer" => {
-                    block.markdown
-                        == seo_domain::editorial::editorial_cta(&draft.editorial_locale)
+                    block.markdown == seo_domain::editorial::editorial_cta(&draft.editorial_locale)
                 }
                 "related_pages" => {
                     block.markdown

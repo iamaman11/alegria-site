@@ -108,7 +108,10 @@ fn supported_refs<'a>(entries: &[Evidence<'a>]) -> BTreeSet<&'a str> {
         .iter()
         .filter(|entry| {
             entry.validation_verdict == "supported"
-                && matches!(entry.traceability_label, "verified_fact" | "verified_summary")
+                && matches!(
+                    entry.traceability_label,
+                    "verified_fact" | "verified_summary"
+                )
         })
         .flat_map(|entry| entry.support_refs.iter().map(String::as_str))
         .collect()
@@ -143,7 +146,10 @@ pub fn validate(input: &ContentContract<'_>) -> Vec<Violation> {
                 violations.push(Violation::UnmatchedFactualSupportRef);
             }
         }
-        if block.markdown.contains("Verified source-backed structured content") {
+        if block
+            .markdown
+            .contains("Verified source-backed structured content")
+        {
             violations.push(Violation::PlaceholderFactualContent);
         }
     }
@@ -151,11 +157,18 @@ pub fn validate(input: &ContentContract<'_>) -> Vec<Violation> {
         violations.push(Violation::MissingRequiredContentBlock);
     }
 
-    let related_block = input.blocks.iter().find(|block| block.role == "related_pages");
+    let related_block = input
+        .blocks
+        .iter()
+        .find(|block| block.role == "related_pages");
     let missing_links_block = !input.links.is_empty()
         && related_block.is_none_or(|block| block.markdown.trim().is_empty());
     let missing_links_at_publish = input.publish_links.is_some_and(|coverage| {
-        let required = input.links.iter().filter(|link| link.required).collect::<Vec<_>>();
+        let required = input
+            .links
+            .iter()
+            .filter(|link| link.required)
+            .collect::<Vec<_>>();
         !required.is_empty()
             && (if coverage.typed_editorial {
                 coverage.related_pages_body.trim().is_empty()

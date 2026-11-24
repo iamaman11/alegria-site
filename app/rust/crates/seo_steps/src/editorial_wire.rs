@@ -15,12 +15,15 @@ pub fn claim_view(claim: &ClaimLedgerEntry) -> EditorialClaim<'_> {
         traceability_label: &claim.traceability_label,
         fragment_text: &claim.fragment_text,
         support_refs: &claim.support_refs,
-        proposal: claim.editorial_proposal.as_ref().map(|proposal| EditorialProposal {
-            text: &proposal.text,
-            question: &proposal.question,
-            source_url: &proposal.source_url,
-            evidence_spans: &proposal.evidence_spans,
-        }),
+        proposal: claim
+            .editorial_proposal
+            .as_ref()
+            .map(|proposal| EditorialProposal {
+                text: &proposal.text,
+                question: &proposal.question,
+                source_url: &proposal.source_url,
+                evidence_spans: &proposal.evidence_spans,
+            }),
     }
 }
 

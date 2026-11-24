@@ -4,8 +4,8 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature};
-use seo_domain::page_readiness::is_opaque_topic_identifier;
 use seo_domain::ia_planning::{self, IaClusterCandidate, IaClusterDisposition, IaScope};
+use seo_domain::page_readiness::is_opaque_topic_identifier;
 
 // A stable storage identifier is never a publishable topic. Resolve the
 // runtime classifier at the boundary before passing semantic text to domain.

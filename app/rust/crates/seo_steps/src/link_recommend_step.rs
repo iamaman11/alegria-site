@@ -1,8 +1,8 @@
+#[cfg(test)]
+use contracts::generated::alegria::temporal::v1::GraphPlanningContextState;
 use contracts::generated::alegria::temporal::v1::{
     LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
 };
-#[cfg(test)]
-use contracts::generated::alegria::temporal::v1::GraphPlanningContextState;
 use seo_domain::link_recommendation::{recommend_links, LinkPage};
 
 /// Temporal protobuf adaptation. Link eligibility, scoring and prioritization

@@ -9,8 +9,7 @@ use primitives::errors::DomainError;
 use seo_ports::knowledge::{SourceContextChunk, SourceContextQuery};
 use seo_ports::{
     DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplate,
-    SectionTemplateRepository,
-    SourceContextSearchPort,
+    SectionTemplateRepository, SourceContextSearchPort,
 };
 
 use crate::seo_runtime;

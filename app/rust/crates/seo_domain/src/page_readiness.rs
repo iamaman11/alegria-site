@@ -84,7 +84,12 @@ pub fn selected_support_indices(
 ) -> Vec<usize> {
     let direct_roles = required_sections
         .iter()
-        .filter(|role| matches!(role.as_str(), "documents" | "fees" | "timing" | "where_to_apply" | "process" | "who_fits"))
+        .filter(|role| {
+            matches!(
+                role.as_str(),
+                "documents" | "fees" | "timing" | "where_to_apply" | "process" | "who_fits"
+            )
+        })
         .collect::<Vec<_>>();
     let mut seen = BTreeSet::new();
     support
@@ -117,7 +122,10 @@ pub fn page_admissibility(
         return PageAdmissibility::Retired;
     }
     if is_opaque_topic_identifier(page.canonical_slug)
-        || page.canonical_url_path.split('/').any(is_opaque_topic_identifier)
+        || page
+            .canonical_url_path
+            .split('/')
+            .any(is_opaque_topic_identifier)
     {
         return PageAdmissibility::Blocked("opaque_page_path".into());
     }
@@ -125,7 +133,8 @@ pub fn page_admissibility(
         let missing = missing_required_factual_roles(required_sections, support);
         if !missing.is_empty() {
             return PageAdmissibility::Blocked(format!(
-                "page_missing_verified_support:roles={}", missing.join(",")
+                "page_missing_verified_support:roles={}",
+                missing.join(",")
             ));
         }
     }
@@ -135,7 +144,10 @@ pub fn page_admissibility(
             .filter(|gap| {
                 gap.page_node_key == page.page_node_key
                     && matches!(gap.status, "open" | "accepted")
-                    && matches!(gap.reason_code, "page_missing_verified_support" | "page_duplicate_verified_evidence")
+                    && matches!(
+                        gap.reason_code,
+                        "page_missing_verified_support" | "page_duplicate_verified_evidence"
+                    )
             })
             .map(|gap| format!("{}:{}", gap.reason_code, gap.missing_topic))
             .collect::<Vec<_>>();
@@ -197,8 +209,12 @@ mod tests {
         assert!(missing_required_factual_roles(
             &["overview".into(), "faq".into(), "related_pages".into()],
             &[support("eligibility_rule")],
-        ).is_empty());
-        assert_eq!(missing_required_factual_roles(&["fees".into()], &[support("eligibility_rule")]), vec!["fees"]);
+        )
+        .is_empty());
+        assert_eq!(
+            missing_required_factual_roles(&["fees".into()], &[support("eligibility_rule")]),
+            vec!["fees"]
+        );
         let missing = missing_required_factual_roles(&[], &[support("eligibility_rule")]);
         assert!(missing.contains(&"documents".to_string()));
         assert!(missing.contains(&"timing".to_string()));
@@ -206,16 +222,30 @@ mod tests {
 
     #[test]
     fn stale_or_missing_evidence_never_satisfies_required_role() {
-        let stale = VerifiedSupport { freshness_class: "stale", ..support("fee_item") };
-        let empty = VerifiedSupport { fragment_text: "", ..support("fee_item") };
-        assert_eq!(missing_required_factual_roles(&["fees".into()], &[stale]), vec!["fees"]);
-        assert_eq!(missing_required_factual_roles(&["fees".into()], &[empty]), vec!["fees"]);
+        let stale = VerifiedSupport {
+            freshness_class: "stale",
+            ..support("fee_item")
+        };
+        let empty = VerifiedSupport {
+            fragment_text: "",
+            ..support("fee_item")
+        };
+        assert_eq!(
+            missing_required_factual_roles(&["fees".into()], &[stale]),
+            vec!["fees"]
+        );
+        assert_eq!(
+            missing_required_factual_roles(&["fees".into()], &[empty]),
+            vec!["fees"]
+        );
     }
 
     #[test]
     fn opaque_ids_never_enter_public_paths() {
         assert!(is_opaque_topic_identifier(&"a".repeat(64)));
-        assert!(is_opaque_topic_identifier("123e4567-e89b-12d3-a456-426614174000"));
+        assert!(is_opaque_topic_identifier(
+            "123e4567-e89b-12d3-a456-426614174000"
+        ));
         assert!(!is_opaque_topic_identifier("plant-leaf-care"));
     }
 }

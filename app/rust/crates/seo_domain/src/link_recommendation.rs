@@ -99,12 +99,17 @@ pub fn recommend_links(
                 continue;
             }
             let semantic = semantic_adjacency(&source.url_path, &target.url_path);
-            let journey_bonus = if source.parent_key == target.key || target.parent_key == source.key {
-                0.08
+            let journey_bonus =
+                if source.parent_key == target.key || target.parent_key == source.key {
+                    0.08
+                } else {
+                    0.0
+                };
+            let family_bonus = if source.url_family == target.url_family {
+                0.04
             } else {
                 0.0
             };
-            let family_bonus = if source.url_family == target.url_family { 0.04 } else { 0.0 };
             let source_topics = topics_by_cluster
                 .get(&source.cluster_key)
                 .map(Vec::as_slice)
@@ -188,18 +193,28 @@ mod tests {
 
     #[test]
     fn graph_topic_affinity_selects_the_optional_link_and_excludes_blocked_pages() {
-        let pages = vec![page("source", "common"), page("alpha", "different"), page("zeta", "common")];
+        let pages = vec![
+            page("source", "common"),
+            page("alpha", "different"),
+            page("zeta", "common"),
+        ];
         let topics = BTreeMap::from([
             ("common".into(), vec!["shared".into()]),
             ("different".into(), vec!["other".into()]),
         ]);
         let links = recommend_links(&pages, &topics, 1);
-        let from_source = links.iter().find(|link| link.source_key == "source").unwrap();
+        let from_source = links
+            .iter()
+            .find(|link| link.source_key == "source")
+            .unwrap();
         assert_eq!(from_source.target_key, "zeta");
         assert_eq!(from_source.reason, "graph_topic_adjacency");
         let mut blocked_pages = pages;
         blocked_pages[2].lifecycle_state = "blocked".into();
-        assert_eq!(recommend_links(&blocked_pages, &topics, 1)[0].target_key, "alpha");
+        assert_eq!(
+            recommend_links(&blocked_pages, &topics, 1)[0].target_key,
+            "alpha"
+        );
     }
 
     #[test]
@@ -208,8 +223,20 @@ mod tests {
         hub.page_type = "hub_page".into();
         let mut other_scope = page("other", "other-cluster");
         other_scope.scope = "other_scope".into();
-        let result = recommend_links(&[hub.clone(), page("detail", "detail"), other_scope], &BTreeMap::new(), 1);
-        assert_eq!(result.iter().filter(|link| link.source_key == "hub").count(), 1);
-        assert!(result.iter().any(|link| link.source_key == "hub" && link.required && link.target_key == "detail"));
+        let result = recommend_links(
+            &[hub.clone(), page("detail", "detail"), other_scope],
+            &BTreeMap::new(),
+            1,
+        );
+        assert_eq!(
+            result
+                .iter()
+                .filter(|link| link.source_key == "hub")
+                .count(),
+            1
+        );
+        assert!(result
+            .iter()
+            .any(|link| link.source_key == "hub" && link.required && link.target_key == "detail"));
     }
 }

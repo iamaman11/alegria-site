@@ -168,10 +168,8 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
                 .iter()
                 .find(|blueprint| blueprint.blueprint_key == page.blueprint_key);
             let (mut missing, mut refs) = if let Some(blueprint) = blueprint {
-                let support = crate::page_wire::page_verified_support(
-                    blueprint,
-                    &input.verified_support,
-                );
+                let support =
+                    crate::page_wire::page_verified_support(blueprint, &input.verified_support);
                 (
                     crate::page_wire::missing_required_factual_roles(blueprint, &support),
                     support

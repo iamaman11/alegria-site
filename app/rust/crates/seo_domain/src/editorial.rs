@@ -59,12 +59,18 @@ pub fn block_type_for_role(section_role: &str) -> &'static str {
 
 pub fn role_matches_section(role_type: &str, section_role: &str) -> bool {
     match section_role {
-        "documents" => matches!(role_type, "document_required" | "must_provide" | "form_required"),
+        "documents" => matches!(
+            role_type,
+            "document_required" | "must_provide" | "form_required"
+        ),
         "fees" => matches!(role_type, "fee_item" | "must_pay"),
         "timing" => matches!(role_type, "timeline_item" | "timeline"),
         "where_to_apply" => matches!(role_type, "where_to_apply" | "appointment_rule"),
         "process" => matches!(role_type, "step"),
-        "who_fits" => matches!(role_type, "eligibility_rule" | "must_satisfy" | "allows" | "forbids"),
+        "who_fits" => matches!(
+            role_type,
+            "eligibility_rule" | "must_satisfy" | "allows" | "forbids"
+        ),
         "overview" | "faq" => true,
         _ => false,
     }
@@ -83,14 +89,27 @@ pub fn support_traceability_label(section_role: &str) -> &'static str {
 
 pub fn default_section_roles() -> &'static [&'static str] {
     &[
-        "overview", "who_fits", "documents", "process", "fees", "timing", "where_to_apply",
-        "faq", "related_pages", "cta_disclaimer",
+        "overview",
+        "who_fits",
+        "documents",
+        "process",
+        "fees",
+        "timing",
+        "where_to_apply",
+        "faq",
+        "related_pages",
+        "cta_disclaimer",
     ]
 }
 
 pub fn mandatory_section_roles() -> &'static [&'static str] {
     &[
-        "overview", "documents", "fees", "timing", "related_pages", "cta_disclaimer",
+        "overview",
+        "documents",
+        "fees",
+        "timing",
+        "related_pages",
+        "cta_disclaimer",
     ]
 }
 
@@ -140,7 +159,10 @@ pub fn planned_content_blocks(
                     template.heading.to_string()
                 },
                 required: template.required,
-                deterministic_only: matches!(role, "documents" | "fees" | "timing" | "related_pages"),
+                deterministic_only: matches!(
+                    role,
+                    "documents" | "fees" | "timing" | "related_pages"
+                ),
             })
         })
         .collect()
@@ -238,7 +260,9 @@ pub fn validate_editorial_claim(
     let mut matches = support
         .iter()
         .filter(|entry| entry.support_ref == claim.support_refs[0]);
-    let source = matches.next().ok_or(EditorialClaimError::MissingOrAmbiguousSupport)?;
+    let source = matches
+        .next()
+        .ok_or(EditorialClaimError::MissingOrAmbiguousSupport)?;
     if matches.next().is_some() {
         return Err(EditorialClaimError::MissingOrAmbiguousSupport);
     }
@@ -272,7 +296,9 @@ pub fn validate_editorial_claim(
             if span.trim() != span || span.chars().count() < 12 || span.contains('\r') {
                 return Err(EditorialClaimError::InvalidEvidenceSpan);
             }
-            let start = quote.find(span).ok_or(EditorialClaimError::InvalidEvidenceSpan)?;
+            let start = quote
+                .find(span)
+                .ok_or(EditorialClaimError::InvalidEvidenceSpan)?;
             let end = start + span.len();
             if (start != 0 && quote.as_bytes()[start - 1] != b'\n')
                 || (end != quote.len() && quote.as_bytes()[end] != b'\n')
@@ -311,9 +337,15 @@ pub fn render_editorial_claim(
         "pl" => "Źródło",
         _ => "Source",
     };
-    let text = format!("{} [{}]({})", proposal.text.trim(), label, proposal.source_url);
+    let text = format!(
+        "{} [{}]({})",
+        proposal.text.trim(),
+        label,
+        proposal.source_url
+    );
     if claim.source_section_key == "faq" {
-        if !plain_editorial_text(proposal.question) || !proposal.question.trim_end().ends_with('?') {
+        if !plain_editorial_text(proposal.question) || !proposal.question.trim_end().ends_with('?')
+        {
             return Err(EditorialClaimError::InvalidQuestion);
         }
         Ok(format!("### {}\n\n{}", proposal.question.trim(), text))
@@ -343,7 +375,9 @@ pub fn render_verified_source_list(support: &[VerifiedSupport<'_>], locale: &str
     };
     let urls = support
         .iter()
-        .filter(|entry| entry.freshness_class == "fresh" && safe_verified_source_url(entry.source_url))
+        .filter(|entry| {
+            entry.freshness_class == "fresh" && safe_verified_source_url(entry.source_url)
+        })
         .map(|entry| entry.source_url)
         .collect::<BTreeSet<_>>();
     urls.into_iter()
@@ -356,7 +390,10 @@ pub fn render_verified_source_list(support: &[VerifiedSupport<'_>], locale: &str
 mod tests {
     use super::*;
 
-    fn sample<'a>(support_ref: &'a [String], spans: &'a [String]) -> (EditorialClaim<'a>, VerifiedSupport<'static>) {
+    fn sample<'a>(
+        support_ref: &'a [String],
+        spans: &'a [String],
+    ) -> (EditorialClaim<'a>, VerifiedSupport<'static>) {
         let claim = EditorialClaim {
             claim_kind: "factual",
             validation_verdict: "supported",
@@ -383,7 +420,10 @@ mod tests {
 
     #[test]
     fn locale_roles_and_opaque_values_are_not_transport_dependent() {
-        assert_eq!(locale_from_canonical_path("/ru/gardening/plant-care/"), "ru");
+        assert_eq!(
+            locale_from_canonical_path("/ru/gardening/plant-care/"),
+            "ru"
+        );
         assert_eq!(heading_for_role_locale("fees", "ru"), "Консульский сбор");
         assert_eq!(heading_for_role_locale("unknown", "ru"), "Section");
         assert_eq!(block_type_for_role("documents"), "documents_checklist");
@@ -392,13 +432,28 @@ mod tests {
     #[test]
     fn block_selection_retains_mandatory_and_verified_sections_only() {
         let sections = [
-            SectionTemplate { section_role: "fees", heading: "", required: false },
-            SectionTemplate { section_role: "documents", heading: "Custom title", required: true },
-            SectionTemplate { section_role: "related_pages", heading: "", required: false },
+            SectionTemplate {
+                section_role: "fees",
+                heading: "",
+                required: false,
+            },
+            SectionTemplate {
+                section_role: "documents",
+                heading: "Custom title",
+                required: true,
+            },
+            SectionTemplate {
+                section_role: "related_pages",
+                heading: "",
+                required: false,
+            },
         ];
         let source = VerifiedSupport {
-            support_ref: "fee-one", fragment_text: "Fee", role_type: "fee_item",
-            freshness_class: "fresh", source_url: "https://example.org/fees",
+            support_ref: "fee-one",
+            fragment_text: "Fee",
+            role_type: "fee_item",
+            freshness_class: "fresh",
+            source_url: "https://example.org/fees",
         };
         let blocks = planned_content_blocks(&sections, &[source], false);
         assert_eq!(blocks.len(), 2);
@@ -414,7 +469,10 @@ mod tests {
         let refs = vec!["rule-one".into()];
         let (claim, source) = sample(&refs, &[]);
         assert_eq!(validate_editorial_claim(claim, &[source]), Ok(()));
-        assert_eq!(render_editorial_claim(claim, "ru").unwrap(), "- Обычно решение принимается за 15 дней. [Источник](https://example.org/official)");
+        assert_eq!(
+            render_editorial_claim(claim, "ru").unwrap(),
+            "- Обычно решение принимается за 15 дней. [Источник](https://example.org/official)"
+        );
     }
 
     #[test]
@@ -422,9 +480,15 @@ mod tests {
         let refs = vec!["rule-one".into()];
         let (mut claim, source) = sample(&refs, &[]);
         claim.proposal.as_mut().unwrap().text = "Срок 3 дня.";
-        assert_eq!(validate_editorial_claim(claim, &[source]), Err(EditorialClaimError::NumericEvidenceMismatch));
+        assert_eq!(
+            validate_editorial_claim(claim, &[source]),
+            Err(EditorialClaimError::NumericEvidenceMismatch)
+        );
         claim.proposal.as_mut().unwrap().text = "Обычно решение принимается за 15 дней.";
-        assert_eq!(validate_editorial_claim(claim, &[source, source]), Err(EditorialClaimError::MissingOrAmbiguousSupport));
+        assert_eq!(
+            validate_editorial_claim(claim, &[source, source]),
+            Err(EditorialClaimError::MissingOrAmbiguousSupport)
+        );
     }
 
     #[test]
@@ -435,6 +499,9 @@ mod tests {
         assert_eq!(validate_editorial_claim(claim, &[source]), Ok(()));
         let bad = vec!["15 days".into()];
         let (claim, source) = sample(&refs, &bad);
-        assert_eq!(validate_editorial_claim(claim, &[source]), Err(EditorialClaimError::InvalidEvidenceSpan));
+        assert_eq!(
+            validate_editorial_claim(claim, &[source]),
+            Err(EditorialClaimError::InvalidEvidenceSpan)
+        );
     }
 }
