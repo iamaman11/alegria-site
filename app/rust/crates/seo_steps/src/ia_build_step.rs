@@ -293,14 +293,9 @@ pub fn execute(input: &IaBuildInputPayload) -> Result<IaBuildOutputPayload, Doma
 
 #[cfg(test)]
 fn canonical_test_scope() -> contracts::generated::alegria::temporal::v1::SeoScopePayload {
-    let scope = seo_domain::identity::derive_scope(
-        "alegria-site",
-        "ru-RU",
-        "ES",
-        "tourist",
-        "standard",
-    )
-    .unwrap();
+    let scope =
+        seo_domain::identity::derive_scope("alegria-site", "ru-RU", "ES", "tourist", "standard")
+            .unwrap();
     contracts::generated::alegria::temporal::v1::SeoScopePayload {
         market: scope.market,
         locale: scope.locale,
