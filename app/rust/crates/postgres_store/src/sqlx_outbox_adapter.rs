@@ -157,9 +157,7 @@ pub async fn lock_and_reject_projected_legacy_truth_write_in_tx(
     .fetch_optional(&mut **tx)
     .await?;
     if let Some(aggregate_key) = projected_rule {
-        return Err(VerifiedRuleTruthFenceError::NonAtomicLegacyProjection {
-            aggregate_key,
-        });
+        return Err(VerifiedRuleTruthFenceError::NonAtomicLegacyProjection { aggregate_key });
     }
     Ok(())
 }
@@ -909,7 +907,7 @@ mod tests {
         let later = (
             Uuid::new_v4(),
             "hash-c".to_owned(),
-            OffsetDateTime::UNIX_EPOCH + sqlx::types::time::Duration::seconds(1),
+            OffsetDateTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
         );
         assert!(latest_intent_timestamp_unambiguous(&[]));
         assert!(latest_intent_timestamp_unambiguous(&[one.clone()]));
