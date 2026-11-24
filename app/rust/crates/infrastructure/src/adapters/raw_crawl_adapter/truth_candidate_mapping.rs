@@ -139,13 +139,13 @@ async fn upsert_verified_rule_instance_from_candidate(
     // durable uncertainty check would allow late Qdrant effects to resurrect
     // older verification after this canonical write commits.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
         &mut tx,
         &[rule_instance_id.to_string()],
     )
     .await
     .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-        message: format!("legacy adjudication verified-rule write blocked: {err}"),
+        message: format!("legacy adjudication lacks atomic Qdrant projection intent: {err}"),
     })?;
     let role_key = canonical_role_key(&candidate.role);
     sqlx::query(
@@ -245,13 +245,13 @@ async fn demote_verified_semantic_slot(
     adjudication_reason: &str,
 ) -> std::result::Result<(), primitives::errors::DomainError> {
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
         &mut tx,
         &[rule_instance_id.to_string()],
     )
     .await
     .map_err(|err| primitives::errors::DomainError::InfraUnavailable {
-        message: format!("legacy adjudication verified-rule demotion blocked: {err}"),
+        message: format!("legacy adjudication demotion lacks Qdrant tombstone intent: {err}"),
     })?;
     sqlx::query(
         "UPDATE verified.rule_instances

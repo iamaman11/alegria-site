@@ -23,6 +23,11 @@ PROJECTION_DISPATCH = ROOT / "app" / "rust" / "crates" / "runtime_composition" /
 OUTBOX_MATERIALIZE = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "worker.rs"
 TEMPORAL_RUNTIME_SUPPORT = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations" / "runtime_support_ops.rs"
+LEGACY_SOURCE_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_source_projection_adapter.rs"
+LEGACY_RAW_CRAWL_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter" / "truth_candidate_mapping.rs"
+CANONICAL_VERIFIED_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "verified_rule_projection_adapter.rs"
+SQLX_VERIFIED_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter" / "projection_runtime_store.rs"
+GENERIC_OUTBOX_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_runtime_outbox_adapter.rs"
 UNCERTAIN_MARKER = "projection_outcome_uncertain:v1"
 
 
@@ -141,6 +146,30 @@ def fence_contract_failures(
     return failures
 
 
+def truth_writer_fence_failures(files: dict[Path, str], postgres_outbox: str) -> list[str]:
+    """Protect the full set of known producer paths, not just RPC consumers."""
+    failures: list[str] = []
+    if "pub async fn lock_and_reject_projected_legacy_truth_write_in_tx" not in postgres_outbox:
+        failures.append("PG owner must reject projected non-atomic legacy Truth mutation")
+    if "NonAtomicLegacyProjection" not in postgres_outbox:
+        failures.append("PG owner must classify non-atomic legacy projected writes")
+    expected = {
+        LEGACY_SOURCE_WRITER: ("lock_and_reject_projected_legacy_truth_write_in_tx", 1),
+        LEGACY_RAW_CRAWL_WRITER: ("lock_and_reject_projected_legacy_truth_write_in_tx", 2),
+        CANONICAL_VERIFIED_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 1),
+        SQLX_VERIFIED_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 3),
+        GENERIC_OUTBOX_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 1),
+    }
+    for path, (call, minimum) in expected.items():
+        if files[path].count(call) < minimum:
+            failures.append(
+                f"{path.relative_to(ROOT)} is missing a mandatory verified-rule Truth fence"
+            )
+    if "verified-rule Qdrant Outbox events require atomic Truth staging" not in files[GENERIC_OUTBOX_WRITER]:
+        failures.append("standalone verified-rule Outbox writes must be prohibited")
+    return failures
+
+
 def read_file_resolved(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     if path.name == "proto_runtime_payload_store.rs":
@@ -238,6 +267,21 @@ def main() -> int:
         failures.extend(f"missing fenced delivery owner: {path.relative_to(ROOT)}" for path in absent)
     else:
         failures.extend(fence_contract_failures(*(path.read_text(encoding="utf-8") for path in fence_paths)))
+
+    truth_paths = (
+        LEGACY_SOURCE_WRITER, LEGACY_RAW_CRAWL_WRITER, CANONICAL_VERIFIED_WRITER,
+        SQLX_VERIFIED_WRITER, GENERIC_OUTBOX_WRITER,
+    )
+    absent_truth = [path for path in truth_paths if not path.is_file()]
+    if absent_truth:
+        failures.extend(
+            f"missing fenced Truth owner: {path.relative_to(ROOT)}" for path in absent_truth
+        )
+    elif POSTGRES_OUTBOX.is_file():
+        truth_files = {path: path.read_text(encoding="utf-8") for path in truth_paths}
+        failures.extend(truth_writer_fence_failures(
+            truth_files, POSTGRES_OUTBOX.read_text(encoding="utf-8"),
+        ))
 
     if failures:
         print("RELIABILITY_CONTRACTS: FAILED")

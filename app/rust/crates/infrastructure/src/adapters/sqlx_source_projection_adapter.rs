@@ -173,13 +173,13 @@ pub async fn persist_from_pipeline_state(
         .iter()
         .map(|(id, _)| id.clone())
         .collect::<Vec<_>>();
-    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
         &mut tx,
         &all_rule_ids,
     )
     .await
     .map_err(|err| DomainError::InfraUnavailable {
-        message: format!("legacy Truth projection blocked by Qdrant uncertainty: {err}"),
+        message: format!("legacy Truth write has no atomic Qdrant projection intent: {err}"),
     })?;
 
     let mut written = 0usize;

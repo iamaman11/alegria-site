@@ -4090,6 +4090,7 @@ dependencies = [
  "contracts",
  "graph_neo4j",
  "infrastructure",
+ "postgres_store",
  "primitives",
  "prost",
  "runtime_models",

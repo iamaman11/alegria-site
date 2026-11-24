@@ -63,6 +63,8 @@ pub const VERIFIED_RULE_UNCERTAIN_MARKER: &str = "projection_outcome_uncertain:v
 pub enum VerifiedRuleTruthFenceError {
     #[error("invalid verified-rule projection identity")]
     InvalidIdentity,
+    #[error("legacy Truth mutation of already projected verified rule {aggregate_key} requires atomic PostgreSQL registry and Qdrant Outbox intent")]
+    NonAtomicLegacyProjection { aggregate_key: String },
     #[error("verified-rule Truth mutation blocked: Qdrant outcome of event {event_id} for {aggregate_key} is uncertain; manually reconcile the remote effect first")]
     Uncertain {
         event_id: Uuid,
@@ -116,6 +118,46 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
     if let Some((event_id, aggregate_key)) = uncertain {
         return Err(VerifiedRuleTruthFenceError::Uncertain {
             event_id,
+            aggregate_key,
+        });
+    }
+    Ok(())
+}
+
+/// Fail-closed compatibility boundary for legacy Truth writers that cannot
+/// atomically stage a verified-rule registry change AND its Qdrant Outbox
+/// intent in the same PostgreSQL transaction.
+///
+/// A legacy writer may still modify a rule that has never had an active
+/// `verified_rules_4` point. It MUST NOT mutate an already projected rule:
+/// that would change canonical Truth while leaving Qdrant's old point live,
+/// with no corresponding durable repair intent. This is intentionally a
+/// temporary loss of legacy functionality pending its atomic writer cutover.
+///
+/// This helper must be called BEFORE any canonical rule mutation and within
+/// that mutation's own transaction. It obtains the usual per-point advisory
+/// locks and rejects unresolved remote outcomes first; the registry check is
+/// then protected against concurrent canonical projection writers by the
+/// SAME locks, so an active point cannot appear between check and mutation.
+pub async fn lock_and_reject_projected_legacy_truth_write_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule_ids: &[String],
+) -> std::result::Result<(), VerifiedRuleTruthFenceError> {
+    lock_and_ensure_verified_rules_writable_in_tx(tx, rule_ids).await?;
+    if rule_ids.is_empty() {
+        return Ok(());
+    }
+    let projected_rule: Option<String> = sqlx::query_scalar(
+        "SELECT entity_key FROM kb.qdrant_points
+         WHERE collection_name='verified_rules_4'
+           AND entity_type='rule_instance' AND entity_key=ANY($1::text[])
+         ORDER BY entity_key LIMIT 1",
+    )
+    .bind(rule_ids)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some(aggregate_key) = projected_rule {
+        return Err(VerifiedRuleTruthFenceError::NonAtomicLegacyProjection {
             aggregate_key,
         });
     }
@@ -795,7 +837,7 @@ pub async fn read_sync_status(pool: &PgPool) -> Result<SyncStatusSnapshot> {
 mod tests {
     use super::{
         latest_intent_timestamp_unambiguous, validate_target_claim, validate_verified_rule_event,
-        OutboxEvent, VERIFIED_RULE_UNCERTAIN_MARKER,
+        OutboxEvent, VerifiedRuleTruthFenceError, VERIFIED_RULE_UNCERTAIN_MARKER,
     };
     use sqlx::types::time::OffsetDateTime;
     use uuid::Uuid;
@@ -873,6 +915,16 @@ mod tests {
         assert!(latest_intent_timestamp_unambiguous(&[one.clone()]));
         assert!(!latest_intent_timestamp_unambiguous(&[one.clone(), tied]));
         assert!(latest_intent_timestamp_unambiguous(&[later, one]));
+    }
+
+    #[test]
+    fn legacy_projected_truth_write_error_identifies_the_unsafe_rule() {
+        let error = VerifiedRuleTruthFenceError::NonAtomicLegacyProjection {
+            aggregate_key: "rule-42".to_owned(),
+        };
+        let message = error.to_string();
+        assert!(message.contains("rule-42"));
+        assert!(message.contains("atomic PostgreSQL registry and Qdrant Outbox"));
     }
 
     #[test]
