@@ -262,8 +262,8 @@ pub(crate) async fn layer_router_sweep_impl(
     let decisions = sections
         .iter()
         .map(|section| {
-            let output = seo_steps::layer_router_step::execute(
-                &seo_steps::layer_router_step::LayerRouterInput {
+            let output = seo_domain::extraction::layer_routing::execute(
+                &seo_domain::extraction::layer_routing::LayerRouterInput {
                     section_id: section.id.to_string(),
                     heading_text: section.heading_path.clone(),
                     raw_text: section.content_md.clone(),
@@ -364,8 +364,8 @@ pub(crate) async fn entity_span_sweep_impl(
     let section_outputs = sections
         .iter()
         .map(|section| {
-            let output = seo_steps::entity_span_detection_step::execute(
-                &seo_steps::entity_span_detection_step::EntitySpanInput {
+            let output = seo_domain::extraction::entity_spans::execute(
+                &seo_domain::extraction::entity_spans::EntitySpanInput {
                     section_id: section.id.to_string(),
                     raw_text: section.content_md.clone(),
                 },

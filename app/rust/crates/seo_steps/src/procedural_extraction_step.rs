@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct ProceduralExtractionInput {
     pub section_id: String,
     pub raw_text: String,
-    pub mentions: Vec<crate::entity_span_detection_step::EntityMention>,
+    pub mentions: Vec<seo_domain::extraction::entity_spans::EntityMention>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,7 +89,7 @@ pub fn execute(input: &ProceduralExtractionInput) -> ProceduralExtractionOutput 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity_span_detection_step::EntityMention;
+    use seo_domain::extraction::entity_spans::EntityMention;
 
     #[test]
     fn builds_fee_timeline_and_document_rules_from_mentions() {

@@ -1,3 +1,4 @@
+//! Extract schedule, closure and appointment signals from source sections.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

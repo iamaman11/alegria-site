@@ -62,7 +62,7 @@ pub struct OperationalExtractionSweepInput {
 pub struct OperationalExtractionSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub entities: Vec<seo_steps::operational_extraction_step::OperationalEntity>,
+    pub entities: Vec<seo_domain::extraction::operational_entities::OperationalEntity>,
     pub blocked_by_gate: bool,
     pub decision: String,
 }
@@ -86,7 +86,7 @@ pub struct EditorialExtractionSweepInput {
 pub struct EditorialExtractionSectionState {
     pub section_id: i64,
     pub page_id: i64,
-    pub topics: Vec<seo_steps::editorial_extraction_step::EditorialTopic>,
+    pub topics: Vec<seo_domain::extraction::editorial_topics::EditorialTopic>,
     pub blocked_by_gate: bool,
     pub skipped: bool,
     pub decision: String,

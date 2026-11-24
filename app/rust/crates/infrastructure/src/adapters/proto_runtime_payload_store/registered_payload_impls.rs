@@ -216,19 +216,19 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.DomBlockRelevanceOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::layer_router_step::LayerRouterInput,
+    seo_domain::extraction::layer_routing::LayerRouterInput,
     "alegria.runtime.json.LayerRouterInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::layer_router_step::LayerRouterOutput,
+    seo_domain::extraction::layer_routing::LayerRouterOutput,
     "alegria.runtime.json.LayerRouterOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::entity_span_detection_step::EntitySpanInput,
+    seo_domain::extraction::entity_spans::EntitySpanInput,
     "alegria.runtime.json.EntitySpanInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::entity_span_detection_step::EntitySpanOutput,
+    seo_domain::extraction::entity_spans::EntitySpanOutput,
     "alegria.runtime.json.EntitySpanOutput"
 );
 impl_json_runtime_payload!(
@@ -248,19 +248,19 @@ impl_json_runtime_payload!(
     "alegria.runtime.json.ProceduralExtractionOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::operational_extraction_step::OperationalExtractionInput,
+    seo_domain::extraction::operational_entities::OperationalExtractionInput,
     "alegria.runtime.json.OperationalExtractionInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::operational_extraction_step::OperationalExtractionOutput,
+    seo_domain::extraction::operational_entities::OperationalExtractionOutput,
     "alegria.runtime.json.OperationalExtractionOutput"
 );
 impl_json_runtime_payload!(
-    seo_steps::editorial_extraction_step::EditorialExtractionInput,
+    seo_domain::extraction::editorial_topics::EditorialExtractionInput,
     "alegria.runtime.json.EditorialExtractionInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::editorial_extraction_step::EditorialExtractionOutput,
+    seo_domain::extraction::editorial_topics::EditorialExtractionOutput,
     "alegria.runtime.json.EditorialExtractionOutput"
 );
 impl_json_runtime_payload!(

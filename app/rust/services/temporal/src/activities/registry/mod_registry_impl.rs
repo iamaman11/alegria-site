@@ -69,8 +69,8 @@ impl AlegriaActivities {
     pub async fn run_layer_router_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::layer_router_step::LayerRouterInput,
-    ) -> Result<seo_steps::layer_router_step::LayerRouterOutput, ActivityError> {
+        input: seo_domain::extraction::layer_routing::LayerRouterInput,
+    ) -> Result<seo_domain::extraction::layer_routing::LayerRouterOutput, ActivityError> {
         self.execute_step(&input.section_id, "layer_router", 1, &input, || async {
             Ok(step_catalog::run_layer_router(self.as_ref(), &input))
         })
@@ -82,8 +82,8 @@ impl AlegriaActivities {
     pub async fn run_entity_span_detection_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::entity_span_detection_step::EntitySpanInput,
-    ) -> Result<seo_steps::entity_span_detection_step::EntitySpanOutput, ActivityError> {
+        input: seo_domain::extraction::entity_spans::EntitySpanInput,
+    ) -> Result<seo_domain::extraction::entity_spans::EntitySpanOutput, ActivityError> {
         self.execute_step(
             &input.section_id,
             "entity_span_detection",
@@ -144,8 +144,8 @@ impl AlegriaActivities {
     pub async fn run_operational_extraction_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::operational_extraction_step::OperationalExtractionInput,
-    ) -> Result<seo_steps::operational_extraction_step::OperationalExtractionOutput, ActivityError>
+        input: seo_domain::extraction::operational_entities::OperationalExtractionInput,
+    ) -> Result<seo_domain::extraction::operational_entities::OperationalExtractionOutput, ActivityError>
     {
         self.execute_step(
             &input.section_id,
@@ -167,8 +167,8 @@ impl AlegriaActivities {
     pub async fn run_editorial_extraction_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::editorial_extraction_step::EditorialExtractionInput,
-    ) -> Result<seo_steps::editorial_extraction_step::EditorialExtractionOutput, ActivityError>
+        input: seo_domain::extraction::editorial_topics::EditorialExtractionInput,
+    ) -> Result<seo_domain::extraction::editorial_topics::EditorialExtractionOutput, ActivityError>
     {
         self.execute_step(
             &input.section_id,

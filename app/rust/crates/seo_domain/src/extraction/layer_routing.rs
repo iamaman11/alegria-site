@@ -1,3 +1,4 @@
+//! Classify source sections into editorial and factual extraction lanes.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

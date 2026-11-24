@@ -127,14 +127,14 @@ pub fn run_expert_extraction_core(
             || sectioning_contract.decision != "pass"
             || !cas_gate.is_replay_safe;
 
-        let layer_input = seo_steps::layer_router_step::LayerRouterInput {
+        let layer_input = seo_domain::extraction::layer_routing::LayerRouterInput {
             section_id: section.id.to_string(),
             heading_text: section.heading_path.clone(),
             raw_text: section.content_md.clone(),
             source_tier: section.source_dtype.clone(),
             block_type: section.section_type.clone(),
         };
-        let layer_output = seo_steps::layer_router_step::execute(&layer_input);
+        let layer_output = seo_domain::extraction::layer_routing::execute(&layer_input);
         stage_records.push(stage_record(
             "layer_router",
             section,
@@ -173,11 +173,11 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let entity_input = seo_steps::entity_span_detection_step::EntitySpanInput {
+        let entity_input = seo_domain::extraction::entity_spans::EntitySpanInput {
             section_id: section.id.to_string(),
             raw_text: section.content_md.clone(),
         };
-        let entity_output = seo_steps::entity_span_detection_step::execute(&entity_input);
+        let entity_output = seo_domain::extraction::entity_spans::execute(&entity_input);
         stage_records.push(stage_record(
             "entity_span_detection",
             section,
@@ -291,12 +291,12 @@ pub fn run_expert_extraction_core(
         ));
 
         let operational_input =
-            seo_steps::operational_extraction_step::OperationalExtractionInput {
+            seo_domain::extraction::operational_entities::OperationalExtractionInput {
                 section_id: section.id.to_string(),
                 raw_text: section.content_md.clone(),
             };
         let operational_output =
-            seo_steps::operational_extraction_step::execute(&operational_input);
+            seo_domain::extraction::operational_entities::execute(&operational_input);
         stage_records.push(stage_record(
             "operational_extraction",
             section,
@@ -310,14 +310,14 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let editorial_input = seo_steps::editorial_extraction_step::EditorialExtractionInput {
+        let editorial_input = seo_domain::extraction::editorial_topics::EditorialExtractionInput {
             section_id: section.id.to_string(),
             raw_text: section.content_md.clone(),
         };
         let editorial_output = if blocked_by_gate || !page_utility.allow_editorial_extraction {
-            seo_steps::editorial_extraction_step::EditorialExtractionOutput { topics: Vec::new() }
+            seo_domain::extraction::editorial_topics::EditorialExtractionOutput { topics: Vec::new() }
         } else {
-            seo_steps::editorial_extraction_step::execute(&editorial_input)
+            seo_domain::extraction::editorial_topics::execute(&editorial_input)
         };
         stage_records.push(stage_record(
             "editorial_extraction",

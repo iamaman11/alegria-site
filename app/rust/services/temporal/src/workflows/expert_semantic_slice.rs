@@ -167,7 +167,7 @@ impl ExpertSemanticSliceWorkflow {
         let layer = ctx
             .start_activity(
                 AlegriaActivities::run_layer_router_step,
-                seo_steps::layer_router_step::LayerRouterInput {
+                seo_domain::extraction::layer_routing::LayerRouterInput {
                     section_id: section.section_id.clone(),
                     heading_text: section.heading_path.clone(),
                     raw_text: section.raw_text.clone(),
@@ -183,7 +183,7 @@ impl ExpertSemanticSliceWorkflow {
         let spans = ctx
             .start_activity(
                 AlegriaActivities::run_entity_span_detection_step,
-                seo_steps::entity_span_detection_step::EntitySpanInput {
+                seo_domain::extraction::entity_spans::EntitySpanInput {
                     section_id: section.section_id.clone(),
                     raw_text: section.raw_text.clone(),
                 },
@@ -230,7 +230,7 @@ impl ExpertSemanticSliceWorkflow {
         let operational = ctx
             .start_activity(
                 AlegriaActivities::run_operational_extraction_step,
-                seo_steps::operational_extraction_step::OperationalExtractionInput {
+                seo_domain::extraction::operational_entities::OperationalExtractionInput {
                     section_id: section.section_id.clone(),
                     raw_text: section.raw_text.clone(),
                 },
@@ -243,7 +243,7 @@ impl ExpertSemanticSliceWorkflow {
         let editorial = ctx
             .start_activity(
                 AlegriaActivities::run_editorial_extraction_step,
-                seo_steps::editorial_extraction_step::EditorialExtractionInput {
+                seo_domain::extraction::editorial_topics::EditorialExtractionInput {
                     section_id: section.section_id.clone(),
                     raw_text: section.raw_text.clone(),
                 },

@@ -5,6 +5,123 @@ include!("proto_runtime_payload_store/registered_payload_impls.rs");
 include!("proto_runtime_payload_store/decode_helpers.rs");
 
 #[cfg(test)]
+mod semantic_extraction_payload_tests {
+    use super::RuntimeProtoPayload;
+    use seo_domain::extraction::{
+        editorial_topics, entity_spans, layer_routing, operational_entities,
+    };
+
+    #[test]
+    fn all_eight_registered_identifiers_survive_the_domain_move() {
+        macro_rules! assert_id {
+            ($ty:ty, $id:literal) => {
+                assert_eq!(<$ty as RuntimeProtoPayload>::payload_type(), $id);
+            };
+        }
+
+        assert_id!(layer_routing::LayerRouterInput, "alegria.runtime.json.LayerRouterInput");
+        assert_id!(layer_routing::LayerRouterOutput, "alegria.runtime.json.LayerRouterOutput");
+        assert_id!(entity_spans::EntitySpanInput, "alegria.runtime.json.EntitySpanInput");
+        assert_id!(entity_spans::EntitySpanOutput, "alegria.runtime.json.EntitySpanOutput");
+        assert_id!(
+            operational_entities::OperationalExtractionInput,
+            "alegria.runtime.json.OperationalExtractionInput"
+        );
+        assert_id!(
+            operational_entities::OperationalExtractionOutput,
+            "alegria.runtime.json.OperationalExtractionOutput"
+        );
+        assert_id!(
+            editorial_topics::EditorialExtractionInput,
+            "alegria.runtime.json.EditorialExtractionInput"
+        );
+        assert_id!(
+            editorial_topics::EditorialExtractionOutput,
+            "alegria.runtime.json.EditorialExtractionOutput"
+        );
+    }
+
+    #[test]
+    fn router_and_mentions_keep_existing_json_shapes_and_decode_roundtrip() {
+        let router = layer_routing::LayerRouterInput {
+            section_id: "s1".into(),
+            heading_text: "Title".into(),
+            raw_text: "80 EUR".into(),
+            source_tier: "official".into(),
+            block_type: "document".into(),
+        };
+        let bytes = router.encode_payload_bytes().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json, serde_json::json!({
+            "section_id": "s1",
+            "heading_text": "Title",
+            "raw_text": "80 EUR",
+            "source_tier": "official",
+            "block_type": "document"
+        }));
+        let decoded = layer_routing::LayerRouterInput::decode_payload_bytes(&bytes).unwrap();
+        assert_eq!(decoded.block_type, "document");
+
+        let routed = layer_routing::execute(&decoded);
+        let json: serde_json::Value =
+            serde_json::from_slice(&routed.encode_payload_bytes().unwrap()).unwrap();
+        assert!(json["confidence"].is_number());
+        assert!(json["needs_hitl"].is_boolean());
+        assert!(json["layer_scores"]["procedural"].is_number());
+        assert_eq!(json.as_object().unwrap().len(), 6);
+
+        let input = entity_spans::EntitySpanInput {
+            section_id: "s1".into(),
+            raw_text: "80 EUR".into(),
+        };
+        let bytes = input.encode_payload_bytes().unwrap();
+        let decoded = entity_spans::EntitySpanInput::decode_payload_bytes(&bytes).unwrap();
+        let mentions = entity_spans::execute(&decoded);
+        let json: serde_json::Value =
+            serde_json::from_slice(&mentions.encode_payload_bytes().unwrap()).unwrap();
+        let first = &json["mentions"][0];
+        assert_eq!(first["entity_type"], "fee");
+        assert_eq!(first["has_numeric"], true);
+        assert_eq!(first["is_central"], true);
+        assert!(first["confidence"].as_f64().unwrap() > 0.9);
+        assert_eq!(first.as_object().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn editorial_and_operational_payloads_keep_typed_wire_shape() {
+        let operational = operational_entities::OperationalExtractionInput {
+            section_id: "s1".into(),
+            raw_text: "График работы и запись".into(),
+        };
+        let decoded = operational_entities::OperationalExtractionInput::decode_payload_bytes(
+            &operational.encode_payload_bytes().unwrap(),
+        )
+        .unwrap();
+        let output = operational_entities::execute(&decoded);
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.encode_payload_bytes().unwrap()).unwrap();
+        assert_eq!(json["entities"].as_array().unwrap().len(), 2);
+        assert_eq!(json["entities"][0]["entity_kind"], "office_schedule");
+        assert!(json["entities"][0]["confidence"].is_number());
+
+        let editorial = editorial_topics::EditorialExtractionInput {
+            section_id: "s1".into(),
+            raw_text: "Почему отказ?".into(),
+        };
+        let decoded = editorial_topics::EditorialExtractionInput::decode_payload_bytes(
+            &editorial.encode_payload_bytes().unwrap(),
+        )
+        .unwrap();
+        let output = editorial_topics::execute(&decoded);
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.encode_payload_bytes().unwrap()).unwrap();
+        assert_eq!(json["topics"].as_array().unwrap().len(), 2);
+        assert_eq!(json["topics"][0]["topic_type"], "faq_topic");
+        assert!(json["topics"][0]["topic_key_candidate"].is_string());
+    }
+}
+
+#[cfg(test)]
 mod truth_review_payload_tests {
     use super::RuntimeProtoPayload;
     use truth_domain::{completeness, hitl_decision};
