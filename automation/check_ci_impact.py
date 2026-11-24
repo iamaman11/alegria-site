@@ -767,7 +767,11 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_planning_and_projection_atomicity_select_actual_postgres_suite(self) -> None:
         for path in (
+            "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
+            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
             "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
         ):
@@ -776,6 +780,13 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertIn("planning_atomicity", outcome["selected_suites"])
                 self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
                 self.assertIn("planning_atomic_", dict(suite_commands_for_report(outcome))["planning_atomicity"])
+
+        # One canonical Qdrant key builder is also exercised by Draft QA's
+        # existing PostgreSQL retry and idempotency assertions.
+        self.assertIn(
+            "draft_qa_scenario",
+            self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs")["selected_suites"],
+        )
 
     def test_historical_truth_report_is_not_a_live_rust_fixture(self) -> None:
         outcome = self.impact("docs/runs/r3_contradiction_handling.json")

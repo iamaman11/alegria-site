@@ -135,8 +135,19 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         input: &GlobalSiteReconcileInputPayload,
         output: &GlobalSiteReconcileOutputPayload,
     ) -> Result<GlobalNavigationPersistReport, DomainError> {
-        sqlx_seo_adapter::persist_ia_build_output(
-            self.pool,
+        // One global reconcile is one durable site-plan revision. Its IA,
+        // required links, content gaps, retirement and navigation cannot be
+        // committed independently: a late failure must leave the previous
+        // complete site plan visible, not a partially reconciled graph.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("begin global site reconcile transaction: {err}"),
+            })?;
+        sqlx_seo_adapter::persist_ia_build_output_in_tx(
+            &mut tx,
             &IaBuildInputPayload {
                 verified_support: Vec::new(),
                 run_id: input.run_id.clone(),
@@ -151,53 +162,8 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
         )
         .await?;
-        let mut links = output.link_recommendations.clone();
-        let mut gaps = output.content_gaps.clone();
-        // Reconcile historical plans through the same persistence owners.
-        // Preserve unrelated scopes, manual decisions and published dependencies
-        // outside this run's evaluated plan.
-        if let Some(context) = input.graph_context.as_ref() {
-            let keys = output.page_nodes.iter().map(|node| node.page_node_key.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
-            let link_keys = links.iter().map(|link| link.link_recommendation_key.clone())
-                .collect::<std::collections::BTreeSet<_>>();
-            for prior in &context.link_recommendations {
-                if matches!(prior.status.as_str(), "candidate" | "accepted")
-                    && keys.contains(prior.source_page_key.as_str())
-                    && keys.contains(prior.target_page_key.as_str())
-                    && !link_keys.contains(&prior.link_recommendation_key)
-                {
-                    let mut expired = prior.clone();
-                    expired.status = "expired".into();
-                    links.push(expired);
-                }
-            }
-            if !input.page_blueprints.is_empty() {
-                use seo_domain::artifact_identity::ContentGapDetector;
-                let identity = |gap: &contracts::generated::alegria::temporal::v1::ContentGapState| {
-                    ContentGapDetector::from_reason(&gap.reason_code)
-                        .map(|detector| detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic))
-                };
-                let gap_keys = gaps.iter().filter_map(identity)
-                    .collect::<std::collections::BTreeSet<_>>();
-                for prior in &context.content_gaps {
-                    if prior.status == "open"
-                        && matches!(prior.reason_code.as_str(),
-                            "page_missing_verified_support" | "page_duplicate_verified_evidence")
-                        && identity(prior).is_some_and(|key| !gap_keys.contains(&key))
-                        && output.page_nodes.iter().any(|page|
-                            page.page_node_key == prior.page_node_key
-                            && !matches!(page.lifecycle_state.as_str(), "blocked" | "deprecated" | "stale"))
-                    {
-                        let mut resolved = prior.clone();
-                        resolved.status = "resolved".into();
-                        gaps.push(resolved);
-                    }
-                }
-            }
-        }
-        sqlx_seo_adapter::persist_link_recommend_output(
-            self.pool,
+        sqlx_seo_adapter::persist_link_recommend_output_in_tx(
+            &mut tx,
             &LinkRecommendInputPayload {
                 run_id: input.run_id.clone(),
                 page_nodes: output.page_nodes.clone(),
@@ -205,12 +171,12 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
                 graph_context: None,
             },
             &LinkRecommendOutputPayload {
-                link_recommendations: links,
+                link_recommendations: output.link_recommendations.clone(),
             },
         )
         .await?;
-        sqlx_seo_adapter::persist_opportunity_build_output(
-            self.pool,
+        sqlx_seo_adapter::persist_opportunity_build_output_in_tx(
+            &mut tx,
             &OpportunityBuildInputPayload {
                 run_id: input.run_id.clone(),
                 scope: input.scope.clone(),
@@ -219,21 +185,35 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
             &OpportunityBuildOutputPayload {
                 keyword_clusters: Vec::new(),
-                content_gaps: gaps,
+                content_gaps: output.content_gaps.clone(),
             },
         )
         .await?;
         let scope = input.scope.as_ref().cloned().unwrap_or_default();
-        let current_keys = output.page_nodes.iter().map(|page| page.page_node_key.clone()).collect::<Vec<_>>();
-        sqlx_seo_adapter::retire_opaque_unpublished_plans(self.pool, &input.run_id,
-            &scope.scope_signature, &current_keys).await?;
-        let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages(
-            self.pool,
+        let current_keys = output
+            .page_nodes
+            .iter()
+            .map(|page| page.page_node_key.clone())
+            .collect::<Vec<_>>();
+        sqlx_seo_adapter::retire_opaque_unpublished_plans_in_tx(
+            &mut tx,
+            &input.run_id,
+            &scope.scope_signature,
+            &current_keys,
+        )
+        .await?;
+        let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages_in_tx(
+            &mut tx,
             &scope.market,
             &scope.locale,
             &input.reconcile_reason,
         )
         .await?;
+        tx.commit()
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("commit global site reconcile transaction: {err}"),
+            })?;
         Ok(GlobalNavigationPersistReport {
             navigation_tree_key: navigation.navigation_tree_key,
             scope_count: navigation.scope_count,

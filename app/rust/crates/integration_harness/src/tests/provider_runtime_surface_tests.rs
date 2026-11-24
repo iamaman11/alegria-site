@@ -1894,3 +1894,647 @@ async fn planning_atomic_link_recommend_outbox_failure_rolls_back_then_retries()
     .unwrap();
     assert_eq!((links, dependencies, events), (1, 1, 1));
 }
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() {
+    use infrastructure::adapters::sqlx_seo_adapter::persist_global_navigation_from_active_pages;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let blueprint = format!("navigation-atomic-blueprint-{marker}");
+    let scope = format!("navigation-atomic-scope-{marker}");
+    let market = format!("navigation-atomic-market-{marker}");
+    let locale = "ru-RU";
+    let first = format!("navigation-atomic-first-{marker}");
+    let second = format!("navigation-atomic-second-{marker}");
+    sqlx::query(
+        "INSERT INTO site.page_blueprints (blueprint_key,page_type_key,dominant_intent) \
+         VALUES ($1,'country_hub_page','informational')",
+    )
+    .bind(&blueprint)
+    .execute(pool)
+    .await
+    .unwrap();
+    let insert_page =
+        "INSERT INTO site.page_nodes \
+         (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state) \
+         VALUES ($1,$2,$3,'country_hub_page','informational',$4,$5,'planned')";
+    sqlx::query(insert_page)
+        .bind(&first)
+        .bind(&scope)
+        .bind(&blueprint)
+        .bind("first")
+        .bind(format!("/test/{marker}/first/"))
+        .execute(pool)
+        .await
+        .unwrap();
+
+    let baseline = persist_global_navigation_from_active_pages(pool, &market, locale, "initial")
+        .await
+        .unwrap();
+    assert!(!baseline.navigation_tree_key.is_empty());
+    let old_item_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1 AND page_node_key=$2",
+    )
+    .bind(&baseline.navigation_tree_key)
+    .bind(&first)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(old_item_count, 1);
+
+    // A second page makes the next attempt replace the previous tree items
+    // and update scope page_count before the final rebuild-plan write.
+    sqlx::query(insert_page)
+        .bind(&second)
+        .bind(&scope)
+        .bind(&blueprint)
+        .bind("second")
+        .bind(format!("/test/{marker}/second/"))
+        .execute(pool)
+        .await
+        .unwrap();
+    // NOT VALID permits the existing initial plan but rejects new/updated
+    // navigation plans, ensuring the injected fault occurs at the last write.
+    sqlx::query(
+        "ALTER TABLE site.global_rebuild_plan ADD CONSTRAINT navigation_atomic_late_fault \
+         CHECK (trigger_type <> 'navigation_reconciled') NOT VALID",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        .await
+        .is_err());
+    let old_scope_count: i32 = sqlx::query_scalar(
+        "SELECT page_count FROM site.site_scopes WHERE scope_signature=$1",
+    )
+    .bind(&scope)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let tree_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1",
+    )
+    .bind(&baseline.navigation_tree_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let second_item_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1 AND page_node_key=$2",
+    )
+    .bind(&baseline.navigation_tree_key)
+    .bind(&second)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((old_scope_count, tree_count, second_item_count), (1, 1, 0));
+
+    sqlx::query(
+        "ALTER TABLE site.global_rebuild_plan DROP CONSTRAINT navigation_atomic_late_fault",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    let updated = persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        .await
+        .unwrap();
+    assert_eq!(updated.navigation_tree_key, baseline.navigation_tree_key);
+    let scope_count: i32 = sqlx::query_scalar(
+        "SELECT page_count FROM site.site_scopes WHERE scope_signature=$1",
+    )
+    .bind(&scope)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let item_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1",
+    )
+    .bind(&updated.navigation_tree_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((scope_count, item_count), (2, 2));
+
+    // A workflow reason is not a navigation revision. Replaying an unchanged
+    // tree must not reopen a rebuild that a worker already completed.
+    let completed_plan: String = sqlx::query_scalar(
+        "SELECT rebuild_plan_key FROM site.global_rebuild_plan \
+         WHERE trigger_type='navigation_reconciled' \
+           AND reason_payload->>'navigation_tree_key'=$1 \
+           AND reason_payload->>'reason'='updated'",
+    )
+    .bind(&updated.navigation_tree_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE site.global_rebuild_plan SET status='done' WHERE rebuild_plan_key=$1")
+        .bind(&completed_plan)
+        .execute(pool)
+        .await
+        .unwrap();
+    persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        .await
+        .unwrap();
+    let preserved_status: String = sqlx::query_scalar(
+        "SELECT status FROM site.global_rebuild_plan WHERE rebuild_plan_key=$1",
+    )
+    .bind(&completed_plan)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(preserved_status, "done");
+
+    // Removing the last active page is a new, empty revision. It must clear
+    // the visible menu and enqueue exactly one fresh rebuild on that revision.
+    sqlx::query(
+        "UPDATE site.page_nodes SET lifecycle_state='deprecated' WHERE page_node_key=ANY($1)",
+    )
+    .bind(&vec![first, second])
+    .execute(pool)
+    .await
+    .unwrap();
+    let emptied = persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        .await
+        .unwrap();
+    assert_eq!(emptied.page_item_count, 0);
+    let items_after_retirement: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1",
+    )
+    .bind(&updated.navigation_tree_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(items_after_retirement, 0);
+    let empty_plan: String = sqlx::query_scalar(
+        "SELECT rebuild_plan_key FROM site.global_rebuild_plan \
+         WHERE trigger_type='navigation_reconciled' \
+           AND reason_payload->>'navigation_tree_key'=$1 \
+           AND reason_payload->>'reason'='updated' \
+           AND rebuild_plan_key<>$2",
+    )
+    .bind(&updated.navigation_tree_key)
+    .bind(&completed_plan)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let empty_status: String = sqlx::query_scalar(
+        "SELECT status FROM site.global_rebuild_plan WHERE rebuild_plan_key=$1",
+    )
+    .bind(&empty_plan)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(empty_status, "queued");
+    sqlx::query("UPDATE site.global_rebuild_plan SET status='done' WHERE rebuild_plan_key=$1")
+        .bind(&empty_plan)
+        .execute(pool)
+        .await
+        .unwrap();
+    persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        .await
+        .unwrap();
+    let (plan_count, terminal_empty_plans): (i64, i64) = sqlx::query_as(
+        "SELECT count(*), count(*) FILTER (WHERE rebuild_plan_key=$2 AND status='done') \
+         FROM site.global_rebuild_plan WHERE trigger_type='navigation_reconciled' \
+           AND reason_payload->>'navigation_tree_key'=$1 \
+           AND reason_payload->>'reason'='updated'",
+    )
+    .bind(&updated.navigation_tree_key)
+    .bind(&empty_plan)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((plan_count, terminal_empty_plans), (2, 1));
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_registered_input_late_blob_failure_rolls_back_run() {
+    use infrastructure::adapters::{
+        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
+    };
+    use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let repo = SqlxSeoRuntimeRepository::new(pool);
+    let registered = repo
+        .register_site_build_input(&SeoSiteBuildRegistrationRequest {
+            run_id: Uuid::new_v4().to_string(),
+            context_key: None,
+            market: "alegria-site".into(),
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            visa_subtype: None,
+            applicant_profile: "standard".into(),
+            citizenship_code: "BY".into(),
+            bootstrap_context: true,
+            queries: vec!["spain visa".into()],
+            query_batch_key: None,
+            run_mode: Some("publish_with_hitl".into()),
+            retained_source_run_id: None,
+        })
+        .await
+        .unwrap();
+    let mut input = registered.clone();
+    input.run_id = Uuid::new_v4().to_string();
+
+    // The existing registration has already populated another run. Reject
+    // only subsequent input blob writes, after execution_runs INSERT, without
+    // requiring deletion or mutation of that valid fixture.
+    sqlx::query(
+        "ALTER TABLE pipeline.execution_run_blobs ADD CONSTRAINT planning_atomic_blob_fault \
+         CHECK (field_name <> 'input_payload') NOT VALID",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(sqlx_seo_adapter::upsert_seo_site_build_input(pool, &input)
+        .await
+        .is_err());
+    let absent_run: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.execution_runs WHERE run_id=$1::uuid",
+    )
+    .bind(&input.run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let absent_blob: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.execution_run_blobs WHERE run_id=$1::uuid AND field_name='input_payload'",
+    )
+    .bind(&input.run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((absent_run, absent_blob), (0, 0));
+
+    sqlx::query(
+        "ALTER TABLE pipeline.execution_run_blobs DROP CONSTRAINT planning_atomic_blob_fault",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        sqlx_seo_adapter::upsert_seo_site_build_input(pool, &input)
+            .await
+            .unwrap();
+    }
+    let (runs, blobs): (i64, i64) = sqlx::query_as(
+        "SELECT \
+         (SELECT count(*) FROM pipeline.execution_runs WHERE run_id=$1::uuid), \
+         (SELECT count(*) FROM pipeline.execution_run_blobs WHERE run_id=$1::uuid AND field_name='input_payload')",
+    )
+    .bind(&input.run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((runs, blobs), (1, 1));
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_every_owner() {
+    use contracts::generated::alegria::temporal::v1::{
+        ContentGapState, GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload,
+        PageNodeState, SeoScopePayload,
+    };
+    use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+    use seo_domain::artifact_identity::ContentGapDetector;
+    use seo_ports::PlanningRepository;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let run_id = Uuid::new_v4().to_string();
+    let scope_signature = format!("global-atomic-scope-{marker}");
+    let market = format!("global-atomic-market-{marker}");
+    let first = format!("global-atomic-first-{marker}");
+    let second = format!("global-atomic-second-{marker}");
+    let link = format!("global-atomic-link-{marker}");
+    let obsolete = format!("global-atomic-obsolete-{marker}");
+    let obsolete_target = format!("global-atomic-obsolete-target-{marker}");
+    let expired_link = format!("global-atomic-expired-link-{marker}");
+    let expired_overlap = format!("global-atomic-overlapping-expired-{marker}");
+    let optional_link = format!("global-atomic-optional-link-{marker}");
+    // A pre-existing opaque, unpublished plan is retired only after the new
+    // IA/link/opportunity writes. Its original state must survive a late fault.
+    for (key, path) in [
+        (&obsolete, format!("/legacy/{marker}/")),
+        (&obsolete_target, format!("/legacy/{marker}/target/")),
+    ] {
+        sqlx::query(
+            "INSERT INTO site.page_nodes \
+             (page_node_key,scope_signature,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state) \
+             VALUES ($1,$2,'country_hub_page','informational',$3,$4,'planned')",
+        )
+        .bind(key)
+        .bind(&scope_signature)
+        .bind(&marker)
+        .bind(path)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    for (recommendation, source, target, role) in [
+        (&expired_link, &obsolete, &obsolete_target, "hub_to_child"),
+        (&optional_link, &obsolete_target, &obsolete, "child_to_hub"),
+    ] {
+        sqlx::query(
+            "INSERT INTO site.link_recommendations \
+             (link_recommendation_key,scope_signature,source_page_key,target_page_key, \
+              link_role,anchor_strategy,required_flag,score,status) \
+             VALUES ($1,$2,$3,$4,$5,'navigation_contextual',true,0.95,'accepted')",
+        )
+        .bind(recommendation)
+        .bind(&scope_signature)
+        .bind(source)
+        .bind(target)
+        .bind(role)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO monitoring.seo_rebuild_dependencies \
+             (rebuild_dependency_key,page_node_key,dependency_type,dependency_ref,status) \
+             VALUES ($1,$2,'required_link',$3,'active')",
+        )
+        .bind(seo_domain::artifact_identity::seo_artifact_key(
+            "rebuild_dependency",
+            &[source, "required_link", target],
+        ))
+        .bind(source)
+        .bind(target)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let gap_detector = ContentGapDetector::SerpReliability;
+    let gap = gap_detector.key(&scope_signature, "", "who_fits");
+    let pages = [(&first, "first"), (&second, "second")]
+        .into_iter()
+        .map(|(key, slug)| PageNodeState {
+            page_node_key: (*key).clone(),
+            scope_signature: scope_signature.clone(),
+            page_type_key: "country_hub_page".into(),
+            dominant_intent: "informational".into(),
+            canonical_slug: slug.into(),
+            canonical_url_path: format!("/test/{marker}/{slug}/"),
+            lifecycle_state: "planned".into(),
+            menu_group: "main".into(),
+            breadcrumb_policy: "standard".into(),
+            canonical_url_family: "country_hub".into(),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let input = GlobalSiteReconcileInputPayload {
+        run_id: run_id.clone(),
+        scope: Some(SeoScopePayload {
+            market,
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            applicant_profile: "standard".into(),
+            scope_signature: scope_signature.clone(),
+            ..Default::default()
+        }),
+        reconcile_reason: format!("atomic-reconcile-{marker}"),
+        ..Default::default()
+    };
+    let output = GlobalSiteReconcileOutputPayload {
+        page_nodes: pages,
+        link_recommendations: vec![
+            LinkRecommendationState {
+                link_recommendation_key: link.clone(),
+                scope_signature: scope_signature.clone(),
+                source_page_key: first.clone(),
+                target_page_key: second.clone(),
+                link_role: "contextual".into(),
+                anchor_strategy: "descriptive".into(),
+                required_flag: true,
+                score: 0.9,
+                status: "candidate".into(),
+                ..Default::default()
+            },
+            LinkRecommendationState {
+                link_recommendation_key: expired_overlap.clone(),
+                scope_signature: scope_signature.clone(),
+                source_page_key: first.clone(),
+                target_page_key: second.clone(),
+                link_role: "legacy_contextual".into(),
+                anchor_strategy: "legacy_descriptive".into(),
+                required_flag: true,
+                score: 0.7,
+                status: "expired".into(),
+                ..Default::default()
+            },
+            LinkRecommendationState {
+                link_recommendation_key: expired_link.clone(),
+                scope_signature: scope_signature.clone(),
+                source_page_key: obsolete.clone(),
+                target_page_key: obsolete_target.clone(),
+                link_role: "hub_to_child".into(),
+                anchor_strategy: "navigation_contextual".into(),
+                required_flag: true,
+                score: 0.95,
+                status: "expired".into(),
+                ..Default::default()
+            },
+            LinkRecommendationState {
+                link_recommendation_key: optional_link.clone(),
+                scope_signature: scope_signature.clone(),
+                source_page_key: obsolete_target.clone(),
+                target_page_key: obsolete.clone(),
+                link_role: "child_to_hub".into(),
+                anchor_strategy: "navigation_contextual".into(),
+                required_flag: false,
+                score: 0.95,
+                status: "accepted".into(),
+                ..Default::default()
+            },
+        ],
+        content_gaps: vec![ContentGapState {
+            content_gap_key: gap.clone(),
+            scope_signature: scope_signature.clone(),
+            missing_topic: "who_fits".into(),
+            severity: "medium".into(),
+            status: "open".into(),
+            reason_code: gap_detector.reason().into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let repo = SqlxSeoRuntimeRepository::new(pool);
+
+    // Navigation's rebuild-plan insert is the LAST write, after IA pages,
+    // required-link edge, Content Gap and their Outbox events. Rejecting it
+    // must roll back every owner across the global reconcile transaction.
+    sqlx::query(
+        "ALTER TABLE site.global_rebuild_plan ADD CONSTRAINT global_atomic_navigation_fault \
+         CHECK (trigger_type <> 'navigation_reconciled')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(repo
+        .persist_global_site_reconcile_output(&input, &output)
+        .await
+        .is_err());
+    let (pages, links, gaps, dependencies, events, plans, trees): (
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+        i64,
+    ) = sqlx::query_as(
+            "SELECT \
+             (SELECT count(*) FROM site.page_nodes WHERE page_node_key=ANY($1)), \
+             (SELECT count(*) FROM site.link_recommendations WHERE link_recommendation_key=$2), \
+             (SELECT count(*) FROM site.content_gaps WHERE content_gap_key=$3), \
+             (SELECT count(*) FROM monitoring.seo_rebuild_dependencies WHERE page_node_key=$4), \
+             (SELECT count(*) FROM system.sync_outbox WHERE run_id=$5), \
+             (SELECT count(*) FROM site.global_rebuild_plan WHERE trigger_type='navigation_reconciled'), \
+             (SELECT count(*) FROM site.navigation_trees WHERE market=$6)",
+    )
+    .bind(vec![first.clone(), second.clone()])
+    .bind(&link)
+    .bind(&gap)
+    .bind(&first)
+    .bind(&run_id)
+    .bind(input.scope.as_ref().unwrap().market.as_str())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (pages, links, gaps, dependencies, events, plans, trees),
+        (0, 0, 0, 0, 0, 0, 0)
+    );
+    let obsolete_after_failure: String = sqlx::query_scalar(
+        "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key=$1",
+    )
+    .bind(&obsolete)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(obsolete_after_failure, "planned");
+    let (prior_link_after_failure, prior_edge_after_failure): (String, String) =
+        sqlx::query_as(
+            "SELECT \
+             (SELECT status FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+             (SELECT status FROM monitoring.seo_rebuild_dependencies \
+              WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3)",
+        )
+        .bind(&expired_link)
+        .bind(&obsolete)
+        .bind(&obsolete_target)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        (prior_link_after_failure.as_str(), prior_edge_after_failure.as_str()),
+        ("accepted", "active")
+    );
+    let optional_still_required: bool = sqlx::query_scalar(
+        "SELECT required_flag FROM site.link_recommendations WHERE link_recommendation_key=$1",
+    )
+    .bind(&optional_link)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(optional_still_required);
+    sqlx::query(
+        "ALTER TABLE site.global_rebuild_plan DROP CONSTRAINT global_atomic_navigation_fault",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+
+    let successful = repo
+        .persist_global_site_reconcile_output(&input, &output)
+        .await
+        .unwrap();
+    assert_eq!(successful.page_item_count, 2);
+    let obsolete_after_success: String = sqlx::query_scalar(
+        "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key=$1",
+    )
+    .bind(&obsolete)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(obsolete_after_success, "deprecated");
+    let (expired_status, deprecated_edge): (String, String) = sqlx::query_as(
+        "SELECT \
+         (SELECT status FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+         (SELECT status FROM monitoring.seo_rebuild_dependencies \
+          WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3)",
+    )
+    .bind(&expired_link)
+    .bind(&obsolete)
+    .bind(&obsolete_target)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((expired_status.as_str(), deprecated_edge.as_str()), ("expired", "deprecated"));
+    let (optional_is_required, optional_edge): (bool, String) = sqlx::query_as(
+        "SELECT \
+         (SELECT required_flag FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+         (SELECT status FROM monitoring.seo_rebuild_dependencies \
+          WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3)",
+    )
+    .bind(&optional_link)
+    .bind(&obsolete_target)
+    .bind(&obsolete)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((optional_is_required, optional_edge.as_str()), (false, "deprecated"));
+    let (expired_overlap_status, live_edge_status): (String, String) = sqlx::query_as(
+        "SELECT \
+         (SELECT status FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+         (SELECT status FROM monitoring.seo_rebuild_dependencies \
+          WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3)",
+    )
+    .bind(&expired_overlap)
+    .bind(&first)
+    .bind(&second)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((expired_overlap_status.as_str(), live_edge_status.as_str()), ("expired", "active"));
+    let projections_before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox WHERE run_id=$1",
+    )
+    .bind(&run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(projections_before >= 7);
+    repo.persist_global_site_reconcile_output(&input, &output)
+        .await
+        .unwrap();
+    let projections_after: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox WHERE run_id=$1",
+    )
+    .bind(&run_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(projections_after, projections_before);
+    let gap_qdrant: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox \
+         WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
+    )
+    .bind(&gap)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(gap_qdrant, 1, "the same Qdrant content must not multiply on replay");
+}

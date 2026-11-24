@@ -219,6 +219,7 @@ DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
     "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/draft_publish_rebuild_persistence.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
     "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs",
 }
@@ -227,7 +228,11 @@ DRAFT_QA_SCENARIO_PATHS = {
 # Keep them in the existing architecture-and-rust job; the integration harness
 # owns the test, while this registry only selects its exact Cargo filter.
 PLANNING_ATOMICITY_PATHS = {
+    "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
+    "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }

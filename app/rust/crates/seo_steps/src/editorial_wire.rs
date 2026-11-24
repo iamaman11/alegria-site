@@ -1,11 +1,29 @@
 //! Conversion at the Temporal wire boundary. No editorial policy lives here.
 
 use contracts::generated::alegria::temporal::v1::{
-    ClaimLedgerEntry, LinkRecommendationState, SectionTemplateBinding, SeoVerifiedFactSupportState,
+    ClaimLedgerEntry, LinkRecommendationState, RenderedContentBlock, SectionTemplateBinding,
+    SeoVerifiedFactSupportState,
 };
 use seo_domain::editorial::{
-    EditorialClaim, EditorialProposal, PlannedContentBlock, SectionTemplate, VerifiedSupport,
+    ContentBlock, EditorialClaim, EditorialProposal, PlannedContentBlock, SectionTemplate,
+    VerifiedSupport,
 };
+
+/// Adapt the one canonical rendered-block shape at the wire boundary.
+/// Content Contract and final Draft QA consume this same domain view.
+pub fn content_block_views(blocks: &[RenderedContentBlock]) -> Vec<ContentBlock<'_>> {
+    blocks
+        .iter()
+        .map(|block| ContentBlock {
+            role: &block.section_role,
+            block_type: &block.block_type,
+            heading: &block.heading,
+            markdown: &block.markdown,
+            required: block.required,
+            support_refs: &block.support_refs,
+        })
+        .collect()
+}
 
 pub fn claim_view(claim: &ClaimLedgerEntry) -> EditorialClaim<'_> {
     EditorialClaim {
@@ -56,8 +74,37 @@ pub fn block_plan(
     seo_domain::editorial::planned_content_blocks(
         &templates,
         &support_views(support),
-        !required_links.is_empty(),
+        required_links.iter().any(|link| link.required_flag),
     )
+}
+
+#[cfg(test)]
+mod required_link_plan_tests {
+    use super::*;
+
+    #[test]
+    fn optional_link_does_not_activate_an_unrequired_related_pages_block() {
+        let template = SectionTemplateBinding {
+            section_role: "related_pages".into(),
+            required: false,
+            ..Default::default()
+        };
+        let optional = LinkRecommendationState {
+            target_page_key: "optional-target".into(),
+            required_flag: false,
+            ..Default::default()
+        };
+        assert!(block_plan(&[template.clone()], &[], &[optional]).is_empty());
+
+        let required = LinkRecommendationState {
+            target_page_key: "required-target".into(),
+            required_flag: true,
+            ..Default::default()
+        };
+        let plan = block_plan(&[template], &[], &[required]);
+        assert_eq!(plan.len(), 1);
+        assert_eq!(plan[0].section_role, "related_pages");
+    }
 }
 
 #[cfg(test)]

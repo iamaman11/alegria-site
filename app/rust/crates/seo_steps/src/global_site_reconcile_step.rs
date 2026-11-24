@@ -2,8 +2,8 @@ use seo_domain::artifact_identity::ContentGapDetector;
 use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, LinkRecommendationState,
-    PageNodeState,
+    ContentGapState, GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload,
+    LinkRecommendationState, PageNodeState,
 };
 use primitives::errors::DomainError;
 
@@ -337,7 +337,8 @@ pub fn execute(
             unique_links.insert(key, link);
         }
     }
-    let deduped = unique_links.into_values().collect::<Vec<_>>();
+    let mut deduped = unique_links.into_values().collect::<Vec<_>>();
+    let active_link_count = deduped.len() as u32;
 
     if let Some(graph_context) = input.graph_context.as_ref() {
         let mut seen = BTreeSet::new();
@@ -382,10 +383,69 @@ pub fn execute(
         }
     }
 
+    // The same domain decision that selects current links and verified
+    // evidence also retires superseded graph records. Persistence must write
+    // this resolved result as-is, not decide which historical decisions are
+    // still valid after the current plan has been assembled.
+    if let Some(context) = input.graph_context.as_ref() {
+        let current_keys = page_nodes
+            .iter()
+            .map(|page| page.page_node_key.as_str())
+            .collect::<BTreeSet<_>>();
+        let current_links = deduped
+            .iter()
+            .map(|link| link.link_recommendation_key.clone())
+            .collect::<BTreeSet<_>>();
+        for prior in &context.link_recommendations {
+            if matches!(prior.status.as_str(), "candidate" | "accepted")
+                && current_keys.contains(prior.source_page_key.as_str())
+                && current_keys.contains(prior.target_page_key.as_str())
+                && !current_links.contains(&prior.link_recommendation_key)
+            {
+                let mut expired = prior.clone();
+                expired.status = "expired".into();
+                deduped.push(expired);
+            }
+        }
+        // Evidence-coverage decisions are eligible for resolution only when
+        // page blueprints made factual completeness measurable in this run.
+        if !input.page_blueprints.is_empty() {
+            let identity = |gap: &ContentGapState| {
+                ContentGapDetector::from_reason(&gap.reason_code).map(|detector| {
+                    detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic)
+                })
+            };
+            let current_gaps = content_gaps
+                .iter()
+                .filter_map(identity)
+                .collect::<BTreeSet<_>>();
+            for prior in &context.content_gaps {
+                if prior.status == "open"
+                    && matches!(
+                        prior.reason_code.as_str(),
+                        "page_missing_verified_support" | "page_duplicate_verified_evidence"
+                    )
+                    && identity(prior).is_some_and(|key| !current_gaps.contains(&key))
+                    && page_nodes.iter().any(|page| {
+                        page.page_node_key == prior.page_node_key
+                            && !matches!(
+                                page.lifecycle_state.as_str(),
+                                "blocked" | "deprecated" | "stale"
+                            )
+                    })
+                {
+                    let mut resolved = prior.clone();
+                    resolved.status = "resolved".into();
+                    content_gaps.push(resolved);
+                }
+            }
+        }
+    }
+
     Ok(GlobalSiteReconcileOutputPayload {
         page_nodes,
         updated_page_count,
-        updated_link_count: deduped.len() as u32,
+        updated_link_count: active_link_count,
         link_recommendations: deduped,
         orphan_page_node_keys,
         cannibalization_conflict_keys,
@@ -397,7 +457,114 @@ pub fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use contracts::generated::alegria::temporal::v1::GraphPlanningCoverageSignalState;
+    use contracts::generated::alegria::temporal::v1::{
+        GraphPlanningContextState, GraphPlanningCoverageSignalState, PageBlueprintState,
+        SeoVerifiedFactSupportState,
+    };
+
+    #[test]
+    fn superseded_links_expire_in_domain_output_but_active_link_count_is_unchanged() {
+        let current = LinkRecommendationState {
+            link_recommendation_key: "current-link".into(),
+            source_page_key: "a".into(),
+            target_page_key: "b".into(),
+            status: "candidate".into(),
+            score: 0.9,
+            ..Default::default()
+        };
+        let prior = LinkRecommendationState {
+            link_recommendation_key: "prior-link".into(),
+            status: "accepted".into(),
+            ..current.clone()
+        };
+        let outside_scope = LinkRecommendationState {
+            link_recommendation_key: "outside-scope".into(),
+            target_page_key: "other".into(),
+            ..prior.clone()
+        };
+        let output = execute(&GlobalSiteReconcileInputPayload {
+            page_nodes: ["a", "b"]
+                .into_iter()
+                .map(|key| PageNodeState {
+                    page_node_key: key.into(),
+                    canonical_url_path: format!("/{key}/"),
+                    lifecycle_state: "planned".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            link_recommendations: vec![current],
+            graph_context: Some(GraphPlanningContextState {
+                link_recommendations: vec![prior, outside_scope],
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(output.updated_link_count, 1);
+        assert!(output.link_recommendations.iter().any(|link| {
+            link.link_recommendation_key == "current-link" && link.status == "candidate"
+        }));
+        assert!(output.link_recommendations.iter().any(|link| {
+            link.link_recommendation_key == "prior-link" && link.status == "expired"
+        }));
+        assert!(output
+            .link_recommendations
+            .iter()
+            .all(|link| link.link_recommendation_key != "outside-scope"));
+    }
+
+    #[test]
+    fn restored_page_evidence_resolves_prior_gap_but_does_not_resolve_unrelated_gaps() {
+        let previous = ContentGapState {
+            content_gap_key: "previous-gap".into(),
+            scope_signature: "scope".into(),
+            page_node_key: "documents".into(),
+            missing_topic: "documents".into(),
+            status: "open".into(),
+            reason_code: "page_missing_verified_support".into(),
+            ..Default::default()
+        };
+        let unrelated = ContentGapState {
+            content_gap_key: "unrelated-gap".into(),
+            reason_code: "global_reconcile_missing_topic".into(),
+            ..previous.clone()
+        };
+        let output = execute(&GlobalSiteReconcileInputPayload {
+            page_nodes: vec![PageNodeState {
+                page_node_key: "documents".into(),
+                blueprint_key: "doc".into(),
+                scope_signature: "scope".into(),
+                canonical_url_path: "/documents/".into(),
+                page_type_key: "detail_page".into(),
+                lifecycle_state: "planned".into(),
+                ..Default::default()
+            }],
+            page_blueprints: vec![PageBlueprintState {
+                blueprint_key: "doc".into(),
+                required_sections: vec!["overview".into(), "documents".into()],
+                ..Default::default()
+            }],
+            verified_support: vec![SeoVerifiedFactSupportState {
+                support_ref: "verified-document".into(),
+                fragment_text: "Verified document requirements".into(),
+                role_type: "document_required".into(),
+                freshness_class: "fresh".into(),
+                ..Default::default()
+            }],
+            graph_context: Some(GraphPlanningContextState {
+                content_gaps: vec![previous, unrelated],
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(output.page_nodes[0].lifecycle_state, "planned");
+        assert_eq!(output.content_gaps.len(), 1);
+        assert_eq!(output.content_gaps[0].content_gap_key, "previous-gap");
+        assert_eq!(output.content_gaps[0].status, "resolved");
+    }
 
     #[test]
     fn emits_graph_backed_missing_topic_gap_without_upgrading_page_state() {

@@ -13,6 +13,9 @@ pub async fn upsert_seo_site_build_input(
     validate_applicant_profile_reference(pool, &validated_scope.applicant_profile).await?;
     let payload_bytes = input.encode_payload_bytes()?;
     let payload_hash = primitives::hash::blake3_hex(&payload_bytes);
+    // The input payload is the only durable source for the registered run.
+    // Never commit a runnable execution_run without its matching input blob.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
@@ -23,14 +26,17 @@ pub async fn upsert_seo_site_build_input(
         SET workflow_run_id = EXCLUDED.workflow_run_id,
             workflow_type   = EXCLUDED.workflow_type,
             context_key     = EXCLUDED.context_key,
-            status          = EXCLUDED.status,
+            -- Registration replay is not a workflow-state transition. In
+            -- particular, a completed/failed or HITL run must never be reset
+            -- to 'created' just because the input is stored again.
+            status          = pipeline.execution_runs.status,
             updated_at      = now()
         "#,
     )
     .bind(uuid)
     .bind(&input.run_id)
     .bind(&input.context_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -52,10 +58,11 @@ pub async fn upsert_seo_site_build_input(
     .bind(SeoSiteBuildInputPayload::schema_version())
     .bind(payload_bytes)
     .bind(payload_hash)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -77,6 +84,8 @@ pub async fn persist_serp_ingest_output(
         &output.query_batch_key
     };
     non_empty(query_batch_key, "query_batch_key")?;
+    // A query batch and all its raw snapshots form one acquired result.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
@@ -96,7 +105,7 @@ pub async fn persist_serp_ingest_output(
     .bind(&scope.market)
     .bind(&scope.locale)
     .bind(&output.status)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -124,10 +133,11 @@ pub async fn persist_serp_ingest_output(
             "query_batch_key": query_batch_key,
             "source_system": "seo_site_build_input",
         })))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -148,6 +158,9 @@ pub async fn persist_serp_normalize_output(
         .and_then(|p| blank_as_none(&p.query_batch_key))
         .or_else(|| blank_as_none(&input.query_batch_key))
         .ok_or_else(|| validation_failure("SEO persistence requires query_batch_key"))?;
+    // The SERP batch, patterns, observations, editorial review tasks and
+    // downstream projections must never become mutually inconsistent.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
 
     sqlx::query(
         r#"
@@ -166,7 +179,7 @@ pub async fn persist_serp_normalize_output(
     .bind(&scope.scope_signature)
     .bind(&scope.market)
     .bind(&scope.locale)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -201,7 +214,7 @@ pub async fn persist_serp_normalize_output(
         .bind(pattern.reliability_score)
         .bind(blank_as_none(&pattern.evidence_ref))
         .bind(&pattern.status)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -231,11 +244,27 @@ pub async fn persist_serp_normalize_output(
             "status": pattern.status,
             "evidence_ref": pattern.evidence_ref,
         })))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
 
         if pattern.status == "partial" {
+            // HITL review is a durable human decision for a specific observed
+            // revision. Temporal replay must not reopen a resolved task; a
+            // new run or changed source observation is a new review reason.
+            let source_revision = primitives::hash::content_hash_v1(
+                &json!({
+                    "run_id": input.run_id,
+                    "serp_pattern_key": pattern.serp_pattern_key,
+                    "query": pattern.query,
+                    "pattern_type": pattern.pattern_type,
+                    "dominant_intent": pattern.dominant_intent,
+                    "reliability_score": pattern.reliability_score,
+                    "evidence_ref": pattern.evidence_ref,
+                    "status": pattern.status,
+                })
+                .to_string(),
+            );
             sqlx::query(
                 r#"
                 INSERT INTO site.seo_hitl_tasks
@@ -248,6 +277,8 @@ pub async fn persist_serp_normalize_output(
                 SET queue_state = 'open',
                     decision_payload = EXCLUDED.decision_payload,
                     updated_at = now()
+                WHERE site.seo_hitl_tasks.decision_payload->>'source_revision'
+                      IS DISTINCT FROM EXCLUDED.decision_payload->>'source_revision'
                 "#,
             )
             .bind(seo_domain::artifact_identity::seo_artifact_key(
@@ -264,12 +295,13 @@ pub async fn persist_serp_normalize_output(
                 "query": pattern.query,
                 "dominant_intent": pattern.dominant_intent,
                 "reliability_score": pattern.reliability_score,
+                "source_revision": source_revision,
             })))
             .bind(Json(json!([{
                 "event": "unsafe_serp_pattern_detected",
                 "query": pattern.query,
             }])))
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
         }
@@ -279,8 +311,12 @@ pub async fn persist_serp_normalize_output(
             &pattern.serp_pattern_key,
             &pattern.scope_signature,
             &format!(
-                "{}|{}|{}|{}",
-                pattern.query, pattern.pattern_type, pattern.dominant_intent, pattern.status
+                "{}|{}|{}|{}|{}",
+                query_batch_key,
+                pattern.query,
+                pattern.pattern_type,
+                pattern.dominant_intent,
+                pattern.status
             ),
         ));
         projection_events.push(seo_qdrant_projection_event(
@@ -294,6 +330,7 @@ pub async fn persist_serp_normalize_output(
                 pattern.query, pattern.pattern_type, pattern.dominant_intent, pattern.status
             ),
             HashMap::from([
+                ("query_batch_key".to_string(), query_batch_key.to_string()),
                 ("query".to_string(), pattern.query.clone()),
                 ("pattern_type".to_string(), pattern.pattern_type.clone()),
                 (
@@ -305,12 +342,27 @@ pub async fn persist_serp_normalize_output(
         ));
     }
 
-    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    emit_projection_events_for_run_in_tx(&mut tx, &input.run_id, projection_events).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
 pub async fn persist_opportunity_build_output(
     pool: &PgPool,
+    input: &OpportunityBuildInputPayload,
+    output: &OpportunityBuildOutputPayload,
+) -> Result<OpportunityBuildOutputPayload, DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let canonical = persist_opportunity_build_output_in_tx(&mut tx, input, output).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(canonical)
+}
+
+/// Same canonical persistence operation, with transaction ownership delegated
+/// to a larger site reconcile. Do not commit an individual planning step if
+/// another member of the same reconcile can still fail.
+pub async fn persist_opportunity_build_output_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     input: &OpportunityBuildInputPayload,
     output: &OpportunityBuildOutputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
@@ -347,7 +399,7 @@ pub async fn persist_opportunity_build_output(
         .bind(&scope.applicant_profile)
         .bind(&cluster.seed_keyword)
         .bind(cluster.cluster_version as i32)
-        .fetch_all(pool)
+        .fetch_all(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         if existing.len() > 1 {
@@ -410,7 +462,7 @@ pub async fn persist_opportunity_build_output(
             &cluster.support_refs,
             cluster.graph_confidence,
         )))
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -481,7 +533,7 @@ pub async fn persist_opportunity_build_output(
         .bind(&pattern.query)
         .bind(&pattern.dominant_intent)
         .bind(pattern.reliability_score)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
     }
@@ -528,7 +580,7 @@ pub async fn persist_opportunity_build_output(
             &gap.support_refs,
             gap.graph_confidence,
         )))
-        .fetch_one(pool)
+        .fetch_one(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -553,7 +605,7 @@ pub async fn persist_opportunity_build_output(
         ));
     }
 
-    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    emit_projection_events_for_run_in_tx(tx, &input.run_id, projection_events).await?;
     Ok(canonical)
 }
 
@@ -562,6 +614,36 @@ pub async fn persist_ia_build_output(
     input: &IaBuildInputPayload,
     output: &IaBuildOutputPayload,
 ) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    persist_ia_build_output_in_tx(&mut tx, input, output).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(())
+}
+
+pub async fn persist_ia_build_output_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    input: &IaBuildInputPayload,
+    output: &IaBuildOutputPayload,
+) -> Result<(), DomainError> {
+    // Publishing locks its canonical page identity before writing CMS state.
+    // Lock existing page identities in a deterministic order before checking
+    // the public URL, so a concurrent CMS publish cannot race with IA rename.
+    let mut existing_page_keys = output
+        .page_nodes
+        .iter()
+        .map(|page| page.page_node_key.clone())
+        .collect::<Vec<_>>();
+    existing_page_keys.sort();
+    existing_page_keys.dedup();
+    sqlx::query(
+        "SELECT page_node_key FROM site.page_nodes \
+         WHERE page_node_key = ANY($1) ORDER BY page_node_key FOR UPDATE",
+    )
+    .bind(&existing_page_keys)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+
     let mut projection_events = Vec::new();
     for blueprint in &output.page_blueprints {
         non_empty(&blueprint.blueprint_key, "blueprint_key")?;
@@ -593,7 +675,7 @@ pub async fn persist_ia_build_output(
             "canonical_url_family": blueprint.canonical_url_family.clone(),
         })))
         .bind(&blueprint.status)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -602,12 +684,14 @@ pub async fn persist_ia_build_output(
             &blueprint.blueprint_key,
             "",
             &format!(
-                "{}|{}|{}|{}|{:?}",
+                "{}|{}|{}|{}|{:?}|{}|{}",
                 blueprint.page_type_key,
                 blueprint.dominant_intent,
                 blueprint.scope_class,
                 blueprint.title_pattern,
-                blueprint.required_sections
+                blueprint.required_sections,
+                blueprint.blueprint_version,
+                blueprint.status
             ),
         ));
         projection_events.push(seo_qdrant_projection_event(
@@ -631,6 +715,14 @@ pub async fn persist_ia_build_output(
                 ),
                 ("scope_class".to_string(), blueprint.scope_class.clone()),
                 ("status".to_string(), blueprint.status.clone()),
+                (
+                    "blueprint_version".to_string(),
+                    blueprint.blueprint_version.to_string(),
+                ),
+                (
+                    "canonical_url_family".to_string(),
+                    blueprint.canonical_url_family.clone(),
+                ),
             ]),
         ));
     }
@@ -641,7 +733,7 @@ pub async fn persist_ia_build_output(
         let published_path: Option<String> = sqlx::query_scalar(
             "SELECT canonical_url_path FROM site.cms_pages WHERE page_node_key=$1 AND published_at IS NOT NULL",
         )
-        .bind(&page.page_node_key).fetch_optional(pool).await.map_err(classify_sqlx)?;
+        .bind(&page.page_node_key).fetch_optional(&mut **tx).await.map_err(classify_sqlx)?;
         if published_path.as_ref().is_some_and(|path| path != &page.canonical_url_path) {
             return Err(validation_failure("IA cannot rename a committed public page"));
         }
@@ -688,7 +780,7 @@ pub async fn persist_ia_build_output(
         .bind(&page.breadcrumb_policy)
         .bind(&page.canonical_url_family)
         .bind(&page.lifecycle_state)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -714,7 +806,7 @@ pub async fn persist_ia_build_output(
                 "page_type_key": page.page_type_key,
                 "dominant_intent": page.dominant_intent,
             })))
-            .execute(pool)
+            .execute(&mut **tx)
             .await
             .map_err(classify_sqlx)?;
         }
@@ -740,7 +832,7 @@ pub async fn persist_ia_build_output(
                 "page_type_key": page.page_type_key,
                 "dominant_intent": page.dominant_intent,
             })))
-            .execute(pool)
+            .execute(&mut **tx)
             .await
             .map_err(classify_sqlx)?;
 
@@ -753,7 +845,7 @@ pub async fn persist_ia_build_output(
                 "#,
             )
             .bind(&page.keyword_cluster_key)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(classify_sqlx)?
             {
@@ -779,7 +871,7 @@ pub async fn persist_ia_build_output(
                     "page_type_key": page.page_type_key,
                     "dominant_intent": page.dominant_intent,
                 })))
-                .execute(pool)
+                .execute(&mut **tx)
                 .await
                 .map_err(classify_sqlx)?;
             }
@@ -811,7 +903,7 @@ pub async fn persist_ia_build_output(
             "breadcrumb_policy": page.breadcrumb_policy,
             "canonical_url_family": page.canonical_url_family,
         })))
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -820,8 +912,9 @@ pub async fn persist_ia_build_output(
             &page.page_node_key,
             &page.scope_signature,
             &format!(
-                "{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}",
                 page.canonical_url_path,
+                page.canonical_slug,
                 page.page_type_key,
                 page.dominant_intent,
                 page.lifecycle_state,
@@ -881,7 +974,7 @@ pub async fn persist_ia_build_output(
         .bind(&conflict.conflict_reason)
         .bind(&conflict.severity)
         .bind(&conflict.status)
-        .execute(pool)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -896,7 +989,7 @@ pub async fn persist_ia_build_output(
         ));
     }
 
-    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    emit_projection_events_for_run_in_tx(tx, &input.run_id, projection_events).await?;
     Ok(())
 }
 
@@ -905,19 +998,29 @@ pub async fn persist_ia_build_output(
 pub async fn retire_opaque_unpublished_plans(
     pool: &PgPool, run_id: &str, scope: &str, current_keys: &[String],
 ) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    retire_opaque_unpublished_plans_in_tx(&mut tx, run_id, scope, current_keys).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(())
+}
+
+pub async fn retire_opaque_unpublished_plans_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    scope: &str,
+    current_keys: &[String],
+) -> Result<(), DomainError> {
     if scope.trim().is_empty() || current_keys.is_empty() {
         return Ok(());
     }
-    // Retiring stale nodes and emitting their graph removals must commit
-    // together. A failed projection event must not silently hide a page.
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // A failed projection event must not silently hide a retired page.
     let rows = sqlx::query(
         "SELECT page_node_key, canonical_slug, canonical_url_path FROM site.page_nodes p
          WHERE scope_signature=$1 AND NOT(page_node_key=ANY($2))
            AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
            AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)
          ORDER BY page_node_key",
-    ).bind(scope).bind(current_keys).fetch_all(&mut *tx).await.map_err(classify_sqlx)?;
+    ).bind(scope).bind(current_keys).fetch_all(&mut **tx).await.map_err(classify_sqlx)?;
     let mut events = Vec::new();
     for row in rows {
         let key: String = row.get("page_node_key");
@@ -932,15 +1035,14 @@ pub async fn retire_opaque_unpublished_plans(
              WHERE page_node_key=$1 AND scope_signature=$2
                AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
                AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
-        ).bind(&key).bind(scope).execute(&mut *tx).await.map_err(classify_sqlx)?;
+        ).bind(&key).bind(scope).execute(&mut **tx).await.map_err(classify_sqlx)?;
         if result.rows_affected() != 0 {
             events.push(seo_graph_projection_event_with_revision(
                 "page_node", &key, scope, "deprecated:opaque_legacy_plan",
             ));
         }
     }
-    emit_projection_events_for_run_in_tx(&mut tx, run_id, events).await?;
-    tx.commit().await.map_err(classify_sqlx)?;
+    emit_projection_events_for_run_in_tx(tx, run_id, events).await?;
     Ok(())
 }
 
@@ -949,12 +1051,38 @@ pub async fn persist_link_recommend_output(
     input: &LinkRecommendInputPayload,
     output: &LinkRecommendOutputPayload,
 ) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    persist_link_recommend_output_in_tx(&mut tx, input, output).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(())
+}
+
+pub async fn persist_link_recommend_output_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    input: &LinkRecommendInputPayload,
+    output: &LinkRecommendOutputPayload,
+) -> Result<(), DomainError> {
     // Link rows, required-link rebuild edges and their projection events are
     // one persisted result. A late Outbox failure must roll all of them back.
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     let mut projection_events = Vec::new();
+    // Several recommendation identities may refer to the same source/target
+    // pair. The domain emits a current link before expired historical links;
+    // the dependency is pair-scoped, so one live required link must win over
+    // any tombstone regardless of output order.
+    let mut touched_pairs = BTreeSet::new();
+    let mut live_required_pairs = BTreeMap::new();
     for link in &output.link_recommendations {
         non_empty(&link.link_recommendation_key, "link_recommendation_key")?;
+        let pair = (link.source_page_key.clone(), link.target_page_key.clone());
+        touched_pairs.insert(pair.clone());
+        if link.required_flag
+            && matches!(link.status.as_str(), "candidate" | "accepted" | "applied")
+        {
+            live_required_pairs.insert(
+                pair,
+                (link.link_role.clone(), link.anchor_strategy.clone()),
+            );
+        }
         sqlx::query(
             r#"
             INSERT INTO site.link_recommendations
@@ -987,36 +1115,9 @@ pub async fn persist_link_recommend_output(
             &link.support_refs,
             link.graph_confidence,
         )))
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
-
-        if link.required_flag {
-            sqlx::query(
-                r#"
-                INSERT INTO monitoring.seo_rebuild_dependencies
-                    (rebuild_dependency_key, page_node_key, dependency_type, dependency_ref, reason_package, status)
-                VALUES ($1, $2, 'required_link', $3, $4, 'active')
-                ON CONFLICT (page_node_key, dependency_type, dependency_ref) DO UPDATE
-                SET reason_package = EXCLUDED.reason_package,
-                    status = EXCLUDED.status,
-                    updated_at = now()
-                "#,
-            )
-            .bind(seo_domain::artifact_identity::seo_artifact_key(
-                "rebuild_dependency",
-                &[&link.source_page_key, "required_link", &link.target_page_key],
-            ))
-            .bind(&link.source_page_key)
-            .bind(&link.target_page_key)
-            .bind(Json(json!({
-                "link_role": link.link_role,
-                "anchor_strategy": link.anchor_strategy,
-            })))
-            .execute(&mut *tx)
-            .await
-            .map_err(classify_sqlx)?;
-        }
 
         projection_events.push(seo_graph_projection_event_with_revision(
             "link_recommendation",
@@ -1034,7 +1135,53 @@ pub async fn persist_link_recommend_output(
             ),
         ));
     }
-    emit_projection_events_for_run_in_tx(&mut tx, &input.run_id, projection_events).await?;
-    tx.commit().await.map_err(classify_sqlx)?;
+    // Write exactly one rebuild-dependency decision per source/target pair.
+    // Retired/optional-only pairs deprecate existing edges without creating
+    // phantom dependencies for links that were never required.
+    for (source, target) in touched_pairs {
+        if let Some((link_role, anchor_strategy)) =
+            live_required_pairs.get(&(source.clone(), target.clone()))
+        {
+            sqlx::query(
+                r#"
+                INSERT INTO monitoring.seo_rebuild_dependencies
+                    (rebuild_dependency_key, page_node_key, dependency_type, dependency_ref, reason_package, status)
+                VALUES ($1, $2, 'required_link', $3, $4, 'active')
+                ON CONFLICT (page_node_key, dependency_type, dependency_ref) DO UPDATE
+                SET reason_package = EXCLUDED.reason_package,
+                    status = EXCLUDED.status,
+                    updated_at = now()
+                "#,
+            )
+            .bind(seo_domain::artifact_identity::seo_artifact_key(
+                "rebuild_dependency",
+                &[&source, "required_link", &target],
+            ))
+            .bind(&source)
+            .bind(&target)
+            .bind(Json(json!({
+                "link_role": link_role,
+                "anchor_strategy": anchor_strategy,
+            })))
+            .execute(&mut **tx)
+            .await
+            .map_err(classify_sqlx)?;
+        } else {
+            sqlx::query(
+                r#"
+                UPDATE monitoring.seo_rebuild_dependencies
+                SET status='deprecated', updated_at=now()
+                WHERE page_node_key=$1 AND dependency_type='required_link'
+                  AND dependency_ref=$2 AND status <> 'deprecated'
+                "#,
+            )
+            .bind(&source)
+            .bind(&target)
+            .execute(&mut **tx)
+            .await
+            .map_err(classify_sqlx)?;
+        }
+    }
+    emit_projection_events_for_run_in_tx(tx, &input.run_id, projection_events).await?;
     Ok(())
 }

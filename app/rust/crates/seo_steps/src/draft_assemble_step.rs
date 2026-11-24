@@ -181,11 +181,11 @@ fn deterministic_section_body(
     claim_ledger: &mut Vec<ClaimLedgerEntry>,
 ) -> String {
     if section_role == "related_pages" {
-        if required_links.is_empty() {
+        if !required_links.iter().any(|link| link.required_flag) {
             return "No mandatory related pages are required for this scope.\n".to_string();
         }
         let mut body = String::new();
-        for link in required_links {
+        for link in required_links.iter().filter(|link| link.required_flag) {
             body.push_str("- Recommended internal link: ");
             body.push_str(&link.link_role);
             body.push_str(" -> ");
@@ -526,6 +526,14 @@ fn merge_candidate_content_blocks(
 }
 
 pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload {
+    // The wire payload may contain optional recommendations. Only actual
+    // obligations may enter the brief, prompt, plan and persisted draft.
+    let required_links = input
+        .required_links
+        .iter()
+        .filter(|link| link.required_flag)
+        .cloned()
+        .collect::<Vec<_>>();
     let page_node = input.page_node.clone().unwrap_or_default();
     let blueprint = input.page_blueprint.clone().unwrap_or_default();
     let generated_metadata = input
@@ -562,7 +570,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         ),
         section_templates: templates.clone(),
         verified_support: sanitized_support.clone(),
-        required_links: input.required_links.clone(),
+        required_links: required_links.clone(),
         truth_snapshot_ref: input.run_id.clone(),
         source_context_chunks: sanitized_source_context_chunks,
         locale_code: locale_from_canonical_path(&page_node.canonical_url_path).to_string(),
@@ -589,14 +597,14 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         &page_brief_key,
         &templates,
         &sanitized_support,
-        &input.required_links,
+        &required_links,
     );
 
     let fallback = build_fallback_draft_parts(
         &page_node.page_node_key,
         &safe_title,
         &sanitized_support,
-        &input.required_links,
+        &required_links,
         &templates,
     );
     let candidate = input.llm_candidate.as_ref().map(sanitize_candidate);
@@ -727,7 +735,7 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
         truth_snapshot_ref: input.run_id.clone(),
         sections,
         traceability_entries,
-        required_links: input.required_links.clone(),
+        required_links: required_links.clone(),
         schema_markup_json,
         claim_ledger,
         content_blocks,
@@ -767,12 +775,96 @@ pub fn execute(input: &DraftAssembleInputPayload) -> DraftAssembleOutputPayload 
                 "claim_ledger".to_string(),
                 "content_blocks".to_string(),
             ],
-            required_links: input.required_links.clone(),
+            required_links,
             truth_snapshot_ref: input.run_id.clone(),
         }),
         draft,
         editorial_brief: Some(editorial_brief),
         llm_request: Some(llm_request),
         content_block_plan: Some(content_block_plan),
+    }
+}
+
+#[cfg(test)]
+mod required_link_rendering_tests {
+    use super::*;
+    use contracts::generated::alegria::temporal::v1::{
+        DraftAssembleInputPayload, LinkRecommendationState, SectionTemplateBinding,
+    };
+
+    #[test]
+    fn assembled_brief_and_plan_exclude_optional_recommendations() {
+        let input = DraftAssembleInputPayload {
+            required_links: vec![LinkRecommendationState {
+                target_page_key: "optional-target".into(),
+                required_flag: false,
+                ..Default::default()
+            }],
+            section_templates: vec![SectionTemplateBinding {
+                section_role: "related_pages".into(),
+                required: false,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let assembled = execute(&input);
+        assert!(assembled
+            .editorial_brief
+            .as_ref()
+            .unwrap()
+            .required_links
+            .is_empty());
+        assert!(assembled
+            .page_brief
+            .as_ref()
+            .unwrap()
+            .required_links
+            .is_empty());
+        assert!(assembled
+            .content_block_plan
+            .as_ref()
+            .unwrap()
+            .items
+            .is_empty());
+    }
+
+    #[test]
+    fn only_required_link_obligations_are_rendered() {
+        let optional = LinkRecommendationState {
+            target_page_key: "optional-target".into(),
+            required_flag: false,
+            ..Default::default()
+        };
+        let required = LinkRecommendationState {
+            target_page_key: "required-target".into(),
+            link_role: "hub_to_child".into(),
+            required_flag: true,
+            ..Default::default()
+        };
+        let mut traceability = Vec::new();
+        let mut ledger = Vec::new();
+        let empty = deterministic_section_body(
+            "page",
+            "related_pages",
+            &[],
+            &[optional.clone()],
+            &mut traceability,
+            &mut ledger,
+        );
+        assert_eq!(
+            empty,
+            "No mandatory related pages are required for this scope.\n"
+        );
+
+        let rendered = deterministic_section_body(
+            "page",
+            "related_pages",
+            &[],
+            &[optional, required],
+            &mut traceability,
+            &mut ledger,
+        );
+        assert!(rendered.contains("required-target"));
+        assert!(!rendered.contains("optional-target"));
     }
 }
