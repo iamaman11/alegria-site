@@ -508,6 +508,143 @@ async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retr
     .await
     .unwrap();
     assert_eq!((current_amount, rule_count), (55, 1), "stale run A replay overwrote run B");
+
+    // A different hazard is an older run whose FIRST Truth activity starts
+    // only after a newer run has already committed. It has no cached result,
+    // so the committed-step supersession fence must reject it before any
+    // candidate, canonical rule or projection Outbox mutation.
+    let old_first_run = Uuid::new_v4().to_string();
+    let fresh_run = Uuid::new_v4().to_string();
+    let tied_run = Uuid::new_v4().to_string();
+    let old_input = format!("truth-old-first-{marker}");
+    let fresh_input = format!("truth-new-first-{marker}");
+    let tied_input = format!("truth-tied-first-{marker}");
+    for (run, input) in [
+        (&old_first_run, &old_input),
+        (&fresh_run, &fresh_input),
+        (&tied_run, &tied_input),
+    ] {
+        sqlx::query(
+            "INSERT INTO pipeline.execution_runs \
+             (run_id,workflow_run_id,workflow_type,context_key) \
+             VALUES ($1,$2,'seo_site_build',$3)",
+        )
+        .bind(Uuid::parse_str(run).unwrap())
+        .bind(format!("truth-stale-first-{run}"))
+        .bind(&context_key)
+        .execute(pool)
+        .await
+        .unwrap();
+        let (hash, key) = ledger::derive_step_keys(run, "verified_truth_write", 1, input)
+            .unwrap();
+        assert!(ledger::begin_step_execution(
+            pool, run, "verified_truth_write", 1, &hash, &key,
+        )
+        .await
+        .unwrap());
+    }
+    // Precise chronology makes CI independent of timestamp resolution.
+    sqlx::query(
+        "UPDATE pipeline.execution_runs SET created_at= \
+         CASE WHEN run_id=$1::uuid THEN now()-interval '2 hours' \
+              ELSE now()+interval '1 hour' END \
+         WHERE run_id=ANY($2::uuid[])",
+    )
+    .bind(Uuid::parse_str(&old_first_run).unwrap())
+    .bind(vec![
+        Uuid::parse_str(&old_first_run).unwrap(),
+        Uuid::parse_str(&fresh_run).unwrap(),
+        Uuid::parse_str(&tied_run).unwrap(),
+    ])
+    .execute(pool)
+    .await
+    .unwrap();
+    let mut fresh_tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("truth-context|{context_key}"))
+        .execute(&mut *fresh_tx)
+        .await
+        .unwrap();
+    sqlx_seo_adapter::reject_stale_truth_run_in_tx(&mut fresh_tx, &fresh_run, &context_key)
+        .await
+        .unwrap();
+    let mut newest_rule = rules[0].clone();
+    newest_rule.params = serde_json::json!({"amount":75,"currency":"EUR"});
+    sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(&mut fresh_tx, &newest_rule)
+        .await
+        .unwrap();
+    let projection = seo_steps::outbox_builder::qdrant_rule_upsert(
+        &fresh_run, &newest_rule.rule_instance_id, &context_key,
+        &newest_rule.rule_type_key, &newest_rule.concept_key, &newest_rule.role_type,
+        &newest_rule.source_key, "verified_rules_4", vec![0.1; 1024],
+    );
+    let event = infrastructure::adapters::sqlx_outbox_adapter::OutboxEnvelope {
+        run_id: fresh_run.clone(),
+        aggregate_type: projection.aggregate_type,
+        aggregate_key: projection.aggregate_key,
+        target_system: projection.target_system,
+        event_type: projection.event_type,
+        payload_type: projection.payload_type,
+        schema_version: projection.schema_version,
+        idempotency_key: projection.idempotency_key,
+        payload_bytes: projection.payload_bytes,
+    };
+    assert_eq!(
+        infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(
+            &mut fresh_tx, &[event],
+        )
+        .await
+        .unwrap(),
+        1
+    );
+    let fresh_output = format!("newest-truth-output-{marker}");
+    ledger::complete_step_execution_with_output_in_tx(
+        &mut fresh_tx, &fresh_run, "verified_truth_write", 1, &fresh_input, &fresh_output,
+    )
+    .await
+    .unwrap();
+    fresh_tx.commit().await.unwrap();
+
+    for (stale_run, stale_input) in [
+        (&old_first_run, &old_input),
+        (&tied_run, &tied_input),
+    ] {
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("truth-context|{context_key}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let cached: Option<String> = ledger::load_completed_step_result_in_tx(
+            &mut tx, stale_run, "verified_truth_write", 1, stale_input,
+        )
+        .await
+        .unwrap();
+        assert!(cached.is_none(), "the stale activity has never executed before");
+        let err = sqlx_seo_adapter::reject_stale_truth_run_in_tx(
+            &mut tx, stale_run, &context_key,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.class_str(), "conflict_violation");
+        tx.rollback().await.unwrap();
+    }
+    let (amount, candidates_after, events_after): (i64, i64, i64) = sqlx::query_as(
+        "SELECT (r.params->>'amount')::bigint, \
+         (SELECT count(*) FROM extracted.rule_candidates WHERE context_key=$2), \
+         (SELECT count(*) FROM system.sync_outbox WHERE run_id=$3) \
+         FROM verified.rule_instances r WHERE r.rule_instance_id=$1",
+    )
+    .bind(&rules[0].rule_instance_id)
+    .bind(&context_key)
+    .bind(&fresh_run)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (amount, candidates_after, events_after), (75, 3, 1),
+        "stale first Truth activity changed the newer canonical rule or Outbox"
+    );
 }
 
 #[cfg(feature = "e2e")]

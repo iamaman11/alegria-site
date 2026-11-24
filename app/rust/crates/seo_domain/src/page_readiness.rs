@@ -3,7 +3,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::editorial::{factual_role, required_section_roles, role_matches_section, VerifiedSupport};
+use crate::editorial::{
+    factual_role, required_section_roles, role_matches_section, VerifiedSupport,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PageNode<'a> {

@@ -144,8 +144,7 @@ pub async fn stage_rule_upserts_in_tx(
             idempotency_key: event.idempotency_key,
             payload_bytes: event.payload_bytes,
         });
-        let point_id =
-            qdrant_point_id_v1(COLLECTION, "rule_instance", &candidate.rule_instance_id);
+        let point_id = qdrant_point_id_v1(COLLECTION, "rule_instance", &candidate.rule_instance_id);
         sqlx_seo_adapter::upsert_qdrant_rule_point_in_tx(
             tx,
             &point_id,

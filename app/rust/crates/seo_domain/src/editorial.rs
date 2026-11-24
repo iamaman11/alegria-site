@@ -130,7 +130,11 @@ pub fn required_section_roles(explicit: &[String]) -> Vec<String> {
     } else {
         explicit.to_vec()
     };
-    roles.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+    roles
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy)]

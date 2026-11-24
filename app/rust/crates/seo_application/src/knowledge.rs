@@ -15,8 +15,7 @@ use seo_ports::{
     knowledge::{
         CanonicalVectorLookup, SemanticNeighborCollection, SemanticNeighborLookup,
         SemanticNeighborQuery, SourceContextChunk, SourceContextCollection, SourceContextQuery,
-        VerifiedRule, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
-        VerifiedRulesQuery,
+        VerifiedRule, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch, VerifiedRulesQuery,
     },
     CanonicalVectorSearchPort, SemanticNeighborSearchPort, SourceContextSearchPort,
     VerifiedRuleEmbeddingPort, VerifiedRulesReader,

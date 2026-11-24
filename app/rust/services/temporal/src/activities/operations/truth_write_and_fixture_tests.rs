@@ -176,16 +176,7 @@ pub(crate) async fn verified_truth_write_impl(
     // HITL reconciliation spans the whole context, including candidates from
     // other semantic slots. Serialize Truth writes per context first, then
     // lock the individual projection identities in a globally sorted order.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(format!("truth-context|{}", input.context_key))
-        .execute(&mut *tx)
-        .await
-        .map_err(|error| DomainError::InfraUnavailable {
-            message: format!(
-                "verified_truth_write lock context_key={}: {error}",
-                input.context_key
-            ),
-        })?;
+    sqlx_seo_adapter::lock_truth_context_in_tx(&mut tx, &input.context_key).await?;
     let replay: Option<VerifiedTruthWriteOutput> =
         infrastructure::adapters::sqlx_step_ledger_adapter::load_completed_step_result_in_tx(
             &mut tx,
@@ -200,19 +191,16 @@ pub(crate) async fn verified_truth_write_impl(
         // its projection events and its output under the same context lock.
         return Ok(previous);
     }
-    for rule_instance_id in semantic_outcomes.keys() {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(format!(
-                "qdrant|verified_rules_4|rule_instance|{rule_instance_id}"
-            ))
-            .execute(&mut *tx)
-            .await
-            .map_err(|error| DomainError::InfraUnavailable {
-                message: format!(
-                    "verified_truth_write lock rule_instance_id={rule_instance_id}: {error}"
-                ),
-            })?;
-    }
+    // An older workflow can reach this step for the first time after a
+    // newer workflow has committed. Reject it, rather than returning a
+    // successful no-op that might let the stale workflow publish its page.
+    sqlx_seo_adapter::reject_stale_truth_run_in_tx(&mut tx, &input.run_id, &input.context_key)
+        .await?;
+    sqlx_seo_adapter::lock_truth_rule_projections_in_tx(
+        &mut tx,
+        semantic_outcomes.keys(),
+    )
+    .await?;
 
     for decision in &input.truth_adjudication.decisions {
         // Source evidence was preflight-validated before calling Voyage.

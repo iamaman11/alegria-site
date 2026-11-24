@@ -163,6 +163,95 @@ pub async fn upsert_qdrant_rule_point_in_tx(
     Ok(())
 }
 
+/// Serialize context-wide Truth/HITL writes before acquiring any per-rule
+/// projection locks. The caller owns the transaction and its final commit.
+pub async fn lock_truth_context_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context_key: &str,
+) -> Result<(), DomainError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("truth-context|{context_key}"))
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
+    Ok(())
+}
+
+/// Acquire the same sorted, transaction-scoped rule keys used by the Qdrant
+/// Outbox materializer. Truth holds these while mutating canonical SQL state.
+/// Lock order for the complete write is context first, then sorted rule IDs.
+pub async fn lock_truth_rule_projections_in_tx<I, S>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule_ids: I,
+) -> Result<(), DomainError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let sorted = rule_ids
+        .into_iter()
+        .map(|id| id.as_ref().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    for rule_instance_id in sorted {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!(
+                "qdrant|verified_rules_4|rule_instance|{rule_instance_id}"
+            ))
+            .execute(&mut **tx)
+            .await
+            .map_err(classify_sqlx)?;
+    }
+    Ok(())
+}
+
+/// A delayed older workflow must not overwrite a newer Truth commit for the
+/// same context, even on its FIRST execution. This guard runs after the
+/// context advisory lock and before any canonical mutations. The completed
+/// step marker and its SQL state commit atomically in the Truth activity.
+pub async fn reject_stale_truth_run_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    context_key: &str,
+) -> Result<(), DomainError> {
+    let current_id = Uuid::parse_str(run_id)
+        .map_err(|error| validation_failure(format!("invalid Truth run_id UUID: {error}")))?;
+    let newer_committed: Option<bool> = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM pipeline.execution_runs AS newer
+             JOIN pipeline.step_executions AS done
+               ON done.run_id = newer.run_id
+              AND done.step_name = 'verified_truth_write'
+              AND done.status = 'done'
+             WHERE newer.context_key = this_run.context_key
+               AND newer.run_id <> this_run.run_id
+               -- UUID ordering cannot establish chronology when PostgreSQL
+               -- timestamps tie. Intentionally sacrifice progress on a tie:
+               -- the safety invariant forbids either ambiguous stale write.
+               AND newer.created_at >= this_run.created_at
+         )
+         FROM pipeline.execution_runs AS this_run
+         WHERE this_run.run_id = $1 AND this_run.context_key = $2",
+    )
+    .bind(current_id)
+    .bind(context_key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let Some(newer_committed) = newer_committed else {
+        return Err(validation_failure(format!(
+            "Truth run {run_id} does not belong to context {context_key}"
+        )));
+    };
+    if newer_committed {
+        return Err(DomainError::ConflictViolation {
+            message: format!(
+                "stale Truth run {run_id} cannot overwrite a newer completed Truth write for context {context_key}"
+            ),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 pub struct VerifiedTruthCandidateWrite {
     pub rule_candidate_id: String,

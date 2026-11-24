@@ -411,7 +411,10 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(canonical.len(), 1);
-            assert_eq!(canonical[0].link_recommendation_key, expected.link_recommendation_key);
+            assert_eq!(
+                canonical[0].link_recommendation_key,
+                expected.link_recommendation_key
+            );
             assert_eq!(canonical[0].link_role, expected.link_role);
             assert_eq!(canonical[0].anchor_strategy, expected.anchor_strategy);
         }

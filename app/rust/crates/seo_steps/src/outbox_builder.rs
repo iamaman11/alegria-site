@@ -175,11 +175,24 @@ mod projection_lifecycle_tests {
     fn reverified_rule_reenqueues_the_same_embedding_for_a_new_run() {
         fn event(run: &str) -> OutboxEnvelope {
             qdrant_rule_upsert(
-                run, "rule-1", "ctx", "fee", "fee", "must_pay", "source-1",
-                "verified_rules_4", vec![0.1, 0.2],
+                run,
+                "rule-1",
+                "ctx",
+                "fee",
+                "fee",
+                "must_pay",
+                "source-1",
+                "verified_rules_4",
+                vec![0.1, 0.2],
             )
         }
-        assert_eq!(event("run-1").idempotency_key, event("run-1").idempotency_key);
-        assert_ne!(event("run-1").idempotency_key, event("run-2").idempotency_key);
+        assert_eq!(
+            event("run-1").idempotency_key,
+            event("run-1").idempotency_key
+        );
+        assert_ne!(
+            event("run-1").idempotency_key,
+            event("run-2").idempotency_key
+        );
     }
 }

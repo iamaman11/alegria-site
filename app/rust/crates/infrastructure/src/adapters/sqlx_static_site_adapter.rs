@@ -29,7 +29,14 @@ pub struct StaticCmsLinkRow {
     pub source_page_key: String,
     pub target_page_key: String,
     pub canonical_url_path: String,
+    pub label: String,
     pub required_flag: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticPublishedLinkTargetRow {
+    pub page_node_key: String,
+    pub canonical_url_path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +55,7 @@ pub struct StaticNavigationItemRow {
 pub struct StaticSiteSnapshot {
     pub pages: Vec<StaticCmsPageRow>,
     pub links: Vec<StaticCmsLinkRow>,
+    pub published_link_targets: Vec<StaticPublishedLinkTargetRow>,
     pub navigation_items: Vec<StaticNavigationItemRow>,
 }
 
@@ -115,6 +123,7 @@ fn approved_links_from_revision(
             source_page_key: source_page_key.to_string(),
             target_page_key: link.target_page_key,
             canonical_url_path: link.canonical_url_path,
+            label: link.label,
             required_flag: true,
         });
     }
@@ -133,6 +142,53 @@ fn pages_and_approved_links(
         pages.push(page_from_row(row));
     }
     Ok((pages, links))
+}
+
+/// Candidate releases render only their own scope's pages, while an approved
+/// link may target a published page in another scope. Resolve those published
+/// targets as metadata, never as additional pages to render or navigate.
+async fn load_published_link_targets(
+    pool: &PgPool,
+    pages: &[StaticCmsPageRow],
+    links: &[StaticCmsLinkRow],
+) -> Result<Vec<StaticPublishedLinkTargetRow>, DomainError> {
+    let release_keys = pages
+        .iter()
+        .map(|page| page.page_node_key.as_str())
+        .collect::<BTreeSet<_>>();
+    let external_keys = links
+        .iter()
+        .filter(|link| !release_keys.contains(link.target_page_key.as_str()))
+        .map(|link| link.target_page_key.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if external_keys.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = sqlx::query(
+        r#"
+        SELECT p.page_node_key, p.canonical_url_path
+        FROM site.cms_pages p
+        JOIN site.cms_page_revisions r
+          ON r.revision_id = p.current_revision_id
+         AND r.page_node_key = p.page_node_key
+         AND r.revision_status = 'published'
+        WHERE p.current_status = 'published'
+          AND p.page_node_key = ANY($1)
+        "#,
+    )
+    .bind(&external_keys)
+    .fetch_all(pool)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| StaticPublishedLinkTargetRow {
+            page_node_key: row.get("page_node_key"),
+            canonical_url_path: row.get("canonical_url_path"),
+        })
+        .collect())
 }
 
 /// Public navigation is a versioned planning projection. A rendered release
@@ -224,9 +280,18 @@ pub async fn load_static_site_snapshot(pool: &PgPool) -> Result<StaticSiteSnapsh
     .map_err(classify_sqlx)?;
 
     let (pages, links) = pages_and_approved_links(rows)?;
-    let page_keys = pages.iter().map(|page| page.page_node_key.clone()).collect::<Vec<_>>();
+    let page_keys = pages
+        .iter()
+        .map(|page| page.page_node_key.clone())
+        .collect::<Vec<_>>();
+    let published_link_targets = load_published_link_targets(pool, &pages, &links).await?;
     let navigation_items = load_navigation_items(pool, &page_keys).await?;
-    Ok(StaticSiteSnapshot { pages, links, navigation_items })
+    Ok(StaticSiteSnapshot {
+        pages,
+        links,
+        published_link_targets,
+        navigation_items,
+    })
 }
 
 /// Candidate build snapshot used before final publication.
@@ -324,9 +389,18 @@ pub async fn load_static_site_candidate_snapshot(
         });
     }
 
-    let page_keys = pages.iter().map(|page| page.page_node_key.clone()).collect::<Vec<_>>();
+    let page_keys = pages
+        .iter()
+        .map(|page| page.page_node_key.clone())
+        .collect::<Vec<_>>();
+    let published_link_targets = load_published_link_targets(pool, &pages, &links).await?;
     let navigation_items = load_navigation_items(pool, &page_keys).await?;
-    Ok(StaticSiteSnapshot { pages, links, navigation_items })
+    Ok(StaticSiteSnapshot {
+        pages,
+        links,
+        published_link_targets,
+        navigation_items,
+    })
 }
 
 #[cfg(test)]
@@ -349,6 +423,7 @@ mod approved_revision_link_tests {
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target_page_key, "published-target");
         assert_eq!(links[0].canonical_url_path, "/ru/published-target/");
+        assert_eq!(links[0].label, "Published target");
         assert!(links[0].required_flag);
     }
 
@@ -362,10 +437,14 @@ mod approved_revision_link_tests {
             {"target_page_key":"x", "canonical_url_path":"/ru/x", "label":"X", "link_role":"hub_child"}
         ]);
         assert!(approved_links_from_revision("source", duplicate).is_err());
-        assert!(approved_links_from_revision("source", json!([{
-            "target_page_key": "x", "canonical_url_path": "/ru/x",
-            "label": "X", "link_role": ""
-        }])).is_err());
+        assert!(approved_links_from_revision(
+            "source",
+            json!([{
+                "target_page_key": "x", "canonical_url_path": "/ru/x",
+                "label": "X", "link_role": ""
+            }])
+        )
+        .is_err());
         assert!(approved_links_from_revision("source", json!({"not_links":true})).is_err());
     }
 }

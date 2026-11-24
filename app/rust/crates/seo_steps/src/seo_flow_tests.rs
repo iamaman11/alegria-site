@@ -351,7 +351,9 @@ fn seo_steps_form_publish_ready_pipeline() {
 
     // A generated draft cannot silently downgrade the approved blueprint:
     // removing one of several required sections blocks the actual QA step.
-    let missing_role = expected_required_sections.first().expect("approved required role");
+    let missing_role = expected_required_sections
+        .first()
+        .expect("approved required role");
     let mut incomplete = draft_state.clone().expect("draft for negative QA");
     incomplete
         .sections

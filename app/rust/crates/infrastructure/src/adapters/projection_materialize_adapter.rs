@@ -295,13 +295,12 @@ async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchErro
         ));
     }
     if cmd.entity_key.trim().is_empty() {
-        return Err(DispatchError::contract("QdrantDeleteCommand.entity_key is empty"));
+        return Err(DispatchError::contract(
+            "QdrantDeleteCommand.entity_key is empty",
+        ));
     }
-    let expected_point_id = qdrant_point_id_v1(
-        &cmd.collection_name,
-        &cmd.entity_type,
-        &cmd.entity_key,
-    );
+    let expected_point_id =
+        qdrant_point_id_v1(&cmd.collection_name, &cmd.entity_type, &cmd.entity_key);
     if cmd.point_id != expected_point_id {
         return Err(DispatchError::contract(
             "QdrantDeleteCommand.point_id does not match canonical identity",
@@ -458,8 +457,8 @@ pub async fn dispatch_event(
     if target_system == "qdrant" {
         return match event_type {
             "QdrantUpsertCommand" => {
-                let cmd = QdrantUpsertCommand::decode(payload_bytes)
-                    .map_err(DispatchError::contract)?;
+                let cmd =
+                    QdrantUpsertCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
                 if cmd.collection_name == "verified_rules_4" && cmd.entity_type == "rule_instance" {
                     if cmd.entity_key != aggregate_key {
                         return Err(DispatchError::contract(
@@ -478,8 +477,8 @@ pub async fn dispatch_event(
                         "unsupported QdrantDeleteCommand payload_type",
                     ));
                 }
-                let cmd = QdrantDeleteCommand::decode(payload_bytes)
-                    .map_err(DispatchError::contract)?;
+                let cmd =
+                    QdrantDeleteCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
                 if cmd.entity_key != aggregate_key {
                     return Err(DispatchError::contract(
                         "QdrantDeleteCommand aggregate_key does not match rule identity",

@@ -409,8 +409,7 @@ where
 {
     let uuid = Uuid::parse_str(run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
-    let (input_hash, idempotency_key) =
-        derive_step_keys(run_id, step_name, schema_version, input)?;
+    let (input_hash, idempotency_key) = derive_step_keys(run_id, step_name, schema_version, input)?;
     let status: Option<String> = sqlx::query_scalar(
         "SELECT status FROM pipeline.step_executions
          WHERE run_id=$1 AND step_name=$2 AND idempotency_key=$3 AND input_hash=$4",
@@ -487,8 +486,7 @@ where
 {
     let uuid = Uuid::parse_str(run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
-    let (input_hash, idempotency_key) =
-        derive_step_keys(run_id, step_name, schema_version, input)?;
+    let (input_hash, idempotency_key) = derive_step_keys(run_id, step_name, schema_version, input)?;
     let payload_bytes = output.encode_payload_bytes()?;
     let output_hash = blake3_hex(&payload_bytes);
     sqlx::query(

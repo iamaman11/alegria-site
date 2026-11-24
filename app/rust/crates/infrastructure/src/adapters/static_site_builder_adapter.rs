@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use super::sqlx_static_site_adapter::{
     load_static_site_candidate_snapshot, load_static_site_snapshot, StaticCmsLinkRow,
-    StaticCmsPageRow, StaticNavigationItemRow, StaticSiteSnapshot,
+    StaticCmsPageRow, StaticNavigationItemRow, StaticPublishedLinkTargetRow, StaticSiteSnapshot,
 };
 
 // Bump only when published HTML/layout semantics change. The Worker uses this
@@ -500,6 +500,7 @@ fn json_for_script(value: &Value) -> Result<String> {
 fn render_related_links(
     page: &StaticCmsPageRow,
     pages_by_key: &HashMap<String, StaticCmsPageRow>,
+    published_link_targets: &HashMap<String, StaticPublishedLinkTargetRow>,
     links_by_source: &HashMap<String, Vec<StaticCmsLinkRow>>,
 ) -> Result<(String, usize, usize)> {
     let Some(links) = links_by_source.get(&page.page_node_key) else {
@@ -509,7 +510,15 @@ fn render_related_links(
     let mut rendered_link_count = 0usize;
     let mut items = String::new();
     for link in links {
-        let Some(target) = pages_by_key.get(&link.target_page_key) else {
+        let target_path = pages_by_key
+            .get(&link.target_page_key)
+            .map(|target| target.canonical_url_path.as_str())
+            .or_else(|| {
+                published_link_targets
+                    .get(&link.target_page_key)
+                    .map(|target| target.canonical_url_path.as_str())
+            });
+        let Some(target_path) = target_path else {
             if link.required_flag {
                 anyhow::bail!(
                     "required link target absent from release: {}",
@@ -522,7 +531,7 @@ fn render_related_links(
         // change cannot silently redirect that immutable published link.
         if !link.canonical_url_path.is_empty()
             && normalize_url_path(&link.canonical_url_path)?
-                != normalize_url_path(&target.canonical_url_path)?
+                != normalize_url_path(target_path)?
         {
             anyhow::bail!(
                 "approved CMS link target changed after revision: {}",
@@ -530,7 +539,7 @@ fn render_related_links(
             );
         }
         rendered_link_count += 1;
-        let href = normalize_url_path(&target.canonical_url_path)?;
+        let href = normalize_url_path(target_path)?;
         let marker = if link.required_flag {
             " data-required=\"true\""
         } else {
@@ -540,7 +549,7 @@ fn render_related_links(
             r#"<li{}><a href="{}">{}</a></li>"#,
             marker,
             escape_html(&href),
-            escape_html(&target.title),
+            escape_html(&link.label),
         ));
     }
     if items.is_empty() {
@@ -565,6 +574,7 @@ fn render_page(
     page: &StaticCmsPageRow,
     pages: &[StaticCmsPageRow],
     pages_by_key: &HashMap<String, StaticCmsPageRow>,
+    published_link_targets: &HashMap<String, StaticPublishedLinkTargetRow>,
     links_by_source: &HashMap<String, Vec<StaticCmsLinkRow>>,
     navigation_items: &[StaticNavigationItemRow],
     base_url: &str,
@@ -588,7 +598,7 @@ fn render_page(
     let nav = render_navigation(page, pages_by_key, navigation_items)?;
     let breadcrumbs = render_breadcrumbs(page, pages, base_url)?;
     let (related, required_link_count, rendered_link_count) =
-        render_related_links(page, pages_by_key, links_by_source)?;
+        render_related_links(page, pages_by_key, published_link_targets, links_by_source)?;
     let schema_json = json_for_script(&page_schema_json(page, pages, &canonical, base_url)?)?;
     let navigation_label = if is_russian(&page.locale_code) {
         "Разделы сайта"
@@ -671,6 +681,7 @@ fn render_page(
 fn build_static_artifacts(
     pages: &[StaticCmsPageRow],
     links: &[StaticCmsLinkRow],
+    published_link_targets: &[StaticPublishedLinkTargetRow],
     navigation_items: &[StaticNavigationItemRow],
     base_url: &str,
 ) -> Result<(Vec<StaticArtifact>, Vec<RenderPreviewPage>)> {
@@ -681,6 +692,10 @@ fn build_static_artifacts(
         .iter()
         .map(|page| (page.page_node_key.clone(), page.clone()))
         .collect();
+    let published_link_targets = published_link_targets
+        .iter()
+        .map(|target| (target.page_node_key.clone(), target.clone()))
+        .collect::<HashMap<_, _>>();
     let mut links_by_source: HashMap<String, Vec<StaticCmsLinkRow>> = HashMap::new();
     for link in links {
         links_by_source
@@ -695,7 +710,13 @@ fn build_static_artifacts(
     let mut manifest_pages = Vec::new();
     for page in pages {
         let (html, preview) = render_page(
-            page, pages, &pages_by_key, &links_by_source, navigation_items, base_url,
+            page,
+            pages,
+            &pages_by_key,
+            &published_link_targets,
+            &links_by_source,
+            navigation_items,
+            base_url,
         )?;
         let relative_path = output_path_for_url(&page.canonical_url_path)?;
         artifacts.push(StaticArtifact {
@@ -812,7 +833,11 @@ pub async fn build_static_site(
 ) -> Result<StaticBuildResult> {
     let snapshot = load_static_site_snapshot(pool).await?;
     let (artifacts, previews) = build_static_artifacts(
-        &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
+        &snapshot.pages,
+        &snapshot.links,
+        &snapshot.published_link_targets,
+        &snapshot.navigation_items,
+        base_url,
     )?;
     write_static_artifacts(output_dir, &artifacts)?;
     Ok(StaticBuildResult {
@@ -833,10 +858,13 @@ fn build_incremental_from_snapshot(
         .filter(|key| !key.trim().is_empty())
         .cloned()
         .collect::<std::collections::HashSet<_>>();
-    let (all_artifacts, all_previews) =
-        build_static_artifacts(
-            &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
-        )?;
+    let (all_artifacts, all_previews) = build_static_artifacts(
+        &snapshot.pages,
+        &snapshot.links,
+        &snapshot.published_link_targets,
+        &snapshot.navigation_items,
+        base_url,
+    )?;
     let page_paths = snapshot
         .pages
         .iter()
@@ -895,7 +923,11 @@ pub async fn build_static_site_candidate_incremental(
     // target revision; otherwise the sitemap/manifest would list missing pages.
     // Only the target needs a preview for its per-page editorial gate.
     let (artifacts, all_previews) = build_static_artifacts(
-        &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
+        &snapshot.pages,
+        &snapshot.links,
+        &snapshot.published_link_targets,
+        &snapshot.navigation_items,
+        base_url,
     )?;
     write_static_artifacts(output_dir, &artifacts)?;
     let previews = all_previews
@@ -943,6 +975,7 @@ mod tests {
         };
         let (artifacts, previews) = build_static_artifacts(
             &[target, published_dependency],
+            &[],
             &[],
             &[],
             "https://staging.alegria.by",
@@ -1021,24 +1054,44 @@ mod tests {
         ]);
         let nav = vec![
             StaticNavigationItemRow {
-                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
-                locale: "ru-RU".into(), page_node_key: "a".into(),
-                label: "А".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 1,
+                navigation_tree_key: "tree-ru".into(),
+                market: "BY".into(),
+                locale: "ru-RU".into(),
+                page_node_key: "a".into(),
+                label: "А".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 1,
+                sort_order: 1,
             },
             StaticNavigationItemRow {
-                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
-                locale: "ru-RU".into(), page_node_key: "draft-only".into(),
-                label: "Draft".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 2,
+                navigation_tree_key: "tree-ru".into(),
+                market: "BY".into(),
+                locale: "ru-RU".into(),
+                page_node_key: "draft-only".into(),
+                label: "Draft".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 1,
+                sort_order: 2,
             },
             StaticNavigationItemRow {
-                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
-                locale: "ru-RU".into(), page_node_key: "b".into(),
-                label: "Б".into(), group_sort_order: 1000, hierarchy_depth: 2, sort_order: 3,
+                navigation_tree_key: "tree-ru".into(),
+                market: "BY".into(),
+                locale: "ru-RU".into(),
+                page_node_key: "b".into(),
+                label: "Б".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 2,
+                sort_order: 3,
             },
             StaticNavigationItemRow {
-                navigation_tree_key: "tree-en".into(), market: "GB".into(),
-                locale: "en-US".into(), page_node_key: "foreign".into(),
-                label: "Foreign".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 1,
+                navigation_tree_key: "tree-en".into(),
+                market: "GB".into(),
+                locale: "en-US".into(),
+                page_node_key: "foreign".into(),
+                label: "Foreign".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 1,
+                sort_order: 1,
             },
         ];
         let html = render_navigation(&a, &published, &nav).unwrap();
@@ -1084,15 +1137,19 @@ mod tests {
             source_page_key: "child".into(),
             target_page_key: "parent".into(),
             canonical_url_path: "/ru/garden/".into(),
+            label: "Утверждённая подпись".into(),
             required_flag: true,
         };
         let links = HashMap::from([("child".to_string(), vec![link])]);
-        assert!(render_related_links(&page, &HashMap::new(), &links).is_err());
+        assert!(render_related_links(&page, &HashMap::new(), &HashMap::new(), &links).is_err());
         let targets = HashMap::from([("parent".to_string(), parent.clone())]);
-        let (html, required, rendered) = render_related_links(&page, &targets, &links).unwrap();
+        let (html, required, rendered) =
+            render_related_links(&page, &targets, &HashMap::new(), &links).unwrap();
         assert_eq!((required, rendered), (1, 1));
         assert!(html.contains("Связанные страницы"));
         assert!(html.contains("href=\"/ru/garden\""));
+        assert!(html.contains("Утверждённая подпись"));
+        assert!(!html.contains(">Сад</a>"));
         let changed = StaticCmsPageRow {
             canonical_url_path: "/ru/new-garden".into(),
             ..parent
@@ -1100,9 +1157,39 @@ mod tests {
         assert!(render_related_links(
             &page,
             &HashMap::from([("parent".to_string(), changed)]),
+            &HashMap::new(),
             &links,
         )
         .is_err());
+    }
+
+    #[test]
+    fn cross_scope_published_link_targets_are_metadata_not_rendered_pages() {
+        let source = sample_release_page("source", "/ru/source", "Source");
+        let links = vec![StaticCmsLinkRow {
+            source_page_key: "source".into(),
+            target_page_key: "foreign".into(),
+            canonical_url_path: "/en/foreign".into(),
+            label: "Approved cross-scope title".into(),
+            required_flag: true,
+        }];
+        let published_targets = vec![StaticPublishedLinkTargetRow {
+            page_node_key: "foreign".into(),
+            canonical_url_path: "/en/foreign".into(),
+        }];
+        let (artifacts, previews) = build_static_artifacts(
+            &[source.clone()], &links, &published_targets, &[], "https://example.test",
+        )
+        .unwrap();
+        assert_eq!(previews.len(), 1);
+        assert_eq!(previews[0].required_link_count, 1);
+        assert_eq!(previews[0].rendered_link_count, 1);
+        assert!(previews[0].rendered_html.contains("href=\"/en/foreign\""));
+        assert!(previews[0].rendered_html.contains("Approved cross-scope title"));
+        assert!(!artifacts.iter().any(|artifact| artifact.relative_path == "en/foreign/index.html"));
+        assert!(build_static_artifacts(
+            &[source], &links, &[], &[], "https://example.test",
+        ).is_err());
     }
 
     #[test]
@@ -1140,6 +1227,7 @@ mod tests {
                 source_page_key: page.page_node_key.clone(),
                 target_page_key: "hub".into(),
                 canonical_url_path: "/ru/visa/spain/tourist/".into(),
+                label: "Туристическая виза".into(),
                 required_flag: true,
             }],
         )]);
@@ -1170,6 +1258,7 @@ mod tests {
             &page,
             &pages,
             &targets,
+            &HashMap::new(),
             &links,
             &navigation_items,
             "https://staging.example.test",
@@ -1203,6 +1292,7 @@ mod tests {
             &page,
             &[page.clone()],
             &HashMap::from([(page.page_node_key.clone(), page.clone())]),
+            &HashMap::new(),
             &HashMap::new(),
             &[],
             "https://staging.example.test",
