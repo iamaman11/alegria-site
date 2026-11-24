@@ -414,12 +414,18 @@
             }
         };
         let wire = serde_json::to_vec(&History {
-            events: vec![event("load_verified_support_bundle"), event("run_serp_ingest_step")],
+            events: vec![
+                event("AlegriaActivities::load_verified_support_bundle"),
+                event("AlegriaActivities::run_serp_ingest_step"),
+            ],
         })
         .expect("serialize SDK-generated History envelope");
         assert_eq!(
             scheduled_temporal_activities(&wire),
-            vec!["load_verified_support_bundle", "run_serp_ingest_step"]
+            vec![
+                "AlegriaActivities::load_verified_support_bundle",
+                "AlegriaActivities::run_serp_ingest_step",
+            ]
         );
     }
 
@@ -431,11 +437,11 @@
         let activities = scheduled_temporal_activities(history_json);
         let support_index = activities
             .iter()
-            .position(|activity| activity == "load_verified_support_bundle")
+            .position(|activity| activity == "AlegriaActivities::load_verified_support_bundle")
             .unwrap_or_else(|| panic!("missing scheduled support Activity in {activities:?}"));
         let source_index = activities
             .iter()
-            .position(|activity| activity == "run_serp_ingest_step")
+            .position(|activity| activity == "AlegriaActivities::run_serp_ingest_step")
             .unwrap_or_else(|| panic!("missing scheduled source Activity in {activities:?}"));
         assert_eq!(
             support_index < source_index,
