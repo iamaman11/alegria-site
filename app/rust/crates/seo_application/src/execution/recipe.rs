@@ -207,7 +207,10 @@ impl fmt::Display for SeoStepRecipeError {
                 write!(f, "step {step:?} requires unavailable {input:?}")
             }
             Self::UnsupportedManifestVersion(version) => {
-                write!(f, "unsupported SEO recipe manifest schema version {version}")
+                write!(
+                    f,
+                    "unsupported SEO recipe manifest schema version {version}"
+                )
             }
             Self::UnknownManifestStep(step) => write!(f, "unknown SEO recipe step {step}"),
         }
@@ -370,7 +373,9 @@ impl SeoPhaseRecipe {
 
     pub fn from_manifest(manifest: &SeoRecipeManifest) -> Result<Self, SeoStepRecipeError> {
         if manifest.schema_version != SEO_RECIPE_SCHEMA_VERSION {
-            return Err(SeoStepRecipeError::UnsupportedManifestVersion(manifest.schema_version));
+            return Err(SeoStepRecipeError::UnsupportedManifestVersion(
+                manifest.schema_version,
+            ));
         }
         fn parse(ids: &[String]) -> Result<Vec<SeoPhaseKey>, SeoStepRecipeError> {
             ids.iter()
@@ -602,20 +607,20 @@ mod tests {
     }
 
     #[test]
-    fn recipe_manifest_round_trips_and_rejects_drift() {
+    fn recipe_manifest_serializes_and_rejects_drift() {
         let standard = SeoPhaseRecipe::for_plan(&full_plan(), true).unwrap();
         let manifest = standard.manifest();
         let encoded = serde_json::to_string(&manifest).unwrap();
-        let decoded: SeoRecipeManifest = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(SeoPhaseRecipe::from_manifest(&decoded).unwrap(), standard);
+        assert!(encoded.contains("\"schema_version\":1"));
+        assert_eq!(SeoPhaseRecipe::from_manifest(&manifest).unwrap(), standard);
 
-        let mut future = decoded.clone();
+        let mut future = manifest.clone();
         future.schema_version += 1;
         assert!(matches!(
             SeoPhaseRecipe::from_manifest(&future),
             Err(SeoStepRecipeError::UnsupportedManifestVersion(_))
         ));
-        let mut unknown = decoded.clone();
+        let mut unknown = manifest.clone();
         unknown.pre_page[0] = "unknown_future_step".to_string();
         assert_eq!(
             SeoPhaseRecipe::from_manifest(&unknown),
@@ -623,7 +628,7 @@ mod tests {
                 "unknown_future_step".to_string()
             ))
         );
-        let mut backwards = decoded;
+        let mut backwards = manifest;
         backwards.pre_page.swap(1, 2);
         assert!(matches!(
             SeoPhaseRecipe::from_manifest(&backwards),

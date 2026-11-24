@@ -47,7 +47,10 @@ impl fmt::Display for TruthWriteError {
                 write!(f, "candidate {id} uses an unsupported scoped predicate")
             }
             Self::NonFiniteCandidateValues(id) => {
-                write!(f, "candidate {id} has a non-finite numeric parameter or scope")
+                write!(
+                    f,
+                    "candidate {id} has a non-finite numeric parameter or scope"
+                )
             }
         }
     }
@@ -463,10 +466,8 @@ mod tests {
             Err(TruthWriteError::NonFiniteCandidateValues("official".into()))
         );
         candidate.params = TruthParamValue::default();
-        candidate.scope = TruthParamValue::object([(
-            "scope",
-            TruthParamValue::Decimal(f64::INFINITY),
-        )]);
+        candidate.scope =
+            TruthParamValue::object([("scope", TruthParamValue::Decimal(f64::INFINITY))]);
         assert_eq!(
             validate_verified_truth_write_candidate(&candidate),
             Err(TruthWriteError::NonFiniteCandidateValues("official".into()))

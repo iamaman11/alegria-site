@@ -39,7 +39,9 @@ pub(super) fn validate_prepared_truth_write(
     let mut required_slots = BTreeSet::new();
     for (decision, slot) in decisions.iter().zip(semantic_slots) {
         if decision.rule_candidate_id.trim().is_empty() || slot.trim().is_empty() {
-            return Err(invalid("candidate and semantic slot identities must not be empty"));
+            return Err(invalid(
+                "candidate and semantic slot identities must not be empty",
+            ));
         }
         validate_verified_truth_write_candidate(decision).map_err(|error| {
             DomainError::ValidationFailure {
@@ -69,9 +71,11 @@ pub(super) fn validate_prepared_truth_write(
         if let SemanticTruthWriteOutcome::Verified(selected)
         | SemanticTruthWriteOutcome::Rejected(selected) = outcome
         {
-            if !decisions.iter().zip(semantic_slots).any(|(decision, decision_slot)| {
-                decision_slot == slot && decision == *selected
-            }) {
+            if !decisions
+                .iter()
+                .zip(semantic_slots)
+                .any(|(decision, decision_slot)| decision_slot == slot && decision == *selected)
+            {
                 return Err(invalid(
                     "semantic outcome references a different candidate decision",
                 ));
@@ -196,14 +200,7 @@ mod tests {
         let sections = raw_sections();
         let change = projection();
         assert!(validate_prepared_truth_write(
-            "run",
-            "context",
-            &decisions,
-            &slots,
-            &outcomes,
-            &sections,
-            &change,
-            None,
+            "run", "context", &decisions, &slots, &outcomes, &sections, &change, None,
         )
         .is_ok());
     }
