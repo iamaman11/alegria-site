@@ -115,6 +115,42 @@ pub(super) fn validate_prepared_truth_write(
     Ok(())
 }
 
+/// An already-projected global rule must never be rewritten unless this
+/// transaction also stages its replacement Qdrant revision. Whether an
+/// embedding is optional for *new* Truth must not silently unproject a rule
+/// that has been materialized before. SQL checks projection history after
+/// the context/rule advisory locks; this pure function only identifies keys
+/// with no corresponding prepared intent.
+pub(super) fn unstaged_global_verified_rule_ids(
+    semantic_outcomes: &BTreeMap<String, SemanticTruthWriteOutcome<'_>>,
+    projection_change: &VerifiedRuleUpsertBatch,
+    projection_embeddings: Option<&VerifiedRuleEmbeddingBatch>,
+) -> Vec<String> {
+    let staged_upserts = if projection_embeddings.is_some() {
+        projection_change
+            .upserts
+            .iter()
+            .map(|candidate| candidate.rule_instance_id.as_str())
+            .collect::<BTreeSet<_>>()
+    } else {
+        BTreeSet::new()
+    };
+    semantic_outcomes
+        .iter()
+        .filter_map(|(rule_id, outcome)| match outcome {
+            SemanticTruthWriteOutcome::Verified(decision)
+                if matches!(
+                    truth_domain::truth_candidates::truth_scope_target(&decision.scope),
+                    Some(truth_domain::truth_candidates::TruthScopeTarget::Global)
+                ) && !staged_upserts.contains(rule_id.as_str()) =>
+            {
+                Some(rule_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub(super) fn serialize_truth_value(
     value: &truth_domain::truth_candidates::TruthParamValue,
     label: &str,
@@ -203,6 +239,40 @@ mod tests {
             "run", "context", &decisions, &slots, &outcomes, &sections, &change, None,
         )
         .is_ok());
+    }
+
+    #[test]
+    fn projected_global_truth_requires_a_real_upsert_intent_on_every_reverification() {
+        let global = decision("candidate-global");
+        let mut scoped = decision("candidate-scoped");
+        scoped.scope = serde_json::from_value(serde_json::json!({
+            "applicant_profile": "student"
+        }))
+        .unwrap();
+        let outcomes = BTreeMap::from([
+            ("slot".into(), SemanticTruthWriteOutcome::Verified(&global)),
+            (
+                "scoped-slot".into(),
+                SemanticTruthWriteOutcome::Verified(&scoped),
+            ),
+        ]);
+        let change = projection();
+        assert_eq!(
+            unstaged_global_verified_rule_ids(&outcomes, &change, None),
+            vec!["slot".to_string()]
+        );
+        let embeddings = VerifiedRuleEmbeddingBatch {
+            model: "voyage".into(),
+            vectors: vec![vec![0.0; 1024]],
+        };
+        assert!(unstaged_global_verified_rule_ids(&outcomes, &change, Some(&embeddings))
+            .is_empty());
+        let mut not_staged = change;
+        not_staged.upserts.clear();
+        assert_eq!(
+            unstaged_global_verified_rule_ids(&outcomes, &not_staged, Some(&embeddings)),
+            vec!["slot".to_string()]
+        );
     }
 
     #[test]

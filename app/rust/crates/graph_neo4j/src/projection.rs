@@ -5,7 +5,7 @@
 //! about SQLx, PostgreSQL pools, outbox delivery, or workflow orchestration.
 //! A change to the graph schema therefore belongs to the graph owner.
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use neo4rs::{query, Graph};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -326,48 +326,87 @@ pub async fn upsert_content_gap(graph: &Graph, row: ContentGapProjection) -> Res
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct LinkRecommendationProjection {
     pub link_recommendation_key: String,
+    pub scope_signature: String,
     pub source_page_key: String,
     pub target_page_key: String,
     pub link_role: String,
     pub anchor_strategy: String,
     pub required_flag: bool,
-    pub score_text: String,
+    /// Finite score in [0, 1], persisted as a Neo4j float for graph readers.
+    pub score: f64,
     pub status: String,
 }
 
 const LINK_RECOMMENDATION_CYPHER: &str = r#"
     MATCH (source:PageNode {page_node_key: $source_page_key})
     MATCH (target:PageNode {page_node_key: $target_page_key})
+    WHERE source.scope_signature = $scope_signature
+      AND target.scope_signature = $scope_signature
     MERGE (source)-[r:RECOMMENDS_LINK_TO {link_recommendation_key: $link_recommendation_key}]->(target)
     SET r.link_role = $link_role,
         r.anchor_strategy = $anchor_strategy,
         r.required_flag = $required_flag,
         r.score = $score,
         r.status = $status
+    RETURN count(r) AS projected_count
     "#;
 
 /// Call only after the authoritative PageNode rows of both endpoints have
 /// been materialized. Link events can be claimed before PageNode events.
+/// A missing or differently scoped endpoint must fail the Outbox delivery,
+/// rather than silently ACK a relationship that Neo4j did not materialize.
 pub async fn upsert_link_recommendation(
     graph: &Graph,
     row: LinkRecommendationProjection,
 ) -> Result<()> {
-    graph.run(link_recommendation_query(row)).await?;
+    if row.scope_signature.trim().is_empty() {
+        bail!("link recommendation projection requires a nonempty scope_signature");
+    }
+    if !row.score.is_finite() || !(0.0..=1.0).contains(&row.score) {
+        bail!("link recommendation projection score must be a finite number between 0 and 1");
+    }
+    let link_recommendation_key = row.link_recommendation_key.clone();
+    let mut rows = graph
+        .execute(link_recommendation_query(row))
+        .await
+        .context("execute scoped Neo4j link recommendation projection")?;
+    let count = rows
+        .next()
+        .await
+        .context("read scoped Neo4j link recommendation projection result")?
+        .context("Neo4j link recommendation projection returned no count")?
+        .get::<i64>("projected_count")
+        .context("read Neo4j projected_count")?;
+    // The stream is fully consumed before the Outbox caller is allowed to ACK.
+    if rows
+        .next()
+        .await
+        .context("finish scoped Neo4j link recommendation projection stream")?
+        .is_some()
+    {
+        bail!("link recommendation projection returned more than one result row");
+    }
+    if count != 1 {
+        bail!(
+            "link recommendation {link_recommendation_key} expected one same-scope source/target pair, projected {count}"
+        );
+    }
     Ok(())
 }
 
 fn link_recommendation_query(row: LinkRecommendationProjection) -> neo4rs::Query {
     query(LINK_RECOMMENDATION_CYPHER)
         .param("link_recommendation_key", row.link_recommendation_key)
+        .param("scope_signature", row.scope_signature)
         .param("source_page_key", row.source_page_key)
         .param("target_page_key", row.target_page_key)
         .param("link_role", row.link_role)
         .param("anchor_strategy", row.anchor_strategy)
         .param("required_flag", row.required_flag)
-        .param("score", row.score_text)
+        .param("score", row.score)
         .param("status", row.status)
 }
 
@@ -457,7 +496,10 @@ mod projection_contract_tests {
 
         assert!(LINK_RECOMMENDATION_CYPHER.contains("MATCH (source:PageNode"));
         assert!(LINK_RECOMMENDATION_CYPHER.contains("MATCH (target:PageNode"));
+        assert!(LINK_RECOMMENDATION_CYPHER.contains("source.scope_signature = $scope_signature"));
+        assert!(LINK_RECOMMENDATION_CYPHER.contains("target.scope_signature = $scope_signature"));
         assert!(LINK_RECOMMENDATION_CYPHER.contains("MERGE (source)-[r:RECOMMENDS_LINK_TO"));
+        assert!(LINK_RECOMMENDATION_CYPHER.contains("RETURN count(r) AS projected_count"));
         let actual: BTreeSet<String> = LINK_RECOMMENDATION_CYPHER
             .split('$')
             .skip(1)
@@ -470,6 +512,7 @@ mod projection_contract_tests {
             .collect();
         let expected: BTreeSet<String> = [
             "link_recommendation_key",
+            "scope_signature",
             "source_page_key",
             "target_page_key",
             "link_role",

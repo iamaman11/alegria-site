@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use sqlx::Row;
 use std::env;
 
@@ -288,7 +288,7 @@ async fn materialize_link_recommendation(
 ) -> Result<()> {
     let Some(row) = sqlx::query(
         r#"
-        SELECT link_recommendation_key, source_page_key, target_page_key, link_role,
+        SELECT link_recommendation_key, scope_signature, source_page_key, target_page_key, link_role,
                anchor_strategy, required_flag, score::text AS score_text, status
         FROM site.link_recommendations
         WHERE link_recommendation_key = $1
@@ -300,6 +300,17 @@ async fn materialize_link_recommendation(
     else {
         bail!("link_recommendation not found: {link_recommendation_key}");
     };
+
+    // PostgreSQL NUMERIC is transported as text to avoid a new decimal crate,
+    // but Neo4j graph readback requires a native float. Never persist a text
+    // score (silently interpreted as 0 by the current graph reader).
+    let score_text: String = row.get("score_text");
+    let score = score_text.parse::<f64>().with_context(|| {
+        format!("invalid link recommendation score for {link_recommendation_key}")
+    })?;
+    if !score.is_finite() || !(0.0..=1.0).contains(&score) {
+        bail!("invalid link recommendation score outside finite [0,1] for {link_recommendation_key}");
+    }
 
     // A link outbox event can be claimed before the PageNode events. Materialize
     // both endpoints from their authoritative SQL rows before creating the
@@ -314,12 +325,13 @@ async fn materialize_link_recommendation(
         graph,
         projection::LinkRecommendationProjection {
             link_recommendation_key: row.get("link_recommendation_key"),
+            scope_signature: row.get("scope_signature"),
             source_page_key,
             target_page_key,
             link_role: row.get("link_role"),
             anchor_strategy: row.get("anchor_strategy"),
             required_flag: row.get("required_flag"),
-            score_text: row.get("score_text"),
+            score,
             status: row.get("status"),
         },
     )

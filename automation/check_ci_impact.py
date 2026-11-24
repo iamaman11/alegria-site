@@ -728,6 +728,16 @@ class ImpactFixtures(unittest.TestCase):
              "outbox_worker", "cli_tools", "integration_harness"},
         )
         self.assertEqual(got["selected_suites"], ["graph_query"])
+        self.assertEqual(
+            dict(suite_commands_for_report(got))["graph_query"],
+            ["cargo", "test", "-p", "integration_harness", "--features", "e2e",
+             "--lib", "graph_capability_", "--locked", "--", "--nocapture"],
+        )
+
+    def test_new_graph_link_e2e_source_selects_existing_graph_owner(self) -> None:
+        result = self.impact("app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs")
+        self.assertIn("graph_query", result["selected_suites"])
+        self.assertEqual(dict(suite_commands_for_report(result))["graph_query"][7], "graph_capability_")
 
     def test_http_change_includes_gsc_only(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/http_client/src/lib.rs")["affected_crates"]), {"http_client", "gsc_sync"})

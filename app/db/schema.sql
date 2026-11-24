@@ -381,6 +381,7 @@ CREATE TABLE IF NOT EXISTS system.sync_outbox (
     idempotency_key TEXT NOT NULL DEFAULT '',
     payload_bytes  BYTEA NOT NULL DEFAULT '\x',
     payload_hash   TEXT NOT NULL,           -- BLAKE3 через Rust primitives::hash::content_hash_v1
+    projection_revision BIGINT,             -- causal per-rule counter; NULL for other targets and legacy rows
     status         TEXT NOT NULL DEFAULT 'pending'
         CHECK (status IN ('pending','processing','done','failed')),
     retry_count    INTEGER NOT NULL DEFAULT 0,
@@ -410,7 +411,64 @@ ALTER TABLE system.sync_outbox
 ALTER TABLE system.sync_outbox
     ADD COLUMN IF NOT EXISTS payload_bytes BYTEA NOT NULL DEFAULT '\x';
 ALTER TABLE system.sync_outbox
+    ADD COLUMN IF NOT EXISTS projection_revision BIGINT;
+ALTER TABLE system.sync_outbox
     DROP COLUMN IF EXISTS payload_json;
+
+-- Do not invent order for pre-revision events. NOT VALID deliberately leaves
+-- historical rows untouched, but rejects all new inserts AND updates of an
+-- unversioned verified-rule row (including attempts to claim it for delivery).
+-- A real operator cutover is required for ANY historical unversioned intent.
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint
+                   WHERE conrelid='system.sync_outbox'::regclass
+                     AND conname='sync_outbox_verified_rule_revision_check') THEN
+        ALTER TABLE system.sync_outbox
+            ADD CONSTRAINT sync_outbox_verified_rule_revision_check
+            CHECK (NOT (target_system='qdrant' AND aggregate_type='rule_instance')
+                   OR (projection_revision IS NOT NULL AND projection_revision > 0)) NOT VALID;
+    END IF;
+END $$;
+
+-- This counter is an identity-local, durable ordering authority. Its updates
+-- and Outbox insert commit in the canonical Truth transaction under the
+-- identical per-rule advisory lock used by the dispatch fence.
+CREATE TABLE IF NOT EXISTS system.verified_rule_projection_heads (
+    aggregate_key TEXT PRIMARY KEY CHECK (aggregate_key <> '' AND btrim(aggregate_key)=aggregate_key),
+    current_revision BIGINT NOT NULL CHECK (current_revision > 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_verified_rule_revision
+    ON system.sync_outbox(aggregate_key, projection_revision)
+    WHERE target_system='qdrant' AND aggregate_type='rule_instance'
+      AND projection_revision IS NOT NULL;
+
+-- Revision and immutable event identity cannot be rewritten after staging;
+-- only status, delivery lease and retry metadata may change. In particular,
+-- no old unversioned event can be silently 'repaired' via an UPDATE.
+CREATE OR REPLACE FUNCTION system.guard_verified_rule_outbox_identity() RETURNS trigger AS $$
+BEGIN
+    IF ROW(OLD.run_id, OLD.aggregate_type, OLD.aggregate_key, OLD.target_system,
+           OLD.event_type, OLD.payload_type, OLD.schema_version, OLD.idempotency_key,
+           OLD.payload_bytes, OLD.payload_hash, OLD.projection_revision)
+       IS DISTINCT FROM
+       ROW(NEW.run_id, NEW.aggregate_type, NEW.aggregate_key, NEW.target_system,
+           NEW.event_type, NEW.payload_type, NEW.schema_version, NEW.idempotency_key,
+           NEW.payload_bytes, NEW.payload_hash, NEW.projection_revision) THEN
+        RAISE EXCEPTION 'verified-rule Outbox identity and revision are immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS trg_verified_rule_outbox_identity ON system.sync_outbox;
+CREATE TRIGGER trg_verified_rule_outbox_identity
+    BEFORE UPDATE ON system.sync_outbox
+    FOR EACH ROW
+    WHEN ((OLD.target_system='qdrant' AND OLD.aggregate_type='rule_instance')
+       OR (NEW.target_system='qdrant' AND NEW.aggregate_type='rule_instance'))
+    EXECUTE FUNCTION system.guard_verified_rule_outbox_identity();
 
 -- Индекс для SELECT ... FOR UPDATE SKIP LOCKED поллинга
 CREATE INDEX IF NOT EXISTS idx_system_sync_outbox_pending

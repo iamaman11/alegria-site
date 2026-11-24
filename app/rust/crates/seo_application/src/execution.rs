@@ -345,7 +345,9 @@ pub fn planning_phase_keys(plan: &SeoExecutionPlan, refresh_support: bool) -> Ve
 }
 
 pub fn should_publish(plan: &SeoExecutionPlan) -> bool {
-    if plan.policy.persistence == RunPersistencePolicy::PersistWithoutPublish {
+    // Publication requires explicit write permission from both orthogonal
+    // policies. A custom run policy must never turn a DryRun into a publisher.
+    if plan.policy.persistence != RunPersistencePolicy::PersistAll {
         return false;
     }
     matches!(plan.policy.publish, RunPublishPolicy::PublishIfApproved)
@@ -460,6 +462,22 @@ mod tests {
             },
         };
         assert!(!page_phase_keys(&plan).contains(&SeoPhaseKey::CmsRequestReview));
+    }
+
+    #[test]
+    fn dry_run_cannot_admit_publish_effects_from_a_conflicting_policy() {
+        let plan = SeoExecutionPlan {
+            scenario: SeoScenarioKind::Full,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy {
+                persistence: RunPersistencePolicy::DryRun,
+                interaction: RunInteractionPolicy::FailIfHitlRequired,
+                projection: RunProjectionPolicy::WarnOnly,
+                publish: RunPublishPolicy::PublishIfApproved,
+            },
+        };
+        assert!(!should_publish(&plan));
+        assert!(!page_phase_keys(&plan).contains(&SeoPhaseKey::FinalizePublish));
     }
 
     #[test]

@@ -23,7 +23,9 @@ use super::{
 };
 
 mod preflight;
-use preflight::{serialize_truth_value, validate_prepared_truth_write};
+use preflight::{
+    serialize_truth_value, unstaged_global_verified_rule_ids, validate_prepared_truth_write,
+};
 
 /// Read-only idempotent replay before any external embedding call. The
 /// transaction below repeats this check under the context lock.
@@ -113,6 +115,28 @@ where
     }
     sqlx_seo_adapter::reject_stale_truth_run_in_tx(&mut tx, run_id, context_key).await?;
     sqlx_seo_adapter::lock_truth_rule_projections_in_tx(&mut tx, semantic_outcomes.keys()).await?;
+
+    // Optional Voyage embedding is safe for a never-projected identity, but
+    // not for a previously materialized global rule. Otherwise a new Truth
+    // commit would leave its old Qdrant point live with no revisioned Outbox
+    // replacement. The PG helper checks both active and tombstoned projection
+    // history while these SAME per-rule locks are held. Scoped verification
+    // may proceed because it is explicitly tombstoned below.
+    let unstaged_global_rules = unstaged_global_verified_rule_ids(
+        &semantic_outcomes,
+        projection_change,
+        projection_embeddings.as_ref(),
+    );
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &unstaged_global_rules,
+    )
+    .await
+    .map_err(|error| DomainError::InfraUnavailable {
+        message: format!(
+            "verified Truth global-rule update lacks atomic revisioned Qdrant intent: {error}"
+        ),
+    })?;
 
     let mut persisted_candidate_ids = BTreeMap::<String, String>::new();
     for (decision, semantic_slot) in decisions.iter().zip(semantic_slots) {

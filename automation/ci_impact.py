@@ -384,13 +384,19 @@ SUITE_OWNERS = {
         ),
     },
     "graph_query": {
-        "paths": {"app/rust/crates/runtime_composition/src/adapters/graph_capability_adapter.rs"},
+        "paths": {
+            "app/rust/crates/runtime_composition/src/adapters/graph_capability_adapter.rs",
+            "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+        },
         "prefixes": ("app/rust/crates/graph_neo4j/",),
         "lock_crates": {"graph_neo4j"},
         "on_unknown_global_input": False,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "graph_capability_probe_binds_context_key", "--locked", "--", "--nocapture",
+            # Both the context-key probe and real Neo4j scoped-edge regression
+            # share the graph capability prefix. This selects BOTH without
+            # adding a suite, job or unguarded provider-side traversal.
+            "--lib", "graph_capability_", "--locked", "--", "--nocapture",
         ),
     },
     "vector_projection": {

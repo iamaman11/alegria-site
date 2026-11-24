@@ -142,6 +142,22 @@ pub async fn outbox_emit_many_in_tx(
     })?;
     let mut emitted: i64 = 0;
     for event in events {
+        if event.target_system == "qdrant" && event.aggregate_type == "rule_instance" {
+            // PostgreSQL alone owns the monotonically increasing per-rule
+            // revision. The owner allocates it with the corresponding Outbox
+            // insert in this SAME canonical Truth transaction, under the
+            // uncertainty fence. An exact replay returns zero without
+            // consuming a new revision. Generic inserts must never write an
+            // unversioned verified-rule Qdrant intent.
+            emitted += postgres_store::sqlx_outbox_adapter::insert_verified_rule_outbox_in_tx(
+                tx, event,
+            )
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!("verified-rule revisioned Outbox enqueue rejected: {err}"),
+            })?;
+            continue;
+        }
         let payload_hash = primitives::hash::blake3_hex(event.payload_bytes());
 
         let res = sqlx::query(

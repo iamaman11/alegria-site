@@ -27,7 +27,12 @@ async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str)
         .execute(pool)
         .await
         .unwrap();
-    sqlx::query("TRUNCATE TABLE system.sync_outbox RESTART IDENTITY CASCADE")
+    // Outbox revisions and their identity-local heads are one logical ledger.
+    // Reset both in the same statement: leaving the heads behind would make
+    // the next real Truth→Outbox transaction fail history-integrity checks.
+    sqlx::query(
+        "TRUNCATE TABLE system.sync_outbox, system.verified_rule_projection_heads RESTART IDENTITY CASCADE",
+    )
         .execute(pool)
         .await
         .unwrap();

@@ -784,6 +784,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn planning_only_rejects_stale_truth_support_before_repository_io() {
+        use SeoPhaseKey::RefreshVerifiedSupportBundle;
+
+        let repo = PlanningPortsOnly::default();
+        let request = narrow_scenario_request(SeoScenarioKind::PlanningOnly);
+        let plan = build_execution_plan(&request);
+        let standard = SeoPhaseRecipe::for_plan(&plan, true).unwrap();
+        let stale_recipe = SeoPhaseRecipe::compose_pre_page(
+            standard
+                .pre_page_steps()
+                .iter()
+                .copied()
+                .filter(|step| *step != RefreshVerifiedSupportBundle)
+                .collect(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            execute_planning_only_with_recipe(&repo, &request, &stale_recipe).await,
+            Err(DomainError::ContractViolation { .. })
+        ));
+        assert_eq!(
+            repo.fixture
+                .support_calls
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "stale support must fail before any external effects"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_publish_conflict_fails_before_any_scenario_io() {
+        let repo = FakeRepo::default();
+        let mut request = narrow_scenario_request(SeoScenarioKind::Full);
+        request.policy.publish = crate::execution::RunPublishPolicy::PublishIfApproved;
+        let recipe = SeoPhaseRecipe::for_plan(&build_execution_plan(&request), true).unwrap();
+
+        assert!(matches!(
+            execute_site_build_scenario_with_recipe(&repo, &request, &recipe).await,
+            Err(DomainError::ContractViolation { .. })
+        ));
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "effect-policy conflicts must be rejected before any repository I/O"
+        );
+    }
+
+    #[tokio::test]
     async fn planning_only_rejects_foreign_recipe_and_request_without_io() {
         let repo = PlanningPortsOnly::default();
         let request = narrow_scenario_request(SeoScenarioKind::PlanningOnly);

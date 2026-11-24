@@ -37,6 +37,9 @@ pub struct OutboxEvent {
     pub schema_version: i32,
     pub idempotency_key: String,
     pub payload_bytes: Vec<u8>,
+    /// Monotonic per-point causal position, allocated with canonical Truth.
+    /// None is an unordered historical event; it must never reach Qdrant.
+    pub projection_revision: Option<i64>,
     pub retry_count: i32,
     pub lease_worker_id: String,
     pub lease_locked_at: OffsetDateTime,
@@ -65,6 +68,14 @@ pub enum VerifiedRuleTruthFenceError {
     InvalidIdentity,
     #[error("legacy Truth mutation of already projected verified rule {aggregate_key} requires atomic PostgreSQL registry and Qdrant Outbox intent")]
     NonAtomicLegacyProjection { aggregate_key: String },
+    #[error("invalid verified-rule Outbox contract: {0}")]
+    InvalidOutboxContract(&'static str),
+    #[error("verified-rule projection identity {aggregate_key} has unordered historical Outbox event {event_id}; manual cutover required")]
+    LegacyUnordered { aggregate_key: String, event_id: Uuid },
+    #[error("verified-rule Outbox idempotency key conflicts with a different event or stale revision for {aggregate_key}")]
+    IdempotencyConflict { aggregate_key: String },
+    #[error("verified-rule projection revision head and durable Outbox disagree for {aggregate_key}; manual reconciliation required")]
+    RevisionHistoryCorrupt { aggregate_key: String },
     #[error("verified-rule Truth mutation blocked: Qdrant outcome of event {event_id} for {aggregate_key} is uncertain; manually reconcile the remote effect first")]
     Uncertain {
         event_id: Uuid,
@@ -109,7 +120,7 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
          WHERE target_system='qdrant' AND aggregate_type='rule_instance'
            AND aggregate_key=ANY($1::text[])
            AND status='failed' AND last_error=$2
-         ORDER BY created_at, event_id LIMIT 1",
+         ORDER BY aggregate_key, event_id LIMIT 1",
     )
     .bind(&ordered)
     .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
@@ -121,24 +132,170 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
             aggregate_key,
         });
     }
+    let unordered: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT event_id, aggregate_key FROM system.sync_outbox
+         WHERE target_system='qdrant' AND aggregate_type='rule_instance'
+           AND aggregate_key=ANY($1::text[]) AND projection_revision IS NULL
+         ORDER BY aggregate_key LIMIT 1",
+    )
+    .bind(&ordered)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if let Some((event_id, aggregate_key)) = unordered {
+        return Err(VerifiedRuleTruthFenceError::LegacyUnordered {
+            event_id,
+            aggregate_key,
+        });
+    }
     Ok(())
+}
+
+fn validate_verified_rule_envelope(event: &OutboxEnvelope) -> std::result::Result<(), &'static str> {
+    if event.target_system != "qdrant" || event.aggregate_type != "rule_instance" {
+        return Err("expected qdrant/rule_instance identity");
+    }
+    if event.aggregate_key.is_empty() || event.aggregate_key.trim() != event.aggregate_key {
+        return Err("empty or non-canonical rule identity");
+    }
+    let expected_payload_type = match event.event_type.as_str() {
+        "QdrantUpsertCommand" => "alegria.outbox.qdrant_upsert_command.v1",
+        "QdrantDeleteCommand" => "alegria.outbox.qdrant_delete_command.v1",
+        _ => return Err("unsupported verified-rule operation"),
+    };
+    if event.payload_type != expected_payload_type || event.schema_version != 1 {
+        return Err("unsupported verified-rule wire contract");
+    }
+    if event.payload_bytes.is_empty() || event.idempotency_key.is_empty()
+        || event.run_id.is_empty()
+        || event.idempotency_key.trim() != event.idempotency_key
+        || event.run_id.trim() != event.run_id
+    {
+        return Err("missing or non-canonical verified-rule payload/idempotency identity");
+    }
+    Ok(())
+}
+
+/// Sole PostgreSQL-owned enqueue boundary for canonical verified_rules_4
+/// intents. The caller has already changed Truth/registry in `tx`; any
+/// failure here rolls those changes back with the whole transaction.
+///
+/// Under exactly the dispatcher's advisory lock, first validate unresolved
+/// historical effects and idempotency, then reserve the next *per-point*
+/// revision and insert its effect. Duplicate exact latest intent returns 0
+/// without reserving another position; a replay of a superseded historical
+/// intent is rejected so it cannot silently replace a new Truth mutation.
+pub async fn insert_verified_rule_outbox_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    event: &OutboxEnvelope,
+) -> std::result::Result<i64, VerifiedRuleTruthFenceError> {
+    validate_verified_rule_envelope(event)
+        .map_err(VerifiedRuleTruthFenceError::InvalidOutboxContract)?;
+    lock_and_ensure_verified_rules_writable_in_tx(tx, &[event.aggregate_key.clone()]).await?;
+    let hash = primitives::hash::blake3_hex(event.payload_bytes());
+
+    let existing = sqlx::query(
+        "SELECT run_id, aggregate_type, target_system, payload_type,
+                schema_version, payload_hash, payload_bytes, projection_revision
+         FROM system.sync_outbox
+         WHERE aggregate_key=$1 AND event_type=$2 AND idempotency_key=$3",
+    )
+    .bind(&event.aggregate_key)
+    .bind(&event.event_type)
+    .bind(&event.idempotency_key)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT current_revision FROM system.verified_rule_projection_heads
+         WHERE aggregate_key=$1",
+    )
+    .bind(&event.aggregate_key)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let persisted_max: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(projection_revision) FROM system.sync_outbox
+         WHERE target_system='qdrant' AND aggregate_type='rule_instance'
+           AND aggregate_key=$1",
+    )
+    .bind(&event.aggregate_key)
+    .fetch_one(&mut **tx)
+    .await?;
+    if head != persisted_max {
+        return Err(VerifiedRuleTruthFenceError::RevisionHistoryCorrupt {
+            aggregate_key: event.aggregate_key.clone(),
+        });
+    }
+
+    if let Some(row) = existing {
+        let revision: Option<i64> = row.try_get("projection_revision")?;
+        let exact = row.try_get::<String, _>("run_id")? == event.run_id
+            && row.try_get::<String, _>("aggregate_type")? == event.aggregate_type
+            && row.try_get::<String, _>("target_system")? == event.target_system
+            && row.try_get::<String, _>("payload_type")? == event.payload_type
+            && row.try_get::<i32, _>("schema_version")? == event.schema_version
+            && row.try_get::<String, _>("payload_hash")? == hash
+            && row.try_get::<Vec<u8>, _>("payload_bytes")? == event.payload_bytes
+            && revision == head;
+        return if exact {
+            Ok(0)
+        } else {
+            Err(VerifiedRuleTruthFenceError::IdempotencyConflict {
+                aggregate_key: event.aggregate_key.clone(),
+            })
+        };
+    }
+
+    let revision: i64 = sqlx::query_scalar(
+        "INSERT INTO system.verified_rule_projection_heads
+           (aggregate_key, current_revision) VALUES ($1, 1)
+         ON CONFLICT (aggregate_key) DO UPDATE
+           SET current_revision=system.verified_rule_projection_heads.current_revision + 1,
+               updated_at=now()
+         RETURNING current_revision",
+    )
+    .bind(&event.aggregate_key)
+    .fetch_one(&mut **tx)
+    .await?;
+
+    let inserted = sqlx::query(
+        "INSERT INTO system.sync_outbox
+           (run_id, aggregate_type, aggregate_key, target_system, event_type,
+            payload_type, schema_version, idempotency_key, payload_bytes,
+            payload_hash, projection_revision, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,clock_timestamp())",
+    )
+    .bind(&event.run_id)
+    .bind(&event.aggregate_type)
+    .bind(&event.aggregate_key)
+    .bind(&event.target_system)
+    .bind(&event.event_type)
+    .bind(&event.payload_type)
+    .bind(event.schema_version)
+    .bind(&event.idempotency_key)
+    .bind(event.payload_bytes())
+    .bind(&hash)
+    .bind(revision)
+    .execute(&mut **tx)
+    .await?;
+    Ok(inserted.rows_affected() as i64)
 }
 
 /// Fail-closed compatibility boundary for legacy Truth writers that cannot
 /// atomically stage a verified-rule registry change AND its Qdrant Outbox
 /// intent in the same PostgreSQL transaction.
 ///
-/// A legacy writer may still modify a rule that has never had an active
-/// `verified_rules_4` point. It MUST NOT mutate an already projected rule:
-/// that would change canonical Truth while leaving Qdrant's old point live,
-/// with no corresponding durable repair intent. This is intentionally a
-/// temporary loss of legacy functionality pending its atomic writer cutover.
+/// A legacy writer may still modify only rules that have NEVER had an active
+/// `verified_rules_4` point, Outbox history, or revision head. Even a deleted
+/// point can be reverified later: ignoring its prior projection history would
+/// let an atomic new writer race a legacy Truth-only writer. Temporary loss
+/// of legacy mutation functionality is intentional pending atomic cutover.
 ///
 /// This helper must be called BEFORE any canonical rule mutation and within
 /// that mutation's own transaction. It obtains the usual per-point advisory
 /// locks and rejects unresolved remote outcomes first; the registry check is
 /// then protected against concurrent canonical projection writers by the
-/// SAME locks, so an active point cannot appear between check and mutation.
+/// SAME locks, so a current or historical projection identity cannot change
+/// between the check and mutation.
 pub async fn lock_and_reject_projected_legacy_truth_write_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rule_ids: &[String],
@@ -148,10 +305,18 @@ pub async fn lock_and_reject_projected_legacy_truth_write_in_tx(
         return Ok(());
     }
     let projected_rule: Option<String> = sqlx::query_scalar(
-        "SELECT entity_key FROM kb.qdrant_points
-         WHERE collection_name='verified_rules_4'
-           AND entity_type='rule_instance' AND entity_key=ANY($1::text[])
-         ORDER BY entity_key LIMIT 1",
+        "SELECT aggregate_key FROM (
+           SELECT entity_key AS aggregate_key FROM kb.qdrant_points
+           WHERE collection_name='verified_rules_4'
+             AND entity_type='rule_instance' AND entity_key=ANY($1::text[])
+           UNION
+           SELECT aggregate_key FROM system.sync_outbox
+           WHERE target_system='qdrant' AND aggregate_type='rule_instance'
+             AND aggregate_key=ANY($1::text[])
+           UNION
+           SELECT aggregate_key FROM system.verified_rule_projection_heads
+           WHERE aggregate_key=ANY($1::text[])
+         ) projected ORDER BY aggregate_key LIMIT 1",
     )
     .bind(rule_ids)
     .fetch_optional(&mut **tx)
@@ -179,8 +344,8 @@ pub enum VerifiedRuleDispatchError<E> {
     BlockedUncertain {
         event_id: Uuid,
     },
-    /// UUIDv4 is not an ordering tie-breaker. A monotonic per-point revision
-    /// is required to resolve the older-vs-newer intent correctly.
+    /// Legacy intent without an authentic writer revision, or a broken
+    /// correspondence between Outbox history and the per-point revision head.
     AmbiguousOrdering,
     Database(sqlx::Error),
     /// An RPC may have reached the provider before failing or being cancelled.
@@ -230,14 +395,10 @@ fn validate_verified_rule_event(event: &OutboxEvent) -> std::result::Result<(), 
     if event.payload_bytes.is_empty() || event.lease_worker_id.is_empty() {
         return Err("missing payload or worker lease identity");
     }
+    if !matches!(event.projection_revision, Some(revision) if revision > 0) {
+        return Err("missing positive producer-owned projection_revision");
+    }
     Ok(())
-}
-
-/// Timestamp ties cannot be broken by random UUIDv4 ordering. This narrow
-/// guard refuses known ambiguity; it is *not* a substitute for a monotonic
-/// writer-owned revision (timestamps can regress or precede commit order).
-fn latest_intent_timestamp_unambiguous(events: &[(Uuid, String, OffsetDateTime)]) -> bool {
-    events.len() < 2 || events[0].2 != events[1].2
 }
 
 /// Execute the *single* verified-rule projection effect while preserving the
@@ -252,7 +413,7 @@ fn latest_intent_timestamp_unambiguous(events: &[(Uuid, String, OffsetDateTime)]
 ///
 /// Atomic order:
 /// 1. Acquire the same advisory lock used by every verified-rule Truth writer.
-/// 2. Validate the current processing lease, latest event ID+payload hash,
+/// 2. Validate the current processing lease, latest *causal revision* and hash,
 ///    current registry intent and absence of an older unknown RPC.
 /// 3. Commit `status='failed', last_error=UNCERTAIN_MARKER` via a SECOND PG
 ///    connection, with lease CAS, before invoking the provider.
@@ -304,6 +465,7 @@ where
               AND target_system='qdrant' AND aggregate_type='rule_instance'
               AND aggregate_key=$4 AND event_type=$5 AND payload_type=$6
               AND schema_version=1 AND payload_hash=$7
+              AND projection_revision=$8
          )",
     )
     .bind(event.event_id)
@@ -313,6 +475,7 @@ where
     .bind(&event.event_type)
     .bind(&event.payload_type)
     .bind(primitives::hash::blake3_hex(&event.payload_bytes))
+    .bind(event.projection_revision)
     .fetch_one(&mut *lock_tx)
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
@@ -326,7 +489,7 @@ where
         "SELECT event_id FROM system.sync_outbox
          WHERE target_system='qdrant' AND aggregate_type='rule_instance'
            AND aggregate_key=$1 AND status='failed' AND last_error=$2
-         ORDER BY created_at, event_id LIMIT 1",
+         ORDER BY event_id LIMIT 1",
     )
     .bind(&event.aggregate_key)
     .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
@@ -337,18 +500,41 @@ where
         return Err(VerifiedRuleDispatchError::BlockedUncertain { event_id });
     }
 
-    let latest: Vec<(Uuid, String, OffsetDateTime)> = sqlx::query_as(
-        "SELECT event_id, payload_hash, created_at FROM system.sync_outbox
+    let legacy_unordered: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM system.sync_outbox
+         WHERE target_system='qdrant' AND aggregate_type='rule_instance'
+           AND aggregate_key=$1 AND projection_revision IS NULL
+         )",
+    )
+    .bind(&event.aggregate_key)
+    .fetch_one(&mut *lock_tx)
+    .await
+    .map_err(VerifiedRuleDispatchError::Database)?;
+    if legacy_unordered {
+        return Err(VerifiedRuleDispatchError::AmbiguousOrdering);
+    }
+
+    let latest: Option<(Uuid, String, i64)> = sqlx::query_as(
+        "SELECT event_id, payload_hash, projection_revision FROM system.sync_outbox
          WHERE aggregate_type='rule_instance' AND aggregate_key=$1
            AND target_system='qdrant'
            AND event_type IN ('QdrantUpsertCommand', 'QdrantDeleteCommand')
-         ORDER BY created_at DESC, event_id DESC LIMIT 2",
+           AND projection_revision IS NOT NULL
+         ORDER BY projection_revision DESC LIMIT 1",
     )
     .bind(&event.aggregate_key)
-    .fetch_all(&mut *lock_tx)
+    .fetch_optional(&mut *lock_tx)
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
-    if !latest_intent_timestamp_unambiguous(&latest) {
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT current_revision FROM system.verified_rule_projection_heads
+         WHERE aggregate_key=$1",
+    )
+    .bind(&event.aggregate_key)
+    .fetch_optional(&mut *lock_tx)
+    .await
+    .map_err(VerifiedRuleDispatchError::Database)?;
+    if latest.as_ref().map(|(_, _, revision)| *revision) != head {
         return Err(VerifiedRuleDispatchError::AmbiguousOrdering);
     }
 
@@ -364,9 +550,10 @@ where
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
     let expected_active = event.event_type == "QdrantUpsertCommand";
-    let current = latest.first().is_some_and(|(event_id, digest, _)| {
+    let current = latest.as_ref().is_some_and(|(event_id, digest, revision)| {
         *event_id == event.event_id
             && digest == &primitives::hash::blake3_hex(&event.payload_bytes)
+            && Some(*revision) == event.projection_revision
             && registry_active == expected_active
     });
     if !current {
@@ -559,6 +746,7 @@ async fn claim_outbox_batch_scoped(
             o.schema_version,
             o.idempotency_key,
             o.payload_bytes,
+            o.projection_revision,
             o.retry_count,
             o.worker_id,
             o.locked_at
@@ -585,6 +773,7 @@ async fn claim_outbox_batch_scoped(
             schema_version: r.get("schema_version"),
             idempotency_key: r.get("idempotency_key"),
             payload_bytes: r.get("payload_bytes"),
+            projection_revision: r.get("projection_revision"),
             retry_count: r.get("retry_count"),
             lease_worker_id: r.get("worker_id"),
             lease_locked_at: r.get("locked_at"),
@@ -637,6 +826,7 @@ pub async fn claim_outbox_batch_for_run_target(
             o.schema_version,
             o.idempotency_key,
             o.payload_bytes,
+            o.projection_revision,
             o.retry_count,
             o.worker_id,
             o.locked_at
@@ -663,6 +853,7 @@ pub async fn claim_outbox_batch_for_run_target(
             schema_version: r.get("schema_version"),
             idempotency_key: r.get("idempotency_key"),
             payload_bytes: r.get("payload_bytes"),
+            projection_revision: r.get("projection_revision"),
             retry_count: r.get("retry_count"),
             lease_worker_id: r.get("worker_id"),
             lease_locked_at: r.get("locked_at"),
@@ -834,8 +1025,8 @@ pub async fn read_sync_status(pool: &PgPool) -> Result<SyncStatusSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_intent_timestamp_unambiguous, validate_target_claim, validate_verified_rule_event,
-        OutboxEvent, VerifiedRuleTruthFenceError, VERIFIED_RULE_UNCERTAIN_MARKER,
+        validate_target_claim, validate_verified_rule_envelope, validate_verified_rule_event,
+        OutboxEnvelope, OutboxEvent, VerifiedRuleTruthFenceError, VERIFIED_RULE_UNCERTAIN_MARKER,
     };
     use sqlx::types::time::OffsetDateTime;
     use uuid::Uuid;
@@ -852,6 +1043,7 @@ mod tests {
             schema_version: 1,
             idempotency_key: "run-1|rule-1".into(),
             payload_bytes: vec![1],
+            projection_revision: Some(1),
             retry_count: 0,
             lease_worker_id: "worker-1".into(),
             lease_locked_at: OffsetDateTime::UNIX_EPOCH,
@@ -886,6 +1078,11 @@ mod tests {
         invalid.schema_version = 1;
         invalid.payload_bytes.clear();
         assert!(validate_verified_rule_event(&invalid).is_err());
+        invalid.payload_bytes = vec![1];
+        invalid.projection_revision = None;
+        assert!(validate_verified_rule_event(&invalid).is_err());
+        invalid.projection_revision = Some(0);
+        assert!(validate_verified_rule_event(&invalid).is_err());
         assert_eq!(
             VERIFIED_RULE_UNCERTAIN_MARKER,
             "projection_outcome_uncertain:v1"
@@ -893,26 +1090,27 @@ mod tests {
     }
 
     #[test]
-    fn random_uuid_tie_must_not_choose_latest_projection_intent() {
-        let one = (
-            Uuid::new_v4(),
-            "hash-a".to_owned(),
-            OffsetDateTime::UNIX_EPOCH,
-        );
-        let tied = (
-            Uuid::new_v4(),
-            "hash-b".to_owned(),
-            OffsetDateTime::UNIX_EPOCH,
-        );
-        let later = (
-            Uuid::new_v4(),
-            "hash-c".to_owned(),
-            OffsetDateTime::UNIX_EPOCH + std::time::Duration::from_secs(1),
-        );
-        assert!(latest_intent_timestamp_unambiguous(&[]));
-        assert!(latest_intent_timestamp_unambiguous(&[one.clone()]));
-        assert!(!latest_intent_timestamp_unambiguous(&[one.clone(), tied]));
-        assert!(latest_intent_timestamp_unambiguous(&[later, one]));
+    fn writer_rejects_unknown_projection_wire_contract_before_sql() {
+        let mut event = OutboxEnvelope {
+            run_id: "run-1".into(),
+            aggregate_type: "rule_instance".into(),
+            aggregate_key: "rule-1".into(),
+            target_system: "qdrant".into(),
+            event_type: "QdrantDeleteCommand".into(),
+            payload_type: "alegria.outbox.qdrant_delete_command.v1".into(),
+            schema_version: 1,
+            idempotency_key: "same-logical-effect".into(),
+            payload_bytes: vec![1],
+        };
+        assert!(validate_verified_rule_envelope(&event).is_ok());
+        event.event_type = "unregistered-dynamic-provider-operation".into();
+        assert!(validate_verified_rule_envelope(&event).is_err());
+        event.event_type = "QdrantDeleteCommand".into();
+        event.idempotency_key.clear();
+        assert!(validate_verified_rule_envelope(&event).is_err());
+        event.idempotency_key = "key".into();
+        event.aggregate_key = " rule-1".into();
+        assert!(validate_verified_rule_envelope(&event).is_err());
     }
 
     #[test]

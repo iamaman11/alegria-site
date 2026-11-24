@@ -175,6 +175,7 @@ jobs:
           python3 automation/check_dev_rust_feedback.py
           python3 automation/check_owner_rebuild.py
           python3 automation/check_reliability_contracts.py
+          python3 automation/test_causal_revision_contract.py
 
       - name: Regression-test fast CI timing and failure propagation
         run: |

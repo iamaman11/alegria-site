@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     final_phase_keys, initial_phase_keys, page_phase_keys, phase_label, planning_phase_keys,
-    should_publish, SeoExecutionPlan, SeoExecutionSegment, SeoPhaseKey,
+    should_publish, RunPersistencePolicy, RunPublishPolicy, SeoExecutionPlan, SeoExecutionSegment,
+    SeoPhaseKey,
 };
 use crate::scenario::SeoScenarioKind;
 
@@ -47,6 +48,9 @@ pub struct SeoStepContract {
     pub segment: SeoExecutionSegment,
     pub consumes: &'static [SeoStepArtifact],
     pub produces: &'static [SeoStepArtifact],
+    /// Evidence rendered stale by this operation, even when the artifact was
+    /// previously present. A subsequent producer must restore it before use.
+    pub invalidates: &'static [SeoStepArtifact],
 }
 
 impl SeoPhaseKey {
@@ -156,6 +160,13 @@ impl SeoPhaseKey {
             segment,
             consumes,
             produces,
+            // Raw ingestion may commit new Truth. The support snapshot loaded
+            // before that commit is no longer certified for IA or publishing;
+            // loading support again (either operation) restores the artifact.
+            invalidates: match self {
+                Self::RawKnowledgeIngestion => &[VerifiedSupport],
+                _ => &[],
+            },
         }
     }
 }
@@ -178,6 +189,11 @@ pub enum SeoStepRecipeError {
         step: SeoPhaseKey,
         input: SeoStepArtifact,
     },
+    StaleInput {
+        step: SeoPhaseKey,
+        input: SeoStepArtifact,
+    },
+    DryRunPublishConflict,
     UnsupportedManifestVersion(u16),
     UnknownManifestStep(String),
 }
@@ -205,6 +221,12 @@ impl fmt::Display for SeoStepRecipeError {
             }
             Self::MissingInput { step, input } => {
                 write!(f, "step {step:?} requires unavailable {input:?}")
+            }
+            Self::StaleInput { step, input } => {
+                write!(f, "step {step:?} requires {input:?} renewed after an invalidating operation")
+            }
+            Self::DryRunPublishConflict => {
+                write!(f, "dry-run persistence cannot authorize publishing effects")
             }
             Self::UnsupportedManifestVersion(version) => {
                 write!(
@@ -439,7 +461,34 @@ impl SeoPhaseRecipe {
     /// to produce its run summary and per-page work. Publication is never
     /// enabled by a custom recipe when the run policy forbids it.
     pub fn validate_for_scenario(&self, plan: &SeoExecutionPlan) -> Result<(), SeoStepRecipeError> {
+        if plan.policy.persistence == RunPersistencePolicy::DryRun
+            && plan.policy.publish == RunPublishPolicy::PublishIfApproved
+        {
+            return Err(SeoStepRecipeError::DryRunPublishConflict);
+        }
         self.validate()?;
+        // `validate` proves topological presence, not freshness. These live
+        // scenarios share a mutable Truth projection: a producer may make an
+        // already-available artifact stale before another operation consumes
+        // it. Check the entire recipe prior to the first repository call.
+        let mut fresh = BTreeSet::new();
+        for &step in self
+            .pre_page
+            .iter()
+            .chain(&self.per_page)
+            .chain(&self.finalize)
+        {
+            let contract = step.contract();
+            for &input in contract.consumes {
+                if !fresh.contains(&input) {
+                    return Err(SeoStepRecipeError::StaleInput { step, input });
+                }
+            }
+            for &invalidated in contract.invalidates {
+                fresh.remove(&invalidated);
+            }
+            fresh.extend(contract.produces.iter().copied());
+        }
         use SeoPhaseKey::*;
         // These scenarios return from the executor early. Never accept a
         // recipe whose validated steps would be silently skipped at runtime.
@@ -663,6 +712,68 @@ mod tests {
     }
 
     #[test]
+    fn truth_ingestion_invalidates_only_the_support_snapshot_not_independent_work() {
+        use SeoPhaseKey::*;
+        use SeoStepArtifact::*;
+
+        let standard = SeoPhaseRecipe::for_plan(&full_plan(), true).unwrap();
+        let stale = SeoPhaseRecipe::compose_pre_page(
+            standard
+                .pre_page_steps()
+                .iter()
+                .copied()
+                .filter(|step| *step != RefreshVerifiedSupportBundle)
+                .collect(),
+            standard.per_page.clone(),
+            standard.finalize.clone(),
+        )
+        .unwrap();
+        // A producer once existed, so the purely topological check succeeds.
+        // It is unsafe for the live runner after Truth could have changed.
+        stale.validate().unwrap();
+        assert_eq!(
+            stale.validate_for_scenario(&full_plan()),
+            Err(SeoStepRecipeError::StaleInput {
+                step: IaBuild,
+                input: VerifiedSupport,
+            })
+        );
+        standard.validate_for_scenario(&full_plan()).unwrap();
+
+        // An owner may reissue the artifact using either certified support
+        // producer. Contract-aware validation does not require one fixed step.
+        let reloaded = SeoPhaseRecipe::compose_pre_page(
+            vec![
+                SerpIngest,
+                CrawlSources,
+                RawKnowledgeIngestion,
+                LoadVerifiedSupportBundle,
+                SerpNormalize,
+                OpportunityBuild,
+                IaBuild,
+                LinkRecommend,
+                GlobalSiteReconcile,
+            ],
+            standard.per_page,
+            standard.finalize,
+        )
+        .unwrap();
+        reloaded.validate_for_scenario(&full_plan()).unwrap();
+    }
+
+    #[test]
+    fn dry_run_publish_policy_conflict_is_rejected_even_for_a_nonpublishing_recipe() {
+        let mut plan = full_plan();
+        plan.policy.persistence = RunPersistencePolicy::DryRun;
+        let recipe = SeoPhaseRecipe::for_plan(&plan, true).unwrap();
+        assert!(!recipe.per_page.contains(&SeoPhaseKey::FinalizePublish));
+        assert_eq!(
+            recipe.validate_for_scenario(&plan),
+            Err(SeoStepRecipeError::DryRunPublishConflict)
+        );
+    }
+
+    #[test]
     fn invalid_order_and_missing_input_are_rejected_before_execution() {
         use SeoPhaseKey::*;
         let bad = SeoPhaseRecipe::compose(
@@ -727,11 +838,13 @@ mod tests {
                     segment: Initial,
                     consumes: &[QueryBatch],
                     produces: &[VerifiedSupport],
+                    invalidates: &[],
                 },
                 SerpIngest => SeoStepContract {
                     segment: Initial,
                     consumes: &[VerifiedSupport],
                     produces: &[QueryBatch],
+                    invalidates: &[],
                 },
                 _ => step.contract(),
             });

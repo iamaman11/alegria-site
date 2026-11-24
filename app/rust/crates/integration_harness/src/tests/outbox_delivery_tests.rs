@@ -9,8 +9,8 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     };
     use infrastructure::adapters::{
         sqlx_outbox_adapter::{
-            claim_outbox_batch_for_target, dispatch_verified_rule_with_fence,
-            VerifiedRuleDispatchOutcome,
+            claim_outbox_batch_for_target, dispatch_verified_rule_with_fence, mark_done,
+            LeaseUpdate, VerifiedRuleDispatchOutcome,
         },
         verified_rule_projection_adapter::{
             stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx, VerifiedRuleEmbeddingAdapter,
@@ -142,6 +142,23 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
     ).bind(&second_rule_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(recovered, 1, "next independent revision must be retryable");
+    let (independent_point_id, independent_upsert_id): (String, Uuid) = sqlx::query_as(
+        "SELECT p.point_id, o.event_id FROM kb.qdrant_points p \
+         JOIN system.sync_outbox o ON o.aggregate_key=p.entity_key \
+         WHERE p.entity_key=$1 AND p.collection_name='verified_rules_4' \
+           AND o.target_system='qdrant' AND o.event_type='QdrantUpsertCommand'",
+    )
+    .bind(&second_rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    let independent_expected = [VerifiedRuleReadbackPoint {
+        point_id: independent_point_id,
+        rule_instance_id: second_rule_id.clone(),
+        context_key: context_key.clone(),
+        concept_key: "passport".into(),
+        source_key: "https://example.gov/passport".into(),
+    }];
 
     let delete_rule_ids = vec![rule_id.clone()];
     // A late SQL/Outbox failure must not delete the external Qdrant point or
@@ -225,6 +242,26 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     .await
     .unwrap();
     assert_eq!(deletion_events, 1, "same deletion replay must not duplicate Outbox");
+    // Replaying the ORIGINAL run after its tombstone is not a fresh intent.
+    // The writer must fail closed and roll back its registry mutation, rather
+    // than silently taking the old idempotency key as permission to restore.
+    let mut obsolete_replay = pg.pool.begin().await.unwrap();
+    assert!(
+        stage_rule_upserts_in_tx(&mut obsolete_replay, &command, embeddings.clone())
+            .await
+            .is_err(),
+        "obsolete run replay rewrote Truth despite a newer tombstone"
+    );
+    obsolete_replay.rollback().await.unwrap();
+    let still_deleted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points \
+         WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(still_deleted, 0, "rejected obsolete replay mutated the canonical registry");
     let tombstone_id: Uuid = sqlx::query_scalar(
         "SELECT event_id FROM system.sync_outbox \
          WHERE aggregate_key=$1 AND event_type='QdrantDeleteCommand'",
@@ -233,10 +270,69 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     .fetch_one(&pg.pool)
     .await
     .unwrap();
-    // Concurrent delivery of two DISTINCT, actually claimed Outbox events.
+    // The causal intent is allocated under the Truth writer's per-rule PG
+    // lock. In particular, the same event's idempotent replay must not create
+    // a fourth revision, and an unrelated rule starts its OWN sequence.
+    let (first_revision, delayed_revision, tombstone_revision, independent_revision):
+        (i64, i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+         (SELECT projection_revision FROM system.sync_outbox WHERE event_id=$1), \
+         (SELECT projection_revision FROM system.sync_outbox WHERE event_id=$2), \
+         (SELECT projection_revision FROM system.sync_outbox WHERE event_id=$3), \
+         (SELECT projection_revision FROM system.sync_outbox WHERE event_id=$4)",
+    )
+    .bind(upsert_event_id)
+    .bind(delayed_upsert_id)
+    .bind(tombstone_id)
+    .bind(independent_upsert_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        (first_revision, delayed_revision, tombstone_revision, independent_revision),
+        (1, 2, 3, 1),
+        "replays, rollback and unrelated rule identities must not consume revisions"
+    );
+
+    // An intentionally adversarial, disposable PG fixture: make the first
+    // and delayed intents share a timestamp, and make the LATEST tombstone
+    // look oldest by created_at. Neither timestamps nor UUID lexical order
+    // are allowed to pick which real Qdrant effect may execute.
+    let disturbed = sqlx::query(
+        "UPDATE system.sync_outbox \
+         SET created_at = CASE \
+           WHEN event_id=$3 THEN TIMESTAMPTZ '2020-01-01 00:00:00+00' \
+           ELSE TIMESTAMPTZ '2030-01-01 00:00:00+00' END \
+         WHERE event_id IN ($1,$2,$3)",
+    )
+    .bind(upsert_event_id)
+    .bind(delayed_upsert_id)
+    .bind(tombstone_id)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(disturbed.rows_affected(), 3);
+    let reversed_and_tied: bool = sqlx::query_scalar(
+        "SELECT original.created_at = delayed.created_at \
+            AND tombstone.created_at < delayed.created_at \
+         FROM system.sync_outbox original \
+         JOIN system.sync_outbox delayed ON delayed.event_id=$2 \
+         JOIN system.sync_outbox tombstone ON tombstone.event_id=$3 \
+         WHERE original.event_id=$1",
+    )
+    .bind(upsert_event_id)
+    .bind(delayed_upsert_id)
+    .bind(tombstone_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert!(reversed_and_tied, "test fixture did not invert timestamp ordering");
+
+    // Concurrent delivery of three DISTINCT, actually claimed Outbox events.
     // The stale upsert must be ACKed as SkippedStale without invoking the
     // callback; the latest tombstone executes through the leased PG→Qdrant
-    // fence. If the callback is invoked, the injected error fails this test.
+    // fence. An unrelated rule's upsert executes independently at the same
+    // time. If the stale callback is invoked, the injected error fails this test.
     let mut delayed_claim = claim_outbox_batch_for_target(
         &pg.pool, "a14-stale-owner", "qdrant", 1, 120, Some(delayed_upsert_id),
     )
@@ -247,19 +343,51 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     )
     .await
     .unwrap();
+    let mut independent_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-independent-owner", "qdrant", 1, 120, Some(independent_upsert_id),
+    )
+    .await
+    .unwrap();
     assert_eq!(delayed_claim.len(), 1);
     assert_eq!(delete_claim.len(), 1);
-    let delayed_event = delayed_claim.pop().unwrap();
+    assert_eq!(independent_claim.len(), 1);
+    let expired_delayed_owner = delayed_claim.pop().unwrap();
+    // A genuinely pending effect remains reclaimable after lease expiry, but
+    // the former worker's PG ownership CAS must fail after a new claim.
+    sqlx::query(
+        "UPDATE system.sync_outbox SET locked_until=now()-interval '1 second' \
+         WHERE event_id=$1",
+    )
+    .bind(delayed_upsert_id)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let mut reclaim_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-reclaimed-stale-owner", "qdrant", 1, 120, Some(delayed_upsert_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(reclaim_claim.len(), 1, "expired pending lease was not reclaimed");
+    let delayed_event = reclaim_claim.pop().unwrap();
+    assert_ne!(expired_delayed_owner.lease_worker_id, delayed_event.lease_worker_id);
+    assert_eq!(
+        mark_done(&pg.pool, &expired_delayed_owner).await.unwrap(),
+        LeaseUpdate::Lost,
+        "expired worker acknowledged a newly owned Qdrant event"
+    );
     let tombstone_event = delete_claim.pop().unwrap();
-    let (stale_dispatch, tombstone_dispatch) = tokio::join!(
+    let independent_event = independent_claim.pop().unwrap();
+    let (stale_dispatch, tombstone_dispatch, independent_dispatch) = tokio::join!(
         dispatch_verified_rule_with_fence(&pg.pool, &delayed_event, || async {
             Err::<(), anyhow::Error>(anyhow::anyhow!("stale upsert reached Qdrant effect"))
         }),
         dispatch_leased_event(&pg.pool, &tombstone_event),
+        dispatch_leased_event(&pg.pool, &independent_event),
     );
     assert_eq!(stale_dispatch.unwrap(), VerifiedRuleDispatchOutcome::SkippedStale);
     assert_eq!(tombstone_dispatch.unwrap(), DispatchDisposition::AcknowledgedByFence);
-    for event_id in [delayed_upsert_id, tombstone_id] {
+    assert_eq!(independent_dispatch.unwrap(), DispatchDisposition::AcknowledgedByFence);
+    for event_id in [delayed_upsert_id, tombstone_id, independent_upsert_id] {
         assert!(claim_outbox_batch_for_target(
             &pg.pool, "a14-repeat-owner", "qdrant", 1, 120, Some(event_id),
         )
@@ -272,6 +400,60 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
             .await
             .unwrap(),
         "concurrent delayed upsert resurrected a rule after its tombstone"
+    );
+    assert!(
+        vector_qdrant::verify_verified_rule_readback(&independent_expected)
+            .await
+            .unwrap(),
+        "unrelated rule was blocked by the deleted rule's causal revision"
+    );
+
+    // A later canonical re-verification is allowed to intentionally restore
+    // the fact. Giving it the EARLIEST timestamp tests the reverse transition:
+    // a newer upsert must supersede the tombstone by revision alone.
+    let restoration_run_id = Uuid::new_v4().to_string();
+    let restoration_batch = VerifiedRuleUpsertBatch {
+        run_id: restoration_run_id.clone(),
+        ..command
+    };
+    let mut restoration_tx = pg.pool.begin().await.unwrap();
+    stage_rule_upserts_in_tx(&mut restoration_tx, &restoration_batch, embeddings)
+        .await
+        .unwrap();
+    restoration_tx.commit().await.unwrap();
+    let (restoration_id, restoration_revision): (Uuid, i64) = sqlx::query_as(
+        "SELECT event_id, projection_revision FROM system.sync_outbox \
+         WHERE aggregate_key=$1 AND run_id=$2 AND event_type='QdrantUpsertCommand'",
+    )
+    .bind(&rule_id)
+    .bind(&restoration_run_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(restoration_revision, 4, "intent resurrection lost per-rule causality");
+    sqlx::query(
+        "UPDATE system.sync_outbox SET created_at=TIMESTAMPTZ '2010-01-01 00:00:00+00' \
+         WHERE event_id=$1",
+    )
+    .bind(restoration_id)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let mut restoration_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-restoration-owner", "qdrant", 1, 120, Some(restoration_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(restoration_claim.len(), 1);
+    assert_eq!(
+        dispatch_leased_event(&pg.pool, &restoration_claim.pop().unwrap())
+            .await
+            .unwrap(),
+        DispatchDisposition::AcknowledgedByFence,
+    );
+    assert!(
+        vector_qdrant::verify_verified_rule_readback(&expected).await.unwrap(),
+        "later canonical rule revision was suppressed by an older tombstone"
     );
 }
 

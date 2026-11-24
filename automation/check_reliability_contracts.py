@@ -11,6 +11,7 @@ PROTO = ROOT / "app" / "contracts" / "proto" / "temporal_payloads.proto"
 CONTRACTS_BUILD = ROOT / "app" / "rust" / "crates" / "contracts" / "build.rs"
 CONTRACTS_LIB = ROOT / "app" / "rust" / "crates" / "contracts" / "src" / "lib.rs"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
+REVISION_MIGRATION = ROOT / "app" / "db" / "migrations" / "20261124_0001_verified_rule_projection_revision.sql"
 TEMPORAL_MAIN = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "main.rs"
 METRICS = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "metrics.rs"
 OUTBOX_BUILDER = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "outbox_builder.rs"
@@ -28,6 +29,8 @@ LEGACY_RAW_CRAWL_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / 
 CANONICAL_VERIFIED_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "verified_rule_projection_adapter.rs"
 SQLX_VERIFIED_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter" / "projection_runtime_store.rs"
 GENERIC_OUTBOX_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_runtime_outbox_adapter.rs"
+CANONICAL_TRUTH_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_truth_write_adapter.rs"
+TRUTH_PREFLIGHT = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_truth_write_adapter" / "preflight.rs"
 UNCERTAIN_MARKER = "projection_outcome_uncertain:v1"
 
 
@@ -153,12 +156,17 @@ def truth_writer_fence_failures(files: dict[Path, str], postgres_outbox: str) ->
         failures.append("PG owner must reject projected non-atomic legacy Truth mutation")
     if "NonAtomicLegacyProjection" not in postgres_outbox:
         failures.append("PG owner must classify non-atomic legacy projected writes")
+    for needle in ("SELECT aggregate_key FROM system.sync_outbox",
+                   "SELECT aggregate_key FROM system.verified_rule_projection_heads"):
+        if needle not in postgres_outbox:
+            failures.append(f"legacy Truth fence must include tombstoned projection history: `{needle}`")
     expected = {
         LEGACY_SOURCE_WRITER: ("lock_and_reject_projected_legacy_truth_write_in_tx", 1),
         LEGACY_RAW_CRAWL_WRITER: ("lock_and_reject_projected_legacy_truth_write_in_tx", 2),
         CANONICAL_VERIFIED_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 1),
         SQLX_VERIFIED_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 3),
         GENERIC_OUTBOX_WRITER: ("lock_and_ensure_verified_rules_writable_in_tx", 1),
+        CANONICAL_TRUTH_WRITER: ("lock_and_reject_projected_legacy_truth_write_in_tx", 1),
     }
     for path, (call, minimum) in expected.items():
         if files[path].count(call) < minimum:
@@ -167,6 +175,118 @@ def truth_writer_fence_failures(files: dict[Path, str], postgres_outbox: str) ->
             )
     if "verified-rule Qdrant Outbox events require atomic Truth staging" not in files[GENERIC_OUTBOX_WRITER]:
         failures.append("standalone verified-rule Outbox writes must be prohibited")
+    if "unstaged_global_verified_rule_ids(" not in files[CANONICAL_TRUTH_WRITER]:
+        failures.append("canonical Truth writer must detect verified rules missing an atomic Qdrant intent")
+    if "pub(super) fn unstaged_global_verified_rule_ids(" not in files[TRUTH_PREFLIGHT]:
+        failures.append("Truth preflight must own the missing-projection-intent classification")
+    return failures
+
+
+def causal_revision_contract_failures(
+    schema: str, migration: str, postgres_outbox: str,
+    generic_writer: str, canonical_writer: str, sqlx_verified_writer: str,
+) -> list[str]:
+    """Fail closed on loss of the PostgreSQL-owned causal Outbox ordering.
+
+    This is an inexpensive source invariant, not proof of serializability or
+    provider delivery: the real concurrent PostgreSQL/Outbox E2E is mandatory.
+    An old UUIDv4/created_at ordering fallback must never become authoritative
+    when historical events have no recoverable revision.
+    """
+    failures: list[str] = []
+    for name, source in (("schema", schema), ("migration", migration)):
+        for needle in (
+            "ADD COLUMN IF NOT EXISTS projection_revision BIGINT",
+            "CREATE TABLE IF NOT EXISTS system.verified_rule_projection_heads",
+            "aggregate_key TEXT PRIMARY KEY",
+            "current_revision BIGINT NOT NULL",
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_outbox_verified_rule_revision",
+            "sync_outbox_verified_rule_revision_check",
+            "OR (projection_revision IS NOT NULL AND projection_revision > 0)) NOT VALID",
+        ):
+            if needle not in source:
+                failures.append(f"causal revision {name} missing `{needle}`")
+        if re.search(r"\bUPDATE\s+system\.sync_outbox\s+SET\s+projection_revision\b", source, re.I):
+            failures.append(f"causal revision {name} must not fabricate legacy ordering")
+
+    def require(source: str, owner: str, needles: tuple[str, ...]) -> None:
+        for needle in needles:
+            if needle not in source:
+                failures.append(f"{owner} missing causal revision `{needle}`")
+
+    producer_start = postgres_outbox.find("pub async fn insert_verified_rule_outbox_in_tx(")
+    producer_end = postgres_outbox.find("pub async fn lock_and_reject_projected_legacy_truth_write_in_tx(")
+    dispatch_start = postgres_outbox.find("pub async fn dispatch_verified_rule_with_fence<")
+    dispatch_end = postgres_outbox.find("pub struct SyncStatusSnapshot", dispatch_start)
+    if producer_start == -1 or producer_end <= producer_start:
+        failures.append("PostgreSQL revisioned enqueue owner is missing")
+        enqueue = ""
+    else:
+        enqueue = postgres_outbox[producer_start:producer_end]
+    if dispatch_start == -1 or dispatch_end <= dispatch_start:
+        failures.append("PostgreSQL revision-aware dispatcher is missing")
+        dispatch = ""
+    else:
+        dispatch = postgres_outbox[dispatch_start:dispatch_end]
+
+    require(enqueue, "PostgreSQL revisioned enqueue", (
+        "lock_and_ensure_verified_rules_writable_in_tx(tx,",
+        "SELECT MAX(projection_revision) FROM system.sync_outbox",
+        "if head != persisted_max",
+        "ON CONFLICT (aggregate_key) DO UPDATE",
+        "current_revision=system.verified_rule_projection_heads.current_revision + 1",
+        "payload_hash, projection_revision, created_at",
+        ".bind(revision)",
+        ".execute(&mut **tx)",
+        "IdempotencyConflict",
+    ))
+    # Revision reservation must precede the new event insert and both must use
+    # the caller's transaction; a separate PG connection would break causality.
+    reservation = enqueue.find("INSERT INTO system.verified_rule_projection_heads")
+    event_insert = enqueue.find("INSERT INTO system.sync_outbox")
+    if reservation == -1 or event_insert <= reservation:
+        failures.append("PostgreSQL must reserve the revision before inserting its Outbox event")
+    require(postgres_outbox, "PostgreSQL revision contract", (
+        "projection_revision: Option<i64>",
+        "projection_revision: r.get(\"projection_revision\")",
+        "projection_revision IS NULL",
+        "LegacyUnordered",
+    ))
+    require(dispatch, "PostgreSQL causal dispatch", (
+        "projection_revision=$8",
+        ".bind(event.projection_revision)",
+        "projection_revision IS NULL",
+        "ORDER BY projection_revision DESC LIMIT 1",
+        "SELECT current_revision FROM system.verified_rule_projection_heads",
+        "if latest.as_ref().map(|(_, _, revision)| *revision) != head",
+        "Some(*revision) == event.projection_revision",
+    ))
+    if "ORDER BY created_at DESC" in dispatch or "latest_intent_timestamp_unambiguous" in dispatch:
+        failures.append("PostgreSQL causal dispatch must not fall back to timestamps/UUIDv4")
+    if "matches!(event.projection_revision, Some(revision) if revision > 0)" not in postgres_outbox:
+        failures.append("verified-rule lease must reject absent/non-positive producer revision")
+
+    transactional_start = generic_writer.find("pub async fn outbox_emit_many_in_tx(")
+    transactional_end = generic_writer.find("pub async fn outbox_emit_one(")
+    if transactional_start == -1 or transactional_end <= transactional_start:
+        failures.append("generic Outbox transaction writer is missing")
+        transactional = ""
+    else:
+        transactional = generic_writer[transactional_start:transactional_end]
+    require(transactional, "generic Outbox writer", (
+        'event.target_system == "qdrant" && event.aggregate_type == "rule_instance"',
+        "postgres_store::sqlx_outbox_adapter::insert_verified_rule_outbox_in_tx(",
+        "continue;",
+    ))
+    require(generic_writer, "standalone Outbox writer", (
+        "verified-rule Qdrant Outbox events require atomic Truth staging",
+    ))
+    if generic_writer.count("verified-rule Qdrant Outbox events require atomic Truth staging") < 2:
+        failures.append("both standalone Outbox emitters must reject verified-rule writes")
+    if canonical_writer.count("sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(tx, &events)") < 2:
+        failures.append("both canonical verified-rule effects must stage via revisioned Outbox transaction")
+    if sqlx_verified_writer.count("lock_and_reject_projected_legacy_truth_write_in_tx(") < 2:
+        failures.append("standalone verified-rule Truth upsert and demotion must reject projected identities")
     return failures
 
 
@@ -271,6 +391,7 @@ def main() -> int:
     truth_paths = (
         LEGACY_SOURCE_WRITER, LEGACY_RAW_CRAWL_WRITER, CANONICAL_VERIFIED_WRITER,
         SQLX_VERIFIED_WRITER, GENERIC_OUTBOX_WRITER,
+        CANONICAL_TRUTH_WRITER, TRUTH_PREFLIGHT,
     )
     absent_truth = [path for path in truth_paths if not path.is_file()]
     if absent_truth:
@@ -281,6 +402,20 @@ def main() -> int:
         truth_files = {path: path.read_text(encoding="utf-8") for path in truth_paths}
         failures.extend(truth_writer_fence_failures(
             truth_files, POSTGRES_OUTBOX.read_text(encoding="utf-8"),
+        ))
+
+    revision_paths = (
+        SCHEMA, REVISION_MIGRATION, POSTGRES_OUTBOX,
+        GENERIC_OUTBOX_WRITER, CANONICAL_VERIFIED_WRITER, SQLX_VERIFIED_WRITER,
+    )
+    absent_revision = [path for path in revision_paths if not path.is_file()]
+    if absent_revision:
+        failures.extend(
+            f"missing causal revision owner: {path.relative_to(ROOT)}" for path in absent_revision
+        )
+    else:
+        failures.extend(causal_revision_contract_failures(
+            *(path.read_text(encoding="utf-8") for path in revision_paths)
         ))
 
     if failures:

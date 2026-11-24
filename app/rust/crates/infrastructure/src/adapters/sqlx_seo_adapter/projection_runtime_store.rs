@@ -540,6 +540,19 @@ pub async fn upsert_verified_rule_instance(
     // Invalid scope never opens a connection, including through this pool API.
     validate_verified_rule_instance_write(rule)?;
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // The standalone legacy writer has no Outbox intent or staged registry
+    // mutation in its transaction. It may seed an as-yet unprojected identity,
+    // but must never mutate one that has ever been projected (including a
+    // previously tombstoned point). Canonical Truth writes use the in-tx
+    // writer and stage the revisioned Qdrant intent before commit instead.
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        std::slice::from_ref(&rule.rule_instance_id),
+    )
+    .await
+    .map_err(|error| DomainError::InfraUnavailable {
+        message: format!("legacy verified Truth upsert without Qdrant intent rejected: {error}"),
+    })?;
     upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
     tx.commit().await.map_err(classify_sqlx)
 }
@@ -686,6 +699,17 @@ pub async fn demote_verified_rule_instance(
     adjudication_reason: &str,
 ) -> Result<(), DomainError> {
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // A standalone status change cannot atomically issue the Qdrant
+    // tombstone. Protect the entire lifetime of an ever-projected rule, not
+    // merely identities with a currently active registry row.
+    postgres_store::sqlx_outbox_adapter::lock_and_reject_projected_legacy_truth_write_in_tx(
+        &mut tx,
+        &[rule_instance_id.to_owned()],
+    )
+    .await
+    .map_err(|error| DomainError::InfraUnavailable {
+        message: format!("legacy verified Truth demotion without Qdrant intent rejected: {error}"),
+    })?;
     demote_verified_rule_instance_in_tx(
         &mut tx,
         rule_instance_id,
