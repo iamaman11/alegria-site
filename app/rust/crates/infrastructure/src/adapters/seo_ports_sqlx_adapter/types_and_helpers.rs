@@ -8,8 +8,7 @@ use seo_domain::{
 use seo_ports::{
     CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
     CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
-    GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
-    GraphNeighborhoodHit, GraphReasoningPort, OrganicSerpResponse,
+    GlobalNavigationPersistReport, GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse,
     OrganicSerpResult, PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
     PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
     SectionTemplate, SectionTemplateRepository, SemanticDemandCluster, SemanticLinkCandidate,

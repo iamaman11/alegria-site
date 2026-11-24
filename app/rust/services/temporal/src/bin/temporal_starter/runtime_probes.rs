@@ -76,8 +76,7 @@ async fn persist_seo_site_build_input(
     }
     let pool = connect_pg(&database_url.unwrap_or_else(default_database_url)).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
-    let site_input = register_site_build_input(
-        &repo,
+    let site_input = repo.register_site_build_input(
         &SeoSiteBuildRegistrationRequest {
             run_id: run_id.to_string(),
             context_key,

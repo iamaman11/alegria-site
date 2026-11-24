@@ -258,7 +258,13 @@ async fn emit_projection_events_for_run(
     run_id: &str,
     events: Vec<OutboxEnvelope>,
 ) -> Result<(), DomainError> {
-    let events = events
+    let events = stamped_projection_events(run_id, events);
+    let _ = outbox_emit_many(pool, &events).await?;
+    Ok(())
+}
+
+fn stamped_projection_events(run_id: &str, events: Vec<OutboxEnvelope>) -> Vec<OutboxEnvelope> {
+    events
         .into_iter()
         .map(|mut event| {
             if event.run_id.trim().is_empty() {
@@ -266,8 +272,16 @@ async fn emit_projection_events_for_run(
             }
             event
         })
-        .collect::<Vec<_>>();
-    let _ = outbox_emit_many(pool, &events).await?;
+        .collect()
+}
+
+async fn emit_projection_events_for_run_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    events: Vec<OutboxEnvelope>,
+) -> Result<(), DomainError> {
+    let events = stamped_projection_events(run_id, events);
+    let _ = outbox_emit_many_in_tx(tx, &events).await?;
     Ok(())
 }
 

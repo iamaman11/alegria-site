@@ -908,12 +908,16 @@ pub async fn retire_opaque_unpublished_plans(
     if scope.trim().is_empty() || current_keys.is_empty() {
         return Ok(());
     }
+    // Retiring stale nodes and emitting their graph removals must commit
+    // together. A failed projection event must not silently hide a page.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     let rows = sqlx::query(
         "SELECT page_node_key, canonical_slug, canonical_url_path FROM site.page_nodes p
          WHERE scope_signature=$1 AND NOT(page_node_key=ANY($2))
            AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
-           AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
-    ).bind(scope).bind(current_keys).fetch_all(pool).await.map_err(classify_sqlx)?;
+           AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)
+         ORDER BY page_node_key",
+    ).bind(scope).bind(current_keys).fetch_all(&mut *tx).await.map_err(classify_sqlx)?;
     let mut events = Vec::new();
     for row in rows {
         let key: String = row.get("page_node_key");
@@ -928,14 +932,15 @@ pub async fn retire_opaque_unpublished_plans(
              WHERE page_node_key=$1 AND scope_signature=$2
                AND lifecycle_state IN ('candidate','planned','blocked','stale','needs_rebuild')
                AND NOT EXISTS (SELECT 1 FROM site.cms_pages c WHERE c.page_node_key=p.page_node_key)",
-        ).bind(&key).bind(scope).execute(pool).await.map_err(classify_sqlx)?;
+        ).bind(&key).bind(scope).execute(&mut *tx).await.map_err(classify_sqlx)?;
         if result.rows_affected() != 0 {
             events.push(seo_graph_projection_event_with_revision(
                 "page_node", &key, scope, "deprecated:opaque_legacy_plan",
             ));
         }
     }
-    emit_projection_events_for_run(pool, run_id, events).await?;
+    emit_projection_events_for_run_in_tx(&mut tx, run_id, events).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -944,6 +949,9 @@ pub async fn persist_link_recommend_output(
     input: &LinkRecommendInputPayload,
     output: &LinkRecommendOutputPayload,
 ) -> Result<(), DomainError> {
+    // Link rows, required-link rebuild edges and their projection events are
+    // one persisted result. A late Outbox failure must roll all of them back.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     let mut projection_events = Vec::new();
     for link in &output.link_recommendations {
         non_empty(&link.link_recommendation_key, "link_recommendation_key")?;
@@ -979,7 +987,7 @@ pub async fn persist_link_recommend_output(
             &link.support_refs,
             link.graph_confidence,
         )))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -1005,7 +1013,7 @@ pub async fn persist_link_recommend_output(
                 "link_role": link.link_role,
                 "anchor_strategy": link.anchor_strategy,
             })))
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
         }
@@ -1026,6 +1034,7 @@ pub async fn persist_link_recommend_output(
             ),
         ));
     }
-    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    emit_projection_events_for_run_in_tx(&mut tx, &input.run_id, projection_events).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }

@@ -14,7 +14,6 @@ pub mod outbox_builder;
 pub mod page_wire;
 pub mod pii_redaction_prepass_step;
 pub mod procedural_extraction_step;
-pub mod quality_policy_step;
 pub mod render_preview_validate_step;
 pub mod seo_identity;
 pub mod seo_step_support;

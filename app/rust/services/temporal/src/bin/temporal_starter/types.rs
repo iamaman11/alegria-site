@@ -18,9 +18,8 @@ use infrastructure::adapters::{
 };
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
 use seo_application::execution::normalize_run_mode;
-use seo_application::registration::register_site_build_input;
 use seo_domain::identity;
-use seo_ports::SeoSiteBuildRegistrationRequest;
+use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::BTreeMap;

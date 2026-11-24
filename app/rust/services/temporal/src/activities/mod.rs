@@ -26,11 +26,13 @@ use infrastructure::adapters::{
 };
 use primitives::errors::DomainError;
 use runtime_models::ReconcileTargetReportRecord;
-use seo_ports::{ProjectionStatusRepository, VerifiedSupportBundleRequest};
+use seo_ports::{
+    CrawlIngestRepository, EditorialGenerationPort, ProjectionStatusRepository,
+    SeoBuildInputRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
+};
 
 pub(crate) mod operations;
 mod runtime;
-mod step_catalog;
 
 pub struct AlegriaActivities {
     pub pool: Arc<AlegriaPgPool>,

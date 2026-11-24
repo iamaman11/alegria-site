@@ -5,6 +5,9 @@ pub async fn persist_draft_assemble_output(
 ) -> Result<(), DomainError> {
     let mut projection_events = Vec::new();
     non_empty(run_id, "run_id")?;
+    // A draft, its support/dependency graph, runtime plan and projection
+    // commands are one decision. Never expose a partly assembled page.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     if let Some(brief) = output.page_brief.as_ref() {
         non_empty(&brief.page_brief_key, "page_brief_key")?;
         sqlx::query(
@@ -45,19 +48,21 @@ pub async fn persist_draft_assemble_output(
         })))
         .bind(brief.brief_version as i32)
         .bind(&brief.status)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
 
-        projection_events.push(seo_graph_projection_event(
+        let mut event = seo_graph_projection_event(
             "page_brief",
             &brief.page_brief_key,
             "",
-        ));
+        );
+        event.run_id = run_id.to_string();
+        projection_events.push(event);
     }
 
     if let Some(plan) = output.content_block_plan.as_ref() {
-        upsert_runtime_blob(pool, run_id, "content_block_plan", plan).await?;
+        upsert_runtime_blob_on_conn(&mut *tx, run_id, "content_block_plan", plan).await?;
     }
 
     if let Some(draft) = output.draft.as_ref() {
@@ -100,7 +105,7 @@ pub async fn persist_draft_assemble_output(
         .bind(&draft.qa_verdict)
         .bind(Json(json!([])))
         .bind(&draft.truth_snapshot_ref)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
 
@@ -109,7 +114,40 @@ pub async fn persist_draft_assemble_output(
                 "immutable page draft changed during replay",
             ));
         }
-        set_page_lifecycle(pool, &draft.page_node_key, "draft_ready", "draft_assembled").await?;
+        set_page_lifecycle_in_tx(&mut tx, &draft.page_node_key, "draft_ready", "draft_assembled")
+            .await?;
+
+        // One lookup for all support IDs, rather than one round trip for each
+        // nested claim/support reference. Missing IDs simply have no source
+        // provenance dependency, as before.
+        let support_refs = draft
+            .claim_ledger
+            .iter()
+            .flat_map(|claim| claim.support_refs.iter())
+            .filter(|support_ref| !support_ref.trim().is_empty())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let source_keys = if support_refs.is_empty() {
+            HashMap::new()
+        } else {
+            sqlx::query_as::<_, (String, String)>(
+                r#"
+                SELECT rule_instance_id, source_key
+                FROM verified.rule_instances
+                WHERE rule_instance_id = ANY($1)
+                  AND source_key IS NOT NULL
+                  AND source_key <> ''
+                "#,
+            )
+            .bind(&support_refs)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(classify_sqlx)?
+            .into_iter()
+            .collect::<HashMap<_, _>>()
+        };
 
         for claim in &draft.claim_ledger {
             for support_ref in &claim.support_refs {
@@ -143,7 +181,7 @@ pub async fn persist_draft_assemble_output(
                 .bind(&claim.source_section_key)
                 .bind(&claim.claim_kind)
                 .bind(&claim.traceability_label)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(classify_sqlx)?;
 
@@ -170,25 +208,11 @@ pub async fn persist_draft_assemble_output(
                     "claim_kind": claim.claim_kind,
                     "traceability_label": claim.traceability_label,
                 })))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(classify_sqlx)?;
 
-                if let Some(source_key) = sqlx::query_scalar::<_, String>(
-                    r#"
-                    SELECT source_key
-                    FROM verified.rule_instances
-                    WHERE rule_instance_id = $1
-                      AND source_key IS NOT NULL
-                      AND source_key <> ''
-                    LIMIT 1
-                    "#,
-                )
-                .bind(support_ref)
-                .fetch_optional(pool)
-                .await
-                .map_err(classify_sqlx)?
-                {
+                if let Some(source_key) = source_keys.get(support_ref) {
                     sqlx::query(
                         r#"
                         INSERT INTO monitoring.seo_rebuild_dependencies
@@ -202,16 +226,16 @@ pub async fn persist_draft_assemble_output(
                     )
                     .bind(seo_domain::artifact_identity::seo_artifact_key(
                         "rebuild_dependency",
-                        &[&draft.page_node_key, "source_provenance", &source_key],
+                        &[&draft.page_node_key, "source_provenance", source_key],
                     ))
                     .bind(&draft.page_node_key)
-                    .bind(&source_key)
+                    .bind(source_key)
                     .bind(Json(json!({
                         "page_draft_key": draft.page_draft_key,
                         "support_ref": support_ref,
                         "source_section_key": claim.source_section_key,
                     })))
-                    .execute(pool)
+                    .execute(&mut *tx)
                     .await
                     .map_err(classify_sqlx)?;
                 }
@@ -246,13 +270,13 @@ pub async fn persist_draft_assemble_output(
                     "block_type": item.block_type,
                     "required": item.required,
                 })))
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(classify_sqlx)?;
             }
         }
 
-        projection_events.push(seo_qdrant_projection_event(
+        let mut event = seo_qdrant_projection_event(
             run_id,
             "editorial_topics_4",
             "page_draft",
@@ -268,10 +292,24 @@ pub async fn persist_draft_assemble_output(
                     draft.truth_snapshot_ref.clone(),
                 ),
             ]),
+        );
+        event.run_id = run_id.to_string();
+        // Protobuf map iteration order is not stable. Retrying the same
+        // immutable draft must not create another Qdrant projection event.
+        event.idempotency_key = primitives::hash::content_hash_v1(&format!(
+            "draft_assemble@4|{}|{}|{}|{}|{}",
+            run_id,
+            draft.page_draft_key,
+            draft.truth_snapshot_ref,
+            draft.qa_verdict,
+            primitives::hash::blake3_hex(draft.body_markdown.as_bytes()),
         ));
+        projection_events.push(event);
     }
 
-    emit_projection_events_for_run(pool, run_id, projection_events).await?;
+    super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(&mut tx, &projection_events)
+        .await?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -420,6 +458,7 @@ pub async fn persist_rebuild_detect_output(
     if output.verdict != RebuildVerdict::RebuildRequired {
         return Ok(());
     }
+    non_empty(&input.run_id, "run_id")?;
 
     let mut projection_events = Vec::new();
     let impact_by_page = resolve_rebuild_impacts(pool, &input.changed_truth_keys).await?;
@@ -437,10 +476,17 @@ pub async fn persist_rebuild_detect_output(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    for page_node_key in &output.impacted_page_node_keys {
-        if page_node_key.trim().is_empty() {
-            continue;
-        }
+    // A rebuild decision affects multiple pages and two queues. Commit every
+    // page, lifecycle transition and projection event together or none.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    // Stable, deduplicated page lock order also prevents two multi-page
+    // rebuild runs from deadlocking when their impact lists are reversed.
+    for page_node_key in output
+        .impacted_page_node_keys
+        .iter()
+        .filter(|page| !page.trim().is_empty())
+        .collect::<BTreeSet<_>>()
+    {
         let changed_truth_key = input
             .changed_truth_keys
             .first()
@@ -466,30 +512,42 @@ pub async fn persist_rebuild_detect_output(
         } else {
             reason_package
         };
-        if let Some(lifecycle_state) = rebuild::lifecycle_state_for_trigger(&trigger_type) {
-            set_page_lifecycle(pool, page_node_key, lifecycle_state, &trigger_type).await?;
-        }
-        projection_events.push(seo_graph_projection_event("page_node", page_node_key, ""));
         let rebuild_request_key = seo_domain::artifact_identity::seo_artifact_key(
             "seo_rebuild",
             &[
                 page_node_key,
                 &trigger_type,
                 changed_truth_key,
+                &input.run_id,
                 "rebuild_detect@1",
             ],
         );
-        sqlx::query(
+        // Keep lock order page -> backlog, consistent with page lifecycle
+        // writers. A processed event must never republish a rebuild task or
+        // move a completed page back to needs_rebuild on Temporal retry.
+        let page_exists: Option<i64> = sqlx::query_scalar(
+            "SELECT 1::bigint FROM site.page_nodes WHERE page_node_key = $1 FOR UPDATE",
+        )
+        .bind(page_node_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(classify_sqlx)?;
+        if page_exists.is_none() {
+            return Err(validation_failure(format!(
+                "rebuild page_node not found: {page_node_key}"
+            )));
+        }
+        let queued = sqlx::query(
             r#"
             INSERT INTO monitoring.seo_rebuild_backlog
                 (rebuild_request_key, page_node_key, trigger_type, priority, status, reason)
             VALUES ($1, $2, $3, $4, 'queued', $5)
             ON CONFLICT (rebuild_request_key) DO UPDATE
-                SET status     = 'queued',
-                trigger_type = EXCLUDED.trigger_type,
+                SET trigger_type = EXCLUDED.trigger_type,
                 priority   = EXCLUDED.priority,
                 reason     = EXCLUDED.reason,
                 updated_at = now()
+            WHERE monitoring.seo_rebuild_backlog.status = 'queued'
             "#,
         )
         .bind(rebuild_request_key)
@@ -497,13 +555,29 @@ pub async fn persist_rebuild_detect_output(
         .bind(&trigger_type)
         .bind(priority)
         .bind(reason_package.to_string())
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
+        if queued.rows_affected() == 0 {
+            continue;
+        }
+        if let Some(lifecycle_state) = rebuild::lifecycle_state_for_trigger(&trigger_type) {
+            set_page_lifecycle_in_tx(&mut tx, page_node_key, lifecycle_state, &trigger_type)
+                .await?;
+        }
+        let mut event = seo_graph_projection_event("page_node", page_node_key, "");
+        event.run_id = input.run_id.clone();
+        // One durable projection per distinct change-run, not one forever per
+        // page. Temporal replay of the same run keeps the exact same key.
+        event.idempotency_key = primitives::hash::content_hash_v1(&format!(
+            "rebuild_detect@1|{}|{}|{}",
+            input.run_id, page_node_key, trigger_type
+        ));
+        projection_events.push(event);
 
         let global_rebuild_plan_key = seo_domain::artifact_identity::seo_artifact_key(
             "global_rebuild_plan",
-            &[page_node_key, &trigger_type, changed_truth_key],
+            &[page_node_key, &trigger_type, changed_truth_key, &input.run_id],
         );
         sqlx::query(
             r#"
@@ -515,8 +589,8 @@ pub async fn persist_rebuild_detect_output(
                 trigger_type = EXCLUDED.trigger_type,
                 priority = EXCLUDED.priority,
                 reason_payload = EXCLUDED.reason_payload,
-                status = 'queued',
                 updated_at = now()
+            WHERE site.global_rebuild_plan.status = 'queued'
             "#,
         )
         .bind(global_rebuild_plan_key)
@@ -524,12 +598,14 @@ pub async fn persist_rebuild_detect_output(
         .bind(&trigger_type)
         .bind(priority)
         .bind(Json(reason_package.clone()))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
 
-    emit_projection_events_for_run(pool, &input.run_id, projection_events).await?;
+    super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(&mut tx, &projection_events)
+        .await?;
+    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
@@ -600,21 +676,6 @@ mod tests {
         assert_eq!(normalize_applicant_profile("Minor").unwrap(), "minor");
         assert!(normalize_applicant_profile("base").is_err());
     }
-}
-
-async fn set_page_lifecycle(
-    pool: &PgPool,
-    page_node_key: &str,
-    to_state: &str,
-    reason: &str,
-) -> Result<(), DomainError> {
-    if page_node_key.trim().is_empty() {
-        return Ok(());
-    }
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    set_page_lifecycle_in_tx(&mut tx, page_node_key, to_state, reason).await?;
-    tx.commit().await.map_err(classify_sqlx)?;
-    Ok(())
 }
 
 async fn set_page_lifecycle_in_tx(

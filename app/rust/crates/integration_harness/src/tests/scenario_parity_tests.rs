@@ -64,8 +64,7 @@
         let repo = SqlxSeoRuntimeRepository::new(&infra.postgres.pool);
         let run_id = Uuid::new_v4().to_string();
         let query_batch_key = format!("synthetic-batch-{run_id}");
-        let site_input = register_site_build_input(
-            &repo,
+        let site_input = repo.register_site_build_input(
             &SeoSiteBuildRegistrationRequest {
                 run_id: run_id.clone(),
                 context_key: None,

@@ -5,11 +5,13 @@ async fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft(
     use contracts::generated::alegria::temporal::v1::{
         ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
         DraftAssembleOutputPayload, DraftQaInputPayload, DraftQaOutputPayload, DraftState,
+        PageBriefState,
     };
     use infrastructure::adapters::sqlx_seo_adapter::{
         persist_content_contract_validate_output, persist_draft_assemble_output,
-        persist_draft_qa_output,
+        persist_draft_qa_output, persist_rebuild_detect_output,
     };
+    use seo_domain::rebuild::{RebuildDetectRequest, RebuildDetectResult, RebuildVerdict};
 
     let pg = PostgresHarness::start().await.unwrap();
     let key = Uuid::new_v4().simple().to_string();
@@ -245,16 +247,77 @@ async fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft(
         qa_verdict: "not_run".into(),
         ..draft.clone()
     };
+    let next_draft_key = next_draft.page_draft_key.clone();
+    let next_output = DraftAssembleOutputPayload {
+        page_brief: Some(PageBriefState {
+            page_brief_key: draft.page_brief_key.clone(),
+            page_node_key: page.clone(),
+            blueprint_key: blueprint.clone(),
+            title: "Updated brief title".into(),
+            brief_version: 1,
+            status: "ready".into(),
+            ..PageBriefState::default()
+        }),
+        draft: Some(next_draft),
+        ..DraftAssembleOutputPayload::default()
+    };
+    // The Outbox is the LAST write in Draft Assemble. Inject that failure and
+    // verify both the new draft and a preceding brief update roll back.
+    sqlx::query("CREATE FUNCTION public.atomic_draft_outbox_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type='QdrantUpsertCommand' AND NEW.aggregate_key LIKE 'qa-atomic-next-draft-%' THEN RAISE EXCEPTION 'injected draft outbox failure'; END IF; RETURN NEW; END $$")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER atomic_draft_outbox_fail BEFORE INSERT ON system.sync_outbox FOR EACH ROW EXECUTE FUNCTION public.atomic_draft_outbox_fail()")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    assert!(persist_draft_assemble_output(&pg.pool, &run_id, &next_output)
+        .await
+        .is_err());
+    let unchanged_brief: String =
+        sqlx::query_scalar("SELECT title FROM site.page_briefs WHERE page_brief_key=$1")
+            .bind(&draft.page_brief_key)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    assert_eq!(unchanged_brief, "QA test");
+    let assembled_drafts: i64 =
+        sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts WHERE page_draft_key=$1")
+            .bind(&next_draft_key)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    assert_eq!(assembled_drafts, 0);
+    let assembled_events: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'")
+        .bind(&next_draft_key)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(assembled_events, 0, "draft and projection must roll back together");
+    sqlx::query("DROP TRIGGER atomic_draft_outbox_fail ON system.sync_outbox")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION public.atomic_draft_outbox_fail()")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
     persist_draft_assemble_output(
         &pg.pool,
         &run_id,
-        &DraftAssembleOutputPayload {
-            draft: Some(next_draft),
-            ..DraftAssembleOutputPayload::default()
-        },
+        &next_output,
     )
     .await
     .unwrap();
+    persist_draft_assemble_output(&pg.pool, &run_id, &next_output)
+        .await
+        .unwrap();
+    let once: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'")
+        .bind(&next_draft_key)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(once, 1, "replaying the same draft must not duplicate Qdrant projection");
     let live: (String, String, String) = sqlx::query_as("SELECT n.lifecycle_state,p.current_status,p.current_revision_id FROM site.page_nodes n JOIN site.cms_pages p ON p.page_node_key=n.page_node_key WHERE n.page_node_key=$1")
         .bind(&page)
         .fetch_one(&pg.pool)
@@ -267,4 +330,117 @@ async fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft(
         .await
         .unwrap();
     assert_eq!(lifecycle_events, 1, "published re-QA/assembly must not invent lifecycle transitions");
+
+    let rebuild_input = RebuildDetectRequest {
+        run_id: run_id.clone(),
+        changed_truth_keys: vec![format!("truth-rebuild-{key}")],
+        page_node_keys: vec![page.clone()],
+    };
+    let rebuild_output = RebuildDetectResult {
+        impacted_page_node_keys: vec![page.clone()],
+        verdict: RebuildVerdict::RebuildRequired,
+        impacts: vec![],
+    };
+    // Inject a late Outbox failure after Rebuild has written its queue, plan
+    // and lifecycle. Nothing must become visible outside the transaction.
+    sqlx::query("CREATE FUNCTION public.atomic_rebuild_outbox_fail() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.event_type='SeoGraphProjectionUpserted' AND NEW.aggregate_key LIKE 'qa-atomic-page-%' THEN RAISE EXCEPTION 'injected rebuild outbox failure'; END IF; RETURN NEW; END $$")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER atomic_rebuild_outbox_fail BEFORE INSERT ON system.sync_outbox FOR EACH ROW EXECUTE FUNCTION public.atomic_rebuild_outbox_fail()")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    assert!(persist_rebuild_detect_output(&pg.pool, &rebuild_input, &rebuild_output)
+        .await
+        .is_err());
+    let rolled_back: (String, i64, i64) = sqlx::query_as(
+        "SELECT p.lifecycle_state,
+           (SELECT count(*)::bigint FROM monitoring.seo_rebuild_backlog WHERE page_node_key=p.page_node_key),
+           (SELECT count(*)::bigint FROM site.global_rebuild_plan WHERE affected_page_node_key=p.page_node_key)
+         FROM site.page_nodes p WHERE p.page_node_key=$1",
+    )
+    .bind(&page)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(rolled_back, ("published".into(), 0, 0));
+    sqlx::query("DROP TRIGGER atomic_rebuild_outbox_fail ON system.sync_outbox")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("DROP FUNCTION public.atomic_rebuild_outbox_fail()")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    persist_rebuild_detect_output(&pg.pool, &rebuild_input, &rebuild_output)
+        .await
+        .unwrap();
+    let queued: (String, i64, i64) = sqlx::query_as(
+        "SELECT p.lifecycle_state,
+           (SELECT count(*)::bigint FROM monitoring.seo_rebuild_backlog WHERE page_node_key=p.page_node_key AND status='queued'),
+           (SELECT count(*)::bigint FROM site.global_rebuild_plan WHERE affected_page_node_key=p.page_node_key AND status='queued')
+         FROM site.page_nodes p WHERE p.page_node_key=$1",
+    )
+    .bind(&page)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(queued, ("needs_rebuild".into(), 1, 1));
+    sqlx::query("UPDATE monitoring.seo_rebuild_backlog SET status='done' WHERE page_node_key=$1")
+        .bind(&page)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE site.global_rebuild_plan SET status='done' WHERE affected_page_node_key=$1")
+        .bind(&page)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE site.page_nodes SET lifecycle_state='published' WHERE page_node_key=$1")
+        .bind(&page)
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+    // Replay of one logical change is a no-op; another run on the same truth
+    // key must create fresh queue work and a fresh projection event.
+    persist_rebuild_detect_output(&pg.pool, &rebuild_input, &rebuild_output)
+        .await
+        .unwrap();
+    let replayed: (String, i64, i64) = sqlx::query_as(
+        "SELECT p.lifecycle_state,
+           (SELECT count(*)::bigint FROM monitoring.seo_rebuild_backlog WHERE page_node_key=p.page_node_key AND status='done'),
+           (SELECT count(*)::bigint FROM site.global_rebuild_plan WHERE affected_page_node_key=p.page_node_key AND status='done')
+         FROM site.page_nodes p WHERE p.page_node_key=$1",
+    )
+    .bind(&page)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(replayed, ("published".into(), 1, 1));
+    let next_change = RebuildDetectRequest {
+        run_id: Uuid::new_v4().to_string(),
+        ..rebuild_input
+    };
+    persist_rebuild_detect_output(&pg.pool, &next_change, &rebuild_output)
+        .await
+        .unwrap();
+    let newer: (String, i64, i64, i64) = sqlx::query_as(
+        "SELECT p.lifecycle_state,
+           (SELECT count(*)::bigint FROM monitoring.seo_rebuild_backlog WHERE page_node_key=p.page_node_key AND status='queued'),
+           (SELECT count(*)::bigint FROM monitoring.seo_rebuild_backlog WHERE page_node_key=p.page_node_key AND status='done'),
+           (SELECT count(*)::bigint FROM site.global_rebuild_plan WHERE affected_page_node_key=p.page_node_key AND status='queued')
+         FROM site.page_nodes p WHERE p.page_node_key=$1",
+    )
+    .bind(&page)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(newer, ("needs_rebuild".into(), 1, 1, 1));
+    let projections: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='SeoGraphProjectionUpserted'")
+        .bind(&page)
+        .fetch_one(&pg.pool)
+        .await
+        .unwrap();
+    assert_eq!(projections, 2, "one projection for each distinct rebuild change");
 }

@@ -1,24 +1,4 @@
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Neo4jBackwriteInput {
-    pub target_system: String,
-    pub dry_run: bool,
-    pub max_retry_count: Option<i32>,
-    pub batch_limit: Option<i64>,
-    pub requeue_base_delay_sec: Option<i64>,
-    pub requeue_jitter_sec: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Neo4jBackwriteOutput {
-    pub target_system: String,
-    pub dry_run: bool,
-    pub stale_candidates: i64,
-    pub failed_candidates: i64,
-    pub reset_stale_processing: i64,
-    pub requeued_failed: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectionSyncInput {
     pub run_id: String,
     pub target_system: String,

@@ -465,14 +465,14 @@ Critical path:
   - no menu explosion;
   - long-tail pages через directory path;
   - stable redirect/deprecation behavior.
-- Draft quality scoring оформляется как publish gate по `page_type` templates и quality policy registry.
+- Draft quality blocking decisions принадлежат действующему `seo_domain::draft_quality` и проверяются в Draft QA / Content Contract. Старый неиспользуемый `policies::quality_policy` registry удалён; его отдельные проверки не являются publish gate.
 - Run report является обязательным artifact каждого execution run.
 - Observability contract включает SQL views, Prometheus metrics и Grafana dashboards, которые позволяют принимать решение без чтения сырых логов.
 
 **Phase exit:**
 - `automation/check_rebuild_engine_contract.py` и `automation/smoke_rebuild_propagation.py` подтверждают enqueue и обработку rebuild jobs после factual change.
 - `automation/check_global_nav_policy_contract.py` и `automation/smoke_global_nav_expansion.py` подтверждают deterministic nav evolution.
-- `automation/check_quality_policy_registry.py` и `automation/smoke_quality_policy_registry.py` подтверждают page-type templates, quality policy lookup и blocking behavior ниже threshold.
+- Действующие проверки `seo_domain::draft_quality`, Content Contract и PostgreSQL Draft QA E2E подтверждают блокировку публикации неподтверждённого контента; отдельной quality-policy registry больше нет.
 - `automation/check_run_report_completeness.py` и `automation/check_metrics_contract.py` подтверждают run report, SQL views и metrics surface.
 
 **Rollback / compat notes:**

@@ -15,10 +15,7 @@ impl AlegriaActivities {
             input.url.clone()
         };
         self.execute_step(&run_id, "page_utility_classifier", 1, &input, || async {
-            Ok(step_catalog::run_page_utility_classifier(
-                self.as_ref(),
-                &input,
-            ))
+            Ok(acquisition::source_relevance::classify_page(&input))
         })
         .await
     }
@@ -35,7 +32,7 @@ impl AlegriaActivities {
             .map(|item| item.dom_block_id.clone())
             .unwrap_or_else(|| "dom_block_relevance".to_string());
         self.execute_step(&run_id, "dom_block_relevance_filter", 1, &input, || async {
-            Ok(step_catalog::run_dom_block_relevance(self.as_ref(), &input))
+            Ok(acquisition::source_relevance::score_dom_blocks(&input))
         })
         .await
     }
@@ -48,7 +45,7 @@ impl AlegriaActivities {
         input: seo_domain::extraction::layer_routing::LayerRouterInput,
     ) -> Result<seo_domain::extraction::layer_routing::LayerRouterOutput, ActivityError> {
         self.execute_step(&input.section_id, "layer_router", 1, &input, || async {
-            Ok(step_catalog::run_layer_router(self.as_ref(), &input))
+            Ok(seo_domain::extraction::layer_routing::execute(&input))
         })
         .await
     }
@@ -66,10 +63,7 @@ impl AlegriaActivities {
             1,
             &input,
             || async {
-                Ok(step_catalog::run_entity_span_detection(
-                    self.as_ref(),
-                    &input,
-                ))
+                Ok(seo_domain::extraction::entity_spans::execute(&input))
             },
         )
         .await
@@ -87,7 +81,7 @@ impl AlegriaActivities {
             "canonical_mapping",
             1,
             &input,
-            || async { Ok(step_catalog::run_canonical_mapping(self.as_ref(), &input)) },
+            || async { Ok(seo_domain::canonical_mapping::execute(&input)) },
         )
         .await
     }
@@ -106,10 +100,7 @@ impl AlegriaActivities {
             1,
             &input,
             || async {
-                Ok(step_catalog::run_procedural_extraction(
-                    self.as_ref(),
-                    &input,
-                ))
+                Ok(seo_steps::procedural_extraction_step::execute(&input))
             },
         )
         .await
@@ -129,10 +120,7 @@ impl AlegriaActivities {
             1,
             &input,
             || async {
-                Ok(step_catalog::run_operational_extraction(
-                    self.as_ref(),
-                    &input,
-                ))
+                Ok(seo_domain::extraction::operational_entities::execute(&input))
             },
         )
         .await
@@ -152,10 +140,7 @@ impl AlegriaActivities {
             1,
             &input,
             || async {
-                Ok(step_catalog::run_editorial_extraction(
-                    self.as_ref(),
-                    &input,
-                ))
+                Ok(seo_domain::extraction::editorial_topics::execute(&input))
             },
         )
         .await
@@ -173,7 +158,7 @@ impl AlegriaActivities {
             "completeness_judge",
             1,
             &input,
-            || async { Ok(step_catalog::run_completeness_judge(self.as_ref(), &input)) },
+            || async { Ok(truth_domain::completeness::execute(&input)) },
         )
         .await
     }
@@ -186,7 +171,7 @@ impl AlegriaActivities {
         input: seo_steps::triple_builder_step::TripleBuilderInput,
     ) -> Result<seo_steps::triple_builder_step::TripleBuilderOutput, ActivityError> {
         self.execute_step(&input.section_id, "triple_builder", 1, &input, || async {
-            Ok(step_catalog::run_triple_builder(self.as_ref(), &input))
+            Ok(seo_steps::triple_builder_step::execute(&input))
         })
         .await
     }
@@ -199,7 +184,7 @@ impl AlegriaActivities {
         input: truth_domain::contradictions::ContradictionGateInput,
     ) -> Result<truth_domain::contradictions::ContradictionGateOutput, ActivityError> {
         self.execute_step(&input.run_id, "contradiction_gate", 1, &input, || async {
-            Ok(step_catalog::run_contradiction_gate(self.as_ref(), &input))
+            Ok(truth_domain::contradictions::execute(&input))
         })
         .await
     }
@@ -212,21 +197,9 @@ impl AlegriaActivities {
         input: truth_domain::hitl_decision::HitlDecisionInput,
     ) -> Result<truth_domain::hitl_decision::HitlDecisionOutput, ActivityError> {
         self.execute_step(&input.run_id, "hitl_decision", 1, &input, || async {
-            Ok(step_catalog::run_hitl_decision(self.as_ref(), &input))
+            Ok(truth_domain::hitl_decision::execute(&input))
         })
         .await
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_neo4j_backwrite_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: operations::Neo4jBackwriteInput,
-    ) -> Result<operations::Neo4jBackwriteOutput, ActivityError> {
-        step_catalog::run_neo4j_backwrite(self.as_ref(), &input)
-            .await
-            .map_err(Self::into_activity_error)
     }
 
     #[allow(dead_code)]
@@ -787,7 +760,7 @@ impl AlegriaActivities {
     ) -> Result<SeoSiteBuildInputPayload, ActivityError> {
         self.execute_step(&run_id, "load_seo_site_build_input", 1, &run_id, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::seo_runtime::load_site_build_input(&repo, &run_id).await
+            repo.load_site_build_input(&run_id).await
         })
         .await
     }
@@ -807,7 +780,7 @@ impl AlegriaActivities {
             })?;
         let timer = crate::metrics::ActivityTimer::start("load_verified_support_bundle");
         let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-        match seo_application::seo_runtime::load_verified_support_bundle(&repo, &request).await {
+        match repo.load_verified_support_bundle(&request).await {
             Ok(bundle) => {
                 crate::metrics::global()
                     .support_bundle_events_total
@@ -818,20 +791,11 @@ impl AlegriaActivities {
             }
             Err(err) => {
                 let class = err.class();
-                let error_text = format!("{err:?}");
-                let outcome = if error_text.contains("empty") {
-                    "empty"
-                } else {
-                    "failed"
-                };
                 crate::metrics::global()
                     .support_bundle_events_total
-                    .with_label_values(&[outcome])
+                    .with_label_values(&["failed"])
                     .inc();
                 timer.record_failure(class.as_str());
-                if outcome == "empty" {
-                    return Ok(Vec::new());
-                }
                 Err(Self::activity_error_from_domain(&err))
             }
         }
@@ -868,7 +832,7 @@ impl AlegriaActivities {
                 return Ok(retained);
             }
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::crawl_ingest::run_crawl_sources(&repo, &input).await
+            repo.crawl_sources(&input).await
         })
         .await
     }
@@ -883,8 +847,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "raw_knowledge_ingestion", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            let report =
-                seo_application::crawl_ingest::run_raw_knowledge_ingestion(&repo, &input).await?;
+            let report = repo.ingest_raw_knowledge(&input).await?;
             observe_projection_barrier(&self.pool, "raw_knowledge_ingestion", &input.run_id)
                 .await?;
             Ok(report)
@@ -1006,8 +969,7 @@ impl AlegriaActivities {
         let run_id = input.run_id.clone();
         self.execute_step(&run_id, "editorial_draft_generate", 1, &input, || async {
             let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            let output =
-                seo_application::drafting::run_editorial_draft_generate(&repo, &input).await?;
+            let output = repo.generate_editorial_draft(&input).await?;
             let outcome = if output.provider_key == "deterministic_fixture"
                 && output.status.contains("fallback")
             {
@@ -1087,21 +1049,6 @@ impl AlegriaActivities {
                 admissible_support_count: input.verified_support.len(),
                 status: "admissible".to_string(),
             })
-        })
-        .await
-    }
-
-    #[allow(dead_code)]
-    #[activity]
-    pub async fn run_cms_publish_step(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        input: CmsPublishInputPayload,
-    ) -> Result<CmsPublishOutputPayload, ActivityError> {
-        let run_id = input.run_id.clone();
-        self.execute_step(&run_id, "cms_publish", 1, &input, || async {
-            let repo = SqlxSeoRuntimeRepository::new(&self.pool);
-            seo_application::review_publish::run_cms_publish(&repo, &input).await
         })
         .await
     }

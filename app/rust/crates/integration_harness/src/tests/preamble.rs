@@ -21,12 +21,11 @@
     };
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
-        registration::register_site_build_input,
         scenario::{
             execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
         },
     };
-    use seo_ports::SeoSiteBuildRegistrationRequest;
+    use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
     use seo_steps::seo_step_support::artifact_key;
     use serial_test::serial;
     use sqlx::{types::Json, Row};

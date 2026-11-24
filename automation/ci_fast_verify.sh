@@ -44,7 +44,6 @@ case "${1:-}" in
   integration)
     python3 automation/check_expert_core_activation_contract.py
     python3 automation/check_temporal_build_id_policy.py
-    python3 automation/check_quality_policy_registry.py
     python3 automation/check_run_report_completeness.py
     python3 automation/check_reconcile_failsafe.py
     python3 automation/check_sqlx_offline_contract.py

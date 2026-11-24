@@ -6,7 +6,6 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
     // Legacy Python paths are intentionally NOT required anymore (R9 archive).
     // ---------------------------------------------------------------------
     let required_files = [
-        "app/rust/crates/seo_domain/src/block_validator.rs",
         "app/rust/crates/truth_domain/src/fact_verifier.rs",
         "app/rust/crates/seo_domain/src/writer.rs",
         "app/rust/crates/acquisition/src/pdf_parser.rs",
@@ -32,27 +31,6 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
                 code: "M001",
                 message: format!("missing required file: {}", p.display()),
             });
-        }
-    }
-
-    // ---------------------------------------------------------------------
-    // R101: Enforce Rust Temporal activity coverage (MERGED_MODE target chain).
-    // ---------------------------------------------------------------------
-    let temporal_activities = root.join("app/rust/services/temporal/src/activities/mod.rs");
-    if temporal_activities.exists() {
-        let text = read_text(&temporal_activities)?;
-        for fn_name in [
-            "pub async fn generate_content(",
-            "pub async fn validate_blocks(",
-            "pub async fn finalize_run(",
-        ] {
-            if !text.contains(fn_name) {
-                findings.push(Finding {
-                    level: "warn",
-                    code: "R101",
-                    message: format!("missing temporal activity in Rust worker: {fn_name}"),
-                });
-            }
         }
     }
 

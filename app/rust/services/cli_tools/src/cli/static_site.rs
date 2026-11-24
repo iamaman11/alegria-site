@@ -74,8 +74,7 @@ async fn crawl_pending_sources(
     let database_url = database_url.unwrap_or_else(default_database_url);
     let pool = connect_pg(&database_url).await?;
     let repo = SqlxSeoRuntimeRepository::new(&pool);
-    let output = run_crawl_sources(
-        &repo,
+    let output = repo.crawl_sources(
         &contracts::generated::alegria::temporal::v1::CrawlSourcesInputPayload {
             run_id,
             query_batch_key,

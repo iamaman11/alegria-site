@@ -33,8 +33,7 @@ async fn run_page_phase<
                     section_templates: Vec::new(),
                     llm_candidate: None,
                     source_context_chunks: Vec::new(),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),
@@ -47,14 +46,12 @@ async fn run_page_phase<
         }
         SeoPhaseKey::EditorialDraftGenerate => {
             let draft_plan = require_state_ref(&page_state.draft_plan, "draft_assemble_required")?;
-            let output = drafting::run_editorial_draft_generate(
-                repo,
-                &EditorialDraftGenerateInputPayload {
+            let output = repo
+                .generate_editorial_draft(&EditorialDraftGenerateInputPayload {
                     run_id,
                     request: draft_plan.llm_request.clone(),
                     provider_policy: "multi_provider:first_available".to_string(),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),

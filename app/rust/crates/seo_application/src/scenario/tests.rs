@@ -11,8 +11,8 @@ mod tests {
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
-        CrawlIngestRepository, GraphCapabilityPort, GraphCoverageEvaluation, GraphNeighborhoodHit,
-        GraphReasoningPort, OrganicSerpResponse, PlanningRepository, ProjectionBarrierStatus,
+        CrawlIngestRepository, GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse,
+        PlanningRepository, ProjectionBarrierStatus,
         ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
         RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
@@ -248,27 +248,6 @@ mod tests {
             Ok(runtime_models::GraphPlanningContext::default())
         }
 
-        async fn find_conflict_neighborhood(
-            &self,
-            _scope_signature: &str,
-            _page_node_key: &str,
-        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
-            Ok(Vec::new())
-        }
-
-        async fn evaluate_draft_coverage_neighborhood(
-            &self,
-            page_node_key: &str,
-            _draft_markdown: &str,
-        ) -> Result<GraphCoverageEvaluation, DomainError> {
-            Ok(GraphCoverageEvaluation {
-                page_node_key: page_node_key.to_string(),
-                coverage_score: 0.0,
-                missing_topics: Vec::new(),
-                reason_codes: vec!["graph_draft_coverage".to_string()],
-                support_refs: Vec::new(),
-            })
-        }
     }
 
     #[async_trait]

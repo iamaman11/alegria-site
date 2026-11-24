@@ -30,7 +30,7 @@ use super::proto_runtime_payload_store::{
     RuntimeProtoPayload,
 };
 use super::sqlx_outbox_adapter::OutboxEnvelope;
-use super::sqlx_runtime_outbox_adapter::outbox_emit_many;
+use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionBacklogCounts {

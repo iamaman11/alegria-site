@@ -700,6 +700,26 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("temporal_restart", result["selected_suites"])
         self.assertTrue(worker_release_decision(result, result["changed_paths"], manual=False)["worker_required"])
 
+    def test_draft_qa_sql_atomicity_change_selects_actual_postgres_rollback_suite(self) -> None:
+        path = "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/draft_publish_rebuild_persistence.rs"
+        outcome = self.impact(path)
+        self.assertEqual(outcome["scope"], "scoped")
+        self.assertIn("draft_qa_scenario", outcome["selected_suites"])
+        self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
+        self.assertIn("draft_qa_", dict(suite_commands_for_report(outcome))["draft_qa_scenario"])
+
+    def test_planning_and_projection_atomicity_select_actual_postgres_suite(self) -> None:
+        for path in (
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
+            "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+        ):
+            with self.subTest(path=path):
+                outcome = self.impact(path)
+                self.assertIn("planning_atomicity", outcome["selected_suites"])
+                self.assertIn("architecture-and-rust", outcome["selected_ci_jobs"])
+                self.assertIn("planning_atomic_", dict(suite_commands_for_report(outcome))["planning_atomicity"])
+
     def test_historical_truth_report_is_not_a_live_rust_fixture(self) -> None:
         outcome = self.impact("docs/runs/r3_contradiction_handling.json")
         self.assertEqual(outcome["scope"], "none")
@@ -861,7 +881,10 @@ class ImpactFixtures(unittest.TestCase):
     def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
         outcome = self.impact("automation/ci_impact.py")
         self.assertEqual(outcome["scope"], "full")
-        self.assertEqual(len(outcome["selected_suites"]), 5)
+        self.assertEqual(
+            set(outcome["selected_suites"]),
+            {name for name, owner in SUITE_OWNERS.items() if owner["on_unknown_global_input"]},
+        )
         self.assertEqual(len(outcome["selected_images"]), 4)
         self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
         self.assertTrue(outcome["full_scope_reasons"])

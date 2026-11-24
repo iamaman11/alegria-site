@@ -178,9 +178,6 @@ python3 automation/check_seo_steps_infra_surface.py
 echo "[35e/56] Temporal SEO planning cluster boundary"
 python3 automation/check_temporal_seo_activity_surface.py
 
-echo "[35f/57] Temporal step catalog SEO surface"
-python3 automation/check_temporal_step_catalog_surface.py
-
 echo "[35f1/57] Temporal workflow catalog support surfaces"
 python3 automation/check_temporal_workflow_catalog_support.py
 
@@ -346,12 +343,6 @@ fi
 if [[ "$PHASE" == "all" || "$PHASE" == "integration" ]]; then
 echo "[41/53] Temporal build-id policy"
 python3 automation/check_temporal_build_id_policy.py
-
-echo "[42a/53] Quality policy registry and scoring"
-python3 automation/check_quality_policy_registry.py
-
-echo "[42b/53] Quality policy registry and scoring smoke"
-python3 automation/smoke_quality_policy_registry.py
 
 echo "[42c/53] Run report completeness"
 python3 automation/check_run_report_completeness.py

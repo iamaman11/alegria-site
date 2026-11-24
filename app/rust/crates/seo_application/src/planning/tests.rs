@@ -3,8 +3,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use seo_ports::{
-        GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
-        GraphNeighborhoodHit, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
+        GlobalNavigationPersistReport, GraphCapabilityPort, GraphReasoningPort,
+        OrganicSerpResponse, OrganicSerpResult,
         PlanningRepository, SemanticLinkCandidate,
         SemanticLinkSearchPort, SerpSearchPort,
     };
@@ -181,27 +181,6 @@ mod tests {
             Ok(runtime_models::GraphPlanningContext::default())
         }
 
-        async fn find_conflict_neighborhood(
-            &self,
-            _scope_signature: &str,
-            _page_node_key: &str,
-        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
-            Ok(Vec::new())
-        }
-
-        async fn evaluate_draft_coverage_neighborhood(
-            &self,
-            page_node_key: &str,
-            _draft_markdown: &str,
-        ) -> Result<GraphCoverageEvaluation, DomainError> {
-            Ok(GraphCoverageEvaluation {
-                page_node_key: page_node_key.to_string(),
-                coverage_score: 0.0,
-                missing_topics: Vec::new(),
-                reason_codes: vec!["graph_draft_coverage".to_string()],
-                support_refs: Vec::new(),
-            })
-        }
     }
 
     struct FakeSerpSearchPort;
@@ -375,27 +354,6 @@ mod tests {
             Ok(self.graph_context.clone())
         }
 
-        async fn find_conflict_neighborhood(
-            &self,
-            _scope_signature: &str,
-            _page_node_key: &str,
-        ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
-            Ok(Vec::new())
-        }
-
-        async fn evaluate_draft_coverage_neighborhood(
-            &self,
-            page_node_key: &str,
-            _draft_markdown: &str,
-        ) -> Result<GraphCoverageEvaluation, DomainError> {
-            Ok(GraphCoverageEvaluation {
-                page_node_key: page_node_key.to_string(),
-                coverage_score: 0.0,
-                missing_topics: Vec::new(),
-                reason_codes: vec!["graph_draft_coverage".to_string()],
-                support_refs: Vec::new(),
-            })
-        }
     }
 
     #[tokio::test]
