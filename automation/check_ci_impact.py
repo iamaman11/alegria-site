@@ -99,7 +99,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
 
     def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
-        report = self.impact(".github/workflows/ci.yml")
+        report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
         assignments = suite_commands_by_ci_job(report)
@@ -109,8 +109,10 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(set(architecture) & set(verify))
         self.assertEqual(architecture | verify, selected)
         self.assertEqual(set(verify), FULL_VERIFY_E2E_SUITES)
-        self.assertIn("cms_review_revision", architecture)
-        self.assertIn("truth_adjudication_integrity", architecture)
+        self.assertIn("cms_review_revision", verify)
+        self.assertIn("truth_adjudication_integrity", verify)
+        self.assertIn("temporal_restart", architecture)
+        self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
     def test_scoped_ci_keeps_every_selected_real_suite_in_architecture(self) -> None:
         for path in (

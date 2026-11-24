@@ -709,11 +709,12 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 
 # The full CI already runs independent workspace units in verify. Running
 # these real, Worker-independent E2E suites there uses the idle second runner
-# while architecture retains the Worker binaries and Temporal/CMS regressions.
+# while architecture retains the Worker binaries and Temporal regressions.
 # Scoped changes keep their existing single-owner architecture fast path.
 FULL_VERIFY_E2E_SUITES = frozenset({
     "draft_qa_scenario", "knowledge_a13", "outbox_a14",
-    "planning_atomicity", "publishing_a17",
+    "planning_atomicity", "publishing_a17", "cms_review_revision",
+    "truth_adjudication_integrity",
 })
 
 

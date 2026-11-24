@@ -233,13 +233,15 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
     def test_full_verify_runs_only_its_selected_real_e2e_after_workspace_units(self) -> None:
         suites = [
             "cms_review_revision", "draft_qa_scenario", "knowledge_a13",
-            "outbox_a14", "planning_atomicity", "publishing_a17", "temporal_restart",
+            "outbox_a14", "planning_atomicity", "publishing_a17",
+            "temporal_restart", "truth_adjudication_integrity",
         ]
         executions, output, evidence = self.run_plan(suites, suite_job="verify")
         assigned = suite_commands_by_ci_job(self.report(suites))["verify"]
         self.assertEqual([command for command, _ in executions], [command for _, command in assigned])
         self.assertEqual({name for name, _ in assigned}, {
-            "draft_qa_scenario", "knowledge_a13", "outbox_a14", "planning_atomicity", "publishing_a17",
+            "cms_review_revision", "draft_qa_scenario", "knowledge_a13", "outbox_a14",
+            "planning_atomicity", "publishing_a17", "truth_adjudication_integrity",
         })
         self.assertNotIn("CI_SUITE_PREPARE=", output)
         self.assertNotIn("CI_WORKSPACE_UNIT_TESTS=", output)
