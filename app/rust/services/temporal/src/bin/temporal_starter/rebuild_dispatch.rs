@@ -167,8 +167,7 @@ async fn run_rebuild_dispatch(
         });
 
         if !dry_run {
-            register_site_build_input(
-                &repo,
+            repo.register_site_build_input(
                 &SeoSiteBuildRegistrationRequest {
                     run_id: run_id.clone(),
                     context_key: context_key.clone(),

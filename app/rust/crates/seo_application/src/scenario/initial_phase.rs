@@ -10,15 +10,13 @@ async fn run_initial_phase<
     let run_id = request.site_input.run_id.clone();
     match key {
         SeoPhaseKey::LoadVerifiedSupportBundle => {
-            state.verified_support = seo_runtime::load_verified_support_bundle(
-                repo,
-                &VerifiedSupportBundleRequest {
+            state.verified_support = repo
+                .load_verified_support_bundle(&VerifiedSupportBundleRequest {
                     run_id,
                     context_key: request.site_input.context_key.clone(),
                     scope_signature: scope_signature(&request.site_input)?,
                     applicant_profile: applicant_profile(&request.site_input),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),
@@ -40,8 +38,7 @@ async fn run_initial_phase<
                     query_batch_key: request.site_input.query_batch_key.clone(),
                     scope: request.site_input.scope.clone(),
                     queries: request.site_input.queries.clone(),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),
@@ -56,16 +53,14 @@ async fn run_initial_phase<
         }
         SeoPhaseKey::CrawlSources => {
             let ingest = require_state_ref(&state.ingest, "serp_ingest_required")?;
-            let output = crawl_ingest::run_crawl_sources(
-                repo,
-                &CrawlSourcesInputPayload {
+            let output = repo
+                .crawl_sources(&CrawlSourcesInputPayload {
                     run_id,
                     query_batch_key: ingest.query_batch_key.clone(),
                     limit: 25,
                     emit_qdrant: true,
                     sweep_index: 0,
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),
@@ -84,16 +79,14 @@ async fn run_initial_phase<
         SeoPhaseKey::RawKnowledgeIngestion => {
             let ingest = require_state_ref(&state.ingest, "serp_ingest_required")?;
             let crawl_sources = require_state_ref(&state.crawl_sources, "crawl_sources_required")?;
-            let output = crawl_ingest::run_raw_knowledge_ingestion(
-                repo,
-                &RawKnowledgeIngestionInputPayload {
+            let output = repo
+                .ingest_raw_knowledge(&RawKnowledgeIngestionInputPayload {
                     run_id,
                     context_key: request.site_input.context_key.clone(),
                     query_batch_key: ingest.query_batch_key.clone(),
                     raw_page_ids: crawl_sources.raw_page_ids.clone(),
                     source_policy: "candidate_only_truth_extraction@1".to_string(),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),

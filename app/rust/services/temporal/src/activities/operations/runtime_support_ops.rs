@@ -53,43 +53,6 @@ pub(crate) async fn check_data_freshness_impl(
     serde_json::to_string(&report).map_err(AlegriaActivities::classify_error)
 }
 
-pub(crate) async fn neo4j_backwrite_impl(
-    input: &Neo4jBackwriteInput,
-) -> Result<Neo4jBackwriteOutput, DomainError> {
-    let mut opts = sqlx_reconcile_adapter::load_default_reconcile_options();
-    opts.dry_run = input.dry_run;
-    if let Some(v) = input.max_retry_count {
-        opts.max_retry_count = v;
-    }
-    if let Some(v) = input.batch_limit {
-        opts.batch_limit = v;
-    }
-    if let Some(v) = input.requeue_base_delay_sec {
-        opts.requeue_base_delay_sec = v;
-    }
-    if let Some(v) = input.requeue_jitter_sec {
-        opts.requeue_jitter_sec = v;
-    }
-
-    let target = if input.target_system.trim().is_empty() {
-        "neo4j"
-    } else {
-        input.target_system.as_str()
-    };
-    let report = sqlx_reconcile_adapter::reconcile_target_system_default(target, &opts)
-        .await
-        .map_err(AlegriaActivities::classify_error)?;
-
-    Ok(Neo4jBackwriteOutput {
-        target_system: report.target_system,
-        dry_run: report.dry_run,
-        stale_candidates: report.stale_candidates,
-        failed_candidates: report.failed_candidates,
-        reset_stale_processing: report.reset_stale_processing,
-        requeued_failed: report.requeued_failed,
-    })
-}
-
 pub(crate) async fn projection_reconcile_impl(
     target_system: &str,
     dry_run: bool,

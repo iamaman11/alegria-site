@@ -3,10 +3,6 @@ name = "temporal_worker"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-default = []
-graphflow_experimental = []
-
 [dependencies]
 # Required by Temporal proc-macros (`#[activities]`, `#[workflow_methods]`):
 # macros resolve these crates by canonical crate names.

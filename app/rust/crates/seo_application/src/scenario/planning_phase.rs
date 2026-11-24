@@ -17,15 +17,13 @@ async fn run_planning_phase<
     let run_id = request.site_input.run_id.clone();
     match key {
         SeoPhaseKey::RefreshVerifiedSupportBundle => {
-            state.verified_support = seo_runtime::load_verified_support_bundle(
-                repo,
-                &VerifiedSupportBundleRequest {
+            state.verified_support = repo
+                .load_verified_support_bundle(&VerifiedSupportBundleRequest {
                     run_id,
                     context_key: request.site_input.context_key.clone(),
                     scope_signature: scope_signature(&request.site_input)?,
                     applicant_profile: applicant_profile(&request.site_input),
-                },
-            )
+                })
             .await?;
             phase_reports.push(phase_report(
                 phase_label(key),

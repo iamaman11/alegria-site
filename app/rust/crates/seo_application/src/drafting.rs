@@ -2,13 +2,12 @@ use contracts::generated::alegria::temporal::v1::{
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
     DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
-    EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
     SectionTemplateBinding, SeoTraceabilityEntryState, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
 use seo_ports::knowledge::{SourceContextChunk, SourceContextQuery};
 use seo_ports::{
-    DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplate,
+    DraftRepository, GraphCapabilityPort, SectionTemplate,
     SectionTemplateRepository, SourceContextSearchPort,
 };
 
@@ -108,13 +107,6 @@ pub async fn run_draft_assemble<
     repo.persist_draft_assemble_output(&input.run_id, &output)
         .await?;
     Ok(output)
-}
-
-pub async fn run_editorial_draft_generate<P: EditorialGenerationPort>(
-    port: &P,
-    input: &EditorialDraftGenerateInputPayload,
-) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
-    port.generate_editorial_draft(input).await
 }
 
 pub async fn run_draft_normalize<R: DraftRepository>(
@@ -326,12 +318,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use contracts::generated::alegria::temporal::v1::{
-        DraftState, EditorialBrief, EditorialDraftGenerateOutputPayload, LlmDraftCandidate,
-        LlmDraftRequest, PageBlueprintState, PageNodeState, SectionTemplateBinding,
+        DraftState, PageBlueprintState, PageNodeState, SectionTemplateBinding,
         SeoDraftSectionState, SeoVerifiedFactSupportState, SourceContextChunkState,
     };
     use seo_ports::{
-        DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
+        DraftRepository, GraphCapabilityPort, SectionTemplateRepository,
         SourceContextSearchPort,
     };
 
@@ -418,8 +409,6 @@ mod tests {
         }
     }
 
-    struct FakeEditorialPort;
-
     #[test]
     fn section_template_port_to_temporal_wire_preserves_all_fields() {
         let template = SectionTemplate {
@@ -445,40 +434,6 @@ mod tests {
                 required: false,
             }
         );
-    }
-
-    #[async_trait]
-    impl EditorialGenerationPort for FakeEditorialPort {
-        async fn generate_editorial_draft(
-            &self,
-            input: &EditorialDraftGenerateInputPayload,
-        ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
-            Ok(EditorialDraftGenerateOutputPayload {
-                provider_key: "fake".to_string(),
-                model_key: "fake-model".to_string(),
-                status: "selected".to_string(),
-                candidate: Some(LlmDraftCandidate {
-                    candidate_key: "cand-1".to_string(),
-                    request_key: input
-                        .request
-                        .as_ref()
-                        .map(|request| request.request_key.clone())
-                        .unwrap_or_default(),
-                    provider_key: "fake".to_string(),
-                    model_key: "fake-model".to_string(),
-                    prompt_version: "prompt@1".to_string(),
-                    body_markdown: "draft".to_string(),
-                    sections: Vec::new(),
-                    claim_ledger: Vec::new(),
-                    content_blocks: Vec::new(),
-                    faq_json: "[]".to_string(),
-                    schema_markup_json: "{}".to_string(),
-                    status: "selected".to_string(),
-                    seo_title: String::new(),
-                    seo_meta_description: String::new(),
-                }),
-            })
-        }
     }
 
     #[tokio::test]
@@ -528,43 +483,6 @@ mod tests {
                 .map(|template| template.template_key.as_str()),
             Some("tmpl:overview")
         );
-    }
-
-    #[tokio::test]
-    async fn drafting_editorial_generation_uses_port() {
-        let port = FakeEditorialPort;
-        let output = run_editorial_draft_generate(
-            &port,
-            &EditorialDraftGenerateInputPayload {
-                run_id: "run-1".to_string(),
-                request: Some(LlmDraftRequest {
-                    request_key: "req-1".to_string(),
-                    run_id: "run-1".to_string(),
-                    editorial_brief: Some(EditorialBrief {
-                        editorial_brief_key: "brief-1".to_string(),
-                        page_node_key: "page-1".to_string(),
-                        page_brief_key: "page-brief-1".to_string(),
-                        target_audience: "tourist".to_string(),
-                        expertise_goal: "goal".to_string(),
-                        section_templates: Vec::new(),
-                        verified_support: Vec::new(),
-                        required_links: Vec::new(),
-                        truth_snapshot_ref: "truth-1".to_string(),
-                        source_context_chunks: Vec::new(),
-                        locale_code: "en".to_string(),
-                        canonical_url_path: "/en/visa/spain/".to_string(),
-                    }),
-                    provider_policy: "multi_provider:first_available".to_string(),
-                    prompt_version: "prompt@1".to_string(),
-                    output_contract: "json".to_string(),
-                }),
-                provider_policy: "multi_provider:first_available".to_string(),
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(output.provider_key, "fake");
-        assert!(output.candidate.is_some());
     }
 
     #[tokio::test]

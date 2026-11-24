@@ -1478,8 +1478,7 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
         sqlx_seo_adapter, sqlx_step_ledger_adapter as ledger,
     };
-    use seo_application::registration::register_site_build_input;
-    use seo_ports::SeoSiteBuildRegistrationRequest;
+    use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -1495,7 +1494,7 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
         query_batch_key: None, run_mode: Some("publish_with_hitl".into()),
         retained_source_run_id: None,
     };
-    let source = register_site_build_input(&repo,&request).await.unwrap();
+    let source = repo.register_site_build_input(&request).await.unwrap();
     let mut reuse = request.clone();
     reuse.run_id = Uuid::new_v4().to_string();
     reuse.context_key = Some(source.context_key.clone());
@@ -1503,7 +1502,7 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
     reuse.queries.clear();
     reuse.retained_source_run_id = Some(source_id.clone());
     // Nonterminal acquisition cannot be reused.
-    assert!(register_site_build_input(&repo,&reuse).await.is_err());
+    assert!(repo.register_site_build_input(&reuse).await.is_err());
 
     let url = "https://example.org/visa";
     let raw = raw_crawl_adapter::save_crawled_html(pool,url,"example.org",url,"official",
@@ -1546,7 +1545,7 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
     sqlx::query("UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1::uuid")
         .bind(&source_id).execute(pool).await.unwrap();
 
-    let retained = register_site_build_input(&repo,&reuse).await.unwrap();
+    let retained = repo.register_site_build_input(&reuse).await.unwrap();
     assert_eq!(retained.queries,source.queries);
     assert_ne!(retained.query_batch_key,source.query_batch_key);
     let ingest_input=SerpIngestInputPayload {
@@ -1592,8 +1591,7 @@ async fn keyword_cluster_natural_owner_survives_changed_serp_family() {
     use infrastructure::adapters::{
         seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
     };
-    use seo_application::registration::register_site_build_input;
-    use seo_ports::SeoSiteBuildRegistrationRequest;
+    use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
@@ -1614,9 +1612,9 @@ async fn keyword_cluster_natural_owner_survives_changed_serp_family() {
         run_mode: Some("publish_with_hitl".into()),
         retained_source_run_id: None,
     };
-    let first_site = register_site_build_input(&repo, &register(Uuid::new_v4().to_string()))
+    let first_site = repo.register_site_build_input(&register(Uuid::new_v4().to_string()))
         .await.unwrap();
-    let second_site = register_site_build_input(&repo, &register(Uuid::new_v4().to_string()))
+    let second_site = repo.register_site_build_input(&register(Uuid::new_v4().to_string()))
         .await.unwrap();
     let keyword = "виза в испанию для белорусов";
     let old_cluster = KeywordClusterState {
@@ -1683,15 +1681,13 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
     };
     use primitives::errors::ErrorClass;
     use seo_domain::artifact_identity::ContentGapDetector;
-    use seo_application::registration::register_site_build_input;
-    use seo_ports::SeoSiteBuildRegistrationRequest;
+    use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
     let repo = SqlxSeoRuntimeRepository::new(pool);
-    let site = register_site_build_input(
-        &repo,
-        &SeoSiteBuildRegistrationRequest {
+    let site = repo
+        .register_site_build_input(&SeoSiteBuildRegistrationRequest {
             run_id: Uuid::new_v4().to_string(),
             context_key: None, market: "alegria-site".into(), locale: "ru-RU".into(),
             country_code: "ES".into(), visa_type: "tourist".into(), visa_subtype: None,
@@ -1699,8 +1695,9 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
             bootstrap_context: true, queries: vec!["spain visa".into()],
             query_batch_key: None, run_mode: Some("publish_with_hitl".into()),
             retained_source_run_id: None,
-        },
-    ).await.unwrap();
+        })
+        .await
+        .unwrap();
     let ia_input = IaBuildInputPayload {
         run_id: site.run_id.clone(), scope: site.scope.clone(), ..Default::default()
     };
@@ -1776,4 +1773,124 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
         .await.unwrap_err();
     assert_eq!(error.class(), ErrorClass::ConflictViolation);
     assert!(error.to_string().contains("SQLSTATE=23505"));
+}
+
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_link_recommend_outbox_failure_rolls_back_then_retries() {
+    use contracts::generated::alegria::temporal::v1::{
+        LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
+    };
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let blueprint = format!("planning-atomic-blueprint-{marker}");
+    let scope = format!("planning-atomic-scope-{marker}");
+    let source = format!("planning-atomic-source-{marker}");
+    let target = format!("planning-atomic-target-{marker}");
+    let recommendation = format!("planning-atomic-link-{marker}");
+
+    sqlx::query(
+        "INSERT INTO site.page_blueprints (blueprint_key,page_type_key,dominant_intent) \
+         VALUES ($1,'country_hub_page','informational')",
+    )
+    .bind(&blueprint)
+    .execute(pool)
+    .await
+    .unwrap();
+    for (page_key, slug) in [(&source, "source"), (&target, "target")] {
+        sqlx::query(
+            "INSERT INTO site.page_nodes \
+             (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state) \
+             VALUES ($1,$2,$3,'country_hub_page','informational',$4,$5,'planned')",
+        )
+        .bind(page_key)
+        .bind(&scope)
+        .bind(&blueprint)
+        .bind(slug)
+        .bind(format!("/test/{marker}/{slug}/"))
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    let input = LinkRecommendInputPayload {
+        run_id: Uuid::new_v4().to_string(),
+        ..Default::default()
+    };
+    let output = LinkRecommendOutputPayload {
+        link_recommendations: vec![LinkRecommendationState {
+            link_recommendation_key: recommendation.clone(),
+            scope_signature: scope,
+            source_page_key: source.clone(),
+            target_page_key: target.clone(),
+            link_role: "contextual".to_string(),
+            anchor_strategy: "descriptive".to_string(),
+            required_flag: true,
+            score: 0.9,
+            status: "candidate".to_string(),
+            ..Default::default()
+        }],
+    };
+
+    // Inject failure at the final Outbox insert after the link row and its
+    // required-link rebuild edge have been written inside the transaction.
+    sqlx::query(
+        "ALTER TABLE system.sync_outbox ADD CONSTRAINT planning_atomic_outbox_fault \
+         CHECK (aggregate_type <> 'link_recommendation')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(
+        infrastructure::adapters::sqlx_seo_adapter::persist_link_recommend_output(
+            pool, &input, &output,
+        )
+        .await
+        .is_err()
+    );
+    let (links, dependencies, events): (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+         (SELECT count(*) FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+         (SELECT count(*) FROM monitoring.seo_rebuild_dependencies WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3), \
+         (SELECT count(*) FROM system.sync_outbox WHERE aggregate_type='link_recommendation' AND aggregate_key=$1)",
+    )
+    .bind(&recommendation)
+    .bind(&source)
+    .bind(&target)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((links, dependencies, events), (0, 0, 0));
+    sqlx::query("ALTER TABLE system.sync_outbox DROP CONSTRAINT planning_atomic_outbox_fault")
+        .execute(pool)
+        .await
+        .unwrap();
+
+    infrastructure::adapters::sqlx_seo_adapter::persist_link_recommend_output(
+        pool, &input, &output,
+    )
+    .await
+    .unwrap();
+    // Retrying the same result must not duplicate its projection event.
+    infrastructure::adapters::sqlx_seo_adapter::persist_link_recommend_output(
+        pool, &input, &output,
+    )
+    .await
+    .unwrap();
+    let (links, dependencies, events): (i64, i64, i64) = sqlx::query_as(
+        "SELECT \
+         (SELECT count(*) FROM site.link_recommendations WHERE link_recommendation_key=$1), \
+         (SELECT count(*) FROM monitoring.seo_rebuild_dependencies WHERE page_node_key=$2 AND dependency_type='required_link' AND dependency_ref=$3), \
+         (SELECT count(*) FROM system.sync_outbox WHERE aggregate_type='link_recommendation' AND aggregate_key=$1)",
+    )
+    .bind(&recommendation)
+    .bind(&source)
+    .bind(&target)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((links, dependencies, events), (1, 1, 1));
 }

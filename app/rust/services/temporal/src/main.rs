@@ -5,8 +5,6 @@ use std::env;
 use std::sync::Arc;
 
 mod activities;
-#[cfg(feature = "graphflow_experimental")]
-mod graphflow_experimental;
 mod metrics;
 mod workflows;
 
@@ -17,12 +15,6 @@ async fn main() -> Result<()> {
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    #[cfg(feature = "graphflow_experimental")]
-    tracing::info!(
-        mode = graphflow_experimental::graphflow_runtime_label(),
-        "temporal_worker started with GraphFlow experimental feature"
-    );
-
     let temporal_url =
         std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string());
     let db_url = std::env::var("DATABASE_URL").context("DATABASE_URL must be set")?;

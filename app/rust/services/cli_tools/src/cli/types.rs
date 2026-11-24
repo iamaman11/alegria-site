@@ -19,13 +19,13 @@ use infrastructure::adapters::{
 use crate::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
-use seo_application::crawl_ingest::run_crawl_sources;
 use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
-use seo_application::registration::register_site_build_input;
 use seo_application::scenario::{
     execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
 };
-use seo_ports::SeoSiteBuildRegistrationRequest;
+use seo_ports::{
+    CrawlIngestRepository, SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest,
+};
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::HashMap;

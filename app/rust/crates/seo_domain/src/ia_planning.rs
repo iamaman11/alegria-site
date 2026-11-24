@@ -5,6 +5,7 @@
 //! belong here, with no knowledge of protobuf, runtime storage or SDKs.
 
 use crate::artifact_identity::canonical_slug;
+use crate::editorial::default_section_roles;
 
 pub struct IaScope<'a> {
     pub locale: &'a str,
@@ -150,18 +151,7 @@ pub fn required_sections_for_page_type(page_type: &str) -> Vec<String> {
             "cta_disclaimer",
         ],
         "faq_page" => &["overview", "faq", "related_pages", "cta_disclaimer"],
-        _ => &[
-            "overview",
-            "who_fits",
-            "documents",
-            "process",
-            "fees",
-            "timing",
-            "where_to_apply",
-            "faq",
-            "related_pages",
-            "cta_disclaimer",
-        ],
+        _ => default_section_roles(),
     };
     roles.iter().map(|role| (*role).to_string()).collect()
 }
@@ -319,6 +309,17 @@ mod tests {
             required_sections_for_page_type(&plan.page_type_key),
             vec!["overview", "fees", "faq", "related_pages", "cta_disclaimer"]
         );
+    }
+
+    #[test]
+    fn default_page_sections_have_one_editorial_owner() {
+        let expected = default_section_roles()
+            .iter()
+            .map(|role| (*role).to_string())
+            .collect::<Vec<_>>();
+        for page_type in ["detail_page", "unknown_page", "supporting_editorial"] {
+            assert_eq!(required_sections_for_page_type(page_type), expected);
+        }
     }
 
     #[test]

@@ -50,6 +50,18 @@ async fn upsert_runtime_blob<T: RuntimeProtoPayload>(
     field_name: &str,
     value: &T,
 ) -> Result<(), DomainError> {
+    let mut conn = pool.acquire().await.map_err(classify_sqlx)?;
+    upsert_runtime_blob_on_conn(&mut *conn, run_id, field_name, value).await
+}
+
+// Draft assembly shares a single database transaction with its large payload
+// and projections. Reuse this writer without checking out a second connection.
+async fn upsert_runtime_blob_on_conn<T: RuntimeProtoPayload>(
+    conn: &mut sqlx::PgConnection,
+    run_id: &str,
+    field_name: &str,
+    value: &T,
+) -> Result<(), DomainError> {
     let uuid = Uuid::parse_str(run_id)
         .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
     let (payload_bytes, payload_hash) = encode_runtime_payload(value)?;
@@ -72,7 +84,7 @@ async fn upsert_runtime_blob<T: RuntimeProtoPayload>(
     .bind(T::schema_version())
     .bind(payload_bytes)
     .bind(payload_hash)
-    .execute(pool)
+    .execute(&mut *conn)
     .await
     .map_err(classify_sqlx)?;
     Ok(())

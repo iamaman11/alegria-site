@@ -4347,8 +4347,6 @@ name = "seo_domain"
 version = "0.1.0"
 dependencies = [
  "primitives",
- "regex",
- "scraper",
  "serde",
  "serde_json",
 ]
@@ -4373,7 +4371,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "contracts",
- "policies",
  "primitives",
  "prost",
  "regex",

@@ -32,7 +32,7 @@ use crate::execution::{
     RunProjectionPolicy, SeoExecutionCursor, SeoExecutionSegment, SeoPhaseDecision, SeoPhaseKey,
     SeoRunPolicy,
 };
-use crate::{crawl_ingest, drafting, planning, rebuild_detect, review_publish, seo_runtime};
+use crate::{drafting, planning, rebuild_detect, review_publish};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SeoExecutionMode {

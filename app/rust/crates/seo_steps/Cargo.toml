@@ -6,7 +6,6 @@ edition = "2021"
 [dependencies]
 runtime_models = { path = "../runtime_models" }
 primitives = { path = "../primitives" }
-policies = { path = "../policies" }
 contracts = { path = "../contracts" }
 seo_domain = { path = "../seo_domain" }
 anyhow = { workspace = true }

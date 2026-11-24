@@ -7,7 +7,6 @@ WORKFLOW = (
     / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
 )
 ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
-SEO_RUNTIME = ROOT / "app/rust/crates/seo_application/src/seo_runtime.rs"
 SUPPORT_ADAPTER = (
     ROOT
     / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/verified_support.rs"
@@ -37,7 +36,6 @@ def main() -> int:
     failures: list[str] = []
     workflow = WORKFLOW.read_text(encoding="utf-8")
     activities = read_file_resolved(ACTIVITIES)
-    seo_runtime = SEO_RUNTIME.read_text(encoding="utf-8")
     support_adapter = SUPPORT_ADAPTER.read_text(encoding="utf-8")
     projection_ports = PROJECTION_PORTS.read_text(encoding="utf-8")
     starter = read_file_resolved(STARTER)
@@ -56,23 +54,14 @@ def main() -> int:
 
     if "pub async fn load_verified_support_bundle" not in activities:
         failures.append("activities missing `load_verified_support_bundle`")
-    if "seo_application::seo_runtime::load_verified_support_bundle" not in activities:
-        failures.append("Temporal activity must use shared seo_application support loader")
-
-    loader_start = seo_runtime.find("pub async fn load_verified_support_bundle")
-    gate_start = seo_runtime.find("pub fn truth_admissibility_gate")
-    if loader_start < 0 or gate_start < 0 or gate_start <= loader_start:
-        failures.append("seo_runtime support loader/gate layout is missing")
-    else:
-        loader_body = seo_runtime[loader_start:gate_start]
-        if "repo.load_verified_support_bundle(request).await" not in loader_body:
-            failures.append("application support loader must remain a read-only repository call")
-        if "truth_admissibility_gate(" in loader_body:
-            failures.append(
-                "application support loader still fail-closes initial zero-truth bootstrap"
-            )
-    if "initial_support_read_allows_zero_truth_bootstrap" not in seo_runtime:
-        failures.append("seo_runtime missing zero-truth bootstrap regression test")
+    if "match repo.load_verified_support_bundle(&request).await" not in activities:
+        failures.append("Temporal activity must read verified support from its typed repository")
+    if "if bundle.is_empty() { \"empty\" } else { \"loaded\" }" not in activities:
+        failures.append("Temporal activity must preserve empty initial support as a valid bootstrap state")
+    if 'error_text.contains("empty")' in activities or 'if outcome == "empty"' in activities:
+        failures.append("Temporal activity must never mask a repository failure as empty bootstrap")
+    if "Err(Self::activity_error_from_domain(&err))" not in activities:
+        failures.append("Temporal activity must propagate typed repository failures")
 
     for needle in [
         "pub async fn load_verified_support_bundle(",

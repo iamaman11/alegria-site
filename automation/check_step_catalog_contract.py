@@ -16,8 +16,6 @@ REQUIRED_CONTRACT_FIELDS = [
 ]
 
 LEDGER_BACKED_STEPS = [
-    "generate_content",
-    "validate_blocks",
     "load_seo_site_build_input",
     "load_verified_support_bundle",
     "serp_ingest",
@@ -29,7 +27,8 @@ LEDGER_BACKED_STEPS = [
     "link_recommend",
     "draft_assemble",
     "draft_qa",
-    "cms_publish",
+    "cms_request_review",
+    "cms_publish_approved",
     "rebuild_detect",
 ]
 

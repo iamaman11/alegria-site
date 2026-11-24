@@ -218,8 +218,18 @@ DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/seo_steps/src/draft_qa_step.rs",
     "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
     "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/draft_publish_rebuild_persistence.rs",
     "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
     "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs",
+}
+
+# Real PostgreSQL rollback checks for planning/link-recommendation writes.
+# Keep them in the existing architecture-and-rust job; the integration harness
+# owns the test, while this registry only selects its exact Cargo filter.
+PLANNING_ATOMICITY_PATHS = {
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_status.rs",
+    "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }
 
 
@@ -263,6 +273,16 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    "planning_atomicity": {
+        "paths": PLANNING_ATOMICITY_PATHS,
+        "prefixes": (),
+        "lock_crates": {"infrastructure", "seo_application"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "planning_atomic_", "--locked", "--", "--nocapture",
+        ),
+    },
     "draft_qa_scenario": {
         "paths": DRAFT_QA_SCENARIO_PATHS,
         "prefixes": (),
