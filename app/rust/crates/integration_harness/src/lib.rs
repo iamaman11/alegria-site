@@ -130,4 +130,6 @@ mod tests {
     include!("tests/manual_llm_temporal_tests.rs");
     include!("tests/pure_v3_temporal_tests.rs");
     include!("tests/pg_v3_truth_review_effect_tests.rs");
+    include!("tests/pg_v3_admission_race_tests.rs");
+    include!("tests/pg_v3_temporal_cross_queue_tests.rs");
 }

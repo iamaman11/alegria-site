@@ -149,7 +149,7 @@ async fn pg_v3_issue_operator_admission(pool: &sqlx::PgPool, fixture: &PgV3Revie
 }
 
 #[cfg(feature = "e2e")]
-async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgPool {
+async fn pg_v3_unprivileged_effect_identity(postgres: &PostgresHarness) -> (sqlx::PgPool, String) {
     use postgres_store::truth_review_effect_v3::assert_unprivileged_pg_effect_role;
 
     // Never use the admin/owner connection to execute an Activity: doing so
@@ -201,7 +201,12 @@ async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgP
     assert_unprivileged_pg_effect_role(&pool)
         .await
         .expect("least-privilege Activity role passes fail-closed startup guard");
-    pool
+    (pool, restricted_url)
+}
+
+#[cfg(feature = "e2e")]
+async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgPool {
+    pg_v3_unprivileged_effect_identity(postgres).await.0
 }
 
 #[cfg(feature = "e2e")]
@@ -310,17 +315,18 @@ async fn pg_v3_truth_review_admission_effect_idempotence_staleness_and_role_boun
     .await
     .expect("actual canonical HITL review task was created");
     assert_eq!(queue_state, "open");
-    // A committed receipt is the durable idempotence authority, even after
-    // the operator's original time window expires and admission is revoked.
+    // A committed receipt is the durable idempotence authority even after
+    // the operator revokes the admission. Natural expiry, without mutating
+    // immutable issued authority, is tested separately under the context lock.
     sqlx::query(
         "UPDATE pipeline.pg_effect_v3_admissions
-         SET expires_at = now() - interval '1 minute', revoked_at = now()
+         SET revoked_at = now()
          WHERE admission_id = $1",
     )
     .bind(authorized.command.admission_id)
     .execute(&postgres.pool)
     .await
-    .expect("privileged operator expires/revokes spent admission");
+    .expect("privileged operator revokes spent admission");
     let replay = execute_admitted_reconcile(
         &effect_pool,
         &authorized.workflow_id,
@@ -328,7 +334,7 @@ async fn pg_v3_truth_review_admission_effect_idempotence_staleness_and_role_boun
         &authorized.command,
     )
     .await
-    .expect("same Activity replay must return committed receipt after expiry");
+    .expect("same Activity replay must return committed receipt after revocation");
     assert_eq!(receipt, replay, "replay must preserve the exact receipt ID");
     let count: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM pipeline.pg_effect_v3_receipts

@@ -23,7 +23,9 @@ SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
     "impact",
-    "architecture-and-rust", "product-truth", "rust-security",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
+    "rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e",
+    "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
 )
@@ -138,7 +140,7 @@ def execute_gate(*, equal_tree: bool = True, omit_job: str | None = None,
 
 
 class MainMergeProvenanceTests(unittest.TestCase):
-    def test_identical_git_trees_and_all_ten_green_jobs_accept_without_build(self) -> None:
+    def test_identical_git_trees_and_all_required_green_jobs_accept_without_build(self) -> None:
         ok, message, calls = execute_gate()
         self.assertTrue(ok, message)
         self.assertIn("CI_GATE=PASS", message)
@@ -159,6 +161,16 @@ class MainMergeProvenanceTests(unittest.TestCase):
         ok, message, _ = execute_gate(omit_job="verify")
         self.assertFalse(ok)
         self.assertIn("did not pass every mandatory owner", message)
+
+    def test_missing_precompiled_e2e_or_verified_binary_owner_blocks_merge(self) -> None:
+        for omitted in (
+            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-architecture-e2e", "rust-verify-e2e",
+        ):
+            with self.subTest(omitted=omitted):
+                ok, message, _ = execute_gate(omit_job=omitted)
+                self.assertFalse(ok)
+                self.assertIn("did not pass every mandatory owner", message)
 
     def test_fresh_merge_waits_for_github_pr_indexing_then_accepts(self) -> None:
         ok, message, _ = execute_gate(delayed_pr_indexes=2)

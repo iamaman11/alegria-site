@@ -283,9 +283,12 @@ pub async fn execute_admitted_reconcile(
         .bind(format!("pg-v3-admission|{}", input.admission_id))
         .execute(&mut *tx)
         .await?;
+    // `now()` would reflect transaction start, which may precede minutes of
+    // waiting on the context lock. Authorize at the post-lock wall-clock
+    // checkpoint; a DB trigger serializes operator revocation on this lock.
     let admission = sqlx::query(
         "SELECT a.admission_id, er.status AS run_status,
-                (a.revoked_at IS NULL AND a.expires_at > now()) AS admission_active
+                (a.revoked_at IS NULL AND a.expires_at > clock_timestamp()) AS admission_active
          FROM pipeline.pg_effect_v3_admissions a
          JOIN pipeline.execution_runs er ON er.run_id = a.run_id
          WHERE a.admission_id = $1 AND a.run_id = $2

@@ -13,7 +13,8 @@ from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
-    "architecture-and-rust", "product-truth",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
+    "rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e", "product-truth",
     "rust-security", "cloudflare-static-build",
     "stack-temporal-postgres18", "stack-storage-graph", "verify",
     "windows-operator-smoke",
@@ -52,7 +53,7 @@ def check() -> None:
     assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request' && needs\.impact\.result == 'success' && contains\(", workflow)) == len(OWNERS)
     # The real Outbox quarantine fence must be a required PR architecture
     # regression, not merely an opt-in comprehensive/deep check.
-    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  rust-e2e-harness:\n", 1)[0]
     assert "python3 automation/check_reliability_contracts.py" in architecture
     assert "python3 automation/test_causal_revision_contract.py" in architecture
     assert "python3 automation/test_neo4j_schema_contract.py" in architecture
@@ -147,7 +148,7 @@ def check() -> None:
 
     # The full workspace unit suite runs in the existing verify owner while
     # architecture runs Worker/E2E. Scoped edits retain Rust's narrow runner.
-    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  rust-e2e-harness:\n", 1)[0]
     product = workflow.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
     verify = workflow.split("  verify:\n", 1)[1].split("  windows-operator-smoke:\n", 1)[0]
     assert "python3 automation/run_scoped_cargo_feedback.py" in architecture
@@ -168,6 +169,42 @@ def check() -> None:
     assert "f.write('cargo_scope=' + report['scope'] + '\\n')" in workflow
     assert "if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then" in architecture
     assert "args+=(--delegate-workspace-unit-tests-to-verify)" in architecture
+    assert "if: needs.impact.outputs.cargo_scope != 'full'" in architecture
+    assert 'git fetch --depth=1 origin "refs/pull/${CI_PR_NUMBER}/head"' in architecture
+    assert 'test "$(git rev-parse FETCH_HEAD)" = "${CI_SOURCE_SHA}"' in architecture
+    compiler = workflow.split("  rust-e2e-harness:\n", 1)[1].split("  rust-e2e-legacy-binaries:\n", 1)[0]
+    legacy_job = workflow.split("  rust-e2e-legacy-binaries:\n", 1)[1].split("  rust-e2e-v3-binaries:\n", 1)[0]
+    v3 = workflow.split("  rust-e2e-v3-binaries:\n", 1)[1].split("  rust-architecture-e2e:\n", 1)[0]
+    graph = workflow.split("  rust-architecture-e2e:\n", 1)[1].split("  rust-verify-e2e:\n", 1)[0]
+    postgres = workflow.split("  rust-verify-e2e:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    assert "--compile-harness-only" in compiler
+    assert "--harness-bundle-dir automation/reports/rust-ci-artifacts/harness" in compiler
+    assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
+    assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3
+    for block in (compiler, legacy_job, v3):
+        assert "uses: actions/cache/restore@v4" in block
+        assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in block
+        assert "uses: actions/upload-artifact@v7" in block
+        assert "cargo test --workspace --locked" not in block
+    assert compiler.count("--compile-harness-only") == 1
+    assert graph.count("--execute-precompiled-e2e") == 1
+    assert postgres.count("--execute-precompiled-e2e") == 1
+    assert "--suite-job architecture-and-rust" in graph
+    assert "--suite-job verify" in postgres
+    assert "--parallel-verify-e2e" in postgres
+    assert "rust_ci_artifacts.py install" in graph and "rust_ci_artifacts.py install" in postgres
+    assert "rust-e2e-harness-${{ github.sha }}" in graph
+    assert "rust-e2e-legacy-${{ github.sha }}" in graph
+    assert "rust-e2e-v3-${{ github.sha }}" in graph
+    assert "rust-e2e-harness-${{ github.sha }}" in postgres
+    assert "rust-e2e-v3-${{ github.sha }}" in postgres
+    assert "CI_RUST_ARTIFACT_TRANSFER owner=architecture" in graph
+    assert "CI_RUST_ARTIFACT_TRANSFER owner=verify" in postgres
+    assert "needs.rust-e2e-harness.result == 'success'" in graph
+    assert "needs.rust-e2e-v3-binaries.result == 'success'" in postgres
+    assert '"rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e"' in gate
+    assert "--execute-precompiled-e2e" not in architecture
+    assert "--execute-precompiled-e2e" not in verify
     # Architecture's real Temporal and graph container suites must not compete
     # on the same runner: CI #492 proved no speed gain and a 40s startup delay.
     assert "--parallel-architecture-e2e" not in architecture

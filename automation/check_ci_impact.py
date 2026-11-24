@@ -103,6 +103,10 @@ class ImpactFixtures(unittest.TestCase):
     def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
+        self.assertTrue({
+            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-architecture-e2e", "rust-verify-e2e",
+        } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
         assignments = suite_commands_by_ci_job(report)
         architecture = dict(assignments["architecture-and-rust"])
@@ -118,6 +122,11 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("pure_dag_v3", architecture)
         self.assertNotIn("pg_effect_v3", architecture)
         self.assertIn("temporal_restart", architecture)
+        self.assertIn("pg_temporal_v3", architecture)
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["command"][7], "temporal_effect_v3_")
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+        })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
     def test_scoped_ci_keeps_every_selected_real_suite_in_architecture(self) -> None:
@@ -189,14 +198,44 @@ class ImpactFixtures(unittest.TestCase):
             head="HEAD", base="BASE",
         )
         self.assertEqual(impact["scope"], "scoped")
-        self.assertEqual(impact["selected_suites"], ["pg_effect_v3"])
-        self.assertEqual(
-            suite_commands_by_ci_job(impact)["architecture-and-rust"],
-            [("pg_effect_v3", list(SUITE_OWNERS["pg_effect_v3"]["command"]))],
-        )
+        self.assertEqual(set(impact["selected_suites"]), {"pg_effect_v3", "pg_temporal_v3"})
+        architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
+        self.assertEqual(architecture["pg_effect_v3"], list(SUITE_OWNERS["pg_effect_v3"]["command"]))
+        self.assertEqual(architecture["pg_temporal_v3"], list(SUITE_OWNERS["pg_temporal_v3"]["command"]))
         self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
         self.assertNotIn("prepare", SUITE_OWNERS["pg_effect_v3"])
         self.assertNotIn("runtime_binaries", SUITE_OWNERS["pg_effect_v3"])
+        self.assertIn("prepare", SUITE_OWNERS["pg_temporal_v3"])
+        self.assertIn("runtime_binaries", SUITE_OWNERS["pg_temporal_v3"])
+        helper_impact = analyze(
+            ["app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs"],
+            {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+            {**self.reverse, "temporal_pg_effects": set()}, head="HEAD", base="BASE",
+        )
+        self.assertIn("pg_temporal_v3", helper_impact["selected_suites"])
+
+    def test_full_only_compiler_handoff_jobs_not_selected_for_scoped_changes(self) -> None:
+        full_only = {
+            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-architecture-e2e", "rust-verify-e2e",
+        }
+        for changed in (
+            "app/rust/services/temporal/src/main.rs",
+            "app/rust/crates/seo_domain/src/publishing.rs",
+            "app/rust/services/temporal_pg_effects/src/main.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze(
+                    [changed],
+                    {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+                    {**self.reverse, "temporal_pg_effects": set()},
+                    head="HEAD", base="BASE",
+                )
+                self.assertEqual(report["scope"], "scoped")
+                self.assertFalse(full_only & set(report["selected_ci_jobs"]))
+        full = self.impact(".github/workflows/ci.yml")
+        self.assertEqual(full["scope"], "full")
+        self.assertTrue(full_only <= set(full["selected_ci_jobs"]))
 
     def test_pg_v3_e2e_is_selected_by_real_hitl_mutation_and_shared_protocol(self) -> None:
         # The V3 effect calls the existing HITL SQL owner directly. A change
@@ -213,6 +252,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/operation_protocol/src/lib.rs",
+            "app/rust/crates/integration_harness/src/tests/pg_v3_admission_race_tests.rs",
         ):
             with self.subTest(changed=changed):
                 report = analyze([changed], owners, reverse, head="HEAD", base="BASE")

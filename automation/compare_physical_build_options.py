@@ -441,6 +441,65 @@ def isolated_source_tree(destination: Path) -> str:
     return sha.stdout.strip()
 
 
+def verify_pr_source_provenance() -> dict[str, Any]:
+    """Pin a physical study to the canonical PR HEAD *tree*, not the merge SHA.
+
+    GitHub's pull_request checkout is its synthetic merge commit; the event's
+    CI_SOURCE_SHA names the PR head commit. They may have different commit IDs
+    even when they contain exactly the same bytes. No physical isolation claim
+    may survive a mismatched tree or an unavailable canonical commit object.
+    """
+
+    def git_revision(revision: str) -> str:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", revision],
+            cwd=ROOT, text=True, capture_output=True,
+        )
+        value = result.stdout.strip()
+        if result.returncode or not re.fullmatch(r"[0-9a-f]{40}", value):
+            raise EvidenceError(
+                f"cannot resolve exact Git object {revision}; "
+                "fetch the canonical CI_SOURCE_SHA before the physical probe"
+            )
+        return value
+
+    checkout_sha = git_revision("HEAD^{commit}")
+    checkout_tree = git_revision("HEAD^{tree}")
+    canonical_sha = os.environ.get("CI_SOURCE_SHA", "").strip()
+    in_pr_ci = (os.environ.get("GITHUB_ACTIONS") == "true"
+                and os.environ.get("GITHUB_EVENT_NAME") == "pull_request")
+    if not canonical_sha:
+        if in_pr_ci:
+            raise EvidenceError("pull_request physical probe requires canonical CI_SOURCE_SHA")
+        return {
+            "checkout_commit_sha": checkout_sha,
+            "checkout_tree_sha": checkout_tree,
+            "canonical_pr_head_commit_sha": None,
+            "canonical_pr_head_tree_sha": None,
+            "trees_equal": None,
+            "scope": "local_checkout_only_no_pr_head_claim",
+        }
+    if not re.fullmatch(r"[0-9a-f]{40}", canonical_sha):
+        raise EvidenceError("CI_SOURCE_SHA is not an exact lower-case Git commit SHA")
+    resolved_head = git_revision(f"{canonical_sha}^{{commit}}")
+    if resolved_head != canonical_sha:
+        raise EvidenceError("CI_SOURCE_SHA does not resolve to its exact Git commit")
+    canonical_tree = git_revision(f"{canonical_sha}^{{tree}}")
+    if checkout_tree != canonical_tree:
+        raise EvidenceError(
+            "synthetic PR merge source tree differs from canonical CI_SOURCE_SHA tree; "
+            "no physical A/B evidence may be attributed to the PR head"
+        )
+    return {
+        "checkout_commit_sha": checkout_sha,
+        "checkout_tree_sha": checkout_tree,
+        "canonical_pr_head_commit_sha": canonical_sha,
+        "canonical_pr_head_tree_sha": canonical_tree,
+        "trees_equal": True,
+        "scope": "canonical_pr_head_tree_verified",
+    }
+
+
 def verify_actual_cargo_metadata(workspace: Path) -> dict[str, Any]:
     rustc_version = subprocess.run(
         ["rustc", "-vV"], cwd=workspace, text=True, capture_output=True,
@@ -564,10 +623,13 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
     for executable in ("cargo", "rustc", "git", "tar"):
         if not shutil.which(executable):
             raise EvidenceError(f"{executable} unavailable; cannot measure compiler-owner A/B")
+    source_provenance = verify_pr_source_provenance()
     with tempfile.TemporaryDirectory(prefix="alegria-physical-owner-ab-") as folder:
         exported = Path(folder) / "source"
         exported.mkdir()
         sha = isolated_source_tree(exported)
+        if sha != source_provenance["checkout_commit_sha"]:
+            raise EvidenceError("checkout HEAD changed between identity check and git archive")
         workspace = exported / "app" / "rust"
         actual_resolve = verify_actual_cargo_metadata(workspace)
         pg_exists = report["C_postgres_activity_owner"]["exists"]
@@ -640,6 +702,8 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
             experiments.append(probe_result)
         result = dict(report)
         result["source_sha"] = sha
+        result["source_tree_sha"] = source_provenance["checkout_tree_sha"]
+        result["source_provenance"] = source_provenance
         result["compiler"] = {
             "isolated_git_archive": True,
             "source_tree_mutated": False,
@@ -652,6 +716,10 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
         }
         result["actual_rustc_evidence"] = True
         result["status"] = "FOUR_OWNER_ACTUAL_RUSTC_AB_CAPTURED"
+        result["measurement_scope"] = (
+            f"{len(packages)} Cargo binaries only: {', '.join(packages)}; "
+            "not outbox_worker, CLI or entire Issue #94 owner topology"
+        )
         return result
 
 
@@ -661,10 +729,13 @@ def compiled_report(report: dict[str, Any]) -> dict[str, Any]:
     for executable in ("cargo", "rustc", "git", "tar"):
         if not shutil.which(executable):
             raise EvidenceError(f"{executable} unavailable; compiler evidence cannot be inferred from manifests")
+    source_provenance = verify_pr_source_provenance()
     with tempfile.TemporaryDirectory(prefix="alegria-physical-ab-") as folder:
         exported = Path(folder) / "source"
         exported.mkdir()
         sha = isolated_source_tree(exported)
+        if sha != source_provenance["checkout_commit_sha"]:
+            raise EvidenceError("checkout HEAD changed between identity check and git archive")
         workspace = exported / "app" / "rust"
         actual_resolve = verify_actual_cargo_metadata(workspace)
         runs = {}
@@ -696,6 +767,8 @@ def compiled_report(report: dict[str, Any]) -> dict[str, Any]:
             }
     report = dict(report)
     report["source_sha"] = sha
+    report["source_tree_sha"] = source_provenance["checkout_tree_sha"]
+    report["source_provenance"] = source_provenance
     report["compiler"] = runs
     report["compiler_cache_regime"] = {
         "A_B_C_cold_targets": "distinct initially empty Cargo targets, no sccache/incremental rustc",
@@ -706,6 +779,11 @@ def compiled_report(report: dict[str, Any]) -> dict[str, Any]:
     report["cargo_resolved_closure"] = actual_resolve
     report["actual_rustc_evidence"] = True
     report["status"] = "ACTUAL_CARGO_BUILDS_CAPTURED_NOT_ISOLATION_PROVEN"
+    report["measurement_scope"] = (
+        f"{len(runs)} Cargo binaries only: "
+        f"{', '.join(item['package'] for item in runs.values())}; "
+        "not outbox_worker, CLI or entire Issue #94 owner topology"
+    )
     report["limitations"] = [
         *report["limitations"],
         "A/B/C cold builds use independent target directories; warm builds reuse only their own target",

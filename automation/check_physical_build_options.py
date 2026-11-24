@@ -191,6 +191,97 @@ class CompilerEvidenceTests(unittest.TestCase):
             # A source-only export must not be mistaken for a compiler result.
             self.assertFalse((exported / "app/rust/target").exists())
 
+    def test_synthetic_pr_merge_uses_exact_canonical_head_tree_not_commit_identity(self) -> None:
+        # GitHub PR checks out a synthetic merge commit. Different commit IDs
+        # are legitimate only when their Git tree is byte-for-byte identical.
+        checkout_sha = "a" * 40
+        canonical_sha = "b" * 40
+        tree = "c" * 40
+        observed = []
+
+        def git_run(command, **_kwargs):
+            observed.append(command)
+            objects = {
+                "HEAD^{commit}": checkout_sha,
+                "HEAD^{tree}": tree,
+                f"{canonical_sha}^{{commit}}": canonical_sha,
+                f"{canonical_sha}^{{tree}}": tree,
+            }
+            name = command[-1]
+            if name not in objects:
+                return subprocess.CompletedProcess(command, 128, "", "unknown object")
+            return subprocess.CompletedProcess(command, 0, objects[name] + "\n", "")
+
+        with (
+            patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request",
+                "CI_SOURCE_SHA": canonical_sha,
+            }),
+            patch.object(ab.subprocess, "run", side_effect=git_run),
+        ):
+            provenance = ab.verify_pr_source_provenance()
+        self.assertTrue(provenance["trees_equal"])
+        self.assertNotEqual(provenance["checkout_commit_sha"], provenance["canonical_pr_head_commit_sha"])
+        self.assertEqual(provenance["checkout_tree_sha"], provenance["canonical_pr_head_tree_sha"])
+        self.assertEqual(provenance["scope"], "canonical_pr_head_tree_verified")
+        self.assertTrue(all(command[:3] == ["git", "rev-parse", "--verify"] for command in observed))
+
+    def test_pr_physical_probe_fails_closed_on_missing_or_mismatched_head_provenance(self) -> None:
+        canonical_sha = "b" * 40
+        with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request",
+            "CI_SOURCE_SHA": "",
+        }):
+            with self.assertRaisesRegex(ab.EvidenceError, "requires canonical CI_SOURCE_SHA"):
+                ab.verify_pr_source_provenance()
+
+        def git_run(command, **_kwargs):
+            objects = {
+                "HEAD^{commit}": "a" * 40,
+                "HEAD^{tree}": "c" * 40,
+                f"{canonical_sha}^{{commit}}": canonical_sha,
+                f"{canonical_sha}^{{tree}}": "d" * 40,
+            }
+            name = command[-1]
+            if name not in objects:
+                return subprocess.CompletedProcess(command, 128, "", "missing object")
+            return subprocess.CompletedProcess(command, 0, objects[name] + "\n", "")
+
+        with (
+            patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request",
+                "CI_SOURCE_SHA": canonical_sha,
+            }),
+            patch.object(ab.subprocess, "run", side_effect=git_run),
+        ):
+            with self.assertRaisesRegex(ab.EvidenceError, "synthetic PR merge source tree differs"):
+                ab.verify_pr_source_provenance()
+
+        def unavailable_head(command, **_kwargs):
+            if command[-1].startswith(canonical_sha):
+                return subprocess.CompletedProcess(command, 128, "", "shallow object absent")
+            return git_run(command)
+
+        with (
+            patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request",
+                "CI_SOURCE_SHA": canonical_sha,
+            }),
+            patch.object(ab.subprocess, "run", side_effect=unavailable_head),
+        ):
+            with self.assertRaisesRegex(ab.EvidenceError, "fetch the canonical CI_SOURCE_SHA"):
+                ab.verify_pr_source_provenance()
+
+    def test_local_physical_probe_cannot_claim_unverified_pr_head(self) -> None:
+        with patch.dict(os.environ, {
+            "GITHUB_ACTIONS": "false", "GITHUB_EVENT_NAME": "",
+            "CI_SOURCE_SHA": "",
+        }):
+            provenance = ab.verify_pr_source_provenance()
+        self.assertEqual(provenance["scope"], "local_checkout_only_no_pr_head_claim")
+        self.assertIsNone(provenance["canonical_pr_head_commit_sha"])
+        self.assertIsNone(provenance["trees_equal"])
+
     def test_compiler_probe_never_fakes_compiler_when_candidate_or_tools_are_missing(self) -> None:
         for argument in ("--compiler", "--compiler-owners"):
             with self.subTest(argument=argument):

@@ -92,6 +92,26 @@ The Activity denies a missing, forged, expired, revoked, mismatched or stale
 admission **before** modifying the HITL queue. Committed exact retries return
 the same receipt even after expiry/revocation, without a second effect.
 
+Admission authority is **append-only in PostgreSQL**, not merely an operator
+runbook convention. The schema/migration installs an invoker trigger that
+rejects changes to the original run/scope/workflow/contract/source/expiry and
+all DELETE/TRUNCATE attempts. The sole accepted UPDATE is a monotonic
+`revoked_at` transition from NULL to a non-NULL value. Before allowing an
+UPDATE, the trigger tries the same `pg-v3-admission|{admission_id}` transaction
+advisory lock as the Activity. Revocation committed before the Activity's
+authorization read is observed and denied. If the Activity already holds the
+lock, revocation **fails immediately** with PostgreSQL `55P03` (lock not
+available); the authorized operator must retry after the atomic effect/receipt
+transaction completes. This fail-fast behavior is necessary: PostgreSQL can
+hold a key-row lock merely because the UPDATE's SET list names a key column,
+even if its new value equals the old value; blocking on the advisory lock
+could deadlock with the Activity's receipt FK KEY SHARE. Forbidden changes
+and deletion are rejected independently. Operator revocation tooling must
+check that the UPDATE affected exactly one row, retry only `55P03` with a
+bounded backoff and escalate repeated BUSY; do not silently treat BUSY as a
+completed revocation. Operators must not bypass triggers, disable them or use
+table-owner DDL as an ordinary revoke path.
+
 The canonical PostgreSQL `truth-context|{context_key}` advisory transaction
 lock is acquired **before** reading admission or source rows. Under ordinary
 READ COMMITTED, this gives a post-lock fresh snapshot; using SERIALIZABLE
@@ -101,6 +121,12 @@ matches legacy verified Truth's creation-order policy: a distinct completed
 blocks the effect, including ties. This is not an independent commit-time
 ordering policy. A later-started run can reconcile after an older run commits
 if its currently read source fingerprint matches what the operator approved.
+Expiry is checked using `clock_timestamp()` at the authorization SELECT
+**after both advisory locks**, not transaction-start `now()`: waiting for the
+context lock cannot extend an already-expired admission. This establishes
+authorization at the post-lock checkpoint, not a promise that the window
+remains open through COMMIT; exact committed retries still read the receipt
+first and cannot produce a second effect.
 
 ## Opt-in execution
 
@@ -113,6 +139,18 @@ ALEGRIA_ENABLE_PG_EFFECT_V3=true \
   ./target/debug/temporal_pg_effects
 ```
 
+For an audited **real server-generated** JSON Workflow History, replay the
+registered V3 Workflow deterministically with the native Temporal SDK:
+
+```bash
+./target/debug/temporal_pg_effects --replay-history /path/to/pg-v3-history.json
+```
+
+This replay mode is offline, does not require the V3 enable flag, DB
+credentials or an active Temporal server, and never connects to an Activity
+worker or executes the PostgreSQL effect. The original Activity outcome must
+be recorded in History; replay success is **not** a production cutover.
+
 No deployment definition, default CI worker, or legacy `alegria-pipeline`
 worker enables it. The pure DAG (`alegria-pure-dag-v3`) remains effect-free.
 The only intended Workflow invocation is an explicitly authorized
@@ -123,8 +161,9 @@ sharing that Task Queue with any worker lacking the exact registered Type.
 
 - Live PostgreSQL role/admission/atomic-receipt and cross-queue Temporal E2E
   must pass on an isolated schema + namespace before production consideration.
-- No isolated Temporal History replay or pinned Worker Deployment yet; a
-  versioned evolution/restart test is required before any cutover.
+- Same-version offline SDK History replay is implemented and exercised by the
+  new isolated E2E, but **cross-version historical replay** and pinned Worker
+  Deployment remain untested; both are required before any cutover.
 - A raw evidence/section writer outside the canonical `truth-context` lock
   could change original bytes between separate READ COMMITTED statements.
   Independent concurrent raw-mutation E2E and a shared lock/trigger policy

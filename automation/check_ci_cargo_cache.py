@@ -16,12 +16,15 @@ import report_sccache_failures as sccache_reporter
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
-OWNERS = ("architecture-and-rust", "verify")
+OWNERS = (
+    "architecture-and-rust", "verify", "rust-e2e-harness",
+    "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+)
 
 
 def validate_cache_policy(workflow: str) -> None:
     # Split job blocks by YAML's two-space job indentation, not by nested steps.
-    blocks = []
+    blocks: dict[str, str] = {}
     for owner in OWNERS:
         marker = f"  {owner}:\n"
         if workflow.count(marker) != 1:
@@ -32,13 +35,13 @@ def validate_cache_policy(workflow: str) -> None:
             if line.startswith("  ") and not line.startswith("    ") and line.rstrip().endswith(":"):
                 break
             body.append(line)
-        blocks.append("\n".join(body))
-    saver, verify = blocks
+        blocks[owner] = "\n".join(body)
+    saver, verify = blocks["architecture-and-rust"], blocks["verify"]
     # The trusted-main compiler cache is useful only when its rustc profile
     # matches the PR reader. A one-sided DEBUG=0 change silently invalidates
     # every sccache entry, turning a warm regression into a cold build.
     prime = workflow.split("  rust-cache-prime:\n", 1)[1].split("  select-image:\n", 1)[0]
-    for name, block in (("PR architecture", saver), ("PR verify", verify), ("accepted-main", prime)):
+    for name, block in (*blocks.items(), ("accepted-main", prime)):
         for profile in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{profile}_DEBUG: "0"'
             if block.count(key) != 1:
@@ -52,10 +55,13 @@ def validate_cache_policy(workflow: str) -> None:
         raise ValueError("sccache must receive authenticated GitHub cache service environment")
     if saver.count("uses: actions/cache@v4") != 1:
         raise ValueError("architecture must be the sole registry cache writer")
-    if "uses: actions/cache@v4" in verify or "uses: actions/cache/save" in verify:
-        raise ValueError("verify must not initialize a second Cargo registry writer")
-    if verify.count("uses: actions/cache/restore@v4") != 1:
-        raise ValueError("verify must restore Cargo sources without writing cache")
+    for owner, block in blocks.items():
+        if owner == "architecture-and-rust":
+            continue
+        if "uses: actions/cache@v4" in block or "uses: actions/cache/save" in block:
+            raise ValueError(f"{owner} must not initialize a second Cargo registry writer")
+        if block.count("uses: actions/cache/restore@v4") != 1:
+            raise ValueError(f"{owner} must restore Cargo sources without writing cache")
     if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in verify:
         raise ValueError("verify Cargo compilation must use read-only compiler cache")
     for step_name in (
@@ -68,7 +74,7 @@ def validate_cache_policy(workflow: str) -> None:
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
         if "        if: needs.impact.outputs.cargo_scope == 'full'" not in step:
             raise ValueError(f"verify Cargo step {step_name} must be full-only")
-    for block in blocks:
+    for block in blocks.values():
         # Reject target *cache payloads*, not valid references to a job-local
         # build directory in an unrelated environment variable or test step.
         for step in re.split(r"(?m)^      - ", block):
@@ -94,11 +100,16 @@ class CargoCachePolicy(unittest.TestCase):
     def test_actual_ci_has_one_registry_writer_and_no_target_archive(self) -> None:
         validate_cache_policy((ROOT / ".github/workflows/ci.yml").read_text())
 
-    def test_a_second_saver_in_python_verify_is_rejected(self) -> None:
+    def test_a_second_saver_in_any_parallel_rust_reader_is_rejected(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
-        changed = original.replace("uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1)
-        with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
-            validate_cache_policy(changed)
+        for owner in OWNERS[1:]:
+            with self.subTest(owner=owner):
+                start = original.index(f"  {owner}:\n")
+                changed = original[:start] + original[start:].replace(
+                    "uses: actions/cache/restore@v4", "uses: actions/cache@v4", 1,
+                )
+                with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
+                    validate_cache_policy(changed)
 
     def test_verify_cargo_setup_cannot_run_for_scoped_or_non_rust_changes(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()
@@ -131,13 +142,15 @@ class CargoCachePolicy(unittest.TestCase):
         original = (ROOT / ".github/workflows/ci.yml").read_text()
         for name in ("DEV", "TEST"):
             key = f'CARGO_PROFILE_{name}_DEBUG: "0"'
-            for occurrence in (1, 2, 3):
-                position = original.find(key)
-                if occurrence == 2:
-                    position = original.find(key, position + len(key))
-                self.assertGreaterEqual(position, 0)
+            for owner in (*OWNERS, "rust-cache-prime"):
+                job_start = original.index(f"  {owner}:\n")
+                position = original.find(key, job_start)
+                next_job = re.search(r"(?m)^  [a-z][a-z0-9-]*:\n", original[job_start+len(f"  {owner}:\n"):])
+                end = (job_start + len(f"  {owner}:\n") + next_job.start()) if next_job else len(original)
+                self.assertGreaterEqual(position, job_start)
+                self.assertLess(position, end)
                 changed = original[:position] + f'CARGO_PROFILE_{name}_DEBUG: "2"' + original[position + len(key):]
-                with self.subTest(name=name, occurrence=occurrence):
+                with self.subTest(name=name, owner=owner):
                     with self.assertRaisesRegex(ValueError, "same symbol-free Rust"):
                         validate_cache_policy(changed)
 

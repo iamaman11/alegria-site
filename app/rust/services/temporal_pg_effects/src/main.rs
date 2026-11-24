@@ -19,9 +19,11 @@ use postgres_store::truth_review_effect_v3::{
     PG_EFFECT_WORKFLOW_TYPE,
 };
 use sqlx::PgPool;
+use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::runtime::RuntimeOptions;
+use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 use temporalio_sdk::{
     ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext, Worker, WorkerOptions,
     WorkflowContext, WorkflowContextView, WorkflowResult,
@@ -149,8 +151,44 @@ impl PgTruthReviewReconcileV3Workflow {
     }
 }
 
+/// Replay an actual persisted Workflow History with the SDK, offline. The
+/// operator's admission, PostgreSQL connection and Activity Worker are never
+/// available to replay; completed Activity outcomes come from History.
+async fn replay_history(path: &std::path::Path) -> Result<()> {
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("read real PG V3 Temporal history {}", path.display()))?;
+    let history = WorkflowHistory::from_json(&bytes)
+        .map_err(|error| anyhow::anyhow!("decode PG V3 Temporal history: {error}"))?;
+    let mut options = WorkflowReplayerOptions::new()
+        .namespace("default".to_string())
+        .task_queue(COMMAND_TASK_QUEUE.to_string())
+        .build();
+    options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
+    WorkflowReplayer::new(options)
+        .map_err(|error| anyhow::anyhow!("construct PG V3 Temporal replayer: {error}"))?
+        .replay_workflow(history)
+        .await
+        .map_err(|error| anyhow::anyhow!("PG V3 Temporal history replay failed: {error}"))?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // A replay-only invocation is intentionally independent of runtime
+    // credentials, live Temporal, and the experimental Worker enable flag.
+    let mut args = std::env::args_os().skip(1);
+    if let Some(argument) = args.next() {
+        if argument == std::ffi::OsStr::new("--replay-history") {
+            let path = args
+                .next()
+                .context("--replay-history requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
+            replay_history(std::path::Path::new(&path)).await?;
+            println!("CI_TEMPORAL_PG_EFFECT_REPLAY=PASS");
+            return Ok(());
+        }
+        anyhow::bail!("unexpected temporal_pg_effects argument: {argument:?}");
+    }
     anyhow::ensure!(
         std::env::var("ALEGRIA_ENABLE_PG_EFFECT_V3").ok().as_deref() == Some("true"),
         "experimental PG effect owner disabled; set ALEGRIA_ENABLE_PG_EFFECT_V3=true explicitly"
@@ -224,5 +262,14 @@ mod tests {
         assert_eq!(stale.retry_class(), RetryClass::Never);
         let moved = ReconcileTruthReviewsError::CandidateSetChanged;
         assert_eq!(moved.retry_class(), RetryClass::Never);
+    }
+
+    #[tokio::test]
+    async fn replay_requires_real_sdk_history_even_without_worker_secrets() {
+        let nonexistent = std::env::temp_dir().join(format!(
+            "alegria-pg-v3-no-such-history-{}",
+            std::process::id()
+        ));
+        assert!(replay_history(&nonexistent).await.is_err());
     }
 }

@@ -21,6 +21,7 @@ from typing import Mapping
 from cargo_feedback import run_cargo
 from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_by_ci_job, suite_environment_for_report
 from dev_rust_feedback import commands_for_report
+from rust_ci_artifacts import package as package_ci_artifact
 
 
 FULL_WORKSPACE_UNIT_TEST = ["cargo", "test", "--workspace", "--locked"]
@@ -210,7 +211,7 @@ def run_precompiled_e2e_suite(
 
 def run_precompiled_e2e_suites(
     report: dict, integration_commands: list[tuple[str, list[str]]],
-    *, suite_job: str,
+    *, suite_job: str, prebuilt_executable: Path | None = None,
 ) -> list[dict]:
     """Compile one harness per CI owner, then run every required E2E filter.
 
@@ -230,9 +231,18 @@ def run_precompiled_e2e_suites(
     if integration_commands != suite_commands_by_ci_job(report)[suite_job]:
         raise ValueError("precompiled E2E must execute the exact suite owner partition")
 
-    print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(E2E_COMPILE), flush=True)
-    compilation = run_cargo(E2E_COMPILE, cwd=WORKSPACE)
-    executable = precompiled_verify_executable(compilation)
+    measurements: list[dict] = []
+    if prebuilt_executable is None:
+        print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(E2E_COMPILE), flush=True)
+        compilation = run_cargo(E2E_COMPILE, cwd=WORKSPACE)
+        executable = precompiled_verify_executable(compilation)
+        measurements.append(compilation)
+    else:
+        executable = prebuilt_executable.resolve()
+        expected = (WORKSPACE / "target/debug/deps/integration_harness-ci-exact").resolve()
+        if executable != expected or not executable.is_file() or not os.access(executable, os.X_OK):
+            raise ValueError("prebuilt harness requires verified exact-source installed artifact")
+        print(f"CI_E2E_PREBUILT=PASS executable={executable}", flush=True)
     environments: list[dict[str, str]] = []
     for name, command in integration_commands:
         environments.append(suite_runtime_environment(report, name))
@@ -257,7 +267,7 @@ def run_precompiled_e2e_suites(
                 print(f"CI_E2E_SUITE_FAILURE={name} reason={error}", flush=True)
     if failures:
         raise RuntimeError(f"{len(failures)} mandatory E2E suites failed") from failures[0]
-    return [compilation, *(results[name] for name, _ in integration_commands)]
+    return [*measurements, *(results[name] for name, _ in integration_commands)]
 
 
 def main() -> int:
@@ -276,6 +286,12 @@ def main() -> int:
         "--parallel-verify-e2e", action="store_true",
         help="Compile once and run mandatory verify E2E filters in two isolated processes",
     )
+    parser.add_argument("--compile-harness-only", action="store_true",
+                        help="For full impact, compile exact E2E harness once and publish content-verified bundle")
+    parser.add_argument("--harness-bundle-dir", type=Path,
+                        help="Fresh output directory for the single full-impact E2E compiler artifact")
+    parser.add_argument("--execute-precompiled-e2e", action="store_true",
+                        help="For full impact, run exact owner suites from previously verified binary artifacts")
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
     actual_sha = subprocess.check_output(
@@ -283,6 +299,32 @@ def main() -> int:
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
+    if args.compile_harness_only or args.execute_precompiled_e2e:
+        if (report.get("analysis") != "full"
+                or args.compile_harness_only == args.execute_precompiled_e2e
+                or args.delegate_workspace_unit_tests_to_verify
+                or (args.compile_harness_only != (args.harness_bundle_dir is not None))
+                or (args.parallel_verify_e2e and args.suite_job != "verify")
+                or not {"architecture-and-rust", "verify"}.issubset(report.get("selected_ci_jobs", []))):
+            raise ValueError("full exact-source compiler/E2E stage must be exclusive and correctly gated")
+        if args.compile_harness_only:
+            print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(E2E_COMPILE), flush=True)
+            compilation = run_cargo(E2E_COMPILE, cwd=WORKSPACE)
+            executable = precompiled_verify_executable(compilation)
+            package_ci_artifact("harness", actual_sha, args.harness_bundle_dir, harness=executable)
+            print("CI_E2E_HARNESS_BUILD=PASS", flush=True)
+            return 0
+        if args.suite_job == "verify" and not args.parallel_verify_e2e:
+            raise ValueError("full verify suites must retain independent two-process E2E scheduling")
+        suites = suite_commands_by_ci_job(report)[args.suite_job]
+        results = run_precompiled_e2e_suites(
+            report, suites, suite_job=args.suite_job,
+            prebuilt_executable=WORKSPACE / "target/debug/deps/integration_harness-ci-exact",
+        )
+        print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} suites={len(suites)} tests={sum(row['matched_tests'] for row in results)}", flush=True)
+        return 0
+    if args.harness_bundle_dir is not None:
+        raise ValueError("harness bundle is valid only for the dedicated full compiler stage")
     if args.suite_job == "verify":
         if args.delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":
             raise ValueError("verify executes delegated E2E suites only for full impact")

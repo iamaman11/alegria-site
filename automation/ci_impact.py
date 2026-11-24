@@ -128,6 +128,8 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "automation/dev_rust_feedback.py",
     "automation/cargo_feedback.py",
     "automation/run_scoped_cargo_feedback.py",
+    "automation/rust_ci_artifacts.py",
+    "automation/check_rust_ci_artifacts.py",
     "automation/run_main_cache_prime.py",
     "automation/report_sccache_failures.py",
     "automation/report_ci_cargo_cache.py",
@@ -280,6 +282,14 @@ PURE_V3_E2E_PREPARE = (
 )
 PURE_V3_E2E_RUNTIME_BINARIES = {
     "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
+}
+
+PG_V3_TEMPORAL_PREPARE = (
+    "cargo", "build", "--locked", "-p", "temporal_pg_effects",
+    "--bin", "temporal_pg_effects",
+)
+PG_V3_TEMPORAL_RUNTIME_BINARIES = {
+    "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
 
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
@@ -498,6 +508,7 @@ SUITE_OWNERS = {
             "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/integration_harness/src/lib.rs",
             "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/integration_harness/src/tests/pg_v3_admission_race_tests.rs",
         },
         "prefixes": (
             "app/rust/services/temporal_pg_effects/",
@@ -513,6 +524,29 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "pg_v3_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "pg_temporal_v3": {
+        "paths": {
+            "app/rust/crates/integration_harness/src/lib.rs",
+            "app/rust/crates/integration_harness/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+            "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/db/schema.sql",
+            "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+        },
+        "prefixes": (
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/operation_protocol/src/",
+            "app/rust/crates/temporal_gateway/src/",
+        ),
+        "lock_crates": {"temporal_pg_effects", "temporal_gateway", "postgres_store"},
+        "on_unknown_global_input": True,
+        "prepare": PG_V3_TEMPORAL_PREPARE,
+        "runtime_binaries": PG_V3_TEMPORAL_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "temporal_effect_v3_", "--locked", "--", "--nocapture",
         ),
     },
 }
@@ -594,6 +628,11 @@ def main_cache_prime_required(changed: list[str]) -> bool:
 # only this planner can mark an owner not applicable to an exact source diff.
 CI_PR_OWNERS = (
     "architecture-and-rust",
+    "rust-e2e-harness",
+    "rust-e2e-legacy-binaries",
+    "rust-e2e-v3-binaries",
+    "rust-architecture-e2e",
+    "rust-verify-e2e",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
