@@ -6,18 +6,21 @@
 //! fencing; this executor intentionally admits only side-effect-free work.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Write};
 
 use operation_protocol::{
     ArtifactBinding, ArtifactId, ArtifactSchema, ContractCatalog, ExecutionPlan, IdempotencyPolicy,
-    Operation, OperationInstanceId, OperationRef, PlanError, PortId, RunScope,
+    Operation, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId, RunScope,
 };
+use serde::{Deserialize, Serialize};
 use seo_domain::extraction::operations::{
     CanonicalizeMentions, EditorialTopics, EntitySpans, LayerRoute, OperationalEntities,
     PureExtractionOperation,
 };
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactValue {
     pub schema: ArtifactSchema,
     pub scope: RunScope,
@@ -31,10 +34,115 @@ pub struct ExecutionResult {
     pub artifacts: BTreeMap<ArtifactId, ArtifactValue>,
 }
 
+/// Opt-in, provider-free durable Workflow input. The external artifacts and
+/// their payloads are captured in the Temporal start event. The provenance
+/// field is a declared origin, NOT an authenticated database revision; this
+/// runner is therefore deliberately forbidden from performing any I/O.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PureDagRun {
+    pub plan: ExecutionPlan,
+    pub admitted: BTreeMap<ArtifactId, ArtifactValue>,
+}
+
+/// Stable, inspectable output of a deterministic, side-effect-free run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PureDagReceipt {
+    pub plan_hash: PlanHash,
+    pub order: Vec<OperationInstanceId>,
+    pub artifacts: BTreeMap<ArtifactId, ArtifactValue>,
+}
+
+// This first pure Temporal runner is intentionally small. These are limits
+// on the actual JSON history payloads, not just on raw source text. A future
+// worker/activity protocol may support larger artifacts outside History.
+pub const PURE_DAG_MAX_NODES: usize = 64;
+pub const PURE_DAG_MAX_INPUT_BYTES: usize = 512 * 1024;
+pub const PURE_DAG_MAX_RESULT_BYTES: usize = 512 * 1024;
+
+struct BoundedJsonWriter {
+    limit: usize,
+    bytes: usize,
+    exceeded: bool,
+}
+
+impl Write for BoundedJsonWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if buffer.len() > self.limit.saturating_sub(self.bytes) {
+            self.exceeded = true;
+            return Err(io::Error::other("JSON budget exceeded"));
+        }
+        self.bytes += buffer.len();
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn enforce_json_budget<T: Serialize>(
+    value: &T,
+    limit: usize,
+    resource: &'static str,
+) -> Result<(), OperationRunError> {
+    // Stream into a counting sink: a malicious serialized input cannot first
+    // allocate a multi-megabyte temporary JSON buffer just to be rejected.
+    let mut writer = BoundedJsonWriter {
+        limit,
+        bytes: 0,
+        exceeded: false,
+    };
+    match serde_json::to_writer(&mut writer, value) {
+        Ok(()) => Ok(()),
+        Err(_) if writer.exceeded => {
+            Err(OperationRunError::ResourceBudgetExceeded { resource, limit })
+        }
+        Err(error) => Err(OperationRunError::EnvelopeSerialization(error.to_string())),
+    }
+}
+
+fn enforce_pure_dag_input_budget(run: &PureDagRun) -> Result<(), OperationRunError> {
+    if run.plan.nodes.len() > PURE_DAG_MAX_NODES {
+        return Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "operation_nodes",
+            limit: PURE_DAG_MAX_NODES,
+        });
+    }
+    let raw_bytes = run
+        .admitted
+        .values()
+        .try_fold(0usize, |total, value| total.checked_add(value.payload.len()))
+        .unwrap_or(usize::MAX);
+    if raw_bytes > PURE_DAG_MAX_INPUT_BYTES {
+        return Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "input_bytes",
+            limit: PURE_DAG_MAX_INPUT_BYTES,
+        });
+    }
+    enforce_json_budget(run, PURE_DAG_MAX_INPUT_BYTES, "input_bytes")
+}
+
 #[derive(Debug, Error)]
 pub enum OperationRunError {
     #[error(transparent)]
     InvalidPlan(#[from] PlanError),
+    #[error("pure DAG is empty and cannot claim a completed operation run")]
+    EmptyPurePlan,
+    #[error("pure DAG refuses effectful operation or permission at {0:?}")]
+    EffectfulPlan(OperationRef),
+    #[error("pure DAG refuses global effects even without a currently consuming node")]
+    EffectfulPlanEnvelope,
+    #[error("pure DAG run id differs from the immutable Temporal workflow id")]
+    TemporalRunIdMismatch,
+    #[error("pure DAG {resource} exceeds resource budget {limit}")]
+    ResourceBudgetExceeded {
+        resource: &'static str,
+        limit: usize,
+    },
+    #[error("pure DAG envelope cannot be serialized: {0}")]
+    EnvelopeSerialization(String),
     #[error("operation {0:?} is not registered with this executor")]
     MissingExecutor(OperationRef),
     #[error("pure operation {0:?} requires exactly one input and output port and no effects")]
@@ -141,6 +249,14 @@ impl OperationRegistry {
         admitted: BTreeMap<ArtifactId, ArtifactValue>,
     ) -> Result<ExecutionResult, OperationRunError> {
         let checked = plan.validate(&self.catalog)?;
+        // The registry contains only pure handlers. Reject a missing binding
+        // for any node before calling the first operation, even if the missing
+        // node would otherwise be reached only after earlier computations.
+        for node in &plan.nodes {
+            if !self.handlers.contains_key(&node.operation) {
+                return Err(OperationRunError::MissingExecutor(node.operation.clone()));
+            }
+        }
         for (id, expected) in &plan.external_artifacts {
             let actual = admitted
                 .get(id)
@@ -236,6 +352,52 @@ impl OperationRegistry {
             artifacts,
         })
     }
+}
+
+/// Bind a generic immutable DAG to real domain operations in a pure-only
+/// Temporal-compatible envelope. This has no SQL, HTTP, Graph, Vector or
+/// Temporal SDK dependency. Effectful operations require their own future
+/// owner-authorized durable activity/runtime and must never be admitted here.
+pub fn execute_pure_dag(
+    workflow_id: &str,
+    run: &PureDagRun,
+) -> Result<PureDagReceipt, OperationRunError> {
+    if workflow_id != run.plan.scope.run_id {
+        return Err(OperationRunError::TemporalRunIdMismatch);
+    }
+    if run.plan.nodes.is_empty() {
+        return Err(OperationRunError::EmptyPurePlan);
+    }
+    if !run.plan.allowed_effects.is_empty() {
+        return Err(OperationRunError::EffectfulPlanEnvelope);
+    }
+    enforce_pure_dag_input_budget(run)?;
+    let registry = semantic_extraction_registry()?;
+    // Never seal an incoming plan: its original fingerprints and hash must
+    // survive Temporal workflow replay unchanged.
+    run.plan.validate(registry.catalog())?;
+    for node in &run.plan.nodes {
+        let contract = registry
+            .catalog()
+            .contract(&node.operation)
+            .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
+        if contract.idempotency != IdempotencyPolicy::Pure
+            || !contract.effects.is_empty()
+            || !node.permitted_effects.is_empty()
+        {
+            return Err(OperationRunError::EffectfulPlan(node.operation.clone()));
+        }
+    }
+    let executed = registry.execute(&run.plan, run.admitted.clone())?;
+    let receipt = PureDagReceipt {
+        plan_hash: run.plan.hash.clone(),
+        order: executed.order,
+        artifacts: executed.artifacts,
+    };
+    // Do not return an oversized payload to the Temporal SDK for History
+    // recording. Any failure here is pure and can be retried without effects.
+    enforce_json_budget(&receipt, PURE_DAG_MAX_RESULT_BYTES, "result_bytes")?;
+    Ok(receipt)
 }
 
 /// One owner-specific binding site. New domain operations are registered here

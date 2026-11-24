@@ -18,6 +18,7 @@ mod expert_semantic_slice;
 mod freshness;
 mod history_replay;
 mod projection_reconcile;
+mod pure_operation_dag;
 mod runtime;
 mod seo_site_build_canonical_cutover;
 mod seo_site_build_composable_v2;
@@ -170,6 +171,11 @@ pub(crate) fn build_worker_options(
     }
     freshness::register(&mut opts)?;
     projection_reconcile::register(&mut opts)?;
+    // The new generic DAG executor deliberately cannot perform I/O. Keep
+    // legacy production flows unchanged until the effect protocol is proven.
+    if env_flag("ALLOW_PURE_DAG_WORKFLOW") {
+        pure_operation_dag::register(&mut opts)?;
+    }
     seo_site_build_canonical_cutover::register(&mut opts)?;
     seo_site_build_composable_v2::register(&mut opts)?;
     if env_flag("ALLOW_TEST_HITL_WORKFLOW") || profile.allows_test() {

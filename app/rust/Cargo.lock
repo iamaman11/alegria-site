@@ -605,13 +605,13 @@ name = "cli_tools"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "contracts",
  "hex",
  "infrastructure",
  "primitives",
  "prost",
- "runtime_composition",
  "seo_application",
  "seo_ports",
  "seo_steps",

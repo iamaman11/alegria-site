@@ -353,3 +353,204 @@ fn malformed_typed_payload_fails_closed_at_the_only_json_boundary() {
         Err(OperationRunError::InvalidInput { .. })
     ));
 }
+
+#[test]
+fn durable_pure_dag_executes_real_operations_with_immutable_payloads() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, admitted) = plan(
+        &registry,
+        vec![
+            node::<EditorialTopics>("faq", "editorial-input", "faq-output"),
+            node::<EntitySpans>("spans", "entity-input", "spans-output"),
+        ],
+        vec![
+            seed::<EditorialTopics>("editorial-input", &editorial_input()),
+            seed::<EntitySpans>("entity-input", &entity_input()),
+        ],
+    );
+    let wire = serde_json::to_vec(&PureDagRun { plan, admitted }).unwrap();
+    let recorded: PureDagRun = serde_json::from_slice(&wire).unwrap();
+    let receipt = execute_pure_dag("test-run", &recorded).unwrap();
+    assert_eq!(receipt.plan_hash, recorded.plan.hash);
+    assert_eq!(receipt.order.len(), 2);
+    let encoded_receipt = serde_json::to_vec(&receipt).unwrap();
+    let replayed: PureDagReceipt = serde_json::from_slice(&encoded_receipt).unwrap();
+    assert_eq!(serde_json::to_vec(&replayed).unwrap(), encoded_receipt);
+    let faq: editorial_topics::EditorialExtractionOutput = serde_json::from_slice(
+        &replayed.artifacts[&ArtifactId::from("faq-output")].payload,
+    )
+    .unwrap();
+    assert!(faq.topics.iter().any(|topic| topic.topic_type == "faq_topic"));
+}
+
+#[test]
+fn pure_dag_rejects_changed_or_effectful_input_without_repinning() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, admitted) = plan(
+        &registry,
+        vec![node::<EntitySpans>("spans", "entity-input", "spans-output")],
+        vec![seed::<EntitySpans>("entity-input", &entity_input())],
+    );
+    let original = PureDagRun { plan, admitted };
+    assert!(matches!(
+        execute_pure_dag("another-temporal-workflow", &original),
+        Err(OperationRunError::TemporalRunIdMismatch)
+    ));
+
+    let mut altered = original.clone();
+    altered.plan.nodes[0].instance = "different-instance".into();
+    assert!(matches!(
+        execute_pure_dag("test-run", &altered),
+        Err(OperationRunError::InvalidPlan(PlanError::PlanHashMismatch))
+    ));
+
+    let mut effects = original;
+    effects.plan.allowed_effects.insert("publication.write".into());
+    effects.plan = effects.plan.seal(registry.catalog()).unwrap();
+    assert!(matches!(
+        execute_pure_dag("test-run", &effects),
+        Err(OperationRunError::EffectfulPlanEnvelope)
+    ));
+}
+
+#[test]
+fn pure_dag_rejects_empty_success_before_any_domain_execution() {
+    let registry = semantic_extraction_registry().unwrap();
+    let plan = ExecutionPlan {
+        schema_revision: PLAN_SCHEMA_REVISION,
+        scope: scope(),
+        allowed_effects: BTreeSet::new(),
+        external_artifacts: BTreeMap::new(),
+        pinned_contracts: Vec::new(),
+        nodes: Vec::new(),
+        hash: PlanHash(String::new()),
+    }
+    .seal(registry.catalog())
+    .unwrap();
+    assert!(matches!(
+        execute_pure_dag("test-run", &PureDagRun {
+            plan,
+            admitted: BTreeMap::new()
+        }),
+        Err(OperationRunError::EmptyPurePlan)
+    ));
+}
+
+#[test]
+fn missing_late_executor_is_rejected_before_any_pure_operation_runs() {
+    let mut registry = semantic_extraction_registry().unwrap();
+    let (plan, admitted) = plan(
+        &registry,
+        vec![
+            node::<EditorialTopics>("a-first", "editorial-input", "faq-output"),
+            node::<EntitySpans>("z-later", "entity-input", "spans-output"),
+        ],
+        vec![
+            seed::<EditorialTopics>("editorial-input", &editorial_input()),
+            seed::<EntitySpans>("entity-input", &entity_input()),
+        ],
+    );
+    let invocations = Arc::new(AtomicUsize::new(0));
+    let recorded = Arc::clone(&invocations);
+    registry.handlers.insert(
+        EditorialTopics::contract().reference,
+        Box::new(move |_inputs| {
+            recorded.fetch_add(1, Ordering::SeqCst);
+            Ok(BTreeMap::new())
+        }),
+    );
+    registry.handlers.remove(&EntitySpans::contract().reference);
+    assert!(matches!(
+        registry.execute(&plan, admitted),
+        Err(OperationRunError::MissingExecutor(_))
+    ));
+    assert_eq!(invocations.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn pure_dag_enforces_exact_json_input_limit_without_serialization_allocation() {
+    // A JSON string includes the opening and closing quotation marks. The
+    // counting writer accepts exactly the limit and fails at the first excess
+    // byte, without allocating the entire serialized representation.
+    enforce_json_budget(&"abcd", 6, "input_bytes").unwrap();
+    assert!(matches!(
+        enforce_json_budget(&"abcde", 6, "input_bytes"),
+        Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "input_bytes",
+            limit: 6
+        })
+    ));
+
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, mut admitted) = plan(
+        &registry,
+        vec![node::<EntitySpans>("spans", "input", "output")],
+        vec![seed::<EntitySpans>("input", &entity_input())],
+    );
+    admitted.get_mut(&"input".into()).unwrap().payload =
+        vec![b'x'; PURE_DAG_MAX_INPUT_BYTES];
+    // Even though this payload is not a valid typed EntitySpans input, the
+    // wire budget must be rejected before any operation deserialization.
+    assert!(matches!(
+        execute_pure_dag("test-run", &PureDagRun { plan, admitted }),
+        Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "input_bytes",
+            limit: PURE_DAG_MAX_INPUT_BYTES
+        })
+    ));
+}
+
+#[test]
+fn pure_dag_node_budget_rejects_oversize_before_executor_validation() {
+    let registry = semantic_extraction_registry().unwrap();
+    let nodes = (0..PURE_DAG_MAX_NODES)
+        .map(|index| {
+            node::<EntitySpans>(
+                &format!("node-{index}"),
+                "input",
+                &format!("output-{index}"),
+            )
+        })
+        .collect();
+    let (plan, admitted) = plan(
+        &registry,
+        nodes,
+        vec![seed::<EntitySpans>("input", &entity_input())],
+    );
+    let mut run = PureDagRun { plan, admitted };
+    enforce_pure_dag_input_budget(&run).unwrap();
+    run.plan.nodes.push(node::<EntitySpans>(
+        "node-extra",
+        "input",
+        "output-extra",
+    ));
+    // The mutated manifest also has a stale hash. A too-large manifest must
+    // be rejected first without ever reaching the operation executor.
+    assert!(matches!(
+        execute_pure_dag("test-run", &run),
+        Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "operation_nodes",
+            limit: PURE_DAG_MAX_NODES
+        })
+    ));
+}
+
+#[test]
+fn pure_dag_result_budget_is_measured_before_temporal_history_return() {
+    let registry = semantic_extraction_registry().unwrap();
+    let (plan, admitted) = plan(
+        &registry,
+        vec![node::<EntitySpans>("spans", "input", "output")],
+        vec![seed::<EntitySpans>("input", &entity_input())],
+    );
+    let receipt = execute_pure_dag("test-run", &PureDagRun { plan, admitted }).unwrap();
+    let exact = serde_json::to_vec(&receipt).unwrap().len();
+    enforce_json_budget(&receipt, exact, "result_bytes").unwrap();
+    assert!(matches!(
+        enforce_json_budget(&receipt, exact - 1, "result_bytes"),
+        Err(OperationRunError::ResourceBudgetExceeded {
+            resource: "result_bytes",
+            ..
+        })
+    ));
+}

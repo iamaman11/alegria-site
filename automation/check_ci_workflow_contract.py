@@ -168,6 +168,10 @@ def check() -> None:
     assert "f.write('cargo_scope=' + report['scope'] + '\\n')" in workflow
     assert "if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then" in architecture
     assert "args+=(--delegate-workspace-unit-tests-to-verify)" in architecture
+    assert "args+=(--parallel-architecture-e2e)" in architecture
+    assert architecture.index("args+=(--parallel-architecture-e2e)") > architecture.index(
+        "if [[ '${{ needs.impact.outputs.cargo_scope }}' == full ]]; then"
+    )
     assert 'python3 automation/run_scoped_cargo_feedback.py \\' in architecture
     assert "cache-mode: write" not in workflow
     assert "cargo test -p integration_harness --features e2e" not in architecture

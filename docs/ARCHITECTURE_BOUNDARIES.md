@@ -44,6 +44,11 @@ Temporal-приёмки. Возвращать удалённую фиктивн�
 явные prerequisites; её можно повторно применить в другом сценарии без
 копирования алгоритма из Temporal или SQL-адаптера.
 
+Спорные границы между предметным решением, Activity/CLI и внешним эффектом,
+включая прямые provider writes вне штатной Outbox-доставки, рассмотрены в
+[`ISSUE94_OPERATION_BOUNDARY_DECISIONS.md`](ISSUE94_OPERATION_BOUNDARY_DECISIONS.md).
+Это карта исходников для architecture freeze, не второй каталог шагов сайта.
+
 - `seo_domain` и `truth_domain` определяют чистые правила и допустимость
   состояния. `seo_application` собирает типизированные операции в план;
   `seo_steps` переводит wire-контракты. SQLx, граф и векторный поиск исполняют

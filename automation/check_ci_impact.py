@@ -52,7 +52,7 @@ class ImpactFixtures(unittest.TestCase):
             "graph_neo4j": {"analytics_svc", "temporal_worker", "runtime_composition"},
             "http_client": {"gsc_sync"},
             "infrastructure": {"runtime_composition"},
-            "runtime_composition": {"temporal_worker", "outbox_worker", "cli_tools", "integration_harness"},
+            "runtime_composition": {"temporal_worker", "outbox_worker", "integration_harness"},
             "integration_harness": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
@@ -725,7 +725,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(
             set(got["affected_crates"]),
             {"graph_neo4j", "runtime_composition", "analytics_svc", "temporal_worker",
-             "outbox_worker", "cli_tools", "integration_harness"},
+             "outbox_worker", "integration_harness"},
         )
         self.assertEqual(got["selected_suites"], ["graph_query"])
         self.assertEqual(
@@ -752,7 +752,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(
             set(result["affected_crates"]),
             {"vector_qdrant", "runtime_composition", "temporal_worker", "outbox_worker",
-             "cli_tools", "integration_harness"},
+             "integration_harness"},
         )
         self.assertEqual(result["selected_suites"], ["vector_projection"])
 
@@ -1128,7 +1128,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(
             set(self.impact("app/rust/services/gsc_sync/src/main.rs", "app/rust/crates/graph_neo4j/src/lib.rs")["affected_crates"]),
             {"gsc_sync", "graph_neo4j", "runtime_composition", "analytics_svc",
-             "temporal_worker", "outbox_worker", "cli_tools", "integration_harness"},
+             "temporal_worker", "outbox_worker", "integration_harness"},
         )
 
     def test_optional_dev_and_build_path_dependencies_in_graph(self) -> None:

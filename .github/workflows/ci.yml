@@ -246,6 +246,11 @@ jobs:
             # The same exact-source full scope makes the existing verify job
             # mandatory; it executes the workspace unit tests in parallel.
             args+=(--delegate-workspace-unit-tests-to-verify)
+            # Run independent graph/vector/Temporal integration suites in
+            # separately isolated OS processes after compiling the identical
+            # exact-source harness only once in this owner. All mandatory
+            # suites, their containerized databases and Worker startup remain.
+            args+=(--parallel-architecture-e2e)
           fi
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json "${args[@]}"

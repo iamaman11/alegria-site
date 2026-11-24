@@ -28,10 +28,10 @@ VERIFY_E2E_COMMAND_PREFIX = (
     "cargo", "test", "-p", "integration_harness", "--features", "e2e", "--lib",
 )
 VERIFY_E2E_COMMAND_SUFFIX = ("--locked", "--", "--nocapture")
-VERIFY_E2E_COMPILE = [
+E2E_COMPILE = [
     *VERIFY_E2E_COMMAND_PREFIX, "--locked", "--no-run",
 ]
-VERIFY_E2E_MAX_PROCESSES = 2
+E2E_MAX_PROCESSES = 2
 TEST_RESULT_COUNT = re.compile(r"test result: ok\. (\d+) passed;")
 
 
@@ -208,23 +208,30 @@ def run_precompiled_e2e_suite(
     return measurement
 
 
-def run_parallel_verify_e2e(
+def run_parallel_precompiled_e2e(
     report: dict, integration_commands: list[tuple[str, list[str]]],
+    *, suite_job: str,
 ) -> list[dict]:
-    """Compile one exact-source harness and run distinct filters in <=2 processes.
+    """Compile one exact-source harness per CI owner and isolate each E2E filter.
 
-    The original suite registry, CI job partition and mandatory tests are not
-    modified. `#[serial]` inside the harness protects process-local env; two
-    distinct OS processes have independent env and Testcontainers mapped ports.
+    This changes *only* scheduling, not ownership or suite selection. In
+    particular, Temporal/graph use their actual independent Testcontainers,
+    own temporary PostgreSQL/Neo4j/Qdrant state, and have distinct process
+    environments. The two processes are bounded to avoid saturating the CI
+    runner with multiple heavyweight databases. All selected suites must pass.
     """
     if len(integration_commands) < 2:
-        raise ValueError("parallel verify E2E needs at least two suites")
+        raise ValueError("parallel precompiled E2E needs at least two suites")
+    if suite_job not in ("verify", "architecture-and-rust"):
+        raise ValueError("unknown E2E CI owner")
     filters = [exact_verify_e2e_filter(command) for _, command in integration_commands]
     if len(filters) != len(set(filters)):
-        raise ValueError("parallel verify E2E cannot execute duplicated filters")
+        raise ValueError("parallel E2E cannot execute duplicated filters")
+    if integration_commands != suite_commands_by_ci_job(report)[suite_job]:
+        raise ValueError("parallel E2E must execute the exact suite owner partition")
 
-    print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(VERIFY_E2E_COMPILE), flush=True)
-    compilation = run_cargo(VERIFY_E2E_COMPILE, cwd=WORKSPACE)
+    print("CI_E2E_PRECOMPILE COMMAND=" + " ".join(E2E_COMPILE), flush=True)
+    compilation = run_cargo(E2E_COMPILE, cwd=WORKSPACE)
     executable = precompiled_verify_executable(compilation)
     environments: list[dict[str, str]] = []
     for name, command in integration_commands:
@@ -234,11 +241,18 @@ def run_parallel_verify_e2e(
     output_lock = threading.Lock()
     results: dict[str, dict] = {}
     failures: list[Exception] = []
-    print(f"CI_E2E_PARALLEL_PROCESSES={VERIFY_E2E_MAX_PROCESSES} suites={len(filters)}", flush=True)
-    with ThreadPoolExecutor(max_workers=VERIFY_E2E_MAX_PROCESSES) as pool:
+    print(f"CI_E2E_PARALLEL_PROCESSES={E2E_MAX_PROCESSES} owner={suite_job} suites={len(filters)}", flush=True)
+    # On the architecture owner, schedule the observed longest integration
+    # first (canonical Temporal); it overlaps the independent graph contract
+    # suite without changing the deterministic result/report order. The
+    # verify job keeps its existing exact-source suite order.
+    queue = list(zip(integration_commands, environments))
+    if suite_job == "architecture-and-rust":
+        queue.sort(key=lambda item: item[0][0] != "temporal_restart")
+    with ThreadPoolExecutor(max_workers=E2E_MAX_PROCESSES) as pool:
         pending = {
             pool.submit(run_precompiled_e2e_suite, name, command, executable, environment, output_lock): name
-            for (name, command), environment in zip(integration_commands, environments)
+            for (name, command), environment in queue
         }
         for future in as_completed(pending):
             name = pending[future]
@@ -268,6 +282,10 @@ def main() -> int:
         "--parallel-verify-e2e", action="store_true",
         help="Compile once and run mandatory verify E2E filters in two isolated processes",
     )
+    parser.add_argument(
+        "--parallel-architecture-e2e", action="store_true",
+        help="For full impact, precompile architecture E2E once and run independent filters in two OS processes",
+    )
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
     actual_sha = subprocess.check_output(
@@ -276,7 +294,8 @@ def main() -> int:
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
     if args.suite_job == "verify":
-        if args.delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":
+        if (args.delegate_workspace_unit_tests_to_verify
+                or args.parallel_architecture_e2e or report.get("analysis") != "full"):
             raise ValueError("verify executes delegated E2E suites only for full impact")
         # The same verify job has already executed its mandatory workspace
         # unit tests. Never re-run those Cargo commands through this runner.
@@ -286,6 +305,8 @@ def main() -> int:
     else:
         if args.parallel_verify_e2e:
             raise ValueError("parallel verify E2E cannot run in architecture owner")
+        if args.parallel_architecture_e2e and report.get("analysis") != "full":
+            raise ValueError("parallel architecture E2E requires full exact-source impact")
         commands, delegated = cargo_commands_for_ci(
             report,
             delegate_workspace_unit_tests_to_verify=args.delegate_workspace_unit_tests_to_verify,
@@ -313,8 +334,10 @@ def main() -> int:
 
     # All real integration commands and owners come from ci_impact.py; the
     # runner has no suite-specific compilation or filter-selection branches.
-    if args.parallel_verify_e2e and len(integration_commands) >= 2:
-        measurements.extend(run_parallel_verify_e2e(report, integration_commands))
+    if (args.parallel_verify_e2e or args.parallel_architecture_e2e) and len(integration_commands) >= 2:
+        measurements.extend(run_parallel_precompiled_e2e(
+            report, integration_commands, suite_job=args.suite_job,
+        ))
     else:
         for name, command in integration_commands:
             # The prebuilt-binary hook is generic. A runtime suite can use its

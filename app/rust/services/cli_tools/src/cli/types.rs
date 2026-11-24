@@ -4,7 +4,6 @@ use contracts::generated::alegria::temporal::v1::{
     CrawlSourcesOutputPayload, FactExtractionInputPayload, ProjectionBarrierAuditOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
-use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use temporal_gateway::TemporalSeoWorkflowControlAdapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
@@ -19,21 +18,42 @@ use crate::analytics_client::AnalyticsClient;
 use crate::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};
-use seo_application::execution::{run_mode_for_scenario, SeoRunPolicy};
-use seo_application::scenario::{
-    execute_site_build_scenario, SeoExecutionMode, SeoScenarioKind, SeoScenarioRequest,
-};
-use seo_ports::{
-    CrawlIngestRepository, SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest,
-};
+use seo_ports::{CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest};
 use serde_json::{json, Value};
 use sqlx::{types::Json, Row};
 use std::collections::HashMap;
+use std::error::Error;
 use std::env;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 use uuid::Uuid;
+
+/// A narrow, explicit cutover boundary: old direct site commands are not
+/// silently reinterpreted as Temporal workflows. They remain discoverable in
+/// CLI help, but fail before any DB/network I/O until a canonical operation
+/// plan runner replaces their fixed four-stage implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnsupportedDirectSiteCommand {
+    SeoRun,
+    CrawlPendingSources,
+}
+
+impl fmt::Display for UnsupportedDirectSiteCommand {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = match self {
+            Self::SeoRun => "seo-run",
+            Self::CrawlPendingSources => "crawl-pending-sources",
+        };
+        write!(
+            f,
+            "CLI_DIRECT_SITE_COMMAND_DISABLED: {command} cannot execute during operation-plan cutover; use the canonical Temporal workflow operator, not direct SQL/provider execution"
+        )
+    }
+}
+
+impl Error for UnsupportedDirectSiteCommand {}
 
 #[derive(Parser, Debug)]
 #[command(name = "cli_tools")]
@@ -175,6 +195,8 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+    /// Disabled during #94 cutover: use the existing Temporal source-acquisition workflow.
+    /// This command fails before any provider or database I/O.
     CrawlPendingSources {
         #[arg(long)]
         database_url: Option<String>,
@@ -313,6 +335,8 @@ enum Command {
         #[arg(long, default_value = "")]
         reason: String,
     },
+    /// Disabled during #94 cutover: use temporal_starter for registered workflows.
+    /// No old fixed-phase execution is silently translated into a new plan.
     SeoRun {
         #[command(subcommand)]
         scenario: SeoRunCommand,

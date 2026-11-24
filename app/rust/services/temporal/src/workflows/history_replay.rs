@@ -26,6 +26,8 @@ pub(crate) async fn replay_history(path: &Path) -> Result<()> {
         .context("register canonical V1 workflow for history replay")?;
     super::seo_site_build_composable_v2::register_for_replay(&mut options)
         .context("register composable V2 workflow for history replay")?;
+    super::pure_operation_dag::register_for_replay(&mut options)
+        .context("register provider-free pure DAG workflow for history replay")?;
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct Temporal replayer: {error}"))?
         .replay_workflow(history)

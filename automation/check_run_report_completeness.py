@@ -89,13 +89,20 @@ def main() -> int:
         if not check_contains(scenario, needle):
             failures.append(f"scenario.rs missing `{needle}`")
 
+    # Historical R4 evidence refers to a now-retired direct CLI implementation.
+    # The detailed report schema remains in seo_application, but executing that
+    # fixed pipeline via cli_tools is forbidden while #94 replaces the plan.
+    # Reject both a removed error and a silently reintroduced legacy runner.
     for needle in [
-        "SEO_RUN_RESULT scenario=",
-        "SEO_RUN_PHASE phase=",
-        "result.phase_reports",
+        "CLI_DIRECT_SITE_COMMAND_DISABLED:",
+        "UnsupportedDirectSiteCommand::SeoRun.into()",
+        "UnsupportedDirectSiteCommand::CrawlPendingSources.into()",
     ]:
         if not check_contains(cli, needle):
-            failures.append(f"cli_tools run report surface missing `{needle}`")
+            failures.append(f"cli_tools lacks explicit retired-command guard `{needle}`")
+    for needle in ["SEO_RUN_RESULT scenario=", "SEO_RUN_PHASE phase=", "execute_site_build_scenario("]:
+        if check_contains(cli, needle):
+            failures.append(f"cli_tools still executes retired fixed-phase site command `{needle}`")
 
     for needle in [
         "workflow_starts_total",

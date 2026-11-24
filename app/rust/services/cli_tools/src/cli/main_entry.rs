@@ -122,14 +122,8 @@ async fn main() -> Result<()> {
         } => {
             truth_hitl_decide(database_url, &task_key, &actor_role, &decision, &reason).await?
         }
-        Command::CrawlPendingSources {
-            database_url,
-            run_id,
-            query_batch_key,
-            limit,
-            emit_qdrant,
-        } => {
-            crawl_pending_sources(database_url, run_id, query_batch_key, limit, emit_qdrant).await?
+        Command::CrawlPendingSources { .. } => {
+            return Err(UnsupportedDirectSiteCommand::CrawlPendingSources.into());
         }
         Command::CmsReviewList {
             database_url,
@@ -270,49 +264,8 @@ async fn main() -> Result<()> {
             );
             0
         }
-        Command::SeoRun {
-            scenario,
-            database_url,
-            run_id,
-            context_key,
-            market,
-            locale,
-            country_code,
-            visa_type,
-            visa_subtype,
-            applicant_profile,
-            citizenship_code,
-            bootstrap_context,
-            queries,
-            query_batch_key,
-            output_dir,
-            base_url,
-            publish,
-            require_preapproved_decision,
-            warn_only_projections,
-        } => {
-            seo_run(
-                scenario,
-                database_url,
-                run_id,
-                context_key,
-                market,
-                locale,
-                country_code,
-                visa_type,
-                visa_subtype,
-                applicant_profile,
-                citizenship_code,
-                bootstrap_context,
-                queries,
-                query_batch_key,
-                output_dir,
-                base_url,
-                publish,
-                require_preapproved_decision,
-                warn_only_projections,
-            )
-            .await?
+        Command::SeoRun { .. } => {
+            return Err(UnsupportedDirectSiteCommand::SeoRun.into());
         }
     };
 
@@ -320,5 +273,36 @@ async fn main() -> Result<()> {
         Ok(())
     } else {
         std::process::exit(code)
+    }
+}
+
+#[cfg(test)]
+mod direct_site_command_cutover_tests {
+    use super::*;
+
+    #[test]
+    fn previous_operator_commands_remain_discoverable_but_explicitly_disabled() {
+        let cases: [(&[&str], UnsupportedDirectSiteCommand); 2] = [
+            (&["cli_tools", "seo-run", "full"], UnsupportedDirectSiteCommand::SeoRun),
+            (
+                &["cli_tools", "crawl-pending-sources"],
+                UnsupportedDirectSiteCommand::CrawlPendingSources,
+            ),
+        ];
+        for (args, expected) in cases {
+            let parsed = Cli::try_parse_from(args.iter().copied())
+                .expect("operator gets a typed CLI command");
+            let actual = match parsed.command {
+                Command::SeoRun { .. } => UnsupportedDirectSiteCommand::SeoRun,
+                Command::CrawlPendingSources { .. } => {
+                    UnsupportedDirectSiteCommand::CrawlPendingSources
+                }
+                _ => panic!("legacy direct mode was silently redirected"),
+            };
+            assert_eq!(actual, expected);
+            let diagnostic = actual.to_string();
+            assert!(diagnostic.starts_with("CLI_DIRECT_SITE_COMMAND_DISABLED:"));
+            assert!(diagnostic.contains("canonical Temporal workflow operator"));
+        }
     }
 }

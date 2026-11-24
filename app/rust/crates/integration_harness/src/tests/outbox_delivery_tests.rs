@@ -1358,3 +1358,159 @@ async fn outbox_a14_terminal_failure_and_dead_letter_are_atomic() {
         .bind(second_claim.event_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(status, "processing", "no terminal failure without durable dead letter");
 }
+
+/// PostgreSQL itself rejects a verified_rules_4 registry change unless the
+/// final projection command was reserved in the SAME transaction. Requiring
+/// only an historical event ID would allow a direct SQL writer to reuse it.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn outbox_a14_pg_commit_fence_rejects_direct_registry_and_truth_bypass() {
+    use infrastructure::adapters::verified_rule_projection_adapter::{
+        stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx,
+    };
+    use seo_ports::knowledge::{
+        VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
+    };
+
+    fn assert_commit_fence(error: &sqlx::Error) {
+        let code = error.as_database_error()
+            .and_then(|db| db.code())
+            .map(|code| code.to_string());
+        assert_eq!(code.as_deref(), Some("23514"), "unexpected PG failure: {error}");
+    }
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let rule_id = format!("commit-fence-{}", Uuid::new_v4().simple());
+    let point_id = primitives::qdrant_point_id::qdrant_point_id_v1(
+        "verified_rules_4", "rule_instance", &rule_id,
+    );
+    let direct_insert = sqlx::query(
+        "INSERT INTO kb.qdrant_points
+         (point_id,entity_type,entity_key,collection_name,embedding_model,embedding_version)
+         VALUES ($1,'rule_instance',$2,'verified_rules_4','fixture','v1')",
+    )
+    .bind(&point_id).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&direct_insert);
+
+    let context_key = format!("commit-context-{}", Uuid::new_v4().simple());
+    let country_code = format!("C{}", &Uuid::new_v4().simple().to_string()[..8]);
+    sqlx::query(
+        "INSERT INTO kb.visa_contexts (context_key,country_code,visa_family,citizenship_code)
+         VALUES ($1,$2,'tourist','BY')",
+    ).bind(&context_key).bind(&country_code).execute(&pg.pool).await.unwrap();
+    let batch = VerifiedRuleUpsertBatch {
+        run_id: Uuid::new_v4().to_string(),
+        context_key: context_key.clone(),
+        upserts: vec![VerifiedRuleProjectionCandidate {
+            rule_instance_id: rule_id.clone(),
+            role_type: "document_required".into(),
+            concept_key: "passport".into(),
+            source_key: "https://fixture.example.gov/passport".into(),
+            evidence_quote: "A passport is required".into(),
+        }],
+    };
+    let embeddings = VerifiedRuleEmbeddingBatch {
+        model: "fixture".into(),
+        vectors: vec![vec![0.1; 1024]],
+    };
+    let mut tx = pg.pool.begin().await.unwrap();
+    stage_rule_upserts_in_tx(&mut tx, &batch, embeddings).await.unwrap();
+    sqlx::query(
+        "INSERT INTO verified.rule_instances
+         (rule_instance_id,context_key,rule_type_key,concept_key,role_type,params,status)
+         VALUES ($1,$2,'passport','passport','document_required','{}','verified')",
+    ).bind(&rule_id).bind(&context_key).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let evidence: (i64, bool) = sqlx::query_as(
+        "SELECT projection_revision, staged_xid IS NOT NULL FROM system.sync_outbox
+         WHERE aggregate_key=$1 AND target_system='qdrant' AND aggregate_type='rule_instance'",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(evidence, (1, true));
+
+    let forged_rebind = sqlx::query(
+        "UPDATE system.sync_outbox SET staged_xid=pg_current_xact_id()
+         WHERE aggregate_key=$1 AND target_system='qdrant' AND aggregate_type='rule_instance'",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&forged_rebind);
+
+    let forbidden_receipt_delete = sqlx::query(
+        "DELETE FROM system.sync_outbox
+         WHERE aggregate_key=$1 AND target_system='qdrant' AND aggregate_type='rule_instance'",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&forbidden_receipt_delete);
+    let forbidden_head_delete = sqlx::query(
+        "DELETE FROM system.verified_rule_projection_heads WHERE aggregate_key=$1",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&forbidden_head_delete);
+
+    let direct_update = sqlx::query(
+        "UPDATE verified.rule_instances SET status='disputed' WHERE rule_instance_id=$1",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&direct_update);
+    let direct_registry_change = sqlx::query(
+        "UPDATE kb.qdrant_points SET embedding_version='unfenced' WHERE entity_key=$1
+         AND collection_name='verified_rules_4'",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&direct_registry_change);
+    let direct_delete = sqlx::query(
+        "DELETE FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+    ).bind(&rule_id).execute(&pg.pool).await.unwrap_err();
+    assert_commit_fence(&direct_delete);
+
+    let mut tx = pg.pool.begin().await.unwrap();
+    stage_rule_point_deletes_in_tx(&mut tx, &batch.run_id, &context_key, &[rule_id.clone()])
+        .await.unwrap();
+    tx.commit().await.unwrap();
+    let latest_revision: i64 = sqlx::query_scalar(
+        "SELECT current_revision FROM system.verified_rule_projection_heads WHERE aggregate_key=$1",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(latest_revision, 2, "deletion must reserve a new causal intent");
+}
+
+/// Constraint triggers must validate the final committed state, not a
+/// savepoint's transient event or a committed receipt from an older run.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn outbox_a14_pg_commit_fence_savepoint_rollback_never_reuses_intent() {
+    use infrastructure::adapters::verified_rule_projection_adapter::stage_rule_upserts_in_tx;
+    use seo_ports::knowledge::{
+        VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
+    };
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let rule_id = format!("commit-savepoint-{}", Uuid::new_v4().simple());
+    let batch = VerifiedRuleUpsertBatch {
+        run_id: Uuid::new_v4().to_string(),
+        context_key: format!("commit-context-{}", Uuid::new_v4().simple()),
+        upserts: vec![VerifiedRuleProjectionCandidate {
+            rule_instance_id: rule_id.clone(),
+            role_type: "document_required".into(),
+            concept_key: "passport".into(),
+            source_key: "https://fixture.example.gov/passport".into(),
+            evidence_quote: "A passport is required".into(),
+        }],
+    };
+    let mut tx = pg.pool.begin().await.unwrap();
+    sqlx::query("SAVEPOINT stage_intent").execute(&mut *tx).await.unwrap();
+    stage_rule_upserts_in_tx(&mut tx, &batch, VerifiedRuleEmbeddingBatch {
+        model: "fixture".into(), vectors: vec![vec![0.1; 1024]],
+    }).await.unwrap();
+    sqlx::query("ROLLBACK TO SAVEPOINT stage_intent").execute(&mut *tx).await.unwrap();
+    sqlx::query(
+        "INSERT INTO kb.qdrant_points
+         (point_id,entity_type,entity_key,collection_name,embedding_model,embedding_version)
+         VALUES ($1,'rule_instance',$2,'verified_rules_4','fixture','v1')",
+    ).bind(Uuid::new_v4().to_string()).bind(&rule_id)
+        .execute(&mut *tx).await.unwrap();
+    let error = tx.commit().await.unwrap_err();
+    let error_code = error.as_database_error().and_then(|db| db.code());
+    assert_eq!(error_code.as_deref(), Some("23514"),
+        "rolled-back intent must not authorize registry writes: {error}");
+    let lingering: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+    ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(lingering, 0);
+}

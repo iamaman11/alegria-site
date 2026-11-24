@@ -7,7 +7,6 @@ edition = "2021"
 tokio = { workspace = true }
 seo_steps = { path = "../../crates/seo_steps" }
 infrastructure = { path = "../../crates/infrastructure" }
-runtime_composition = { path = "../../crates/runtime_composition" }
 temporal_gateway = { path = "../../crates/temporal_gateway" }
 seo_application = { path = "../../crates/seo_application" }
 seo_ports = { path = "../../crates/seo_ports" }
@@ -15,6 +14,7 @@ primitives = { path = "../../crates/primitives" }
 truth_domain = { path = "../../crates/truth_domain" }
 contracts = { path = "../../crates/contracts" }
 anyhow = { workspace = true }
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"] }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
