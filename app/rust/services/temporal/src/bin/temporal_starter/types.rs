@@ -54,6 +54,9 @@ struct Cli {
 enum Command {
     /// Connectivity check: open client and print namespace/task queue
     Ping,
+    /// One-shot Neo4j projection uniqueness migration; requires stopped/drained graph writers.
+    /// Uses NEO4J_URI, NEO4J_USER and NEO4J_PASSWORD; does not connect to Temporal.
+    Neo4jSchemaInstall,
     /// Start workflow execution
     Start {
         #[arg(long, value_enum)]

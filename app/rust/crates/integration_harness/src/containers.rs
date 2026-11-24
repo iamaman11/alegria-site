@@ -187,6 +187,20 @@ impl Neo4jHarness {
         let user = "neo4j".to_string();
         let password = "neo4j_password".to_string();
         probe_neo4j(&uri, &user, &password).await?;
+        // The same schema contract must exist before any concurrent Temporal
+        // Activity or Outbox Worker is allowed to MERGE graph projections.
+        // This is explicit fixture bootstrap, never per-event DDL. Production
+        // release must perform and verify the same managed owner migration.
+        // Only the explicit schema installer may use a raw graph connection.
+        // The production `connect_neo4j` checks these constraints and must
+        // refuse a fresh, not-yet-initialized graph database.
+        let graph = Graph::new(&uri, &user, &password)?;
+        graph_neo4j::schema::install_projection_schema(&graph)
+            .await
+            .context("install Neo4j projection uniqueness constraints")?;
+        graph_neo4j::schema::verify_projection_schema(&graph)
+            .await
+            .context("verify Neo4j projection uniqueness constraints")?;
         Ok(Self {
             uri,
             user,

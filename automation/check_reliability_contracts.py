@@ -31,6 +31,15 @@ SQLX_VERIFIED_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "sr
 GENERIC_OUTBOX_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_runtime_outbox_adapter.rs"
 CANONICAL_TRUTH_WRITER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_truth_write_adapter.rs"
 TRUTH_PREFLIGHT = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_truth_write_adapter" / "preflight.rs"
+NEO4J_SCHEMA_OWNER = ROOT / "app" / "rust" / "crates" / "graph_neo4j" / "src" / "schema.rs"
+NEO4J_CONNECTION_OWNER = ROOT / "app" / "rust" / "crates" / "graph_neo4j" / "src" / "lib.rs"
+NEO4J_REAL_HARNESS = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src" / "containers.rs"
+NEO4J_REAL_E2E = ROOT / "app" / "rust" / "crates" / "integration_harness" / "src" / "tests" / "provider_runtime_surface_tests.rs"
+NEO4J_OPERATOR_TYPES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter" / "types.rs"
+NEO4J_OPERATOR_DISPATCH = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter" / "main_dispatch.rs"
+NEO4J_LOCAL_GRAPH_GATE = ROOT / "automation" / "run_graph_contract_gate.sh"
+CI_IMPACT_PLANNER = ROOT / "automation" / "ci_impact.py"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 UNCERTAIN_MARKER = "projection_outcome_uncertain:v1"
 
 
@@ -290,6 +299,233 @@ def causal_revision_contract_failures(
     return failures
 
 
+# These are physical Neo4j projection MERGE identities, not a fixed website
+# recipe, business-step count or a promise that all future operations are known.
+# A new MERGE identity must be added to the owner schema and this guard.
+NEO4J_UNIQUE_IDENTITIES = frozenset({
+    ("Node", "VisaContext", "context_key"),
+    ("Node", "Concept", "concept_key"),
+    ("Node", "RuleInstance", "rule_instance_id"),
+    ("Node", "Page", "url_path"),
+    ("Node", "KeywordCluster", "cluster_key"),
+    ("Node", "Intent", "intent_key"),
+    ("Node", "SERPPattern", "serp_pattern_key"),
+    ("Node", "PageBlueprint", "blueprint_key"),
+    ("Node", "PageNode", "page_node_key"),
+    ("Node", "ContentGap", "content_gap_key"),
+    ("Node", "PageBrief", "page_brief_key"),
+    ("Relationship", "RECOMMENDS_LINK_TO", "link_recommendation_key"),
+    ("Relationship", "CONFLICTS_WITH", "conflict_key"),
+})
+
+
+def neo4j_schema_contract_failures(
+    schema: str, connection: str, harness: str,
+    e2e: str, impact: str, workflow: str,
+    operator_types: str, operator_dispatch: str,
+    local_graph_gate: str,
+) -> list[str]:
+    """Static regression fence for *real* Neo4j identity prerequisites.
+
+    Named DDL, SHOW metadata verification, production connection and an
+    existing real-container graph E2E are all required. This check itself
+    never connects to Neo4j and never claims to have installed a constraint.
+    """
+    failures: list[str] = []
+    # Parse reviewed data entries, not comments or random Cypher strings:
+    # each identity needs its own typed specification and executable DDL.
+    entries = re.findall(
+        r'ProjectionConstraint\s*\{\s*name:\s*"([^"]+)",\s*'
+        r'entity:\s*ConstraintEntity::(Node|Relationship),\s*'
+        r'label_or_type:\s*"([^"]+)",\s*'
+        r'property:\s*"([^"]+)",\s*'
+        r'ddl:\s*"([^"]+)",\s*\}',
+        schema,
+    )
+    found: dict[tuple[str, str, str], str] = {}
+    names: set[str] = set()
+    for name, entity, label, property_key, ddl in entries:
+        identity = (entity, label, property_key)
+        if identity in found:
+            failures.append(f"Neo4j projection duplicates typed schema specification {identity}")
+        found[identity] = name
+        if name in names:
+            failures.append(f"Neo4j projection reuses constraint name `{name}`")
+        names.add(name)
+        identifier = r"[A-Za-z_][A-Za-z_0-9]*"
+        if entity == "Node":
+            template = rf"CREATE CONSTRAINT ({identifier}) IF NOT EXISTS FOR \(n:({identifier})\) REQUIRE n\.({identifier}) IS UNIQUE"
+        else:
+            template = rf"CREATE CONSTRAINT ({identifier}) IF NOT EXISTS FOR \(\)-\[r:({identifier})\]-\(\) REQUIRE r\.({identifier}) IS UNIQUE"
+        parsed_ddl = re.fullmatch(template, ddl)
+        if not parsed_ddl or parsed_ddl.groups() != (name, label, property_key):
+            failures.append(f"Neo4j `{name}` must install a matching named uniqueness DDL for {identity}")
+    for missing in sorted(NEO4J_UNIQUE_IDENTITIES - set(found)):
+        failures.append(f"Neo4j projection missing owner uniqueness constraint for {missing}")
+
+    install = schema.split("pub async fn install_projection_schema", 1)
+    verify = schema.split("pub async fn verify_projection_schema", 1)
+    if len(install) != 2 or len(verify) != 2:
+        failures.append("Neo4j owner must expose explicit install and read-only verify schema APIs")
+    else:
+        installer = install[1].split("pub async fn verify_projection_schema", 1)[0]
+        verifier = verify[1].split("#[cfg(test)]", 1)[0]
+        normalized_installer = re.sub(r"\s+", "", installer)
+        for needle in (
+            "for spec in PROJECTION_CONSTRAINTS",
+            "graph.run(query(spec.ddl))",
+            "verify_projection_schema(graph).await",
+        ):
+            if re.sub(r"\s+", "", needle) not in normalized_installer:
+                failures.append(f"Neo4j schema installer missing `{needle}`")
+        for needle in (
+            "SHOW CONSTRAINTS", "entityType", "labelsOrTypes", "properties",
+            "matches_constraint(spec, found)", "bail!", "PROJECTION_CONSTRAINTS",
+        ):
+            if needle not in verifier:
+                failures.append(f"Neo4j schema verifier missing `{needle}`")
+        if "CREATE CONSTRAINT" in verifier or "graph.run(query(spec.ddl))" in verifier:
+            failures.append("Neo4j production schema verification must remain read-only")
+        shape_required = (
+            "found.entity == expected_entity",
+            "expected_kinds.contains(&found.kind.as_str())",
+        )
+        label_exact = (
+            "found.labels_or_types == [spec.label_or_type]" in schema or
+            all(part in schema for part in (
+                "found.labels_or_types.len() == 1",
+                "found.labels_or_types[0] == spec.label_or_type",
+            ))
+        )
+        property_exact = (
+            "found.properties == [spec.property]" in schema or
+            all(part in schema for part in (
+                "found.properties.len() == 1",
+                "found.properties[0] == spec.property",
+            ))
+        )
+        if not (all(needle in schema for needle in shape_required) and label_exact and property_exact):
+            failures.append("Neo4j schema verifier must reject wrong type/entity/label/property")
+
+    connection_fn = connection.split("pub async fn connect_neo4j", 1)
+    if len(connection_fn) != 2:
+        failures.append("Neo4j production connection factory missing")
+    else:
+        body = connection_fn[1].split("pub async fn run_cypher", 1)[0]
+        if not re.search(r"schema::verify_projection_schema\s*\(\s*&graph\s*\)\s*\.await\s*\?", body):
+            failures.append("Neo4j production connect_neo4j must fail closed on absent constraints")
+        if "schema::install_projection_schema" in body or "CREATE CONSTRAINT" in body:
+            failures.append("Neo4j production connect_neo4j may verify, never auto-install schema")
+
+    bootstrap = harness.split("impl Neo4jHarness", 1)
+    if len(bootstrap) != 2:
+        failures.append("real Neo4jHarness is missing")
+    else:
+        body = bootstrap[1].split("impl ", 1)[0]
+        install_position = body.find("graph_neo4j::schema::install_projection_schema(&graph)")
+        verify_position = body.find("graph_neo4j::schema::verify_projection_schema(&graph)")
+        return_position = body.find("Ok(Self {")
+        if install_position < 0 or verify_position <= install_position or return_position <= verify_position:
+            failures.append("real Neo4jHarness must install and verify constraints before exposing graph writers")
+        if 'GenericImage::new("neo4j"' not in body:
+            failures.append("Neo4j uniqueness E2E must use the actual Neo4j container")
+
+    test = e2e.split("async fn graph_capability_link_projection_rejects_cross_scope_and_missing_endpoints", 1)
+    if len(test) != 2:
+        failures.append("real graph_capability Neo4j E2E is missing")
+    else:
+        body = test[1].split("#[cfg(feature = \"e2e\")]", 1)[0]
+        for needle in ("Neo4jHarness::start().await", "tokio::join!", "count_page_nodes", "count_links", "upsert_page_node", "upsert_link_recommendation"):
+            if needle not in body:
+                failures.append(f"real concurrent Neo4j E2E missing `{needle}`")
+        if body.count("tokio::join!(") < 2:
+            failures.append("real Neo4j E2E must race both PageNode and link identities")
+        for check in (
+            "assert_eq!(count_page_nodes(&graph, &concurrent_page_key).await, 1)",
+            "assert_eq!(count_links(&graph, &concurrent_link_key).await, 1)",
+            "graph_neo4j::schema::verify_projection_schema(&graph)",
+            "graph_neo4j::schema::install_projection_schema(&graph)",
+            '"DROP CONSTRAINT alegria_pagenode_page_node_key_unique IF EXISTS"',
+        ):
+            if check not in body:
+                failures.append(f"real Neo4j race/historical-duplicate E2E missing `{check}`")
+
+    # A real production deployment must have an executable operator command,
+    # not just a test-only installer. The existing temporal_starter has the
+    # graph_neo4j dependency and deliberately returns before connecting to
+    # Temporal; no new service, job or schema-migrator binary is introduced.
+    if not re.search(r"enum Command\s*\{[\s\S]*?\bNeo4jSchemaInstall\s*,", operator_types):
+        failures.append("existing temporal_starter must expose neo4j-schema-install command")
+    cli_bootstrap = operator_dispatch.split("let command = match command {", 1)
+    if len(cli_bootstrap) != 2:
+        failures.append("temporal_starter operator migration dispatch is missing")
+    else:
+        early_dispatch = cli_bootstrap[1].split("let identity =", 1)[0]
+        for needle in (
+            "Command::Neo4jSchemaInstall =>",
+            'std::env::var("NEO4J_URI")',
+            'std::env::var("NEO4J_USER")',
+            'std::env::var("NEO4J_PASSWORD")',
+            "neo4rs_adapter::Graph::new(&uri, &user, &password)?",
+            "neo4rs_adapter::schema::install_projection_schema(&graph).await?",
+            "neo4rs_adapter::schema::verify_projection_schema(&graph).await?",
+            "return Ok(())",
+        ):
+            if needle not in early_dispatch:
+                failures.append(f"operator-only Neo4j migration missing `{needle}` before Temporal connect")
+        if "connect_client(" in early_dispatch or "neo4rs_adapter::connect_neo4j(" in early_dispatch:
+            failures.append("operator schema installation must avoid Temporal and production verify-first factory")
+
+    # This local smoke gate may provision its OWN disposable compose Neo4j.
+    # With BOOTSTRAP_LOCAL_INFRA=0 (operator-supplied production or staging
+    # endpoint) it must not silently install/edit live constraints.
+    compose_bootstrap = re.search(
+        r'if \[\[ "\$BOOTSTRAP_LOCAL_INFRA" == "1" \]\]; then\s*'
+        r'if command -v docker[^\n]*; then\s*'
+        r'[\s\S]*?compose_cmd up -d postgres neo4j[^\n]*\n'
+        r'[\s\S]*?LOCAL_NEO4J_BOOTSTRAPPED=true\s*\n\s*fi\s*\nfi',
+        local_graph_gate,
+    )
+    if not compose_bootstrap or 'LOCAL_NEO4J_BOOTSTRAPPED=false' not in local_graph_gate:
+        failures.append("local graph gate may enable auto-DDL only after its own successful Docker compose bootstrap")
+    local_gate = local_graph_gate.split('if [[ "$LOCAL_NEO4J_BOOTSTRAPPED" == "true" ]]; then', 1)
+    if len(local_gate) != 2:
+        failures.append("local graph gate must isolate one-shot Neo4j schema installation from external endpoints")
+    else:
+        installer = local_gate[1].split("\nfi\n", 1)[0]
+        for needle in (
+            'CARGO_TARGET_DIR="$CLI_TARGET_DIR"',
+            'NEO4J_URI="127.0.0.1:7687"',
+            'NEO4J_USER="neo4j"',
+            'NEO4J_PASSWORD="neo4j_password"',
+            'cargo run -q -p temporal_worker --bin temporal_starter -- neo4j-schema-install',
+        ):
+            if needle not in installer:
+                failures.append(f"local Neo4j graph gate missing safe one-shot installer `{needle}`")
+    if local_graph_gate.count("-- neo4j-schema-install") != 1:
+        failures.append("local graph gate must have exactly one guarded schema migration")
+    if local_graph_gate.find("-- neo4j-schema-install") > local_graph_gate.find("    seo-preflight") >= 0:
+        failures.append("local graph gate must install Neo4j schema before preflight")
+
+    graph_suite = impact.split('"graph_query": {', 1)
+    if len(graph_suite) != 2:
+        failures.append("existing graph_query impact suite is missing")
+    else:
+        suite = graph_suite[1].split('"vector_projection": {', 1)[0]
+        if '"--lib", "graph_capability_", "--locked"' not in suite:
+            failures.append("graph_query must execute both real Neo4j graph_capability tests")
+        if '"app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs"' not in suite:
+            failures.append("graph_query impact map must own concurrent replay test edits")
+        if '"app/rust/crates/integration_harness/src/containers.rs"' not in suite:
+            failures.append("graph_query impact map must own real Neo4j schema bootstrap edits")
+        if '"app/rust/crates/graph_neo4j/"' not in suite:
+            failures.append("graph_query must run on Neo4j schema owner edits")
+    architecture = workflow.split("  architecture-and-rust:\n", 1)
+    if len(architecture) != 2 or "python3 automation/check_reliability_contracts.py" not in architecture[1].split("  product-truth:\n", 1)[0]:
+        failures.append("required architecture owner must run Neo4j schema source guard")
+    return failures
+
+
 def read_file_resolved(path: Path) -> str:
     text = path.read_text(encoding="utf-8")
     if path.name == "proto_runtime_payload_store.rs":
@@ -416,6 +652,23 @@ def main() -> int:
     else:
         failures.extend(causal_revision_contract_failures(
             *(path.read_text(encoding="utf-8") for path in revision_paths)
+        ))
+
+    neo4j_paths = (
+        NEO4J_SCHEMA_OWNER, NEO4J_CONNECTION_OWNER, NEO4J_REAL_HARNESS,
+        NEO4J_REAL_E2E, CI_IMPACT_PLANNER, CI_WORKFLOW,
+        NEO4J_OPERATOR_TYPES, NEO4J_OPERATOR_DISPATCH,
+        NEO4J_LOCAL_GRAPH_GATE,
+    )
+    absent_neo4j = [path for path in neo4j_paths if not path.is_file()]
+    if absent_neo4j:
+        failures.extend(
+            f"missing Neo4j uniqueness contract owner: {path.relative_to(ROOT)}"
+            for path in absent_neo4j
+        )
+    else:
+        failures.extend(neo4j_schema_contract_failures(
+            *(path.read_text(encoding="utf-8") for path in neo4j_paths)
         ))
 
     if failures:

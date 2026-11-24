@@ -63,3 +63,41 @@ The measured seven `verify` E2E Cargo command wall-times sum to 183.968 s, **inc
 **Architectural limitation confirmed:** `graph_neo4j` still has seven downstream workspace packages, `vector_qdrant` six, and both are directly consumed by `infrastructure` and `temporal_worker`. Outbox's projection dispatcher also performs real provider-specific operations, so this is not just an unused Cargo edge. Moving provider re-exports into crates did not produce independent Worker rebuilds. Any future extraction or process boundary must justify its protocol, deployment, diagnostic and compilation costs with measured evidence.
 
 **≤180-second CI SLA: NOT ACCEPTED.** A promising *hypothesis* is to compile the E2E test binary once and run the exact mandatory filters in separate environment-isolated processes with bounded concurrency; the existing in-process `#[serial]` guards cannot simply be disabled. The actual benefit and resource behavior require full CI measurement. Remaining acceptance: (1) isolated edit/rebuild measurements for each provider class; (2) at least three successful full PR event-to-gate samples ≤180 seconds; (3) two executed alternative functional recipes, immutable Temporal command-plan/replay evidence, and an accepted-main Worker startup with source identity/attestation. Keep PR #95 Draft and issues #94/#43 OPEN until proven.
+
+## Neo4j concurrent MERGE identity: required migration gate (CI #486)
+
+The [Draft PR #95 CI run #486](https://github.com/iamaman11/alegria-site/actions/runs/45480401963) is **not** a passing architecture gate. The canonical Temporal E2E timed out twice with real `SeoGraphProjectionUpserted` retries: `link recommendation ... expected one same-scope source/target pair, projected 2`. The separate real `graph_query` E2E passed 2/2. The latter did not simulate competing Temporal + Outbox writers, so it cannot override the former. Neo4j `MERGE` without a uniqueness constraint is not a concurrent identity guarantee. Do **not** suppress the strict `count(r) == 1` check, acknowledge an ambiguous projection, or reinterpret this failure as a CI scheduling problem.
+
+The schema owner is `graph_neo4j`, not a cross-provider `infrastructure` helper. Its mandatory uniqueness contract covers the 11 node identities actually used by `projection.rs` and both keyed relationship identities (13 constraints total):
+
+| Neo4j entity | Unique property |
+| --- | --- |
+| `VisaContext` | `context_key` |
+| `Concept` | `concept_key` |
+| `RuleInstance` | `rule_instance_id` |
+| `Page` | `url_path` |
+| `KeywordCluster` | `cluster_key` |
+| `Intent` | `intent_key` |
+| `SERPPattern` | `serp_pattern_key` |
+| `PageBlueprint` | `blueprint_key` |
+| `PageNode` | `page_node_key` |
+| `ContentGap` | `content_gap_key` |
+| `PageBrief` | `page_brief_key` |
+| `RECOMMENDS_LINK_TO` relationship | `link_recommendation_key` |
+| `CONFLICTS_WITH` relationship | `conflict_key` |
+
+**Required deployment order:** (1) stop/drain Temporal and Outbox graph projection writers, retaining their PostgreSQL outbox events; (2) audit existing Neo4j identities, manually resolve duplicates with a provenance-preserving, reviewed repair if present; (3) run the existing `temporal_starter` operator binary explicitly, with the normal Neo4j connection environment and **without starting a Temporal workflow**:
+
+```bash
+cd app/rust
+NEO4J_URI="${NEO4J_URI:?}" \
+NEO4J_USER="${NEO4J_USER:?}" \
+NEO4J_PASSWORD="${NEO4J_PASSWORD:?}" \
+  cargo run -p temporal_worker --bin temporal_starter -- neo4j-schema-install
+```
+
+(4) The command's `graph_neo4j::schema::install_projection_schema` executes the named DDL and `verify_projection_schema` checks the installed Neo4j schema by constraint type, entity, label/relationship type and property; (5) only then start workers/readers, whose production `connect_neo4j` must verify the schema before exposing `Graph`. Do not run DDL on every Outbox event or silently delete/merge historical duplicates. New deployments and existing databases require the same verified precondition; a green source grep alone does not install constraints in production. If the installer rejects duplicates or wrong constraint definitions, leave writers stopped and open a reviewed data-repair incident; **never** bypass verification or ACK ambiguous projections.
+
+The existing `automation/run_graph_contract_gate.sh` is a **local smoke gate**, not a production migration tool. Only when it successfully starts its own `postgres neo4j` Docker Compose services (`GRAPH_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=1`) does it invoke that same `temporal_starter neo4j-schema-install` once, with fixed loopback `127.0.0.1:7687` and the local Compose test credentials, before `seo-preflight`. It reuses the test CLI build target and aborts if installation fails. With `GRAPH_CONTRACT_GATE_BOOTSTRAP_LOCAL_INFRA=0`, it performs **no schema DDL**; the operator must have installed and verified the external database beforehand.
+
+The existing `integration_harness::Neo4jHarness` must explicitly install and verify on a *real* disposable Neo4j instance before any projection test writes. A real concurrent-replay E2E must run via the **existing** `graph_query` selector (`--lib graph_capability_`) in the one `ci.yml` architecture owner, and the offline contract/mutation checks guard against accidentally removing schema installation, production verification or that E2E selector. No extra crate, process, job or workflow is justified by the repair. Verification of this owner invariant does **not** prove independent Cargo rebuilds, a ≤180-second green gate, causal graph revision semantics or freely composable business operations: those remain separate open acceptance blockers.

@@ -2,11 +2,18 @@ use anyhow::Result;
 
 pub mod planning_links;
 pub mod projection;
+pub mod schema;
 
 pub use neo4rs::{query, Graph};
 
 pub async fn connect_neo4j(uri: &str, user: &str, password: &str) -> Result<Graph> {
-    Ok(Graph::new(uri, user, password)?)
+    let graph = Graph::new(uri, user, password)?;
+    // Production-facing connections must never mutate an unconstrained graph:
+    // concurrent MERGE can create duplicate identities before an Outbox ACK.
+    // Explicit operator/harness bootstrap installs the constraints. This
+    // read-only check is intentionally repeated after restarts/reconnections.
+    schema::verify_projection_schema(&graph).await?;
+    Ok(graph)
 }
 
 pub async fn run_cypher(graph: &Graph, cypher: &str) -> Result<()> {

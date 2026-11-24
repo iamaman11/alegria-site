@@ -114,6 +114,7 @@ bash automation/run_rust_owned_check.sh bash automation/contract_verify.sh
 
 echo "[20/50] Reliability contracts check"
 python3 automation/check_reliability_contracts.py
+python3 automation/test_neo4j_schema_contract.py
 
 echo "[21/50] Domain error usage policy"
 python3 automation/check_domain_error_usage.py

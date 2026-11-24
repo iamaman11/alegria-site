@@ -386,6 +386,9 @@ SUITE_OWNERS = {
     "graph_query": {
         "paths": {
             "app/rust/crates/runtime_composition/src/adapters/graph_capability_adapter.rs",
+            # Shared test-container setup is also the Neo4j uniqueness
+            # bootstrap boundary. Changing it must run the real graph race.
+            "app/rust/crates/integration_harness/src/containers.rs",
             "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
         },
         "prefixes": ("app/rust/crates/graph_neo4j/",),

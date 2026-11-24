@@ -202,6 +202,28 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
     let command = match command {
+        Command::Neo4jSchemaInstall => {
+            // This is deliberately operator-driven. Production readers/writers
+            // verify existing constraints; they never race DDL per event.
+            // Require an explicit destination and credentials so a migration
+            // cannot silently run against the localhost development default.
+            let uri = std::env::var("NEO4J_URI")
+                .context("NEO4J_URI must be explicitly set for neo4j-schema-install")?;
+            let user = std::env::var("NEO4J_USER")
+                .context("NEO4J_USER must be explicitly set for neo4j-schema-install")?;
+            let password = std::env::var("NEO4J_PASSWORD")
+                .context("NEO4J_PASSWORD must be explicitly set for neo4j-schema-install")?;
+            if uri.trim().is_empty() || user.trim().is_empty() || password.is_empty() {
+                anyhow::bail!("Neo4j schema install requires nonempty NEO4J_URI/USER/PASSWORD");
+            }
+            // connect_neo4j verifies the schema and therefore cannot bootstrap it.
+            // This raw connection is confined to the explicit operator command.
+            let graph = neo4rs_adapter::Graph::new(&uri, &user, &password)?;
+            neo4rs_adapter::schema::install_projection_schema(&graph).await?;
+            neo4rs_adapter::schema::verify_projection_schema(&graph).await?;
+            println!("NEO4J_PROJECTION_SCHEMA installed_and_verified");
+            return Ok(());
+        }
         Command::SeoPreflight {
             database_url,
             context_key,
@@ -268,6 +290,9 @@ async fn main() -> Result<()> {
         .context("failed to connect to Temporal")?;
 
     match command {
+        Command::Neo4jSchemaInstall => {
+            unreachable!("Neo4jSchemaInstall is handled before Temporal connect")
+        }
         Command::Ping => {
             println!(
                 "ok temporal_url={} namespace={} task_queue={}",
