@@ -15,6 +15,8 @@ POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
+TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
+TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
 COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
 # SDKs may be used by these dedicated adapter crates, never by domain code.
@@ -41,6 +43,22 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-client", "temporalio-common", "temporalio-sdk-core",
     },
     (ROOT / "app" / "rust" / "services" / "temporal" / "Cargo.toml").resolve(): {
+        "temporalio-sdk",
+        "temporalio-sdk-core",
+        "temporalio-client",
+        "temporalio-common",
+        "temporalio-macros",
+    },
+    # Independent native Temporal runtime owners are legitimate SDK consumers.
+    # These are exact manifest exceptions, not permission for domain crates or
+    # unrelated provider dependencies to import a Temporal SDK.
+    (RUST_ROOT / "services" / "temporal_orchestrator" / "Cargo.toml").resolve(): {
+        "temporalio-sdk",
+        "temporalio-client",
+        "temporalio-common",
+        "temporalio-macros",
+    },
+    (RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml").resolve(): {
         "temporalio-sdk",
         "temporalio-sdk-core",
         "temporalio-client",
@@ -211,7 +229,12 @@ def main() -> int:
             # Other external SDKs remain forbidden in those owner modules.
             if ("temporalio_" in pat.pattern and any(
                 directory in file_path.parents
-                for directory in (TEMPORAL_WORKER_SRC, TEMPORAL_GATEWAY_SRC)
+                for directory in (
+                    TEMPORAL_WORKER_SRC,
+                    TEMPORAL_GATEWAY_SRC,
+                    TEMPORAL_ORCHESTRATOR_SRC,
+                    TEMPORAL_PG_EFFECTS_SRC,
+                )
             )):
                 continue
             # A gRPC server must use tonic request/response types directly,

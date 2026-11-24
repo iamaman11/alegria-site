@@ -172,7 +172,11 @@ async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgP
     );
     // Identifiers are composed solely of a fixed prefix and generated UUID
     // hex, and this PostgreSQL lives inside this test's disposable container.
-    sqlx::raw_sql(&grant_sql)
+    // `CREATE ROLE` identifiers cannot be bind parameters. The only dynamic
+    // identifier is a fixed prefix plus server-generated UUID hex; the
+    // password is a local constant and the database is disposable. The SQLx
+    // 0.9 safety assertion is intentionally confined to this test fixture.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(grant_sql))
         .execute(&postgres.pool)
         .await
         .expect("provision least-privilege disposable PG Activity role");
