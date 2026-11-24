@@ -567,7 +567,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         .iter()
         .flat_map(|section| section.candidates.iter())
         .map(|candidate| {
-            infrastructure::adapters::sqlx_hitl_adapter::TruthReviewCandidateSnapshot {
+            postgres_store::sqlx_hitl_adapter::TruthReviewCandidateSnapshot {
                 candidate_id: candidate.rule_candidate_id.clone(),
                 context_key: input.context_key.clone(),
                 source_snapshot_hash: candidate.source_snapshot_hash.clone(),
@@ -586,7 +586,7 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         })
         .collect::<Vec<_>>();
     let rejected_ids =
-        infrastructure::adapters::sqlx_hitl_adapter::load_exact_rejected_truth_candidate_ids(
+        postgres_store::sqlx_hitl_adapter::load_exact_rejected_truth_candidate_ids(
             &acts.pool,
             &input.context_key,
             &review_candidates,

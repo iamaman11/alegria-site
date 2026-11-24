@@ -266,13 +266,26 @@ jobs:
       # git archive. No PR source files or default Task Queues are changed.
       # Until B exists it fails closed; ordinary PR checks never run it.
       - name: Compare physical A/B owner relinks (opt-in)
-        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')
+        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-probe') && !contains(github.event.pull_request.labels.*.name, 'physical-ab-coldwarm')
         env:
           SQLX_OFFLINE: "true"
         run: |
           mkdir -p automation/reports
           python3 automation/compare_physical_build_options.py \
             --compiler-owners > automation/reports/physical_owner_ab.json
+
+      # Separate on-demand study: three real Cargo executables compiled from
+      # independent empty targets, then each rebuilt warm without source edits.
+      # Mutually exclusive labels avoid two costly full A/B experiments in one
+      # required run; neither path executes on ordinary pull requests.
+      - name: Measure physical A/B cold and warm CPU/RAM (opt-in)
+        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-coldwarm') && !contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          mkdir -p automation/reports
+          python3 automation/compare_physical_build_options.py \
+            --compiler > automation/reports/physical_coldwarm_ab.json
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -295,6 +308,7 @@ jobs:
             automation/reports/cargo_cache_architecture-and-rust.json
             automation/reports/owner_rebuild_probe.json
             automation/reports/physical_owner_ab.json
+            automation/reports/physical_coldwarm_ab.json
             app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: error
 

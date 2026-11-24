@@ -271,6 +271,17 @@ WORKER_E2E_RUNTIME_BINARIES = {
     "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
 }
 
+# The new pure DAG Temporal worker owns a different queue and has no provider
+# processes. Never pull the legacy worker/outbox binaries into this test's
+# preparation: both branches are intentionally independently deployable.
+PURE_V3_E2E_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "--bin", "temporal_orchestrator",
+)
+PURE_V3_E2E_RUNTIME_BINARIES = {
+    "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
+}
+
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
 # through the production SQLx reader and the active SEO generation operation.
 KNOWLEDGE_A13_PATHS = {
@@ -448,6 +459,47 @@ SUITE_OWNERS = {
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "canonical_temporal_",
             "--locked", "--", "--nocapture",
+        ),
+    },
+    "pure_dag_v3": {
+        "paths": {
+            "app/rust/services/temporal_orchestrator/Cargo.toml",
+            "app/rust/crates/integration_harness/src/lib.rs",
+            "app/rust/crates/integration_harness/src/tests/pure_v3_temporal_tests.rs",
+            "app/rust/crates/temporal_gateway/src/lib.rs",
+        },
+        "prefixes": ("app/rust/services/temporal_orchestrator/src/",),
+        "lock_crates": {"temporal_orchestrator", "temporal_gateway"},
+        # Unlike legacy certification, V3 is the mandatory source-to-runtime
+        # queue-isolation check for a new executable; exercise it when a global
+        # CI/runtime input changes, even when the diff cannot be mapped.
+        "on_unknown_global_input": True,
+        "prepare": PURE_V3_E2E_PREPARE,
+        "runtime_binaries": PURE_V3_E2E_RUNTIME_BINARIES,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "pure_v3_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "pg_effect_v3": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/integration_harness/src/lib.rs",
+            "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
+        },
+        "prefixes": ("app/rust/services/temporal_pg_effects/",),
+        "lock_crates": {"temporal_pg_effects", "postgres_store", "operation_protocol"},
+        # The PostgreSQL-only fenced Activity owner must remain tested even
+        # when a global schema/CI input cannot be safely narrowed.
+        "on_unknown_global_input": True,
+        # SQL admission/replay/idempotence is exercised directly against a
+        # disposable real PostgreSQL service. No Temporal Docker service and
+        # no PG Worker binary are needed; do not add either as preparation.
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "pg_v3_", "--locked", "--", "--nocapture",
         ),
     },
 }
@@ -723,7 +775,7 @@ def suite_commands_for_report(report: dict[str, Any]) -> list[tuple[str, list[st
 FULL_VERIFY_E2E_SUITES = frozenset({
     "draft_qa_scenario", "knowledge_a13", "outbox_a14",
     "planning_atomicity", "publishing_a17", "cms_review_revision",
-    "truth_adjudication_integrity",
+    "truth_adjudication_integrity", "pure_dag_v3", "pg_effect_v3",
 })
 
 

@@ -9,6 +9,7 @@
 use std::collections::BTreeMap;
 
 use primitives::errors::DomainError;
+use postgres_store::sqlx_hitl_adapter;
 use seo_ports::knowledge::{VerifiedRuleEmbeddingBatch, VerifiedRuleUpsertBatch};
 use sqlx::PgPool;
 use truth_domain::review_decisions::TruthAdjudicationCandidateDecision;
@@ -18,7 +19,7 @@ use truth_domain::semantic_truth_write::{
 
 use super::proto_runtime_payload_store::RuntimeProtoPayload;
 use super::{
-    raw_crawl_adapter, sqlx_hitl_adapter, sqlx_seo_adapter, sqlx_step_ledger_adapter,
+    raw_crawl_adapter, sqlx_seo_adapter, sqlx_step_ledger_adapter,
     verified_rule_projection_adapter,
 };
 

@@ -1,0 +1,23 @@
+[package]
+name = "temporal_pg_effects"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Exactly one PG business effect and the Temporal transport. Never pull
+# runtime_composition, infrastructure, graph_neo4j, vector_qdrant or providers.
+postgres_store = { path = "../../crates/postgres_store" }
+temporal_gateway = { path = "../../crates/temporal_gateway" }
+temporalio-sdk = { workspace = true }
+temporalio-sdk-core = { workspace = true }
+temporalio-client = { workspace = true }
+temporalio-common = { workspace = true }
+temporalio-macros = { workspace = true }
+temporalio-workflow = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures-util = "0.3"

@@ -5,7 +5,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
+blake3 = { workspace = true }
 operation_protocol = { path = "../operation_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
 primitives = { path = "../primitives" }
 runtime_models = { path = "../runtime_models" }
 sqlx = { workspace = true }

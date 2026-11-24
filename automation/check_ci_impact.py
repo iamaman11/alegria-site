@@ -113,6 +113,10 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(verify), FULL_VERIFY_E2E_SUITES)
         self.assertIn("cms_review_revision", verify)
         self.assertIn("truth_adjudication_integrity", verify)
+        self.assertIn("pure_dag_v3", verify)
+        self.assertIn("pg_effect_v3", verify)
+        self.assertNotIn("pure_dag_v3", architecture)
+        self.assertNotIn("pg_effect_v3", architecture)
         self.assertIn("temporal_restart", architecture)
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
@@ -130,6 +134,43 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(
                     assignments["architecture-and-rust"], suite_commands_for_report(report),
                 )
+
+    def test_pure_v3_is_selected_by_real_orchestrator_source_and_never_prepares_old_workers(self) -> None:
+        from ci_impact import PURE_V3_E2E_PREPARE, PURE_V3_E2E_RUNTIME_BINARIES, WORKER_E2E_PREPARE
+
+        impact = analyze(
+            ["app/rust/services/temporal_orchestrator/src/main.rs"],
+            {**self.owners, "app/rust/services/temporal_orchestrator": "temporal_orchestrator"},
+            {**self.reverse, "temporal_orchestrator": set()},
+            head="HEAD", base="BASE",
+        )
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(impact["selected_suites"], ["pure_dag_v3"])
+        architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
+        self.assertEqual(set(architecture), {"pure_dag_v3"})
+        self.assertIn("pure_v3_", architecture["pure_dag_v3"])
+        self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)
+        self.assertEqual(PURE_V3_E2E_RUNTIME_BINARIES, {
+            "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
+        })
+
+    def test_pg_v3_sql_only_suite_has_no_temporal_server_or_runtime_binary_dependency(self) -> None:
+        changed = "app/rust/services/temporal_pg_effects/src/main.rs"
+        impact = analyze(
+            [changed],
+            {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
+            {**self.reverse, "temporal_pg_effects": set()},
+            head="HEAD", base="BASE",
+        )
+        self.assertEqual(impact["scope"], "scoped")
+        self.assertEqual(impact["selected_suites"], ["pg_effect_v3"])
+        self.assertEqual(
+            suite_commands_by_ci_job(impact)["architecture-and-rust"],
+            [("pg_effect_v3", list(SUITE_OWNERS["pg_effect_v3"]["command"]))],
+        )
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
+        self.assertNotIn("prepare", SUITE_OWNERS["pg_effect_v3"])
+        self.assertNotIn("runtime_binaries", SUITE_OWNERS["pg_effect_v3"])
 
     def test_full_ci_suite_rebalance_rejects_ungated_or_mismatched_impact(self) -> None:
         report = self.impact(".github/workflows/ci.yml")

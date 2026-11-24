@@ -12,3 +12,5 @@ pub mod sqlx_reconcile_runtime_adapter;
 pub mod sqlx_runtime_health_adapter;
 
 pub use runtime_models::{ReconcileSummary, ReconcileTargetReportRecord};
+pub mod sqlx_hitl_adapter;
+pub mod truth_review_effect_v3;

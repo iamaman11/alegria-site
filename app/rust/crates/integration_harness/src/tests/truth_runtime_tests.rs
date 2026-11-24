@@ -186,19 +186,19 @@
 
         // A real SQL queue receives one review for a needs_hitl candidate,
         // regardless of how many times the same workflow activity replays.
-        let hits = infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+        let hits = postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
             &pool, &context_key, "ci-truth-run",
         )
         .await
         .unwrap();
         assert_eq!(hits, 1);
-        let replay = infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+        let replay = postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
             &pool, &context_key, "ci-truth-run",
         )
         .await
         .unwrap();
         assert_eq!(replay, 0);
-        let reviews = infrastructure::adapters::sqlx_hitl_adapter::list_truth_candidate_reviews(
+        let reviews = postgres_store::sqlx_hitl_adapter::list_truth_candidate_reviews(
             &pool, &context_key, 10,
         )
         .await
@@ -209,7 +209,7 @@
         assert_eq!(reviews[0]["candidate"]["source_snapshot_hash"], "test-source-snapshot");
         assert_eq!(reviews[0]["candidate"]["llm_provider"], "chat_manual");
         assert_eq!(reviews[0]["candidate"]["evidence_quote"], raw_text);
-        let show = infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+        let show = postgres_store::sqlx_hitl_adapter::show_truth_candidate_review(
             &pool, &task,
         )
         .await
@@ -218,13 +218,13 @@
         assert_eq!(show["evidence_context"]["snapshot_matches"], true);
         assert!(show["evidence_context"]["excerpt"]
             .as_str().unwrap().contains("Consular fee"));
-        assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+        assert!(postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "seo_system", "approve", "test approval",
         )
         .await
         .is_err());
         let changes_requested =
-            infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
                 &pool, &task, "ci_human_reviewer", "request_changes", "source is incomplete",
             )
             .await
@@ -238,31 +238,31 @@
         .await
         .unwrap();
         assert_eq!(unchanged_after_changes, "needs_hitl");
-        let reviewed = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+        let reviewed = postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "ci_human_reviewer", "approve", "source checked",
         )
         .await
         .unwrap();
         assert_eq!(reviewed, "in_review");
-        let reject_only = infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+        let reject_only = postgres_store::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
             &pool, &context_key,
         )
         .await
         .unwrap();
         assert!(reject_only.is_empty(), "approval never bypasses truth governance");
-        let same = infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+        let same = postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "ci_human_reviewer", "approve", "source checked",
         )
         .await
         .unwrap();
         assert_eq!(same, "in_review");
-        assert!(infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+        assert!(postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &task, "other_reviewer", "reject", "different decision",
         )
         .await
         .is_err());
         let task_after =
-            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+            postgres_store::sqlx_hitl_adapter::show_truth_candidate_review(
                 &pool, &task,
             )
             .await
@@ -278,7 +278,7 @@
         .unwrap();
         assert_eq!(not_verified, "needs_hitl");
         let after_review_replay =
-            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
                 &pool, &context_key, "ci-truth-run",
             )
             .await
@@ -297,7 +297,7 @@
         // A review of an earlier needs_hitl candidate is not a reusable
         // approval for a later epistemic status or changed source snapshot.
         assert!(
-            infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+            postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
                 &pool, &task, "ci_human_reviewer", "approve", "source checked",
             )
             .await
@@ -305,14 +305,14 @@
         );
 
         let reconciled_after_independent_verification =
-            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
                 &pool, &context_key, "ci-truth-rechecked",
             )
             .await
             .unwrap();
         assert_eq!(reconciled_after_independent_verification, 0);
         let superseded =
-            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+            postgres_store::sqlx_hitl_adapter::show_truth_candidate_review(
                 &pool, &task,
             )
             .await
@@ -333,14 +333,14 @@
         .await
         .unwrap();
         assert_eq!(
-            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
                 &pool, &context_key, "ci-reviewed-rejection",
             )
             .await
             .unwrap(),
             1
         );
-        let reviews = infrastructure::adapters::sqlx_hitl_adapter::list_truth_candidate_reviews(
+        let reviews = postgres_store::sqlx_hitl_adapter::list_truth_candidate_reviews(
             &pool, &context_key, 10,
         )
         .await
@@ -348,13 +348,13 @@
         let rejection_key = reviews.iter()
             .find(|task| task["candidate"]["candidate_id"] == rejected_candidate_id)
             .unwrap()["task_key"].as_str().unwrap().to_string();
-        infrastructure::adapters::sqlx_hitl_adapter::decide_truth_candidate_review(
+        postgres_store::sqlx_hitl_adapter::decide_truth_candidate_review(
             &pool, &rejection_key, "ci_human_reviewer", "reject", "not supported by source",
         )
         .await
         .unwrap();
         let negatives =
-            infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+            postgres_store::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
                 &pool, &context_key,
             )
             .await
@@ -383,7 +383,7 @@
         .await
         .unwrap();
         assert_eq!(
-            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
                 &pool, &context_key, "ci-rejected-recheck",
             )
             .await
@@ -391,14 +391,14 @@
             0
         );
         let persistent =
-            infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+            postgres_store::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
                 &pool, &context_key,
             )
             .await
             .unwrap();
         assert_eq!(persistent.len(), 1);
         let still_held =
-            infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+            postgres_store::sqlx_hitl_adapter::show_truth_candidate_review(
                 &pool, &rejection_key,
             )
             .await
@@ -417,14 +417,14 @@
         .await
         .unwrap();
         assert_eq!(
-            infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
+            postgres_store::sqlx_hitl_adapter::reconcile_truth_candidate_reviews(
                 &pool, &context_key, "ci-changed-extraction",
             )
             .await
             .unwrap(),
             0
         );
-        let reopened = infrastructure::adapters::sqlx_hitl_adapter::show_truth_candidate_review(
+        let reopened = postgres_store::sqlx_hitl_adapter::show_truth_candidate_review(
             &pool, &rejection_key,
         )
         .await
@@ -433,7 +433,7 @@
         assert_eq!(reopened["candidate"]["evidence_quote"], "35 EUR");
         assert!(reopened["candidate"].get("review").is_none());
         assert_eq!(reopened["audit_log"].as_array().unwrap().len(), 3);
-        assert!(infrastructure::adapters::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
+        assert!(postgres_store::sqlx_hitl_adapter::load_rejected_truth_review_payloads(
             &pool, &context_key,
         )
         .await

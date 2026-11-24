@@ -1,3 +1,5 @@
+//! PostgreSQL-owned Truth/HITL queue. Canonical reconciliation, human review
+//! and exact-source guards live alongside their authoritative transactions.
 use anyhow::Context;
 use primitives::errors::DomainError;
 use serde::Serialize;

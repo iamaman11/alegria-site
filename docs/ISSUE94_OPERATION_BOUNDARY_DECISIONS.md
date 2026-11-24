@@ -102,3 +102,9 @@ backfill пишет PG intent и проходит тот же lease/ACK/fence pa
 закрытие первой checkbox #94. Полный owner/contract decision ledger,
 фактическая независимая компиляция, полноценное Temporal DAG execution и
 provider safety ещё не приняты; PR #95 остаётся Draft, main — без merge.
+
+Первый отдельный PG-owned business effect в V3 разбирается по SQL,
+admission/retry, security и source-reachability в
+[`ISSUE94_TRUTH_REVIEW_EFFECT_OWNER_V3.md`](ISSUE94_TRUTH_REVIEW_EFFECT_OWNER_V3.md).
+Он не переопределяет общий счёт candidate operations и не снимает
+требование физического compile/runtime доказательства.

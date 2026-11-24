@@ -13,7 +13,6 @@ pub mod sqlx_context_bundle_adapter;
 pub mod sqlx_dead_letter_adapter;
 pub mod sqlx_execution_runs_adapter;
 pub mod sqlx_freshness_adapter;
-pub mod sqlx_hitl_adapter;
 pub mod sqlx_hitl_runtime_adapter;
 pub mod sqlx_outbox_adapter;
 pub mod sqlx_page_html_adapter;

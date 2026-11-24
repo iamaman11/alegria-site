@@ -128,4 +128,6 @@ mod tests {
     include!("tests/scenario_parity_tests.rs");
     include!("tests/pure_dag_temporal_helpers.rs");
     include!("tests/manual_llm_temporal_tests.rs");
+    include!("tests/pure_v3_temporal_tests.rs");
+    include!("tests/pg_v3_truth_review_effect_tests.rs");
 }

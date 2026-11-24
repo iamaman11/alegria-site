@@ -39,6 +39,7 @@ temporal_gateway = { path = "../temporal_gateway", optional = true }
 uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
+postgres_store = { path = "../postgres_store" }
 outbox_worker = { path = "../../services/outbox_worker" }
 operation_protocol = { path = "../operation_protocol" }
 async-trait = "0.1"

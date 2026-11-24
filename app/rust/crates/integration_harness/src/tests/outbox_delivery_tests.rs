@@ -464,7 +464,8 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
 #[tokio::test]
 #[serial]
 async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retries() {
-    use infrastructure::adapters::{raw_crawl_adapter, sqlx_hitl_adapter, sqlx_seo_adapter};
+    use infrastructure::adapters::{raw_crawl_adapter, sqlx_seo_adapter};
+    use postgres_store::sqlx_hitl_adapter;
     use infrastructure::adapters::verified_rule_projection_adapter::stage_rule_upserts_in_tx;
     use seo_ports::knowledge::{
         VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,

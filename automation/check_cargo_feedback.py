@@ -156,9 +156,10 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
 
     def run_plan(
         self, suites: list[str], *, delegated: bool = False,
-        suite_job: str = "architecture-and-rust",
+        suite_job: str = "architecture-and-rust", scope: str = "full",
     ) -> tuple[list[tuple[list[str], dict]], str, dict]:
         report = self.report(suites)
+        report["analysis"] = scope
         executions: list[tuple[list[str], dict]] = []
 
         def record(command: list[str], **kwargs: object) -> dict:
@@ -242,6 +243,33 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         ])
         self.assertNotIn("CI_SUITE_PREPARE=", output)
         self.assertNotIn("CI_SUITE_PREPARE_REUSED=", output)
+
+    def test_pure_dag_v3_prepares_only_the_new_worker_in_exact_source_target(self) -> None:
+        from ci_impact import PURE_V3_E2E_PREPARE
+
+        suites = ["pure_dag_v3"]
+        executions, output, _ = self.run_plan(suites, scope="scoped")
+        self.assertEqual([command for command, _ in executions], [
+            ["cargo", "test", "--workspace", "--locked"],
+            list(PURE_V3_E2E_PREPARE),
+            list(SUITE_OWNERS["pure_dag_v3"]["command"]),
+        ])
+        self.assertIn("CI_SUITE_PREPARE=pure_dag_v3 COMMAND=", output)
+        self.assertIn("CI_SUITE_PREBUILT=pure_dag_v3", output)
+        self.assertNotIn("INTEGRATION_TEMPORAL_WORKER_BIN", output)
+        self.assertNotIn("INTEGRATION_OUTBOX_WORKER_BIN", output)
+
+    def test_pg_v3_direct_postgres_harness_runs_without_worker_or_temporal_prebuild(self) -> None:
+        suites = ["pg_effect_v3"]
+        executions, output, measurements = self.run_plan(suites, scope="scoped")
+        self.assertEqual([command for command, _ in executions], [
+            ["cargo", "test", "--workspace", "--locked"],
+            list(SUITE_OWNERS["pg_effect_v3"]["command"]),
+        ])
+        self.assertEqual(len(measurements["measurements"]), 2)
+        self.assertIn("pg_v3_", output)
+        self.assertNotIn("CI_SUITE_PREPARE=", output)
+        self.assertNotIn("CI_SUITE_PREBUILT=", output)
 
     def test_full_workspace_tests_delegated_only_to_parallel_verify_owner(self) -> None:
         suites = ["cms_review_revision", "knowledge_a13", "temporal_restart"]

@@ -1,8 +1,9 @@
 //! Temporal client connectivity and workflow control.
 //!
-//! Workflow and Activity execution belong to `temporal_worker`. This crate
-//! owns only the independently used client operations (CLI, reconcile and E2E)
-//! so storage adapters do not pull the Temporal SDK into their Cargo graph.
+//! Workflow and Activity execution belong to individual registered worker
+//! packages (`temporal_worker` for legacy, `temporal_orchestrator` for pure
+//! DAGs). This crate owns only independently used client operations (CLI,
+//! reconcile and E2E), so storage adapters do not acquire worker handlers.
 
 use anyhow::{anyhow, Result};
 use futures::StreamExt;
@@ -15,6 +16,11 @@ use temporalio_client::{
 };
 use temporalio_common::data_converters::RawValue;
 use temporalio_sdk_core::Url;
+
+/// Provider-free pure-operation Workflow consumer. Never share the existing
+/// `alegria-pipeline` queue with partial Activity sets or legacy V1/V2 workers.
+/// Changing this name requires a versioned cutover of durable Temporal histories.
+pub const PURE_DAG_ORCHESTRATOR_QUEUE: &str = "alegria-pure-dag-v3";
 
 pub async fn connect_client(
     temporal_url: &str,

@@ -5,13 +5,13 @@ use contracts::generated::alegria::temporal::v1::{
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
 use temporal_gateway::TemporalSeoWorkflowControlAdapter;
+use postgres_store::sqlx_hitl_adapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
 use infrastructure::adapters::{
     raw_crawl_adapter,
     reqwest_adapter::new_default_client,
-    sqlx_hitl_adapter,
     sqlx_adapter::connect_pg,
 };
 use crate::analytics_client::AnalyticsClient;

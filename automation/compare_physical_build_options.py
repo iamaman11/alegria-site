@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST = ROOT / "app" / "rust"
 MONOLITH = "temporal_worker"
 ORCHESTRATOR = "temporal_orchestrator"
+PG_EFFECT_OWNER = "temporal_pg_effects"
 # This is a DESIGN hypothesis only. Once a candidate Cargo package exists,
 # its *actual* manifest replaces this proposed set in all measurements.
 PROPOSED_ORCHESTRATOR_DEPS = frozenset({
@@ -42,6 +44,18 @@ PROVIDER_OWNERS = frozenset({
     "graph_neo4j", "vector_qdrant", "postgres_store", "runtime_composition",
     "infrastructure",
 })
+PG_ALLOWED_PROVIDER_OWNERS = frozenset({"postgres_store"})
+# Cargo workspace names alone are insufficient: a new standalone binary could
+# bypass a local provider crate by taking a vendor SDK directly. Match package
+# names from the resolved locked Cargo graph (never substring-match arbitrary
+# crate names). For the PG Activity owner only SQL drivers are admissible.
+PROVIDER_TRANSPORT_PREFIXES = (
+    "sqlx", "tokio-postgres", "postgres", "deadpool-postgres", "pg-",
+    "neo4rs", "neo4j", "bolt-client", "qdrant", "redis", "mongodb",
+)
+GRAPH_VECTOR_TRANSPORT_PREFIXES = (
+    "neo4rs", "neo4j", "bolt-client", "qdrant",
+)
 SOURCE_OWNERS = ("postgres_store", "graph_neo4j", "vector_qdrant", "temporal_gateway")
 OWNER_SOURCE_PATHS = {
     "postgres_store": "app/rust/crates/postgres_store/src/lib.rs",
@@ -171,6 +185,11 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
     candidate = closure(graph, desired_deps) | ({ORCHESTRATOR} if actual_candidate else set())
     candidate_providers = sorted(candidate & PROVIDER_OWNERS)
     monolith_providers = sorted(baseline & PROVIDER_OWNERS)
+    pg_exists = PG_EFFECT_OWNER in graph
+    pg_closure = closure(graph, {PG_EFFECT_OWNER}) if pg_exists else set()
+    illegal_pg = sorted((pg_closure & PROVIDER_OWNERS) - PG_ALLOWED_PROVIDER_OWNERS)
+    if illegal_pg:
+        raise EvidenceError(f"PG Activity owner transitively links forbidden providers: {illegal_pg}")
     if not monolith_providers:
         raise EvidenceError("baseline unexpectedly has no provider edges; assumptions changed")
     if candidate_providers:
@@ -219,6 +238,14 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
             "workspace_dependency_count": len(candidate) - (1 if actual_candidate else 0),
             "provider_dependencies": candidate_providers,
         },
+        "C_postgres_activity_owner": {
+            "package": PG_EFFECT_OWNER,
+            "exists": pg_exists,
+            "workspace_closure_excluding_self": sorted(pg_closure - {PG_EFFECT_OWNER}),
+            "workspace_dependency_count": len(pg_closure) - (1 if pg_exists else 0),
+            "provider_dependencies": sorted(pg_closure & PROVIDER_OWNERS),
+            "allowed_provider_dependencies": sorted(PG_ALLOWED_PROVIDER_OWNERS),
+        },
         "provider_edits_reverse_closure": {
             owner: sorted(reverse_closure(graph, owner)) for owner in SOURCE_OWNERS
         },
@@ -233,9 +260,36 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
     }
 
 
-def compiler_artifacts(command: list[str], cwd: Path, *, isolated_target: bool = False) -> dict[str, Any]:
+def parse_gnu_time_report(raw: str) -> dict[str, float | int]:
+    """Accept only complete resource accounting from GNU time's child tree."""
+    fields = raw.strip().split("\t")
+    if len(fields) != 6 or fields[0] != "PHYSICAL_AB_RESOURCE":
+        raise EvidenceError("GNU time resource output is absent or malformed")
+    try:
+        elapsed, user, system = (float(value) for value in fields[1:4])
+        rss = int(fields[4])
+        status = int(fields[5])
+    except ValueError as exc:
+        raise EvidenceError("GNU time resource fields are not numeric") from exc
+    if (status or min(elapsed, user, system) < 0 or rss <= 0
+            or any(value != value or value == float("inf") for value in (elapsed, user, system))):
+        raise EvidenceError("GNU time recorded failed or invalid resource accounting")
+    return {
+        "wall_seconds": elapsed,
+        "user_cpu_seconds": user,
+        "system_cpu_seconds": system,
+        "peak_resident_kib": rss,
+    }
+
+
+def compiler_artifacts(
+    command: list[str], cwd: Path, *, isolated_target: bool = False,
+    target_dir: Path | None = None, measure_resources: bool = False,
+) -> dict[str, Any]:
     started = time.monotonic()
     environment = os.environ.copy()
+    if measure_resources and not isolated_target:
+        raise EvidenceError("CPU/RAM rustc evidence requires wrapper-free isolated compilation")
     if isolated_target:
         # The source study must never reuse/poison the checkout's target, any
         # sccache object, or rustc incremental compilation artifacts. Cargo
@@ -252,17 +306,35 @@ def compiler_artifacts(command: list[str], cwd: Path, *, isolated_target: bool =
         environment["RUSTC"] = rustc
         environment["CARGO_BUILD_RUSTC"] = rustc
         environment["CARGO_INCREMENTAL"] = "0"
-        environment["CARGO_TARGET_DIR"] = str(cwd / "target")
+        environment["CARGO_TARGET_DIR"] = str(target_dir or cwd / "target")
         if not command or command[0] != "cargo":
             raise EvidenceError("isolated rustc probe requires direct Cargo invocation")
         # Explicit CLI config outranks Cargo home/workspace config; otherwise
         # an unnoticed [build] rustc-wrapper can survive environment cleanup.
         command = [command[0], *CARGO_DISABLE_WRAPPER_CONFIG, *command[1:]]
-    process = subprocess.Popen(
-        command, cwd=cwd, env=environment,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    )
-    stdout, stderr = process.communicate()
+    if measure_resources and not shutil.which("time"):
+        raise EvidenceError("GNU time unavailable; cannot claim CPU/RAM resource evidence")
+    # Per-Cargo GNU time tracks waited rustc/linker descendants, and its
+    # max-RSS is scoped to this invocation (unlike cumulative RUSAGE_CHILDREN).
+    # It does not measure summed simultaneous resident bytes across processes.
+    with tempfile.TemporaryDirectory(prefix="alegria-cargo-resource-") as resources:
+        timing_file = Path(resources) / "gnu-time.txt"
+        invocation = (
+            ["time", "-f", "PHYSICAL_AB_RESOURCE\t%e\t%U\t%S\t%M\t%x",
+             "-o", str(timing_file), *command]
+            if measure_resources else command
+        )
+        process = subprocess.Popen(
+            invocation, cwd=cwd, env=environment,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        stdout, stderr = process.communicate()
+        if process.returncode:
+            raise EvidenceError(f"compiler command failed: {command}; stderr={stderr[-4000:]}")
+        resources_observed = (
+            parse_gnu_time_report(timing_file.read_text(encoding="utf-8"))
+            if measure_resources else None
+        )
     units: list[dict[str, Any]] = []
     finished = False
     for line in stdout.splitlines():
@@ -296,12 +368,19 @@ def compiler_artifacts(command: list[str], cwd: Path, *, isolated_target: bool =
             "isolated_cargo_target": isolated_target,
         },
         "elapsed_seconds": round(time.monotonic() - started, 3),
+        "process_tree_resources": resources_observed,
+        "resource_measurement": (
+            "GNU time: Cargo plus waited rustc/linker children; per-process peak RSS, not total concurrent RSS"
+            if measure_resources else "NOT_MEASURED"
+        ),
         "compiler_artifacts": units,
         "non_fresh_units": [u for u in units if not u["fresh"]],
     }
 
 
-def binary_snapshot(build: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def binary_snapshot(
+    build: dict[str, Any], required_binaries: tuple[str, ...] = (MONOLITH, ORCHESTRATOR),
+) -> dict[str, dict[str, Any]]:
     """Retain executable mtime/hash, not just Cargo's `fresh` flag."""
     result = {}
     for unit in build["compiler_artifacts"]:
@@ -318,18 +397,18 @@ def binary_snapshot(build: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "mtime_ns": path.stat().st_mtime_ns,
             "sha256": digest.hexdigest(),
         }
-    if {MONOLITH, ORCHESTRATOR} - result.keys():
-        raise EvidenceError("A/B compiler invocation omitted one binary")
+    if set(required_binaries) - result.keys():
+        raise EvidenceError(f"compiler invocation omitted binaries: {sorted(set(required_binaries) - result.keys())}")
     return result
 
 
-def build_both(workspace: Path) -> dict[str, Any]:
+def build_physical_targets(workspace: Path, *, pg_exists: bool) -> dict[str, Any]:
+    packages = (MONOLITH, ORCHESTRATOR, PG_EFFECT_OWNER) if pg_exists else (MONOLITH, ORCHESTRATOR)
     result = compiler_artifacts([
         "cargo", "build", "--locked", "--timings", "--message-format=json-render-diagnostics",
-        "--package", MONOLITH, "--bin", MONOLITH,
-        "--package", ORCHESTRATOR, "--bin", ORCHESTRATOR,
-    ], workspace, isolated_target=True)
-    result["binaries"] = binary_snapshot(result)
+        *(argument for package in packages for argument in ("--package", package, "--bin", package)),
+    ], workspace, isolated_target=True, measure_resources=True)
+    result["binaries"] = binary_snapshot(result, packages)
     return result
 
 
@@ -363,8 +442,16 @@ def isolated_source_tree(destination: Path) -> str:
 
 
 def verify_actual_cargo_metadata(workspace: Path) -> dict[str, Any]:
+    rustc_version = subprocess.run(
+        ["rustc", "-vV"], cwd=workspace, text=True, capture_output=True,
+    )
+    hosts = re.findall(r"^host: ([A-Za-z0-9_\-]+)$", rustc_version.stdout, flags=re.MULTILINE)
+    if rustc_version.returncode or len(hosts) != 1:
+        raise EvidenceError("cannot pin Cargo metadata to rustc host target")
+    host_target = hosts[0]
     metadata = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
+        ["cargo", "metadata", "--locked", "--format-version", "1",
+         "--filter-platform", host_target],
         cwd=workspace, text=True, capture_output=True,
     )
     if metadata.returncode:
@@ -373,21 +460,49 @@ def verify_actual_cargo_metadata(workspace: Path) -> dict[str, Any]:
         parsed = json.loads(metadata.stdout)
     except json.JSONDecodeError as exc:
         raise EvidenceError("cargo metadata emitted invalid JSON") from exc
-    present = {p.get("name") for p in parsed.get("packages", [])}
+    packages = parsed.get("packages", [])
+    present = {p.get("name") for p in packages}
     if {MONOLITH, ORCHESTRATOR} - present:
         raise EvidenceError("Cargo metadata missing one side of A/B")
     if not isinstance(parsed.get("resolve"), dict) or not parsed["resolve"].get("nodes"):
         raise EvidenceError("Cargo metadata has no resolved dependency graph")
-    package_ids = {p["id"]: p["name"] for p in parsed["packages"]}
-    package_names = {name: identifier for identifier, name in package_ids.items()}
+    package_ids = {p["id"]: p["name"] for p in packages}
+    ids_to_packages = {p["id"]: p for p in packages}
+    workspace_ids = set(parsed.get("workspace_members", []))
+    if any(
+        identifier not in workspace_ids and p.get("source") is None
+        for identifier, p in ids_to_packages.items()
+    ):
+        raise EvidenceError("Cargo resolved undeclared external path package")
+    package_names = {
+        package_ids[identifier]: identifier
+        for identifier in workspace_ids
+        if identifier in package_ids
+    }
+    if {MONOLITH, ORCHESTRATOR} - package_names.keys():
+        raise EvidenceError("Cargo metadata missing one workspace-owned A/B target")
     resolved_edges = {}
     for node in parsed["resolve"]["nodes"]:
-        resolved_edges[node["id"]] = {
-            item["pkg"] for item in node.get("deps", [])
-            if isinstance(item, dict) and isinstance(item.get("pkg"), str)
-        }
+        dependencies: set[str] = set()
+        for item in node.get("deps", []):
+            if not isinstance(item, dict) or not isinstance(item.get("pkg"), str):
+                raise EvidenceError("Cargo metadata contains an unknown dependency edge")
+            kinds = item.get("dep_kinds")
+            if not isinstance(kinds, list) or not kinds:
+                raise EvidenceError("Cargo metadata lacks dependency edge kind (dev/build/normal)")
+            if any(
+                isinstance(kind, dict) and kind.get("kind") in (None, "build")
+                for kind in kinds
+            ):
+                dependencies.add(item["pkg"])
+        resolved_edges[node["id"]] = dependencies
     results = {}
-    for candidate in (MONOLITH, ORCHESTRATOR):
+    candidates = (MONOLITH, ORCHESTRATOR, PG_EFFECT_OWNER)
+    for candidate in candidates:
+        if candidate not in package_names:
+            if candidate == PG_EFFECT_OWNER:
+                continue
+            raise EvidenceError(f"missing workspace target {candidate}")
         visited = set()
         pending = [package_names[candidate]]
         while pending:
@@ -399,12 +514,41 @@ def verify_actual_cargo_metadata(workspace: Path) -> dict[str, Any]:
             visited.add(identifier)
             pending.extend(resolved_edges[identifier] - visited)
         owners = {package_ids[identifier] for identifier in visited}
+        vendor_names = {
+            package_ids[identifier]
+            for identifier in visited
+            if ids_to_packages[identifier].get("source") is not None
+        }
+        forbidden_local = (
+            (owners & PROVIDER_OWNERS)
+            - (PG_ALLOWED_PROVIDER_OWNERS if candidate == PG_EFFECT_OWNER else set())
+            if candidate != MONOLITH else set()
+        )
+        forbidden_vendor_prefixes = (
+            GRAPH_VECTOR_TRANSPORT_PREFIXES
+            if candidate == PG_EFFECT_OWNER else PROVIDER_TRANSPORT_PREFIXES
+        )
+        forbidden_vendor = sorted(
+            name for name in vendor_names
+            if any(name == prefix.rstrip("-") or name.startswith(prefix) for prefix in forbidden_vendor_prefixes)
+        ) if candidate != MONOLITH else []
+        if forbidden_local or forbidden_vendor:
+            raise EvidenceError(
+                f"{candidate}: forbidden resolved provider links: "
+                f"workspace={sorted(forbidden_local)}, vendor={forbidden_vendor}"
+            )
         results[candidate] = {
+            "host_build_target": host_target,
+            "feature_scope": "locked default-feature Cargo build; dev edges excluded; metadata may overapproximate workspace-wide feature unification",
             "resolved_all_dependency_package_count": len(visited) - 1,
             "resolved_provider_crates": sorted(owners & PROVIDER_OWNERS),
+            "resolved_workspace_packages": sorted(owners & set(package_names)),
+            "resolved_provider_transport_crates": sorted(
+                name for name in vendor_names
+                if any(name == prefix.rstrip("-") or name.startswith(prefix)
+                       for prefix in PROVIDER_TRANSPORT_PREFIXES)
+            ),
         }
-    if results[ORCHESTRATOR]["resolved_provider_crates"]:
-        raise EvidenceError("real Cargo metadata resolves forbidden providers in B")
     return results
 
 
@@ -426,10 +570,13 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
         sha = isolated_source_tree(exported)
         workspace = exported / "app" / "rust"
         actual_resolve = verify_actual_cargo_metadata(workspace)
-        baseline = build_both(workspace)
+        pg_exists = report["C_postgres_activity_owner"]["exists"]
+        packages = (MONOLITH, ORCHESTRATOR, PG_EFFECT_OWNER) if pg_exists else (MONOLITH, ORCHESTRATOR)
+        baseline = build_physical_targets(workspace, pg_exists=pg_exists)
         baseline_binaries = baseline["binaries"]
         a_closure = set(report["A_native_monolith"]["workspace_closure_excluding_self"])
         b_closure = set(report["B_separate_orchestrator"]["workspace_closure_excluding_self"])
+        c_closure = set(report["C_postgres_activity_owner"]["workspace_closure_excluding_self"])
         experiments = []
         for index, (owner, source_path) in enumerate(OWNER_SOURCE_PATHS.items()):
             source = exported / source_path
@@ -440,7 +587,7 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                            f"const PHYSICAL_AB_OWNER_PROBE: &str = \"{sha}_{index}\";\n").encode()
             try:
                 source.write_bytes(original + probe_bytes)
-                build = build_both(workspace)
+                build = build_physical_targets(workspace, pg_exists=pg_exists)
             finally:
                 source.write_bytes(original)
             if source.read_bytes() != original:
@@ -450,7 +597,7 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                 raise EvidenceError(f"{owner}: no actual non-fresh owner rustc unit")
             relinked = sorted({
                 unit["target_name"] for unit in rebuilt if "bin" in unit["kind"]
-            } & {MONOLITH, ORCHESTRATOR})
+            } & set(packages))
             if (MONOLITH in relinked) != (owner in a_closure):
                 raise EvidenceError(f"{owner}: monolith relink inconsistent with Cargo closure")
             touched = sorted(
@@ -470,6 +617,12 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                 raise EvidenceError(f"{owner}: orchestrator binary relink unexpectedly {relinked}")
             if (ORCHESTRATOR in touched) != expected_b_relink:
                 raise EvidenceError(f"{owner}: orchestrator executable write inconsistent with Cargo closure")
+            if pg_exists:
+                expected_c_relink = owner in c_closure
+                if (PG_EFFECT_OWNER in relinked) != expected_c_relink:
+                    raise EvidenceError(f"{owner}: PG Activity worker relink unexpectedly {relinked}")
+                if (PG_EFFECT_OWNER in touched) != expected_c_relink:
+                    raise EvidenceError(f"{owner}: PG Activity executable write inconsistent with Cargo closure")
             probe_result = {
                 "owner": owner,
                 "modified_only_in_temporary_export": source_path,
@@ -478,10 +631,12 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                 "binary_files_written": touched,
                 "binary_hash_changed": changed,
                 "elapsed_seconds": build["elapsed_seconds"],
+                "process_tree_resources": build["process_tree_resources"],
             }
-            restored = build_both(workspace)
+            restored = build_physical_targets(workspace, pg_exists=pg_exists)
             baseline_binaries = restored["binaries"]
             probe_result["baseline_restore_elapsed_seconds"] = restored["elapsed_seconds"]
+            probe_result["baseline_restore_resources"] = restored["process_tree_resources"]
             experiments.append(probe_result)
         result = dict(report)
         result["source_sha"] = sha
@@ -490,6 +645,9 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
             "source_tree_mutated": False,
             "cargo_resolved_closure": actual_resolve,
             "baseline": baseline,
+            "compiled_packages": packages,
+            "candidate_pg_activity_owner_included": pg_exists,
+            "owner_probe_cache_regime": "one isolated Cargo target, sequential edits and restored source between probes",
             "four_owner_probes": experiments,
         }
         result["actual_rustc_evidence"] = True
@@ -510,21 +668,48 @@ def compiled_report(report: dict[str, Any]) -> dict[str, Any]:
         workspace = exported / "app" / "rust"
         actual_resolve = verify_actual_cargo_metadata(workspace)
         runs = {}
-        for label, package in (("A", MONOLITH), ("B", ORCHESTRATOR)):
+        candidates = [("A", MONOLITH), ("B", ORCHESTRATOR)]
+        if report["C_postgres_activity_owner"]["exists"]:
+            candidates.append(("C", PG_EFFECT_OWNER))
+        for label, package in candidates:
             command = [
                 "cargo", "build", "--locked", "--timings", "--message-format=json-render-diagnostics",
                 "--package", package, "--bin", package,
             ]
-            runs[label] = compiler_artifacts(command, workspace, isolated_target=True)
+            # Independent artifact directories prevent B from inheriting A's
+            # already-compiled local rlibs. Rust dependency fetches still use
+            # the same immutable Cargo registry source; report that explicitly.
+            target_dir = Path(folder) / f"target-{label}"
+            cold = compiler_artifacts(
+                command, workspace, isolated_target=True,
+                target_dir=target_dir, measure_resources=True,
+            )
+            warm = compiler_artifacts(
+                command, workspace, isolated_target=True,
+                target_dir=target_dir, measure_resources=True,
+            )
+            runs[label] = {
+                "package": package,
+                "target_directory_isolated_from_other_options": True,
+                "cold": cold,
+                "warm": warm,
+            }
     report = dict(report)
     report["source_sha"] = sha
     report["compiler"] = runs
+    report["compiler_cache_regime"] = {
+        "A_B_C_cold_targets": "distinct initially empty Cargo targets, no sccache/incremental rustc",
+        "each_warm": "same target, same source, same default Cargo build features",
+        "external_cache_shared": "Cargo registry and compiler executable only",
+        "not_an_end_to_end_ci_slo": True,
+    }
     report["cargo_resolved_closure"] = actual_resolve
     report["actual_rustc_evidence"] = True
     report["status"] = "ACTUAL_CARGO_BUILDS_CAPTURED_NOT_ISOLATION_PROVEN"
     report["limitations"] = [
         *report["limitations"],
-        "A/B sequential builds share target cache; record cold/warm and owner-perturbation measurements separately",
+        "A/B/C cold builds use independent target directories; warm builds reuse only their own target",
+        "GNU time peak RSS is the maximum individual process resident set, not peak aggregate concurrent RAM",
         "Compiler success alone does not prove cross-queue semantics, effect fences, runtime parity or CI SLO",
     ]
     return report

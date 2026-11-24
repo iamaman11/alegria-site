@@ -610,6 +610,7 @@ dependencies = [
  "contracts",
  "hex",
  "infrastructure",
+ "postgres_store",
  "primitives",
  "prost",
  "seo_application",
@@ -2146,6 +2147,7 @@ dependencies = [
  "infrastructure",
  "operation_protocol",
  "outbox_worker",
+ "postgres_store",
  "primitives",
  "prost",
  "reqwest 0.13.5",
@@ -3421,9 +3423,12 @@ name = "postgres_store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "operation_protocol",
  "primitives",
  "runtime_models",
+ "serde",
+ "serde_json",
  "sqlx",
  "thiserror 2.0.21",
  "uuid",
@@ -5096,6 +5101,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "temporal_orchestrator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "seo_application",
+ "serde_json",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "temporal_pg_effects"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "postgres_store",
+ "serde_json",
+ "sqlx",
+ "temporal_gateway",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-sdk-core",
+ "temporalio-workflow",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "temporal_worker"
 version = "0.1.0"
 dependencies = [
@@ -5108,6 +5153,7 @@ dependencies = [
  "graph_neo4j",
  "infrastructure",
  "policies",
+ "postgres_store",
  "primitives",
  "prometheus",
  "runtime_composition",
