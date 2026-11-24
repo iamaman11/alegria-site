@@ -322,12 +322,9 @@ mod tests {
         unknown_scope_a.scope.clear();
         let mut unknown_scope_b = same_scope;
         unknown_scope_b.scope.clear();
-        assert!(recommend_links(
-            &[unknown_scope_a, unknown_scope_b],
-            &BTreeMap::new(),
-            3,
-        )
-        .is_empty());
+        assert!(
+            recommend_links(&[unknown_scope_a, unknown_scope_b], &BTreeMap::new(), 3,).is_empty()
+        );
     }
 
     #[test]
