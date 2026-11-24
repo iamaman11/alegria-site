@@ -45,10 +45,8 @@ use seo_ports::knowledge::{
     VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange,
 };
 use primitives::hash::{blake3_hex, content_hash_v1};
-use primitives::qdrant_point_id::qdrant_point_id_v1;
 use truth_domain::truth_candidates::{
-    validate_truth_candidate, TruthCandidateRuntime, TruthCandidateValidationResult,
-    TruthParamValue, TruthStructuredCandidate,
+    validate_truth_candidate, TruthCandidateRuntime, TruthParamValue, TruthStructuredCandidate,
 };
 use runtime_models::ReconcileTargetReportRecord;
 use serde::{Deserialize, Serialize};

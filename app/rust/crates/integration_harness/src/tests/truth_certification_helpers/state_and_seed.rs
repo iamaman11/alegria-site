@@ -219,8 +219,7 @@ async fn register_truth_certification_input(
     query: String,
     run_mode: String,
 ) -> contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload {
-    register_site_build_input(
-        repo,
+    repo.register_site_build_input(
         &SeoSiteBuildRegistrationRequest {
             run_id,
             context_key: None,
