@@ -1,14 +1,14 @@
 use contracts::generated::alegria::temporal::v1::{
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
-    DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
-    SectionTemplateBinding, SeoTraceabilityEntryState, SourceContextChunkState,
+    DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload, SectionTemplateBinding,
+    SeoTraceabilityEntryState, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
 use seo_ports::knowledge::{SourceContextChunk, SourceContextQuery};
 use seo_ports::{
-    DraftRepository, GraphCapabilityPort, SectionTemplate,
-    SectionTemplateRepository, SourceContextSearchPort,
+    DraftRepository, GraphCapabilityPort, SectionTemplate, SectionTemplateRepository,
+    SourceContextSearchPort,
 };
 
 use crate::seo_runtime;
@@ -322,8 +322,7 @@ mod tests {
         SeoDraftSectionState, SeoVerifiedFactSupportState, SourceContextChunkState,
     };
     use seo_ports::{
-        DraftRepository, GraphCapabilityPort, SectionTemplateRepository,
-        SourceContextSearchPort,
+        DraftRepository, GraphCapabilityPort, SectionTemplateRepository, SourceContextSearchPort,
     };
 
     #[derive(Default)]

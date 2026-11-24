@@ -85,7 +85,8 @@ def main() -> int:
     for needle in [
         "source_provenance",
         "navigation_state",
-        "SELECT source_key",
+        "SELECT rule_instance_id, source_key",
+        "WHERE rule_instance_id = ANY($1)",
         "dependency_type = 'source_provenance'",
         "dependency_type = 'navigation_state'",
         "matched_dependencies",
