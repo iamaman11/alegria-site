@@ -2670,8 +2670,17 @@ async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_eve
     let pool = &pg.pool;
     let marker = Uuid::new_v4().simple().to_string();
     let run_id = Uuid::new_v4().to_string();
-    let scope_signature = format!("global-atomic-scope-{marker}");
     let market = format!("global-atomic-market-{marker}");
+    let scope = SeoScopePayload {
+        market,
+        locale: "ru-RU".into(),
+        country_code: "ES".into(),
+        visa_type: "tourist".into(),
+        applicant_profile: "standard".into(),
+        scope_signature: String::new(),
+        ..Default::default()
+    };
+    let scope_signature = seo_steps::seo_step_support::scope_signature(Some(&scope)).unwrap();
     let first = format!("global-atomic-first-{marker}");
     let second = format!("global-atomic-second-{marker}");
     let link = format!("global-atomic-link-{marker}");
@@ -2752,15 +2761,7 @@ async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_eve
         .collect::<Vec<_>>();
     let input = GlobalSiteReconcileInputPayload {
         run_id: run_id.clone(),
-        scope: Some(SeoScopePayload {
-            market,
-            locale: "ru-RU".into(),
-            country_code: "ES".into(),
-            visa_type: "tourist".into(),
-            applicant_profile: "standard".into(),
-            scope_signature: scope_signature.clone(),
-            ..Default::default()
-        }),
+        scope: Some(scope),
         reconcile_reason: format!("atomic-reconcile-{marker}"),
         ..Default::default()
     };
