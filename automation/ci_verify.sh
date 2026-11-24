@@ -103,10 +103,7 @@ python3 automation/check_seo_steps_no_json_boundary.py
 echo "[15/50] SEO steps external SDK ban"
 python3 automation/check_seo_steps_external_sdk_ban.py
 
-echo "[16/50] Allowed boundary points"
-python3 automation/check_allowed_boundary_points.py
-
-echo "[17/50] JSON boundary policy (deny-by-default)"
+echo "[16-17/50] JSON boundary policy (single deny-by-default owner)"
 python3 automation/check_json_boundary_policy.py
 
 echo "[18/50] Services/temporal boundary"

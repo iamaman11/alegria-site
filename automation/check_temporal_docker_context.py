@@ -28,6 +28,10 @@ IGNORED_TEST_SOURCES = (
     "app/rust/crates/integration_harness/src/env_overrides.rs",
     "app/rust/crates/integration_harness/src/stub_servers.rs",
 )
+STATIC_MANIFEST = "infra/cloudflare/seo-static/package.json"
+STATIC_DEPENDENCY_INSTALL = (
+    "RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund"
+)
 
 
 def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> list[str]:
@@ -58,6 +62,27 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
         errors.append("Docker must retain the locked release build")
     if "-p temporal_worker -p cli_tools" not in dockerfile:
         errors.append("Docker release package selection changed: recheck the test-only exclusions")
+    # A release-specific binary or provenance COPY must never invalidate npm.
+    # The Cloudflare deploy adapter's package.json alone owns this stage.
+    node_stage = dockerfile.find("FROM node:")
+    manifest = dockerfile.find(
+        f"COPY {STATIC_MANIFEST} /app/{STATIC_MANIFEST}", node_stage,
+    )
+    npm = dockerfile.find(STATIC_DEPENDENCY_INSTALL, node_stage)
+    assets = dockerfile.find(
+        "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static", node_stage,
+    )
+    envelope = dockerfile.find("COPY worker-context.json /app/worker-context.json", node_stage)
+    binary = dockerfile.find(
+        "COPY --from=builder /app/app/rust/target/release/temporal_worker", node_stage,
+    )
+    if not (0 <= node_stage < manifest < npm < assets < envelope < binary):
+        errors.append(
+            "Cloudflare package dependencies must install before website assets, "
+            "source provenance and Worker binaries"
+        )
+    if dockerfile.count(STATIC_DEPENDENCY_INSTALL) != 1:
+        errors.append("Cloudflare package dependencies must be installed exactly once")
     return errors
 
 
@@ -86,6 +111,29 @@ class TemporalDockerContextTests(unittest.TestCase):
 
     def test_different_release_packages_require_review(self) -> None:
         wrong = self.dockerfile.replace("-p temporal_worker -p cli_tools", "-p integration_harness -p cli_tools")
+        self.assertTrue(boundary_errors(self.base, self.worker, wrong))
+
+    def test_native_cloudflare_tools_reuse_cache_after_worker_rebuild(self) -> None:
+        wrong = self.dockerfile.replace(STATIC_DEPENDENCY_INSTALL + "\n", "", 1)
+        wrong = wrong.replace(
+            "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools",
+            "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools\n"
+            + STATIC_DEPENDENCY_INSTALL,
+        )
+        self.assertTrue(boundary_errors(self.base, self.worker, wrong))
+
+    def test_asset_changes_cannot_trigger_npm_install(self) -> None:
+        copy_assets = "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static"
+        wrong = self.dockerfile.replace(STATIC_DEPENDENCY_INSTALL + "\n", "", 1)
+        wrong = wrong.replace(copy_assets, copy_assets + "\n" + STATIC_DEPENDENCY_INSTALL)
+        self.assertTrue(boundary_errors(self.base, self.worker, wrong))
+
+    def test_only_cloudflare_manifest_may_invalidate_npm_dependencies(self) -> None:
+        wrong = self.dockerfile.replace(
+            f"COPY {STATIC_MANIFEST} /app/{STATIC_MANIFEST}",
+            "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static",
+            1,
+        )
         self.assertTrue(boundary_errors(self.base, self.worker, wrong))
 
 

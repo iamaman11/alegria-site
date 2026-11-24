@@ -94,11 +94,22 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         blocking_reasons.push(blocker_state.reason_code.clone());
         blockers.push(blocker_state);
     }
-    if let Some(draft_ref) = input.draft.as_ref() {
-        for blocker_state in crate::licensing_gate_step::evaluate(draft_ref) {
-            blocking_reasons.push(blocker_state.reason_code.clone());
-            blockers.push(blocker_state);
-        }
+    // This is a domain publish policy, not a separate Temporal activity.
+    // One blocker is emitted even when several restricted fragments occur.
+    if seo_domain::publishing::license::has_restricted_source(
+        draft.traceability_entries.iter().map(|entry| {
+            (
+                entry.traceability_label.as_str(),
+                entry.validation_verdict.as_str(),
+            )
+        }),
+    ) {
+        let reason = seo_domain::publishing::license::RESTRICTED_SOURCE_REASON;
+        blocking_reasons.push(reason.to_string());
+        blockers.push(blocker(
+            reason,
+            seo_domain::publishing::license::RESTRICTED_SOURCE_ACTION,
+        ));
     }
     // The source-backed fragments come from the DB-resolved VERIFIED bundle,
     // not self-declared support refs in the LLM response. An invented claim
@@ -370,6 +381,48 @@ mod tests {
     use contracts::generated::alegria::temporal::v1::{
         ClaimLedgerEntry, DraftState, RenderedContentBlock, SeoTraceabilityEntryState,
     };
+
+    #[test]
+    fn multiple_restricted_fragments_emit_exactly_one_compatible_publish_blocker() {
+        let draft = DraftState {
+            traceability_entries: vec![
+                SeoTraceabilityEntryState {
+                    traceability_label: "restricted_redistribution_source".to_string(),
+                    validation_verdict: "blocked".to_string(),
+                    ..Default::default()
+                },
+                SeoTraceabilityEntryState {
+                    traceability_label: "non_redistributable_source".to_string(),
+                    validation_verdict: "supported".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let qa = execute(&DraftQaInputPayload {
+            draft: Some(draft),
+            ..Default::default()
+        });
+        let licensing_blockers = qa
+            .blockers
+            .iter()
+            .filter(|blocker| blocker.reason_code == "restricted_redistribution_source")
+            .collect::<Vec<_>>();
+        assert_eq!(licensing_blockers.len(), 1);
+        assert_eq!(licensing_blockers[0].task_type, "publish_gate_blocker");
+        assert_eq!(licensing_blockers[0].recheck_trigger, "draft_qa_rerun");
+        assert_eq!(
+            licensing_blockers[0].required_next_action,
+            seo_domain::publishing::license::RESTRICTED_SOURCE_ACTION
+        );
+        assert_eq!(
+            qa.blocking_reasons
+                .iter()
+                .filter(|reason| reason.as_str() == "restricted_redistribution_source")
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn fabricated_factual_statement_with_valid_ref_is_blocked() {

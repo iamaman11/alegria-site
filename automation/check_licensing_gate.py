@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs" / "runs" / "r3_licensing_gate.json"
-LICENSING = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "licensing_gate_step.rs"
+LICENSING = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "publishing" / "license.rs"
 ASSEMBLE = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "draft_assemble_step.rs"
 QA = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "draft_qa_step.rs"
 
@@ -59,10 +59,9 @@ def main() -> int:
         "restricted_redistribution_source",
         "non_redistributable_source",
         "validation_verdict == \"blocked\"",
-        "publish_gate_blocker",
     ]:
         if needle not in licensing:
-            failures.append(f"licensing gate missing `{needle}`")
+            failures.append(f"domain licensing policy missing `{needle}`")
 
     for needle in [
         "redistribution_allowed=false",
@@ -74,7 +73,9 @@ def main() -> int:
             failures.append(f"draft assemble missing `{needle}`")
 
     for needle in [
-        "licensing_gate_step::evaluate",
+        "seo_domain::publishing::license::has_restricted_source",
+        "RESTRICTED_SOURCE_ACTION",
+        "blocker(",
     ]:
         if needle not in qa:
             failures.append(f"draft qa missing `{needle}`")

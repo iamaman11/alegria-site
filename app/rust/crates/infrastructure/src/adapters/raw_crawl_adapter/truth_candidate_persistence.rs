@@ -199,49 +199,23 @@ async fn adjudicate_persisted_rule_candidates(
         .collect::<BTreeMap<_, _>>();
 
     let mut report = TruthAdjudicationPersistReport::default();
-    let mut groups: BTreeMap<(String, String, String), Vec<PersistedCandidateForAdjudication>> =
-        BTreeMap::new();
-    for candidate in candidates {
-        groups
-            .entry((
-                candidate.context_key.clone(),
-                candidate.role.clone(),
-                candidate.concept_canonical_key.clone(),
-            ))
-            .or_default()
-            .push(candidate);
-    }
-
-    for ((group_context_key, group_role, group_concept), group_candidates) in groups {
-        let semantic_slot_id =
-            semantic_rule_instance_id(&group_context_key, &group_role, &group_concept);
+    for (identity, group_candidates) in group_by_semantic_identity(candidates) {
+        let semantic_slot_id = semantic_rule_instance_id(
+            &identity.context_key,
+            &identity.role,
+            &identity.concept_canonical_key,
+        );
         // Include unresolved proposals in the existing governance decision,
         // rather than silently filtering them out before independent
         // corroboration. Rejected proposals remain rejected.
-        let structured: Vec<TruthStructuredCandidate> = group_candidates
-            .iter()
-            .filter(|candidate| {
-                matches!(
-                    candidate.epistemic_status.as_str(),
-                    "structured" | "needs_hitl"
-                )
-            })
-            .map(to_truth_structured_candidate)
-            .collect();
-        let needs_hitl_ids: Vec<String> = group_candidates
-            .iter()
-            .filter(|candidate| candidate.epistemic_status == "needs_hitl")
-            .map(|candidate| candidate.rule_candidate_id.clone())
-            .collect();
-        let rejected_ids: Vec<String> = group_candidates
-            .iter()
-            .filter(|candidate| candidate.epistemic_status == "rejected")
-            .map(|candidate| candidate.rule_candidate_id.clone())
-            .collect();
+        let decisions = candidate_group_decisions(&group_candidates);
+        let structured = &decisions.adjudicable;
+        let needs_hitl_ids = &decisions.needs_hitl_ids;
+        let rejected_ids = &decisions.rejected_ids;
 
         if structured.is_empty() {
             if !needs_hitl_ids.is_empty() {
-                for candidate_id in &needs_hitl_ids {
+                for candidate_id in needs_hitl_ids {
                     update_candidate_epistemic_status(pool, candidate_id, "needs_hitl").await?;
                 }
                 report.needs_hitl_candidate_count += needs_hitl_ids.len();
@@ -258,7 +232,7 @@ async fn adjudicate_persisted_rule_candidates(
                     .changed_truth_keys
                     .push(format!("verified.rule_instance:{semantic_slot_id}"));
             } else if !rejected_ids.is_empty() {
-                for candidate_id in &rejected_ids {
+                for candidate_id in rejected_ids {
                     update_candidate_epistemic_status(pool, candidate_id, "rejected").await?;
                 }
                 demote_verified_semantic_slot(
@@ -278,7 +252,7 @@ async fn adjudicate_persisted_rule_candidates(
         }
 
         let adjudication =
-            adjudicate_truth_candidates_with_governance(&structured, &source_registry);
+            adjudicate_truth_candidates_with_governance(structured, &source_registry);
         match adjudication.overall_status.as_str() {
             "verified" => {
                 for decision in &adjudication.decisions {
@@ -291,7 +265,15 @@ async fn adjudicate_persisted_rule_candidates(
                         .await?;
                     }
                 }
-                let canonical = pick_canonical_candidate(&group_candidates, &structured, &adjudication)?;
+                let canonical = canonical_persisted_candidate(
+                    &group_candidates,
+                    structured,
+                    &adjudication,
+                )
+                .ok_or_else(|| primitives::errors::DomainError::UnexpectedBug {
+                    message: "truth adjudication produced verified verdict without canonical candidate"
+                        .to_string(),
+                })?;
                 upsert_verified_rule_instance_from_candidate(
                     pool,
                     &semantic_slot_id,

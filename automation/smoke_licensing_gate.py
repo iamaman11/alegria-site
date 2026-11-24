@@ -14,7 +14,7 @@ def main() -> int:
         [
             "bash",
             "-lc",
-            "cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_steps licensing_gate_step",
+            "cd app/rust && SQLX_OFFLINE=true cargo test -q -p seo_domain publishing::license && SQLX_OFFLINE=true cargo test -q -p seo_steps draft_qa_step",
         ],
         cwd=ROOT,
         check=False,

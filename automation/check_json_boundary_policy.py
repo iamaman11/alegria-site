@@ -49,11 +49,18 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel.startswith("app/rust/services/cli_tools/src/"):
         return True
-    if rel.startswith("app/rust/services/temporal/src/bin/"):
+    # The CLI is a wire boundary; other runtime code must use typed inputs.
+    if rel.startswith("app/rust/services/temporal/src/bin/temporal_starter/"):
         return True
-    if rel.startswith("app/rust/services/temporal/src/activities/operations/"):
-        return True
-    if rel.startswith("app/rust/services/temporal/src/activities/registry/"):
+    if rel in {
+        "app/rust/services/temporal/src/bin/whole_page_semantic_report.rs",
+        # The preamble and registry decode registered external activity JSON.
+        "app/rust/services/temporal/src/activities/operations/contracts/preamble.rs",
+        "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
+        # The activity compatibility tests exercise the registered wire form.
+        "app/rust/services/temporal/src/activities/operations/truth_write_and_fixture_tests.rs",
+        "app/rust/services/temporal/src/activities/operations/truth_projection_helpers.rs",
+    }:
         return True
     return False
 

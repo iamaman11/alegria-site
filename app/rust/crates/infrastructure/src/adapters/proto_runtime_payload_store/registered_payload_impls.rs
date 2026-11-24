@@ -200,19 +200,19 @@ impl_prost_runtime_payload!(
 );
 
 impl_json_runtime_payload!(
-    seo_steps::page_utility_classifier_step::PageUtilityClassifierInput,
+    acquisition::source_relevance::PageUtilityClassifierInput,
     "alegria.runtime.json.PageUtilityClassifierInput"
 );
 impl_json_runtime_payload!(
-    seo_steps::page_utility_classifier_step::PageUtilityClassifierOutput,
+    acquisition::source_relevance::PageUtilityClassifierOutput,
     "alegria.runtime.json.PageUtilityClassifierOutput"
 );
 impl_json_runtime_payload!(
-    Vec<seo_steps::dom_block_relevance_step::DomBlockInput>,
+    Vec<acquisition::source_relevance::DomBlockInput>,
     "alegria.runtime.json.DomBlockInputList"
 );
 impl_json_runtime_payload!(
-    seo_steps::dom_block_relevance_step::DomBlockRelevanceOutput,
+    acquisition::source_relevance::DomBlockRelevanceOutput,
     "alegria.runtime.json.DomBlockRelevanceOutput"
 );
 impl_json_runtime_payload!(

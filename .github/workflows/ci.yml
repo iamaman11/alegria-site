@@ -108,6 +108,12 @@ jobs:
       # Release-like CI compiles use a shared compiler-object cache;
       # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
+      # Cargo's default debug symbols are several GB of temporary output for
+      # this 22-crate workspace. CI runs assertions/tests but never debugs the
+      # resulting executable, so omit DWARF while keeping dev/test semantics.
+      # Match trusted-main cache priming exactly to preserve sccache hits.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       SCCACHE_GHA_ENABLED: "on"
       # PR caches are isolated by merge ref. Reuse compiler objects created by
       # trusted main without uploading hundreds of PR-only entries or competing
@@ -720,6 +726,9 @@ jobs:
     timeout-minutes: 35
     env:
       CARGO_INCREMENTAL: "0"
+      # Identical compile profiles on accepted main and read-only PR workers.
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
       # Pace writes below the GitHub cache service's burst rate limit.
       CARGO_BUILD_JOBS: "2"
       SQLX_OFFLINE: "true"
@@ -953,7 +962,9 @@ jobs:
             org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             by.alegria.source-head-sha=${{ env.SOURCE_SHA }}
           cache-from: type=gha,scope=alegria-temporal-worker
-          cache-to: type=gha,scope=alegria-temporal-worker,mode=max
+          # Export dependency layers for source-only reuse with low-overhead
+          # compression; first warm release must prove the real time benefit.
+          cache-to: type=gha,scope=alegria-temporal-worker,mode=max,compression=zstd,compression-level=1
 
       - name: Verify runtime startup, source identity and native deployment tools
         run: |

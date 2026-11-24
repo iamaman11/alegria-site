@@ -15,15 +15,16 @@ use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };
 use truth_domain::persisted_candidates::{
-    canonical_adjudication_reason, canonical_role_key, canonical_verification_method,
-    canonical_verified_candidate_id, classify_persisted_candidate,
+    candidate_group_decisions, canonical_adjudication_reason, canonical_persisted_candidate,
+    canonical_role_key, canonical_verification_method, classify_persisted_candidate,
+    group_by_semantic_identity, PersistedCandidateForAdjudication,
 };
 use primitives::hash::blake3_hex;
 use primitives::hash::content_hash_v1;
 use acquisition::html_sections::{extract_meta_typed, extract_sections_typed, HtmlSection};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 use truth_domain::truth_candidates::{
-    validate_truth_candidate, TruthCandidateRuntime, TruthParamValue, TruthStructuredCandidate,
+    validate_truth_candidate, TruthCandidateRuntime, TruthParamValue,
 };
 use primitives::url_norm::domain_norm;
 
@@ -126,26 +127,3 @@ pub struct RawKnowledgeIngestionReport {
     pub changed_truth_keys: Vec<String>,
     pub extraction_provider_unavailable: bool,
 }
-
-#[derive(Debug, Clone)]
-struct PersistedCandidateForAdjudication {
-    rule_candidate_id: String,
-    context_key: String,
-    role: String,
-    concept_canonical_key: String,
-    params: TruthParamValue,
-    source_key: String,
-    source_tier: String,
-    confidence: f64,
-    freshness_class: String,
-    completeness_class: String,
-    evidence_section_id: i64,
-    evidence_quote: String,
-    span_start: i32,
-    span_end: i32,
-    source_snapshot_hash: String,
-    prompt_version: String,
-    model_version: String,
-    epistemic_status: String,
-}
-

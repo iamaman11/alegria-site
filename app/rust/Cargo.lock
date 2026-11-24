@@ -5040,6 +5040,7 @@ dependencies = [
 name = "temporal_worker"
 version = "0.1.0"
 dependencies = [
+ "acquisition",
  "anyhow",
  "clap",
  "contracts",

@@ -283,6 +283,22 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/finalize_publish.rs")
         self.assertEqual(result["selected_suites"], ["publishing_a17"])
 
+    def test_domain_publication_license_and_materialization_keep_a17_owner(self) -> None:
+        # Old Temporal orchestration steps are being moved under one domain
+        # owner. Rename diffs include both paths; each side must be covered.
+        for path in (
+            "app/rust/crates/seo_steps/src/licensing_gate_step.rs",
+            "app/rust/crates/seo_steps/src/publish_materialize_step.rs",
+            "app/rust/crates/seo_steps/src/finalize_publish_step.rs",
+            "app/rust/crates/seo_domain/src/publishing/license.rs",
+            "app/rust/crates/seo_domain/src/publishing/materialization.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertEqual(result["analysis"], "scoped")
+                self.assertIn("publishing_a17", result["selected_suites"])
+                self.assertIn("architecture-and-rust", result["selected_ci_jobs"])
+
     def test_render_preview_policy_and_wire_changes_select_publishing_a17(self) -> None:
         for path in (
             "app/rust/crates/seo_domain/src/render_preview.rs",

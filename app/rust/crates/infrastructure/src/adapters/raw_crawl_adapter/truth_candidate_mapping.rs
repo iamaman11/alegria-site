@@ -103,73 +103,6 @@ async fn load_persisted_candidates_for_adjudication(
     Ok(candidates)
 }
 
-fn to_truth_structured_candidate(
-    candidate: &PersistedCandidateForAdjudication,
-) -> TruthStructuredCandidate {
-    TruthStructuredCandidate {
-        rule_candidate_id: candidate.rule_candidate_id.clone(),
-        context_key: candidate.context_key.clone(),
-        role: candidate.role.clone(),
-        concept_canonical_key: candidate.concept_canonical_key.clone(),
-        params: candidate.params.clone(),
-        source_key: candidate.source_key.clone(),
-        source_tier: candidate.source_tier.clone(),
-        confidence: candidate.confidence,
-        freshness_class: candidate.freshness_class.clone(),
-        completeness_class: candidate.completeness_class.clone(),
-        evidence_quote: candidate.evidence_quote.clone(),
-        epistemic_status: candidate.epistemic_status.clone(),
-    }
-}
-
-fn truth_param_value_from_json(value: &Value) -> TruthParamValue {
-    match value {
-        Value::Null => TruthParamValue::Null,
-        Value::Bool(value) => TruthParamValue::Bool(*value),
-        Value::Number(value) => {
-            if let Some(integer) = value.as_i64() {
-                TruthParamValue::Integer(integer)
-            } else if let Some(decimal) = value.as_f64() {
-                TruthParamValue::Decimal(decimal)
-            } else {
-                TruthParamValue::Null
-            }
-        }
-        Value::String(value) => TruthParamValue::Text(value.clone()),
-        Value::Array(values) => TruthParamValue::List(
-            values
-                .iter()
-                .map(truth_param_value_from_json)
-                .collect::<Vec<_>>(),
-        ),
-        Value::Object(values) => TruthParamValue::Object(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), truth_param_value_from_json(value)))
-                .collect(),
-        ),
-    }
-}
-
-fn truth_param_value_to_json(value: &TruthParamValue) -> Value {
-    match value {
-        TruthParamValue::Null => Value::Null,
-        TruthParamValue::Bool(value) => Value::Bool(*value),
-        TruthParamValue::Integer(value) => json!(value),
-        TruthParamValue::Decimal(value) => json!(value),
-        TruthParamValue::Text(value) => Value::String(value.clone()),
-        TruthParamValue::List(values) => {
-            Value::Array(values.iter().map(truth_param_value_to_json).collect())
-        }
-        TruthParamValue::Object(values) => Value::Object(
-            values
-                .iter()
-                .map(|(key, value)| (key.clone(), truth_param_value_to_json(value)))
-                .collect(),
-        ),
-    }
-}
-
 async fn update_candidate_epistemic_status(
     pool: &PgPool,
     rule_candidate_id: &str,
@@ -191,21 +124,6 @@ async fn update_candidate_epistemic_status(
 
 fn semantic_rule_instance_id(context_key: &str, role: &str, concept_canonical_key: &str) -> String {
     blake3_hex(format!("{context_key}|{role}|{concept_canonical_key}").as_bytes())
-}
-
-fn pick_canonical_candidate<'a>(
-    group_candidates: &'a [PersistedCandidateForAdjudication],
-    structured: &[TruthStructuredCandidate],
-    adjudication: &truth_domain::truth_candidates::TruthAdjudicationResult,
-) -> std::result::Result<&'a PersistedCandidateForAdjudication, primitives::errors::DomainError> {
-    let canonical_id = canonical_verified_candidate_id(structured, adjudication);
-    group_candidates
-        .iter()
-        .find(|candidate| Some(candidate.rule_candidate_id.as_str()) == canonical_id)
-        .ok_or_else(|| primitives::errors::DomainError::UnexpectedBug {
-            message: "truth adjudication produced verified verdict without canonical candidate"
-                .to_string(),
-        })
 }
 
 async fn upsert_verified_rule_instance_from_candidate(

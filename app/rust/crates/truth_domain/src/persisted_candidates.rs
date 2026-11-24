@@ -4,7 +4,120 @@
 use crate::evidence::{
     classify_candidate_completeness_from_flags, classify_candidate_freshness_local,
 };
+use std::collections::BTreeMap;
+
 use crate::truth_candidates::{TruthAdjudicationResult, TruthParamValue, TruthStructuredCandidate};
+
+/// Storage-independent candidate snapshot needed to adjudicate an existing
+/// semantic fact. Database rows and SQL remain in the infrastructure adapter.
+#[derive(Debug, Clone)]
+pub struct PersistedCandidateForAdjudication {
+    pub rule_candidate_id: String,
+    pub context_key: String,
+    pub role: String,
+    pub concept_canonical_key: String,
+    pub params: TruthParamValue,
+    pub source_key: String,
+    pub source_tier: String,
+    pub confidence: f64,
+    pub freshness_class: String,
+    pub completeness_class: String,
+    pub evidence_section_id: i64,
+    pub evidence_quote: String,
+    pub span_start: i32,
+    pub span_end: i32,
+    pub source_snapshot_hash: String,
+    pub prompt_version: String,
+    pub model_version: String,
+    pub epistemic_status: String,
+}
+
+impl PersistedCandidateForAdjudication {
+    pub fn structured(&self) -> TruthStructuredCandidate {
+        TruthStructuredCandidate {
+            rule_candidate_id: self.rule_candidate_id.clone(),
+            context_key: self.context_key.clone(),
+            role: self.role.clone(),
+            concept_canonical_key: self.concept_canonical_key.clone(),
+            params: self.params.clone(),
+            source_key: self.source_key.clone(),
+            source_tier: self.source_tier.clone(),
+            confidence: self.confidence,
+            freshness_class: self.freshness_class.clone(),
+            completeness_class: self.completeness_class.clone(),
+            evidence_quote: self.evidence_quote.clone(),
+            epistemic_status: self.epistemic_status.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub struct TruthSemanticIdentity {
+    pub context_key: String,
+    pub role: String,
+    pub concept_canonical_key: String,
+}
+
+/// All claims for one role/concept must enter governance together: filtering
+/// unresolved claims before this point would silently promote other sources.
+pub fn group_by_semantic_identity(
+    candidates: Vec<PersistedCandidateForAdjudication>,
+) -> BTreeMap<TruthSemanticIdentity, Vec<PersistedCandidateForAdjudication>> {
+    let mut groups = BTreeMap::new();
+    for candidate in candidates {
+        let identity = TruthSemanticIdentity {
+            context_key: candidate.context_key.clone(),
+            role: candidate.role.clone(),
+            concept_canonical_key: candidate.concept_canonical_key.clone(),
+        };
+        groups
+            .entry(identity)
+            .or_insert_with(Vec::new)
+            .push(candidate);
+    }
+    groups
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CandidateGroupDecisions {
+    pub adjudicable: Vec<TruthStructuredCandidate>,
+    pub needs_hitl_ids: Vec<String>,
+    pub rejected_ids: Vec<String>,
+}
+
+pub fn candidate_group_decisions(
+    group: &[PersistedCandidateForAdjudication],
+) -> CandidateGroupDecisions {
+    let mut result = CandidateGroupDecisions::default();
+    for candidate in group {
+        match candidate.epistemic_status.as_str() {
+            "structured" => result.adjudicable.push(candidate.structured()),
+            "needs_hitl" => {
+                result.adjudicable.push(candidate.structured());
+                result
+                    .needs_hitl_ids
+                    .push(candidate.rule_candidate_id.clone());
+            }
+            "rejected" => result
+                .rejected_ids
+                .push(candidate.rule_candidate_id.clone()),
+            _ => {}
+        }
+    }
+    result
+}
+
+/// Persist exactly the candidate the Truth domain actually verified.
+pub fn canonical_persisted_candidate<'a>(
+    group: &'a [PersistedCandidateForAdjudication],
+    adjudicable: &[TruthStructuredCandidate],
+    adjudication: &TruthAdjudicationResult,
+) -> Option<&'a PersistedCandidateForAdjudication> {
+    let canonical_id = canonical_verified_candidate_id(adjudicable, adjudication)?;
+    group
+        .iter()
+        .find(|candidate| candidate.rule_candidate_id == canonical_id)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersistedCandidateClassification {
@@ -89,6 +202,85 @@ pub fn canonical_role_key(role: &str) -> String {
 mod tests {
     use super::*;
     use crate::truth_candidates::TruthAdjudicationDecision;
+
+    fn persisted(id: &str, status: &str, context: &str) -> PersistedCandidateForAdjudication {
+        PersistedCandidateForAdjudication {
+            rule_candidate_id: id.into(),
+            context_key: context.into(),
+            role: "fee".into(),
+            concept_canonical_key: "consular_fee".into(),
+            params: TruthParamValue::object([("amount", TruthParamValue::Integer(35))]),
+            source_key: format!("source-{id}"),
+            source_tier: "official".into(),
+            confidence: 0.9,
+            freshness_class: "fresh".into(),
+            completeness_class: "complete".into(),
+            evidence_section_id: 8,
+            evidence_quote: "35 EUR".into(),
+            span_start: 0,
+            span_end: 6,
+            source_snapshot_hash: "hash".into(),
+            prompt_version: "v1".into(),
+            model_version: "model".into(),
+            epistemic_status: status.into(),
+        }
+    }
+
+    #[test]
+    fn semantic_groups_keep_unresolved_claims_together_without_cross_context_leaks() {
+        let groups = group_by_semantic_identity(vec![
+            persisted("yes", "structured", "ES"),
+            persisted("scope", "needs_hitl", "ES"),
+            persisted("no", "rejected", "ES"),
+            persisted("other-context", "structured", "FR"),
+        ]);
+        assert_eq!(groups.len(), 2);
+        let same_identity = groups
+            .get(&TruthSemanticIdentity {
+                context_key: "ES".into(),
+                role: "fee".into(),
+                concept_canonical_key: "consular_fee".into(),
+            })
+            .unwrap();
+        let decisions = candidate_group_decisions(same_identity);
+        assert_eq!(decisions.adjudicable.len(), 2);
+        assert_eq!(decisions.needs_hitl_ids, vec!["scope".to_string()]);
+        assert_eq!(decisions.rejected_ids, vec!["no".to_string()]);
+        assert_eq!(decisions.adjudicable[1].epistemic_status, "needs_hitl");
+        assert_eq!(decisions.adjudicable[0].params, same_identity[0].params);
+    }
+
+    #[test]
+    fn canonical_persisted_choice_requires_exact_verified_id() {
+        let group = vec![
+            persisted("verified", "structured", "ES"),
+            persisted("rejected", "rejected", "ES"),
+        ];
+        let admissible = candidate_group_decisions(&group).adjudicable;
+        let verdict = TruthAdjudicationResult {
+            decisions: vec![TruthAdjudicationDecision {
+                rule_candidate_id: "verified".into(),
+                decision: "verified".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            canonical_persisted_candidate(&group, &admissible, &verdict)
+                .unwrap()
+                .rule_candidate_id,
+            "verified"
+        );
+        let invalid = TruthAdjudicationResult {
+            decisions: vec![TruthAdjudicationDecision {
+                rule_candidate_id: "rejected".into(),
+                decision: "verified".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert!(canonical_persisted_candidate(&group, &admissible, &invalid).is_none());
+    }
 
     fn classify(
         status: &str,

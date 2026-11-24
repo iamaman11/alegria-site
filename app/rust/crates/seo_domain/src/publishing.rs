@@ -2,6 +2,9 @@
 //! deployment, but only an independently verified public release is published.
 //! SQL transactions, the live pointer, and HTTP remain adapter responsibilities.
 
+pub mod license;
+pub mod materialization;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReleaseReadiness {
     ReadyToVerify,
