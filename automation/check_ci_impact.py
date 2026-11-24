@@ -129,6 +129,63 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertTrue(decision["worker_required"])
                 self.assertEqual(decision["reason"], "shared_impact_registry")
 
+    def test_worker_cache_export_preserves_source_only_then_asset_rebase(self) -> None:
+        # Exporting after a Rust edit is mandatory: the next asset-only main
+        # merge must find that compiled builder image in the shared cache.
+        source = ["app/rust/services/temporal/src/main.rs"]
+        first = worker_release_decision(self.impact(*source), source, manual=False)
+        self.assertTrue(first["worker_required"])
+        self.assertTrue(first["cache_export_required"])
+
+        # Node dependency changes alter the other expensive reusable layer.
+        manifest = ["infra/cloudflare/seo-static/package.json"]
+        npm = worker_release_decision(self.impact(*manifest), manifest, manual=False)
+        self.assertTrue(npm["worker_required"])
+        self.assertTrue(npm["cache_export_required"])
+
+        for assets in (
+            ["infra/cloudflare/seo-static/build-entry.js"],
+            ["automation/deploy_seo_static_cloudflare.py"],
+            ["infra/cloudflare/seo-static/build-entry.js", "automation/check_first_site_release.py"],
+        ):
+            with self.subTest(assets=assets):
+                second = worker_release_decision(self.impact(*assets), assets, manual=False)
+                self.assertTrue(second["worker_required"])
+                self.assertFalse(second["cache_export_required"])
+
+    def test_worker_cache_export_unknown_source_and_manual_are_fail_closed(self) -> None:
+        for changed in (
+            ["infra/cloudflare/seo-static/package.json"],
+            ["infra/cloudflare/seo-static/package-lock.json"],
+            ["infra/cloudflare/seo-static/npm-shrinkwrap.json"],
+            ["app/rust/services/temporal/Dockerfile"],
+            ["app/contracts/proto/temporal_payloads.proto"],
+            ["automation/prepare_worker_build_context.py"],
+            ["automation/new_release_helper.py"],
+            ["app/rust/services/temporal/src/main.rs", "infra/cloudflare/seo-static/build-entry.js"],
+            ["infra/cloudflare/seo-static/build-entry.js", "automation/new_release_helper.py"],
+        ):
+            with self.subTest(changed=changed):
+                decision = worker_release_decision(self.impact(*changed), changed, manual=False)
+                self.assertTrue(decision["worker_required"])
+                self.assertTrue(decision["cache_export_required"])
+
+        # A malformed lock graph still exercises the fail-closed release path,
+        # without trying to resolve the synthetic BASE/HEAD test refs.
+        lock_changed = ["app/rust/Cargo.lock"]
+        lock_report = self.impact(*lock_changed, lock_snapshots=("invalid", "invalid"))
+        lock_decision = worker_release_decision(lock_report, lock_changed, manual=False)
+        self.assertTrue(lock_decision["cache_export_required"])
+
+        asset = ["infra/cloudflare/seo-static/build-entry.js"]
+        manual = worker_release_decision(self.impact(*asset), asset, manual=True)
+        self.assertTrue(manual["worker_required"])
+        self.assertTrue(manual["cache_export_required"])
+        ci_only = [".github/workflows/ci.yml"]
+        skipped = worker_release_decision(self.impact(*ci_only), ci_only, manual=False)
+        self.assertFalse(skipped["worker_required"])
+        self.assertFalse(skipped["cache_export_required"])
+
     def test_architecture_source_contract_needs_only_python_verify(self) -> None:
         path = "automation/check_expert_core_activation_contract.py"
         report = self.impact(path)
@@ -369,7 +426,7 @@ class ImpactFixtures(unittest.TestCase):
                         ("shared", "1.1.0", ()))
         impact = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
         self.assertEqual(set(impact["affected_crates"]), {"temporal_worker", "outbox_worker"})
-        self.assertEqual(set(impact["selected_images"]), {"temporal-worker", "outbox-worker"})
+        self.assertEqual(impact["selected_images"], ["temporal-worker"])
         self.assertEqual(set(impact["selected_suites"]), {"temporal_restart", "outbox_a14"})
 
     def test_removed_lock_dependency_uses_old_graph(self) -> None:
@@ -858,15 +915,28 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("verify", outcome["selected_ci_jobs"])
         self.assertIn(path, outcome["image_reasons"]["temporal-worker"][0])
 
-    def test_unrelated_service_edit_selects_no_temporal_image(self) -> None:
+    def test_unreleased_service_edit_does_not_claim_an_artifact(self) -> None:
         outcome = self.impact("app/rust/services/analytics_svc/src/main.rs")
-        self.assertEqual(outcome["selected_images"], ["analytics-svc"])
+        self.assertEqual(outcome["selected_images"], [])
         self.assertEqual(outcome["image_status"]["temporal-worker"], "not_applicable")
 
-    def test_outbox_service_change_runs_real_outbox_suite_and_own_image(self) -> None:
+    def test_outbox_service_change_runs_real_suite_without_phantom_image(self) -> None:
         outcome = self.impact("app/rust/services/outbox_worker/src/worker.rs")
         self.assertEqual(outcome["selected_suites"], ["outbox_a14"])
-        self.assertEqual(outcome["selected_images"], ["outbox-worker"])
+        self.assertEqual(outcome["selected_images"], [])
+
+    def test_unreleased_dockerfiles_remain_fail_closed_executable_inputs(self) -> None:
+        # Dropping imaginary release-image outputs must never quietly classify
+        # a real delivery Dockerfile as documentation or a safe no-op.
+        for path in (
+            "app/rust/services/outbox_worker/Dockerfile",
+            "app/rust/services/analytics_svc/Dockerfile",
+            "infra/analytics_lab/Dockerfile",
+        ):
+            with self.subTest(path=path):
+                outcome = self.impact(path)
+                self.assertEqual(outcome["selected_images"], [])
+                self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
 
     def test_cloudflare_static_is_worker_image_input_without_cargo(self) -> None:
         asset = "infra/cloudflare/seo-static/package.json"
@@ -878,14 +948,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertTrue(worker_release_decision(outcome, [asset], manual=False)["worker_required"])
         self.assertFalse(main_cache_prime_required([asset]))
 
-    def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
+    def test_planner_or_ci_driver_change_selects_every_registered_suite_and_real_image(self) -> None:
         outcome = self.impact("automation/ci_impact.py")
         self.assertEqual(outcome["scope"], "full")
         self.assertEqual(
             set(outcome["selected_suites"]),
             {name for name, owner in SUITE_OWNERS.items() if owner["on_unknown_global_input"]},
         )
-        self.assertEqual(len(outcome["selected_images"]), 4)
+        self.assertEqual(outcome["selected_images"], ["temporal-worker"])
         self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
         self.assertTrue(outcome["full_scope_reasons"])
 

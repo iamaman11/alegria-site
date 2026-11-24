@@ -408,31 +408,15 @@ SUITE_OWNERS = {
     },
 }
 
-# Each image is selected from the actual binaries compiled by its Dockerfile
-# plus explicitly COPIED delivery inputs. No other Rust service is an implicit
-# Worker dependency. Only temporal-worker is currently packaged by
-# the package job in the one ci.yml; other image selection remains diagnostic
-# until their release owners use this same report.
+# Only the image that is actually built, source-verified and attested by this
+# CI has a release selector. Other services have executable Rust/Compose
+# owners, not hypothetical CI image outputs. Their Dockerfile changes still
+# receive the fail-closed PR gate via ci_jobs_for_change.
 IMAGE_OWNERS = {
     "temporal-worker": {
         "crates": {"temporal_worker", "cli_tools"},
         "paths": WORKER_PACKAGING_FILES | {"app/rust/services/temporal/Dockerfile"},
         "prefixes": ("infra/cloudflare/seo-static/",),
-    },
-    "outbox-worker": {
-        "crates": {"outbox_worker"},
-        "paths": {"app/rust/services/outbox_worker/Dockerfile"},
-        "prefixes": (),
-    },
-    "analytics-svc": {
-        "crates": {"analytics_svc"},
-        "paths": {"app/rust/services/analytics_svc/Dockerfile"},
-        "prefixes": (),
-    },
-    "analytics-lab": {
-        "crates": set(),
-        "paths": {"infra/analytics_lab/Dockerfile"},
-        "prefixes": ("infra/analytics_lab/", "app/analytics_lab/"),
     },
 }
 
@@ -458,8 +442,23 @@ def worker_release_decision(report: dict[str, Any], changed: list[str], *, manua
         required, reason = False, "ci_operator_maintenance_only"
     else:
         required, reason = status == "selected", "shared_impact_registry"
+    # Buildx's reusable builder layers are source-specific, not just keyed by
+    # Cargo manifests. Even a source-only Rust edit must export the updated
+    # binary layer: a subsequent static-assets-only release reuses it. Pure
+    # delivered assets need only rebase unchanged Rust/Node dependency layers;
+    # exporting the whole builder cache again would be duplicate work.
+    # An explicit rebuild, an unknown input, or ANY executable/compiler input
+    # conservatively keeps cache export enabled.
+    static_delivery_only = all(
+        path in WORKER_PACKAGING_FILES
+        or (path.startswith("infra/cloudflare/seo-static/")
+            and Path(path).name not in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}
+            and path not in WORKER_NONDELIVERY_FILES)
+        for path in changed
+    )
     return {
         "worker_required": required,
+        "cache_export_required": required and (manual or not static_delivery_only),
         "reason": reason,
         "changed_paths": sorted(set(changed)),
     }
@@ -966,7 +965,7 @@ def analyze(
             classified_inputs[path] = "known CI-only input: mandatory verify contract, no Rust compilation"
             continue
         if path.startswith(("infra/analytics_lab/", "app/analytics_lab/")):
-            classified_inputs[path] = "known non-Rust input: analytics-lab image"
+            classified_inputs[path] = "known analytics-lab source/config: verified outside Rust"
             continue
         if path.endswith("/Dockerfile") and any(path in rule["paths"] for rule in IMAGE_OWNERS.values()):
             classified_inputs[path] = "known image Dockerfile: packaging only"
