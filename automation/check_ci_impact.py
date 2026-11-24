@@ -10,13 +10,14 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci_impact import (
-    CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, analyze, changed_paths,
+    CI_PR_OWNERS, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX, WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
     main_cache_prime_required,
     suite_commands_for_report, suite_environment_for_report, truth_fixture_ids_for_paths,
     worker_release_decision, workspace_graph,
 )
 from dev_rust_feedback import commands_for_report
+from run_main_cache_prime import prime_commands_for_report
 from run_scoped_cargo_feedback import require_clean_truth_filter_environment
 
 
@@ -76,6 +77,27 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
 
+    def test_compiler_cache_and_feedback_tools_do_not_ship_into_worker(self) -> None:
+        # A change to compiler orchestration still receives the full PR gate:
+        # the release graph must not confuse it with a delivered Worker input.
+        for path in (
+            "automation/run_main_cache_prime.py",
+            "automation/run_scoped_cargo_feedback.py",
+            "automation/cargo_feedback.py",
+            "automation/dev_rust_feedback.py",
+            "automation/check_cargo_feedback.py",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertEqual(report["scope"], "full")
+                self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+                self.assertFalse(worker_release_decision(report, [path], manual=False)["worker_required"])
+
+        diagnostic = "automation/report_sccache_failures.py"
+        report = self.impact(diagnostic)
+        self.assertEqual(report["selected_ci_jobs"], ["verify"])
+        self.assertFalse(worker_release_decision(report, [diagnostic], manual=False)["worker_required"])
+
     def test_worker_release_rebuilds_mixed_unknown_and_real_delivery_inputs(self) -> None:
         for paths in (
             [".github/workflows/ci.yml", "automation/deploy_seo_static_cloudflare.py"],
@@ -114,11 +136,99 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(main_cache_prime_required([".github/workflows/ci.yml"]))
         self.assertFalse(main_cache_prime_required(["infra/cloudflare/seo-static/package.json"]))
         self.assertFalse(main_cache_prime_required(["app/rust/crates/integration_harness/src/tests/foo.rs"]))
+        self.assertFalse(main_cache_prime_required(["app/rust/services/temporal/Dockerfile"]))
+        self.assertFalse(main_cache_prime_required([TRUTH_FIXTURE_PREFIX + "source.html"]))
+        self.assertTrue(main_cache_prime_required(["app/rust/crates/integration_harness/src/lib.rs"]))
         self.assertTrue(main_cache_prime_required([
             "app/rust/crates/integration_harness/src/tests/foo.rs", old,
         ]))
         with self.assertRaises(ValueError):
             main_cache_prime_required([])
+
+    def test_main_prime_compiles_pr_selected_leaf_tests_and_reverse_check_only(self) -> None:
+        report = self.impact("app/rust/crates/http_client/src/lib.rs")
+        self.assertEqual(report["analysis"], "scoped")
+        self.assertEqual(report["affected_crates"], ["gsc_sync", "http_client"])
+        self.assertEqual(report["selected_suites"], [])
+        self.assertEqual(prime_commands_for_report(report), [
+            ["cargo", "check", "--locked", "--package", "gsc_sync"],
+            ["cargo", "test", "--locked", "--package", "http_client", "--no-run"],
+        ])
+
+    def test_main_prime_compiles_e2e_feature_only_for_real_selected_suite(self) -> None:
+        report = self.impact("app/rust/services/outbox_worker/src/worker.rs")
+        self.assertEqual(report["selected_suites"], ["outbox_a14"])
+        self.assertEqual(prime_commands_for_report(report), [
+            ["cargo", "test", "--locked", "--package", "outbox_worker", "--no-run"],
+            ["cargo", "test", "--locked", "--package", "integration_harness",
+             "--features", "e2e", "--lib", "--no-run"],
+        ])
+
+    def test_main_prime_global_unknown_and_broken_lock_fall_back_to_full_workspace(self) -> None:
+        for report in (
+            self.impact("app/rust/Cargo.toml"),
+            self.impact("app/rust/Cargo.lock", lock_snapshots=("broken lock", "still broken")),
+        ):
+            with self.subTest(reason=report["full_scope_reasons"]):
+                self.assertEqual(report["analysis"], "full")
+                commands = prime_commands_for_report(report)
+                self.assertEqual(commands[0], ["cargo", "test", "--workspace", "--locked", "--no-run"])
+                self.assertEqual(commands[1], [
+                    "cargo", "test", "--locked", "--package", "integration_harness",
+                    "--features", "e2e", "--lib", "--no-run",
+                ])
+
+    def test_main_prime_scoped_lockfile_tracks_real_consumer_and_suite(self) -> None:
+        old = self.lock(("temporal_worker", "0.1.0", ("temporalio-client 1.0.0",)),
+                        ("temporalio-client", "1.0.0", ()))
+        new = self.lock(("temporal_worker", "0.1.0", ("temporalio-client 1.1.0",)),
+                        ("temporalio-client", "1.1.0", ()))
+        report = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
+        self.assertEqual(report["analysis"], "scoped")
+        self.assertEqual(report["selected_suites"], ["temporal_restart"])
+        self.assertEqual(prime_commands_for_report(report), [
+            ["cargo", "test", "--locked", "--package", "temporal_worker", "--no-run"],
+            list(WORKER_E2E_PREPARE),
+            ["cargo", "test", "--locked", "--package", "integration_harness",
+             "--features", "e2e", "--lib", "--no-run"],
+        ])
+
+    def test_main_prime_compiles_shared_runtime_processes_once(self) -> None:
+        report = self.impact(
+            "app/rust/services/temporal/src/main.rs",
+            TRUTH_FIXTURE_PREFIX + "happy_path_publish_allowed.html",
+        )
+        self.assertIn("truth_certification", report["selected_suites"])
+        self.assertIn("temporal_restart", report["selected_suites"])
+        commands = prime_commands_for_report(report)
+        self.assertEqual(commands.count(list(WORKER_E2E_PREPARE)), 1)
+        self.assertEqual(commands[-1], [
+            "cargo", "test", "--locked", "--package", "integration_harness",
+            "--features", "e2e", "--lib", "--no-run",
+        ])
+
+    def test_main_prime_no_compilation_for_runtime_fixture_only(self) -> None:
+        report = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path.html")
+        self.assertEqual(report["analysis"], "none")
+        self.assertIn("truth_certification", report["selected_suites"])
+        # A fixture-only PR runs the selected live suite; the accepted-main
+        # cache job is intentionally not scheduled for runtime-only bytes.
+        self.assertFalse(main_cache_prime_required(report["changed_paths"]))
+
+    def test_worker_readme_only_is_not_delivery_image_or_cloudflare_build(self) -> None:
+        readme = "infra/cloudflare/seo-static/README.md"
+        report = self.impact(readme)
+        self.assertEqual(report["analysis"], "none")
+        self.assertEqual(report["selected_images"], [])
+        self.assertNotIn("cloudflare-static-build", report["selected_ci_jobs"])
+        self.assertFalse(worker_release_decision(report, [readme], manual=False)["worker_required"])
+        self.assertIn("non-delivery", report["classified_inputs"][readme])
+
+        real_asset = "infra/cloudflare/seo-static/package.json"
+        mixed = self.impact(readme, real_asset)
+        self.assertIn("temporal-worker", mixed["selected_images"])
+        self.assertIn("cloudflare-static-build", mixed["selected_ci_jobs"])
+        self.assertTrue(worker_release_decision(mixed, [readme, real_asset], manual=False)["worker_required"])
 
     def test_explicit_worker_rebuild_overrides_maintenance_skip(self) -> None:
         paths = [".github/workflows/ci.yml"]

@@ -808,15 +808,31 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      # Seed test/check compiler units for PR feedback. A debug Worker binary
-      # cannot be reused as a release artifact by Docker BuildKit.
-      - name: Prime shared test compilation units
+      # Reuse the PR's exact-source Cargo graph and suite owners. A leaf crate
+      # must not rebuild all three integration_harness compile profiles, while
+      # unknown/global Cargo inputs still compile the full workspace. Cache
+      # writes remain limited to this trusted, accepted-main-only job.
+      - name: Select exact-source Cargo compiler units
         if: steps.cache_scope.outputs.needed == 'true'
-        working-directory: app/rust
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
         run: |
-          cargo check --locked --package integration_harness
-          cargo test --locked --package integration_harness --no-run
-          cargo test -p integration_harness --features e2e --lib --no-run --locked
+          python3 automation/ci_impact.py \
+            --base "$BEFORE_SHA" \
+            --head "$SOURCE_SHA" \
+            --report automation/reports/main_cache_prime_impact.json
+
+      - name: Prime only affected PR compilation units
+        if: steps.cache_scope.outputs.needed == 'true'
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          python3 automation/run_main_cache_prime.py \
+            --base-sha "$BEFORE_SHA" \
+            --source-sha "$SOURCE_SHA" \
+            --report automation/reports/main_cache_prime_impact.json
 
       - name: Report main cache hits, misses and write errors
         if: always() && steps.cache_scope.outputs.needed == 'true'

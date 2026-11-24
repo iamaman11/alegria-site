@@ -58,15 +58,18 @@ COPY infra/cloudflare/seo-static/package.json /app/infra/cloudflare/seo-static/p
 RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund
 
 # Website config/assets and the exact-source release envelope are independent
-# of the compiler and Node dependency layers.
-COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static
-COPY automation/deploy_seo_static_cloudflare.py \
+# of the compiler and Node dependency layers. BuildKit COPY --link keeps their
+# layers independent of earlier changes, and can rebase the unchanged native
+# binaries instead of exporting them again for assets/provenance-only releases.
+# These destinations are ordinary directories/files, never symlink targets.
+COPY --link infra/cloudflare/seo-static /app/infra/cloudflare/seo-static
+COPY --link automation/deploy_seo_static_cloudflare.py \
      automation/check_public_static_output.py \
      automation/check_public_http_readback.py \
      automation/check_first_site_release.py /app/automation/
-COPY worker-context.json /app/worker-context.json
-COPY --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
-COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
-COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools
+COPY --link worker-context.json /app/worker-context.json
+COPY --link --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
+COPY --link --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
+COPY --link --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools
 
 ENTRYPOINT ["/usr/local/bin/temporal_worker"]

@@ -32,6 +32,65 @@ STATIC_MANIFEST = "infra/cloudflare/seo-static/package.json"
 STATIC_DEPENDENCY_INSTALL = (
     "RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund"
 )
+STATIC_ASSET_COPY = "COPY --link infra/cloudflare/seo-static /app/infra/cloudflare/seo-static"
+WORKER_CONTEXT_COPY = "COPY --link worker-context.json /app/worker-context.json"
+NATIVE_BINARIES = ("temporal_worker", "temporal_starter", "cli_tools")
+DEPLOY_SCRIPTS = (
+    "automation/deploy_seo_static_cloudflare.py",
+    "automation/check_public_static_output.py",
+    "automation/check_public_http_readback.py",
+    "automation/check_first_site_release.py",
+)
+
+
+def docker_instructions(dockerfile: str) -> list[str]:
+    """Unwrap Dockerfile continuations to inspect actual final-stage operations."""
+    instructions: list[str] = []
+    pending = ""
+    for raw in dockerfile.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        continuation = line.endswith("\\")
+        pending += line[:-1].strip() + " " if continuation else line
+        if not continuation:
+            instructions.append(" ".join(pending.split()))
+            pending = ""
+    if pending:
+        raise ValueError("incomplete Dockerfile continuation")
+    return instructions
+
+
+def runtime_cache_invalidations(dockerfile: str, changed_inputs: set[str]) -> dict[str, bool]:
+    """Model native BuildKit COPY --link cache dependence, not elapsed CI time.
+
+    A regular instruction depends on all preceding runtime layers; a linked
+    COPY can reuse its immutable source layer even if earlier layers changed.
+    Only a change to that COPY's own source should invalidate the linked layer.
+    The model assumes the builder supplied the given binary paths and ignores
+    independent base-image upgrades (which are tested by the actual CI build).
+    """
+    operations = docker_instructions(dockerfile)
+    runtime = operations[next(i for i, op in enumerate(operations) if op.startswith("FROM node:")) + 1:]
+    prior_changed = False
+    effects: dict[str, bool] = {}
+    for operation in runtime:
+        words = operation.split()
+        if words[0] == "COPY":
+            linked = "--link" in words[1:]
+            sources = [word for word in words[1:-1] if not word.startswith("--")]
+            source_changed = any(
+                changed == source or changed.startswith(source.rstrip("/") + "/")
+                for source in sources for changed in changed_inputs
+            )
+            invalidated = source_changed or (prior_changed and not linked)
+            effects[words[-1]] = invalidated
+        else:
+            invalidated = prior_changed
+            if operation == STATIC_DEPENDENCY_INSTALL:
+                effects[STATIC_DEPENDENCY_INSTALL] = invalidated
+        prior_changed |= invalidated
+    return effects
 
 
 def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> list[str]:
@@ -56,7 +115,7 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
         errors.append("Cargo dependencies must compile before production Rust source is copied")
     if dockerfile.count("cargo build --release --locked") != 2:
         errors.append("Docker requires one dependency compile and one real source compile")
-    if "COPY worker-context.json /app/worker-context.json" not in dockerfile:
+    if WORKER_CONTEXT_COPY not in dockerfile:
         errors.append("Worker image must preserve exact-source context provenance")
     if "cargo build --release --locked" not in dockerfile:
         errors.append("Docker must retain the locked release build")
@@ -69,12 +128,10 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
         f"COPY {STATIC_MANIFEST} /app/{STATIC_MANIFEST}", node_stage,
     )
     npm = dockerfile.find(STATIC_DEPENDENCY_INSTALL, node_stage)
-    assets = dockerfile.find(
-        "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static", node_stage,
-    )
-    envelope = dockerfile.find("COPY worker-context.json /app/worker-context.json", node_stage)
+    assets = dockerfile.find(STATIC_ASSET_COPY, node_stage)
+    envelope = dockerfile.find(WORKER_CONTEXT_COPY, node_stage)
     binary = dockerfile.find(
-        "COPY --from=builder /app/app/rust/target/release/temporal_worker", node_stage,
+        "COPY --link --from=builder /app/app/rust/target/release/temporal_worker", node_stage,
     )
     if not (0 <= node_stage < manifest < npm < assets < envelope < binary):
         errors.append(
@@ -83,6 +140,31 @@ def boundary_errors(root_ignore: str, specific_ignore: str, dockerfile: str) -> 
         )
     if dockerfile.count(STATIC_DEPENDENCY_INSTALL) != 1:
         errors.append("Cloudflare package dependencies must be installed exactly once")
+    operations = docker_instructions(dockerfile)
+    runtime = operations[next(i for i, op in enumerate(operations) if op.startswith("FROM node:")) + 1:]
+    expected_linked_sources = {
+        "infra/cloudflare/seo-static",
+        "worker-context.json",
+        *DEPLOY_SCRIPTS,
+        *(f"/app/app/rust/target/release/{name}" for name in NATIVE_BINARIES),
+    }
+    for source in expected_linked_sources:
+        matches = [line for line in runtime if line.startswith("COPY ") and source in line.split()]
+        if len(matches) != 1 or "--link" not in matches[0].split():
+            errors.append(f"Runtime source must have one independent linked COPY layer: {source}")
+    script_copies = [line for line in runtime if line.startswith("COPY ")
+                     and DEPLOY_SCRIPTS[0] in line.split()]
+    if len(script_copies) != 1 or script_copies[0].split()[-1] != "/app/automation/":
+        errors.append("Cloudflare deployment/check scripts must retain their native runtime directory")
+    for name in NATIVE_BINARIES:
+        src = f"/app/app/rust/target/release/{name}"
+        dest = f"/usr/local/bin/{name}"
+        if f"COPY --link --from=builder {src} {dest}" not in runtime:
+            errors.append(f"Native Worker executable must retain its exact linked destination: {name}")
+    if runtime[-1] != 'ENTRYPOINT ["/usr/local/bin/temporal_worker"]':
+        errors.append("Release image must keep the native Worker entrypoint")
+    if "WORKDIR /app" not in runtime:
+        errors.append("Linked release destinations must remain under /app")
     return errors
 
 
@@ -116,14 +198,14 @@ class TemporalDockerContextTests(unittest.TestCase):
     def test_native_cloudflare_tools_reuse_cache_after_worker_rebuild(self) -> None:
         wrong = self.dockerfile.replace(STATIC_DEPENDENCY_INSTALL + "\n", "", 1)
         wrong = wrong.replace(
-            "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools",
-            "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools\n"
+            "COPY --link --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools",
+            "COPY --link --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools\n"
             + STATIC_DEPENDENCY_INSTALL,
         )
         self.assertTrue(boundary_errors(self.base, self.worker, wrong))
 
     def test_asset_changes_cannot_trigger_npm_install(self) -> None:
-        copy_assets = "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static"
+        copy_assets = STATIC_ASSET_COPY
         wrong = self.dockerfile.replace(STATIC_DEPENDENCY_INSTALL + "\n", "", 1)
         wrong = wrong.replace(copy_assets, copy_assets + "\n" + STATIC_DEPENDENCY_INSTALL)
         self.assertTrue(boundary_errors(self.base, self.worker, wrong))
@@ -131,10 +213,96 @@ class TemporalDockerContextTests(unittest.TestCase):
     def test_only_cloudflare_manifest_may_invalidate_npm_dependencies(self) -> None:
         wrong = self.dockerfile.replace(
             f"COPY {STATIC_MANIFEST} /app/{STATIC_MANIFEST}",
-            "COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static",
+            STATIC_ASSET_COPY,
             1,
         )
         self.assertTrue(boundary_errors(self.base, self.worker, wrong))
+
+    def test_asset_or_provenance_only_reuses_all_native_binary_layers(self) -> None:
+        executable_destinations = {f"/usr/local/bin/{name}" for name in NATIVE_BINARIES}
+        for changed in (
+            "infra/cloudflare/seo-static/vite.config.ts",
+            "automation/deploy_seo_static_cloudflare.py",
+            "worker-context.json",
+        ):
+            with self.subTest(changed=changed):
+                invalid = runtime_cache_invalidations(self.dockerfile, {changed})
+                self.assertTrue(any(invalid.values()), "change must invalidate its own content layer")
+                self.assertTrue(executable_destinations <= invalid.keys())
+                self.assertTrue(all(not invalid[dest] for dest in executable_destinations),
+                                "BuildKit must rebase unchanged native binaries")
+                self.assertFalse(invalid["/app/infra/cloudflare/seo-static/package.json"],
+                                 "assets or provenance must not reinstall npm")
+                self.assertFalse(invalid[STATIC_DEPENDENCY_INSTALL])
+
+    def test_manifest_reinstalls_npm_but_keeps_independent_native_layers(self) -> None:
+        invalid = runtime_cache_invalidations(
+            self.dockerfile, {"infra/cloudflare/seo-static/package.json"},
+        )
+        self.assertTrue(invalid["/app/infra/cloudflare/seo-static/package.json"])
+        self.assertTrue(invalid["/app/infra/cloudflare/seo-static"])
+        self.assertTrue(invalid[STATIC_DEPENDENCY_INSTALL])
+        self.assertTrue(all(not invalid[f"/usr/local/bin/{name}"] for name in NATIVE_BINARIES))
+
+    def test_source_binary_change_invalidates_its_own_linked_layer(self) -> None:
+        invalid = runtime_cache_invalidations(
+            self.dockerfile, {"/app/app/rust/target/release/temporal_worker"},
+        )
+        self.assertFalse(invalid[STATIC_DEPENDENCY_INSTALL])
+        self.assertFalse(invalid["/app/infra/cloudflare/seo-static"])
+        self.assertTrue(invalid["/usr/local/bin/temporal_worker"])
+        self.assertFalse(invalid["/usr/local/bin/temporal_starter"])
+        self.assertFalse(invalid["/usr/local/bin/cli_tools"])
+
+    def test_unlinked_binary_regression_would_reexport_after_asset_only_change(self) -> None:
+        for name in NATIVE_BINARIES:
+            with self.subTest(executable=name):
+                src = f"/app/app/rust/target/release/{name}"
+                linked = f"COPY --link --from=builder {src}"
+                wrong = self.dockerfile.replace(linked, f"COPY --from=builder {src}")
+                invalid = runtime_cache_invalidations(
+                    wrong, {"infra/cloudflare/seo-static/vite.config.ts"},
+                )
+                self.assertTrue(invalid[f"/usr/local/bin/{name}"],
+                                "ordinary COPY depends on the changed asset layer")
+                self.assertTrue(boundary_errors(self.base, self.worker, wrong))
+
+    def test_worker_native_entrypoint_and_cloudflare_smokes_cannot_be_removed(self) -> None:
+        for source in DEPLOY_SCRIPTS:
+            with self.subTest(source=source):
+                self.assertTrue(boundary_errors(
+                    self.base, self.worker, self.dockerfile.replace(source, "", 1),
+                ))
+        wrong_scripts_dir = self.dockerfile.replace(
+            "automation/check_first_site_release.py /app/automation/",
+            "automation/check_first_site_release.py /tmp/automation/",
+        )
+        self.assertTrue(boundary_errors(self.base, self.worker, wrong_scripts_dir))
+        wrong_entrypoint = self.dockerfile.replace(
+            'ENTRYPOINT ["/usr/local/bin/temporal_worker"]',
+            'ENTRYPOINT ["/usr/local/bin/temporal_starter"]',
+        )
+        self.assertTrue(boundary_errors(self.base, self.worker, wrong_entrypoint))
+
+    def test_nondelivered_readme_cannot_poison_worker_image_context(self) -> None:
+        owners = {"app/rust/services/temporal": "temporal_worker"}
+        tracked = {
+            "app/rust/Cargo.toml", "app/rust/Cargo.lock",
+            "app/rust/services/temporal/Cargo.toml",
+            "infra/cloudflare/seo-static/README.md",
+            "infra/cloudflare/seo-static/vite.config.ts",
+            "infra/cloudflare/seo-static/package.json",
+            "infra/cloudflare/seo-static/extra-delivered-content.md",
+            "app/contracts/proto/read_api.proto", "app/contracts/proto/rules.proto",
+            "app/contracts/proto/condition.proto", "app/contracts/proto/sync.proto",
+            "app/contracts/proto/temporal_payloads.proto", "app/analytics_lab/proto/analytics.proto",
+        }
+        copied = context_files(tracked, owners, {"temporal_worker"})
+        self.assertNotIn("infra/cloudflare/seo-static/README.md", copied)
+        self.assertIn("infra/cloudflare/seo-static/vite.config.ts", copied)
+        self.assertIn("infra/cloudflare/seo-static/package.json", copied)
+        self.assertIn("infra/cloudflare/seo-static/extra-delivered-content.md", copied,
+                      "do not drop future published Markdown content")
 
 
     def test_dependency_closure_and_independent_service_exclusion(self) -> None:

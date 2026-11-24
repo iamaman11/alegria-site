@@ -219,9 +219,14 @@ def check() -> None:
     assert "runner.temp" not in prime
     assert "SCCACHE_GHA_ENABLED: \"on\"" in prime
     assert "version: \"v0.16.0\"" in prime
-    assert "cargo check --locked --package integration_harness" in prime
-    assert "cargo test --locked --package integration_harness --no-run" in prime
-    assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" in prime
+    assert "python3 automation/ci_impact.py \\" in prime
+    assert '--report automation/reports/main_cache_prime_impact.json' in prime
+    assert 'python3 automation/run_main_cache_prime.py \\' in prime
+    assert '--base-sha "$BEFORE_SHA"' in prime
+    assert '--source-sha "$SOURCE_SHA"' in prime
+    assert "cargo check --locked --package integration_harness" not in prime
+    assert "cargo test --locked --package integration_harness --no-run" not in prime
+    assert "cargo test -p integration_harness --features e2e --lib --no-run --locked" not in prime
     assert "cargo build --locked -p temporal_worker -p outbox_worker" not in prime
     assert "core.exportVariable('ACTIONS_RUNTIME_TOKEN', token)" in prime
     assert "cache-mode: write" not in prime

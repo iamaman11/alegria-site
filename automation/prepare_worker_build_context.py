@@ -17,7 +17,10 @@ import tomllib
 from collections import deque
 from pathlib import Path
 
-from ci_impact import IMAGE_OWNERS, ROOT, WORKER_PACKAGING_FILES, load_cargo_metadata, workspace_graph
+from ci_impact import (
+    IMAGE_OWNERS, ROOT, WORKER_NONDELIVERY_FILES, WORKER_PACKAGING_FILES,
+    load_cargo_metadata, workspace_graph,
+)
 
 
 SKELETON_ROOT = "dependency-skeleton"
@@ -134,6 +137,11 @@ def context_files(tracked: set[str], owners: dict[str, str], release: set[str]) 
         raise ValueError("missing tracked workspace manifest or Cargo.lock")
     paths = set(mandatory)
     for path in tracked:
+        # The static release directory has one tracked explanation-only file.
+        # It is never delivered by the Worker and must not change the image
+        # layers or trigger a new attested production artifact on its own.
+        if path in WORKER_NONDELIVERY_FILES:
+            continue
         if path.startswith(("app/rust/.sqlx/", "app/contracts/proto/", "app/analytics_lab/proto/")):
             paths.add(path)
         if path.startswith("infra/cloudflare/seo-static/") or path in WORKER_PACKAGING_FILES:
