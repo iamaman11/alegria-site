@@ -672,9 +672,7 @@ impl ExecutionPlan {
         let mut lineage = self
             .external_artifacts
             .iter()
-            .map(|(id, artifact)| {
-                (id.clone(), BTreeSet::from([artifact.schema.id.clone()]))
-            })
+            .map(|(id, artifact)| (id.clone(), BTreeSet::from([artifact.schema.id.clone()])))
             .collect::<BTreeMap<ArtifactId, BTreeSet<ArtifactTypeId>>>();
         for id in order {
             let node = by_id[id];
@@ -696,14 +694,15 @@ impl ExecutionPlan {
                 );
             }
             for (port, artifact) in &node.outputs {
-                let schema = contract
-                    .outputs
-                    .get(port)
-                    .ok_or_else(|| PlanError::UnexpectedPort {
-                        instance: id.clone(),
-                        port: port.clone(),
-                        direction: "output",
-                    })?;
+                let schema =
+                    contract
+                        .outputs
+                        .get(port)
+                        .ok_or_else(|| PlanError::UnexpectedPort {
+                            instance: id.clone(),
+                            port: port.clone(),
+                            direction: "output",
+                        })?;
                 let mut inherited_output = inherited.clone();
                 inherited_output.insert(schema.id.clone());
                 lineage.insert(artifact.clone(), inherited_output);
@@ -743,27 +742,29 @@ impl ExecutionPlan {
                 .contract(&node.operation)
                 .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
             for (port, binding) in &node.inputs {
-                let expected = contract
-                    .inputs
-                    .get(port)
-                    .ok_or_else(|| PlanError::UnexpectedPort {
-                        instance: consumer.clone(),
-                        port: port.clone(),
-                        direction: "input",
-                    })?;
+                let expected =
+                    contract
+                        .inputs
+                        .get(port)
+                        .ok_or_else(|| PlanError::UnexpectedPort {
+                            instance: consumer.clone(),
+                            port: port.clone(),
+                            direction: "input",
+                        })?;
                 let (artifact, producer) = match binding {
                     ArtifactBinding::External { artifact } => (artifact, None),
                     ArtifactBinding::Produced {
                         artifact, producer, ..
                     } => (artifact, Some(producer)),
                 };
-                let source_lineage = lineage
-                    .get(artifact)
-                    .ok_or_else(|| PlanError::ArtifactSchemaMismatch {
-                        instance: consumer.clone(),
-                        port: port.clone(),
-                        artifact: artifact.clone(),
-                    })?;
+                let source_lineage =
+                    lineage
+                        .get(artifact)
+                        .ok_or_else(|| PlanError::ArtifactSchemaMismatch {
+                            instance: consumer.clone(),
+                            port: port.clone(),
+                            artifact: artifact.clone(),
+                        })?;
                 // The declared direct input schema is already checked in the
                 // earlier pass; this pass additionally checks ALL inherited
                 // dependencies of the concrete artifact being consumed.

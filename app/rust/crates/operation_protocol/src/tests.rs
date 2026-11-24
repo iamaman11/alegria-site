@@ -325,7 +325,7 @@ fn review_node(id: &str, producer: &str, artifact: &str) -> OperationNode {
         instance: id.into(),
         operation: reference("content.review-draft"),
         inputs: BTreeMap::from([("draft".into(), produced(producer, "draft", artifact))]),
-        outputs: BTreeMap::from([("review".into(), format!("{id}-result").into())]),
+        outputs: BTreeMap::from([("review".into(), ArtifactId(format!("{id}-result")))]),
         after: BTreeSet::new(),
         permitted_effects: BTreeSet::new(),
     }
