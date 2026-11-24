@@ -1072,9 +1072,11 @@
                 serde_json::json!({"amount": 80, "currency": "EUR"}),
             )),
         ];
+        let mut replay_responses = responses.clone();
+        replay_responses.extend(responses);
         let stub = stub_servers::spawn_json_sequence_stub(
             "/v1/chat/completions",
-            responses.repeat(2),
+            replay_responses,
         )
         .await
         .unwrap();
