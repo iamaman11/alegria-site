@@ -620,6 +620,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/truth_domain/src/review_decisions.rs",
             "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
             "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+            "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)

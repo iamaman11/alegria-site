@@ -194,6 +194,7 @@ TRUTH_ADJUDICATION_PATHS = {
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
     "app/rust/services/temporal/src/activities/runtime.rs",
     "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+    "app/rust/crates/integration_harness/src/tests/synthetic_runtime_helpers.rs",
 }
 
 # An actual PostgreSQL revision-bound human review exercises the domain

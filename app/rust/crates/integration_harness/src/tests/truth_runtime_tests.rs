@@ -856,7 +856,7 @@
         .await;
 
         let raw_text = "Consular fee is 35 EUR";
-        let (page_a, _) = seed_raw_page_with_section(
+        let (page_a, section_a) = seed_raw_page_with_section(
             &harness.pool,
             "https://source-a.example.gov/fees",
             "government",
@@ -864,7 +864,7 @@
             raw_text,
         )
         .await;
-        let (page_b, _) = seed_raw_page_with_section(
+        let (page_b, section_b) = seed_raw_page_with_section(
             &harness.pool,
             "https://source-b.example.gov/fees",
             "government",
@@ -881,12 +881,14 @@
                     "FEE_ITEM",
                     "consular_fee",
                     serde_json::json!({"amount": 35, "currency": "EUR"}),
+                    section_a,
                 )),
                 local_truth_response(local_truth_candidate_payload(
                     raw_text,
                     "FEE_ITEM",
                     "consular_fee",
                     serde_json::json!({"amount": 35, "currency": "EUR"}),
+                    section_b,
                 )),
             ],
         )
@@ -961,7 +963,7 @@
         .await;
 
         let raw_text = "Consular fee is payable on submission.";
-        let (page_id, _) = seed_raw_page_with_section(
+        let (page_id, section_id) = seed_raw_page_with_section(
             &harness.pool,
             "https://source-c.example.gov/fees",
             "government",
@@ -977,6 +979,7 @@
                 "FEE_ITEM",
                 "consular_fee",
                 serde_json::json!({"currency": "EUR"}),
+                section_id,
             ))],
         )
         .await
@@ -1039,7 +1042,7 @@
 
         let raw_text_a = "Consular fee is 35 EUR";
         let raw_text_b = "Consular fee is 80 EUR";
-        let (page_a, _) = seed_raw_page_with_section(
+        let (page_a, section_a) = seed_raw_page_with_section(
             &harness.pool,
             "https://source-d.example.gov/fees",
             "government",
@@ -1047,7 +1050,7 @@
             raw_text_a,
         )
         .await;
-        let (page_b, _) = seed_raw_page_with_section(
+        let (page_b, section_b) = seed_raw_page_with_section(
             &harness.pool,
             "https://source-e.example.gov/fees",
             "government",
@@ -1064,12 +1067,14 @@
                 "FEE_ITEM",
                 "consular_fee",
                 serde_json::json!({"amount": 35, "currency": "EUR"}),
+                section_a,
             )),
             local_truth_response(local_truth_candidate_payload(
                 raw_text_b,
                 "FEE_ITEM",
                 "consular_fee",
                 serde_json::json!({"amount": 80, "currency": "EUR"}),
+                section_b,
             )),
         ];
         let mut replay_responses = responses.clone();
