@@ -14,16 +14,16 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use postgres_store::truth_review_effect_v3::{
     assert_unprivileged_pg_effect_role, execute_admitted_reconcile, ReconcileTruthReviewsError,
-    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass,
-    PG_EFFECT_TASK_QUEUE, PG_EFFECT_WORKFLOW_TYPE,
+    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
+    PG_EFFECT_WORKFLOW_TYPE,
 };
 use sqlx::PgPool;
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::runtime::RuntimeOptions;
 use temporalio_sdk::{
-    ActivityOptions, ApplicationFailure, Runtime, Worker, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult, SyncWorkflowContext,
+    ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext, Worker, WorkerOptions,
+    WorkflowContext, WorkflowContextView, WorkflowResult,
 };
 
 // Required by Temporal proc-macro expansions.
@@ -52,29 +52,44 @@ impl PgTruthReviewActivities {
             activity_terminal("PG effect must originate from a Temporal Workflow")
         })?;
         let actual_workflow_run_id = info.workflow_run_id.as_deref().ok_or_else(|| {
-            activity_terminal("PG effect must originate from a specific Temporal Workflow execution")
+            activity_terminal(
+                "PG effect must originate from a specific Temporal Workflow execution",
+            )
         })?;
         if info.workflow_type.as_deref() != Some(PG_EFFECT_WORKFLOW_TYPE)
             || info.task_queue != PG_EFFECT_TASK_QUEUE
         {
-            return Err(activity_terminal("PG effect Activity provenance is not its pinned V3 owner Workflow/Queue"));
+            return Err(activity_terminal(
+                "PG effect Activity provenance is not its pinned V3 owner Workflow/Queue",
+            ));
         }
         // No `workflow_id` is read from untrusted Activity input. It comes
         // from server-attested ActivityInfo and must match operator admission.
-        execute_admitted_reconcile(&self.pool, actual_workflow_id, actual_workflow_run_id, &input)
-            .await
-            .map_err(|err| {
-                let failure = match err.retry_class() {
-                    RetryClass::Never => ApplicationFailure::non_retryable(std::io::Error::other(err.to_string())),
-                    RetryClass::RetryWithSameAdmission => ApplicationFailure::new(std::io::Error::other(err.to_string())),
-                };
-                ActivityError::application(failure)
-            })
+        execute_admitted_reconcile(
+            &self.pool,
+            actual_workflow_id,
+            actual_workflow_run_id,
+            &input,
+        )
+        .await
+        .map_err(|err| {
+            let failure = match err.retry_class() {
+                RetryClass::Never => {
+                    ApplicationFailure::non_retryable(std::io::Error::other(err.to_string()))
+                }
+                RetryClass::RetryWithSameAdmission => {
+                    ApplicationFailure::new(std::io::Error::other(err.to_string()))
+                }
+            };
+            ActivityError::application(failure)
+        })
     }
 }
 
 fn activity_terminal(message: &str) -> ActivityError {
-    ActivityError::application(ApplicationFailure::non_retryable(std::io::Error::other(message.to_string())))
+    ActivityError::application(ApplicationFailure::non_retryable(std::io::Error::other(
+        message.to_string(),
+    )))
 }
 
 #[workflow]
@@ -87,7 +102,10 @@ struct PgTruthReviewReconcileV3Workflow {
 impl PgTruthReviewReconcileV3Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, input: ReconcileTruthReviewsInput) -> Self {
-        Self { immutable_command: input, admission_signal_received: false }
+        Self {
+            immutable_command: input,
+            admission_signal_received: false,
+        }
     }
 
     #[run]
@@ -98,7 +116,8 @@ impl PgTruthReviewReconcileV3Workflow {
         // then signals readiness. Without this gate the Activity could run
         // before the operator knew the Temporal Run ID and wrongly fail the
         // legitimate issuance path. Signals do NOT authorize anything.
-        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        ctx.wait_condition(|state| state.admission_signal_received)
+            .await?;
         // No arbitrary graph plan / allowed_effects is accepted here. The
         // trusted operator must separately insert an admission in PostgreSQL.
         // The Activity has the final authoritative veto even if this History
@@ -156,8 +175,8 @@ async fn main() -> Result<()> {
         .build()
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let runtime = Runtime::from_current_tokio(options)?;
-    let temporal_url = std::env::var("TEMPORAL_URL")
-        .unwrap_or_else(|_| "http://localhost:7233".to_string());
+    let temporal_url =
+        std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string());
     let identity = format!("alegria-pg-effect-v3:{}", std::process::id());
     let client = temporal_gateway::connect_client(&temporal_url, identity, "default").await?;
 
@@ -175,8 +194,11 @@ async fn main() -> Result<()> {
         .build();
     let activity_worker = Worker::new(&runtime, client, activity_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
-    tracing::info!(command_queue = COMMAND_TASK_QUEUE, activity_queue = PG_EFFECT_TASK_QUEUE,
-        "experimental PostgreSQL Truth review owner polling opt-in queues");
+    tracing::info!(
+        command_queue = COMMAND_TASK_QUEUE,
+        activity_queue = PG_EFFECT_TASK_QUEUE,
+        "experimental PostgreSQL Truth review owner polling opt-in queues"
+    );
     tokio::try_join!(command_worker.run(), activity_worker.run())
         .context("PG effect owner stopped")?;
     Ok(())

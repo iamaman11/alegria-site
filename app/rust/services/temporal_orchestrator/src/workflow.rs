@@ -9,8 +9,8 @@ use seo_application::operation_adapter::{execute_pure_dag, PureDagRun};
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
 use temporalio_sdk::{
-    ApplicationFailure, SyncWorkflowContext, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult, WorkflowTermination,
+    ApplicationFailure, SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView,
+    WorkflowResult, WorkflowTermination,
 };
 
 #[workflow]

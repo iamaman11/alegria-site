@@ -32,10 +32,8 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_or_missing_history_fails_offline() {
-        let missing = std::env::temp_dir().join(format!(
-            "alegria-pure-dag-missing-{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("alegria-pure-dag-missing-{}", std::process::id()));
         assert!(replay_history(&missing).await.is_err());
         let corrupt = std::env::temp_dir().join(format!(
             "alegria-pure-dag-corrupt-{}-{}.json",

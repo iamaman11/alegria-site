@@ -54,8 +54,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
         immutable_source_sha(&source_sha),
         "WORKER_BUILD_ID must be a nonzero 40-hex source SHA"
     );
-    let temporal_url = read("TEMPORAL_URL")
-        .unwrap_or_else(|| "http://localhost:7233".to_string());
+    let temporal_url = read("TEMPORAL_URL").unwrap_or_else(|| "http://localhost:7233".to_string());
     let namespace = read("TEMPORAL_NAMESPACE").unwrap_or_else(|| "default".to_string());
     anyhow::ensure!(
         !namespace.trim().is_empty() && namespace.trim() == namespace,
@@ -106,7 +105,9 @@ async fn main() -> Result<()> {
     let mut args = env::args_os().skip(1);
     if let Some(argument) = args.next() {
         if argument == std::ffi::OsStr::new("--replay-history") {
-            let path = args.next().context("--replay-history requires one JSON file")?;
+            let path = args
+                .next()
+                .context("--replay-history requires one JSON file")?;
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
             replay::replay_history(std::path::Path::new(&path)).await?;
             println!("CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS");
@@ -153,8 +154,14 @@ mod tests {
     fn valid_env() -> BTreeMap<String, String> {
         BTreeMap::from([
             (LIVE_OPT_IN.into(), "true".into()),
-            ("WORKER_BUILD_ID".into(), "0123456789abcdef0123456789abcdef01234567".into()),
-            ("TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(), PURE_DAG_ORCHESTRATOR_QUEUE.into()),
+            (
+                "WORKER_BUILD_ID".into(),
+                "0123456789abcdef0123456789abcdef01234567".into(),
+            ),
+            (
+                "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+                PURE_DAG_ORCHESTRATOR_QUEUE.into(),
+            ),
             ("TEMPORAL_URL".into(), "http://localhost:7233".into()),
         ])
     }
@@ -172,7 +179,10 @@ mod tests {
             ("TEMPORAL_ORCHESTRATOR_TASK_QUEUE", "alegria-pipeline"),
         ] {
             broken.insert(key.into(), value.into());
-            assert!(checked_live_config(|name| broken.get(name).cloned()).is_err(), "{key}");
+            assert!(
+                checked_live_config(|name| broken.get(name).cloned()).is_err(),
+                "{key}"
+            );
             broken = original.clone();
         }
         broken.insert("TEMPORAL_NAMESPACE".into(), " ".into());

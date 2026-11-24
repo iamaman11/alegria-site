@@ -31,6 +31,9 @@ ALLOWED_SQL_FILES: set[Path] = {
     (ROOT / "automation" / "check_rebuild_queue_execution_path.py").resolve(),
     # Reads expected SQL fragments from Rust source; never opens a DB connection.
     (ROOT / "automation" / "check_reliability_contracts.py").resolve(),
+    # Matches SQL fragments in Rust-owned PostgreSQL source as a static
+    # contract scanner; has no DB connection or Python SQL execution.
+    (ROOT / "automation" / "check_v3_effect_owner_boundary.py").resolve(),
     (ROOT / "automation" / "check_seo_provenance_invariants.py").resolve(),
     (ROOT / "automation" / "check_serp_intelligence_contract.py").resolve(),
     (ROOT / "automation" / "local_db_baseline.py").resolve(),

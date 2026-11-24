@@ -76,7 +76,9 @@ pub enum ReconcileTruthReviewsError {
     AdmissionDenied,
     #[error("Truth run is absent, terminal, has wrong scope or is not verifying/pending_hitl")]
     StaleTruthRun,
-    #[error("candidate source snapshot changed since PG admission; operator re-admission required")]
+    #[error(
+        "candidate source snapshot changed since PG admission; operator re-admission required"
+    )]
     CandidateSetChanged,
     #[error("PG effect worker must use a DB role without admission write privileges")]
     PrivilegedWorkerRole,
@@ -141,9 +143,11 @@ impl Operation for ReconcileTruthReviewsOperation {
 /// `operation_protocol`'s immutable pinned contract hashing. The operator
 /// admission pins this value, not merely a caller-asserted operation name.
 pub fn contract_fingerprint() -> Result<String, ReconcileTruthReviewsError> {
-    Ok(blake3::hash(&serde_json::to_vec(&ReconcileTruthReviewsOperation::contract())?)
-        .to_hex()
-        .to_string())
+    Ok(blake3::hash(&serde_json::to_vec(
+        &ReconcileTruthReviewsOperation::contract(),
+    )?)
+    .to_hex()
+    .to_string())
 }
 
 /// Reject privileged DB role before polling Temporal. Table owners and roles
@@ -195,8 +199,7 @@ pub async fn assert_unprivileged_pg_effect_role(
 /// Exact SHA-256 candidate snapshot hash for privileged manual issuance. The SQL must
 /// be executed by the operator in the SAME snapshot that selects its canonical
 /// run/context; never accept a caller-supplied hash without PG recomputation.
-pub const CANDIDATE_SET_HASH_SQL: &str =
-    "SELECT encode(digest(COALESCE(jsonb_agg( \
+pub const CANDIDATE_SET_HASH_SQL: &str = "SELECT encode(digest(COALESCE(jsonb_agg( \
        jsonb_build_object('candidate', to_jsonb(c), 'raw_section_hash', s.content_hash, \
          'raw_section_content', s.content_md) ORDER BY c.rule_candidate_id)::text, '[]'), \
        'sha256'), 'hex') \
@@ -217,11 +220,11 @@ fn validate(input: &ReconcileTruthReviewsInput) -> Result<(), ReconcileTruthRevi
     if input.operation_instance.trim().is_empty()
         || input.operation_instance.trim() != input.operation_instance
     {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("operation_instance"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "operation_instance",
+        ));
     }
-    if input.plan_hash.len() != 64
-        || !input.plan_hash.bytes().all(|c| c.is_ascii_hexdigit())
-    {
+    if input.plan_hash.len() != 64 || !input.plan_hash.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(ReconcileTruthReviewsError::InvalidCommand("plan_hash"));
     }
     Ok(())
@@ -239,7 +242,9 @@ pub fn execution_key(
         return Err(ReconcileTruthReviewsError::InvalidCommand("workflow_id"));
     }
     if Uuid::parse_str(workflow_run_id).is_err() {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("workflow_run_id"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "workflow_run_id",
+        ));
     }
     Ok(blake3::hash(&serde_json::to_vec(&(
         OPERATION_ID,
@@ -329,7 +334,10 @@ pub async fn execute_admitted_reconcile(
     if !admission.get::<bool, _>("admission_active") {
         return Err(ReconcileTruthReviewsError::AdmissionDenied);
     }
-    if !matches!(admission.get::<String, _>("run_status").as_str(), "verifying" | "pending_hitl") {
+    if !matches!(
+        admission.get::<String, _>("run_status").as_str(),
+        "verifying" | "pending_hitl"
+    ) {
         return Err(ReconcileTruthReviewsError::StaleTruthRun);
     }
     // Preserve legacy Truth chronology: a newly completed Truth write for
@@ -422,14 +430,17 @@ fn receipt_from_row(row: &sqlx::postgres::PgRow) -> ReconcileTruthReviewsReceipt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operation_protocol::{ContractCatalog, ExecutionPlan, PLAN_SCHEMA_REVISION, PlanHash};
+    use operation_protocol::{ContractCatalog, ExecutionPlan, PlanHash, PLAN_SCHEMA_REVISION};
 
     fn input() -> ReconcileTruthReviewsInput {
         let run = Uuid::from_u128(17);
         ReconcileTruthReviewsInput {
             admission_id: Uuid::from_u128(41),
             run_id: run,
-            scope: RunScope { tenant_id: "site-a".into(), run_id: run.to_string() },
+            scope: RunScope {
+                tenant_id: "site-a".into(),
+                run_id: run.to_string(),
+            },
             context_key: "ES|tourist||BY".into(),
             operation_instance: "reconcile-truth-review-1".into(),
             plan_hash: "a".repeat(64),
@@ -442,12 +453,17 @@ mod tests {
         assert_eq!(contract.reference.id.as_str(), OPERATION_ID);
         assert_eq!(contract.reference.revision, 1);
         assert_eq!(contract.owner.as_str(), "postgres_store");
-        assert_eq!(contract.effects, BTreeSet::from([EffectId(EFFECT_ID.into())]));
+        assert_eq!(
+            contract.effects,
+            BTreeSet::from([EffectId(EFFECT_ID.into())])
+        );
         assert_eq!(contract.idempotency, IdempotencyPolicy::Idempotent);
         assert_eq!(contract.outputs.len(), 1);
         assert_eq!(contract.inputs.len(), 1);
         let mut catalog = ContractCatalog::default();
-        catalog.register::<ReconcileTruthReviewsOperation>().unwrap();
+        catalog
+            .register::<ReconcileTruthReviewsOperation>()
+            .unwrap();
     }
 
     #[test]
@@ -456,12 +472,29 @@ mod tests {
         let temporal_run = Uuid::from_u128(55).to_string();
         let key = execution_key("pg-truth-review-workflow", &temporal_run, &original).unwrap();
         assert_eq!(key.len(), 64);
-        assert_eq!(key, execution_key("pg-truth-review-workflow", &temporal_run, &original).unwrap());
-        assert_ne!(key, execution_key("other-workflow", &temporal_run, &original).unwrap());
-        assert_ne!(key, execution_key("pg-truth-review-workflow", &Uuid::from_u128(56).to_string(), &original).unwrap());
+        assert_eq!(
+            key,
+            execution_key("pg-truth-review-workflow", &temporal_run, &original).unwrap()
+        );
+        assert_ne!(
+            key,
+            execution_key("other-workflow", &temporal_run, &original).unwrap()
+        );
+        assert_ne!(
+            key,
+            execution_key(
+                "pg-truth-review-workflow",
+                &Uuid::from_u128(56).to_string(),
+                &original
+            )
+            .unwrap()
+        );
         let mut another = original.clone();
         another.operation_instance = "other-instance".into();
-        assert_ne!(key, execution_key("pg-truth-review-workflow", &temporal_run, &another).unwrap());
+        assert_ne!(
+            key,
+            execution_key("pg-truth-review-workflow", &temporal_run, &another).unwrap()
+        );
     }
 
     #[test]
@@ -469,11 +502,22 @@ mod tests {
         let mut command = input();
         let temporal_run = Uuid::from_u128(55).to_string();
         command.scope.run_id = "someone-else".into();
-        assert!(matches!(execution_key("wf", &temporal_run, &command), Err(ReconcileTruthReviewsError::InvalidCommand("scope.run_id"))));
+        assert!(matches!(
+            execution_key("wf", &temporal_run, &command),
+            Err(ReconcileTruthReviewsError::InvalidCommand("scope.run_id"))
+        ));
         command = input();
         command.plan_hash = "not-pinned".into();
-        assert!(matches!(execution_key("wf", &temporal_run, &command), Err(ReconcileTruthReviewsError::InvalidCommand("plan_hash"))));
-        assert!(matches!(execution_key("wf", "forged-not-uuid", &input()), Err(ReconcileTruthReviewsError::InvalidCommand("workflow_run_id"))));
+        assert!(matches!(
+            execution_key("wf", &temporal_run, &command),
+            Err(ReconcileTruthReviewsError::InvalidCommand("plan_hash"))
+        ));
+        assert!(matches!(
+            execution_key("wf", "forged-not-uuid", &input()),
+            Err(ReconcileTruthReviewsError::InvalidCommand(
+                "workflow_run_id"
+            ))
+        ));
     }
 
     #[test]
