@@ -241,7 +241,7 @@ mod commands {
               -- marked this step done after another attempt began failing.
               -- A late error must never erase that durable replay fence.
               AND status <> 'done'
-            "#
+            "#,
         )
         .bind(terminal_status)
         .bind(error_class)
