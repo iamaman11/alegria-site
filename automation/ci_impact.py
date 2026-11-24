@@ -184,6 +184,18 @@ OUTBOX_A14_PATHS = {
     "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
 }
 
+# Truth adjudication is a real PostgreSQL/evidence operation distinct from
+# publication, outbox delivery and full Temporal restart. Its targeted E2E
+# must be selected by the same impact model, including for test-only changes.
+TRUTH_ADJUDICATION_PATHS = {
+    "app/rust/crates/truth_domain/src/contradictions.rs",
+    "app/rust/crates/truth_domain/src/truth_governance.rs",
+    "app/rust/crates/truth_domain/src/review_decisions.rs",
+    "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
+    "app/rust/services/temporal/src/activities/runtime.rs",
+    "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+}
+
 # An actual PostgreSQL revision-bound human review exercises the domain
 # decision, typed port, SQL transaction and active-workflow ownership. It is
 # distinct from the public release/readback A17 integration.
@@ -336,6 +348,16 @@ SUITE_OWNERS = {
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
+        ),
+    },
+    "truth_adjudication_integrity": {
+        "paths": TRUTH_ADJUDICATION_PATHS,
+        "prefixes": (),
+        "lock_crates": {"truth_domain"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "truth_adjudication_", "--locked", "--", "--nocapture",
         ),
     },
     "knowledge_a13": {

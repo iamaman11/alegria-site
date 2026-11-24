@@ -113,6 +113,9 @@ jobs:
       # Release-like CI compiles use a shared compiler-object cache;
       # local developer builds retain incremental compilation.
       CARGO_INCREMENTAL: "0"
+      # Measured PR canary: keep compiler object identities unchanged while
+      # testing a wider build queue on the Rust/real-E2E critical path.
+      CARGO_BUILD_JOBS: "6"
       # Cargo's default debug symbols are several GB of temporary output for
       # this 22-crate workspace. CI runs assertions/tests but never debugs the
       # resulting executable, so omit DWARF while keeping dev/test semantics.

@@ -843,7 +843,7 @@
     #[cfg(feature = "e2e")]
     #[tokio::test]
     #[serial]
-    async fn truth_runtime_promotes_corroborated_candidates_into_admissible_verified_truth() {
+    async fn truth_adjudication_promotes_corroborated_candidates_into_admissible_verified_truth() {
         let harness = PostgresHarness::start().await.unwrap();
         let context_key = "es:truth-corroborated:by";
         seed_truth_context_and_concept(
@@ -948,7 +948,7 @@
     #[cfg(feature = "e2e")]
     #[tokio::test]
     #[serial]
-    async fn truth_runtime_marks_incomplete_candidate_as_needs_hitl() {
+    async fn truth_adjudication_marks_incomplete_candidate_as_needs_hitl() {
         let harness = PostgresHarness::start().await.unwrap();
         let context_key = "es:truth-needs-hitl:by";
         seed_truth_context_and_concept(
@@ -1025,7 +1025,7 @@
     #[cfg(feature = "e2e")]
     #[tokio::test]
     #[serial]
-    async fn truth_runtime_keeps_conflicting_structured_candidates_out_of_verified_storage() {
+    async fn truth_adjudication_keeps_conflicting_structured_candidates_out_of_verified_storage() {
         let harness = PostgresHarness::start().await.unwrap();
         let context_key = "es:truth-conflict:by";
         seed_truth_context_and_concept(
@@ -1056,22 +1056,25 @@
         )
         .await;
 
+        // Two passes of the same official claims: replay must preserve the
+        // adjudicated HITL state without promoting or duplicating either claim.
+        let responses = vec![
+            local_truth_response(local_truth_candidate_payload(
+                raw_text_a,
+                "FEE_ITEM",
+                "consular_fee",
+                serde_json::json!({"amount": 35, "currency": "EUR"}),
+            )),
+            local_truth_response(local_truth_candidate_payload(
+                raw_text_b,
+                "FEE_ITEM",
+                "consular_fee",
+                serde_json::json!({"amount": 80, "currency": "EUR"}),
+            )),
+        ];
         let stub = stub_servers::spawn_json_sequence_stub(
             "/v1/chat/completions",
-            vec![
-                local_truth_response(local_truth_candidate_payload(
-                    raw_text_a,
-                    "FEE_ITEM",
-                    "consular_fee",
-                    serde_json::json!({"amount": 35, "currency": "EUR"}),
-                )),
-                local_truth_response(local_truth_candidate_payload(
-                    raw_text_b,
-                    "FEE_ITEM",
-                    "consular_fee",
-                    serde_json::json!({"amount": 80, "currency": "EUR"}),
-                )),
-            ],
+            responses.repeat(2),
         )
         .await
         .unwrap();
@@ -1115,6 +1118,40 @@
         .await
         .unwrap();
         assert_eq!(admissible_verified_rows, 0);
+        let replay = raw_crawl_adapter::ingest_raw_pages_into_verified(
+            &harness.pool,
+            &Uuid::new_v4().to_string(),
+            context_key,
+            &[page_a, page_b],
+        )
+        .await
+        .unwrap();
+        assert_eq!(replay.extracted_rule_count, 2);
+        assert_eq!(replay.verified_rule_count, 0);
+        assert_eq!(replay.needs_hitl_candidate_count, 2);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*)::bigint FROM extracted.rule_candidates WHERE context_key = $1",
+            )
+            .bind(context_key)
+            .fetch_one(&harness.pool)
+            .await
+            .unwrap(),
+            2,
+            "replayed official conflict must retain two canonical candidates",
+        );
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT count(*)::bigint FROM verified.rule_instances WHERE context_key = $1 \
+                 AND publish_admissibility = 'admissible'",
+            )
+            .bind(context_key)
+            .fetch_one(&harness.pool)
+            .await
+            .unwrap(),
+            0,
+            "replay must not promote disputed Truth",
+        );
     }
     #[cfg(feature = "e2e")]
     #[tokio::test]

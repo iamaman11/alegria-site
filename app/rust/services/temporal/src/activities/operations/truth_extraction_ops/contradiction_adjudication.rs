@@ -1,4 +1,3 @@
-
 #[cfg(test)]
 mod typed_contradiction_regressions {
     use super::*;
@@ -163,6 +162,85 @@ mod typed_contradiction_regressions {
     }
 }
 
+/// Cross-step section references are a typed contract, not an Activity panic.
+/// The originating run and the missing section must survive the Temporal failure.
+fn required_section<'a, T>(
+    sections: &BTreeMap<i64, &'a T>,
+    run_id: &str,
+    section_id: i64,
+    stage: &str,
+    source: &str,
+) -> Result<&'a T, DomainError> {
+    sections
+        .get(&section_id)
+        .copied()
+        .ok_or_else(|| DomainError::ContractViolation {
+            message: format!(
+                "{stage} run_id={run_id} section_id={section_id}: missing {source} section"
+            ),
+        })
+}
+
+fn bind_candidate_to_section<'a>(
+    bindings: &mut BTreeMap<String, (&'a ValidatedTruthCandidateRecord, i64, i64)>,
+    section: &CandidateValidationSectionState,
+    candidate: &'a ValidatedTruthCandidateRecord,
+    run_id: &str,
+) -> Result<(), DomainError> {
+    let candidate_id = &candidate.rule_candidate_id;
+    if candidate.section_id != section.section_id || candidate.page_id != section.page_id {
+        return Err(DomainError::ContractViolation {
+            message: format!(
+                "truth_adjudication run_id={run_id} section_id={} candidate_id={candidate_id}: candidate section/page identity mismatch",
+                section.section_id,
+            ),
+        });
+    }
+    if bindings.contains_key(candidate_id) {
+        return Err(DomainError::ContractViolation {
+            message: format!(
+                "truth_adjudication run_id={run_id} section_id={} candidate_id={candidate_id}: duplicate rule candidate identity",
+                section.section_id,
+            ),
+        });
+    }
+    bindings.insert(
+        candidate_id.clone(),
+        (candidate, section.section_id, section.page_id),
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod section_join_contract_tests {
+    use super::*;
+    use primitives::errors::ErrorClass;
+
+    #[test]
+    fn incomplete_cross_step_sections_return_a_traced_contract_violation() {
+        let record = 1_i32;
+        let present = BTreeMap::from([(7, &record)]);
+        assert_eq!(
+            *required_section(&present, "run-92", 7, "truth_adjudication", "resolution").unwrap(),
+            1
+        );
+        for (stage, source) in [
+            ("contradiction_gate", "raw source"),
+            ("contradiction_gate", "validated candidates"),
+            ("truth_adjudication", "resolution"),
+            ("truth_adjudication", "contradiction"),
+        ] {
+            let err = required_section(&present, "run-92", 8, stage, source).unwrap_err();
+            assert_eq!(err.class(), ErrorClass::ContractViolation);
+            let message = err.to_string();
+            assert!(message.contains(stage), "{message}");
+            assert!(message.contains("run_id=run-92"), "{message}");
+            assert!(message.contains("section_id=8"), "{message}");
+            assert!(message.contains(source), "{message}");
+        }
+    }
+}
+
 pub(crate) async fn contradiction_gate_sweep_impl(
     acts: &AlegriaActivities,
     input: &ContradictionGateSweepInput,
@@ -182,15 +260,20 @@ pub(crate) async fn contradiction_gate_sweep_impl(
         .collect();
     let mut sections = Vec::with_capacity(input.procedural.sections.len());
     for section in &input.procedural.sections {
-        let raw = raw_by_section.get(&section.section_id).copied().unwrap();
-        let candidate_state = candidates_by_section
-            .get(&section.section_id)
-            .ok_or_else(|| DomainError::ValidationFailure {
-                message: format!(
-                    "missing validated candidates at contradiction gate: {}",
-                    section.section_id
-                ),
-            })?;
+        let raw = required_section(
+            &raw_by_section,
+            &input.run_id,
+            section.section_id,
+            "contradiction_gate",
+            "raw source",
+        )?;
+        let candidate_state = required_section(
+            &candidates_by_section,
+            &input.run_id,
+            section.section_id,
+            "contradiction_gate",
+            "validated candidates",
+        )?;
         let mut facts = section
             .rules
             .iter()
@@ -242,7 +325,8 @@ pub(crate) async fn contradiction_gate_sweep_impl(
                 4,
             )
             .await?;
-            semantic_neighbor_refs = lookup.neighbors
+            semantic_neighbor_refs = lookup
+                .neighbors
                 .into_iter()
                 .map(|record| format!("{}:{:.4}", record.entity_key, record.score))
                 .collect();
@@ -332,179 +416,59 @@ pub(crate) async fn truth_adjudication_sweep_impl(
         .collect::<BTreeMap<_, _>>();
 
     for section in &input.candidate_validation.sections {
-        let resolution = resolution_by_section
-            .get(&section.section_id)
-            .copied()
-            .unwrap();
-        let contradiction = contradiction_by_section
-            .get(&section.section_id)
-            .copied()
-            .unwrap();
+        let resolution = required_section(
+            &resolution_by_section,
+            &input.run_id,
+            section.section_id,
+            "truth_adjudication",
+            "resolution",
+        )?;
+        let contradiction = required_section(
+            &contradiction_by_section,
+            &input.run_id,
+            section.section_id,
+            "truth_adjudication",
+            "contradiction",
+        )?;
         for candidate in &section.candidates {
-            candidate_bindings.insert(
-                candidate.rule_candidate_id.clone(),
-                (candidate, section.section_id, section.page_id),
-            );
+            bind_candidate_to_section(&mut candidate_bindings, section, candidate, &input.run_id)?;
         }
 
-        if section.blocked_by_gate {
-            fixed_states.insert(
-                section.section_id,
-                TruthAdjudicationSectionState {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    decision: "blocked".to_string(),
-                    status: "blocked".to_string(),
-                    verified_count: 0,
-                    needs_hitl_count: 0,
-                    rejected_count: 0,
-                },
-            );
-            continue;
-        }
-
-        let structured_count = section
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.epistemic_status == "structured")
-            .count();
-        let needs_hitl_candidates = section
-            .candidates
-            .iter()
-            .filter(|candidate| candidate.epistemic_status == "needs_hitl")
-            .collect::<Vec<_>>();
-        if structured_count == 0 && !needs_hitl_candidates.is_empty() {
-            for candidate in &needs_hitl_candidates {
-                decisions.push(TruthAdjudicationCandidateDecision {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    rule_candidate_id: candidate.rule_candidate_id.clone(),
-                    role: candidate.role.clone(),
-                    concept_canonical_key: candidate.concept_canonical_key.clone(),
-                    params: candidate.params.clone(),
-                    scope: candidate.scope.clone(),
-                    source_key: candidate.source_key.clone(),
-                    source_tier: candidate.source_tier.clone(),
-                    confidence: candidate.confidence,
-                    freshness_class: candidate.freshness_class.clone(),
-                    completeness_class: candidate.completeness_class.clone(),
-                    evidence_quote: candidate.evidence_quote.clone(),
-                    span_start: candidate.span_start,
-                    span_end: candidate.span_end,
-                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
-                    provider_key: candidate.provider_key.clone(),
-                    model_key: candidate.model_key.clone(),
-                    prompt_version: candidate.prompt_version.clone(),
-                    decision: "needs_hitl".to_string(),
-                    publish_admissibility: "needs_hitl".to_string(),
-                    verification_method: "truth_adjudication@1".to_string(),
-                    adjudication_reason: non_structured_candidate_reason(candidate),
-                });
-            }
-            fixed_states.insert(
-                section.section_id,
-                TruthAdjudicationSectionState {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    decision: "needs_hitl".to_string(),
-                    status: "needs_hitl".to_string(),
-                    verified_count: 0,
-                    needs_hitl_count: needs_hitl_candidates.len(),
-                    rejected_count: 0,
-                },
-            );
-            continue;
-        }
-
-        if contradiction.output.is_blocked {
+        let disposition = truth_domain::review_decisions::classify_adjudication_section(
+            section,
+            &resolution.decision,
+            resolution.needs_hitl,
+            &contradiction.output,
+        );
+        if let Some(status) = disposition.fixed_status() {
+            let mut needs_hitl_count = 0usize;
+            let mut rejected_count = 0usize;
             for candidate in &section.candidates {
-                decisions.push(TruthAdjudicationCandidateDecision {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    rule_candidate_id: candidate.rule_candidate_id.clone(),
-                    role: candidate.role.clone(),
-                    concept_canonical_key: candidate.concept_canonical_key.clone(),
-                    params: candidate.params.clone(),
-                    scope: candidate.scope.clone(),
-                    source_key: candidate.source_key.clone(),
-                    source_tier: candidate.source_tier.clone(),
-                    confidence: candidate.confidence,
-                    freshness_class: candidate.freshness_class.clone(),
-                    completeness_class: candidate.completeness_class.clone(),
-                    evidence_quote: candidate.evidence_quote.clone(),
-                    span_start: candidate.span_start,
-                    span_end: candidate.span_end,
-                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
-                    provider_key: candidate.provider_key.clone(),
-                    model_key: candidate.model_key.clone(),
-                    prompt_version: candidate.prompt_version.clone(),
-                    decision: "rejected".to_string(),
-                    publish_admissibility: "not_admissible".to_string(),
-                    verification_method: "truth_adjudication@1".to_string(),
-                    adjudication_reason: "contradiction_block".to_string(),
-                });
-            }
-            fixed_states.insert(
-                section.section_id,
-                TruthAdjudicationSectionState {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    decision: "rejected".to_string(),
-                    status: "rejected".to_string(),
-                    verified_count: 0,
-                    needs_hitl_count: 0,
-                    rejected_count: section.candidates.len(),
-                },
-            );
-            continue;
-        }
-
-        if resolution.needs_hitl
-            || resolution.decision == "pause_for_hitl"
-            || contradiction.output.needs_hitl
-        {
-            for candidate in &section.candidates {
-                decisions.push(TruthAdjudicationCandidateDecision {
-                    section_id: section.section_id,
-                    page_id: section.page_id,
-                    rule_candidate_id: candidate.rule_candidate_id.clone(),
-                    role: candidate.role.clone(),
-                    concept_canonical_key: candidate.concept_canonical_key.clone(),
-                    params: candidate.params.clone(),
-                    scope: candidate.scope.clone(),
-                    source_key: candidate.source_key.clone(),
-                    source_tier: candidate.source_tier.clone(),
-                    confidence: candidate.confidence,
-                    freshness_class: candidate.freshness_class.clone(),
-                    completeness_class: "partial".to_string(),
-                    evidence_quote: candidate.evidence_quote.clone(),
-                    span_start: candidate.span_start,
-                    span_end: candidate.span_end,
-                    source_snapshot_hash: candidate.source_snapshot_hash.clone(),
-                    provider_key: candidate.provider_key.clone(),
-                    model_key: candidate.model_key.clone(),
-                    prompt_version: candidate.prompt_version.clone(),
-                    decision: "needs_hitl".to_string(),
-                    publish_admissibility: "needs_hitl".to_string(),
-                    verification_method: "truth_adjudication@1".to_string(),
-                    adjudication_reason: if contradiction.output.needs_hitl {
-                        "contradiction_gate_requires_hitl"
+                if let Some(decision) =
+                    truth_domain::review_decisions::fixed_adjudication_candidate_decision(
+                        section,
+                        candidate,
+                        disposition,
+                    )
+                {
+                    if decision.decision == "needs_hitl" {
+                        needs_hitl_count += 1;
                     } else {
-                        "resolution_loop_requires_hitl"
+                        rejected_count += 1;
                     }
-                    .to_string(),
-                });
+                    decisions.push(decision);
+                }
             }
             fixed_states.insert(
                 section.section_id,
                 TruthAdjudicationSectionState {
                     section_id: section.section_id,
                     page_id: section.page_id,
-                    decision: "needs_hitl".to_string(),
-                    status: "needs_hitl".to_string(),
+                    decision: status.to_string(),
+                    status: status.to_string(),
                     verified_count: 0,
-                    needs_hitl_count: section.candidates.len(),
-                    rejected_count: 0,
+                    needs_hitl_count,
+                    rejected_count,
                 },
             );
             continue;
@@ -651,13 +615,11 @@ pub(crate) async fn truth_adjudication_sweep_impl(
                     _ => rejected_count += 1,
                 }
             }
-            let section_decision = if verified_count > 0 {
-                "verified"
-            } else if needs_hitl_count > 0 {
-                "needs_hitl"
-            } else {
-                "rejected"
-            };
+            let section_decision =
+                truth_domain::review_decisions::adjudication_section_status_from_counts(
+                    verified_count,
+                    needs_hitl_count,
+                );
             TruthAdjudicationSectionState {
                 section_id: section.section_id,
                 page_id: section.page_id,
@@ -691,13 +653,10 @@ pub(crate) async fn truth_adjudication_sweep_impl(
             .iter()
             .filter(|decision| decision.decision == "rejected")
             .count();
-        let label = if state.verified_count > 0 {
-            "verified"
-        } else if state.needs_hitl_count > 0 {
-            "needs_hitl"
-        } else {
-            "rejected"
-        };
+        let label = truth_domain::review_decisions::adjudication_section_status_from_counts(
+            state.verified_count,
+            state.needs_hitl_count,
+        );
         state.status = label.to_string();
         state.decision = label.to_string();
     }
@@ -772,6 +731,54 @@ mod manual_candidate_contradiction_tests {
             blocked_by_gate: false,
             status: "accepted".to_string(),
         }
+    }
+
+    #[test]
+    fn candidate_bindings_reject_duplicate_ids_and_mismatched_section_provenance() {
+        let duplicate = section(vec![
+            manual_candidate(35, 0.98, "structured"),
+            manual_candidate(35, 0.97, "structured"),
+        ]);
+        let mut bindings = BTreeMap::new();
+        bind_candidate_to_section(
+            &mut bindings,
+            &duplicate,
+            &duplicate.candidates[0],
+            "run-92",
+        )
+        .unwrap();
+        let error = bind_candidate_to_section(
+            &mut bindings,
+            &duplicate,
+            &duplicate.candidates[1],
+            "run-92",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.class(),
+            primitives::errors::ErrorClass::ContractViolation
+        );
+        assert!(error
+            .to_string()
+            .contains("candidate_id=manual-proposal-35"));
+        assert!(error.to_string().contains("run_id=run-92"));
+
+        let mut wrong = manual_candidate(90, 0.98, "structured");
+        wrong.section_id = 404;
+        let mismatched = section(vec![wrong]);
+        let error = bind_candidate_to_section(
+            &mut BTreeMap::new(),
+            &mismatched,
+            &mismatched.candidates[0],
+            "run-93",
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.class(),
+            primitives::errors::ErrorClass::ContractViolation
+        );
+        assert!(error.to_string().contains("section_id=41"));
+        assert!(error.to_string().contains("run_id=run-93"));
     }
 
     fn gate(
@@ -981,12 +988,10 @@ mod manual_candidate_contradiction_tests {
         let result = adjudicate_truth_candidates_with_governance(&siblings, &BTreeMap::new());
         assert_eq!(result.verified_count, 0);
         assert_eq!(result.needs_hitl_count, 2);
-        assert!(
-            result
-                .decisions
-                .iter()
-                .all(|decision| { decision.publish_admissibility != "admissible" })
-        );
+        assert!(result
+            .decisions
+            .iter()
+            .all(|decision| { decision.publish_admissibility != "admissible" }));
     }
 
     #[test]

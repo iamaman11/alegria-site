@@ -340,12 +340,19 @@ mod sdk11_activity_error_policy_tests {
                 other => panic!("expected application failure, got {other:?}"),
             }
         }
-        let err = DomainError::ConflictViolation {
-            message: "duplicate immutable revision".to_string(),
-        };
-        match AlegriaActivities::activity_error_from_domain(&err) {
-            ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
-            other => panic!("expected application failure, got {other:?}"),
+        for err in [
+            DomainError::ConflictViolation {
+                message: "duplicate immutable revision".to_string(),
+            },
+            DomainError::ContractViolation {
+                message: "truth_adjudication run_id=run-92 section_id=8 missing resolution"
+                    .to_string(),
+            },
+        ] {
+            match AlegriaActivities::activity_error_from_domain(&err) {
+                ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+                other => panic!("expected application failure, got {other:?}"),
+            }
         }
     }
 

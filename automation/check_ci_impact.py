@@ -614,6 +614,23 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertIn("outbox_a14", result["selected_suites"])
                 self.assertIn("outbox_a14_", dict(suite_commands_for_report(result))["outbox_a14"])
 
+    def test_truth_adjudication_change_selects_real_postgres_integrity_suite(self) -> None:
+        for path in (
+            "app/rust/crates/truth_domain/src/contradictions.rs",
+            "app/rust/crates/truth_domain/src/review_decisions.rs",
+            "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/contradiction_adjudication.rs",
+            "app/rust/crates/integration_harness/src/tests/truth_runtime_tests.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertIn("truth_adjudication_integrity", result["selected_suites"])
+                self.assertIn(
+                    "truth_adjudication_",
+                    dict(suite_commands_for_report(result))["truth_adjudication_integrity"],
+                )
+                if path.startswith("app/rust/services/temporal/"):
+                    self.assertIn("temporal_restart", result["selected_suites"])
+
     def test_public_static_render_change_selects_real_cms_and_pg_suite(self) -> None:
         for path in (
             "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs",
