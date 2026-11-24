@@ -253,60 +253,32 @@ impl RuntimeProtoPayload for BTreeMap<String, String> {
 
 impl RuntimeProtoPayload for ReconcileSummary {
     fn payload_type() -> &'static str {
-        "alegria.temporal.v1.ReconcileSummaryPayload"
+        reconcile_wire::RECONCILE_SUMMARY_PAYLOAD_TYPE
     }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
-        Ok(ReconcileSummaryPayload {
-            open_dlq: self.open_dlq,
-            stale_runs: self.stale_runs,
-            pending_hitl_runs: self.pending_hitl_runs,
-            stuck_steps: self.stuck_steps,
-        }
-        .encode_to_vec())
+        Ok(reconcile_wire::encode_summary(self))
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload =
-            decode_prost::<ReconcileSummaryPayload>(payload_bytes, "ReconcileSummaryPayload")?;
-        Ok(Self {
-            open_dlq: payload.open_dlq,
-            stale_runs: payload.stale_runs,
-            pending_hitl_runs: payload.pending_hitl_runs,
-            stuck_steps: payload.stuck_steps,
+        reconcile_wire::decode_summary(payload_bytes).map_err(|error| {
+            contract_violation(format!("failed to decode ReconcileSummaryPayload: {error}"))
         })
     }
 }
 
 impl RuntimeProtoPayload for ReconcileTargetReportRecord {
     fn payload_type() -> &'static str {
-        "alegria.temporal.v1.ReconcileTargetReportPayload"
+        reconcile_wire::RECONCILE_TARGET_PAYLOAD_TYPE
     }
 
     fn encode_payload_bytes(&self) -> std::result::Result<Vec<u8>, DomainError> {
-        Ok(ReconcileTargetReportPayload {
-            target_system: self.target_system.clone(),
-            dry_run: self.dry_run,
-            stale_candidates: self.stale_candidates,
-            failed_candidates: self.failed_candidates,
-            reset_stale_processing: self.reset_stale_processing,
-            requeued_failed: self.requeued_failed,
-        }
-        .encode_to_vec())
+        Ok(reconcile_wire::encode_target_report(self))
     }
 
     fn decode_payload_bytes(payload_bytes: &[u8]) -> std::result::Result<Self, DomainError> {
-        let payload = decode_prost::<ReconcileTargetReportPayload>(
-            payload_bytes,
-            "ReconcileTargetReportPayload",
-        )?;
-        Ok(Self {
-            target_system: payload.target_system,
-            dry_run: payload.dry_run,
-            stale_candidates: payload.stale_candidates,
-            failed_candidates: payload.failed_candidates,
-            reset_stale_processing: payload.reset_stale_processing,
-            requeued_failed: payload.requeued_failed,
+        reconcile_wire::decode_target_report(payload_bytes).map_err(|error| {
+            contract_violation(format!("failed to decode ReconcileTargetReportPayload: {error}"))
         })
     }
 }

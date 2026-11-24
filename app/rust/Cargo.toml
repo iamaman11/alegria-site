@@ -6,6 +6,7 @@ members = [
   "crates/contracts",
   "crates/integration_harness",
   "crates/runtime_models",
+  "crates/postgres_store",
   "crates/policies",
   "crates/seo_domain",
   "crates/seo_ports",

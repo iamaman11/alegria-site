@@ -2103,6 +2103,7 @@ dependencies = [
  "hyper-util",
  "playwright-rs",
  "policies",
+ "postgres_store",
  "primitives",
  "prost",
  "pulldown-cmark",
@@ -3404,6 +3405,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "postgres_store"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "primitives",
+ "runtime_models",
+ "sqlx",
+ "uuid",
+]
+
+[[package]]
 name = "potential_utf"
 version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3878,9 +3890,8 @@ name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "infrastructure",
- "seo_steps",
- "sqlx",
+ "postgres_store",
+ "runtime_models",
  "temporal_gateway",
  "tokio",
  "tracing",
@@ -4062,6 +4073,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "contracts",
+ "prost",
  "serde",
  "serde_json",
  "uuid",

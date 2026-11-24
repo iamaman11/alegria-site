@@ -4,7 +4,7 @@ use std::env;
 
 use super::sqlx_adapter::connect_pg;
 use super::sqlx_context_bundle_adapter;
-use graph_neo4j::{connect_neo4j, query, Graph};
+use graph_neo4j::{connect_neo4j, projection, Graph};
 
 fn neo4j_cfg() -> (String, String, String) {
     (
@@ -32,27 +32,18 @@ pub async fn materialize_rule_instance(rule_instance_id: &str) -> Result<()> {
     let (uri, user, password) = neo4j_cfg();
     let graph = connect_neo4j(&uri, &user, &password).await?;
 
-    let q = query(
-        r#"
-        MERGE (ctx:VisaContext {context_key: $context_key})
-        MERGE (c:Concept {concept_key: $concept_key})
-        MERGE (r:RuleInstance {rule_instance_id: $rule_instance_id})
-        SET r.rule_type_key = $rule_type_key,
-            r.role_type = $role_type,
-            r.status = $status
-        MERGE (ctx)-[:HAS_RULE]->(r)
-        MERGE (r)-[:CONCERNS]->(c)
-        "#,
+    projection::upsert_rule_instance(
+        &graph,
+        projection::RuleInstanceProjection {
+            rule_instance_id,
+            context_key,
+            rule_type_key,
+            concept_key,
+            role_type,
+            status,
+        },
     )
-    .param("context_key", context_key)
-    .param("concept_key", concept_key)
-    .param("rule_instance_id", rule_instance_id)
-    .param("rule_type_key", rule_type_key)
-    .param("role_type", role_type)
-    .param("status", status);
-    graph.run(q).await?;
-
-    Ok(())
+    .await
 }
 
 pub async fn materialize_concept(concept_key: &str) -> Result<()> {
@@ -65,20 +56,16 @@ pub async fn materialize_concept(concept_key: &str) -> Result<()> {
 
     let (uri, user, password) = neo4j_cfg();
     let graph = connect_neo4j(&uri, &user, &password).await?;
-    let q = query(
-        r#"
-        MERGE (c:Concept {concept_key: $concept_key})
-        SET c.concept_type = $concept_type,
-            c.label_ru = $label_ru,
-            c.status = $status
-        "#,
+    projection::upsert_concept(
+        &graph,
+        projection::ConceptProjection {
+            concept_key,
+            concept_type,
+            label_ru,
+            status,
+        },
     )
-    .param("concept_key", concept_key)
-    .param("concept_type", concept_type)
-    .param("label_ru", label_ru)
-    .param("status", status);
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 pub async fn materialize_page_context(url_path: &str) -> Result<()> {
@@ -91,19 +78,15 @@ pub async fn materialize_page_context(url_path: &str) -> Result<()> {
 
     let (uri, user, password) = neo4j_cfg();
     let graph = connect_neo4j(&uri, &user, &password).await?;
-    let q = query(
-        r#"
-        MERGE (p:Page {url_path: $url_path})
-        SET p.mapping_status = $mapping_status
-        MERGE (ctx:VisaContext {context_key: $context_key})
-        MERGE (p)-[:ABOUT_CONTEXT]->(ctx)
-        "#,
+    projection::upsert_page_context(
+        &graph,
+        projection::PageContextProjection {
+            url_path,
+            context_key,
+            mapping_status,
+        },
     )
-    .param("url_path", url_path)
-    .param("mapping_status", mapping_status)
-    .param("context_key", context_key);
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 pub async fn materialize_seo_artifact(artifact_type: &str, artifact_key: &str) -> Result<()> {
@@ -145,29 +128,17 @@ async fn materialize_keyword_cluster(
         bail!("keyword_cluster not found: {cluster_key}");
     };
 
-    let cluster_key: String = row.get("cluster_key");
-    let scope_signature: String = row.get("scope_signature");
-    let seed_keyword: String = row.get("seed_keyword");
-    let dominant_intent: String = row.get("dominant_intent");
-    let status: String = row.get("status");
-    let q = query(
-        r#"
-        MERGE (kc:KeywordCluster {cluster_key: $cluster_key})
-        SET kc.scope_signature = $scope_signature,
-            kc.seed_keyword = $seed_keyword,
-            kc.dominant_intent = $dominant_intent,
-            kc.status = $status
-        MERGE (intent:Intent {intent_key: $dominant_intent})
-        MERGE (kc)-[:TARGETS_INTENT]->(intent)
-        "#,
+    projection::upsert_keyword_cluster(
+        graph,
+        projection::KeywordClusterProjection {
+            cluster_key: row.get("cluster_key"),
+            scope_signature: row.get("scope_signature"),
+            seed_keyword: row.get("seed_keyword"),
+            dominant_intent: row.get("dominant_intent"),
+            status: row.get("status"),
+        },
     )
-    .param("cluster_key", cluster_key)
-    .param("scope_signature", scope_signature)
-    .param("seed_keyword", seed_keyword)
-    .param("dominant_intent", dominant_intent.clone())
-    .param("status", status);
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 async fn materialize_serp_pattern(
@@ -190,28 +161,19 @@ async fn materialize_serp_pattern(
         bail!("serp_pattern not found: {serp_pattern_key}");
     };
 
-    let q = query(
-        r#"
-        MERGE (sp:SERPPattern {serp_pattern_key: $serp_pattern_key})
-        SET sp.query_batch_key = $query_batch_key,
-            sp.scope_signature = $scope_signature,
-            sp.query = $query,
-            sp.pattern_type = $pattern_type,
-            sp.dominant_intent = $dominant_intent,
-            sp.status = $status
-        MERGE (intent:Intent {intent_key: $dominant_intent})
-        MERGE (sp)-[:TARGETS_INTENT]->(intent)
-        "#,
+    projection::upsert_serp_pattern(
+        graph,
+        projection::SerpPatternProjection {
+            serp_pattern_key: row.get("serp_pattern_key"),
+            query_batch_key: row.get("query_batch_key"),
+            scope_signature: row.get("scope_signature"),
+            query_text: row.get("query"),
+            pattern_type: row.get("pattern_type"),
+            dominant_intent: row.get("dominant_intent"),
+            status: row.get("status"),
+        },
     )
-    .param("serp_pattern_key", row.get::<String, _>("serp_pattern_key"))
-    .param("query_batch_key", row.get::<String, _>("query_batch_key"))
-    .param("scope_signature", row.get::<String, _>("scope_signature"))
-    .param("query", row.get::<String, _>("query"))
-    .param("pattern_type", row.get::<String, _>("pattern_type"))
-    .param("dominant_intent", row.get::<String, _>("dominant_intent"))
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 async fn materialize_page_blueprint(
@@ -234,29 +196,18 @@ async fn materialize_page_blueprint(
         bail!("page_blueprint not found: {blueprint_key}");
     };
 
-    let q = query(
-        r#"
-        MERGE (bp:PageBlueprint {blueprint_key: $blueprint_key})
-        SET bp.page_type_key = $page_type_key,
-            bp.dominant_intent = $dominant_intent,
-            bp.scope_class = $scope_class,
-            bp.blueprint_version = $blueprint_version,
-            bp.status = $status
-        MERGE (intent:Intent {intent_key: $dominant_intent})
-        MERGE (bp)-[:TARGETS_INTENT]->(intent)
-        "#,
+    projection::upsert_page_blueprint(
+        graph,
+        projection::PageBlueprintProjection {
+            blueprint_key: row.get("blueprint_key"),
+            page_type_key: row.get("page_type_key"),
+            dominant_intent: row.get("dominant_intent"),
+            scope_class: row.get("scope_class"),
+            blueprint_version: row.get::<i32, _>("blueprint_version") as i64,
+            status: row.get("status"),
+        },
     )
-    .param("blueprint_key", row.get::<String, _>("blueprint_key"))
-    .param("page_type_key", row.get::<String, _>("page_type_key"))
-    .param("dominant_intent", row.get::<String, _>("dominant_intent"))
-    .param("scope_class", row.get::<String, _>("scope_class"))
-    .param(
-        "blueprint_version",
-        row.get::<i32, _>("blueprint_version") as i64,
-    )
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 async fn materialize_page_node(
@@ -280,59 +231,21 @@ async fn materialize_page_node(
         bail!("page_node not found: {page_node_key}");
     };
 
-    let page_node_key: String = row.get("page_node_key");
-    let keyword_cluster_key: Option<String> = row.get("keyword_cluster_key");
-    let blueprint_key: Option<String> = row.get("blueprint_key");
-    let q = query(
-        r#"
-        MERGE (pn:PageNode {page_node_key: $page_node_key})
-        SET pn.scope_signature = $scope_signature,
-            pn.page_type_key = $page_type_key,
-            pn.dominant_intent = $dominant_intent,
-            pn.canonical_slug = $canonical_slug,
-            pn.canonical_url_path = $canonical_url_path,
-            pn.lifecycle_state = $lifecycle_state
-        MERGE (intent:Intent {intent_key: $dominant_intent})
-        MERGE (pn)-[:TARGETS_INTENT]->(intent)
-        "#,
+    projection::upsert_page_node(
+        graph,
+        projection::PageNodeProjection {
+            page_node_key: row.get("page_node_key"),
+            scope_signature: row.get("scope_signature"),
+            keyword_cluster_key: row.get("keyword_cluster_key"),
+            blueprint_key: row.get("blueprint_key"),
+            page_type_key: row.get("page_type_key"),
+            dominant_intent: row.get("dominant_intent"),
+            canonical_slug: row.get("canonical_slug"),
+            canonical_url_path: row.get("canonical_url_path"),
+            lifecycle_state: row.get("lifecycle_state"),
+        },
     )
-    .param("page_node_key", page_node_key.clone())
-    .param("scope_signature", row.get::<String, _>("scope_signature"))
-    .param("page_type_key", row.get::<String, _>("page_type_key"))
-    .param("dominant_intent", row.get::<String, _>("dominant_intent"))
-    .param("canonical_slug", row.get::<String, _>("canonical_slug"))
-    .param(
-        "canonical_url_path",
-        row.get::<String, _>("canonical_url_path"),
-    )
-    .param("lifecycle_state", row.get::<String, _>("lifecycle_state"));
-    graph.run(q).await?;
-
-    if let Some(cluster_key) = keyword_cluster_key {
-        let q = query(
-            r#"
-            MERGE (kc:KeywordCluster {cluster_key: $cluster_key})
-            MERGE (pn:PageNode {page_node_key: $page_node_key})
-            MERGE (kc)-[:PROPOSES_PAGE]->(pn)
-            "#,
-        )
-        .param("cluster_key", cluster_key)
-        .param("page_node_key", page_node_key.clone());
-        graph.run(q).await?;
-    }
-    if let Some(blueprint_key) = blueprint_key {
-        let q = query(
-            r#"
-            MERGE (bp:PageBlueprint {blueprint_key: $blueprint_key})
-            MERGE (pn:PageNode {page_node_key: $page_node_key})
-            MERGE (pn)-[:USES_BLUEPRINT]->(bp)
-            "#,
-        )
-        .param("blueprint_key", blueprint_key)
-        .param("page_node_key", page_node_key);
-        graph.run(q).await?;
-    }
-    Ok(())
+    .await
 }
 
 async fn materialize_content_gap(
@@ -354,37 +267,18 @@ async fn materialize_content_gap(
         bail!("content_gap not found: {content_gap_key}");
     };
 
-    let content_gap_key: String = row.get("content_gap_key");
-    let page_node_key: Option<String> = row.get("page_node_key");
-    let q = query(
-        r#"
-        MERGE (gap:ContentGap {content_gap_key: $content_gap_key})
-        SET gap.scope_signature = $scope_signature,
-            gap.missing_topic = $missing_topic,
-            gap.severity = $severity,
-            gap.status = $status
-        "#,
+    projection::upsert_content_gap(
+        graph,
+        projection::ContentGapProjection {
+            content_gap_key: row.get("content_gap_key"),
+            scope_signature: row.get("scope_signature"),
+            page_node_key: row.get("page_node_key"),
+            missing_topic: row.get("missing_topic"),
+            severity: row.get("severity"),
+            status: row.get("status"),
+        },
     )
-    .param("content_gap_key", content_gap_key.clone())
-    .param("scope_signature", row.get::<String, _>("scope_signature"))
-    .param("missing_topic", row.get::<String, _>("missing_topic"))
-    .param("severity", row.get::<String, _>("severity"))
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-
-    if let Some(page_node_key) = page_node_key {
-        let q = query(
-            r#"
-            MERGE (pn:PageNode {page_node_key: $page_node_key})
-            MERGE (gap:ContentGap {content_gap_key: $content_gap_key})
-            MERGE (pn)-[:HAS_CONTENT_GAP]->(gap)
-            "#,
-        )
-        .param("page_node_key", page_node_key)
-        .param("content_gap_key", content_gap_key);
-        graph.run(q).await?;
-    }
-    Ok(())
+    .await
 }
 
 async fn materialize_link_recommendation(
@@ -416,31 +310,20 @@ async fn materialize_link_recommendation(
     materialize_page_node(graph, pg, &source_page_key).await?;
     materialize_page_node(graph, pg, &target_page_key).await?;
 
-    let q = query(
-        r#"
-        MATCH (source:PageNode {page_node_key: $source_page_key})
-        MATCH (target:PageNode {page_node_key: $target_page_key})
-        MERGE (source)-[r:RECOMMENDS_LINK_TO {link_recommendation_key: $link_recommendation_key}]->(target)
-        SET r.link_role = $link_role,
-            r.anchor_strategy = $anchor_strategy,
-            r.required_flag = $required_flag,
-            r.score = $score,
-            r.status = $status
-        "#,
+    projection::upsert_link_recommendation(
+        graph,
+        projection::LinkRecommendationProjection {
+            link_recommendation_key: row.get("link_recommendation_key"),
+            source_page_key,
+            target_page_key,
+            link_role: row.get("link_role"),
+            anchor_strategy: row.get("anchor_strategy"),
+            required_flag: row.get("required_flag"),
+            score_text: row.get("score_text"),
+            status: row.get("status"),
+        },
     )
-    .param(
-        "link_recommendation_key",
-        row.get::<String, _>("link_recommendation_key"),
-    )
-    .param("source_page_key", row.get::<String, _>("source_page_key"))
-    .param("target_page_key", row.get::<String, _>("target_page_key"))
-    .param("link_role", row.get::<String, _>("link_role"))
-    .param("anchor_strategy", row.get::<String, _>("anchor_strategy"))
-    .param("required_flag", row.get::<bool, _>("required_flag"))
-    .param("score", row.get::<String, _>("score_text"))
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 async fn materialize_cannibalization_conflict(
@@ -462,24 +345,18 @@ async fn materialize_cannibalization_conflict(
         bail!("cannibalization_conflict not found: {conflict_key}");
     };
 
-    let q = query(
-        r#"
-        MERGE (a:PageNode {page_node_key: $page_key_a})
-        MERGE (b:PageNode {page_node_key: $page_key_b})
-        MERGE (a)-[r:CONFLICTS_WITH {conflict_key: $conflict_key}]->(b)
-        SET r.conflict_reason = $conflict_reason,
-            r.severity = $severity,
-            r.status = $status
-        "#,
+    projection::upsert_cannibalization_conflict(
+        graph,
+        projection::CannibalizationConflictProjection {
+            conflict_key: row.get("conflict_key"),
+            page_key_a: row.get("page_key_a"),
+            page_key_b: row.get("page_key_b"),
+            conflict_reason: row.get("conflict_reason"),
+            severity: row.get("severity"),
+            status: row.get("status"),
+        },
     )
-    .param("conflict_key", row.get::<String, _>("conflict_key"))
-    .param("page_key_a", row.get::<String, _>("page_key_a"))
-    .param("page_key_b", row.get::<String, _>("page_key_b"))
-    .param("conflict_reason", row.get::<String, _>("conflict_reason"))
-    .param("severity", row.get::<String, _>("severity"))
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-    Ok(())
+    .await
 }
 
 async fn materialize_page_brief(
@@ -501,24 +378,16 @@ async fn materialize_page_brief(
         bail!("page_brief not found: {page_brief_key}");
     };
 
-    let q = query(
-        r#"
-        MERGE (brief:PageBrief {page_brief_key: $page_brief_key})
-        SET brief.title = $title,
-            brief.meta_description = $meta_description,
-            brief.status = $status
-        MERGE (pn:PageNode {page_node_key: $page_node_key})
-        MERGE (bp:PageBlueprint {blueprint_key: $blueprint_key})
-        MERGE (pn)-[:HAS_BRIEF]->(brief)
-        MERGE (brief)-[:USES_BLUEPRINT]->(bp)
-        "#,
+    projection::upsert_page_brief(
+        graph,
+        projection::PageBriefProjection {
+            page_brief_key: row.get("page_brief_key"),
+            page_node_key: row.get("page_node_key"),
+            blueprint_key: row.get("blueprint_key"),
+            title: row.get("title"),
+            meta_description: row.get("meta_description"),
+            status: row.get("status"),
+        },
     )
-    .param("page_brief_key", row.get::<String, _>("page_brief_key"))
-    .param("page_node_key", row.get::<String, _>("page_node_key"))
-    .param("blueprint_key", row.get::<String, _>("blueprint_key"))
-    .param("title", row.get::<String, _>("title"))
-    .param("meta_description", row.get::<String, _>("meta_description"))
-    .param("status", row.get::<String, _>("status"));
-    graph.run(q).await?;
-    Ok(())
+    .await
 }

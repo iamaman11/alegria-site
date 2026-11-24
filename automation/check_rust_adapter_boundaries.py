@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
+POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
@@ -108,7 +109,6 @@ FORBIDDEN_DIRECT_IN_USE_CASES = [
 
 REQUIRED_ADAPTERS = {
     "mod.rs",
-    "sqlx_adapter.rs",
     "tokio_postgres_adapter.rs",
     "hyper_adapter.rs",
     "tower_adapter.rs",
@@ -117,6 +117,15 @@ REQUIRED_ADAPTERS = {
     "sqlx_outbox_adapter.rs",
     "tracing_adapter.rs",
     "reqwest_adapter.rs",
+}
+
+REQUIRED_POSTGRES_OWNER_FILES = {
+    "lib.rs",
+    "sqlx_adapter.rs",
+    "sqlx_error.rs",
+    "sqlx_reconcile_adapter.rs",
+    "sqlx_reconcile_runtime_adapter.rs",
+    "sqlx_runtime_health_adapter.rs",
 }
 
 FORBIDDEN_INFRA_ROOT_FILES = {
@@ -177,6 +186,11 @@ def main() -> int:
         for req in sorted(REQUIRED_ADAPTERS):
             if req not in present:
                 violations.append(f"missing adapter module: {ADAPTERS_DIR / req}")
+
+    present_postgres = {p.name for p in POSTGRES_STORE_SRC.glob("*.rs")}
+    for required in sorted(REQUIRED_POSTGRES_OWNER_FILES):
+        if required not in present_postgres:
+            violations.append(f"missing PostgreSQL owner module: {POSTGRES_STORE_SRC / required}")
 
     dep_patterns = {k: re.compile(rf"^\s*{re.escape(k)}\s*=", re.MULTILINE) for k in ENFORCED_DEP_KEYS}
     for manifest in sorted(RUST_ROOT.rglob("Cargo.toml")):

@@ -9,6 +9,8 @@ use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 
+pub mod projection_commands;
+
 pub type AlegriaQdrantClient = Qdrant;
 
 #[derive(Debug, Clone)]

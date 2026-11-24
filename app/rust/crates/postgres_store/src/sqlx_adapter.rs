@@ -1,3 +1,5 @@
+//! Connection bootstrap belongs to PostgreSQL, not the general infrastructure facade.
+
 use anyhow::Result;
 use sqlx::{postgres::PgPoolOptions, PgPool};
 

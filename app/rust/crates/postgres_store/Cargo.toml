@@ -1,0 +1,11 @@
+[package]
+name = "postgres_store"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = { workspace = true }
+primitives = { path = "../primitives" }
+runtime_models = { path = "../runtime_models" }
+sqlx = { workspace = true }
+uuid = { workspace = true }

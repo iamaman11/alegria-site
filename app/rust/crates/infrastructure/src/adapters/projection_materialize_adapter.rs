@@ -14,11 +14,11 @@ use super::neo4j_materialization_adapter;
 use super::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
 };
-use vector_qdrant::{
-    connect_qdrant, ensure_dense_collection, normalize_payload, parse_distance, upsert_dense_point,
+use vector_qdrant::projection_commands::{
+    delete_projection, upsert_projection, ProjectionDelete, ProjectionError, ProjectionIdentity,
+    ProjectionUpsert,
 };
 
-const DEFAULT_QDRANT_URL: &str = "http://localhost:6334";
 const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-large";
 const VOYAGE4_COLLECTIONS: [&str; 3] = [
     "kb_canonical_4",
@@ -87,6 +87,13 @@ impl std::fmt::Display for DispatchError {
 
 impl std::error::Error for DispatchError {}
 
+fn qdrant_error(error: ProjectionError) -> DispatchError {
+    match error {
+        ProjectionError::Contract(detail) => DispatchError::contract(detail),
+        ProjectionError::Provider(error) => DispatchError::external(DispatchStage::Qdrant, error),
+    }
+}
+
 fn requires_voyage4_projection(collection_name: &str) -> bool {
     VOYAGE4_COLLECTIONS.contains(&collection_name)
 }
@@ -130,26 +137,11 @@ fn qdrant_payload_value(
 
 async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchError> {
     let mut cmd = QdrantUpsertCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
-
-    let collection_name_owned = cmd.collection_name.trim().to_string();
-    let collection_name = collection_name_owned.as_str();
-    if collection_name.is_empty() {
-        return Err(DispatchError::contract(
-            "QdrantUpsertCommand.collection_name is empty",
-        ));
-    }
-    let entity_type = cmd.entity_type.trim();
-    if entity_type.is_empty() {
-        return Err(DispatchError::contract(
-            "QdrantUpsertCommand.entity_type is empty",
-        ));
-    }
-    let entity_key = cmd.entity_key.trim();
-    if entity_key.is_empty() {
-        return Err(DispatchError::contract(
-            "QdrantUpsertCommand.entity_key is empty",
-        ));
-    }
+    // Provider identity and vector shape belong to Qdrant's typed boundary;
+    // SQLx/Outbox still own the durable ordering and stale-event fences.
+    let identity = ProjectionIdentity::new(&cmd.collection_name, &cmd.entity_type, &cmd.entity_key)
+        .map_err(qdrant_error)?;
+    let collection_name = identity.collection_name();
     if requires_voyage4_projection(collection_name)
         && cmd
             .metadata
@@ -240,50 +232,26 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchErro
         );
     }
 
-    let vector_size = if cmd.vector_size == 0 {
-        cmd.vector.len() as u64
-    } else {
-        cmd.vector_size as u64
-    };
-    if vector_size != cmd.vector.len() as u64 {
-        return Err(DispatchError::contract(format!(
-            "QdrantUpsertCommand.vector_size mismatch: declared={}, actual={}",
-            vector_size,
-            cmd.vector.len()
-        )));
-    }
-    let distance = parse_distance(if cmd.distance.is_empty() {
-        "cosine"
-    } else {
-        &cmd.distance
-    })
-    .map_err(DispatchError::contract)?;
-    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
     let point_id = if cmd.point_id.is_empty() {
-        qdrant_point_id_v1(collection_name, entity_type, entity_key)
+        qdrant_point_id_v1(collection_name, identity.entity_type(), identity.entity_key())
     } else if is_valid_qdrant_point_id(&cmd.point_id) {
         cmd.point_id.clone()
     } else {
-        qdrant_point_id_v1(collection_name, entity_type, entity_key)
+        qdrant_point_id_v1(collection_name, identity.entity_type(), identity.entity_key())
     };
-
-    let client = connect_qdrant(&qdrant_url)
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
-    ensure_dense_collection(&client, collection_name, vector_size, distance)
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
     let entity_payload_value = qdrant_payload_value(cmd.payload, cmd.metadata);
-    let merged_payload = normalize_payload(entity_type, entity_key, Some(&entity_payload_value));
-    upsert_dense_point(
-        &client,
-        collection_name,
-        &point_id,
+    let projection = ProjectionUpsert::new(
+        identity,
+        point_id,
         cmd.vector,
-        merged_payload,
+        cmd.vector_size as u64,
+        &cmd.distance,
+        entity_payload_value,
     )
+    .map_err(qdrant_error)?;
+    upsert_projection(projection)
     .await
-    .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
+    .map_err(qdrant_error)?;
     Ok(())
 }
 
@@ -306,22 +274,11 @@ async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchErro
             "QdrantDeleteCommand.point_id does not match canonical identity",
         ));
     }
-    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
-    let client = connect_qdrant(&qdrant_url)
+    let projection = ProjectionDelete::new(cmd.collection_name, expected_point_id)
+        .map_err(qdrant_error)?;
+    delete_projection(projection)
         .await
-        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
-    // A repeated tombstone is harmless even if no collection was ever
-    // materialized, for example when retrieval was disabled during demotion.
-    if !client
-        .collection_exists(&cmd.collection_name)
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?
-    {
-        return Ok(());
-    }
-    vector_qdrant::delete_point_ids(&client, &cmd.collection_name, vec![expected_point_id])
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))
+        .map_err(qdrant_error)
 }
 
 /// Outbox delivery may retry out of order (SKIP LOCKED claims). For verified
@@ -552,6 +509,21 @@ mod tests {
         let invalid = DispatchError::contract("timeout connecting to remote");
         assert_eq!(invalid.class, ErrorClass::ContractViolation);
         let offline = DispatchError::external(DispatchStage::Qdrant, "invalid payload");
+        assert_eq!(offline.class, ErrorClass::InfraUnavailable);
+        assert_eq!(offline.stage, DispatchStage::Qdrant);
+    }
+
+    #[test]
+    fn qdrant_typed_owner_preserves_contract_and_provider_error_classes() {
+        let invalid = ProjectionIdentity::new("", "rule_instance", "fact-1")
+            .expect_err("invalid projection must fail before provider IO");
+        let mapped = qdrant_error(invalid);
+        assert_eq!(mapped.class, ErrorClass::ContractViolation);
+        assert_eq!(mapped.stage, DispatchStage::Contract);
+
+        let offline = qdrant_error(ProjectionError::Provider(anyhow::anyhow!(
+            "upstream request failed"
+        )));
         assert_eq!(offline.class, ErrorClass::InfraUnavailable);
         assert_eq!(offline.stage, DispatchStage::Qdrant);
     }

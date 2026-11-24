@@ -1,3 +1,5 @@
+//! Durable health snapshot queries over PostgreSQL runtime state.
+
 use anyhow::Result;
 use sqlx::PgPool;
 use uuid::Uuid;

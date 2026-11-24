@@ -1,3 +1,5 @@
+//! Outbox reconciliation only edits PostgreSQL leases and retry queues.
+
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
 

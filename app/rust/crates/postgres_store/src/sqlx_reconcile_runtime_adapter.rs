@@ -1,10 +1,14 @@
 use sqlx::PgPool;
 
-use super::proto_runtime_payload_store::{
-    classify_sqlx, encode_runtime_payload, RuntimeProtoPayload,
-};
+use super::sqlx_error::classify_sqlx;
 use primitives::errors::DomainError;
-use runtime_models::{ReconcileSummary, ReconcileTargetReportRecord};
+use primitives::hash::blake3_hex;
+use runtime_models::{reconcile_wire, ReconcileSummary, ReconcileTargetReportRecord};
+
+fn encoded_payload(bytes: Vec<u8>) -> (Vec<u8>, String) {
+    let hash = blake3_hex(&bytes);
+    (bytes, hash)
+}
 
 mod rows {
     #[derive(Debug)]
@@ -111,11 +115,11 @@ mod commands {
 
 pub async fn begin_reconcile_run(pool: &PgPool) -> std::result::Result<i64, DomainError> {
     let empty = ReconcileSummary::default();
-    let (summary_bytes, summary_hash) = encode_runtime_payload(&empty)?;
+    let (summary_bytes, summary_hash) = encoded_payload(reconcile_wire::encode_summary(&empty));
     let row = commands::insert_reconcile_run(
         pool,
-        <ReconcileSummary as RuntimeProtoPayload>::payload_type(),
-        <ReconcileSummary as RuntimeProtoPayload>::schema_version(),
+        reconcile_wire::RECONCILE_SUMMARY_PAYLOAD_TYPE,
+        reconcile_wire::RECONCILE_SCHEMA_VERSION,
         &summary_bytes,
         &summary_hash,
     )
@@ -132,15 +136,16 @@ pub async fn append_reconcile_target_action(
     target_key: Option<&str>,
     details: &ReconcileTargetReportRecord,
 ) -> std::result::Result<(), DomainError> {
-    let (details_bytes, details_hash) = encode_runtime_payload(details)?;
+    let (details_bytes, details_hash) =
+        encoded_payload(reconcile_wire::encode_target_report(details));
     commands::insert_reconcile_action(
         pool,
         reconcile_run_id,
         action_type,
         target_system,
         target_key,
-        <ReconcileTargetReportRecord as RuntimeProtoPayload>::payload_type(),
-        <ReconcileTargetReportRecord as RuntimeProtoPayload>::schema_version(),
+        reconcile_wire::RECONCILE_TARGET_PAYLOAD_TYPE,
+        reconcile_wire::RECONCILE_SCHEMA_VERSION,
         &details_bytes,
         &details_hash,
     )
@@ -156,15 +161,15 @@ pub async fn append_reconcile_summary_action(
     target_key: Option<&str>,
     details: &ReconcileSummary,
 ) -> std::result::Result<(), DomainError> {
-    let (details_bytes, details_hash) = encode_runtime_payload(details)?;
+    let (details_bytes, details_hash) = encoded_payload(reconcile_wire::encode_summary(details));
     commands::insert_reconcile_action(
         pool,
         reconcile_run_id,
         action_type,
         target_system,
         target_key,
-        <ReconcileSummary as RuntimeProtoPayload>::payload_type(),
-        <ReconcileSummary as RuntimeProtoPayload>::schema_version(),
+        reconcile_wire::RECONCILE_SUMMARY_PAYLOAD_TYPE,
+        reconcile_wire::RECONCILE_SCHEMA_VERSION,
         &details_bytes,
         &details_hash,
     )
@@ -179,13 +184,13 @@ pub async fn finish_reconcile_run(
     summary: &ReconcileSummary,
     error_message: Option<&str>,
 ) -> std::result::Result<(), DomainError> {
-    let (summary_bytes, summary_hash) = encode_runtime_payload(summary)?;
+    let (summary_bytes, summary_hash) = encoded_payload(reconcile_wire::encode_summary(summary));
     commands::update_reconcile_run(
         pool,
         reconcile_run_id,
         status,
-        <ReconcileSummary as RuntimeProtoPayload>::payload_type(),
-        <ReconcileSummary as RuntimeProtoPayload>::schema_version(),
+        reconcile_wire::RECONCILE_SUMMARY_PAYLOAD_TYPE,
+        reconcile_wire::RECONCILE_SCHEMA_VERSION,
         &summary_bytes,
         &summary_hash,
         error_message,

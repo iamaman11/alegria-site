@@ -69,7 +69,7 @@ def main() -> int:
         ROOT / "automation" / "check_json_boundary_policy.py",
         ROOT / "app" / "rust" / "Cargo.toml",
         ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "mod.rs",
-        ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_adapter.rs",
+        ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_adapter.rs",
         ROOT / "app" / "rust" / "crates" / "graph_neo4j" / "src" / "lib.rs",
         ROOT / "app" / "rust" / "crates" / "vector_qdrant" / "src" / "lib.rs",
         ROOT / "app" / "rust" / "crates" / "temporal_gateway" / "src" / "lib.rs",

@@ -1,5 +1,7 @@
 use anyhow::Result;
 
+pub mod projection;
+
 pub use neo4rs::{query, Graph};
 
 pub async fn connect_neo4j(uri: &str, user: &str, password: &str) -> Result<Graph> {

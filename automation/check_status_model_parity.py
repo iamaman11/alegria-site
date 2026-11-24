@@ -5,7 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
-RUNTIME_HEALTH = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_runtime_health_adapter.rs"
+RUNTIME_HEALTH = ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_runtime_health_adapter.rs"
 STEP_LEDGER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_step_ledger_adapter.rs"
 RECONCILE = ROOT / "app" / "rust" / "services" / "reconcile" / "src" / "main.rs"
 
