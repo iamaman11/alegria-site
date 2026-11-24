@@ -11,12 +11,17 @@ EXPERT_CORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "ada
 RAW_CRAWL = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "raw_crawl_adapter.rs"
 SEO_STEPS_LIB = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "lib.rs"
 SEO_DOMAIN_LIB = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "lib.rs"
+SEO_DOMAIN_EXTRACTION = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "extraction" / "mod.rs"
 TRUTH_DOMAIN_LIB = ROOT / "app" / "rust" / "crates" / "truth_domain" / "src" / "lib.rs"
 
-REQUIRED_EXPORTS = [
-    "pub mod entity_span_detection_step;",
-    "pub mod procedural_extraction_step;",
-]
+REQUIRED_EXPORTS = ["pub mod procedural_extraction_step;"]
+
+SEMANTIC_DOMAIN_OWNERS = {
+    "entity_span_detection_step": "entity_spans",
+    "layer_router_step": "layer_routing",
+    "operational_extraction_step": "operational_entities",
+    "editorial_extraction_step": "editorial_topics",
+}
 
 TRUTH_REVIEW_EXPORTS = ["pub mod completeness;", "pub mod hitl_decision;"]
 
@@ -72,6 +77,7 @@ def main() -> int:
     raw_crawl = read_file_resolved(RAW_CRAWL)
     seo_steps_lib = read(SEO_STEPS_LIB)
     seo_domain_lib = read(SEO_DOMAIN_LIB)
+    extraction_modules = read(SEO_DOMAIN_EXTRACTION)
     truth_domain_lib = read(TRUTH_DOMAIN_LIB)
 
     if 'seo_steps = { path = "../seo_steps" }' not in cargo:
@@ -80,6 +86,16 @@ def main() -> int:
     for export in REQUIRED_EXPORTS:
         if export not in seo_steps_lib:
             failures.append(f"seo_steps/lib.rs missing export `{export}`")
+
+    if "pub mod extraction;" not in seo_domain_lib:
+        failures.append("seo_domain/lib.rs must export the semantic extraction domain")
+    for stale_step, domain_owner in SEMANTIC_DOMAIN_OWNERS.items():
+        if f"pub mod {stale_step};" in seo_steps_lib:
+            failures.append(f"seo_steps/lib.rs still owns deprecated `{stale_step}`")
+        if f"pub mod {domain_owner};" not in extraction_modules:
+            failures.append(f"seo_domain/extraction/mod.rs missing `{domain_owner}`")
+        if f"seo_domain::extraction::{domain_owner}::execute" not in expert_core:
+            failures.append(f"expert core must call semantic domain owner `{domain_owner}`")
 
     if "pub mod canonical_mapping;" not in seo_domain_lib:
         failures.append("seo_domain/lib.rs must export the canonical mapping domain")
@@ -137,6 +153,7 @@ def main() -> int:
     print(
         "EXPERT_CORE_ACTIVATION_CONTRACT: OK "
         f"stages={len(REQUIRED_STAGE_NAMES)} step_exports={len(REQUIRED_EXPORTS)} "
+        f"semantic_domain_owners={len(SEMANTIC_DOMAIN_OWNERS)} "
         "canonical_domain_owner=1 "
         f"truth_review_exports={len(TRUTH_REVIEW_EXPORTS)}"
     )

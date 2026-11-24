@@ -4,9 +4,9 @@ use super::AlegriaActivities;
 
 pub(crate) fn run_layer_router(
     _acts: &AlegriaActivities,
-    input: &seo_steps::layer_router_step::LayerRouterInput,
-) -> seo_steps::layer_router_step::LayerRouterOutput {
-    seo_steps::layer_router_step::execute(input)
+    input: &seo_domain::extraction::layer_routing::LayerRouterInput,
+) -> seo_domain::extraction::layer_routing::LayerRouterOutput {
+    seo_domain::extraction::layer_routing::execute(input)
 }
 
 pub(crate) fn run_page_utility_classifier(
@@ -25,9 +25,9 @@ pub(crate) fn run_dom_block_relevance(
 
 pub(crate) fn run_entity_span_detection(
     _acts: &AlegriaActivities,
-    input: &seo_steps::entity_span_detection_step::EntitySpanInput,
-) -> seo_steps::entity_span_detection_step::EntitySpanOutput {
-    seo_steps::entity_span_detection_step::execute(input)
+    input: &seo_domain::extraction::entity_spans::EntitySpanInput,
+) -> seo_domain::extraction::entity_spans::EntitySpanOutput {
+    seo_domain::extraction::entity_spans::execute(input)
 }
 
 pub(crate) fn run_canonical_mapping(
@@ -46,16 +46,16 @@ pub(crate) fn run_procedural_extraction(
 
 pub(crate) fn run_operational_extraction(
     _acts: &AlegriaActivities,
-    input: &seo_steps::operational_extraction_step::OperationalExtractionInput,
-) -> seo_steps::operational_extraction_step::OperationalExtractionOutput {
-    seo_steps::operational_extraction_step::execute(input)
+    input: &seo_domain::extraction::operational_entities::OperationalExtractionInput,
+) -> seo_domain::extraction::operational_entities::OperationalExtractionOutput {
+    seo_domain::extraction::operational_entities::execute(input)
 }
 
 pub(crate) fn run_editorial_extraction(
     _acts: &AlegriaActivities,
-    input: &seo_steps::editorial_extraction_step::EditorialExtractionInput,
-) -> seo_steps::editorial_extraction_step::EditorialExtractionOutput {
-    seo_steps::editorial_extraction_step::execute(input)
+    input: &seo_domain::extraction::editorial_topics::EditorialExtractionInput,
+) -> seo_domain::extraction::editorial_topics::EditorialExtractionOutput {
+    seo_domain::extraction::editorial_topics::execute(input)
 }
 
 pub(crate) fn run_triple_builder(

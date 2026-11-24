@@ -18,7 +18,7 @@ pub struct LayerRouterSectionDecision {
     pub section_id: i64,
     pub page_id: i64,
     pub primary_layer: String,
-    pub secondary_layers: Vec<seo_steps::layer_router_step::SecondaryLayer>,
+    pub secondary_layers: Vec<seo_domain::extraction::layer_routing::SecondaryLayer>,
     pub confidence: f32,
     pub needs_hitl: bool,
     pub blocked_by_gate: bool,
@@ -68,7 +68,7 @@ pub struct EntitySpanSweepInput {
 pub struct EntitySpanSectionMentions {
     pub section_id: i64,
     pub page_id: i64,
-    pub mentions: Vec<seo_steps::entity_span_detection_step::EntityMention>,
+    pub mentions: Vec<seo_domain::extraction::entity_spans::EntityMention>,
     pub blocked_by_gate: bool,
     pub decision: String,
 }

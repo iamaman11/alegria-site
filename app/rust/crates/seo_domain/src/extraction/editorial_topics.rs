@@ -1,3 +1,4 @@
+//! Extract editorial questions, pain points and audience profiles.
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

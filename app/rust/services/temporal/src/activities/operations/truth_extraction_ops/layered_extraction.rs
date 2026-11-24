@@ -137,8 +137,8 @@ pub(crate) async fn operational_extraction_sweep_impl(
             let entities = if blocked_by_gate {
                 Vec::new()
             } else {
-                seo_steps::operational_extraction_step::execute(
-                    &seo_steps::operational_extraction_step::OperationalExtractionInput {
+                seo_domain::extraction::operational_entities::execute(
+                    &seo_domain::extraction::operational_entities::OperationalExtractionInput {
                         section_id: section.id.to_string(),
                         raw_text: section.content_md.clone(),
                     },
@@ -188,8 +188,8 @@ pub(crate) async fn editorial_extraction_sweep_impl(
             let topics = if blocked_by_gate || skipped {
                 Vec::new()
             } else {
-                seo_steps::editorial_extraction_step::execute(
-                    &seo_steps::editorial_extraction_step::EditorialExtractionInput {
+                seo_domain::extraction::editorial_topics::execute(
+                    &seo_domain::extraction::editorial_topics::EditorialExtractionInput {
                         section_id: section.id.to_string(),
                         raw_text: section.content_md.clone(),
                     },

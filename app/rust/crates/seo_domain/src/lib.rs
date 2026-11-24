@@ -3,6 +3,7 @@ pub mod artifact_identity;
 pub mod block_validator;
 pub mod canonical_mapping;
 pub mod cms_revision;
+pub mod extraction;
 pub mod identity;
 pub mod publishing;
 pub mod rebuild;
