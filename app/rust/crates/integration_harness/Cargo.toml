@@ -7,6 +7,7 @@ edition = "2021"
 default = []
 e2e = [
   "dep:infrastructure",
+  "dep:runtime_composition",
   "dep:graph_neo4j",
   "dep:vector_qdrant",
   "dep:sqlx",
@@ -30,6 +31,7 @@ testcontainers = { version = "0.28.0", optional = true }
 vector_qdrant = { path = "../vector_qdrant", optional = true }
 graph_neo4j = { path = "../graph_neo4j", optional = true }
 infrastructure = { path = "../infrastructure", optional = true }
+runtime_composition = { path = "../runtime_composition", optional = true }
 temporalio-client = { workspace = true, optional = true }
 temporalio-common = { workspace = true, optional = true }
 temporalio-sdk-core = { workspace = true, optional = true }
@@ -42,6 +44,7 @@ async-trait = "0.1"
 contracts = { path = "../contracts" }
 primitives = { path = "../primitives" }
 infrastructure = { path = "../infrastructure" }
+runtime_composition = { path = "../runtime_composition" }
 seo_application = { path = "../seo_application" }
 seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }

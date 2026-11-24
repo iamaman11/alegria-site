@@ -10,7 +10,6 @@ use temporalio_common::data_converters::{PayloadConverter, RawValue};
 use infrastructure::adapters::{
     dataforseo_serp_adapter,
     sqlx_execution_runs_adapter, sqlx_serp_adapter,
-    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
     sqlx_seo_adapter,
     voyage_api_adapter::{
@@ -18,6 +17,7 @@ use infrastructure::adapters::{
         VoyageRerankOptions,
     },
 };
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use graph_neo4j as neo4rs_adapter;
 use vector_qdrant as qdrant_client_adapter;
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};

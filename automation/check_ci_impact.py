@@ -32,6 +32,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/graph_neo4j": "graph_neo4j",
             "app/rust/crates/http_client": "http_client",
             "app/rust/crates/infrastructure": "infrastructure",
+            "app/rust/crates/runtime_composition": "runtime_composition",
             "app/rust/crates/integration_harness": "integration_harness",
             "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
@@ -48,16 +49,17 @@ class ImpactFixtures(unittest.TestCase):
         self.reverse = {
             "contracts": {"primitives"},
             "primitives": {"temporal_worker"},
-            "graph_neo4j": {"analytics_svc", "temporal_worker"},
+            "graph_neo4j": {"analytics_svc", "temporal_worker", "runtime_composition"},
             "http_client": {"gsc_sync"},
-            "infrastructure": set(),
+            "infrastructure": {"runtime_composition"},
+            "runtime_composition": {"temporal_worker", "outbox_worker", "cli_tools", "integration_harness"},
             "integration_harness": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
             "seo_ports": set(),
             "seo_steps": {"seo_application", "temporal_worker"},
-            "vector_qdrant": {"temporal_worker"},
+            "vector_qdrant": {"temporal_worker", "runtime_composition"},
             "gsc_sync": set(),
             "cli_tools": set(),
             "analytics_svc": set(),
@@ -694,14 +696,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_real_neighbor_adapter_change_selects_existing_qdrant_a13(self) -> None:
-        result = self.impact("app/rust/crates/infrastructure/src/adapters/semantic_neighbor_search_adapter.rs")
+        result = self.impact("app/rust/crates/runtime_composition/src/adapters/semantic_neighbor_search_adapter.rs")
         self.assertEqual(result["analysis"], "scoped")
         self.assertEqual(result["selected_suites"], ["knowledge_a13"])
 
     def test_editorial_source_context_port_changes_select_real_qdrant_a13(self) -> None:
         for path in (
             "app/rust/crates/seo_application/src/drafting.rs",
-            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
+            "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
@@ -720,7 +722,11 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_graph_change_includes_reverse_consumers(self) -> None:
         got = self.impact("app/rust/crates/graph_neo4j/src/lib.rs")
-        self.assertEqual(set(got["affected_crates"]), {"graph_neo4j", "analytics_svc", "temporal_worker"})
+        self.assertEqual(
+            set(got["affected_crates"]),
+            {"graph_neo4j", "runtime_composition", "analytics_svc", "temporal_worker",
+             "outbox_worker", "cli_tools", "integration_harness"},
+        )
         self.assertEqual(got["selected_suites"], ["graph_query"])
 
     def test_http_change_includes_gsc_only(self) -> None:
@@ -730,7 +736,8 @@ class ImpactFixtures(unittest.TestCase):
         result = self.impact("app/rust/crates/vector_qdrant/src/lib.rs")
         self.assertEqual(
             set(result["affected_crates"]),
-            {"vector_qdrant", "temporal_worker"},
+            {"vector_qdrant", "runtime_composition", "temporal_worker", "outbox_worker",
+             "cli_tools", "integration_harness"},
         )
         self.assertEqual(result["selected_suites"], ["vector_projection"])
 
@@ -891,7 +898,7 @@ class ImpactFixtures(unittest.TestCase):
         for path in (
             "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
             "app/rust/crates/seo_domain/src/link_recommendation.rs",
-            "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
+            "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/shared_helpers.rs",
@@ -1105,7 +1112,8 @@ class ImpactFixtures(unittest.TestCase):
     def test_multiple_changes_include_all_consumers(self) -> None:
         self.assertEqual(
             set(self.impact("app/rust/services/gsc_sync/src/main.rs", "app/rust/crates/graph_neo4j/src/lib.rs")["affected_crates"]),
-            {"gsc_sync", "graph_neo4j", "analytics_svc", "temporal_worker"},
+            {"gsc_sync", "graph_neo4j", "runtime_composition", "analytics_svc",
+             "temporal_worker", "outbox_worker", "cli_tools", "integration_harness"},
         )
 
     def test_optional_dev_and_build_path_dependencies_in_graph(self) -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -15,6 +16,7 @@ INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harnes
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
+COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
 # SDKs may be used by these dedicated adapter crates, never by domain code.
 DEDICATED_ADAPTER_DIRS = {
     (RUST_ROOT / "crates" / "graph_neo4j").resolve(),
@@ -139,6 +141,49 @@ FORBIDDEN_INFRA_ROOT_FILES = {
 }
 
 
+def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
+    """Walk real local path dependencies, including target/dev/build edges.
+
+    Cargo's compilation graph may enable feature-dependent edges; checking
+    their declared union prevents a future feature from silently reconnecting
+    the PostgreSQL owner to Neo4j or Qdrant. No Rust toolchain is required.
+    """
+    visited: set[Path] = set()
+    packages: set[str] = set()
+    direct: set[str] = set()
+
+    def visit(current: Path, *, root: bool = False) -> None:
+        current = current.resolve()
+        if current in visited:
+            return
+        visited.add(current)
+        package = tomllib.loads(current.read_text(encoding="utf-8"))
+        name = package.get("package", {}).get("name")
+        if not isinstance(name, str):
+            raise ValueError(f"missing package.name in {current}")
+        packages.add(name)
+        tables = [package]
+        tables.extend(
+            target for target in package.get("target", {}).values()
+            if isinstance(target, dict)
+        )
+        for table in tables:
+            for key in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for dependency in table.get(key, {}).values():
+                    if not isinstance(dependency, dict) or "path" not in dependency:
+                        continue
+                    linked = (current.parent / dependency["path"] / "Cargo.toml").resolve()
+                    if not linked.is_relative_to(RUST_ROOT.resolve()):
+                        raise ValueError(f"workspace dependency escapes root: {linked}")
+                    if root:
+                        linked_package = tomllib.loads(linked.read_text(encoding="utf-8"))
+                        direct.add(linked_package["package"]["name"])
+                    visit(linked)
+
+    visit(manifest, root=True)
+    return packages, direct
+
+
 def main() -> int:
     violations: list[str] = []
 
@@ -219,6 +264,34 @@ def main() -> int:
         p = INFRA_SRC / name
         if p.exists():
             violations.append(f"legacy infrastructure module must be removed: {p}")
+
+    # Enforce the architectural dependency direction, not just source path or
+    # direct SDK imports: infra/PG must never compile graph/vector providers.
+    try:
+        infra_closure, infra_direct = workspace_dependency_closure(INFRA_MANIFEST)
+        composition_closure, composition_direct = workspace_dependency_closure(COMPOSITION_MANIFEST)
+        for forbidden in ("graph_neo4j", "vector_qdrant", "runtime_composition"):
+            if forbidden in infra_closure:
+                violations.append(
+                    f"infrastructure Cargo dependency closure imports provider/composer `{forbidden}`"
+                )
+        required_composition = {"infrastructure", "graph_neo4j", "vector_qdrant"}
+        for required in sorted(required_composition - composition_direct):
+            violations.append(
+                f"runtime_composition must directly depend on owner `{required}`"
+            )
+        if "runtime_composition" in infra_direct:
+            violations.append("infrastructure -> runtime_composition would create an owner cycle")
+        for owner in ("graph_neo4j", "vector_qdrant"):
+            owner_manifest = RUST_ROOT / "crates" / owner / "Cargo.toml"
+            owner_closure, _ = workspace_dependency_closure(owner_manifest)
+            for forbidden in ("infrastructure", "runtime_composition"):
+                if forbidden in owner_closure:
+                    violations.append(f"{owner} depends on higher-level `{forbidden}`")
+        if not required_composition.issubset(composition_closure):
+            violations.append("runtime_composition Cargo closure lacks one or more provider owners")
+    except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError) as error:
+        violations.append(f"cannot verify provider Cargo dependency closure: {error}")
 
     if violations:
         print("RUST_ADAPTER_BOUNDARY: FAILED")

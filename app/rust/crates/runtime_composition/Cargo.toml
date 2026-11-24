@@ -1,0 +1,24 @@
+[package]
+name = "runtime_composition"
+version = "0.1.0"
+edition = "2021"
+
+# The only cross-provider adapter layer. PostgreSQL-only infrastructure never
+# depends on this crate, while the Worker/CLI select this composition explicitly.
+[dependencies]
+acquisition = { path = "../acquisition" }
+contracts = { path = "../contracts" }
+graph_neo4j = { path = "../graph_neo4j" }
+infrastructure = { path = "../infrastructure" }
+primitives = { path = "../primitives" }
+runtime_models = { path = "../runtime_models" }
+seo_domain = { path = "../seo_domain" }
+seo_ports = { path = "../seo_ports" }
+seo_steps = { path = "../seo_steps" }
+vector_qdrant = { path = "../vector_qdrant" }
+anyhow = { workspace = true }
+async-trait = "0.1"
+prost = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+uuid = { workspace = true }

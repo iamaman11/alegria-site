@@ -4,8 +4,8 @@
 #[tokio::test]
 #[serial]
 async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_delete() {
+    use runtime_composition::adapters::projection_materialize_adapter::dispatch_event;
     use infrastructure::adapters::{
-        projection_materialize_adapter::dispatch_event,
         verified_rule_projection_adapter::{
             stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx, VerifiedRuleEmbeddingAdapter,
         },
@@ -652,7 +652,7 @@ async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retr
 #[serial]
 async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use infrastructure::adapters::projection_materialize_adapter::dispatch_event;
+    use runtime_composition::adapters::projection_materialize_adapter::dispatch_event;
     use infrastructure::adapters::sqlx_outbox_adapter::{
         claim_outbox_batch_for_run_target, mark_done, mark_retry, LeaseUpdate, OutboxEnvelope,
     };

@@ -383,9 +383,7 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         }
     });
     if block_review {
-        use infrastructure::adapters::{
-            seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-        };
+        use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
         use temporalio_client::{UntypedQuery, WorkflowQueryOptions};
         use temporalio_common::data_converters::PayloadConverter;
         use seo_application::cms_review::{

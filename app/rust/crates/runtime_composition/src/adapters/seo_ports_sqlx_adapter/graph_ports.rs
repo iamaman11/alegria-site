@@ -18,41 +18,16 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
             .map_err(|err| DomainError::InfraUnavailable {
                 message: format!("neo4j planning context connect failed: {err}"),
             })?;
-        let mut result = graph
-            .execute(
-                graph_neo4j::query(
-                    r#"
-                    MATCH (source:PageNode {scope_signature: $scope_signature})
-                      -[r:RECOMMENDS_LINK_TO]->
-                      (target:PageNode {scope_signature: $scope_signature})
-                    RETURN
-                      source.page_node_key AS source_page_key,
-                      target.page_node_key AS target_page_key,
-                      coalesce(r.link_role, 'semantic_contextual') AS link_role,
-                      coalesce(r.score, 0.0) AS score
-                    LIMIT 256
-                    "#,
-                )
-                .param("scope_signature", scope_signature.to_string()),
-            )
+        let links = graph_neo4j::planning_links::load_planning_links(&graph, scope_signature)
             .await
             .map_err(|err| DomainError::InfraUnavailable {
                 message: format!("neo4j planning context query failed: {err}"),
             })?;
-        while let Ok(Some(row)) = result.next().await {
-            let source_page_key = row
-                .get::<String>("source_page_key")
-                .unwrap_or_else(|_| String::new());
-            let target_page_key = row
-                .get::<String>("target_page_key")
-                .unwrap_or_else(|_| String::new());
-            if source_page_key.is_empty() || target_page_key.is_empty() {
-                continue;
-            }
-            let score = row.get::<f64>("score").unwrap_or(0.0);
-            let link_role = row
-                .get::<String>("link_role")
-                .unwrap_or_else(|_| "semantic_contextual".to_string());
+        for link in links {
+            let source_page_key = link.source_page_key;
+            let target_page_key = link.target_page_key;
+            let score = link.score;
+            let link_role = link.link_role;
             let support_ref =
                 format!("neo4j://PageNode/{source_page_key}/RECOMMENDS_LINK_TO/{target_page_key}");
             if let Some(existing) = context.link_recommendations.iter_mut().find(|link| {

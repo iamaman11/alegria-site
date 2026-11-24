@@ -93,7 +93,7 @@ async fn retrieve_semantic_neighbors(
     limit: usize,
 ) -> Result<SemanticNeighborLookup, DomainError> {
     seo_application::knowledge::retrieve_semantic_neighbors(
-        &infrastructure::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter,
+        &runtime_composition::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter,
         &SemanticNeighborQuery {
             text: query.to_string(),
             primary,

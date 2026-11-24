@@ -2,8 +2,8 @@ use anyhow::{bail, Result};
 use sqlx::Row;
 use std::env;
 
-use super::sqlx_adapter::connect_pg;
-use super::sqlx_context_bundle_adapter;
+use infrastructure::adapters::sqlx_adapter::connect_pg;
+use infrastructure::adapters::sqlx_context_bundle_adapter;
 use graph_neo4j::{connect_neo4j, projection, Graph};
 
 fn neo4j_cfg() -> (String, String, String) {

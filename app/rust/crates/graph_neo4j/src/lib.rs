@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 pub mod projection;
+pub mod planning_links;
 
 pub use neo4rs::{query, Graph};
 

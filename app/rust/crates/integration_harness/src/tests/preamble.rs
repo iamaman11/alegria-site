@@ -9,8 +9,8 @@
         dataforseo_serp_adapter::{DataForSeoConfig, DataForSeoSerpClient},
         editorial_llm_adapter,
         proto_runtime_payload_store::RuntimeProtoPayload,
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     };
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     #[cfg(feature = "e2e")]
     use infrastructure::adapters::{
         raw_crawl_adapter,

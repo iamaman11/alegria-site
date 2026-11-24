@@ -1,7 +1,7 @@
 #[tokio::test]
 #[serial]
 async fn oversized_rebuild_rerank_uses_only_explicit_advisory_truncation() {
-    use infrastructure::adapters::semantic_search_adapter::{
+    use runtime_composition::adapters::semantic_search_adapter::{
         rerank_records, rerank_records_with_input_policy, RerankInputPolicy, SearchResultRecord,
     };
 
@@ -858,7 +858,7 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
     assert_eq!(result.revision_id, replacement);
     assert_eq!(result.workflow_id, run_id);
     let repository =
-        infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository::new(pool);
+        runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository::new(pool);
     let readback = seo_application::review_publish::load_cms_approval_decision(
         &repository,
         &page,
@@ -1779,9 +1779,9 @@ async fn retained_corpus_reuses_exact_paid_result_and_raw_pages_without_acquisit
     };
     use infrastructure::adapters::{
         raw_crawl_adapter::{self, RobotsDecisionTrace},
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
         sqlx_seo_adapter, sqlx_step_ledger_adapter as ledger,
     };
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -1892,9 +1892,8 @@ async fn keyword_cluster_natural_owner_survives_changed_serp_family() {
     use contracts::generated::alegria::temporal::v1::{
         KeywordClusterState, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
     };
-    use infrastructure::adapters::{
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
-    };
+    use infrastructure::adapters::sqlx_seo_adapter;
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -1980,9 +1979,8 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
         ContentGapState, GlobalSiteReconcileInputPayload, IaBuildInputPayload,
         OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
     };
-    use infrastructure::adapters::{
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
-    };
+    use infrastructure::adapters::sqlx_seo_adapter;
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use primitives::errors::ErrorClass;
     use seo_domain::artifact_identity::ContentGapDetector;
     use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
@@ -2525,9 +2523,8 @@ async fn planning_atomic_navigation_two_markets_are_isolated_and_retire_independ
 #[tokio::test]
 #[serial]
 async fn planning_atomic_registered_input_late_blob_failure_rolls_back_run() {
-    use infrastructure::adapters::{
-        seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_seo_adapter,
-    };
+    use infrastructure::adapters::sqlx_seo_adapter;
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use seo_ports::{SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest};
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -2618,7 +2615,7 @@ async fn planning_atomic_first_reconcile_registers_derived_scope_for_navigation(
         GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, PageNodeState,
         SeoScopePayload,
     };
-    use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use seo_ports::PlanningRepository;
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -2697,7 +2694,7 @@ async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_eve
         ContentGapState, GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload,
         PageNodeState, SeoScopePayload,
     };
-    use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+    use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
     use seo_domain::artifact_identity::ContentGapDetector;
     use seo_ports::PlanningRepository;
 

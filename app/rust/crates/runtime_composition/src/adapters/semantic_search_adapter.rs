@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
 
-use super::voyage_api_adapter::{
+use infrastructure::adapters::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageRerankOptions,
 };
 use vector_qdrant as qdrant;

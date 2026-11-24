@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use contracts::generated::alegria::temporal::v1::{
     FreshnessReport, SeoScopePayload, SeoVerifiedFactSupportState, StepContractMeta,
 };
-use infrastructure::adapters::graph_capability_adapter;
+use runtime_composition::adapters::graph_capability_adapter;
 use graph_neo4j as neo4rs_adapter;
-use infrastructure::adapters::projection_materialize_adapter;
+use runtime_composition::adapters::projection_materialize_adapter;
 use vector_qdrant as qdrant_client_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
@@ -18,7 +18,7 @@ use infrastructure::adapters::sqlx_source_projection_adapter::load_source_regist
 use infrastructure::adapters::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
 };
-use infrastructure::adapters::whole_page_advisory_adapter;
+use runtime_composition::adapters::whole_page_advisory_adapter;
 use truth_domain::truth_governance::{
     adjudicate_truth_candidates_with_governance, SourceGovernanceRecord,
 };

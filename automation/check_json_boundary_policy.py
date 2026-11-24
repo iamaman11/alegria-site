@@ -25,6 +25,10 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel.startswith("app/rust/crates/infrastructure/src/adapters/"):
         return True
+    # Cross-provider runtime wiring remains an adapter boundary after moving
+    # from infrastructure; domains, steps and the crate root stay deny-by-default.
+    if rel.startswith("app/rust/crates/runtime_composition/src/adapters/"):
+        return True
     # Transport-only Qdrant boundary, extracted verbatim from infrastructure.
     # Wire JSON remains legal here, never in the SEO domain or step crates.
     if rel.startswith("app/rust/crates/vector_qdrant/src/"):

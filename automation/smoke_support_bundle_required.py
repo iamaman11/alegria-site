@@ -13,7 +13,7 @@ SUPPORT_ADAPTER = (
 )
 PROJECTION_PORTS = (
     ROOT
-    / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs"
+    / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs"
 )
 STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 

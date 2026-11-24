@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 
-use super::voyage_api_adapter::{
+use infrastructure::adapters::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
 };
 use vector_qdrant as qdrant;

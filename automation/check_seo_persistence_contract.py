@@ -6,8 +6,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
 ADAPTER_MOD = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "mod.rs"
+COMPOSITION_ADAPTER_MOD = ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "mod.rs"
 PORTS_ADAPTER = (
-    ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "seo_ports_sqlx_adapter.rs"
+    ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "seo_ports_sqlx_adapter.rs"
 )
 SEO_PORTS = ROOT / "app" / "rust" / "crates" / "seo_ports" / "src" / "lib.rs"
 SEO_APPLICATION = ROOT / "app" / "rust" / "crates" / "seo_application" / "src"
@@ -79,6 +80,7 @@ def read_file_resolved(path: Path) -> str:
 def main() -> int:
     adapter = read_file_resolved(ADAPTER) if ADAPTER.exists() else ""
     adapter_mod = ADAPTER_MOD.read_text(encoding="utf-8")
+    composition_adapter_mod = COMPOSITION_ADAPTER_MOD.read_text(encoding="utf-8")
     ports_adapter = read_file_resolved(PORTS_ADAPTER)
     seo_ports = SEO_PORTS.read_text(encoding="utf-8")
     activities = read_file_resolved(ACTIVITIES)
@@ -87,8 +89,10 @@ def main() -> int:
 
     if "pub mod sqlx_seo_adapter;" not in adapter_mod:
         failures.append("infrastructure adapter module does not export sqlx_seo_adapter")
-    if "pub mod seo_ports_sqlx_adapter;" not in adapter_mod:
-        failures.append("infrastructure adapter module does not export seo_ports_sqlx_adapter")
+    if "pub mod seo_ports_sqlx_adapter;" not in composition_adapter_mod:
+        failures.append("runtime_composition adapter module does not export seo_ports_sqlx_adapter")
+    if "pub mod seo_ports_sqlx_adapter;" in adapter_mod:
+        failures.append("infrastructure still owns the mixed seo_ports_sqlx_adapter")
 
     for function, (owner_module, owner_token) in PERSISTENCE_OWNERS.items():
         owner_path = SEO_APPLICATION / owner_module

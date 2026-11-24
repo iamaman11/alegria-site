@@ -766,7 +766,7 @@
             ("GRAPH_QUERY_REQUIRED".to_string(), "true".to_string()),
             ("GRAPH_GDS_REQUIRED".to_string(), "false".to_string()),
         ]);
-        infrastructure::adapters::graph_capability_adapter::ensure_graph_contract_if_required(
+        runtime_composition::adapters::graph_capability_adapter::ensure_graph_contract_if_required(
             "graph-probe-regression",
         )
         .await
@@ -811,7 +811,7 @@
                 "authoritative raw section".to_string(),
             )]),
         };
-        infrastructure::adapters::projection_materialize_adapter::dispatch_event(
+        runtime_composition::adapters::projection_materialize_adapter::dispatch_event(
             "qdrant",
             "QdrantUpsertCommand",
             &entity_key,

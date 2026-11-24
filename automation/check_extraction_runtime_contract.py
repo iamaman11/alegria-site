@@ -8,7 +8,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 RAW_CRAWL = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
 TRUTH_LLM = ROOT / "app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs"
-SEO_PORTS_SQLX = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+SEO_PORTS_SQLX = ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs"
 TEMPORAL_STARTER = ROOT / "app/rust/services/temporal/src/bin/temporal_starter.rs"
 WORKFLOWS_MOD = ROOT / "app/rust/services/temporal/src/workflows/mod.rs"
 PRIMITIVES_LIB = ROOT / "app/rust/crates/primitives/src/lib.rs"

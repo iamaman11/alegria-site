@@ -11,7 +11,7 @@ use prost::Message;
 use sqlx::{Connection, Row};
 
 use super::neo4j_materialization_adapter;
-use super::voyage_api_adapter::{
+use infrastructure::adapters::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
 };
 use vector_qdrant::projection_commands::{

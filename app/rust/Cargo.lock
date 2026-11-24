@@ -611,6 +611,7 @@ dependencies = [
  "infrastructure",
  "primitives",
  "prost",
+ "runtime_composition",
  "seo_application",
  "seo_ports",
  "seo_steps",
@@ -2096,7 +2097,6 @@ dependencies = [
  "bytes",
  "chrono",
  "contracts",
- "graph_neo4j",
  "http-body-util",
  "http_client",
  "hyper",
@@ -2122,7 +2122,6 @@ dependencies = [
  "tracing",
  "truth_domain",
  "uuid",
- "vector_qdrant",
 ]
 
 [[package]]
@@ -2149,6 +2148,7 @@ dependencies = [
  "primitives",
  "prost",
  "reqwest 0.13.5",
+ "runtime_composition",
  "seo_application",
  "seo_domain",
  "seo_ports",
@@ -3054,6 +3054,7 @@ dependencies = [
  "infrastructure",
  "primitives",
  "prost",
+ "runtime_composition",
  "seo_steps",
  "serde",
  "serde_json",
@@ -4068,6 +4069,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "runtime_composition"
+version = "0.1.0"
+dependencies = [
+ "acquisition",
+ "anyhow",
+ "async-trait",
+ "contracts",
+ "graph_neo4j",
+ "infrastructure",
+ "primitives",
+ "prost",
+ "runtime_models",
+ "seo_domain",
+ "seo_ports",
+ "seo_steps",
+ "serde_json",
+ "sqlx",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
 name = "runtime_models"
 version = "0.1.0"
 dependencies = [
@@ -5070,6 +5093,7 @@ dependencies = [
  "policies",
  "primitives",
  "prometheus",
+ "runtime_composition",
  "runtime_models",
  "seo_application",
  "seo_domain",

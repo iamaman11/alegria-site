@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use infrastructure::adapters::{raw_crawl_adapter, whole_page_advisory_adapter};
+use infrastructure::adapters::raw_crawl_adapter;
+use runtime_composition::adapters::whole_page_advisory_adapter;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

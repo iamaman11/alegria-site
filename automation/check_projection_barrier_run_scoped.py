@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 MIGRATION = ROOT / "app/db/migrations/20260514_0001_sync_outbox_run_mode_contract.sql"
 SEO_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter.rs"
-PORTS_ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+PORTS_ADAPTER = ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs"
 ACTIVITIES = ROOT / "app/rust/services/temporal/src/activities/mod.rs"
 SCENARIO = ROOT / "app/rust/crates/seo_application/src/scenario.rs"
 

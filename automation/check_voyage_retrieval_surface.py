@@ -10,8 +10,8 @@ STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "tem
 OPS_RUNTIME = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations"
 KNOWLEDGE_USE_CASE = ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "knowledge.rs"
 KNOWLEDGE_PORT = ROOT / "app" / "rust" / "crates" / "seo_ports" / "src" / "lib.rs"
-VECTOR_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "canonical_vector_search_adapter.rs"
-SEO_STEPS_CANONICAL = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "canonical_mapping_step.rs"
+VECTOR_ADAPTER = ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "canonical_vector_search_adapter.rs"
+SEO_DOMAIN_CANONICAL = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "canonical_mapping.rs"
 REGISTRY = ROOT / "docs" / "V6_Support_Process_Registry.md"
 OPS = ROOT / "docs" / "OPS_RUNTIME_RUNBOOK.md"
 PLAN = ROOT / "docs" / "V6_SeoSiteBuildWorkflow_Working_Plan.md"
@@ -39,7 +39,7 @@ def main() -> int:
     knowledge_use_case = read(KNOWLEDGE_USE_CASE)
     knowledge_port = read(KNOWLEDGE_PORT)
     vector_adapter = read(VECTOR_ADAPTER)
-    seo_steps_canonical = read(SEO_STEPS_CANONICAL)
+    seo_domain_canonical = read(SEO_DOMAIN_CANONICAL)
     registry = read(REGISTRY)
     ops = read(OPS)
     plan = read(PLAN)
@@ -114,7 +114,7 @@ def main() -> int:
 
     for needle in [
         "seo_application::knowledge::resolve_canonical_vector_mappings(",
-        "&infrastructure::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter",
+        "&runtime_composition::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter",
         "CANONICAL_VECTOR_RETRIEVAL_REQUIRED",
         "VOYAGE_RERANK_REQUIRED",
         "\"kb_canonical_4\"",
@@ -131,7 +131,7 @@ def main() -> int:
         "pub async fn resolve_canonical_vector_mappings<S: CanonicalVectorSearchPort + ?Sized>(",
         "search.search_canonical_concepts(&mapping.raw_text).await?",
         "CanonicalVectorLookup::Unavailable",
-        "resolve_canonical_candidates(&mapping, &candidates)",
+        "canonical_mapping::resolve_vector_candidates(&mapping, &candidates)",
     ]:
         if needle not in knowledge_use_case:
             failures.append(f"Knowledge canonical vector use case missing `{needle}`")
@@ -159,11 +159,11 @@ def main() -> int:
         "mapping_type: \"vector_required\".to_string()",
         "match_method: \"vector_qdrant_required\".to_string()",
     ]:
-        if needle not in seo_steps_canonical:
-            failures.append(f"seo_steps canonical mapping missing `{needle}`")
+        if needle not in seo_domain_canonical:
+            failures.append(f"seo_domain canonical mapping missing `{needle}`")
 
-    if "pseudo_qdrant_score(" in seo_steps_canonical:
-        failures.append("seo_steps canonical mapping still contains pseudo_qdrant_score")
+    if "pseudo_qdrant_score(" in seo_domain_canonical:
+        failures.append("seo_domain canonical mapping still contains pseudo_qdrant_score")
 
     if failures:
         print("VOYAGE_RETRIEVAL_SURFACE: FAILED")

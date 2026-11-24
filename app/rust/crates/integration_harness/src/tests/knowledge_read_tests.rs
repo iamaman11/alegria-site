@@ -8,7 +8,7 @@
 #[serial]
 async fn knowledge_a13_editorial_source_context_uses_real_qdrant_and_typed_port() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use infrastructure::adapters::projection_materialize_adapter;
+    use runtime_composition::adapters::projection_materialize_adapter;
     use prost::Message;
     use seo_application::knowledge::retrieve_source_context;
     use seo_ports::knowledge::{SourceContextCollection, SourceContextQuery};
@@ -269,7 +269,7 @@ fn knowledge_canonical_mapping_temporal_wire_contract_is_stable() {
 #[serial]
 async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use infrastructure::adapters::{
+    use runtime_composition::adapters::{
         canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
         projection_materialize_adapter,
     };
@@ -379,7 +379,7 @@ async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate
 
     // The same real Qdrant and Voyage endpoints also serve the typed
     // read-only neighborhood contract used by Truth diagnostics.
-    use infrastructure::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter;
+    use runtime_composition::adapters::semantic_neighbor_search_adapter::SemanticNeighborSearchAdapter;
     use seo_application::knowledge::retrieve_semantic_neighbors;
     use seo_ports::knowledge::{SemanticNeighborCollection, SemanticNeighborQuery};
 

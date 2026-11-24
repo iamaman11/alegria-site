@@ -6,9 +6,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "app/db/schema.sql"
 RAW = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter.rs"
-PORTS = ROOT / "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter.rs"
+PORTS = ROOT / "app/rust/crates/runtime_composition/src/adapters/seo_ports_sqlx_adapter.rs"
 SERP = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_serp_adapter.rs"
 WORKFLOW = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
+SOURCE_ACQUISITION = ROOT / "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/source_acquisition.rs"
 RAW_TYPES = ROOT / "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/types.rs"
 
 
@@ -29,7 +30,8 @@ def main() -> int:
     schema = SCHEMA.read_text(encoding="utf-8")
     raw = read_with_includes(RAW)
     ports = read_with_includes(PORTS)
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = read_with_includes(WORKFLOW)
+    source_acquisition = SOURCE_ACQUISITION.read_text(encoding="utf-8")
     raw_types = RAW_TYPES.read_text(encoding="utf-8")
     serp = SERP.read_text(encoding="utf-8")
 
@@ -94,7 +96,7 @@ def main() -> int:
     for needle in ["bounded_raw_sections(", "contextual_section_groups(", ".flatten()", "raw section embedding failed:"]:
         if needle not in (raw + ports):
             failures.append(f"oversized contextual embedding handling missing `{needle}`")
-    if "limit: 5" not in workflow or workflow.count("db_opts(600)") < 2:
+    if "limit: 5" not in source_acquisition or source_acquisition.count("db_opts(600)") < 2:
         failures.append("crawl activity must fit a bounded network/embedding timeout")
 
     # A URL completed by a prior run must be eligible again in a fresh run;
@@ -128,11 +130,11 @@ def main() -> int:
         if needle not in (raw + ports):
             failures.append(f"crawl completeness missing `{needle}`")
     for needle in [
-        'while crawled.status == "more"',
+        'while crawled.status == "more" || crawled.status == "pending_retry"',
         "crawled.raw_page_ids.extend(next.raw_page_ids)",
         'ctx.timer(Duration::from_secs(60)).await',
     ]:
-        if needle not in workflow:
+        if needle not in source_acquisition:
             failures.append(f"durable crawl drain missing `{needle}`")
     if '"crawl_unresolved_pending_retry"' in workflow:
         failures.append("retry pending must not terminate the canonical workflow")
@@ -142,7 +144,7 @@ def main() -> int:
         '"triple_builder".to_string()',
         '"serp_normalize".to_string()',
         '"opportunity_build".to_string()',
-        '"manual_truth_prepare".to_string()',
+        "await_manual_truth_candidates(ctx, &run_id, &validation_input).await?",
         '"truth_adjudication".to_string()',
         '"verified_truth_write".to_string()',
         '"ia_build".to_string()',

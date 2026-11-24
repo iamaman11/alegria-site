@@ -21,9 +21,9 @@ use seo_ports::{
     VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
 
-use super::{
-    dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, manual_llm_queue,
-    raw_crawl_adapter, semantic_search_adapter,
+use super::{graph_capability_adapter, semantic_search_adapter};
+use infrastructure::adapters::{
+    dataforseo_serp_adapter, editorial_llm_adapter, manual_llm_queue, raw_crawl_adapter,
     sqlx_adapter::AlegriaPgPool,
     sqlx_context_bundle_adapter, sqlx_seo_adapter, sqlx_seo_cms_adapter, sqlx_serp_adapter,
     voyage_api_adapter::{VoyageClient, VoyageEmbeddingOptions, VoyageOutputDtype},

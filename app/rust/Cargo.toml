@@ -12,6 +12,7 @@ members = [
   "crates/seo_ports",
   "crates/seo_application",
   "crates/infrastructure",
+  "crates/runtime_composition",
   "crates/graph_neo4j",
   "crates/http_client",
   "crates/vector_qdrant",

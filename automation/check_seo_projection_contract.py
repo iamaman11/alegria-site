@@ -6,10 +6,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SYNC_PROTO = ROOT / "app" / "contracts" / "proto" / "sync.proto"
 SEO_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
-NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "neo4j_materialization_adapter.rs"
+NEO4J_ADAPTER = ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "neo4j_materialization_adapter.rs"
 NEO4J_PROJECTION_OWNER = ROOT / "app" / "rust" / "crates" / "graph_neo4j" / "src" / "projection.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
-PROJECTION_MATERIALIZER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "projection_materialize_adapter.rs"
+PROJECTION_MATERIALIZER = ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "projection_materialize_adapter.rs"
 SEO_DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src"
 CI = ROOT / "automation" / "ci_verify.sh"
 

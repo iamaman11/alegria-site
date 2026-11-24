@@ -4,7 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
     CrawlSourcesOutputPayload, FactExtractionInputPayload, ProjectionBarrierAuditOutputPayload,
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
-use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use temporal_gateway::TemporalSeoWorkflowControlAdapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,

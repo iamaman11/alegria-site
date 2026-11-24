@@ -18,9 +18,8 @@ use contracts::generated::alegria::temporal::v1::{
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
-use infrastructure::adapters::{
-    seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
-};
+use infrastructure::adapters::{sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter};
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use primitives::errors::DomainError;
 use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::{
