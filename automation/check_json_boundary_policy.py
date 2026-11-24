@@ -37,6 +37,11 @@ def is_allowed_json_boundary(path: Path) -> bool:
         return True
     if rel in {
         "app/rust/crates/seo_ports/src/lib.rs",
+        # The PostgreSQL-owned Truth/HITL SQLx adapter serializes audited
+        # JSONB decision and review payloads at the persistence boundary.
+        # This file moved from infrastructure/adapters without changing its
+        # transaction semantics; no domain-wide JSON exception is granted.
+        "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
         # The provider-free protocol's tests verify a strict serialized plan
         # boundary; production domain/operation modules remain deny-by-default.
         "app/rust/crates/operation_protocol/src/tests.rs",
