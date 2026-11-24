@@ -226,15 +226,9 @@ mod tests {
             &self,
             _input: &GlobalSiteReconcileInputPayload,
             output: &GlobalSiteReconcileOutputPayload,
-        ) -> Result<seo_ports::GlobalNavigationPersistReport, DomainError> {
+        ) -> Result<(), DomainError> {
             *self.reconciled.lock().unwrap() = Some(output.clone());
-            Ok(seo_ports::GlobalNavigationPersistReport {
-                navigation_tree_key: "synthetic-navigation".to_string(),
-                scope_count: 1,
-                page_item_count: output.page_nodes.len() as u64,
-                silo_group_count: 0,
-                rebuild_plan_count: 0,
-            })
+            Ok(())
         }
     }
 

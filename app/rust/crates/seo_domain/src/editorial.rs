@@ -119,6 +119,20 @@ pub fn mandatory_section_roles() -> &'static [&'static str] {
     ]
 }
 
+/// The blueprint is authoritative; absent explicit roles select the shared
+/// default plan used by both assembly and final Draft QA.
+pub fn required_section_roles(explicit: &[String]) -> Vec<String> {
+    let roles = if explicit.is_empty() {
+        mandatory_section_roles()
+            .iter()
+            .map(|role| (*role).to_string())
+            .collect::<Vec<_>>()
+    } else {
+        explicit.to_vec()
+    };
+    roles.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct SectionTemplate<'a> {
     pub section_role: &'a str,

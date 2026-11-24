@@ -65,10 +65,9 @@ pub struct VerifiedRuleProjectionCandidate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VerifiedRuleProjectionChange {
+pub struct VerifiedRuleUpsertBatch {
     pub run_id: String,
     pub context_key: String,
-    pub delete_rule_ids: Vec<String>,
     pub upserts: Vec<VerifiedRuleProjectionCandidate>,
 }
 

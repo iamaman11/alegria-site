@@ -7,15 +7,18 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     use infrastructure::adapters::{
         projection_materialize_adapter::dispatch_event,
         qdrant_client_adapter::{self, VerifiedRuleReadbackPoint},
-        verified_rule_projection_adapter::VerifiedRuleProjectionAdapter,
+        verified_rule_projection_adapter::{
+            stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx, VerifiedRuleEmbeddingAdapter,
+        },
     };
-    use seo_application::knowledge::reconcile_verified_rule_projection;
-    use seo_ports::knowledge::{VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange};
+    use seo_application::knowledge::prepare_verified_rule_embedding_batch;
+    use seo_ports::knowledge::{VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch};
 
     let pg = PostgresHarness::start().await.unwrap();
     let qdrant = QdrantHarness::start().await.unwrap();
     let voyage = stub_servers::spawn_voyage_contract_stub().await.unwrap();
     let _env = env_overrides::EnvOverrideGuard::apply([
+        ("DATABASE_URL".to_string(), pg.database_url.clone()),
         ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
         ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
         ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
@@ -33,15 +36,23 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         source_key: "https://example.gov/passport".into(),
         evidence_quote: "A valid passport is mandatory".into(),
     };
-    let command = VerifiedRuleProjectionChange {
+    let command = VerifiedRuleUpsertBatch {
         run_id: run_id.clone(),
         context_key: context_key.clone(),
-        delete_rule_ids: Vec::new(),
         upserts: vec![make_candidate(&rule_id)],
     };
-    let adapter = VerifiedRuleProjectionAdapter::new(&pg.pool);
-    reconcile_verified_rule_projection(&adapter, &command).await.unwrap();
-    reconcile_verified_rule_projection(&adapter, &command).await.unwrap();
+    let adapter = VerifiedRuleEmbeddingAdapter;
+    let embeddings = prepare_verified_rule_embedding_batch(&adapter, &command)
+        .await
+        .unwrap()
+        .unwrap();
+    for _ in 0..2 {
+        let mut tx = pg.pool.begin().await.unwrap();
+        stage_rule_upserts_in_tx(&mut tx, &command, embeddings.clone())
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
     let points: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
     ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
@@ -82,10 +93,18 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
          FOR EACH ROW EXECUTE FUNCTION system.reject_projection_outbox()",
     ).execute(&pg.pool).await.unwrap();
     let second_rule_id = format!("rule-a14-next-{}", Uuid::new_v4().simple());
-    let next = VerifiedRuleProjectionChange {
+    let next = VerifiedRuleUpsertBatch {
         upserts: vec![make_candidate(&second_rule_id)], ..command.clone()
     };
-    assert!(reconcile_verified_rule_projection(&adapter, &next).await.is_err());
+    let next_embeddings = prepare_verified_rule_embedding_batch(&adapter, &next)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut failing_tx = pg.pool.begin().await.unwrap();
+    assert!(stage_rule_upserts_in_tx(&mut failing_tx, &next, next_embeddings.clone())
+        .await
+        .is_err());
+    failing_tx.rollback().await.unwrap();
     let rollback_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
     ).bind(&second_rule_id).fetch_one(&pg.pool).await.unwrap();
@@ -94,20 +113,401 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         .execute(&pg.pool).await.unwrap();
     sqlx::query("DROP FUNCTION system.reject_projection_outbox()")
         .execute(&pg.pool).await.unwrap();
-    reconcile_verified_rule_projection(&adapter, &next).await.unwrap();
+    let mut retry_tx = pg.pool.begin().await.unwrap();
+    stage_rule_upserts_in_tx(&mut retry_tx, &next, next_embeddings)
+        .await
+        .unwrap();
+    retry_tx.commit().await.unwrap();
     let recovered: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
     ).bind(&second_rule_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(recovered, 1, "next independent revision must be retryable");
 
-    reconcile_verified_rule_projection(&adapter, &VerifiedRuleProjectionChange {
-        delete_rule_ids: vec![rule_id.clone()], upserts: Vec::new(), ..command
-    }).await.unwrap();
-    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+    let delete_rule_ids = vec![rule_id.clone()];
+    // A late SQL/Outbox failure must not delete the external Qdrant point or
+    // the canonical registry receipt. Deletion is a durable command first.
+    sqlx::query(
+        "ALTER TABLE system.sync_outbox ADD CONSTRAINT reject_qdrant_delete_outbox \
+         CHECK (event_type <> 'QdrantDeleteCommand')",
+    )
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let mut failing_delete_tx = pg.pool.begin().await.unwrap();
+    assert!(stage_rule_point_deletes_in_tx(
+        &mut failing_delete_tx, &run_id, &context_key, &delete_rule_ids,
+    )
+    .await
+    .is_err());
+    failing_delete_tx.rollback().await.unwrap();
+    let retained: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(retained, 1, "failed Qdrant delete Outbox must roll back registry");
+    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected)
+        .await
+        .unwrap());
+    sqlx::query("ALTER TABLE system.sync_outbox DROP CONSTRAINT reject_qdrant_delete_outbox")
+        .execute(&pg.pool)
+        .await
+        .unwrap();
+
+    for _ in 0..2 {
+        let mut tx = pg.pool.begin().await.unwrap();
+        stage_rule_point_deletes_in_tx(
+            &mut tx, &run_id, &context_key, &delete_rule_ids,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    // Qdrant is eventually consistent via Outbox; SQL state is atomic at commit.
+    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected)
+        .await
+        .unwrap());
     let deleted: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb.qdrant_points WHERE entity_key=$1",
     ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(deleted, 0);
+    let deletion_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox \
+         WHERE aggregate_key=$1 AND event_type='QdrantDeleteCommand'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(deletion_events, 1, "same deletion replay must not duplicate Outbox");
+    let delete_payload: Vec<u8> = sqlx::query_scalar(
+        "SELECT payload_bytes FROM system.sync_outbox \
+         WHERE aggregate_key=$1 AND event_type='QdrantDeleteCommand'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    // An old delayed insert may arrive after the delete intent. The
+    // rule-instance projection uses the newest SQL intent as its fencing key.
+    dispatch_event(
+        "qdrant",
+        "QdrantUpsertCommand",
+        &rule_id,
+        "alegria.outbox.qdrant_upsert_command.v1",
+        &payload,
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        dispatch_event(
+            "qdrant",
+            "QdrantDeleteCommand",
+            &rule_id,
+            "alegria.outbox.qdrant_delete_command.v1",
+            &delete_payload,
+        )
+        .await
+        .unwrap();
+    }
+    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected)
+        .await
+        .unwrap());
+    dispatch_event(
+        "qdrant",
+        "QdrantUpsertCommand",
+        &rule_id,
+        "alegria.outbox.qdrant_upsert_command.v1",
+        &payload,
+    )
+    .await
+    .unwrap();
+    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected)
+        .await
+        .unwrap(), "stale Qdrant upsert resurrected a deleted rule");
+}
+
+/// A14/P0: the real Truth SQL writers compose into one transaction, including
+/// source registration, canonical candidates, HITL review and rule instances.
+/// Failure at the SECOND verified rule cannot expose the first verified fact.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn outbox_a14_truth_write_multi_candidate_late_failure_rolls_back_and_retries() {
+    use infrastructure::adapters::{raw_crawl_adapter, sqlx_hitl_adapter, sqlx_seo_adapter};
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let context_key = format!("a14-truth-atomic-{marker}");
+    let first_concept = format!("a14-truth-first-{marker}");
+    let second_concept = format!("a14-truth-second-{marker}");
+    let hold_concept = format!("a14-truth-hold-{marker}");
+    seed_truth_context_and_concept(pool, &context_key, &first_concept, "fee", "First fee").await;
+    for concept in [&second_concept, &hold_concept] {
+        sqlx::query(
+            "INSERT INTO kb.concepts (concept_key,concept_type,label_ru) VALUES ($1,'fee','Atomic fee')",
+        )
+        .bind(concept)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    let first_url = format!("https://truth-atomic-first-{marker}.example.gov/fee");
+    let second_url = format!("https://truth-atomic-second-{marker}.example.gov/fee");
+    let quote = "Consular fee is 35 EUR";
+    let (_, first_section) =
+        seed_raw_page_with_section(pool, &first_url, "government", "Fee", quote).await;
+    let (_, second_section) =
+        seed_raw_page_with_section(pool, &second_url, "government", "Fee", quote).await;
+    let sections = raw_crawl_adapter::load_raw_sections_by_ids(
+        pool,
+        &[first_section, second_section],
+    )
+    .await
+    .unwrap();
+    assert_eq!(sections.len(), 2);
+
+    let candidates = [
+        (first_section, &first_url, &first_concept, "verified"),
+        (second_section, &second_url, &second_concept, "verified"),
+        (first_section, &first_url, &hold_concept, "needs_hitl"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (section_id, source_key, concept_key, status))| {
+        sqlx_seo_adapter::VerifiedTruthCandidateWrite {
+            rule_candidate_id: format!("a14-truth-candidate-{index}-{marker}"),
+            context_key: context_key.clone(),
+            section_id,
+            role: "FEE_ITEM".into(),
+            concept_canonical_key: concept_key.clone(),
+            evidence_quote: quote.into(),
+            params: serde_json::json!({"amount":35,"currency":"EUR"}),
+            scope: serde_json::json!({}),
+            severity: "mandatory".into(),
+            is_numeric: true,
+            is_incomplete: false,
+            confidence: 0.98,
+            span_start: 0,
+            span_end: quote.len() as i32,
+            source_key: source_key.clone(),
+            source_snapshot_hash: format!("a14-truth-section-{section_id}"),
+            provider_key: "chat_manual".into(),
+            model_key: "gpt-6".into(),
+            prompt_version: "a14-atomic-test@1".into(),
+            epistemic_status: status.into(),
+        }
+    })
+    .collect::<Vec<_>>();
+    let rules = candidates[..2]
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| sqlx_seo_adapter::VerifiedRuleInstanceWrite {
+            rule_instance_id: format!(
+                "a14-truth-{}-{marker}",
+                if index == 0 { "first" } else { "second" }
+            ),
+            context_key: context_key.clone(),
+            rule_type_key: "fee_item".into(),
+            concept_key: candidate.concept_canonical_key.clone(),
+            role_type: "fee_item".into(),
+            params: candidate.params.clone(),
+            scope: candidate.scope.clone(),
+            source_key: candidate.source_key.clone(),
+            confidence: candidate.confidence,
+            rule_candidate_id: candidate.rule_candidate_id.clone(),
+            evidence_section_id: candidate.section_id,
+            evidence_quote: quote.into(),
+            span_start: 0,
+            span_end: quote.len() as i32,
+            source_snapshot_hash: candidate.source_snapshot_hash.clone(),
+            verification_method: "a14-test".into(),
+            adjudication_reason: "synthetic corroborated authoritative source".into(),
+            publish_admissibility: "admissible".into(),
+            freshness_class: "fresh".into(),
+            completeness_class: "complete".into(),
+        })
+        .collect::<Vec<_>>();
+
+    sqlx::query(
+        "ALTER TABLE verified.rule_instances ADD CONSTRAINT a14_truth_atomic_late_fault \
+         CHECK (rule_instance_id NOT LIKE 'a14-truth-second-%')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    for attempt in 0..2 {
+        let mut tx = pool.begin().await.unwrap();
+        for section in &sections {
+            raw_crawl_adapter::ensure_source_in_tx(&mut tx, section)
+                .await
+                .unwrap();
+        }
+        for candidate in &candidates {
+            sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication_in_tx(
+                &mut tx,
+                candidate,
+            )
+            .await
+            .unwrap();
+        }
+        // A second extractor identity for identical evidence must reuse the
+        // first FK through a SAVEPOINT; a unique violation must not poison
+        // the surrounding Truth transaction or invent another verified fact.
+        let mut alias = candidates[0].clone();
+        alias.rule_candidate_id = format!("a14-truth-duplicate-evidence-{marker}");
+        let canonical_id =
+            sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication_in_tx(
+                &mut tx,
+                &alias,
+            )
+            .await
+            .unwrap();
+        assert_eq!(canonical_id, candidates[0].rule_candidate_id);
+        assert_eq!(
+            sqlx_hitl_adapter::reconcile_truth_candidate_reviews_in_tx(
+                &mut tx,
+                &context_key,
+                &Uuid::new_v4().to_string(),
+            )
+            .await
+            .unwrap(),
+            1,
+        );
+        sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(&mut tx, &rules[0])
+            .await
+            .unwrap();
+        let second =
+            sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(&mut tx, &rules[1]).await;
+        if attempt == 0 {
+            assert!(second.is_err(), "late rule fault must abort the whole Truth write");
+            tx.rollback().await.unwrap();
+            for (query, expected) in [
+                ("SELECT count(*) FROM kb.sources WHERE source_key LIKE 'https://truth-atomic-%'", 0_i64),
+                ("SELECT count(*) FROM extracted.rule_candidates WHERE context_key = $1", 0_i64),
+                ("SELECT count(*) FROM verified.rule_instances WHERE context_key = $1", 0_i64),
+                ("SELECT count(*) FROM site.seo_hitl_tasks WHERE scope_signature = $1 AND task_type='truth_candidate_review'", 0_i64),
+            ] {
+                let count: i64 = if query.contains("$1") {
+                    sqlx::query_scalar(query).bind(&context_key).fetch_one(pool).await.unwrap()
+                } else {
+                    sqlx::query_scalar(query).fetch_one(pool).await.unwrap()
+                };
+                assert_eq!(count, expected, "late Truth fault leaked state: {query}");
+            }
+            sqlx::query("ALTER TABLE verified.rule_instances DROP CONSTRAINT a14_truth_atomic_late_fault")
+                .execute(pool)
+                .await
+                .unwrap();
+        } else {
+            second.unwrap();
+            tx.commit().await.unwrap();
+        }
+    }
+    let (candidate_count, verified_count, review_count): (i64, i64, i64) = sqlx::query_as(
+        "SELECT
+            (SELECT count(*) FROM extracted.rule_candidates WHERE context_key=$1),
+            (SELECT count(*) FROM verified.rule_instances WHERE context_key=$1),
+            (SELECT count(*) FROM site.seo_hitl_tasks WHERE scope_signature=$1 AND task_type='truth_candidate_review')",
+    )
+    .bind(&context_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((candidate_count, verified_count, review_count), (3, 2, 1));
+
+    // Production Truth commits its completed step result in the SAME PG
+    // transaction as canonical verified rules. A worker that loses its ACK
+    // must read that original result, even after a newer run has updated the
+    // same semantic slot. Exercise the actual ledger API and SQL write, not
+    // an in-memory retry approximation. String is a registered typed runtime
+    // payload; the activity registers its own VerifiedTruthWrite payloads.
+    use infrastructure::adapters::sqlx_step_ledger_adapter as ledger;
+    let run_a = Uuid::new_v4().to_string();
+    let run_b = Uuid::new_v4().to_string();
+    let input_a = format!("truth-run-A-input-{marker}");
+    let input_b = format!("truth-run-B-input-{marker}");
+    let output_a = format!("truth-run-A-original-output-{marker}");
+    let output_b = format!("truth-run-B-newer-output-{marker}");
+    for (run_id, input, output, amount) in [
+        (&run_a, &input_a, &output_a, 35_i64),
+        (&run_b, &input_b, &output_b, 55_i64),
+    ] {
+        sqlx::query(
+            "INSERT INTO pipeline.execution_runs \
+             (run_id,workflow_run_id,workflow_type,context_key) \
+             VALUES ($1,$2,'seo_site_build',$3)",
+        )
+        .bind(Uuid::parse_str(run_id).unwrap())
+        .bind(format!("truth-replay-{run_id}"))
+        .bind(&context_key)
+        .execute(pool)
+        .await
+        .unwrap();
+        let (input_hash, idempotency_key) =
+            ledger::derive_step_keys(run_id, "verified_truth_write", 1, input).unwrap();
+        assert!(ledger::begin_step_execution(
+            pool, run_id, "verified_truth_write", 1, &input_hash, &idempotency_key,
+        )
+        .await
+        .unwrap());
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("truth-context|{context_key}"))
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let cached: Option<String> = ledger::load_completed_step_result_in_tx(
+            &mut tx, run_id, "verified_truth_write", 1, input,
+        )
+        .await
+        .unwrap();
+        assert!(cached.is_none(), "a fresh run must not inherit another run's result");
+        let mut write = rules[0].clone();
+        write.params = serde_json::json!({"amount": amount, "currency":"EUR"});
+        sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(&mut tx, &write)
+            .await
+            .unwrap();
+        ledger::complete_step_execution_with_output_in_tx(
+            &mut tx, run_id, "verified_truth_write", 1, input, output,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let (input_hash_a, idempotency_key_a) =
+        ledger::derive_step_keys(&run_a, "verified_truth_write", 1, &input_a).unwrap();
+    assert!(!ledger::begin_step_execution(
+        pool, &run_a, "verified_truth_write", 1, &input_hash_a, &idempotency_key_a,
+    )
+    .await
+    .unwrap());
+    let mut replay_tx = pool.begin().await.unwrap();
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("truth-context|{context_key}"))
+        .execute(&mut *replay_tx)
+        .await
+        .unwrap();
+    let replay_a: Option<String> = ledger::load_completed_step_result_in_tx(
+        &mut replay_tx, &run_a, "verified_truth_write", 1, &input_a,
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay_a.as_deref(), Some(output_a.as_str()));
+    replay_tx.commit().await.unwrap();
+    let (current_amount, rule_count): (i64, i64) = sqlx::query_as(
+        "SELECT (params->>'amount')::bigint, \
+         (SELECT count(*) FROM verified.rule_instances WHERE rule_instance_id=$1) \
+         FROM verified.rule_instances WHERE rule_instance_id=$1",
+    )
+    .bind(&rules[0].rule_instance_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((current_amount, rule_count), (55, 1), "stale run A replay overwrote run B");
 }
 
 #[cfg(feature = "e2e")]

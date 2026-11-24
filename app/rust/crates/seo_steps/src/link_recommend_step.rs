@@ -3,7 +3,42 @@ use contracts::generated::alegria::temporal::v1::GraphPlanningContextState;
 use contracts::generated::alegria::temporal::v1::{
     LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
 };
-use seo_domain::link_recommendation::{recommend_links, LinkPage};
+use seo_domain::link_recommendation::{recommend_links, LinkPage, RecommendedLink};
+
+pub(crate) fn link_page_from_wire(
+    page: &contracts::generated::alegria::temporal::v1::PageNodeState,
+) -> LinkPage {
+    LinkPage {
+        key: page.page_node_key.clone(),
+        scope: page.scope_signature.clone(),
+        page_type: page.page_type_key.clone(),
+        lifecycle_state: page.lifecycle_state.clone(),
+        canonical_slug: page.canonical_slug.clone(),
+        url_path: page.canonical_url_path.clone(),
+        url_family: page.canonical_url_family.clone(),
+        parent_key: page.parent_page_node_key.clone(),
+        cluster_key: page.keyword_cluster_key.clone(),
+    }
+}
+
+pub(crate) fn wire_link(link: RecommendedLink) -> LinkRecommendationState {
+    LinkRecommendationState {
+        link_recommendation_key: link.key,
+        scope_signature: link.scope,
+        source_page_key: link.source_key,
+        target_page_key: link.target_key,
+        link_role: link.role.to_string(),
+        anchor_strategy: link.anchor_strategy.to_string(),
+        required_flag: link.required,
+        score: link.score,
+        status: link.status.to_string(),
+        reason_code: link.reason.to_string(),
+        topic_keys: link.shared_topics,
+        triple_refs: Vec::new(),
+        graph_confidence: link.graph_confidence,
+        support_refs: Vec::new(),
+    }
+}
 
 /// Temporal protobuf adaptation. Link eligibility, scoring and prioritization
 /// belong exclusively to the SEO domain.
@@ -11,16 +46,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
     let pages = input
         .page_nodes
         .iter()
-        .map(|page| LinkPage {
-            key: page.page_node_key.clone(),
-            scope: page.scope_signature.clone(),
-            page_type: page.page_type_key.clone(),
-            lifecycle_state: page.lifecycle_state.clone(),
-            url_path: page.canonical_url_path.clone(),
-            url_family: page.canonical_url_family.clone(),
-            parent_key: page.parent_page_node_key.clone(),
-            cluster_key: page.keyword_cluster_key.clone(),
-        })
+        .map(link_page_from_wire)
         .collect::<Vec<_>>();
     let topics_by_cluster = input
         .graph_context
@@ -41,22 +67,7 @@ pub fn execute(input: &LinkRecommendInputPayload) -> LinkRecommendOutputPayload 
             input.max_links_per_page as usize,
         )
         .into_iter()
-        .map(|link| LinkRecommendationState {
-            link_recommendation_key: link.key,
-            scope_signature: link.scope,
-            source_page_key: link.source_key,
-            target_page_key: link.target_key,
-            link_role: link.role.to_string(),
-            anchor_strategy: link.anchor_strategy.to_string(),
-            required_flag: link.required,
-            score: link.score,
-            status: link.status.to_string(),
-            reason_code: link.reason.to_string(),
-            topic_keys: link.shared_topics,
-            triple_refs: Vec::new(),
-            graph_confidence: link.graph_confidence,
-            support_refs: Vec::new(),
-        })
+        .map(wire_link)
         .collect(),
     }
 }

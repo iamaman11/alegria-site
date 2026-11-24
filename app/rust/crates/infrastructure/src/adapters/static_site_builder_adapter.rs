@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 
 use super::sqlx_static_site_adapter::{
     load_static_site_candidate_snapshot, load_static_site_snapshot, StaticCmsLinkRow,
-    StaticCmsPageRow, StaticSiteSnapshot,
+    StaticCmsPageRow, StaticNavigationItemRow, StaticSiteSnapshot,
 };
 
 // Bump only when published HTML/layout semantics change. The Worker uses this
 // to refresh already-approved public pages without new editorial revisions.
-pub const STATIC_SITE_BUILDER_VERSION: &str = "alegria_static_site_builder@3";
+pub const STATIC_SITE_BUILDER_VERSION: &str = "alegria_static_site_builder@5";
 
 #[derive(Debug, Clone)]
 pub struct StaticArtifact {
@@ -185,10 +185,13 @@ fn render_content_blocks(page: &StaticCmsPageRow) -> String {
             .get("section_role")
             .and_then(Value::as_str)
             .unwrap_or("section");
-        // Related pages are rendered from the current release's link graph.
-        // Older CMS revisions also contain a generated internal_links block;
-        // showing both creates duplicate sections with stale link titles.
-        if section_role == "internal_links" {
+        // The current CMS revision's approved link manifest alone owns the
+        // visible links in this exact release.
+        // Both the former `internal_links` and the canonical draft's
+        // `related_pages` blocks are editorial obligations, not public HTML.
+        // Rendering either leaks internal page keys and duplicates the real
+        // related section below.
+        if matches!(section_role, "internal_links" | "related_pages") {
             continue;
         }
         let heading = block.get("heading").and_then(Value::as_str).unwrap_or("");
@@ -231,9 +234,53 @@ fn navigation_label(page: &StaticCmsPageRow) -> &str {
     }
 }
 
-fn render_navigation(current: &StaticCmsPageRow, pages: &[StaticCmsPageRow]) -> Result<String> {
+fn render_navigation(
+    current: &StaticCmsPageRow,
+    pages_by_key: &HashMap<String, StaticCmsPageRow>,
+    navigation_items: &[StaticNavigationItemRow],
+) -> Result<String> {
+    // No fallback to the full CMS page catalog: it would mix markets/locales,
+    // bypass the navigation policy and produce an unbounded public header.
+    let own_trees = navigation_items
+        .iter()
+        .filter(|item| {
+            item.page_node_key == current.page_node_key && item.locale == current.locale_code
+        })
+        .map(|item| item.navigation_tree_key.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    if own_trees.len() > 1 {
+        anyhow::bail!(
+            "ambiguous navigation ownership for published CMS page {}",
+            current.page_node_key
+        );
+    }
+    let Some(tree) = own_trees.first().copied() else {
+        // A newly approved page can be previewed before its navigation plan
+        // becomes active. Never infer market/locale from unrelated CMS pages.
+        return Ok(String::new());
+    };
+    let mut entries = navigation_items
+        .iter()
+        .filter(|item| item.navigation_tree_key == tree && item.hierarchy_depth <= 5)
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| {
+        a.group_sort_order
+            .cmp(&b.group_sort_order)
+            .then(a.sort_order.cmp(&b.sort_order))
+            .then(a.hierarchy_depth.cmp(&b.hierarchy_depth))
+            .then(a.page_node_key.cmp(&b.page_node_key))
+    });
     let mut items = String::new();
-    for page in pages {
+    for item in entries
+        .into_iter()
+        .filter(|item| pages_by_key.contains_key(&item.page_node_key))
+        .take(64)
+    {
+        // Navigation planning includes drafted/unpublished nodes. Only exact
+        // CMS release pages may become public links in this snapshot.
+        let Some(page) = pages_by_key.get(&item.page_node_key) else {
+            continue;
+        };
         let href = normalize_url_path(&page.canonical_url_path)?;
         let depth = menu_depth(&href)?;
         let current_marker = if page.page_node_key == current.page_node_key {
@@ -247,7 +294,11 @@ fn render_navigation(current: &StaticCmsPageRow, pages: &[StaticCmsPageRow]) -> 
             depth,
             escape_html(&page.title),
             current_marker,
-            escape_html(navigation_label(page)),
+            escape_html(if item.label.trim().is_empty() {
+                navigation_label(page)
+            } else {
+                item.label.as_str()
+            }),
         ));
     }
     Ok(items)
@@ -467,6 +518,17 @@ fn render_related_links(
             }
             continue;
         };
+        // The CMS revision approved an exact destination. A later route
+        // change cannot silently redirect that immutable published link.
+        if !link.canonical_url_path.is_empty()
+            && normalize_url_path(&link.canonical_url_path)?
+                != normalize_url_path(&target.canonical_url_path)?
+        {
+            anyhow::bail!(
+                "approved CMS link target changed after revision: {}",
+                link.target_page_key
+            );
+        }
         rendered_link_count += 1;
         let href = normalize_url_path(&target.canonical_url_path)?;
         let marker = if link.required_flag {
@@ -475,11 +537,10 @@ fn render_related_links(
             ""
         };
         items.push_str(&format!(
-            r#"<li{}><a href="{}">{}</a><span>{}</span></li>"#,
+            r#"<li{}><a href="{}">{}</a></li>"#,
             marker,
             escape_html(&href),
             escape_html(&target.title),
-            escape_html(&link.link_role)
         ));
     }
     if items.is_empty() {
@@ -505,17 +566,26 @@ fn render_page(
     pages: &[StaticCmsPageRow],
     pages_by_key: &HashMap<String, StaticCmsPageRow>,
     links_by_source: &HashMap<String, Vec<StaticCmsLinkRow>>,
+    navigation_items: &[StaticNavigationItemRow],
     base_url: &str,
 ) -> Result<(String, RenderPreviewPage)> {
     let canonical_path = normalize_url_path(&page.canonical_url_path)?;
     let canonical = absolute_url(base_url, &canonical_path)?;
     let block_body = render_content_blocks(page);
-    let body = if block_body.trim().is_empty() {
-        markdown_to_html(page_markdown(page))
-    } else {
+    // Once a typed block manifest exists, do not fall back to its raw draft
+    // markdown when every block was intentionally non-renderable (e.g. only
+    // `related_pages`). That draft text contains internal target page keys.
+    let has_typed_blocks = page
+        .body_payload
+        .get("content_blocks")
+        .and_then(Value::as_array)
+        .is_some_and(|blocks| !blocks.is_empty());
+    let body = if has_typed_blocks {
         block_body
+    } else {
+        markdown_to_html(page_markdown(page))
     };
-    let nav = render_navigation(page, pages)?;
+    let nav = render_navigation(page, pages_by_key, navigation_items)?;
     let breadcrumbs = render_breadcrumbs(page, pages, base_url)?;
     let (related, required_link_count, rendered_link_count) =
         render_related_links(page, pages_by_key, links_by_source)?;
@@ -601,6 +671,7 @@ fn render_page(
 fn build_static_artifacts(
     pages: &[StaticCmsPageRow],
     links: &[StaticCmsLinkRow],
+    navigation_items: &[StaticNavigationItemRow],
     base_url: &str,
 ) -> Result<(Vec<StaticArtifact>, Vec<RenderPreviewPage>)> {
     if pages.is_empty() {
@@ -623,7 +694,9 @@ fn build_static_artifacts(
     let mut sitemap_urls = Vec::new();
     let mut manifest_pages = Vec::new();
     for page in pages {
-        let (html, preview) = render_page(page, pages, &pages_by_key, &links_by_source, base_url)?;
+        let (html, preview) = render_page(
+            page, pages, &pages_by_key, &links_by_source, navigation_items, base_url,
+        )?;
         let relative_path = output_path_for_url(&page.canonical_url_path)?;
         artifacts.push(StaticArtifact {
             relative_path,
@@ -738,7 +811,9 @@ pub async fn build_static_site(
     base_url: &str,
 ) -> Result<StaticBuildResult> {
     let snapshot = load_static_site_snapshot(pool).await?;
-    let (artifacts, previews) = build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+    let (artifacts, previews) = build_static_artifacts(
+        &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
+    )?;
     write_static_artifacts(output_dir, &artifacts)?;
     Ok(StaticBuildResult {
         artifacts,
@@ -759,7 +834,9 @@ fn build_incremental_from_snapshot(
         .cloned()
         .collect::<std::collections::HashSet<_>>();
     let (all_artifacts, all_previews) =
-        build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+        build_static_artifacts(
+            &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
+        )?;
     let page_paths = snapshot
         .pages
         .iter()
@@ -817,8 +894,9 @@ pub async fn build_static_site_candidate_incremental(
     // tree to patch. Emit every published dependency along with the approved
     // target revision; otherwise the sitemap/manifest would list missing pages.
     // Only the target needs a preview for its per-page editorial gate.
-    let (artifacts, all_previews) =
-        build_static_artifacts(&snapshot.pages, &snapshot.links, base_url)?;
+    let (artifacts, all_previews) = build_static_artifacts(
+        &snapshot.pages, &snapshot.links, &snapshot.navigation_items, base_url,
+    )?;
     write_static_artifacts(output_dir, &artifacts)?;
     let previews = all_previews
         .into_iter()
@@ -865,6 +943,7 @@ mod tests {
         };
         let (artifacts, previews) = build_static_artifacts(
             &[target, published_dependency],
+            &[],
             &[],
             "https://staging.alegria.by",
         )
@@ -928,6 +1007,51 @@ mod tests {
     }
 
     #[test]
+    fn public_menu_uses_only_its_persisted_tree_and_published_pages() {
+        let mut a = sample_release_page("a", "/ru/a", "A");
+        a.locale_code = "ru-RU".into();
+        let mut b = sample_release_page("b", "/ru/b", "B");
+        b.locale_code = "ru-RU".into();
+        let mut foreign = sample_release_page("foreign", "/en/foreign", "Foreign");
+        foreign.locale_code = "en-US".into();
+        let published = HashMap::from([
+            (a.page_node_key.clone(), a.clone()),
+            (b.page_node_key.clone(), b.clone()),
+            (foreign.page_node_key.clone(), foreign.clone()),
+        ]);
+        let nav = vec![
+            StaticNavigationItemRow {
+                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
+                locale: "ru-RU".into(), page_node_key: "a".into(),
+                label: "А".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 1,
+            },
+            StaticNavigationItemRow {
+                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
+                locale: "ru-RU".into(), page_node_key: "draft-only".into(),
+                label: "Draft".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 2,
+            },
+            StaticNavigationItemRow {
+                navigation_tree_key: "tree-ru".into(), market: "BY".into(),
+                locale: "ru-RU".into(), page_node_key: "b".into(),
+                label: "Б".into(), group_sort_order: 1000, hierarchy_depth: 2, sort_order: 3,
+            },
+            StaticNavigationItemRow {
+                navigation_tree_key: "tree-en".into(), market: "GB".into(),
+                locale: "en-US".into(), page_node_key: "foreign".into(),
+                label: "Foreign".into(), group_sort_order: 1000, hierarchy_depth: 1, sort_order: 1,
+            },
+        ];
+        let html = render_navigation(&a, &published, &nav).unwrap();
+        assert!(html.contains("href=\"/ru/a\""));
+        assert!(html.contains("href=\"/ru/b\""));
+        assert!(!html.contains("draft-only"));
+        assert!(!html.contains("/en/foreign"));
+        let foreign_html = render_navigation(&foreign, &published, &nav).unwrap();
+        assert!(foreign_html.contains("/en/foreign"));
+        assert!(!foreign_html.contains("/ru/a"));
+    }
+
+    #[test]
     fn breadcrumbs_include_only_existing_release_routes() {
         let page = sample_release_page("child", "/ru/garden/watering/", "Полив");
         let parent = sample_release_page("parent", "/ru/garden/", "Сад");
@@ -959,16 +1083,26 @@ mod tests {
         let link = StaticCmsLinkRow {
             source_page_key: "child".into(),
             target_page_key: "parent".into(),
-            link_role: String::new(),
+            canonical_url_path: "/ru/garden/".into(),
             required_flag: true,
         };
         let links = HashMap::from([("child".to_string(), vec![link])]);
         assert!(render_related_links(&page, &HashMap::new(), &links).is_err());
-        let targets = HashMap::from([("parent".to_string(), parent)]);
+        let targets = HashMap::from([("parent".to_string(), parent.clone())]);
         let (html, required, rendered) = render_related_links(&page, &targets, &links).unwrap();
         assert_eq!((required, rendered), (1, 1));
         assert!(html.contains("Связанные страницы"));
         assert!(html.contains("href=\"/ru/garden\""));
+        let changed = StaticCmsPageRow {
+            canonical_url_path: "/ru/new-garden".into(),
+            ..parent
+        };
+        assert!(render_related_links(
+            &page,
+            &HashMap::from([("parent".to_string(), changed)]),
+            &links,
+        )
+        .is_err());
     }
 
     #[test]
@@ -981,10 +1115,11 @@ mod tests {
         page.locale_code = "ru-RU".into();
         page.page_type_key = "fee_page".into();
         page.body_payload = json!({
-            "markdown": "## Обзор\n\n35 евро.\n\n## Связанные страницы\n\n- [Устаревшее название](/ru/visa/spain/tourist/)",
+            "markdown": "## Обзор\n\n35 евро.\n\n## Связанные страницы\n\n- Recommended internal link: hub_to_child -> internal-hub-key",
             "content_blocks": [
                 {"block_type": "prose", "section_role": "overview", "heading": "Обзор", "markdown": "35 евро."},
-                {"block_type": "related_links", "section_role": "internal_links", "heading": "Связанные страницы", "markdown": "- [Устаревшее название](/ru/visa/spain/tourist/)"}
+                {"block_type": "related_links", "section_role": "internal_links", "heading": "Связанные страницы", "markdown": "- [Устаревшее название](/ru/visa/spain/tourist/)"},
+                {"block_type": "related_links", "section_role": "related_pages", "heading": "Связанные страницы", "markdown": "- Recommended internal link: hub_to_child -> internal-hub-key"}
             ]
         });
         let mut hub = sample_release_page(
@@ -1004,16 +1139,39 @@ mod tests {
             vec![StaticCmsLinkRow {
                 source_page_key: page.page_node_key.clone(),
                 target_page_key: "hub".into(),
-                link_role: String::new(),
+                canonical_url_path: "/ru/visa/spain/tourist/".into(),
                 required_flag: true,
             }],
         )]);
+        let navigation_items = vec![
+            StaticNavigationItemRow {
+                navigation_tree_key: "ru-navigation".into(),
+                market: "BY".into(),
+                locale: "ru-RU".into(),
+                page_node_key: "hub".into(),
+                label: "Туристическая виза".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 2,
+                sort_order: 1,
+            },
+            StaticNavigationItemRow {
+                navigation_tree_key: "ru-navigation".into(),
+                market: "BY".into(),
+                locale: "ru-RU".into(),
+                page_node_key: "fees".into(),
+                label: "Сборы".into(),
+                group_sort_order: 1000,
+                hierarchy_depth: 3,
+                sort_order: 2,
+            },
+        ];
 
         let (html, preview) = render_page(
             &page,
             &pages,
             &targets,
             &links,
+            &navigation_items,
             "https://staging.example.test",
         )
         .unwrap();
@@ -1021,12 +1179,38 @@ mod tests {
         assert_eq!(preview.rendered_link_count, 1);
         assert_eq!(html.matches("<h2>Связанные страницы</h2>").count(), 1);
         assert!(!html.contains("Устаревшее название"));
+        assert!(!html.contains("internal-hub-key"));
+        assert!(!html.contains("Recommended internal link"));
+        assert!(html.contains("href=\"/ru/visa/spain/tourist\""));
         assert!(!html.contains("Related Pages"));
         assert!(html.contains("aria-label=\"Навигационная цепочка\""));
         assert!(html.contains("aria-label=\"Разделы сайта\""));
         assert!(html.contains("aria-current=\"page\">Сборы</a>"));
         assert!(html.contains("flex-wrap: wrap"));
         assert!(!html.contains("overflow-x: auto"));
+    }
+
+    #[test]
+    fn only_internal_link_draft_blocks_never_trigger_raw_markdown_fallback() {
+        let mut page = sample_release_page("fees", "/ru/visa/spain/tourist/fees", "Сборы");
+        page.body_payload = json!({
+            "markdown": "- Recommended internal link: hub_to_child -> secret-page-id",
+            "content_blocks": [
+                {"block_type": "related_links", "section_role": "related_pages", "heading": "Связанные страницы", "markdown": "- Recommended internal link: hub_to_child -> secret-page-id"}
+            ]
+        });
+        let (html, preview) = render_page(
+            &page,
+            &[page.clone()],
+            &HashMap::from([(page.page_node_key.clone(), page.clone())]),
+            &HashMap::new(),
+            &[],
+            "https://staging.example.test",
+        )
+        .unwrap();
+        assert_eq!(preview.required_link_count, 0);
+        assert!(!html.contains("secret-page-id"));
+        assert!(!html.contains("Recommended internal link"));
     }
 
     #[test]

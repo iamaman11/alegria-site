@@ -5,13 +5,13 @@
 use async_trait::async_trait;
 use primitives::{errors::DomainError, qdrant_point_id::qdrant_point_id_v1};
 use seo_ports::{
-    knowledge::{VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionChange},
-    VerifiedRuleProjectionPort,
+    knowledge::{VerifiedRuleEmbeddingBatch, VerifiedRuleUpsertBatch},
+    VerifiedRuleEmbeddingPort,
 };
-use sqlx::PgPool;
+use sqlx::{Postgres, Transaction};
 
 use super::{
-    qdrant_client_adapter, sqlx_outbox_adapter, sqlx_runtime_outbox_adapter, sqlx_seo_adapter,
+    sqlx_outbox_adapter, sqlx_runtime_outbox_adapter, sqlx_seo_adapter,
     voyage_api_adapter::{
         VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
     },
@@ -19,15 +19,7 @@ use super::{
 
 const COLLECTION: &str = "verified_rules_4";
 
-pub struct VerifiedRuleProjectionAdapter<'a> {
-    pool: &'a PgPool,
-}
-
-impl<'a> VerifiedRuleProjectionAdapter<'a> {
-    pub fn new(pool: &'a PgPool) -> Self {
-        Self { pool }
-    }
-}
+pub struct VerifiedRuleEmbeddingAdapter;
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name).ok().is_some_and(|value| {
@@ -44,37 +36,134 @@ fn stage_error(stage: &str, run_id: &str, error: impl std::fmt::Display) -> Doma
     }
 }
 
+async fn lock_projection_keys_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: &str,
+    rule_ids: &[String],
+) -> Result<(), DomainError> {
+    for rule_id in rule_ids.iter().collect::<std::collections::BTreeSet<_>>() {
+        let key = format!("qdrant|verified_rules_4|rule_instance|{rule_id}");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(&key)
+            .execute(&mut **tx)
+            .await
+            .map_err(|err| stage_error("lock_projection", run_id, err))?;
+    }
+    Ok(())
+}
+
+/// Stage a complete Truth projection tombstone in the caller's SQL transaction.
+/// A failure inserting the event rolls back the registry deletion (and any
+/// earlier canonical Truth mutations), without touching external Qdrant.
+pub async fn stage_rule_point_deletes_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    run_id: &str,
+    _context_key: &str,
+    rule_ids: &[String],
+) -> Result<(), DomainError> {
+    if rule_ids.is_empty() {
+        return Ok(());
+    }
+    let ids = rule_ids
+        .iter()
+        .filter(|id| !id.trim().is_empty())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let ordered_ids = ids.iter().cloned().collect::<Vec<_>>();
+    lock_projection_keys_in_tx(tx, run_id, &ordered_ids).await?;
+    let events = ids
+        .iter()
+        .map(|rule_id| {
+            let event = seo_steps::outbox_builder::qdrant_rule_delete(run_id, rule_id, COLLECTION);
+            sqlx_outbox_adapter::OutboxEnvelope {
+                run_id: run_id.to_string(),
+                aggregate_type: event.aggregate_type,
+                aggregate_key: event.aggregate_key,
+                target_system: event.target_system,
+                event_type: event.event_type,
+                payload_type: event.payload_type,
+                schema_version: event.schema_version,
+                idempotency_key: event.idempotency_key,
+                payload_bytes: event.payload_bytes,
+            }
+        })
+        .collect::<Vec<_>>();
+    sqlx::query(
+        "DELETE FROM kb.qdrant_points
+         WHERE collection_name = $1
+           AND entity_type = 'rule_instance'
+           AND entity_key = ANY($2)",
+    )
+    .bind(COLLECTION)
+    .bind(&ordered_ids)
+    .execute(&mut **tx)
+    .await
+    .map_err(|err| stage_error("delete_registry", run_id, err))?;
+    sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(tx, &events).await?;
+    Ok(())
+}
+
+/// Called after Voyage embeddings have been prepared, but while the same
+/// canonical Truth transaction is still open. Outbox and registry are written
+/// together; the external Qdrant write remains asynchronous after commit.
+pub async fn stage_rule_upserts_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    change: &VerifiedRuleUpsertBatch,
+    embeddings: VerifiedRuleEmbeddingBatch,
+) -> Result<(), DomainError> {
+    let ids = change
+        .upserts
+        .iter()
+        .map(|candidate| candidate.rule_instance_id.clone())
+        .collect::<Vec<_>>();
+    lock_projection_keys_in_tx(tx, &change.run_id, &ids).await?;
+    let mut events = Vec::with_capacity(change.upserts.len());
+    for (candidate, vector) in change.upserts.iter().zip(embeddings.vectors) {
+        let event = seo_steps::outbox_builder::qdrant_rule_upsert(
+            &change.run_id,
+            &candidate.rule_instance_id,
+            &change.context_key,
+            &candidate.role_type,
+            &candidate.concept_key,
+            &candidate.role_type,
+            &candidate.source_key,
+            COLLECTION,
+            vector.iter().map(|value| *value as f64).collect(),
+        );
+        events.push(sqlx_outbox_adapter::OutboxEnvelope {
+            run_id: change.run_id.clone(),
+            aggregate_type: event.aggregate_type,
+            aggregate_key: event.aggregate_key,
+            target_system: event.target_system,
+            event_type: event.event_type,
+            payload_type: event.payload_type,
+            schema_version: event.schema_version,
+            idempotency_key: event.idempotency_key,
+            payload_bytes: event.payload_bytes,
+        });
+        let point_id =
+            qdrant_point_id_v1(COLLECTION, "rule_instance", &candidate.rule_instance_id);
+        sqlx_seo_adapter::upsert_qdrant_rule_point_in_tx(
+            tx,
+            &point_id,
+            &candidate.rule_instance_id,
+            COLLECTION,
+            &embeddings.model,
+            "verified_rules_4@1",
+        )
+        .await?;
+    }
+    sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(tx, &events).await?;
+    Ok(())
+}
+
 #[async_trait]
-impl VerifiedRuleProjectionPort for VerifiedRuleProjectionAdapter<'_> {
+impl VerifiedRuleEmbeddingPort for VerifiedRuleEmbeddingAdapter {
     fn retrieval_required(&self) -> bool {
         env_flag("RETRIEVAL_CAPABILITY_REQUIRED")
-    }
-
-    async fn delete_rule_points(
-        &self,
-        run_id: &str,
-        rule_ids: &[String],
-    ) -> Result<(), DomainError> {
-        if rule_ids.is_empty() {
-            return Ok(());
-        }
-        if self.retrieval_required() {
-            let url =
-                std::env::var("QDRANT_URL").unwrap_or_else(|_| "http://localhost:6334".to_string());
-            let client = qdrant_client_adapter::connect_qdrant(&url)
-                .await
-                .map_err(|err| stage_error("connect_qdrant_delete", run_id, err))?;
-            let point_ids = rule_ids
-                .iter()
-                .map(|id| qdrant_point_id_v1(COLLECTION, "rule_instance", id))
-                .collect();
-            qdrant_client_adapter::delete_point_ids(&client, COLLECTION, point_ids)
-                .await
-                .map_err(|err| stage_error("delete_qdrant", run_id, err))?;
-        }
-        sqlx_seo_adapter::delete_qdrant_rule_points(self.pool, COLLECTION, rule_ids)
-            .await
-            .map_err(|err| stage_error("delete_registry", run_id, err))
     }
 
     async fn embed_rule_texts(
@@ -101,57 +190,5 @@ impl VerifiedRuleProjectionPort for VerifiedRuleProjectionAdapter<'_> {
             .await
             .map_err(|err| stage_error("embed", run_id, err))?;
         Ok(Some(VerifiedRuleEmbeddingBatch { model, vectors }))
-    }
-
-    async fn stage_rule_upserts(
-        &self,
-        change: &VerifiedRuleProjectionChange,
-        embeddings: VerifiedRuleEmbeddingBatch,
-    ) -> Result<(), DomainError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|err| stage_error("begin", &change.run_id, err))?;
-        let mut events = Vec::with_capacity(change.upserts.len());
-        for (candidate, vector) in change.upserts.iter().zip(embeddings.vectors) {
-            let event = seo_steps::outbox_builder::qdrant_rule_upsert(
-                &candidate.rule_instance_id,
-                &change.context_key,
-                &candidate.role_type,
-                &candidate.concept_key,
-                &candidate.role_type,
-                &candidate.source_key,
-                COLLECTION,
-                vector.iter().map(|value| *value as f64).collect(),
-            );
-            events.push(sqlx_outbox_adapter::OutboxEnvelope {
-                run_id: change.run_id.clone(),
-                aggregate_type: event.aggregate_type,
-                aggregate_key: event.aggregate_key,
-                target_system: event.target_system,
-                event_type: event.event_type,
-                payload_type: event.payload_type,
-                schema_version: event.schema_version,
-                idempotency_key: event.idempotency_key,
-                payload_bytes: event.payload_bytes,
-            });
-            let point_id =
-                qdrant_point_id_v1(COLLECTION, "rule_instance", &candidate.rule_instance_id);
-            sqlx_seo_adapter::upsert_qdrant_rule_point_in_tx(
-                &mut tx,
-                &point_id,
-                &candidate.rule_instance_id,
-                COLLECTION,
-                &embeddings.model,
-                "verified_rules_4@1",
-            )
-            .await?;
-        }
-        sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(&mut tx, &events).await?;
-        tx.commit()
-            .await
-            .map_err(|err| stage_error("commit", &change.run_id, err))?;
-        Ok(())
     }
 }

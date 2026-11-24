@@ -134,7 +134,7 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         &self,
         input: &GlobalSiteReconcileInputPayload,
         output: &GlobalSiteReconcileOutputPayload,
-    ) -> Result<GlobalNavigationPersistReport, DomainError> {
+    ) -> Result<(), DomainError> {
         // One global reconcile is one durable site-plan revision. Its IA,
         // required links, content gaps, retirement and navigation cannot be
         // committed independently: a late failure must leave the previous
@@ -189,7 +189,28 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             },
         )
         .await?;
-        let scope = input.scope.as_ref().cloned().unwrap_or_default();
+        let (scope_signature, market, locale, country_code, visa_type, applicant_profile) =
+            match input.scope.as_ref() {
+                Some(payload) => {
+                    let canonical = seo_steps::seo_identity::derive_scope_from_payload(payload)?;
+                    (
+                        canonical.scope_signature,
+                        canonical.market,
+                        canonical.locale,
+                        canonical.country_code,
+                        canonical.visa_type,
+                        canonical.applicant_profile,
+                    )
+                }
+                None => (
+                    seo_steps::seo_identity::scope_signature_from_payload(None)?,
+                    "global".to_string(),
+                    "und".to_string(),
+                    String::new(),
+                    String::new(),
+                    String::new(),
+                ),
+            };
         let current_keys = output
             .page_nodes
             .iter()
@@ -198,15 +219,27 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
         sqlx_seo_adapter::retire_opaque_unpublished_plans_in_tx(
             &mut tx,
             &input.run_id,
-            &scope.scope_signature,
+            &scope_signature,
             &current_keys,
         )
         .await?;
-        let navigation = sqlx_seo_adapter::persist_global_navigation_from_active_pages_in_tx(
+        // New page scopes can have no keyword_cluster_key. Register the
+        // authoritative tuple inside this same transaction BEFORE the scoped
+        // navigation projection reads page_nodes.
+        sqlx_seo_adapter::upsert_site_scope_identity_in_tx(
             &mut tx,
-            &scope.market,
-            &scope.locale,
-            &input.reconcile_reason,
+            &scope_signature,
+            &market,
+            &locale,
+            &country_code,
+            &visa_type,
+            &applicant_profile,
+        )
+        .await?;
+        sqlx_seo_adapter::persist_global_navigation_from_active_pages_in_tx(
+            &mut tx,
+            &market,
+            &locale,
         )
         .await?;
         tx.commit()
@@ -214,12 +247,6 @@ impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
             .map_err(|err| DomainError::InfraUnavailable {
                 message: format!("commit global site reconcile transaction: {err}"),
             })?;
-        Ok(GlobalNavigationPersistReport {
-            navigation_tree_key: navigation.navigation_tree_key,
-            scope_count: navigation.scope_count,
-            page_item_count: navigation.page_item_count,
-            silo_group_count: navigation.silo_group_count,
-            rebuild_plan_count: navigation.rebuild_plan_count,
-        })
+        Ok(())
     }
 }

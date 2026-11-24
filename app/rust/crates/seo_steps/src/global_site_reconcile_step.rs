@@ -1,4 +1,5 @@
 use seo_domain::artifact_identity::ContentGapDetector;
+use seo_domain::link_recommendation::{linkable_page, recommend_required_links};
 use std::collections::{BTreeMap, BTreeSet};
 
 use contracts::generated::alegria::temporal::v1::{
@@ -7,71 +8,14 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 
-fn link_key(
-    scope_signature: &str,
-    source_page_key: &str,
-    target_page_key: &str,
-    link_role: &str,
-    anchor_strategy: &str,
-) -> String {
-    seo_domain::artifact_identity::seo_artifact_key(
-        "link_recommendation",
-        &[
-            scope_signature,
-            source_page_key,
-            target_page_key,
-            link_role,
-            anchor_strategy,
-            "global_site_reconcile@1",
-        ],
-    )
-}
-
-fn page_is_linkable(page: &PageNodeState) -> bool {
-    !matches!(
-        page.lifecycle_state.as_str(),
-        "blocked" | "deprecated" | "stale"
-    ) && !seo_domain::page_readiness::is_opaque_topic_identifier(&page.canonical_slug)
-        && !page
-            .canonical_url_path
-            .split('/')
-            .any(seo_domain::page_readiness::is_opaque_topic_identifier)
-}
-
-fn required_link(
-    source: &PageNodeState,
-    target: &PageNodeState,
-    link_role: &str,
-    anchor_strategy: &str,
-    score: f64,
-) -> LinkRecommendationState {
-    LinkRecommendationState {
-        link_recommendation_key: link_key(
-            &source.scope_signature,
-            &source.page_node_key,
-            &target.page_node_key,
-            link_role,
-            anchor_strategy,
-        ),
-        scope_signature: source.scope_signature.clone(),
-        source_page_key: source.page_node_key.clone(),
-        target_page_key: target.page_node_key.clone(),
-        link_role: link_role.to_string(),
-        anchor_strategy: anchor_strategy.to_string(),
-        required_flag: true,
-        score,
-        status: "candidate".to_string(),
-        reason_code: "global_site_reconcile".to_string(),
-        topic_keys: Vec::new(),
-        triple_refs: Vec::new(),
-        graph_confidence: 0.0,
-        support_refs: Vec::new(),
-    }
-}
-
 pub fn execute(
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
+    // Only a transport mapper lives here. The link lifecycle/eligibility and
+    // structural scoring have one owner in seo_domain::link_recommendation.
+    let eligible_page = |page: &PageNodeState| {
+        linkable_page(&crate::link_recommend_step::link_page_from_wire(page))
+    };
     let fallback_scope = crate::seo_step_support::scope_signature(input.scope.as_ref())?;
     let mut page_nodes = input.page_nodes.clone();
     let mut orphan_page_node_keys = Vec::new();
@@ -164,7 +108,7 @@ pub fn execute(
         // type* is a duplicate-page signal.
         let mut evidence_owners = BTreeMap::<(String, Vec<String>), String>::new();
         for page in &mut page_nodes {
-            if !page_is_linkable(page) {
+            if !eligible_page(page) {
                 continue;
             }
             let blueprint = input
@@ -256,67 +200,36 @@ pub fn execute(
         .iter()
         .map(|page| (page.page_node_key.clone(), page.clone()))
         .collect::<BTreeMap<_, _>>();
-    let country_hub = country_hub_key
-        .as_ref()
-        .and_then(|key| node_by_key.get(key))
-        .cloned();
-    let hub = hub_key
-        .as_ref()
-        .and_then(|key| node_by_key.get(key))
-        .cloned();
-
     let mut links = input.link_recommendations.clone();
-    if let (Some(country_hub), Some(hub)) = (&country_hub, &hub) {
-        if page_is_linkable(country_hub) && page_is_linkable(hub) {
-            links.push(required_link(
-                country_hub,
-                hub,
-                "country_hub_to_visa_hub",
-                "hub_contextual",
-                0.99,
-            ));
-            links.push(required_link(
-                hub,
-                country_hub,
-                "visa_hub_to_country_hub",
-                "breadcrumb_contextual",
-                0.96,
-            ));
-        }
-    }
-    if let Some(hub) = &hub {
-        for page in &page_nodes {
-            if page.page_node_key == hub.page_node_key || !page_is_linkable(page) {
-                continue;
-            }
-            if page.page_type_key == "country_hub_page" {
-                continue;
-            }
-            links.push(required_link(
-                hub,
-                page,
-                "hub_to_child",
-                "section_contextual",
-                0.97,
-            ));
-            links.push(required_link(
-                page,
-                hub,
-                "child_to_hub",
-                "navigation_contextual",
-                0.95,
-            ));
-        }
-    }
+    let link_pages = page_nodes
+        .iter()
+        .map(crate::link_recommend_step::link_page_from_wire)
+        .collect::<Vec<_>>();
+    let topics_by_cluster = input
+        .graph_context
+        .as_ref()
+        .map(|context| {
+            context
+                .keyword_clusters
+                .iter()
+                .map(|cluster| (cluster.cluster_key.clone(), cluster.topic_keys.clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+        .unwrap_or_default();
+    links.extend(
+        recommend_required_links(&link_pages, &topics_by_cluster)
+            .into_iter()
+            .map(crate::link_recommend_step::wire_link),
+    );
 
     let mut unique_links = BTreeMap::<(String, String), LinkRecommendationState>::new();
     for mut link in links {
         if !node_by_key
             .get(&link.source_page_key)
-            .is_some_and(page_is_linkable)
+            .is_some_and(eligible_page)
             || !node_by_key
                 .get(&link.target_page_key)
-                .is_some_and(page_is_linkable)
+                .is_some_and(eligible_page)
             || link.source_page_key == link.target_page_key
             || matches!(link.status.as_str(), "deprecated" | "rejected" | "expired")
         {
@@ -458,9 +371,66 @@ pub fn execute(
 mod tests {
     use super::*;
     use contracts::generated::alegria::temporal::v1::{
-        GraphPlanningContextState, GraphPlanningCoverageSignalState, PageBlueprintState,
-        SeoVerifiedFactSupportState,
+        GraphPlanningContextState, GraphPlanningCoverageSignalState, LinkRecommendInputPayload,
+        PageBlueprintState, SeoVerifiedFactSupportState,
     };
+
+    #[test]
+    fn structural_links_have_one_domain_key_and_reconcile_respects_needs_rebuild() {
+        let page = |key: &str, page_type: &str, state: &str| PageNodeState {
+            page_node_key: key.into(),
+            scope_signature: "scope".into(),
+            page_type_key: page_type.into(),
+            lifecycle_state: state.into(),
+            canonical_slug: key.into(),
+            canonical_url_path: format!("/visa/{key}/"),
+            ..Default::default()
+        };
+        let pages = vec![
+            page("hub", "hub_page", "planned"),
+            page("detail", "detail_page", "planned"),
+        ];
+        let recommendations = crate::link_recommend_step::execute(&LinkRecommendInputPayload {
+            page_nodes: pages.clone(),
+            ..Default::default()
+        })
+        .link_recommendations;
+        let result = execute(&GlobalSiteReconcileInputPayload {
+            page_nodes: pages.clone(),
+            link_recommendations: recommendations.clone(),
+            ..Default::default()
+        })
+        .unwrap();
+        for expected in recommendations.iter().filter(|link| link.required_flag) {
+            let canonical = result
+                .link_recommendations
+                .iter()
+                .filter(|actual| {
+                    actual.source_page_key == expected.source_page_key
+                        && actual.target_page_key == expected.target_page_key
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(canonical.len(), 1);
+            assert_eq!(canonical[0].link_recommendation_key, expected.link_recommendation_key);
+            assert_eq!(canonical[0].link_role, expected.link_role);
+            assert_eq!(canonical[0].anchor_strategy, expected.anchor_strategy);
+        }
+        assert!(result
+            .link_recommendations
+            .iter()
+            .all(|link| link.reason_code != "global_site_reconcile"));
+
+        let mut rebuilding = pages;
+        rebuilding[1].lifecycle_state = "needs_rebuild".into();
+        let blocked = execute(&GlobalSiteReconcileInputPayload {
+            page_nodes: rebuilding,
+            link_recommendations: recommendations,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(blocked.link_recommendations.is_empty());
+        assert_eq!(blocked.updated_link_count, 0);
+    }
 
     #[test]
     fn superseded_links_expire_in_domain_output_but_active_link_count_is_unchanged() {

@@ -125,6 +125,10 @@ async fn run_page_phase<
                     supported_fragments: factual_fragments.to_vec(),
                     required_links: required_links.to_vec(),
                     verified_support: verified_support.to_vec(),
+                    expected_required_sections:
+                        seo_domain::editorial::required_section_roles(
+                            &page_blueprint.required_sections,
+                        ),
                 },
             )
             .await?;

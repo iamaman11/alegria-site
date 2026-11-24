@@ -14,7 +14,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use seo_domain::editorial::{
     default_section_roles, factual_role, heading_for_role, heading_for_role_locale,
-    locale_from_canonical_path, mandatory_section_roles, support_traceability_label,
+    locale_from_canonical_path, required_section_roles, support_traceability_label,
 };
 
 // Draft assembly must emit traceability_entries with verified_fact / verified_summary
@@ -78,29 +78,15 @@ fn template_bindings(input: &DraftAssembleInputPayload) -> Vec<SectionTemplateBi
         .as_ref()
         .map(|blueprint| blueprint.dominant_intent.clone())
         .unwrap_or_else(|| "informational".to_string());
-    let required_roles = input
-        .page_blueprint
-        .as_ref()
-        .map(|blueprint| {
-            if blueprint.required_sections.is_empty() {
-                mandatory_section_roles()
-                    .iter()
-                    .map(|role| (*role).to_string())
-                    .collect::<BTreeSet<_>>()
-            } else {
-                blueprint
-                    .required_sections
-                    .iter()
-                    .cloned()
-                    .collect::<BTreeSet<_>>()
-            }
-        })
-        .unwrap_or_else(|| {
-            mandatory_section_roles()
-                .iter()
-                .map(|role| (*role).to_string())
-                .collect::<BTreeSet<_>>()
-        });
+    let required_roles = required_section_roles(
+        input
+            .page_blueprint
+            .as_ref()
+            .map(|blueprint| blueprint.required_sections.as_slice())
+            .unwrap_or(&[]),
+    )
+    .into_iter()
+    .collect::<BTreeSet<_>>();
     default_section_roles()
         .iter()
         .map(|role| SectionTemplateBinding {

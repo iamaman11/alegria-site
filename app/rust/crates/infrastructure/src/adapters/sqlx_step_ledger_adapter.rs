@@ -237,6 +237,10 @@ mod commands {
             WHERE run_id = $4
               AND step_name = $5
               AND idempotency_key = $6
+              -- A concurrent attempt may have atomically committed Truth and
+              -- marked this step done after another attempt began failing.
+              -- A late error must never erase that durable replay fence.
+              AND status <> 'done'
             "#,
             terminal_status,
             error_class,
@@ -388,6 +392,69 @@ where
     Ok(Some(T::decode_payload_bytes(&blob.payload_bytes)?))
 }
 
+/// Recheck the same durable step while holding the Truth context lock. Two
+/// Temporal attempts can both enter execute_step while the first is running;
+/// the waiting attempt must return its committed result instead of replaying
+/// canonical writes after the first has finished.
+pub async fn load_completed_step_result_in_tx<I, O>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    step_name: &str,
+    schema_version: i32,
+    input: &I,
+) -> std::result::Result<Option<O>, DomainError>
+where
+    I: RuntimeProtoPayload,
+    O: RuntimeProtoPayload,
+{
+    let uuid = Uuid::parse_str(run_id)
+        .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
+    let (input_hash, idempotency_key) =
+        derive_step_keys(run_id, step_name, schema_version, input)?;
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM pipeline.step_executions
+         WHERE run_id=$1 AND step_name=$2 AND idempotency_key=$3 AND input_hash=$4",
+    )
+    .bind(uuid)
+    .bind(step_name)
+    .bind(&idempotency_key)
+    .bind(&input_hash)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let Some(status) = status else {
+        return Err(contract_violation(format!(
+            "missing activity step ledger: {step_name} run_id={run_id}"
+        )));
+    };
+    if status != "done" {
+        return Ok(None);
+    }
+    let blob: Option<(String, Vec<u8>)> = sqlx::query_as(
+        "SELECT payload_type, payload_bytes FROM pipeline.step_payload_blobs
+         WHERE run_id=$1 AND step_name=$2 AND idempotency_key=$3 AND payload_kind='output'
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(uuid)
+    .bind(step_name)
+    .bind(&idempotency_key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let (payload_type, payload_bytes) = blob.ok_or_else(|| {
+        contract_violation(format!(
+            "completed activity step missing output: {step_name} run_id={run_id}"
+        ))
+    })?;
+    if payload_type != O::payload_type() {
+        return Err(contract_violation(format!(
+            "activity step output payload_type mismatch: expected {}, got {payload_type}",
+            O::payload_type()
+        )));
+    }
+    Ok(Some(O::decode_payload_bytes(&payload_bytes)?))
+}
+
 pub async fn complete_step_execution(
     pool: &PgPool,
     run_id: &str,
@@ -400,6 +467,84 @@ pub async fn complete_step_execution(
     commands::update_step_execution_done(pool, uuid, step_name, idempotency_key, output_hash)
         .await
         .map_err(classify_sqlx)
+}
+
+/// Commit an activity's durable result with the canonical SQL mutations it
+/// reports. A worker crash after that commit but before its Temporal ACK must
+/// replay the stored result, never reapply an older Truth write over a newer
+/// run. The ordinary execute_step wrapper already creates this ledger row.
+pub async fn complete_step_execution_with_output_in_tx<I, O>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    step_name: &str,
+    schema_version: i32,
+    input: &I,
+    output: &O,
+) -> std::result::Result<(), DomainError>
+where
+    I: RuntimeProtoPayload,
+    O: RuntimeProtoPayload,
+{
+    let uuid = Uuid::parse_str(run_id)
+        .map_err(|e| contract_violation(format!("invalid run_id uuid: {e}")))?;
+    let (input_hash, idempotency_key) =
+        derive_step_keys(run_id, step_name, schema_version, input)?;
+    let payload_bytes = output.encode_payload_bytes()?;
+    let output_hash = blake3_hex(&payload_bytes);
+    sqlx::query(
+        "INSERT INTO pipeline.step_payload_blobs
+         (run_id, step_name, idempotency_key, payload_kind, payload_type,
+          schema_version, payload_bytes, payload_hash)
+         VALUES ($1, $2, $3, 'output', $4, $5, $6, $7)
+         ON CONFLICT (idempotency_key, payload_kind, payload_hash) DO NOTHING",
+    )
+    .bind(uuid)
+    .bind(step_name)
+    .bind(&idempotency_key)
+    .bind(O::payload_type())
+    .bind(schema_version)
+    .bind(&payload_bytes)
+    .bind(&output_hash)
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let marked = sqlx::query(
+        "UPDATE pipeline.step_executions
+         SET status = 'done', output_hash = $5,
+             error_class = NULL, error_message = NULL, updated_at = now()
+         WHERE run_id = $1 AND step_name = $2 AND idempotency_key = $3
+           AND input_hash = $4 AND status IN ('running', 'failed', 'done')",
+    )
+    .bind(uuid)
+    .bind(step_name)
+    .bind(&idempotency_key)
+    .bind(&input_hash)
+    .bind(&output_hash)
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    if marked.rows_affected() != 1 {
+        return Err(contract_violation(format!(
+            "missing or incompatible activity step ledger: {step_name} run_id={run_id}"
+        )));
+    }
+    // A crash after commit must not leave the activity's attempt marked
+    // running forever while its canonical state and step result are done.
+    sqlx::query(
+        "UPDATE pipeline.step_attempts
+         SET status='done', finished_at=now()
+         WHERE step_execution_id IN (
+             SELECT step_execution_id FROM pipeline.step_executions
+             WHERE run_id=$1 AND step_name=$2 AND idempotency_key=$3
+         ) AND status='running'",
+    )
+    .bind(uuid)
+    .bind(step_name)
+    .bind(&idempotency_key)
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok(())
 }
 
 pub async fn complete_step_execution_typed<T: RuntimeProtoPayload>(

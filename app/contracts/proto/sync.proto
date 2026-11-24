@@ -107,3 +107,12 @@ message QdrantUpsertCommand {
   uint32 vector_size     = 9;
   map<string, string> metadata = 10;
 }
+
+// Durable point tombstone. The Outbox worker owns the external Qdrant delete;
+// a Truth writer only persists this intent alongside its SQL state change.
+message QdrantDeleteCommand {
+  string collection_name = 1;
+  string entity_type     = 2;
+  string entity_key      = 3;
+  string point_id        = 4;
+}

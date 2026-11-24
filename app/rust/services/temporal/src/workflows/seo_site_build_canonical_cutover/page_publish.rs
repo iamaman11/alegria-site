@@ -318,6 +318,10 @@ async fn run_page_publish_phases(
                                 supported_fragments: factual_fragments.to_vec(),
                                 required_links: required_links.clone(),
                                 verified_support: support_bundle.to_vec(),
+                                expected_required_sections:
+                                    seo_domain::editorial::required_section_roles(
+                                        &page_blueprint.required_sections,
+                                    ),
                             },
                             db_opts(30),
                         )

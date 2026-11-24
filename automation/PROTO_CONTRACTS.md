@@ -11,9 +11,9 @@ Generated file. Do not edit manually.
 | `app/contracts/proto/primitives.proto` | `alegria.primitives.v1` | 10 | 1 | `60b482a112a676cf4002e413c836c103b6b37cb19c13b516361767ae29cbdde8` |
 | `app/contracts/proto/read_api.proto` | `alegria.read_api.v1` | 14 | 0 | `a690559a168b00b7ed554002e84ddad902ed346d989f82a068953af729ca4561` |
 | `app/contracts/proto/rules.proto` | `alegria.rules.v1` | 11 | 0 | `8eb0f733a0929558c39b0359b583b507f484ad614ee25f74a55eaa40e2601434` |
-| `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 12 | 0 | `7e526dd92504423f29fafaabe53efb07a14be74cfde7fccf59e966e1cbc017b0` |
+| `app/contracts/proto/sync.proto` | `alegria.sync.v1` | 13 | 0 | `7bb21976bb28955678dc7663126831d9a88e1a220fa739e4e4bc33abe3d8b243` |
 | `app/contracts/proto/telemetry.proto` | `alegria.telemetry.v1` | 2 | 0 | `4924ffcaad50a1d1e7b8f97e68caa857b876905c6683f3b12616d2a2bbe45f78` |
-| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 100 | 0 | `9c4f7122b898f563cb3d9a40f3f9423b9c6cdd33b9910505b53bf3cbbe04963f` |
+| `app/contracts/proto/temporal_payloads.proto` | `alegria.temporal.v1` | 100 | 0 | `cf2d43242676e4371ca6f18bc2031c83f46cce2825228879aea5210e3d25bc34` |
 | `app/analytics_lab/proto/analytics.proto` | `alegria.analytics.v1` | 10 | 1 | `3e3b8b852b9a46fd656d7e14e61f23c2d161f29dbaf5d3281ea760dcbf3ad21e` |
 
 ## Message/Service Index
@@ -45,7 +45,7 @@ Generated file. Do not edit manually.
 
 ### `app/contracts/proto/sync.proto`
 
-- messages: ConceptApproved, ConceptHierarchyChanged, Neo4jMaterializationCommand, Neo4jRuleUpsertPayload, PageContextMapped, QdrantEntityPayload, QdrantUpsertCommand, RuleInstanceDeprecated, RuleInstanceUpserted, SeoCmsEventPayload, SeoGraphProjectionPayload, SyncOutboxEvent
+- messages: ConceptApproved, ConceptHierarchyChanged, Neo4jMaterializationCommand, Neo4jRuleUpsertPayload, PageContextMapped, QdrantDeleteCommand, QdrantEntityPayload, QdrantUpsertCommand, RuleInstanceDeprecated, RuleInstanceUpserted, SeoCmsEventPayload, SeoGraphProjectionPayload, SyncOutboxEvent
 - services: —
 
 ### `app/contracts/proto/telemetry.proto`

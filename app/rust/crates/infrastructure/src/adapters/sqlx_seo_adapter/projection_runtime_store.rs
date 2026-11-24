@@ -134,25 +134,6 @@ pub async fn load_seo_preflight_store_counts(
     })
 }
 
-pub async fn delete_qdrant_rule_points(
-    pool: &PgPool,
-    collection_name: &str,
-    rule_instance_ids: &[String],
-) -> Result<(), DomainError> {
-    sqlx::query(
-        "DELETE FROM kb.qdrant_points
-         WHERE collection_name = $1
-           AND entity_type = 'rule_instance'
-           AND entity_key = ANY($2)",
-    )
-    .bind(collection_name)
-    .bind(rule_instance_ids)
-    .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
-}
-
 pub async fn upsert_qdrant_rule_point_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     point_id: &str,
@@ -210,8 +191,26 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     pool: &PgPool,
     candidate: &VerifiedTruthCandidateWrite,
 ) -> Result<String, DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let id =
+        upsert_extracted_rule_candidate_from_adjudication_in_tx(&mut tx, candidate).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(id)
+}
+
+/// The evidence-key unique constraint can collide with an extractor-specific
+/// candidate ID. A PostgreSQL SAVEPOINT restores the outer transaction before
+/// reconciling that canonical ID, so the whole Truth write can commit once.
+pub async fn upsert_extracted_rule_candidate_from_adjudication_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    candidate: &VerifiedTruthCandidateWrite,
+) -> Result<String, DomainError> {
     // Keep primary-key replay idempotent. Reconcile a second extractor ID
     // for the same unique source evidence after detecting that exact conflict.
+    sqlx::query("SAVEPOINT truth_candidate_insert")
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
     let insert = sqlx::query(
         "INSERT INTO extracted.rule_candidates (
              rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
@@ -270,16 +269,26 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.provider_key)
     .bind(&candidate.model_key)
     .bind(&candidate.prompt_version)
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match insert {
-        Ok(_) => Ok(candidate.rule_candidate_id.clone()),
+        Ok(_) => {
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            Ok(candidate.rule_candidate_id.clone())
+        }
         Err(sqlx::Error::Database(ref db))
             if db.is_unique_violation()
                 && db.constraint()
                     == Some("rule_candidates_raw_section_id_role_concept_canonical_key_e_key") =>
         {
+            sqlx::query("ROLLBACK TO SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
             // One evidence key can have multiple extractor proposals but only
             // ONE durable SQL identity. Keep existing HITL and verified FKs.
             // A conflicting claim, source, context or rejected review fails closed.
@@ -356,14 +365,28 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
             .bind(&candidate.model_key)
             .bind(&candidate.prompt_version)
             .bind(&candidate.epistemic_status)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(classify_sqlx)?;
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
             canonical_id.ok_or_else(|| DomainError::ValidationFailure {
                 message: "duplicate source evidence has incompatible claim, context, snapshot, or rejected human review".to_string(),
             })
         }
-        Err(err) => Err(classify_sqlx(err)),
+        Err(err) => {
+            sqlx::query("ROLLBACK TO SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            Err(classify_sqlx(err))
+        }
     }
 }
 
@@ -407,6 +430,15 @@ pub async fn upsert_verified_rule_instance(
     pool: &PgPool,
     rule: &VerifiedRuleInstanceWrite,
 ) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+pub async fn upsert_verified_rule_instance_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule: &VerifiedRuleInstanceWrite,
+) -> Result<(), DomainError> {
     // Validate the precise scope BEFORE any SQL mutation.
     if rule
         .params
@@ -424,14 +456,13 @@ pub async fn upsert_verified_rule_instance(
     let target = verified_scope_target(&rule.scope).ok_or_else(|| {
         validation_failure("verified rule scope is not a supported exact applicant_profile")
     })?;
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
              WHERE profile_key = $1 AND status = 'active' FOR SHARE",
         )
         .bind(profile)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         if registered.is_none() {
@@ -501,7 +532,7 @@ pub async fn upsert_verified_rule_instance(
     .bind("cutover@1")
     .bind("deterministic")
     .bind("truth_adjudication_runtime@1")
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -518,7 +549,7 @@ pub async fn upsert_verified_rule_instance(
         )
         .bind(&rule.rule_instance_id)
         .bind(&profile)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         if has_conflicting_binding {
@@ -534,16 +565,36 @@ pub async fn upsert_verified_rule_instance(
         )
         .bind(&rule.rule_instance_id)
         .bind(profile)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
     }
-    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
 pub async fn demote_verified_rule_instance(
     pool: &PgPool,
+    rule_instance_id: &str,
+    status: &str,
+    publish_admissibility: &str,
+    verification_method: &str,
+    adjudication_reason: &str,
+) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    demote_verified_rule_instance_in_tx(
+        &mut tx,
+        rule_instance_id,
+        status,
+        publish_admissibility,
+        verification_method,
+        adjudication_reason,
+    )
+    .await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+pub async fn demote_verified_rule_instance_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rule_instance_id: &str,
     status: &str,
     publish_admissibility: &str,
@@ -564,7 +615,7 @@ pub async fn demote_verified_rule_instance(
     .bind(publish_admissibility)
     .bind(verification_method)
     .bind(adjudication_reason)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     Ok(())

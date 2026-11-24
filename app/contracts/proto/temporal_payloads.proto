@@ -804,6 +804,9 @@ message DraftQaInputPayload {
   repeated string supported_fragments = 3;
   repeated LinkRecommendationState required_links = 4;
   repeated SeoVerifiedFactSupportState verified_support = 5;
+  // Authoritative required roles from the approved page blueprint; QA must
+  // never infer completeness from the generated draft's own required flags.
+  repeated string expected_required_sections = 6;
 }
 
 message DraftQaOutputPayload {

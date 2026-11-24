@@ -785,7 +785,9 @@ async fn manual_truth_inbox_refuses_fabricated_evidence_and_replays_atomically()
 #[tokio::test]
 #[serial]
 async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow() {
-    use infrastructure::adapters::sqlx_seo_cms_adapter;
+    use infrastructure::adapters::{
+        sqlx_seo_adapter, sqlx_seo_cms_adapter, static_site_builder_adapter,
+    };
     use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -980,7 +982,11 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
     sqlx::query("INSERT INTO site.page_briefs (page_brief_key,page_node_key,blueprint_key,title) VALUES ($1,$2,$3,'Tourist page')")
         .bind(&tourist_brief).bind(&tourist_page).bind(&blueprint).execute(pool).await.unwrap();
     let manifest = serde_json::json!({
-        "content_blocks": [{"block_type":"intro","section_role":"intro","markdown":"Текст туристической страницы"}],
+        "content_blocks": [
+            {"block_type":"intro","section_role":"intro","markdown":"Текст туристической страницы"},
+            {"block_type":"related_pages","section_role":"related_pages", "heading":"Связанные страницы",
+             "markdown":format!("- Recommended internal link: hub -> {parent_page}")}
+        ],
         "claim_ledger": []
     });
     sqlx::query("INSERT INTO site.page_drafts (page_draft_key,page_node_key,page_brief_key,body_markdown,qa_verdict,truth_snapshot_ref,traceability_manifest) VALUES ($1,$2,$3,'Текст туристической страницы','publish_ready','verified-truth',$4)")
@@ -1220,6 +1226,90 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
     assert_eq!(links.as_array().unwrap().len(), 1);
     assert_eq!(links[0]["target_page_key"], parent_page);
     assert_eq!(links[0]["canonical_url_path"], parent_path);
+
+    // Public HTML is built from the EXACT approved CMS revision and scoped
+    // persisted navigation. The planner's mutable link graph must not append
+    // a second related-pages section or expose internal target page keys.
+    sqlx::query("UPDATE site.site_scopes SET market='global' WHERE scope_signature=$1")
+        .bind(&scope)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx_seo_adapter::persist_global_navigation_from_active_pages(pool, "global", "ru")
+        .await
+        .unwrap();
+    let static_dir = std::env::temp_dir().join(format!("cms-approved-static-{marker}"));
+    let preview = static_site_builder_adapter::build_static_site_candidate_incremental(
+        pool,
+        &static_dir,
+        "https://example.test",
+        &tourist_page,
+        &approved.revision_id,
+    )
+    .await
+    .unwrap();
+    let public_html = &preview.previews[0].rendered_html;
+    assert_eq!(public_html.matches("<section class=\"related\">").count(), 1);
+    assert!(public_html.contains(&format!(
+        "href=\"{}\"",
+        parent_path.trim_end_matches('/')
+    )));
+    assert!(!public_html.contains(&parent_page), "internal page ID leaked into public HTML");
+    assert!(!public_html.contains(&future_child), "unpublished target leaked into public HTML");
+    assert!(
+        !public_html.contains(&future_path),
+        "a planned but unpublished page became a public menu entry"
+    );
+    assert_eq!((preview.previews[0].required_link_count, preview.previews[0].rendered_link_count), (1, 1));
+
+    // Reconciliation can change candidate links after approval; it cannot
+    // rewrite a revision's exact authored/published destination manifest.
+    sqlx::query(
+        "UPDATE site.link_recommendations SET status='expired' \
+         WHERE source_page_key=$1 AND target_page_key=$2",
+    )
+    .bind(&tourist_page)
+    .bind(&parent_page)
+    .execute(pool)
+    .await
+    .unwrap();
+    let after_graph_change =
+        static_site_builder_adapter::build_static_site_candidate_incremental(
+            pool,
+            &static_dir,
+            "https://example.test",
+            &tourist_page,
+            &approved.revision_id,
+        )
+        .await
+        .unwrap();
+    assert!(after_graph_change.previews[0]
+        .rendered_html
+        .contains(&format!("href=\"{}\"", parent_path.trim_end_matches('/'))));
+    // Conversely, once an approved target is absent from the exact release,
+    // silently filtering it out would let the site drop a mandatory link.
+    sqlx::query(
+        "UPDATE site.cms_pages SET current_revision_id=NULL WHERE page_node_key=$1",
+    )
+    .bind(&parent_page)
+    .execute(pool)
+    .await
+    .unwrap();
+    let missing_target = static_site_builder_adapter::build_static_site_candidate_incremental(
+        pool,
+        &static_dir,
+        "https://example.test",
+        &tourist_page,
+        &approved.revision_id,
+    )
+    .await;
+    assert!(missing_target.is_err(), "approved link to missing release target must block");
+    sqlx::query("UPDATE site.cms_pages SET current_revision_id=$2 WHERE page_node_key=$1")
+        .bind(&parent_page)
+        .bind(&parent_revision)
+        .execute(pool)
+        .await
+        .unwrap();
 
     // A published root/hub can receive a new review candidate when its only
     // outgoing required recommendation points to a future, unpublished child.
@@ -1898,7 +1988,7 @@ async fn planning_atomic_link_recommend_outbox_failure_rolls_back_then_retries()
 #[cfg(feature = "e2e")]
 #[tokio::test]
 #[serial]
-async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() {
+async fn planning_atomic_navigation_late_item_failure_preserves_previous_tree() {
     use infrastructure::adapters::sqlx_seo_adapter::persist_global_navigation_from_active_pages;
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -1918,6 +2008,15 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     .execute(pool)
     .await
     .unwrap();
+    sqlx::query(
+        "INSERT INTO site.site_scopes (scope_signature,market,locale) VALUES ($1,$2,$3)",
+    )
+    .bind(&scope)
+    .bind(&market)
+    .bind(locale)
+    .execute(pool)
+    .await
+    .unwrap();
     let insert_page =
         "INSERT INTO site.page_nodes \
          (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state) \
@@ -1932,7 +2031,7 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
         .await
         .unwrap();
 
-    let baseline = persist_global_navigation_from_active_pages(pool, &market, locale, "initial")
+    let baseline = persist_global_navigation_from_active_pages(pool, &market, locale)
         .await
         .unwrap();
     assert!(!baseline.navigation_tree_key.is_empty());
@@ -1947,7 +2046,7 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     assert_eq!(old_item_count, 1);
 
     // A second page makes the next attempt replace the previous tree items
-    // and update scope page_count before the final rebuild-plan write.
+    // and update scope page_count before inserting the second menu row.
     sqlx::query(insert_page)
         .bind(&second)
         .bind(&scope)
@@ -1957,16 +2056,17 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
         .execute(pool)
         .await
         .unwrap();
-    // NOT VALID permits the existing initial plan but rejects new/updated
-    // navigation plans, ensuring the injected fault occurs at the last write.
+    // NOT VALID permits the existing first menu row, but rejects the new
+    // second item after the DELETE + first INSERT. The transaction must undo
+    // the partial menu replacement and scope-count mutation.
     sqlx::query(
-        "ALTER TABLE site.global_rebuild_plan ADD CONSTRAINT navigation_atomic_late_fault \
-         CHECK (trigger_type <> 'navigation_reconciled') NOT VALID",
+        "ALTER TABLE site.navigation_items ADD CONSTRAINT navigation_atomic_late_fault \
+         CHECK (page_node_key NOT LIKE 'navigation-atomic-second-%') NOT VALID",
     )
     .execute(pool)
     .await
     .unwrap();
-    assert!(persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+    assert!(persist_global_navigation_from_active_pages(pool, &market, locale)
         .await
         .is_err());
     let old_scope_count: i32 = sqlx::query_scalar(
@@ -1994,12 +2094,12 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     assert_eq!((old_scope_count, tree_count, second_item_count), (1, 1, 0));
 
     sqlx::query(
-        "ALTER TABLE site.global_rebuild_plan DROP CONSTRAINT navigation_atomic_late_fault",
+        "ALTER TABLE site.navigation_items DROP CONSTRAINT navigation_atomic_late_fault",
     )
     .execute(pool)
     .await
     .unwrap();
-    let updated = persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+    let updated = persist_global_navigation_from_active_pages(pool, &market, locale)
         .await
         .unwrap();
     assert_eq!(updated.navigation_tree_key, baseline.navigation_tree_key);
@@ -2019,37 +2119,25 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     .unwrap();
     assert_eq!((scope_count, item_count), (2, 2));
 
-    // A workflow reason is not a navigation revision. Replaying an unchanged
-    // tree must not reopen a rebuild that a worker already completed.
-    let completed_plan: String = sqlx::query_scalar(
-        "SELECT rebuild_plan_key FROM site.global_rebuild_plan \
-         WHERE trigger_type='navigation_reconciled' \
-           AND reason_payload->>'navigation_tree_key'=$1 \
-           AND reason_payload->>'reason'='updated'",
+    // Replaying the same snapshot is stable; no phantom rebuild plan is
+    // queued because actual dispatch uses monitoring.seo_rebuild_backlog.
+    persist_global_navigation_from_active_pages(pool, &market, locale)
+        .await
+        .unwrap();
+    let (stable_items, phantom_plans): (i64, i64) = sqlx::query_as(
+        "SELECT
+            (SELECT count(*) FROM site.navigation_items WHERE navigation_tree_key=$1),
+            (SELECT count(*) FROM site.global_rebuild_plan
+             WHERE trigger_type='navigation_reconciled')",
     )
     .bind(&updated.navigation_tree_key)
     .fetch_one(pool)
     .await
     .unwrap();
-    sqlx::query("UPDATE site.global_rebuild_plan SET status='done' WHERE rebuild_plan_key=$1")
-        .bind(&completed_plan)
-        .execute(pool)
-        .await
-        .unwrap();
-    persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
-        .await
-        .unwrap();
-    let preserved_status: String = sqlx::query_scalar(
-        "SELECT status FROM site.global_rebuild_plan WHERE rebuild_plan_key=$1",
-    )
-    .bind(&completed_plan)
-    .fetch_one(pool)
-    .await
-    .unwrap();
-    assert_eq!(preserved_status, "done");
+    assert_eq!((stable_items, phantom_plans), (2, 0));
 
-    // Removing the last active page is a new, empty revision. It must clear
-    // the visible menu and enqueue exactly one fresh rebuild on that revision.
+    // Removing the last active page clears the menu, scopes and groups; it
+    // must not enqueue an unconsumed navigation-only rebuild ceremony.
     sqlx::query(
         "UPDATE site.page_nodes SET lifecycle_state='deprecated' WHERE page_node_key=ANY($1)",
     )
@@ -2057,7 +2145,7 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     .execute(pool)
     .await
     .unwrap();
-    let emptied = persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+    let emptied = persist_global_navigation_from_active_pages(pool, &market, locale)
         .await
         .unwrap();
     assert_eq!(emptied.page_item_count, 0);
@@ -2069,46 +2157,154 @@ async fn planning_atomic_navigation_late_plan_failure_preserves_previous_tree() 
     .await
     .unwrap();
     assert_eq!(items_after_retirement, 0);
-    let empty_plan: String = sqlx::query_scalar(
-        "SELECT rebuild_plan_key FROM site.global_rebuild_plan \
-         WHERE trigger_type='navigation_reconciled' \
-           AND reason_payload->>'navigation_tree_key'=$1 \
-           AND reason_payload->>'reason'='updated' \
-           AND rebuild_plan_key<>$2",
+    let (empty_scope_pages, empty_scope_status): (i32, String) = sqlx::query_as(
+        "SELECT page_count,status FROM site.site_scopes WHERE scope_signature=$1",
     )
-    .bind(&updated.navigation_tree_key)
-    .bind(&completed_plan)
+    .bind(&scope)
     .fetch_one(pool)
     .await
     .unwrap();
-    let empty_status: String = sqlx::query_scalar(
-        "SELECT status FROM site.global_rebuild_plan WHERE rebuild_plan_key=$1",
+    assert_eq!((empty_scope_pages, empty_scope_status.as_str()), (0, "deprecated"));
+    persist_global_navigation_from_active_pages(pool, &market, locale)
+        .await
+        .unwrap();
+    let phantom_empty: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.global_rebuild_plan
+         WHERE trigger_type='navigation_reconciled'",
     )
-    .bind(&empty_plan)
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!(empty_status, "queued");
-    sqlx::query("UPDATE site.global_rebuild_plan SET status='done' WHERE rebuild_plan_key=$1")
-        .bind(&empty_plan)
+    assert_eq!(phantom_empty, 0);
+}
+
+/// Two real site markets cannot write each other's planned pages into their
+/// persisted navigation snapshots, nor retire the other market's scope.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_navigation_two_markets_are_isolated_and_retire_independently() {
+    use infrastructure::adapters::sqlx_seo_adapter::persist_global_navigation_from_active_pages;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let pool = &pg.pool;
+    let marker = Uuid::new_v4().simple().to_string();
+    let blueprint = format!("nav-markets-blueprint-{marker}");
+    sqlx::query(
+        "INSERT INTO site.page_blueprints (blueprint_key,page_type_key,dominant_intent) \
+         VALUES ($1,'country_hub_page','informational')",
+    )
+    .bind(&blueprint)
+    .execute(pool)
+    .await
+    .unwrap();
+    let scopes = [
+        (
+            format!("nav-market-a-scope-{marker}"),
+            format!("nav-market-a-{marker}"),
+            "ru-RU",
+            format!("nav-market-a-page-{marker}"),
+        ),
+        (
+            format!("nav-market-b-scope-{marker}"),
+            format!("nav-market-b-{marker}"),
+            "en-US",
+            format!("nav-market-b-page-{marker}"),
+        ),
+    ];
+    for (index, (scope, market, locale, page)) in scopes.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO site.site_scopes (scope_signature,market,locale) VALUES ($1,$2,$3)",
+        )
+        .bind(scope)
+        .bind(market)
+        .bind(*locale)
         .execute(pool)
         .await
         .unwrap();
-    persist_global_navigation_from_active_pages(pool, &market, locale, "updated")
+        sqlx::query(
+            "INSERT INTO site.page_nodes \
+             (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state,menu_group) \
+             VALUES ($1,$2,$3,'country_hub_page','informational',$4,$5,'planned',$6)",
+        )
+        .bind(page)
+        .bind(scope)
+        .bind(&blueprint)
+        .bind(format!("country-{}", index + 1))
+        .bind(format!("/{locale}/{marker}/{}", index + 1))
+        .bind("visa:shared-name")
+        .execute(pool)
         .await
         .unwrap();
-    let (plan_count, terminal_empty_plans): (i64, i64) = sqlx::query_as(
-        "SELECT count(*), count(*) FILTER (WHERE rebuild_plan_key=$2 AND status='done') \
-         FROM site.global_rebuild_plan WHERE trigger_type='navigation_reconciled' \
-           AND reason_payload->>'navigation_tree_key'=$1 \
-           AND reason_payload->>'reason'='updated'",
+    }
+    let a = persist_global_navigation_from_active_pages(
+        pool,
+        &scopes[0].1,
+        scopes[0].2,
     )
-    .bind(&updated.navigation_tree_key)
-    .bind(&empty_plan)
+    .await
+    .unwrap();
+    let b = persist_global_navigation_from_active_pages(
+        pool,
+        &scopes[1].1,
+        scopes[1].2,
+    )
+    .await
+    .unwrap();
+    assert_ne!(a.navigation_tree_key, b.navigation_tree_key);
+    assert_eq!((a.page_item_count, b.page_item_count), (1, 1));
+    for (tree, expected, forbidden) in [
+        (&a.navigation_tree_key, &scopes[0].3, &scopes[1].3),
+        (&b.navigation_tree_key, &scopes[1].3, &scopes[0].3),
+    ] {
+        let (correct, bleed): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE page_node_key=$2), \
+                    count(*) FILTER (WHERE page_node_key=$3) \
+             FROM site.navigation_items WHERE navigation_tree_key=$1 AND status='active'",
+        )
+        .bind(tree.as_str())
+        .bind(expected.as_str())
+        .bind(forbidden.as_str())
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!((correct, bleed), (1, 0));
+    }
+    // A market-B-only retirement must not change the market-A menu, scope
+    // status or rebuild revision.
+    sqlx::query("UPDATE site.page_nodes SET lifecycle_state='deprecated' WHERE page_node_key=$1")
+        .bind(&scopes[1].3)
+        .execute(pool)
+        .await
+        .unwrap();
+    let b_empty = persist_global_navigation_from_active_pages(
+        pool,
+        &scopes[1].1,
+        scopes[1].2,
+    )
+    .await
+    .unwrap();
+    assert_eq!(b_empty.page_item_count, 0);
+    let unchanged_a: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items \
+         WHERE navigation_tree_key=$1 AND page_node_key=$2",
+    )
+    .bind(&a.navigation_tree_key)
+    .bind(&scopes[0].3)
     .fetch_one(pool)
     .await
     .unwrap();
-    assert_eq!((plan_count, terminal_empty_plans), (2, 1));
+    let statuses: Vec<(String, i32, String)> = sqlx::query_as(
+        "SELECT scope_signature,page_count,status FROM site.site_scopes \
+         WHERE scope_signature = ANY($1) ORDER BY scope_signature",
+    )
+    .bind(&vec![scopes[0].0.clone(), scopes[1].0.clone()])
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(unchanged_a, 1);
+    assert!(statuses.iter().any(|row| row.0 == scopes[0].0 && row.1 == 1 && row.2 == "active"));
+    assert!(statuses.iter().any(|row| row.0 == scopes[1].0 && row.1 == 0 && row.2 == "deprecated"));
 }
 
 #[cfg(feature = "e2e")]
@@ -2195,6 +2391,85 @@ async fn planning_atomic_registered_input_late_blob_failure_rolls_back_run() {
     .await
     .unwrap();
     assert_eq!((runs, blobs), (1, 1));
+}
+
+/// The first canonical planning run may omit the precomputed scope signature.
+/// SQL must register the SAME derived scope identity before navigation reads
+/// its pages, including a fresh database with no prior site_scopes row.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn planning_atomic_first_reconcile_registers_derived_scope_for_navigation() {
+    use contracts::generated::alegria::temporal::v1::{
+        GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, PageNodeState,
+        SeoScopePayload,
+    };
+    use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
+    use seo_ports::PlanningRepository;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let marker = Uuid::new_v4().simple().to_string();
+    let page_key = format!("first-derived-scope-page-{marker}");
+    let scope = SeoScopePayload {
+        market: format!("derived-market-{marker}"),
+        locale: "ru-RU".into(),
+        country_code: "ES".into(),
+        visa_type: "tourist".into(),
+        applicant_profile: "standard".into(),
+        scope_signature: String::new(),
+        ..Default::default()
+    };
+    let identity = seo_steps::seo_step_support::scope_signature(Some(&scope)).unwrap();
+    let before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM site.site_scopes WHERE scope_signature=$1")
+            .bind(&identity)
+            .fetch_one(&pg.pool)
+            .await
+            .unwrap();
+    assert_eq!(before, 0);
+    let input = GlobalSiteReconcileInputPayload {
+        run_id: Uuid::new_v4().to_string(),
+        scope: Some(scope.clone()),
+        reconcile_reason: format!("first-derived-scope-{marker}"),
+        ..Default::default()
+    };
+    let output = GlobalSiteReconcileOutputPayload {
+        page_nodes: vec![PageNodeState {
+            page_node_key: page_key.clone(),
+            scope_signature: identity.clone(),
+            page_type_key: "country_hub_page".into(),
+            dominant_intent: "informational".into(),
+            canonical_slug: "spain".into(),
+            canonical_url_path: format!("/ru/{marker}/spain/"),
+            lifecycle_state: "planned".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let repo = SqlxSeoRuntimeRepository::new(&pg.pool);
+    repo.persist_global_site_reconcile_output(&input, &output)
+        .await
+        .unwrap();
+    let (market, locale, page_count): (String, String, i32) = sqlx::query_as(
+        "SELECT market,locale,page_count FROM site.site_scopes WHERE scope_signature=$1",
+    )
+    .bind(&identity)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!((market, locale, page_count), (scope.market, scope.locale, 1));
+    let nav_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items i \
+         JOIN site.navigation_trees t ON t.navigation_tree_key=i.navigation_tree_key \
+         WHERE t.market=$1 AND t.locale=$2 AND i.page_node_key=$3",
+    )
+    .bind(market)
+    .bind(locale)
+    .bind(page_key)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(nav_count, 1, "fresh derived scope was not included in navigation");
 }
 
 #[cfg(feature = "e2e")]
@@ -2372,12 +2647,12 @@ async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_eve
     };
     let repo = SqlxSeoRuntimeRepository::new(pool);
 
-    // Navigation's rebuild-plan insert is the LAST write, after IA pages,
-    // required-link edge, Content Gap and their Outbox events. Rejecting it
-    // must roll back every owner across the global reconcile transaction.
+    // Navigation's persisted menu item is written after the IA pages,
+    // required links, gaps and their Outbox events. Rejecting a real menu
+    // write must roll back every owner in the global reconcile transaction.
     sqlx::query(
-        "ALTER TABLE site.global_rebuild_plan ADD CONSTRAINT global_atomic_navigation_fault \
-         CHECK (trigger_type <> 'navigation_reconciled')",
+        "ALTER TABLE site.navigation_items ADD CONSTRAINT global_atomic_navigation_fault \
+         CHECK (page_node_key NOT LIKE 'global-atomic-first-%') NOT VALID",
     )
     .execute(pool)
     .await
@@ -2451,17 +2726,26 @@ async fn planning_atomic_global_reconcile_late_navigation_failure_rolls_back_eve
     .unwrap();
     assert!(optional_still_required);
     sqlx::query(
-        "ALTER TABLE site.global_rebuild_plan DROP CONSTRAINT global_atomic_navigation_fault",
+        "ALTER TABLE site.navigation_items DROP CONSTRAINT global_atomic_navigation_fault",
     )
     .execute(pool)
     .await
     .unwrap();
 
-    let successful = repo
-        .persist_global_site_reconcile_output(&input, &output)
+    repo.persist_global_site_reconcile_output(&input, &output)
         .await
         .unwrap();
-    assert_eq!(successful.page_item_count, 2);
+    let reconciled_menu_items: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.navigation_items i \
+         JOIN site.navigation_trees t ON t.navigation_tree_key=i.navigation_tree_key \
+         WHERE t.market=$1 AND i.page_node_key=ANY($2)",
+    )
+    .bind(input.scope.as_ref().unwrap().market.as_str())
+    .bind(vec![first.clone(), second.clone()])
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(reconciled_menu_items, 2);
     let obsolete_after_success: String = sqlx::query_scalar(
         "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key=$1",
     )

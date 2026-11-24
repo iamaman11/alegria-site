@@ -1,12 +1,14 @@
 use std::env;
 
 use contracts::generated::alegria::sync::v1::{
-    Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, SeoCmsEventPayload,
-    SeoGraphProjectionPayload,
+    Neo4jRuleUpsertPayload, QdrantDeleteCommand, QdrantEntityPayload, QdrantUpsertCommand,
+    SeoCmsEventPayload, SeoGraphProjectionPayload,
 };
 use primitives::errors::{DomainError, ErrorClass};
+use primitives::hash::blake3_hex;
 use primitives::qdrant_point_id::{is_valid_qdrant_point_id, qdrant_point_id_v1};
 use prost::Message;
+use sqlx::{Connection, Row};
 
 use super::neo4j_materialization_adapter;
 use super::qdrant_client_adapter::{
@@ -28,6 +30,7 @@ const VOYAGE4_COLLECTIONS: [&str; 3] = [
 pub enum DispatchStage {
     Contract,
     Embedding,
+    Registry,
     Qdrant,
     Neo4j,
 }
@@ -284,6 +287,116 @@ async fn dispatch_qdrant_upsert(payload_bytes: &[u8]) -> Result<(), DispatchErro
     Ok(())
 }
 
+async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchError> {
+    let cmd = QdrantDeleteCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
+    if cmd.collection_name != "verified_rules_4" || cmd.entity_type != "rule_instance" {
+        return Err(DispatchError::contract(
+            "QdrantDeleteCommand only supports verified rule projection tombstones",
+        ));
+    }
+    if cmd.entity_key.trim().is_empty() {
+        return Err(DispatchError::contract("QdrantDeleteCommand.entity_key is empty"));
+    }
+    let expected_point_id = qdrant_point_id_v1(
+        &cmd.collection_name,
+        &cmd.entity_type,
+        &cmd.entity_key,
+    );
+    if cmd.point_id != expected_point_id {
+        return Err(DispatchError::contract(
+            "QdrantDeleteCommand.point_id does not match canonical identity",
+        ));
+    }
+    let qdrant_url = env::var("QDRANT_URL").unwrap_or_else(|_| DEFAULT_QDRANT_URL.to_string());
+    let client = connect_qdrant(&qdrant_url)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?;
+    // A repeated tombstone is harmless even if no collection was ever
+    // materialized, for example when retrieval was disabled during demotion.
+    if !client
+        .collection_exists(&cmd.collection_name)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))?
+    {
+        return Ok(());
+    }
+    super::qdrant_client_adapter::delete_point_ids(
+        &client,
+        &cmd.collection_name,
+        vec![expected_point_id],
+    )
+    .await
+    .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))
+}
+
+/// Outbox delivery may retry out of order (SKIP LOCKED claims). For verified
+/// rules the SQL registry and the most recent durable intent decide whether an
+/// event is still current. The advisory lock serializes Qdrant effects for one
+/// point; a delayed upsert can never resurrect a later tombstone, and a delayed
+/// tombstone cannot erase a newer verification. Truth writers never perform
+/// network calls inside their own SQL transaction.
+async fn dispatch_verified_rule_projection(
+    event_type: &str,
+    aggregate_key: &str,
+    payload_bytes: &[u8],
+) -> Result<(), DispatchError> {
+    let database_url = env::var("DATABASE_URL")
+        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let mut connection = sqlx::PgConnection::connect(&database_url)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let mut tx = connection
+        .begin()
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let lock_key = format!("qdrant|verified_rules_4|rule_instance|{aggregate_key}");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(&lock_key)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let latest = sqlx::query(
+        "SELECT event_type, payload_hash
+         FROM system.sync_outbox
+         WHERE aggregate_type='rule_instance' AND aggregate_key=$1
+           AND target_system='qdrant'
+           AND event_type IN ('QdrantUpsertCommand', 'QdrantDeleteCommand')
+         ORDER BY created_at DESC, event_id DESC
+         LIMIT 1",
+    )
+    .bind(aggregate_key)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let latest_matches = latest.is_some_and(|row| {
+        row.get::<String, _>("event_type") == event_type
+            && row.get::<String, _>("payload_hash") == blake3_hex(payload_bytes)
+    });
+    let registry_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM kb.qdrant_points
+            WHERE collection_name='verified_rules_4'
+              AND entity_type='rule_instance' AND entity_key=$1
+        )",
+    )
+    .bind(aggregate_key)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    let expected_active = event_type == "QdrantUpsertCommand";
+    if latest_matches && registry_active == expected_active {
+        match event_type {
+            "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload_bytes).await?,
+            "QdrantDeleteCommand" => dispatch_qdrant_delete(payload_bytes).await?,
+            _ => return Err(DispatchError::contract("unknown verified rule event")),
+        }
+    }
+    tx.commit()
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
+    Ok(())
+}
+
 async fn dispatch_seo_graph_projection(
     aggregate_key: &str,
     payload_bytes: &[u8],
@@ -344,7 +457,36 @@ pub async fn dispatch_event(
 ) -> Result<(), DispatchError> {
     if target_system == "qdrant" {
         return match event_type {
-            "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload_bytes).await,
+            "QdrantUpsertCommand" => {
+                let cmd = QdrantUpsertCommand::decode(payload_bytes)
+                    .map_err(DispatchError::contract)?;
+                if cmd.collection_name == "verified_rules_4" && cmd.entity_type == "rule_instance" {
+                    if cmd.entity_key != aggregate_key {
+                        return Err(DispatchError::contract(
+                            "QdrantUpsertCommand aggregate_key does not match rule identity",
+                        ));
+                    }
+                    dispatch_verified_rule_projection(event_type, aggregate_key, payload_bytes)
+                        .await
+                } else {
+                    dispatch_qdrant_upsert(payload_bytes).await
+                }
+            }
+            "QdrantDeleteCommand" => {
+                if payload_type != "alegria.outbox.qdrant_delete_command.v1" {
+                    return Err(DispatchError::contract(
+                        "unsupported QdrantDeleteCommand payload_type",
+                    ));
+                }
+                let cmd = QdrantDeleteCommand::decode(payload_bytes)
+                    .map_err(DispatchError::contract)?;
+                if cmd.entity_key != aggregate_key {
+                    return Err(DispatchError::contract(
+                        "QdrantDeleteCommand aggregate_key does not match rule identity",
+                    ));
+                }
+                dispatch_verified_rule_projection(event_type, aggregate_key, payload_bytes).await
+            }
             _ => Err(DispatchError::contract(format!(
                 "unsupported qdrant event_type: {event_type}"
             ))),

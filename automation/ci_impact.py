@@ -171,6 +171,10 @@ PUBLISHING_A17_PATHS = {
 OUTBOX_A14_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/verified_rule_projection_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_runtime_store.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_hitl_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_step_ledger_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/source_registry.rs",
+    "app/rust/services/temporal/src/activities/operations/truth_write_and_fixture_tests.rs",
     "app/rust/services/outbox_worker/src/worker.rs",
     "app/rust/services/outbox_worker/src/materialize.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs",
@@ -195,6 +199,8 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/human_review_decision.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/types_review_helpers.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
+    "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs",
+    "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
@@ -229,6 +235,7 @@ DRAFT_QA_SCENARIO_PATHS = {
 # owns the test, while this registry only selects its exact Cargo filter.
 PLANNING_ATOMICITY_PATHS = {
     "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
+    "app/rust/crates/seo_domain/src/link_recommendation.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",

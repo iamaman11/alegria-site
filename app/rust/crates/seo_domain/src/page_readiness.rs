@@ -3,9 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::editorial::{
-    factual_role, mandatory_section_roles, role_matches_section, VerifiedSupport,
-};
+use crate::editorial::{factual_role, required_section_roles, role_matches_section, VerifiedSupport};
 
 #[derive(Debug, Clone, Copy)]
 pub struct PageNode<'a> {
@@ -78,14 +76,7 @@ pub fn missing_required_factual_roles(
     required_sections: &[String],
     support: &[VerifiedSupport<'_>],
 ) -> Vec<String> {
-    let required_roles = if required_sections.is_empty() {
-        mandatory_section_roles()
-            .iter()
-            .map(|role| (*role).to_string())
-            .collect::<Vec<_>>()
-    } else {
-        required_sections.to_vec()
-    };
+    let required_roles = required_section_roles(required_sections);
     let mut missing = required_roles
         .into_iter()
         .filter(|role| factual_role(role))
