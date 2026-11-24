@@ -99,7 +99,7 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         .await;
     seed_truth_certification_support_bundle(&infra.postgres.pool, &input.context_key, &fixture)
         .await;
-    let _outbox = spawn_outbox_worker(&worker_env);
+    let mut outbox = spawn_outbox_worker(&worker_env);
     let mut worker = spawn_temporal_worker(&worker_env);
     // Temporal persists the workflow task until a poller is available.
     // The real workflow outcome below proves readiness, not a fixed sleep.
@@ -211,6 +211,36 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
                 // Report the *actual* failure boundary rather than treating every
                 // missing editorial task as a slow LLM or raising the timeout.
                 let steps = certification_failure_diagnostics(&infra.postgres.pool, &run_id).await;
+                // A concurrent, mixed-target Outbox worker can own an entire
+                // leased batch while the Temporal Neo4j sync waits. Preserve
+                // the exact leased event types, retries and error/lease state
+                // so a missing ACK is not misdiagnosed as an editorial timeout.
+                let outbox_process = format!("{:?}", outbox.child.try_wait());
+                let graph_outbox = sqlx::query(
+                    "SELECT event_type, status, retry_count, worker_id, \
+                            locked_until::text AS locked_until_text, last_error \
+                     FROM system.sync_outbox \
+                     WHERE run_id=$1 AND target_system='neo4j' \
+                     ORDER BY created_at,event_type LIMIT 40",
+                )
+                .bind(&run_id)
+                .fetch_all(&infra.postgres.pool)
+                .await
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| {
+                            format!(
+                                "{}:{}:retry={}:owner={:?}:until={:?}:error={:?}",
+                                row.get::<String, _>("event_type"),
+                                row.get::<String, _>("status"),
+                                row.get::<i32, _>("retry_count"),
+                                row.get::<Option<String>, _>("worker_id"),
+                                row.get::<Option<String>, _>("locked_until_text"),
+                                row.get::<Option<String>, _>("last_error"),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                });
                 let verified_facts: Result<i64, sqlx::Error> = sqlx::query_scalar(
                     "SELECT count(*)::bigint FROM verified.rule_instances
                      WHERE context_key = $1 AND status = 'verified'",
@@ -265,7 +295,8 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
                      run_id={run_id}; execution_run={run_status:?}; \
                      workflow={temporal}; truth_driver_finished={}; \
                      verified_facts={verified_facts:?}; verified_vectors={verified_vectors:?}; \
-                     manual_jobs={jobs:?}; last_steps=\n{steps}",
+                     manual_jobs={jobs:?}; outbox_process={outbox_process}; \
+                     graph_outbox={graph_outbox:?}; last_steps=\n{steps}",
                     truth_driver.is_finished(),
                 );
             }
