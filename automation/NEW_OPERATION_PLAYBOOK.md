@@ -67,6 +67,9 @@ GitHub exact-head CI. Перед PR нужен `cargo fmt --all -- --check`; CI 
 - Все применимые jobs в **единственном** `.github/workflows/ci.yml` завершились
   `success`; отсутствие suite отражено как `not_applicable`, не как PASS.
 - Измерены затраты, не добавлена новая церемония ради одного теста.
+- Объединяйте принятый PR через GitHub **Merge pull request** с двумя
+  родителями, а не Squash/Rebase. Основной CI проверяет точную связь
+  merge-коммита с проверенным PR head и отвергает иной тип слияния.
 
 ## 4. Release — отдельное действие
 
