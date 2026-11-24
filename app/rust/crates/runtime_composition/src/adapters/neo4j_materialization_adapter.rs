@@ -309,7 +309,9 @@ async fn materialize_link_recommendation(
         format!("invalid link recommendation score for {link_recommendation_key}")
     })?;
     if !score.is_finite() || !(0.0..=1.0).contains(&score) {
-        bail!("invalid link recommendation score outside finite [0,1] for {link_recommendation_key}");
+        bail!(
+            "invalid link recommendation score outside finite [0,1] for {link_recommendation_key}"
+        );
     }
 
     // A link outbox event can be claimed before the PageNode events. Materialize

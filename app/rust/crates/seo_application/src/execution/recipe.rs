@@ -223,7 +223,10 @@ impl fmt::Display for SeoStepRecipeError {
                 write!(f, "step {step:?} requires unavailable {input:?}")
             }
             Self::StaleInput { step, input } => {
-                write!(f, "step {step:?} requires {input:?} renewed after an invalidating operation")
+                write!(
+                    f,
+                    "step {step:?} requires {input:?} renewed after an invalidating operation"
+                )
             }
             Self::DryRunPublishConflict => {
                 write!(f, "dry-run persistence cannot authorize publishing effects")

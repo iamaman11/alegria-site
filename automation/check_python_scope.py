@@ -29,6 +29,8 @@ ALLOWED_SQL_FILES: set[Path] = {
     (ROOT / "automation" / "check_global_navigation_policy.py").resolve(),
     (ROOT / "automation" / "check_llm_extraction_contract.py").resolve(),
     (ROOT / "automation" / "check_rebuild_queue_execution_path.py").resolve(),
+    # Reads expected SQL fragments from Rust source; never opens a DB connection.
+    (ROOT / "automation" / "check_reliability_contracts.py").resolve(),
     (ROOT / "automation" / "check_seo_provenance_invariants.py").resolve(),
     (ROOT / "automation" / "check_serp_intelligence_contract.py").resolve(),
     (ROOT / "automation" / "local_db_baseline.py").resolve(),

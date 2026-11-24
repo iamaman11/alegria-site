@@ -71,7 +71,10 @@ pub enum VerifiedRuleTruthFenceError {
     #[error("invalid verified-rule Outbox contract: {0}")]
     InvalidOutboxContract(&'static str),
     #[error("verified-rule projection identity {aggregate_key} has unordered historical Outbox event {event_id}; manual cutover required")]
-    LegacyUnordered { aggregate_key: String, event_id: Uuid },
+    LegacyUnordered {
+        aggregate_key: String,
+        event_id: Uuid,
+    },
     #[error("verified-rule Outbox idempotency key conflicts with a different event or stale revision for {aggregate_key}")]
     IdempotencyConflict { aggregate_key: String },
     #[error("verified-rule projection revision head and durable Outbox disagree for {aggregate_key}; manual reconciliation required")]
@@ -150,7 +153,9 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
     Ok(())
 }
 
-fn validate_verified_rule_envelope(event: &OutboxEnvelope) -> std::result::Result<(), &'static str> {
+fn validate_verified_rule_envelope(
+    event: &OutboxEnvelope,
+) -> std::result::Result<(), &'static str> {
     if event.target_system != "qdrant" || event.aggregate_type != "rule_instance" {
         return Err("expected qdrant/rule_instance identity");
     }
@@ -165,7 +170,8 @@ fn validate_verified_rule_envelope(event: &OutboxEnvelope) -> std::result::Resul
     if event.payload_type != expected_payload_type || event.schema_version != 1 {
         return Err("unsupported verified-rule wire contract");
     }
-    if event.payload_bytes.is_empty() || event.idempotency_key.is_empty()
+    if event.payload_bytes.is_empty()
+        || event.idempotency_key.is_empty()
         || event.run_id.is_empty()
         || event.idempotency_key.trim() != event.idempotency_key
         || event.run_id.trim() != event.run_id

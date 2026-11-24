@@ -265,8 +265,9 @@ mod tests {
             model: "voyage".into(),
             vectors: vec![vec![0.0; 1024]],
         };
-        assert!(unstaged_global_verified_rule_ids(&outcomes, &change, Some(&embeddings))
-            .is_empty());
+        assert!(
+            unstaged_global_verified_rule_ids(&outcomes, &change, Some(&embeddings)).is_empty()
+        );
         let mut not_staged = change;
         not_staged.upserts.clear();
         assert_eq!(
