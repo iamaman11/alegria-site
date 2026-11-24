@@ -70,7 +70,10 @@ pub fn group_by_semantic_identity(
             role: candidate.role.clone(),
             concept_canonical_key: candidate.concept_canonical_key.clone(),
         };
-        groups.entry(identity).or_insert_with(Vec::new).push(candidate);
+        groups
+            .entry(identity)
+            .or_insert_with(Vec::new)
+            .push(candidate);
     }
     groups
 }
@@ -91,9 +94,13 @@ pub fn candidate_group_decisions(
             "structured" => result.adjudicable.push(candidate.structured()),
             "needs_hitl" => {
                 result.adjudicable.push(candidate.structured());
-                result.needs_hitl_ids.push(candidate.rule_candidate_id.clone());
+                result
+                    .needs_hitl_ids
+                    .push(candidate.rule_candidate_id.clone());
             }
-            "rejected" => result.rejected_ids.push(candidate.rule_candidate_id.clone()),
+            "rejected" => result
+                .rejected_ids
+                .push(candidate.rule_candidate_id.clone()),
             _ => {}
         }
     }

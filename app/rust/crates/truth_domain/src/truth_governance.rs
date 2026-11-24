@@ -421,14 +421,10 @@ mod tests {
         ]);
         let mut first = candidate("1", "a", 35);
         let mut second = candidate("2", "b", 35);
-        first.params = TruthParamValue::object([(
-            "amount",
-            TruthParamValue::Decimal(35.000000001),
-        )]);
-        second.params = TruthParamValue::object([(
-            "amount",
-            TruthParamValue::Decimal(35.000000002),
-        )]);
+        first.params =
+            TruthParamValue::object([("amount", TruthParamValue::Decimal(35.000000001))]);
+        second.params =
+            TruthParamValue::object([("amount", TruthParamValue::Decimal(35.000000002))]);
 
         let result = adjudicate_truth_candidates_with_governance(&[first, second], &registry);
         assert_eq!(result.overall_status, "needs_hitl");

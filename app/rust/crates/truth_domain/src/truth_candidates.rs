@@ -1010,21 +1010,18 @@ mod tests {
         let a = TruthStructuredCandidate {
             role: "fee".into(),
             concept_canonical_key: "visa_fee".into(),
-            params: TruthParamValue::object([(
-                "amount",
-                TruthParamValue::Decimal(35.000000001),
-            )]),
+            params: TruthParamValue::object([("amount", TruthParamValue::Decimal(35.000000001))]),
             ..Default::default()
         };
         let b = TruthStructuredCandidate {
-            params: TruthParamValue::object([(
-                "amount",
-                TruthParamValue::Decimal(35.000000002),
-            )]),
+            params: TruthParamValue::object([("amount", TruthParamValue::Decimal(35.000000002))]),
             ..a.clone()
         };
         assert_eq!(a.params.stable_signature(), b.params.stable_signature());
-        assert_ne!(a.params.exact_conflict_signature(), b.params.exact_conflict_signature());
+        assert_ne!(
+            a.params.exact_conflict_signature(),
+            b.params.exact_conflict_signature()
+        );
         assert_eq!(contradiction_count(&[&a, &b]), 1);
     }
 

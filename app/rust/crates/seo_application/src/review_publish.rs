@@ -1,7 +1,8 @@
 use contracts::generated::alegria::temporal::v1::{
     CmsPublishInputPayload, CmsPublishOutputPayload, FinalizePublishInputPayload,
-    FinalizePublishOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    PublishArtifact, RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
+    FinalizePublishOutputPayload, PublishArtifact, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RenderPreviewValidateInputPayload,
+    RenderPreviewValidateOutputPayload,
 };
 use primitives::errors::DomainError;
 use seo_ports::{CmsApproval, CmsReviewPort, PublishArtifactRepository};
@@ -65,7 +66,11 @@ pub fn plan_publish_materialization(
     let artifact = input.publish_artifact.clone().unwrap_or(PublishArtifact {
         artifact_key: seo_domain::artifact_identity::seo_artifact_key(
             "publish_artifact",
-            &[&input.page_node_key, &input.revision_id, "headless_snapshot"],
+            &[
+                &input.page_node_key,
+                &input.revision_id,
+                "headless_snapshot",
+            ],
         ),
         page_node_key: input.page_node_key.clone(),
         revision_id: input.revision_id.clone(),
@@ -202,7 +207,10 @@ mod tests {
         });
         assert_eq!(blocked.verdict, "blocked");
         assert_eq!(blocked.current_status, "blocked");
-        assert_eq!(blocked.blocking_reasons, vec!["missing_approval".to_string()]);
+        assert_eq!(
+            blocked.blocking_reasons,
+            vec!["missing_approval".to_string()]
+        );
     }
 
     struct FakeReviewPort;
