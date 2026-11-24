@@ -51,7 +51,7 @@ use std::time::Duration;
 const SEMANTIC_SWEEP_TIMEOUT_SECS: u64 = 600;
 
 #[derive(Default)]
-pub(super) struct SeoSiteBuildCanonicalCutoverWorkflow {
+pub struct SeoSiteBuildCanonicalCutoverWorkflow {
     paused: bool,
     waiting_hitl: bool,
     resume_requested: bool,

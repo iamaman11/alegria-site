@@ -25,7 +25,7 @@ use crate::activities::AlegriaActivities;
 use super::runtime::{db_opts, workflow_contract_failure, BasicWorkflowStatus};
 
 #[workflow]
-pub(super) struct SeoSiteBuildComposableV2Workflow {
+pub struct SeoSiteBuildComposableV2Workflow {
     /// Deserialized once from the Temporal start event; never mutated.
     plan: SeoDurablePlan,
     paused: bool,
