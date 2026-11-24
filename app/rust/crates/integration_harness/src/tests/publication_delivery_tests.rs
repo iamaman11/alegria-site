@@ -18,6 +18,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     use seo_ports::{
         PublicReleaseDelivery, PublicReleaseFile, ReleaseDeliveryError, ReleaseDeliveryStage,
     };
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::{
         collections::HashMap,
         path::Path,
@@ -53,6 +54,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         base_url: String,
         http: Arc<PublicHttpState>,
         fault: Mutex<Option<Fault>>,
+        deployments: AtomicUsize,
     }
 
     impl ControlledDelivery {
@@ -89,21 +91,43 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
             release: &Path,
             _previous: Option<&Path>,
         ) -> Result<(), ReleaseDeliveryError> {
+            self.deployments.fetch_add(1, Ordering::SeqCst);
             if self.consume_fault(Fault::Upload) {
                 return Err(Self::error(
                     ReleaseDeliveryStage::Upload,
                     "injected upload failure",
                 ));
             }
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &std::fs::read(release.join("alegria-static-manifest.json"))
+                    .map_err(|err| Self::error(ReleaseDeliveryStage::Upload, &err.to_string()))?,
+            )
+            .map_err(|err| Self::error(ReleaseDeliveryStage::Upload, &err.to_string()))?;
+            let mut paths = vec![
+                ("sitemap.xml".to_string(), "/sitemap.xml".to_string()),
+                ("robots.txt".to_string(), "/robots.txt".to_string()),
+            ];
+            for page in manifest["pages"].as_array().ok_or_else(|| {
+                Self::error(
+                    ReleaseDeliveryStage::Upload,
+                    "missing release manifest pages",
+                )
+            })? {
+                let route = page["canonical_url_path"].as_str().ok_or_else(|| {
+                    Self::error(ReleaseDeliveryStage::Upload, "missing canonical route")
+                })?;
+                let relative = if route == "/" {
+                    "index.html".to_string()
+                } else {
+                    format!("{}/index.html", route.trim_matches('/'))
+                };
+                paths.push((relative, route.to_string()));
+            }
             let mut files = HashMap::new();
-            for (path, route) in [
-                ("index.html", "/"),
-                ("sitemap.xml", "/sitemap.xml"),
-                ("robots.txt", "/robots.txt"),
-            ] {
+            for (path, route) in paths {
                 let bytes = std::fs::read(release.join(path))
                     .map_err(|err| Self::error(ReleaseDeliveryStage::Upload, &err.to_string()))?;
-                files.insert(route.to_string(), bytes);
+                files.insert(route, bytes);
             }
             *self.http.files.lock().unwrap() = files;
             Ok(())
@@ -174,6 +198,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         std::fs::write(candidate.join("robots.txt"), b"User-agent: *\n").unwrap();
         let manifest = serde_json::json!({
             "base_url": "https://staging.alegria.by",
+            "navigation_fingerprint": infrastructure::adapters::sqlx_static_site_adapter::navigation_fingerprint(&[]),
             "page_count": 1,
             "pages": [{
                 "page_node_key": page,
@@ -226,6 +251,43 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         }
     }
 
+    // Produce a genuine full-site candidate: the approved target and all
+    // currently published dependencies are represented by their exact HTML.
+    fn site_candidate(
+        input: &FinalizePublishInputPayload,
+        pages: &[(&str, &str, &str, &str, &str)],
+    ) {
+        let root = Path::new(&input.publish_artifact.as_ref().unwrap().artifact_uri);
+        let mut manifest_pages = Vec::new();
+        for &(page, revision, status, route, html) in pages {
+            let relative = if route == "/" {
+                "index.html".to_string()
+            } else {
+                format!("{}/index.html", route.trim_matches('/'))
+            };
+            let path = root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, html).unwrap();
+            manifest_pages.push(serde_json::json!({
+                "page_node_key": page,
+                "revision_id": revision,
+                "status": status,
+                "canonical_url_path": route,
+            }));
+        }
+        let manifest = serde_json::json!({
+            "base_url": "https://staging.alegria.by",
+            "navigation_fingerprint": infrastructure::adapters::sqlx_static_site_adapter::navigation_fingerprint(&[]),
+            "page_count": manifest_pages.len(),
+            "pages": manifest_pages,
+        });
+        std::fs::write(
+            root.join("alegria-static-manifest.json"),
+            manifest.to_string(),
+        )
+        .unwrap();
+    }
+
     let pg = PostgresHarness::start().await.unwrap();
     let pool = &pg.pool;
     let root = std::env::temp_dir().join(format!("alegria-a17-{}", Uuid::new_v4()));
@@ -262,6 +324,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         base_url: base_url.clone(),
         http,
         fault: Mutex::new(None),
+        deployments: AtomicUsize::new(0),
     };
 
     let marker = Uuid::new_v4().simple().to_string();
@@ -367,6 +430,44 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     ).bind(&page).fetch_one(pool).await.unwrap();
     assert_eq!(outbox_after, outbox_before);
 
+    // A completed A may be resumed after B committed. It must not rewind the
+    // public symlink, Cloudflare upload, CMS pointer, or logical Outbox.
+    let deployed_before = delivery.deployments.load(Ordering::SeqCst);
+    let live_before = std::fs::read_link(root.join("public")).unwrap();
+    let stale = persist_finalize_publish_output_with_delivery(
+        pool,
+        &first,
+        &seo_application::review_publish::plan_finalize_publish(&first),
+        &delivery,
+    )
+    .await
+    .expect_err("late completed A must not republish after B");
+    assert!(format!("{stale:?}").contains("stale_publish_candidate"));
+    assert_eq!(delivery.deployments.load(Ordering::SeqCst), deployed_before);
+    assert_eq!(
+        std::fs::read_link(root.join("public")).unwrap(),
+        live_before
+    );
+    assert_eq!(
+        reqwest::get(&base_url).await.unwrap().text().await.unwrap(),
+        "release-2"
+    );
+    let current_after_late_a: String =
+        sqlx::query_scalar("SELECT current_revision_id FROM site.cms_pages WHERE page_node_key=$1")
+            .bind(&page)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(current_after_late_a, second.revision_id);
+    let events_after_late_a: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='seo_page_published'",
+    )
+    .bind(&page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(events_after_late_a, outbox_before);
+
     // Simulate process death after external switch, before committing the
     // third release in PostgreSQL. Startup must restore the second release.
     let committed_release = std::fs::read_link(root.join("public")).unwrap();
@@ -379,6 +480,14 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     ] {
         std::fs::write(uncommitted_release.join(name), bytes).unwrap();
     }
+    // The test delivery reads the release's complete page manifest, just as
+    // it does for actual multi-page publications. Preserve the committed page
+    // map while simulating a crash after switching to different HTML bytes.
+    std::fs::copy(
+        committed_release.join("alegria-static-manifest.json"),
+        uncommitted_release.join("alegria-static-manifest.json"),
+    )
+    .unwrap();
     delivery.deploy(&uncommitted_release, None).unwrap();
     let next_pointer = root.join(".a17-switch");
     std::os::unix::fs::symlink(&uncommitted_release, &next_pointer).unwrap();
@@ -406,6 +515,194 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         reqwest::get(&base_url).await.unwrap().text().await.unwrap(),
         "release-2"
     );
+    assert!(!root.join(".alegria-pending-publication.json").exists());
+
+    // Publish a real two-page release, then advance only its dependency.
+    // A complete candidate with an older dependency revision must not pass
+    // merely because its own approved target revision still exists.
+    let extra_page = format!("publish-a17-extra-{marker}");
+    let extra_brief = format!("publish-a17-extra-brief-{marker}");
+    sqlx::query("INSERT INTO site.page_nodes (page_node_key,scope_signature,blueprint_key,page_type_key,dominant_intent,canonical_slug,canonical_url_path,lifecycle_state) VALUES ($1,$2,$3,'country_hub_page','informational','extra','/extra','approved')")
+        .bind(&extra_page).bind(&scope).bind(&blueprint)
+        .execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO site.page_briefs (page_brief_key,page_node_key,blueprint_key,title) VALUES ($1,$2,$3,'Extra page')")
+        .bind(&extra_brief).bind(&extra_page).bind(&blueprint)
+        .execute(pool).await.unwrap();
+    let extra_v1 = revision(pool, &root, &extra_page, &extra_brief, &blueprint, 3).await;
+    sqlx::query("INSERT INTO site.cms_pages (page_node_key,scope_signature,canonical_url_path,locale_code,page_type_key,dominant_intent_key,cms_document_id,current_revision_id,current_status) VALUES ($1,$2,'/extra','ru','country_hub_page','informational',$3,$4,'approved')")
+        .bind(&extra_page).bind(&scope).bind(format!("doc-extra-{marker}"))
+        .bind(&extra_v1.revision_id).execute(pool).await.unwrap();
+    site_candidate(
+        &extra_v1,
+        &[
+            (&page, &second.revision_id, "published", "/", "release-2"),
+            (
+                &extra_page,
+                &extra_v1.revision_id,
+                "approved",
+                "/extra",
+                "extra-v1",
+            ),
+        ],
+    );
+    let first_extra = persist_finalize_publish_output_with_delivery(
+        pool,
+        &extra_v1,
+        &seo_application::review_publish::plan_finalize_publish(&extra_v1),
+        &delivery,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_extra.verdict, "published");
+    assert_eq!(
+        reqwest::get(&base_url).await.unwrap().text().await.unwrap(),
+        "release-2"
+    );
+    assert_eq!(
+        reqwest::get(format!("{base_url}/extra"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "extra-v1"
+    );
+
+    let old_manifest = revision(pool, &root, &page, &brief, &blueprint, 4).await;
+    site_candidate(
+        &old_manifest,
+        &[
+            (
+                &page,
+                &old_manifest.revision_id,
+                "approved",
+                "/",
+                "late-root",
+            ),
+            (
+                &extra_page,
+                &extra_v1.revision_id,
+                "published",
+                "/extra",
+                "extra-v1",
+            ),
+        ],
+    );
+    let extra_v2 = revision(pool, &root, &extra_page, &extra_brief, &blueprint, 5).await;
+    site_candidate(
+        &extra_v2,
+        &[
+            (&page, &second.revision_id, "published", "/", "release-2"),
+            (
+                &extra_page,
+                &extra_v2.revision_id,
+                "approved",
+                "/extra",
+                "extra-v2",
+            ),
+        ],
+    );
+    let second_extra = persist_finalize_publish_output_with_delivery(
+        pool,
+        &extra_v2,
+        &seo_application::review_publish::plan_finalize_publish(&extra_v2),
+        &delivery,
+    )
+    .await
+    .unwrap();
+    assert_eq!(second_extra.verdict, "published");
+    assert_eq!(
+        reqwest::get(format!("{base_url}/extra"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "extra-v2"
+    );
+    let deployed_before = delivery.deployments.load(Ordering::SeqCst);
+    let live_before = std::fs::read_link(root.join("public")).unwrap();
+    let root_events_before: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='seo_page_published'",
+    )
+    .bind(&page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let stale_dependency = persist_finalize_publish_output_with_delivery(
+        pool,
+        &old_manifest,
+        &seo_application::review_publish::plan_finalize_publish(&old_manifest),
+        &delivery,
+    )
+    .await
+    .expect_err("old full-site dependency revision must not replace newer HTML");
+    assert!(format!("{stale_dependency:?}").contains("stale_publish_candidate"));
+    assert_eq!(delivery.deployments.load(Ordering::SeqCst), deployed_before);
+    assert_eq!(
+        std::fs::read_link(root.join("public")).unwrap(),
+        live_before
+    );
+    assert_eq!(
+        reqwest::get(&base_url).await.unwrap().text().await.unwrap(),
+        "release-2"
+    );
+    assert_eq!(
+        reqwest::get(format!("{base_url}/extra"))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap(),
+        "extra-v2"
+    );
+    let final_revisions: Vec<(String, String)> = sqlx::query_as(
+        "SELECT page_node_key, current_revision_id FROM site.cms_pages WHERE page_node_key=$1 OR page_node_key=$2 ORDER BY page_node_key",
+    )
+    .bind(&page)
+    .bind(&extra_page)
+    .fetch_all(pool)
+    .await
+    .unwrap();
+    assert_eq!(final_revisions.len(), 2);
+    assert_eq!(
+        final_revisions
+            .iter()
+            .find(|(key, _)| key == &page)
+            .unwrap()
+            .1,
+        second.revision_id
+    );
+    assert_eq!(
+        final_revisions
+            .iter()
+            .find(|(key, _)| key == &extra_page)
+            .unwrap()
+            .1,
+        extra_v2.revision_id
+    );
+    let old_candidate_status: (String, String) = sqlx::query_as(
+        "SELECT r.revision_status,a.status FROM site.cms_page_revisions r JOIN site.publish_artifacts a ON a.revision_id=r.revision_id WHERE r.revision_id=$1",
+    )
+    .bind(&old_manifest.revision_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        old_candidate_status,
+        (
+            "approved".to_string(),
+            "built_pending_validation".to_string()
+        )
+    );
+    let root_events_after: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='seo_page_published'",
+    )
+    .bind(&page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(root_events_after, root_events_before);
     assert!(!root.join(".alegria-pending-publication.json").exists());
     server.abort();
     std::fs::remove_dir_all(&root).unwrap();

@@ -68,6 +68,12 @@ pub async fn persist_finalize_publish_output_with_delivery(
             {
                 return Err(validation_failure("replayed publication artifact/run identity changed"));
             }
+            // The exact live revision may be retried after an ambiguous COMMIT,
+            // but never reverify a stale full-site snapshot as though it were
+            // still the currently approved release.
+            ensure_publication_candidate_fresh(
+                &mut tx, &artifact, &input.page_node_key, &input.revision_id, true,
+            ).await?;
             verify_committed_release(&artifact, &input.page_node_key, &input.revision_id, delivery)
                 .await.map_err(validation_failure)?;
             tx.commit().await.map_err(classify_sqlx)?;
@@ -82,6 +88,12 @@ pub async fn persist_finalize_publish_output_with_delivery(
 
     let mut activation: Option<PublicationActivation> = None;
     if should_activate {
+        // Lock-protected freshness is a publication precondition, not a
+        // delivery failure. A stale run must not change CMS status, events,
+        // Outbox, files, or Cloudflare state before returning its conflict.
+        ensure_publication_candidate_fresh(
+            &mut tx, &artifact, &input.page_node_key, &input.revision_id, false,
+        ).await?;
         // Render readiness is NOT publication. Activate an immutable,
         // approved release and prove real HTTPS bytes before DB commit.
         let allow_first_publication: bool = sqlx::query_scalar(
