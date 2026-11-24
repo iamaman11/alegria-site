@@ -125,11 +125,7 @@ pub fn global() -> &'static Metrics {
             let _ = workflow_completions_total.with_label_values(&[workflow_type]);
             let _ = workflow_failures_total.with_label_values(&[workflow_type]);
         }
-        for step_name in [
-            "finalize_run",
-            "check_data_freshness",
-            "bootstrap",
-        ] {
+        for step_name in ["finalize_run", "check_data_freshness", "bootstrap"] {
             let _ = activity_attempts_total.with_label_values(&[step_name]);
             let _ = step_execution_reused_total.with_label_values(&[step_name]);
             let _ = activity_duration_seconds.with_label_values(&[step_name]);

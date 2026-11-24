@@ -406,14 +406,13 @@ mod tests {
 
     #[test]
     fn qa_verdict_and_blockers_have_one_review_lifecycle_owner() {
-        assert_eq!(review_lifecycle("publish_ready", 0), Some("review_required"));
+        assert_eq!(
+            review_lifecycle("publish_ready", 0),
+            Some("review_required")
+        );
         assert_eq!(review_lifecycle("qa_failed", 1), Some("review_required"));
         assert_eq!(review_lifecycle("qa_failed", 4), Some("review_required"));
-        for (verdict, count) in [
-            ("publish_ready", 1),
-            ("qa_failed", 0),
-            ("unexpected", 0),
-        ] {
+        for (verdict, count) in [("publish_ready", 1), ("qa_failed", 0), ("unexpected", 0)] {
             assert!(review_lifecycle(verdict, count).is_none());
         }
     }

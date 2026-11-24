@@ -451,7 +451,10 @@ mod tests {
     #[test]
     fn only_supported_facts_and_summaries_are_verified_traceability() {
         assert!(verified_traceability_evidence("supported", "verified_fact"));
-        assert!(verified_traceability_evidence("supported", "verified_summary"));
+        assert!(verified_traceability_evidence(
+            "supported",
+            "verified_summary"
+        ));
         for (verdict, label) in [
             ("blocked", "verified_fact"),
             ("supported", "unsupported_factual_fragment"),

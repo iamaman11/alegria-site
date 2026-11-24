@@ -152,7 +152,10 @@ pub fn validate(input: &ContentContract<'_>) -> Vec<Violation> {
     let missing_links_at_publish = input.publish_links.is_some_and(|coverage| {
         input.links.iter().any(|link| link.required)
             && (coverage.related_pages_body.trim().is_empty()
-                || input.links.iter().any(|link| link.required && !link.bound_exactly))
+                || input
+                    .links
+                    .iter()
+                    .any(|link| link.required && !link.bound_exactly))
     });
     if missing_links_block || missing_links_at_publish {
         violations.push(Violation::MissingRequiredInternalLinks);
