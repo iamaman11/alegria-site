@@ -640,9 +640,7 @@ pub fn validate_manual_truth_response(
         // fault. A human-submitted response is an invalid input instead: the
         // same task stays pending until its author corrects the evidence.
         match err {
-            DomainError::InfraUnavailable { message } => {
-                DomainError::ValidationFailure { message }
-            }
+            DomainError::InfraUnavailable { message } => DomainError::ValidationFailure { message },
             other => other,
         }
     })
@@ -981,11 +979,9 @@ mod tests {
             manual.class(),
             primitives::errors::ErrorClass::ValidationFailure
         );
-        assert!(
-            manual
-                .to_string()
-                .contains("evidence_section_id does not match source section")
-        );
+        assert!(manual
+            .to_string()
+            .contains("evidence_section_id does not match source section"));
         let provider = response_from_generated_text(&input, "local_compatible", "model", &invalid)
             .unwrap_err();
         assert_eq!(
