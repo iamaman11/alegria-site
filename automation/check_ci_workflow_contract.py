@@ -187,7 +187,7 @@ def check() -> None:
             assert "          RUSTC_WRAPPER: sccache\n" in step
     for step_name in ("Full-scope compiler cache statistics", "Classify full-scope Rust cache failures"):
         step = verify.split(f"      - name: {step_name}\n", 1)[1].split("\n      - name:", 1)[0]
-        assert "        if: always() && needs.impact.outputs.cargo_scope == 'full'" in step, step_name
+        assert "        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'" in step, step_name
     assert "python3 automation/check_crawler_invariants.py" in fast
     assert "python3 automation/check_module_boundaries.py" not in architecture
     for phase, owner in (("contracts", verify), ("product", product), ("integration", verify)):

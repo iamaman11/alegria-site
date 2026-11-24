@@ -475,6 +475,7 @@ jobs:
 
       - name: Reuse trusted main Rust compiler objects for full workspace tests
         if: needs.impact.outputs.cargo_scope == 'full'
+        id: verify_sccache
         uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
@@ -513,11 +514,11 @@ jobs:
         run: cargo test --workspace --locked
 
       - name: Full-scope compiler cache statistics
-        if: always() && needs.impact.outputs.cargo_scope == 'full'
+        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
         run: sccache --show-stats
 
       - name: Classify full-scope Rust cache failures
-        if: always() && needs.impact.outputs.cargo_scope == 'full'
+        if: always() && needs.impact.outputs.cargo_scope == 'full' && steps.verify_sccache.outcome == 'success'
         run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"
 
       - name: Upload measured Contracts/Integration phase timings
