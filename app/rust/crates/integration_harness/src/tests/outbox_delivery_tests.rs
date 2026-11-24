@@ -6,11 +6,11 @@
 async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_delete() {
     use infrastructure::adapters::{
         projection_materialize_adapter::dispatch_event,
-        qdrant_client_adapter::{self, VerifiedRuleReadbackPoint},
         verified_rule_projection_adapter::{
             stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx, VerifiedRuleEmbeddingAdapter,
         },
     };
+    use vector_qdrant::VerifiedRuleReadbackPoint;
     use seo_application::knowledge::prepare_verified_rule_embedding_batch;
     use seo_ports::knowledge::{VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch};
 
@@ -74,12 +74,12 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         context_key: context_key.clone(), concept_key: "passport".into(),
         source_key: "https://example.gov/passport".into(),
     }];
-    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+    assert!(!vector_qdrant::verify_verified_rule_readback(&expected).await.unwrap());
     for _ in 0..2 {
         dispatch_event("qdrant", "QdrantUpsertCommand", &rule_id,
             "alegria.outbox.qdrant_upsert_command.v1", &payload).await.unwrap();
     }
-    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected).await.unwrap());
+    assert!(vector_qdrant::verify_verified_rule_readback(&expected).await.unwrap());
 
     // Force a real database error *between* point upsert and Outbox insert.
     // The transaction must roll back both rather than leaving a false receipt.
@@ -148,7 +148,7 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     .await
     .unwrap();
     assert_eq!(retained, 1, "failed Qdrant delete Outbox must roll back registry");
-    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected)
+    assert!(vector_qdrant::verify_verified_rule_readback(&expected)
         .await
         .unwrap());
     sqlx::query("ALTER TABLE system.sync_outbox DROP CONSTRAINT reject_qdrant_delete_outbox")
@@ -166,7 +166,7 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         tx.commit().await.unwrap();
     }
     // Qdrant is eventually consistent via Outbox; SQL state is atomic at commit.
-    assert!(qdrant_client_adapter::verify_verified_rule_readback(&expected)
+    assert!(vector_qdrant::verify_verified_rule_readback(&expected)
         .await
         .unwrap());
     let deleted: i64 = sqlx::query_scalar(
@@ -212,7 +212,7 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         .await
         .unwrap();
     }
-    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected)
+    assert!(!vector_qdrant::verify_verified_rule_readback(&expected)
         .await
         .unwrap());
     dispatch_event(
@@ -224,7 +224,7 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     )
     .await
     .unwrap();
-    assert!(!qdrant_client_adapter::verify_verified_rule_readback(&expected)
+    assert!(!vector_qdrant::verify_verified_rule_readback(&expected)
         .await
         .unwrap(), "stale Qdrant upsert resurrected a deleted rule");
 }
@@ -741,15 +741,15 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     ).bind(&run_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(total_done, 2);
 
-    let points = infrastructure::adapters::qdrant_client_adapter::search_dense(
+    let points = vector_qdrant::search_dense(
         &qdrant.client, collection, vec![0.2; 1024], 10, None,
     ).await.unwrap();
     let matching: Vec<_> = points.iter().filter(|p| {
-        infrastructure::adapters::qdrant_client_adapter::scored_point_payload_map(p)
+        vector_qdrant::scored_point_payload_map(p)
             .get("entity_key") == Some(&entity_key)
     }).collect();
     assert_eq!(matching.len(), 1, "replay must not create a second logical point");
-    let fields = infrastructure::adapters::qdrant_client_adapter::scored_point_payload_map(matching[0]);
+    let fields = vector_qdrant::scored_point_payload_map(matching[0]);
     assert_eq!(fields.get("revision").map(String::as_str), Some("revision-2"));
 }
 

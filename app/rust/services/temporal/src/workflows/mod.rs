@@ -1,12 +1,13 @@
 //! Workflows registry and factory for Temporal worker.
 
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion, WorkerOptions,
+use temporalio_common::worker::{
+    VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
 };
+use temporalio_sdk::WorkerOptions;
 
 // Required for proc-macro expansions.
 use futures_util as _;
-use infrastructure::adapters::temporalio_sdk_adapter::temporalio_common as _;
+use temporalio_common as _;
 
 use crate::activities::AlegriaActivities;
 

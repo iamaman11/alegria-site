@@ -14,11 +14,13 @@
     #[cfg(feature = "e2e")]
     use infrastructure::adapters::{
         raw_crawl_adapter,
-        temporalio_sdk_adapter::{
-            connect_client, RawValue, UntypedWorkflow, WorkflowGetResultOptions,
-            WorkflowStartOptions,
-        },
     };
+    #[cfg(feature = "e2e")]
+    use temporal_gateway::connect_client;
+    #[cfg(feature = "e2e")]
+    use temporalio_client::{UntypedWorkflow, WorkflowGetResultOptions, WorkflowStartOptions};
+    #[cfg(feature = "e2e")]
+    use temporalio_common::data_converters::RawValue;
     use seo_application::{
         execution::{run_mode_for_scenario, SeoRunPolicy},
         scenario::{

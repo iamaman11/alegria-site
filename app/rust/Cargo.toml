@@ -16,6 +16,7 @@ members = [
   "crates/vector_qdrant",
   "crates/seo_steps",
   "crates/telemetry",
+  "crates/temporal_gateway",
   "services/temporal",
   "services/outbox_worker",
   "services/reconcile",

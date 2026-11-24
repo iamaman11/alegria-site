@@ -3,10 +3,10 @@ use std::collections::BTreeMap;
 
 use primitives::qdrant_point_id::qdrant_point_id_v1;
 
-use super::qdrant_client_adapter as qdrant;
 use super::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype, VoyageRerankOptions,
 };
+use vector_qdrant as qdrant;
 
 const COLLECTION_NAME: &str = "whole_page_advisory_prototypes";
 const DEFAULT_MODEL: &str = "voyage-4-large";

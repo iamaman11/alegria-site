@@ -5,45 +5,44 @@ use seo_domain::{
     identity,
     rebuild::{RebuildDetectRequest, RebuildDetectResult},
 };
-use seo_ports::{
-    CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
-    CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
-    GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse,
-    OrganicSerpResult, PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
-    PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
-    SectionTemplate, SectionTemplateRepository, SemanticDemandCluster, SemanticLinkCandidate,
-    SemanticLinkSearchPort, SeoBuildInputRepository, SeoBuildRegistrationRepository,
-    SeoSiteBuildRegistrationRequest, SerpSearchPort, SourceContextSearchPort,
-    VerifiedRulesReader, VerifiedSupportBundleRequest, VerifiedSupportRepository,
-};
 use seo_ports::knowledge::{
     SourceContextChunk, SourceContextCollection, VerifiedRule, VerifiedRulesQuery,
     VerifiedRulesView,
 };
+use seo_ports::{
+    CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
+    CmsReviewPort, CrawlIngestRepository, DraftRepository, EditorialGenerationPort,
+    GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
+    PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
+    PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository, SectionTemplate,
+    SectionTemplateRepository, SemanticDemandCluster, SemanticLinkCandidate,
+    SemanticLinkSearchPort, SeoBuildInputRepository, SeoBuildRegistrationRepository,
+    SeoSiteBuildRegistrationRequest, SerpSearchPort, SourceContextSearchPort, VerifiedRulesReader,
+    VerifiedSupportBundleRequest, VerifiedSupportRepository,
+};
 
 use super::{
-    dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, manual_llm_queue, neo4rs_adapter,
+    dataforseo_serp_adapter, editorial_llm_adapter, graph_capability_adapter, manual_llm_queue,
     raw_crawl_adapter, semantic_search_adapter,
     sqlx_adapter::AlegriaPgPool,
-    sqlx_context_bundle_adapter, sqlx_seo_adapter, sqlx_seo_cms_adapter,
-    sqlx_serp_adapter,
+    sqlx_context_bundle_adapter, sqlx_seo_adapter, sqlx_seo_cms_adapter, sqlx_serp_adapter,
     voyage_api_adapter::{VoyageClient, VoyageEmbeddingOptions, VoyageOutputDtype},
 };
 use contracts::generated::alegria::temporal::v1::{
-    CmsPublishInputPayload, CmsPublishOutputPayload,
-    ContentContractValidateInputPayload, ContentContractValidateOutputPayload,
-    CrawlSourcesInputPayload, CrawlSourcesOutputPayload, DraftAssembleOutputPayload,
-    DraftNormalizeInputPayload, DraftNormalizeOutputPayload, DraftQaInputPayload,
-    DraftQaOutputPayload, EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
-    GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
+    CmsPublishInputPayload, CmsPublishOutputPayload, ContentContractValidateInputPayload,
+    ContentContractValidateOutputPayload, CrawlSourcesInputPayload, CrawlSourcesOutputPayload,
+    DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
+    DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
+    EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
     IaBuildOutputPayload, LinkRecommendInputPayload, LinkRecommendOutputPayload,
-    OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
-    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
-    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
-    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
+    PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
+    RawKnowledgeIngestionOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
+    SerpNormalizeOutputPayload,
 };
+use graph_neo4j;
 use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
@@ -232,4 +231,3 @@ fn cluster_queries_from_embeddings(
         })
         .collect()
 }
-

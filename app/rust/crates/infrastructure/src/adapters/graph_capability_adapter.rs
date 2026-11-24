@@ -1,6 +1,6 @@
 use primitives::errors::DomainError;
 
-use super::neo4rs_adapter;
+use graph_neo4j;
 
 fn env_flag(name: &str) -> bool {
     std::env::var(name)
@@ -26,14 +26,14 @@ pub async fn ensure_graph_contract_if_required(context_key: &str) -> Result<(), 
     let user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
     let password = std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
 
-    let graph = neo4rs_adapter::connect_neo4j(&uri, &user, &password)
+    let graph = graph_neo4j::connect_neo4j(&uri, &user, &password)
         .await
         .map_err(|err| DomainError::InfraUnavailable {
             message: format!("neo4j graph contract connect failed for `{context_key}`: {err}"),
         })?;
     graph
         .run(
-            neo4rs_adapter::query("RETURN $context_key AS context_key")
+            graph_neo4j::query("RETURN $context_key AS context_key")
                 .param("context_key", context_key),
         )
         .await
@@ -49,7 +49,7 @@ pub async fn ensure_graph_contract_if_required(context_key: &str) -> Result<(), 
         ];
         let mut gds_error = String::new();
         for cypher in gds_queries {
-            match neo4rs_adapter::run_cypher(&graph, cypher).await {
+            match graph_neo4j::run_cypher(&graph, cypher).await {
                 Ok(_) => return Ok(()),
                 Err(err) => gds_error = err.to_string(),
             }

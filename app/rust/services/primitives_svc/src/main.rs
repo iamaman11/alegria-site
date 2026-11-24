@@ -9,11 +9,12 @@
 //!   normalize_url    — URL нормализация (primitives::url_norm)
 
 use anyhow::Result;
-use infrastructure::adapters::tonic_adapter::{async_trait, Request, Response, Server, Status};
+use tonic::transport::Server;
+use tonic::{async_trait, Request, Response, Status};
 use tracing::info;
 
 pub mod proto {
-    infrastructure::adapters::tonic_adapter::include_proto!("alegria.primitives.v1");
+    tonic::include_proto!("alegria.primitives.v1");
 }
 
 use proto::{

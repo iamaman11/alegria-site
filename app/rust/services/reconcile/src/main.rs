@@ -1,5 +1,4 @@
 use anyhow::Result;
-use futures::StreamExt;
 use infrastructure::adapters::sqlx_adapter::connect_pg;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
     append_reconcile_summary_action, append_reconcile_target_action, begin_reconcile_run,
@@ -7,7 +6,7 @@ use infrastructure::adapters::sqlx_pipeline_runtime_adapter::{
 };
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_runtime_health_adapter;
-use infrastructure::adapters::temporalio_sdk_adapter::{connect_client, WorkflowListOptions};
+use temporal_gateway::{connect_client, running_workflow_ids_older_than};
 use tracing::info;
 
 fn reconcile_options() -> sqlx_reconcile_adapter::ReconcileOptionsRecord {
@@ -48,22 +47,13 @@ async fn main() -> Result<()> {
     )
     .await?;
     let mut stuck_workflows: i64 = 0;
-    let mut stream = temporal_client.list_workflows(
-        "ExecutionStatus = 'Running' AND TaskQueue = 'alegria-pipeline'",
-        WorkflowListOptions::builder().limit(200).build(),
-    );
-    while let Some(item) = stream.next().await {
-        let execution = item?;
-        let started_at = execution
-            .start_time()
-            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-        let age = std::time::SystemTime::now()
-            .duration_since(started_at)
-            .unwrap_or_default();
-        if age.as_secs() < 12 * 60 * 60 {
-            continue;
-        }
-        let wf_id = execution.id().to_string();
+    for wf_id in running_workflow_ids_older_than(
+        &temporal_client,
+        "alegria-pipeline",
+        std::time::Duration::from_secs(12 * 60 * 60),
+    )
+    .await?
+    {
         let is_pending_hitl = match uuid::Uuid::parse_str(&wf_id) {
             Ok(run_id) => sqlx_runtime_health_adapter::is_run_pending_hitl(&pool, run_id)
                 .await

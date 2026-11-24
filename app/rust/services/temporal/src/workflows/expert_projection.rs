@@ -3,12 +3,12 @@ use contracts::generated::alegria::temporal::v1::{
     RawKnowledgeIngestionInputPayload, ReconcileTargetInputPayload, SeoSiteBuildInputPayload,
     SeoVerifiedFactSupportState, SerpIngestInputPayload,
 };
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    workflow, workflow_methods, SyncWorkflowContext, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult,
-};
 use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::VerifiedSupportBundleRequest;
+use temporalio_macros::{workflow, workflow_methods};
+use temporalio_sdk::{
+    SyncWorkflowContext, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
+};
 
 use crate::activities::AlegriaActivities;
 use crate::metrics;

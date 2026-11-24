@@ -12,7 +12,10 @@ temporalio-client = { workspace = true }
 temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
 temporalio-workflow = { workspace = true }
+temporal_gateway = { path = "../../crates/temporal_gateway" }
 infrastructure = { path = "../../crates/infrastructure" }
+graph_neo4j = { path = "../../crates/graph_neo4j" }
+vector_qdrant = { path = "../../crates/vector_qdrant" }
 acquisition = { path = "../../crates/acquisition" }
 policies = { path = "../../crates/policies" }
 seo_steps = { path = "../../crates/seo_steps" }

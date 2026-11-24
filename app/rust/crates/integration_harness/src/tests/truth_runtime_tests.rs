@@ -821,7 +821,7 @@
         .await
         .expect("Qdrant outbox adapter must materialize through REST");
 
-        let points = infrastructure::adapters::qdrant_client_adapter::search_dense(
+        let points = vector_qdrant::search_dense(
             &qdrant.client,
             collection,
             vector,
@@ -832,7 +832,7 @@
         .expect("Qdrant gRPC search must read the REST materialization");
         assert!(
             points.iter().any(|point| {
-                infrastructure::adapters::qdrant_client_adapter::scored_point_payload_map(point)
+                vector_qdrant::scored_point_payload_map(point)
                     .get("entity_key")
                     == Some(&entity_key)
             }),

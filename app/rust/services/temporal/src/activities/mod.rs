@@ -18,9 +18,6 @@ use contracts::generated::alegria::temporal::v1::{
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    activities, ActivityContext, ActivityError,
-};
 use infrastructure::adapters::{
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository, sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter,
 };
@@ -30,6 +27,8 @@ use seo_ports::{
     CrawlIngestRepository, EditorialGenerationPort, ProjectionStatusRepository,
     SeoBuildInputRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
+use temporalio_macros::activities;
+use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 pub(crate) mod operations;
 mod runtime;

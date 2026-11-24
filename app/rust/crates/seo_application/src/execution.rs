@@ -196,7 +196,7 @@ pub fn run_mode_for_scenario(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SeoPhaseKey {
     LoadVerifiedSupportBundle,
     SerpIngest,
@@ -409,6 +409,12 @@ pub fn next_phase(phases: &[SeoPhaseKey], cursor: &SeoExecutionCursor) -> SeoPha
 pub fn advance_cursor(cursor: &mut SeoExecutionCursor) {
     cursor.phase_index += 1;
 }
+
+// The site-build scenario and the durable Temporal workflow share one typed
+// description of step inputs, outputs and supported ordering. A recipe does
+// not run steps or own their side effects; execution remains with each owner.
+mod recipe;
+pub use recipe::{SeoPhaseRecipe, SeoStepArtifact, SeoStepContract, SeoStepRecipeError};
 
 #[cfg(test)]
 mod tests {

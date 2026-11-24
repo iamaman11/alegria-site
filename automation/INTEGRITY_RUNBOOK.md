@@ -91,7 +91,7 @@
 
 ## Три запрета
 
-1. Нельзя протаскивать SQL, JSON-boundary и external SDK выше `infrastructure/adapters`.
+1. Нельзя протаскивать SQL, JSON-boundary и external SDK в Domain/Application; каждый SDK принадлежит его фактическому runtime/adapter owner.
 2. Нельзя возвращать legacy JSON runtime path или generic `JsonPayload` для outbox, step-state, DLQ, HITL и reconcile.
 3. Нельзя считать production rollout валидным без `ci_verify.sh`, `temporal_production_gate.sh` и `restore_drill.sh`.
 
@@ -99,7 +99,7 @@
 
 Обязательные библиотеки и их адаптеры:
 
-- `temporalio-sdk` / `temporalio-sdk-core` / `temporalio-client` / `temporalio-common` / `temporalio-macros` → `temporalio_sdk_adapter.rs`
+- `temporalio-sdk` / `temporalio-macros` → `services/temporal` (Workflow/Activity runtime); `temporalio-client` / `temporalio-common` / `temporalio-sdk-core` → `crates/temporal_gateway` (typed client/Workflow signals).
 - `reqwest` → `reqwest_adapter.rs`
 - `hyper` → `hyper_adapter.rs`
 - `tower` → `tower_adapter.rs`
@@ -108,7 +108,9 @@
 - `rig-core` (`rig`) → `rig_core_adapter.rs`
 - `rig-vertexai` → `rig_vertexai_adapter.rs`
 - `tokio-postgres` → `tokio_postgres_adapter.rs`
-- `neo4rs` → `neo4rs_adapter.rs`
+- `neo4rs` → `crates/graph_neo4j`.
+- `qdrant-client` → `crates/vector_qdrant`.
+- `tonic` analytics health client → `services/cli_tools/src/cli/analytics_client.rs` (proto generation also owned by CLI).
 
 Срез версий (latest на дату фиксации):
 

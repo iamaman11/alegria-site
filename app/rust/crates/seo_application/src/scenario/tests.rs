@@ -5,16 +5,15 @@ mod tests {
     use contracts::generated::alegria::temporal::v1::{
         EditorialDraftGenerateOutputPayload, GlobalSiteReconcileOutputPayload,
         IaBuildOutputPayload, LinkRecommendOutputPayload, LlmDraftCandidate,
-        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload,
-        SeoScopePayload, SeoVerifiedFactSupportState, SerpIngestOutputPayload,
-        SerpNormalizeOutputPayload,
+        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload, SeoScopePayload,
+        SeoVerifiedFactSupportState, SerpIngestOutputPayload, SerpNormalizeOutputPayload,
     };
     use seo_ports::{
         CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
         CrawlIngestRepository, GraphCapabilityPort, GraphReasoningPort, OrganicSerpResponse,
-        PlanningRepository, ProjectionBarrierStatus,
-        ProjectionStatusRepository, PublishArtifactRepository, RebuildDependencyEvidence,
-        RebuildRepository, SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
+        PlanningRepository, ProjectionBarrierStatus, ProjectionStatusRepository,
+        PublishArtifactRepository, RebuildDependencyEvidence, RebuildRepository,
+        SemanticLinkCandidate, SemanticLinkSearchPort, SeoBuildInputRepository,
         SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpSearchPort,
         SourceContextSearchPort, VerifiedSupportBundleRequest, VerifiedSupportRepository,
     };
@@ -29,8 +28,10 @@ mod tests {
     #[derive(Default)]
     struct FakeRepo {
         evidence: EvidenceFixture,
+        empty_truth_changes: bool,
         reconciled: std::sync::Mutex<Option<GlobalSiteReconcileOutputPayload>>,
         editorial_calls: std::sync::Mutex<Vec<String>>,
+        support_calls: std::sync::atomic::AtomicUsize,
     }
 
     #[async_trait]
@@ -66,9 +67,17 @@ mod tests {
             &self,
             _request: &VerifiedSupportBundleRequest,
         ) -> Result<Vec<SeoVerifiedFactSupportState>, DomainError> {
+            self.support_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let (fragment, support_ref, role_type) = match self.evidence {
-                EvidenceFixture::Passport => ("Passport required", "rule:passport", "document_required"),
-                EvidenceFixture::EligibilityOnly => ("Tourists are eligible", "rule:eligibility", "eligibility_rule"),
+                EvidenceFixture::Passport => {
+                    ("Passport required", "rule:passport", "document_required")
+                }
+                EvidenceFixture::EligibilityOnly => (
+                    "Tourists are eligible",
+                    "rule:eligibility",
+                    "eligibility_rule",
+                ),
             };
             Ok(vec![SeoVerifiedFactSupportState {
                 fragment_text: fragment.to_string(),
@@ -113,7 +122,11 @@ mod tests {
                 extracted_rule_count: 1,
                 verified_rule_count: 1,
                 outbox_event_count: 1,
-                changed_truth_keys: vec!["verified.rule_instance:passport".to_string()],
+                changed_truth_keys: if self.empty_truth_changes {
+                    Vec::new()
+                } else {
+                    vec!["verified.rule_instance:passport".to_string()]
+                },
                 status: "done".to_string(),
             })
         }
@@ -241,7 +254,6 @@ mod tests {
         ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
             Ok(runtime_models::GraphPlanningContext::default())
         }
-
     }
 
     #[async_trait]
@@ -266,8 +278,12 @@ mod tests {
 
     #[async_trait]
     impl SourceContextSearchPort for FakeRepo {
-        fn provider_configured(&self) -> bool { false }
-        fn retrieval_required(&self) -> bool { false }
+        fn provider_configured(&self) -> bool {
+            false
+        }
+        fn retrieval_required(&self) -> bool {
+            false
+        }
         async fn search_source_context_collection(
             &self,
             _collection: seo_ports::knowledge::SourceContextCollection,
@@ -316,8 +332,17 @@ mod tests {
             &self,
             input: &EditorialDraftGenerateInputPayload,
         ) -> Result<EditorialDraftGenerateOutputPayload, DomainError> {
-            let brief = input.request.as_ref().unwrap().editorial_brief.as_ref().unwrap();
-            self.editorial_calls.lock().unwrap().push(brief.page_node_key.clone());
+            let brief = input
+                .request
+                .as_ref()
+                .unwrap()
+                .editorial_brief
+                .as_ref()
+                .unwrap();
+            self.editorial_calls
+                .lock()
+                .unwrap()
+                .push(brief.page_node_key.clone());
             Ok(EditorialDraftGenerateOutputPayload {
                 provider_key: "fake".to_string(),
                 model_key: "fake-model".to_string(),
@@ -481,6 +506,165 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scenario_executes_an_alternate_valid_step_order() {
+        use SeoPhaseKey::*;
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::PlanningOnly,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let standard = SeoPhaseRecipe::for_plan(&build_execution_plan(&request), true).unwrap();
+        let alternate = SeoPhaseRecipe::compose(
+            vec![
+                SerpIngest,
+                LoadVerifiedSupportBundle,
+                CrawlSources,
+                RawKnowledgeIngestion,
+            ],
+            standard.steps(SeoExecutionSegment::Planning).to_vec(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &alternate)
+            .await
+            .unwrap();
+        assert_eq!(result.phase_reports[0].phase, "serp_ingest");
+        assert_eq!(
+            result.phase_reports[1].phase,
+            "load_verified_support_bundle"
+        );
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|phase| phase.phase == "global_site_reconcile"));
+    }
+
+    #[tokio::test]
+    async fn late_support_producer_runs_even_without_truth_changes() {
+        use SeoPhaseKey::*;
+        let repo = FakeRepo {
+            empty_truth_changes: true,
+            ..Default::default()
+        };
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::PlanningOnly,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let standard = SeoPhaseRecipe::for_plan(&build_execution_plan(&request), true).unwrap();
+        let late_support = SeoPhaseRecipe::compose(
+            vec![SerpIngest, CrawlSources, RawKnowledgeIngestion],
+            standard.steps(SeoExecutionSegment::Planning).to_vec(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &late_support)
+            .await
+            .unwrap();
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert!(result
+            .phase_reports
+            .iter()
+            .any(|phase| phase.phase == "load_verified_support_bundle.refresh"));
+    }
+
+    #[tokio::test]
+    async fn invalid_recipe_policy_fails_before_external_effects() {
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::Full,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let full_publish = SeoPhaseRecipe::for_plan(
+            &crate::execution::SeoExecutionPlan {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::TemporalDurable,
+                policy: SeoRunPolicy::for_temporal_durable(),
+            },
+            true,
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &full_publish).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn crawl_only_recipe_rejects_unreachable_planning_before_io() {
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::CrawlIngestOnly,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let recipe = SeoPhaseRecipe::for_plan(
+            &crate::execution::SeoExecutionPlan {
+                scenario: SeoScenarioKind::PlanningOnly,
+                mode: SeoExecutionMode::ManualTest,
+                policy: SeoRunPolicy::for_manual_test(),
+            },
+            false,
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &recipe).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn planning_only_recipe_rejects_unreachable_page_steps_before_io() {
+        let repo = FakeRepo::default();
+        let request = SeoScenarioRequest {
+            scenario: SeoScenarioKind::PlanningOnly,
+            mode: SeoExecutionMode::ManualTest,
+            policy: SeoRunPolicy::for_manual_test(),
+            output_dir: "/tmp".to_string(),
+            base_url: "https://example.com".to_string(),
+            site_input: sample_site_input(),
+        };
+        let recipe = SeoPhaseRecipe::for_plan(
+            &crate::execution::SeoExecutionPlan {
+                scenario: SeoScenarioKind::Full,
+                mode: SeoExecutionMode::ManualTest,
+                policy: SeoRunPolicy::for_manual_test(),
+            },
+            false,
+        )
+        .unwrap();
+        let result = execute_site_build_scenario_with_recipe(&repo, &request, &recipe).await;
+        assert!(matches!(result, Err(DomainError::ContractViolation { .. })));
+        assert_eq!(
+            repo.support_calls.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn scenario_publish_blocks_without_human_approval() {
         let repo = FakeRepo::default();
         let result = execute_site_build_scenario(
@@ -569,11 +753,24 @@ mod tests {
         assert_eq!(result.published_pages, 0);
         let reconciled = repo.reconciled.lock().unwrap();
         let pages = &reconciled.as_ref().unwrap().page_nodes;
-        let eligible: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "planned").collect();
-        assert_eq!(eligible.len(), 1, "only the evidenced document leaf should be admitted");
+        let eligible: Vec<_> = pages
+            .iter()
+            .filter(|page| page.lifecycle_state == "planned")
+            .collect();
+        assert_eq!(
+            eligible.len(),
+            1,
+            "only the evidenced document leaf should be admitted"
+        );
         assert_eq!(eligible[0].page_type_key, "requirement_page");
-        assert_eq!(eligible[0].canonical_url_path, "/ru/visa/spain/tourist/documents/");
-        let blocked: Vec<_> = pages.iter().filter(|page| page.lifecycle_state == "blocked").collect();
+        assert_eq!(
+            eligible[0].canonical_url_path,
+            "/ru/visa/spain/tourist/documents/"
+        );
+        let blocked: Vec<_> = pages
+            .iter()
+            .filter(|page| page.lifecycle_state == "blocked")
+            .collect();
         assert!(!blocked.is_empty());
         let calls = repo.editorial_calls.lock().unwrap();
         assert_eq!(calls.as_slice(), &[eligible[0].page_node_key.clone()]);
@@ -585,7 +782,10 @@ mod tests {
             }));
             assert!(!result.phase_reports.iter().any(|report| {
                 report.page_node_key == page.page_node_key
-                    && matches!(report.phase.as_str(), "draft_assemble" | "editorial_draft_generate")
+                    && matches!(
+                        report.phase.as_str(),
+                        "draft_assemble" | "editorial_draft_generate"
+                    )
             }));
         }
     }

@@ -1,8 +1,6 @@
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    ActivityOptions, ApplicationFailure, WorkflowTermination,
-};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use temporalio_sdk::{ActivityOptions, ApplicationFailure, WorkflowTermination};
 
 pub(crate) fn fast_opts(timeout_secs: u64) -> ActivityOptions {
     ActivityOptions::start_to_close_timeout(Duration::from_secs(timeout_secs))

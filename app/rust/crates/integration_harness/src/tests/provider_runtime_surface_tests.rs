@@ -490,8 +490,8 @@ async fn qdrant_harness_accepts_client_probe() {
 #[tokio::test]
 async fn neo4j_harness_exposes_bolt_connection() {
     let harness = Neo4jHarness::start().await.unwrap();
-    let graph = neo4rs::Graph::new(&harness.uri, &harness.user, &harness.password).unwrap();
-    graph.run(neo4rs::query("RETURN 1 AS ok")).await.unwrap();
+    let graph = graph_neo4j::Graph::new(&harness.uri, &harness.user, &harness.password).unwrap();
+    graph.run(graph_neo4j::query("RETURN 1 AS ok")).await.unwrap();
     assert!(harness.uri.starts_with("127.0.0.1:"));
 }
 

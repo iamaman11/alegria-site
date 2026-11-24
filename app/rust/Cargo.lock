@@ -616,7 +616,11 @@ dependencies = [
  "seo_steps",
  "serde_json",
  "sqlx",
+ "temporal_gateway",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "truth_domain",
  "uuid",
 ]
@@ -2097,13 +2101,11 @@ dependencies = [
  "http_client",
  "hyper",
  "hyper-util",
- "neo4rs",
  "playwright-rs",
  "policies",
  "primitives",
  "prost",
  "pulldown-cmark",
- "qdrant-client",
  "reqwest 0.13.5",
  "runtime_models",
  "seo_domain",
@@ -2113,16 +2115,8 @@ dependencies = [
  "serde_json",
  "sqlx",
  "telemetry",
- "temporalio-client",
- "temporalio-common",
- "temporalio-macros",
- "temporalio-sdk",
- "temporalio-sdk-core",
  "tokio",
  "tokio-postgres",
- "tonic",
- "tonic-prost",
- "tonic-prost-build",
  "tower",
  "tracing",
  "truth_domain",
@@ -2148,12 +2142,11 @@ dependencies = [
  "async-trait",
  "axum",
  "contracts",
+ "graph_neo4j",
  "infrastructure",
- "neo4rs",
  "outbox_worker",
  "primitives",
  "prost",
- "qdrant-client",
  "reqwest 0.13.5",
  "seo_application",
  "seo_domain",
@@ -2163,11 +2156,14 @@ dependencies = [
  "serde_json",
  "serial_test",
  "sqlx",
+ "temporal_gateway",
  "temporalio-client",
+ "temporalio-common",
  "temporalio-sdk-core",
  "testcontainers",
  "tokio",
  "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]
@@ -3882,10 +3878,10 @@ name = "reconcile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "futures",
  "infrastructure",
  "seo_steps",
  "sqlx",
+ "temporal_gateway",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5034,6 +5030,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "temporal_gateway"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "primitives",
+ "seo_ports",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-sdk-core",
+]
+
+[[package]]
 name = "temporal_worker"
 version = "0.1.0"
 dependencies = [
@@ -5043,6 +5053,7 @@ dependencies = [
  "contracts",
  "futures",
  "futures-util",
+ "graph_neo4j",
  "infrastructure",
  "policies",
  "primitives",
@@ -5055,6 +5066,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "temporal_gateway",
  "temporalio-client",
  "temporalio-common",
  "temporalio-macros",
@@ -5067,6 +5079,7 @@ dependencies = [
  "truth_domain",
  "url",
  "uuid",
+ "vector_qdrant",
 ]
 
 [[package]]

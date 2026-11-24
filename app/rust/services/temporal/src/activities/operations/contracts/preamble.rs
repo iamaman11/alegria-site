@@ -4,9 +4,9 @@ use contracts::generated::alegria::temporal::v1::{
     FreshnessReport, SeoScopePayload, SeoVerifiedFactSupportState, StepContractMeta,
 };
 use infrastructure::adapters::graph_capability_adapter;
-use infrastructure::adapters::neo4rs_adapter;
+use graph_neo4j as neo4rs_adapter;
 use infrastructure::adapters::projection_materialize_adapter;
-use infrastructure::adapters::qdrant_client_adapter;
+use vector_qdrant as qdrant_client_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
 use infrastructure::adapters::sqlx_outbox_adapter;
@@ -36,8 +36,7 @@ use truth_domain::procedural_candidates::{
     active_heuristic_truth_rules, params_for_rule, role_and_concept_for_rule,
 };
 use truth_domain::semantic_truth_write::{
-    persisted_candidate_status, semantic_truth_write_outcome, truth_candidate_write_fields,
-    validate_verified_truth_write_candidate, SemanticTruthWriteOutcome,
+    semantic_truth_write_outcome, validate_verified_truth_write_candidate, SemanticTruthWriteOutcome,
 };
 use primitives::errors::DomainError;
 use seo_ports::knowledge::{

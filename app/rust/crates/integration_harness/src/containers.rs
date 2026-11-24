@@ -2,8 +2,7 @@
 
 use crate::env_overrides::{btree_env, EnvOverrideGuard};
 use anyhow::{Context, Result};
-use neo4rs::{query, Graph};
-use qdrant_client::Qdrant;
+use graph_neo4j::{query, Graph};
 use sqlx::{postgres::PgPoolOptions, PgPool};
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -17,6 +16,7 @@ use testcontainers::{
 };
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
+use vector_qdrant::Qdrant;
 
 #[derive(Debug)]
 pub struct PostgresHarness {
@@ -147,11 +147,9 @@ impl QdrantHarness {
             "seo_keyword_clusters_4",
             "whole_page_advisory_prototypes",
         ] {
-            infrastructure::adapters::qdrant_client_adapter::ensure_default_dense_collection(
-                &client, collection, 1024,
-            )
-            .await
-            .with_context(|| format!("bootstrap real Qdrant collection {collection}"))?;
+            vector_qdrant::ensure_default_dense_collection(&client, collection, 1024)
+                .await
+                .with_context(|| format!("bootstrap real Qdrant collection {collection}"))?;
         }
         Ok(Self {
             qdrant_url,

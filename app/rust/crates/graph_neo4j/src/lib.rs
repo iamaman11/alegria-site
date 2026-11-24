@@ -69,7 +69,3 @@ mod readiness_tests {
             .contains("unreachable Bolt backend"));
     }
 }
-
-pub async fn init_constraints(_graph: &Graph) -> Result<()> {
-    Ok(())
-}

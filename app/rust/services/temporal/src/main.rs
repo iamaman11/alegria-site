@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use infrastructure::adapters::sqlx_adapter::connect_pg;
-use infrastructure::adapters::temporalio_sdk_adapter::{build_runtime, connect_client, Worker};
 use std::env;
 use std::sync::Arc;
+use temporal_gateway::connect_client;
+use temporalio_sdk::runtime::RuntimeOptions;
+use temporalio_sdk::{Runtime, Worker};
 
 mod activities;
 mod metrics;
@@ -29,7 +31,10 @@ async fn main() -> Result<()> {
     metrics::start_metrics_server(metrics_port).await?;
     tracing::info!(metrics_port, build_id = %build_id, "metrics server started");
 
-    let runtime = build_runtime()?;
+    let options = RuntimeOptions::builder()
+        .build()
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let runtime = Runtime::from_current_tokio(options)?;
     let client = connect_client(&temporal_url, worker_identity, "default").await?;
 
     let pool = connect_pg(&db_url).await?;

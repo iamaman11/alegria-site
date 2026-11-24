@@ -1,12 +1,14 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use infrastructure::adapters::temporalio_sdk_adapter::{
-    connect_client, Client, RawValue, UntypedSignal, UntypedWorkflow, WorkflowClientStatus,
-    WorkflowDescribeOptions, WorkflowGetResultOptions,
+use temporal_gateway::connect_client;
+use temporalio_client::{
+    Client, UntypedSignal, UntypedWorkflow, WorkflowDescribeOptions,
+    WorkflowExecutionStatus as WorkflowClientStatus, WorkflowGetResultOptions,
     WorkflowSignalOptions, WorkflowStartOptions,
 };
+use temporalio_common::data_converters::RawValue;
 use infrastructure::adapters::{
-    dataforseo_serp_adapter, neo4rs_adapter, qdrant_client_adapter,
+    dataforseo_serp_adapter,
     sqlx_execution_runs_adapter, sqlx_serp_adapter,
     seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
     sqlx_adapter::connect_pg,
@@ -16,6 +18,8 @@ use infrastructure::adapters::{
         VoyageRerankOptions,
     },
 };
+use graph_neo4j as neo4rs_adapter;
+use vector_qdrant as qdrant_client_adapter;
 use primitives::{hash::blake3_hex, qdrant_point_id::qdrant_point_id_v1};
 use seo_application::execution::normalize_run_mode;
 use seo_domain::identity;

@@ -31,10 +31,8 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         );
     };
     use contracts::generated::alegria::temporal::v1::EditorialDraftGenerateInputPayload;
-    use infrastructure::adapters::{
-        manual_llm_queue::{self, ManualLlmJob, ManualLlmSubmission},
-        seo_workflow_control_adapter::TemporalSeoWorkflowControlAdapter,
-    };
+    use infrastructure::adapters::manual_llm_queue::{self, ManualLlmJob, ManualLlmSubmission};
+    use temporal_gateway::TemporalSeoWorkflowControlAdapter;
 
     let fixture = load_truth_certification_fixtures()
         .into_iter()
@@ -385,11 +383,9 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     if block_review {
         use infrastructure::adapters::{
             seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository,
-            temporalio_sdk_adapter::{
-                temporalio_common::data_converters::PayloadConverter, UntypedQuery,
-                WorkflowQueryOptions,
-            },
         };
+        use temporalio_client::{UntypedQuery, WorkflowQueryOptions};
+        use temporalio_common::data_converters::PayloadConverter;
         use seo_application::cms_review::{
             apply_human_review_decision, ApplyHumanReviewDecisionInput,
         };

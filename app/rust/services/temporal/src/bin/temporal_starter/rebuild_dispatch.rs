@@ -1,7 +1,7 @@
 const REBUILD_RUN_MODE: &str = "publish_with_hitl";
 
 async fn run_rebuild_dispatch(
-    client: &infrastructure::adapters::temporalio_sdk_adapter::Client,
+    client: &temporalio_client::Client,
     task_queue: &str,
     database_url: Option<String>,
     limit: i64,

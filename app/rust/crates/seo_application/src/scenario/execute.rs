@@ -20,7 +20,44 @@ where
         + GraphReasoningPort
         + GraphCapabilityPort,
 {
+    // Explicit recipe supports the current fixed scenario as well as future
+    // compositions without changing the scenario request or Temporal payload.
+    let recipe = SeoPhaseRecipe::for_plan(&build_execution_plan(request), true)
+        .map_err(|error| execution_plan_invariant_error(&error.to_string()))?;
+    execute_site_build_scenario_with_recipe(repo, request, &recipe).await
+}
+
+/// Execute a preflight-validated recipe in the non-Temporal scenario runner.
+/// Durable Temporal histories remain pinned to their own deployed workflow;
+/// they do not dynamically adopt a reordered recipe during replay.
+pub async fn execute_site_build_scenario_with_recipe<R>(
+    repo: &R,
+    request: &SeoScenarioRequest,
+    recipe: &SeoPhaseRecipe,
+) -> Result<SeoScenarioResult, DomainError>
+where
+    R: SeoBuildInputRepository
+        + VerifiedSupportRepository
+        + PlanningRepository
+        + CrawlIngestRepository
+        + DraftRepository
+        + SectionTemplateRepository
+        + SourceContextSearchPort
+        + EditorialGenerationPort
+        + CmsReviewPort
+        + PublishArtifactRepository
+        + RebuildRepository
+        + ProjectionStatusRepository
+        + SerpSearchPort
+        + SemanticLinkSearchPort
+        + GraphReasoningPort
+        + GraphCapabilityPort,
+{
     let plan = build_execution_plan(request);
+    // Validate all step contracts and publication policy before *any* I/O.
+    recipe
+        .validate_for_scenario(&plan)
+        .map_err(|error| execution_plan_invariant_error(&error.to_string()))?;
     let mut state = ScenarioState::default();
     let mut phase_reports = Vec::new();
     let mut final_status = "done".to_string();
@@ -30,7 +67,7 @@ where
         ..Default::default()
     };
     loop {
-        match next_phase(initial_phase_keys(), &cursor) {
+        match next_phase(recipe.steps(SeoExecutionSegment::Initial), &cursor) {
             SeoPhaseDecision::Complete(_) => break,
             SeoPhaseDecision::Run(input) => {
                 run_initial_phase(repo, request, &mut state, input.key, &mut phase_reports).await?;
@@ -85,11 +122,20 @@ where
         segment: Some(SeoExecutionSegment::Planning),
         ..Default::default()
     };
-    let planning_keys = planning_phase_keys(&plan, !raw_knowledge_changed_truth_keys.is_empty());
+    let planning_keys = recipe.steps(SeoExecutionSegment::Planning);
     loop {
-        match next_phase(&planning_keys, &cursor) {
+        match next_phase(planning_keys, &cursor) {
             SeoPhaseDecision::Complete(_) => break,
             SeoPhaseDecision::Run(input) => {
+                if input.key == SeoPhaseKey::RefreshVerifiedSupportBundle
+                    && raw_knowledge_changed_truth_keys.is_empty()
+                    && recipe
+                        .steps(SeoExecutionSegment::Initial)
+                        .contains(&SeoPhaseKey::LoadVerifiedSupportBundle)
+                {
+                    advance_cursor(&mut cursor);
+                    continue;
+                }
                 if let Some(status) =
                     run_planning_phase(repo, request, &mut state, input.key, &mut phase_reports)
                         .await?
@@ -127,11 +173,12 @@ where
 
     let mut scenario_status = final_status;
     let mut published_pages = 0u32;
-    let page_keys = page_phase_keys(&plan);
+    let page_keys = recipe.steps(SeoExecutionSegment::PerPage);
     let ia = require_state_ref(&state.ia, "ia_build_required")?;
-    use seo_steps::page_wire::page_admissibility;
     use seo_domain::page_readiness::PageAdmissibility;
-    let gaps = &require_state_ref(&state.reconciled, "global_site_reconcile_required")?.content_gaps;
+    use seo_steps::page_wire::page_admissibility;
+    let gaps =
+        &require_state_ref(&state.reconciled, "global_site_reconcile_required")?.content_gaps;
     let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
     let mut support_blocked = false;
     let mut published_page_keys = std::collections::BTreeSet::new();
@@ -144,7 +191,13 @@ where
             .unwrap_or_default();
         let page_support =
             seo_steps::page_wire::page_verified_support(&page_blueprint, &state.verified_support);
-        match page_admissibility(&page_node, &page_blueprint, &page_support, gaps, requires_editorial) {
+        match page_admissibility(
+            &page_node,
+            &page_blueprint,
+            &page_support,
+            gaps,
+            requires_editorial,
+        ) {
             PageAdmissibility::Retired => continue,
             PageAdmissibility::Blocked(reason) => {
                 support_blocked = true;
@@ -160,11 +213,17 @@ where
         }
         let page_fragments = factual_fragments
             .iter()
-            .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
+            .filter(|text| {
+                page_support
+                    .iter()
+                    .any(|support| support.fragment_text.as_str() == text.as_str())
+            })
             .cloned()
             .collect::<Vec<_>>();
         let required_links = seo_steps::page_wire::required_links_for_published_targets(
-            &link_recommendations, &page_node.page_node_key, &published_page_keys,
+            &link_recommendations,
+            &page_node.page_node_key,
+            &published_page_keys,
         );
         let mut page_state = PageState::default();
         cursor = SeoExecutionCursor {
@@ -173,7 +232,7 @@ where
             ..Default::default()
         };
         loop {
-            match next_phase(&page_keys, &cursor) {
+            match next_phase(page_keys, &cursor) {
                 SeoPhaseDecision::Complete(_) => break,
                 SeoPhaseDecision::Run(input) => {
                     if let Some(status) = run_page_phase(
@@ -215,7 +274,7 @@ where
         ..Default::default()
     };
     loop {
-        match next_phase(final_phase_keys(&plan), &cursor) {
+        match next_phase(recipe.steps(SeoExecutionSegment::Finalize), &cursor) {
             SeoPhaseDecision::Complete(_) => break,
             SeoPhaseDecision::Run(input) => match input.key {
                 SeoPhaseKey::RebuildDetect => {
@@ -258,4 +317,3 @@ where
         phase_reports,
     })
 }
-

@@ -16,9 +16,9 @@ fn check_rust_migration_contract(root: &Path, report_json: &str, strict: bool) -
         "app/rust/services/temporal/src/activities/mod.rs",
         "app/rust/services/temporal/src/workflows/mod.rs",
         "app/rust/crates/infrastructure/src/adapters/sqlx_adapter.rs",
-        "app/rust/crates/infrastructure/src/adapters/neo4rs_adapter.rs",
-        "app/rust/crates/infrastructure/src/adapters/qdrant_client_adapter.rs",
-        "app/rust/crates/infrastructure/src/adapters/tonic_adapter.rs",
+        "app/rust/crates/graph_neo4j/src/lib.rs",
+        "app/rust/crates/vector_qdrant/src/lib.rs",
+        "app/rust/services/cli_tools/src/cli/analytics_client.rs",
         "app/rust/services/analytics_svc/src/main.rs",
         "app/analytics_lab/proto/analytics.proto",
     ];

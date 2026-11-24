@@ -18,8 +18,6 @@ seo_steps = { path = "../seo_steps" }
 policies = { path = "../policies" }
 sqlx = { workspace = true }
 tokio-postgres = { workspace = true }
-neo4rs = { workspace = true }
-qdrant-client = { workspace = true }
 tracing = { workspace = true }
 anyhow = { workspace = true }
 telemetry = { path = "../telemetry" }
@@ -38,15 +36,5 @@ tower = { workspace = true }
 playwright-rs = { workspace = true }
 # Production graph/retrieval adapters use Neo4j and Qdrant directly.
 # Do not reintroduce dormant GraphFlow (old SQLx/MySQL/RSA lockfile chain).
-temporalio-sdk = { workspace = true }
-temporalio-sdk-core = { workspace = true }
-temporalio-client = { workspace = true }
-temporalio-common = { workspace = true }
-temporalio-macros = { workspace = true }
 tokio = { workspace = true }
-tonic = { workspace = true }
-tonic-prost = "0.14"
 prost = { workspace = true }
-
-[build-dependencies]
-tonic-prost-build = { workspace = true }

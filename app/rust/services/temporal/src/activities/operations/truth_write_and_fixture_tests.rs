@@ -1,12 +1,25 @@
-async fn completed_verified_truth_write(
-    pool: &sqlx::PgPool,
-    run_id: &str,
-    idempotency_key: &str,
-) -> Result<Option<VerifiedTruthWriteOutput>, DomainError> {
-    infrastructure::adapters::sqlx_step_ledger_adapter::load_completed_step_result::<
-        VerifiedTruthWriteOutput,
-    >(pool, run_id, "verified_truth_write", idempotency_key)
-    .await
+/// Preserve one semantic identity for each input decision, even if an
+/// extractor happens to reuse a candidate ID across different scopes.
+fn group_truth_adjudication_slots<'a>(
+    context_key: &str,
+    decisions: &'a [TruthAdjudicationCandidateDecision],
+) -> (
+    BTreeMap<String, Vec<&'a TruthAdjudicationCandidateDecision>>,
+    Vec<String>,
+) {
+    let mut groups = BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
+    let mut slots = Vec::with_capacity(decisions.len());
+    for decision in decisions {
+        let slot_id = semantic_rule_instance_id_for_scope_local(
+            context_key,
+            &decision.role,
+            &decision.concept_canonical_key,
+            &decision.scope,
+        );
+        groups.entry(slot_id.clone()).or_default().push(decision);
+        slots.push(slot_id);
+    }
+    (groups, slots)
 }
 
 pub(crate) async fn verified_truth_write_impl(
@@ -24,45 +37,32 @@ pub(crate) async fn verified_truth_write_impl(
             input,
         )?;
     if let Some(previous) =
-        completed_verified_truth_write(&acts.pool, &input.run_id, &step_idempotency_key).await?
+        infrastructure::adapters::sqlx_truth_write_adapter::completed_verified_truth_write::<
+            VerifiedTruthWriteOutput,
+        >(&acts.pool, &input.run_id, &step_idempotency_key)
+        .await?
     {
         return Ok(previous);
     }
-    let mut changed_truth_keys = Vec::new();
-    let mut demoted_rule_projection_ids = Vec::new();
-    let mut suppressed_scoped_projection_ids = Vec::new();
-    let mut verified_rule_count = 0usize;
-    let mut demoted_rule_count = 0usize;
-    // A source-evidence collision must preserve the already persisted ID.
-    let mut persisted_candidate_ids = BTreeMap::<String, String>::new();
-    let mut semantic_candidates =
-        BTreeMap::<String, Vec<&TruthAdjudicationCandidateDecision>>::new();
-    for decision in &input.truth_adjudication.decisions {
-        let slot_id = semantic_rule_instance_id_for_scope_local(
-            &input.context_key,
-            &decision.role,
-            &decision.concept_canonical_key,
-            &decision.scope,
-        );
-        semantic_candidates
-            .entry(slot_id)
-            .or_default()
-            .push(decision);
-    }
+    let (semantic_candidates, semantic_slots) =
+        group_truth_adjudication_slots(&input.context_key, &input.truth_adjudication.decisions);
     // One read-only authority registry for this write, shared with the
     // corrected adjudication policy; never trust source-tier labels alone.
     let source_registry = load_source_registry_entries(&acts.pool)
         .await?
         .into_iter()
         .map(|(source_key, record)| {
-            (source_key, SourceGovernanceRecord {
-                source_type: record.source_type,
-                trust_level: record.trust_level,
-                authority_class: record.authority_class,
-                independence_group_key: record.independence_group_key,
-                freshness_ttl_days: record.freshness_ttl_days,
-                override_eligible: record.override_eligible,
-            })
+            (
+                source_key,
+                SourceGovernanceRecord {
+                    source_type: record.source_type,
+                    trust_level: record.trust_level,
+                    authority_class: record.authority_class,
+                    independence_group_key: record.independence_group_key,
+                    freshness_ttl_days: record.freshness_ttl_days,
+                    override_eligible: record.override_eligible,
+                },
+            )
         })
         .collect::<BTreeMap<_, _>>();
     let mut semantic_outcomes = BTreeMap::new();
@@ -150,12 +150,11 @@ pub(crate) async fn verified_truth_write_impl(
             Err(error) => {
                 // The first attempt may have committed during our provider
                 // call; a durable result outranks a now-unneeded embedding.
-                if let Some(previous) = completed_verified_truth_write(
-                    &acts.pool,
-                    &input.run_id,
-                    &step_idempotency_key,
-                )
-                .await?
+                if let Some(previous) =
+                    infrastructure::adapters::sqlx_truth_write_adapter::completed_verified_truth_write::<
+                        VerifiedTruthWriteOutput,
+                    >(&acts.pool, &input.run_id, &step_idempotency_key)
+                    .await?
                 {
                     return Ok(previous);
                 }
@@ -163,252 +162,32 @@ pub(crate) async fn verified_truth_write_impl(
             }
         };
 
-    // A Truth adjudication is one canonical state transition. Source registry,
-    // candidate identities, HITL queue and verified rule slots must not become
-    // visible independently if a later candidate or rule fails validation.
-    let mut tx = acts
-        .pool
-        .begin()
-        .await
-        .map_err(|error| DomainError::InfraUnavailable {
-            message: format!("verified_truth_write begin transaction: {error}"),
-        })?;
-    // HITL reconciliation spans the whole context, including candidates from
-    // other semantic slots. Serialize Truth writes per context first, then
-    // lock the individual projection identities in a globally sorted order.
-    sqlx_seo_adapter::lock_truth_context_in_tx(&mut tx, &input.context_key).await?;
-    let replay: Option<VerifiedTruthWriteOutput> =
-        infrastructure::adapters::sqlx_step_ledger_adapter::load_completed_step_result_in_tx(
-            &mut tx,
-            &input.run_id,
-            "verified_truth_write",
-            1,
-            input,
-        )
-        .await?;
-    if let Some(previous) = replay {
-        // Another attempt of this exact run has already committed Truth,
-        // its projection events and its output under the same context lock.
-        return Ok(previous);
-    }
-    // An older workflow can reach this step for the first time after a
-    // newer workflow has committed. Reject it, rather than returning a
-    // successful no-op that might let the stale workflow publish its page.
-    sqlx_seo_adapter::reject_stale_truth_run_in_tx(&mut tx, &input.run_id, &input.context_key)
-        .await?;
-    sqlx_seo_adapter::lock_truth_rule_projections_in_tx(
-        &mut tx,
-        semantic_outcomes.keys(),
-    )
-    .await?;
-
-    for decision in &input.truth_adjudication.decisions {
-        // Source evidence was preflight-validated before calling Voyage.
-        let raw_section = raw_by_section.get(&decision.section_id).ok_or_else(|| {
-            DomainError::ValidationFailure {
-                message: format!(
-                    "verified truth write missing raw section {} for candidate/source registration",
-                    decision.section_id
-                ),
-            }
-        })?;
-        raw_crawl_adapter::ensure_source_in_tx(&mut tx, raw_section).await?;
-        let fields = truth_candidate_write_fields(decision);
-        let semantic_slot = semantic_rule_instance_id_for_scope_local(
-            &input.context_key,
-            &decision.role,
-            &decision.concept_canonical_key,
-            &decision.scope,
-        );
-        let slot_outcome = semantic_outcomes.get(&semantic_slot).ok_or_else(|| {
-            DomainError::ValidationFailure {
-                message: format!("missing write verdict for semantic identity {semantic_slot}"),
-            }
-        })?;
-        let candidate_status = persisted_candidate_status(decision, slot_outcome);
-        let persisted_candidate_id =
-            sqlx_seo_adapter::upsert_extracted_rule_candidate_from_adjudication_in_tx(
-                &mut tx,
-                &sqlx_seo_adapter::VerifiedTruthCandidateWrite {
-                    rule_candidate_id: decision.rule_candidate_id.clone(),
-                    context_key: input.context_key.clone(),
-                    section_id: decision.section_id,
-                    role: decision.role.clone(),
-                    concept_canonical_key: decision.concept_canonical_key.clone(),
-                    evidence_quote: fields.evidence_quote,
-                    params: truth_param_value_to_json_local(&decision.params),
-                    scope: truth_param_value_to_json_local(&decision.scope),
-                    severity: fields.severity,
-                    is_numeric: fields.is_numeric,
-                    is_incomplete: decision.completeness_class != "complete",
-                    confidence: decision.confidence,
-                    span_start: fields.span_start,
-                    span_end: fields.span_end,
-                    source_key: decision.source_key.clone(),
-                    source_snapshot_hash: decision.source_snapshot_hash.clone(),
-                    provider_key: decision.provider_key.clone(),
-                    model_key: decision.model_key.clone(),
-                    prompt_version: decision.prompt_version.clone(),
-                    epistemic_status: candidate_status.to_string(),
-                },
-            )
-            .await?;
-        persisted_candidate_ids.insert(
-            decision.rule_candidate_id.clone(),
-            persisted_candidate_id,
-        );
-    }
-
-    // The persisted candidate projection is the canonical input for HITL.
-    // This also repairs older unresolved candidates in the same context.
-    // A human decision never changes the verifier's candidate status.
-    infrastructure::adapters::sqlx_hitl_adapter::reconcile_truth_candidate_reviews_in_tx(
-        &mut tx,
-        &input.context_key,
-        &input.run_id,
-    )
-    .await?;
-
-    // Exactly one verdict and one outbox event per semantic slot. A rejected
-    // source cannot demote a verified fact backed by independent sources.
-    for (rule_instance_id, outcome) in semantic_outcomes {
-        let changed_key = format!("verified.rule_instance:{rule_instance_id}");
-        match outcome {
-            SemanticTruthWriteOutcome::Verified(decision) => {
-                let role_type = decision.role.to_ascii_lowercase();
-                sqlx_seo_adapter::upsert_verified_rule_instance_in_tx(
-                    &mut tx,
-                    &sqlx_seo_adapter::VerifiedRuleInstanceWrite {
-                        rule_instance_id: rule_instance_id.clone(),
-                        context_key: input.context_key.clone(),
-                        rule_type_key: role_type.clone(),
-                        concept_key: decision.concept_canonical_key.clone(),
-                        role_type: role_type.clone(),
-                        params: truth_param_value_to_json_local(&decision.params),
-                        scope: truth_param_value_to_json_local(&decision.scope),
-                        source_key: decision.source_key.clone(),
-                        confidence: decision.confidence,
-                        rule_candidate_id: persisted_candidate_ids
-                            .get(&decision.rule_candidate_id)
-                            .ok_or_else(|| DomainError::ValidationFailure {
-                                message: format!(
-                                    "verified candidate {} was not persisted",
-                                    decision.rule_candidate_id
-                                ),
-                            })?
-                            .clone(),
-                        evidence_section_id: decision.section_id,
-                        evidence_quote: decision.evidence_quote.clone(),
-                        span_start: decision.span_start.max(0) as i32,
-                        span_end: std::cmp::max(
-                            decision.span_end as i32,
-                            decision.span_start.max(0) as i32 + 1,
-                        ),
-                        source_snapshot_hash: decision.source_snapshot_hash.clone(),
-                        verification_method: decision.verification_method.clone(),
-                        adjudication_reason: decision.adjudication_reason.clone(),
-                        publish_admissibility: decision.publish_admissibility.clone(),
-                        freshness_class: decision.freshness_class.clone(),
-                        completeness_class: decision.completeness_class.clone(),
-                    },
-                )
-                .await?;
-                verified_rule_count += 1;
-                // verified_rules_4 is currently a context-wide index without
-                // an applicant-profile filter. Never emit a scoped rule into
-                // global retrieval; its validated support flows through the
-                // existing SQL profile resolver instead.
-                if !matches!(
-                    truth_domain::truth_candidates::truth_scope_target(&decision.scope),
-                    Some(truth_domain::truth_candidates::TruthScopeTarget::Global)
-                ) {
-                    suppressed_scoped_projection_ids.push(rule_instance_id.clone());
-                }
-            }
-            SemanticTruthWriteOutcome::Disputed => {
-                sqlx_seo_adapter::demote_verified_rule_instance_in_tx(
-                    &mut tx,
-                    &rule_instance_id,
-                    "disputed",
-                    "needs_hitl",
-                    "truth_write_semantic_guard@1",
-                    "mixed_or_conflicting_semantic_adjudication",
-                )
-                .await?;
-                demoted_rule_count += 1;
-                demoted_rule_projection_ids.push(rule_instance_id.clone());
-            }
-            SemanticTruthWriteOutcome::Rejected(decision) => {
-                sqlx_seo_adapter::demote_verified_rule_instance_in_tx(
-                    &mut tx,
-                    &rule_instance_id,
-                    "deprecated",
-                    "not_admissible",
-                    &decision.verification_method,
-                    &decision.adjudication_reason,
-                )
-                .await?;
-                demoted_rule_count += 1;
-                demoted_rule_projection_ids.push(rule_instance_id.clone());
-            }
-        }
-        changed_truth_keys.push(changed_key);
-    }
-
-    // Purge any stale scoped point left by a prior unfiltered projection.
-    demoted_rule_projection_ids.extend(suppressed_scoped_projection_ids);
-    demoted_rule_projection_ids.sort();
-    demoted_rule_projection_ids.dedup();
-    // Durable delete/upsert events and the point registry share the canonical
-    // Truth commit. Voyage was prepared before opening SQL; external Qdrant
-    // effects are delivered from Outbox only after this transaction commits.
-    infrastructure::adapters::verified_rule_projection_adapter::stage_rule_point_deletes_in_tx(
-        &mut tx,
-        &input.run_id,
-        &input.context_key,
-        &demoted_rule_projection_ids,
-    )
-    .await?;
-    if let Some(embeddings) = projection_embeddings {
-        infrastructure::adapters::verified_rule_projection_adapter::stage_rule_upserts_in_tx(
-            &mut tx,
-            &projection_change,
-            embeddings,
-        )
-        .await?;
-    }
-    changed_truth_keys.sort();
-    changed_truth_keys.dedup();
-    let output = VerifiedTruthWriteOutput {
-        context_key: input.context_key.clone(),
-        verified_rule_count,
-        demoted_rule_count,
-        status: if changed_truth_keys.is_empty() {
-            "no_change".to_string()
-        } else {
-            "written".to_string()
+    infrastructure::adapters::sqlx_truth_write_adapter::commit_verified_truth_write(
+        infrastructure::adapters::sqlx_truth_write_adapter::PreparedTruthWrite {
+            pool: &acts.pool,
+            run_id: &input.run_id,
+            context_key: &input.context_key,
+            step_input: input,
+            decisions: &input.truth_adjudication.decisions,
+            semantic_slots: &semantic_slots,
+            semantic_outcomes,
+            raw_by_section: &raw_by_section,
+            projection_change: &projection_change,
+            projection_embeddings,
         },
-        changed_truth_keys,
-    };
-    // execute_step created this journal row before calling us. Store the
-    // complete typed result and mark it done in the very same commit as Truth.
-    // Its next attempt can then return the original result without applying
-    // an old run again after a newer adjudication has already committed.
-    infrastructure::adapters::sqlx_step_ledger_adapter::complete_step_execution_with_output_in_tx(
-        &mut tx,
-        &input.run_id,
-        "verified_truth_write",
-        1,
-        input,
-        &output,
+        |verified_rule_count, demoted_rule_count, changed_truth_keys| VerifiedTruthWriteOutput {
+            context_key: input.context_key.clone(),
+            verified_rule_count,
+            demoted_rule_count,
+            status: if changed_truth_keys.is_empty() {
+                "no_change".to_string()
+            } else {
+                "written".to_string()
+            },
+            changed_truth_keys,
+        },
     )
-    .await?;
-    tx.commit()
-        .await
-        .map_err(|error| DomainError::InfraUnavailable {
-            message: format!("verified_truth_write commit transaction: {error}"),
-        })?;
-    Ok(output)
+    .await
 }
 
 #[cfg(test)]
@@ -418,6 +197,50 @@ mod tests {
 
     use std::fs;
     use std::path::PathBuf;
+
+    #[test]
+    fn duplicate_candidate_ids_keep_distinct_semantic_slots() {
+        let global: TruthAdjudicationCandidateDecision =
+            serde_json::from_str(r#"{
+                "section_id": 1,
+                "page_id": 1,
+                "rule_candidate_id": "extractor-reused-id",
+                "role": "FEE_ITEM",
+                "concept_canonical_key": "fee",
+                "params": {},
+                "scope": {},
+                "source_key": "source",
+                "source_tier": "primary",
+                "confidence": 1.0,
+                "freshness_class": "fresh",
+                "completeness_class": "complete",
+                "evidence_quote": "fee",
+                "span_start": 0,
+                "span_end": 3,
+                "source_snapshot_hash": "snapshot",
+                "decision": "verified",
+                "publish_admissibility": "admissible",
+                "verification_method": "test",
+                "adjudication_reason": "test"
+            }"#)
+            .expect("valid adjudication fixture");
+        let mut scoped = global.clone();
+        scoped.scope = TruthParamValue::object([(
+            "applicant_profile",
+            TruthParamValue::Text("student".to_string()),
+        )]);
+        let decisions = [global, scoped];
+        let (groups, slots) = group_truth_adjudication_slots("context", &decisions);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(slots.len(), 2);
+        assert_ne!(slots[0], slots[1]);
+        assert_eq!(
+            decisions[0].rule_candidate_id,
+            decisions[1].rule_candidate_id
+        );
+        assert!(groups.contains_key(&slots[0]));
+        assert!(groups.contains_key(&slots[1]));
+    }
 
     #[derive(Debug, Deserialize)]
     struct WholePageSemanticFixtureSection {
@@ -867,7 +690,9 @@ Footer navigation directory menu links help login cookie.";
         ];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
         assert_eq!(snapshot.page_mode_hint(), "content_page");
-        assert!(snapshot.dominant_layers().contains(&"procedural".to_string()));
+        assert!(snapshot
+            .dominant_layers()
+            .contains(&"procedural".to_string()));
         assert!(
             !snapshot.uncertainty_flags().is_empty() || snapshot.page_mode_confidence() >= 0.45
         );
@@ -901,8 +726,12 @@ Footer navigation directory menu links help login cookie.";
         let content = "Tourist visa requirements. Passport, insurance and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid.";
         let sections = vec![section(51, content)];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
-        assert!(snapshot.dominant_layers().contains(&"procedural".to_string()));
-        assert!(snapshot.dominant_layers().contains(&"editorial".to_string()));
+        assert!(snapshot
+            .dominant_layers()
+            .contains(&"procedural".to_string()));
+        assert!(snapshot
+            .dominant_layers()
+            .contains(&"editorial".to_string()));
         assert!(snapshot
             .uncertainty_flags()
             .iter()

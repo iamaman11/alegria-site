@@ -11,11 +11,11 @@ use prost::Message;
 use sqlx::{Connection, Row};
 
 use super::neo4j_materialization_adapter;
-use super::qdrant_client_adapter::{
-    connect_qdrant, ensure_dense_collection, normalize_payload, parse_distance, upsert_dense_point,
-};
 use super::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
+};
+use vector_qdrant::{
+    connect_qdrant, ensure_dense_collection, normalize_payload, parse_distance, upsert_dense_point,
 };
 
 const DEFAULT_QDRANT_URL: &str = "http://localhost:6334";
@@ -319,13 +319,9 @@ async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchErro
     {
         return Ok(());
     }
-    super::qdrant_client_adapter::delete_point_ids(
-        &client,
-        &cmd.collection_name,
-        vec![expected_point_id],
-    )
-    .await
-    .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))
+    vector_qdrant::delete_point_ids(&client, &cmd.collection_name, vec![expected_point_id])
+        .await
+        .map_err(|err| DispatchError::external(DispatchStage::Qdrant, err))
 }
 
 /// Outbox delivery may retry out of order (SKIP LOCKED claims). For verified

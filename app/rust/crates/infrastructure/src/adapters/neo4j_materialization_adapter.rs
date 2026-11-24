@@ -2,9 +2,9 @@ use anyhow::{bail, Result};
 use sqlx::Row;
 use std::env;
 
-use super::neo4rs_adapter::{connect_neo4j, query};
 use super::sqlx_adapter::connect_pg;
 use super::sqlx_context_bundle_adapter;
+use graph_neo4j::{connect_neo4j, query, Graph};
 
 fn neo4j_cfg() -> (String, String, String) {
     (
@@ -127,7 +127,7 @@ pub async fn materialize_seo_artifact(artifact_type: &str, artifact_key: &str) -
 }
 
 async fn materialize_keyword_cluster(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     cluster_key: &str,
 ) -> Result<()> {
@@ -171,7 +171,7 @@ async fn materialize_keyword_cluster(
 }
 
 async fn materialize_serp_pattern(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     serp_pattern_key: &str,
 ) -> Result<()> {
@@ -215,7 +215,7 @@ async fn materialize_serp_pattern(
 }
 
 async fn materialize_page_blueprint(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     blueprint_key: &str,
 ) -> Result<()> {
@@ -260,7 +260,7 @@ async fn materialize_page_blueprint(
 }
 
 async fn materialize_page_node(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     page_node_key: &str,
 ) -> Result<()> {
@@ -336,7 +336,7 @@ async fn materialize_page_node(
 }
 
 async fn materialize_content_gap(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     content_gap_key: &str,
 ) -> Result<()> {
@@ -388,7 +388,7 @@ async fn materialize_content_gap(
 }
 
 async fn materialize_link_recommendation(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     link_recommendation_key: &str,
 ) -> Result<()> {
@@ -444,7 +444,7 @@ async fn materialize_link_recommendation(
 }
 
 async fn materialize_cannibalization_conflict(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     conflict_key: &str,
 ) -> Result<()> {
@@ -483,7 +483,7 @@ async fn materialize_cannibalization_conflict(
 }
 
 async fn materialize_page_brief(
-    graph: &neo4rs::Graph,
+    graph: &Graph,
     pg: &sqlx::PgPool,
     page_brief_key: &str,
 ) -> Result<()> {

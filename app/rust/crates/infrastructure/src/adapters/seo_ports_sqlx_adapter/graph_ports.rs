@@ -13,14 +13,14 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
         let neo4j_user = std::env::var("NEO4J_USER").unwrap_or_else(|_| "neo4j".to_string());
         let neo4j_password =
             std::env::var("NEO4J_PASSWORD").unwrap_or_else(|_| "neo4j_password".to_string());
-        let graph = neo4rs_adapter::connect_neo4j(&neo4j_uri, &neo4j_user, &neo4j_password)
+        let graph = graph_neo4j::connect_neo4j(&neo4j_uri, &neo4j_user, &neo4j_password)
             .await
             .map_err(|err| DomainError::InfraUnavailable {
                 message: format!("neo4j planning context connect failed: {err}"),
             })?;
         let mut result = graph
             .execute(
-                neo4rs_adapter::query(
+                graph_neo4j::query(
                     r#"
                     MATCH (source:PageNode {scope_signature: $scope_signature})
                       -[r:RECOMMENDS_LINK_TO]->
@@ -101,7 +101,6 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
         }
         Ok(context)
     }
-
 }
 
 #[async_trait]
@@ -110,4 +109,3 @@ impl GraphCapabilityPort for SqlxSeoRuntimeRepository<'_> {
         ensure_graph_contract_if_required(context_key).await
     }
 }
-

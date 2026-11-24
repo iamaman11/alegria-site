@@ -5,7 +5,7 @@ use contracts::generated::alegria::temporal::v1::{
     RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, ValidationInputPayload,
 };
 use infrastructure::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
-use infrastructure::adapters::seo_workflow_control_adapter::TemporalSeoWorkflowControlAdapter;
+use temporal_gateway::TemporalSeoWorkflowControlAdapter;
 use infrastructure::adapters::sqlx_reconcile_adapter::{
     reconcile_target_system_default, ReconcileOptionsRecord,
 };
@@ -14,8 +14,8 @@ use infrastructure::adapters::{
     reqwest_adapter::new_default_client,
     sqlx_hitl_adapter,
     sqlx_adapter::connect_pg,
-    tonic_adapter::AnalyticsClient,
 };
+use crate::analytics_client::AnalyticsClient;
 use crate::fact_verifier_json::{verify_fact_json, verify_numeric_rule_json};
 use prost::Message;
 use seo_application::cms_review::{apply_human_review_decision, ApplyHumanReviewDecisionInput};

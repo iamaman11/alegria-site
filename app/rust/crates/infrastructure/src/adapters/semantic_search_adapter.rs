@@ -1,10 +1,10 @@
 use anyhow::{anyhow, Result};
 use std::collections::BTreeMap;
 
-use super::qdrant_client_adapter as qdrant;
 use super::voyage_api_adapter::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageRerankOptions,
 };
+use vector_qdrant as qdrant;
 
 #[derive(Debug, Clone, Default)]
 pub struct SearchResultRecord {
