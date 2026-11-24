@@ -79,6 +79,7 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         format!("manual-acceptance-{}", Uuid::new_v4()),
     );
     worker_env.insert("VOYAGE_API_KEY".to_string(), "truth-cert-stub".to_string());
+    worker_env.insert("ALLOW_PURE_DAG_WORKFLOW".to_string(), "true".to_string());
     worker_env.insert(
         "VOYAGE_API_BASE_URL".to_string(),
         format!("{}/v1", voyage_stub.base_url),
@@ -703,5 +704,114 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     );
     assert_saved_temporal_history_replays(&rejected_history);
     checkpoint("invalid_plan_rejected_without_activities");
+
+    // The same actual server/poller now executes THREE substantially distinct
+    // operation DAGs, without a fixed site-build sequence or external effects.
+    // Their real server histories are replayed through the exact-source SDK
+    // binary; a JSON/unit-only roundtrip would not prove this behavior.
+    for (index, case) in [
+        "route-only",
+        "entity-to-canonical",
+        "independent-editorial-operations",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index == 2 {
+            // A fresh Worker must accept the same immutable pure plan protocol
+            // without requiring any previous in-memory registry state.
+            drop(worker);
+            worker = spawn_temporal_worker(&worker_env);
+            assert!(worker.child.try_wait().unwrap().is_none());
+        }
+        let pure_run_id = Uuid::new_v4().to_string();
+        let pure_run = pure_dag_e2e_case(case, &pure_run_id);
+        let handle = client
+            .start_workflow(
+                UntypedWorkflow::new("AlegriaPureOperationDagV1Workflow"),
+                RawValue::from_value(&pure_run, &converter),
+                WorkflowStartOptions::new("alegria-pipeline", pure_run_id.clone()).build(),
+            )
+            .await
+            .expect("start actual pure DAG Temporal workflow");
+        let completed = timeout(
+            Duration::from_secs(30),
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("pure DAG Workflow timed out")
+        .expect("pure DAG Workflow failed");
+        let actual_json: String = completed.to_value(&converter);
+        let actual: seo_application::operation_adapter::PureDagReceipt =
+            serde_json::from_str(&actual_json).expect("decode real pure DAG result");
+        assert_eq!(actual.plan_hash, pure_run.plan.hash);
+        let expected = seo_application::operation_adapter::execute_pure_dag(
+            &pure_run_id,
+            &pure_run,
+        )
+        .expect("same-source pure reference execution");
+        assert_eq!(
+            serde_json::to_value(&actual).unwrap(),
+            serde_json::to_value(&expected).unwrap(),
+            "Temporal returned incorrect executed operation artifacts for {case}"
+        );
+        let saved_history = handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json()
+            .await
+            .expect("fetch actual pure DAG Temporal History");
+        assert!(
+            scheduled_temporal_activities(&saved_history).is_empty(),
+            "pure DAG {case} scheduled an effectful Activity"
+        );
+        assert_saved_temporal_history_replays(&saved_history);
+        checkpoint(case);
+    }
+
+    // Hash, contract version and effect permission cannot be silently
+    // re-sealed while resuming a persisted Temporal run. All three fail on
+    // the actual server before any Activity and replay their failure history.
+    for rejection in ["schema", "pinned-contract", "effect-permission"] {
+        let pure_run_id = Uuid::new_v4().to_string();
+        let mut pure_run = pure_dag_e2e_case("route-only", &pure_run_id);
+        match rejection {
+            "schema" => pure_run.plan.schema_revision += 1,
+            "pinned-contract" => {
+                pure_run.plan.pinned_contracts[0].fingerprint.0.push_str("-changed");
+                pure_run.plan.hash = pure_run.plan.canonical_hash().unwrap();
+            }
+            "effect-permission" => {
+                pure_run.plan.allowed_effects.insert("publication.write".into());
+                pure_run.plan.hash = pure_run.plan.canonical_hash().unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let handle = client
+            .start_workflow(
+                UntypedWorkflow::new("AlegriaPureOperationDagV1Workflow"),
+                RawValue::from_value(&pure_run, &converter),
+                WorkflowStartOptions::new("alegria-pipeline", pure_run_id).build(),
+            )
+            .await
+            .expect("start real rejected pure DAG workflow");
+        let rejected = timeout(
+            Duration::from_secs(20),
+            handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("pure DAG rejection did not terminate");
+        assert!(rejected.is_err(), "pure DAG {rejection} unexpectedly succeeded");
+        let history = handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json()
+            .await
+            .expect("fetch rejected pure DAG history");
+        assert!(
+            scheduled_temporal_activities(&history).is_empty(),
+            "rejected pure DAG {rejection} scheduled an Activity"
+        );
+        assert_saved_temporal_history_replays(&history);
+        checkpoint(rejection);
+    }
     drop(worker);
 }

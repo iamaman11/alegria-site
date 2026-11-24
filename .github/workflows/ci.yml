@@ -174,6 +174,7 @@ jobs:
           python3 automation/check_ci_impact.py
           python3 automation/check_dev_rust_feedback.py
           python3 automation/check_owner_rebuild.py
+          python3 automation/check_physical_build_options.py
           python3 automation/check_reliability_contracts.py
           python3 automation/test_causal_revision_contract.py
           python3 automation/test_neo4j_schema_contract.py
@@ -246,11 +247,6 @@ jobs:
             # The same exact-source full scope makes the existing verify job
             # mandatory; it executes the workspace unit tests in parallel.
             args+=(--delegate-workspace-unit-tests-to-verify)
-            # Run independent graph/vector/Temporal integration suites in
-            # separately isolated OS processes after compiling the identical
-            # exact-source harness only once in this owner. All mandatory
-            # suites, their containerized databases and Worker startup remain.
-            args+=(--parallel-architecture-e2e)
           fi
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json "${args[@]}"
@@ -263,6 +259,20 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: python3 automation/measure_owner_rebuild.py
+
+      # Independent from the legacy in-place owner probe: this experimental
+      # A/B study requires a *real* provider-free orchestrator package and
+      # builds four isolated owner-only source deltas in a temporary exact-SHA
+      # git archive. No PR source files or default Task Queues are changed.
+      # Until B exists it fails closed; ordinary PR checks never run it.
+      - name: Compare physical A/B owner relinks (opt-in)
+        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          mkdir -p automation/reports
+          python3 automation/compare_physical_build_options.py \
+            --compiler-owners > automation/reports/physical_owner_ab.json
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -284,6 +294,7 @@ jobs:
           path: |
             automation/reports/cargo_cache_architecture-and-rust.json
             automation/reports/owner_rebuild_probe.json
+            automation/reports/physical_owner_ab.json
             app/rust/target/cargo-timings/cargo-timing*.html
           if-no-files-found: error
 

@@ -75,6 +75,11 @@ pub enum VerifiedRuleTruthFenceError {
         aggregate_key: String,
         event_id: Uuid,
     },
+    #[error("verified-rule projection identity {aggregate_key} has unproven historical Outbox event {event_id} without a database-stamped transaction; manual cutover required")]
+    LegacyUnproven {
+        aggregate_key: String,
+        event_id: Uuid,
+    },
     #[error("verified-rule Outbox idempotency key conflicts with a different event or stale revision for {aggregate_key}")]
     IdempotencyConflict { aggregate_key: String },
     #[error("verified-rule projection revision head and durable Outbox disagree for {aggregate_key}; manual reconciliation required")]
@@ -135,19 +140,22 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
             aggregate_key,
         });
     }
-    let unordered: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT event_id, aggregate_key FROM system.sync_outbox
+    let unordered: Option<(Uuid, String, bool)> = sqlx::query_as(
+        "SELECT event_id, aggregate_key, projection_revision IS NULL AS missing_revision
+         FROM system.sync_outbox
          WHERE target_system='qdrant' AND aggregate_type='rule_instance'
-           AND aggregate_key=ANY($1::text[]) AND projection_revision IS NULL
+           AND aggregate_key=ANY($1::text[])
+           AND (projection_revision IS NULL OR staged_xid IS NULL)
          ORDER BY aggregate_key LIMIT 1",
     )
     .bind(&ordered)
     .fetch_optional(&mut **tx)
     .await?;
-    if let Some((event_id, aggregate_key)) = unordered {
-        return Err(VerifiedRuleTruthFenceError::LegacyUnordered {
-            event_id,
-            aggregate_key,
+    if let Some((event_id, aggregate_key, missing_revision)) = unordered {
+        return Err(if missing_revision {
+            VerifiedRuleTruthFenceError::LegacyUnordered { event_id, aggregate_key }
+        } else {
+            VerifiedRuleTruthFenceError::LegacyUnproven { event_id, aggregate_key }
         });
     }
     Ok(())
@@ -506,17 +514,18 @@ where
         return Err(VerifiedRuleDispatchError::BlockedUncertain { event_id });
     }
 
-    let legacy_unordered: bool = sqlx::query_scalar(
+    let legacy_unproven: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM system.sync_outbox
          WHERE target_system='qdrant' AND aggregate_type='rule_instance'
-           AND aggregate_key=$1 AND projection_revision IS NULL
+           AND aggregate_key=$1
+           AND (projection_revision IS NULL OR staged_xid IS NULL)
          )",
     )
     .bind(&event.aggregate_key)
     .fetch_one(&mut *lock_tx)
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
-    if legacy_unordered {
+    if legacy_unproven {
         return Err(VerifiedRuleDispatchError::AmbiguousOrdering);
     }
 

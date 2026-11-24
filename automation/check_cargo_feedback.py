@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -22,7 +23,7 @@ from ci_impact import (
 from run_scoped_cargo_feedback import (
     E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
-    run_parallel_precompiled_e2e, run_precompiled_e2e_suite, selected_preparations,
+    run_precompiled_e2e_suites, run_precompiled_e2e_suite, selected_preparations,
 )
 
 
@@ -155,7 +156,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
 
     def run_plan(
         self, suites: list[str], *, delegated: bool = False,
-        suite_job: str = "architecture-and-rust", parallel_architecture: bool = False,
+        suite_job: str = "architecture-and-rust",
     ) -> tuple[list[tuple[list[str], dict]], str, dict]:
         report = self.report(suites)
         executions: list[tuple[list[str], dict]] = []
@@ -164,9 +165,9 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             executions.append((command, kwargs))
             return {"command": command, "exit_code": 0}
 
-        def precompiled(report: dict, assigned: list[tuple[str, list[str]]], *,
+        def precompiled(_report: dict, assigned: list[tuple[str, list[str]]], *,
                         suite_job: str) -> list[dict]:
-            executions.append((["parallel-e2e-execution"], {
+            executions.append((["precompiled-e2e-execution"], {
                 "suite_job": suite_job, "selected": [name for name, _ in assigned],
             }))
             return [{"compiled_once": True, "selected": [name for name, _ in assigned]}]
@@ -193,12 +194,11 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 patch("run_scoped_cargo_feedback.commands_for_report",
                       return_value=[["cargo", "test", "--workspace", "--locked"]]),
                 patch("run_scoped_cargo_feedback.run_cargo", side_effect=record),
-                patch("run_scoped_cargo_feedback.run_parallel_precompiled_e2e", side_effect=precompiled),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suites", side_effect=precompiled),
                 patch.object(sys, "argv", [
                     "runner", "--report", str(report_path),
                     *(["--delegate-workspace-unit-tests-to-verify"] if delegated else []),
                     *(["--suite-job", suite_job] if suite_job != "architecture-and-rust" else []),
-                    *(["--parallel-architecture-e2e"] if parallel_architecture else []),
                 ]),
                 patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}, clear=True),
                 patch("sys.stdout", new_callable=io.StringIO) as output,
@@ -214,21 +214,6 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             )
         return executions, lines, measurements
 
-    def test_full_architecture_prepares_workers_before_single_parallel_e2e_invocation(self) -> None:
-        selected = ["graph_query", "vector_projection", "temporal_restart"]
-        executions, output, evidence = self.run_plan(
-            selected, delegated=True, parallel_architecture=True,
-        )
-        self.assertEqual([command for command, _ in executions], [
-            list(WORKER_E2E_PREPARE), ["parallel-e2e-execution"],
-        ])
-        self.assertEqual(executions[-1][1], {
-            "suite_job": "architecture-and-rust", "selected": selected,
-        })
-        self.assertEqual(evidence["selected_suites"], selected)
-        self.assertEqual(len(evidence["measurements"]), 2)
-        self.assertIn("CI_SUITE_PREPARE=temporal_restart", output)
-
     def test_runtime_prebuild_runs_once_before_any_e2e_without_changing_tests(self) -> None:
         suites = ["cms_review_revision", "truth_certification", "knowledge_a13", "temporal_restart"]
         commands = suite_commands_by_ci_job(self.report(suites))["architecture-and-rust"]
@@ -236,20 +221,17 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         expected = [
             ["cargo", "test", "--workspace", "--locked"],
             list(WORKER_E2E_PREPARE),
-            *(command for _, command in commands),
+            ["precompiled-e2e-execution"],
         ]
         self.assertEqual([command for command, _ in executions], expected)
         self.assertEqual(len(measurements["measurements"]), len(expected))
         self.assertEqual(output.count("CI_SUITE_PREPARE=truth_certification COMMAND="), 1)
         self.assertIn("CI_SUITE_PREPARE_REUSED=temporal_restart", output)
-        self.assertEqual(output.count("CI_SUITE="), len(commands))
+        self.assertEqual(executions[-1][1], {
+            "suite_job": "architecture-and-rust",
+            "selected": [name for name, _ in commands],
+        })
         self.assertTrue(all(kwargs.get("env") is None for _, kwargs in executions[:2]))
-        for (name, _), (_, kwargs) in zip(commands, executions[2:]):
-            if name in {"truth_certification", "temporal_restart"}:
-                self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", kwargs["env"])
-                self.assertIn("INTEGRATION_OUTBOX_WORKER_BIN", kwargs["env"])
-            else:
-                self.assertIsNone(kwargs["env"])
 
     def test_e2e_without_runtime_owner_does_not_build_workers(self) -> None:
         suites = ["cms_review_revision", "knowledge_a13", "publishing_a17"]
@@ -443,7 +425,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 }) as compile_cargo,
                 patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
             ):
-                results = run_parallel_precompiled_e2e(
+                results = run_precompiled_e2e_suites(
                     self.report(selected), suites, suite_job="verify",
                 )
             compile_cargo.assert_called_once_with(E2E_COMPILE, cwd=WORKSPACE)
@@ -451,10 +433,10 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             self.assertEqual([result.get("suite") for result in results[1:]], selected)
             self.assertEqual(len(results), len(selected) + 1)
 
-    def test_architecture_parallel_preserves_every_real_suite_and_starts_temporal_first(self) -> None:
-        # The architecture owner has a prebuilt Worker and independent real
-        # Neo4j/Qdrant/Temporal Testcontainers. Its slowest selected suite
-        # overlaps graph without moving a test to the other CI job.
+    def test_architecture_reuses_one_harness_and_serializes_real_container_suites(self) -> None:
+        # CI #492 empirically showed that concurrent Neo4j and Temporal starts
+        # competed for Docker resources. Even distinct processes/containers
+        # should run one at a time on the architecture owner.
         selected = ["graph_query", "vector_projection", "temporal_restart"]
         suites = suite_commands_by_ci_job(self.report(selected))["architecture-and-rust"]
         with tempfile.TemporaryDirectory() as directory:
@@ -463,16 +445,10 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"compiled test binary")
             binary.chmod(0o755)
-            started = threading.Barrier(2, timeout=3)
             launched: list[str] = []
-            lock = threading.Lock()
 
             def execution(name: str, command: list[str], *_args: object) -> dict:
-                with lock:
-                    launched.append(name)
-                    ordinal = len(launched)
-                if ordinal <= 2:
-                    started.wait()
+                launched.append(name)
                 return {"suite": name, "selected_cargo_command": command}
 
             with (
@@ -482,21 +458,22 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 }) as compile_cargo,
                 patch("run_scoped_cargo_feedback.suite_runtime_environment", return_value={}),
                 patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
+                patch("run_scoped_cargo_feedback.ThreadPoolExecutor", wraps=ThreadPoolExecutor) as pool_factory,
             ):
-                results = run_parallel_precompiled_e2e(
+                results = run_precompiled_e2e_suites(
                     self.report(selected), suites, suite_job="architecture-and-rust",
                 )
             compile_cargo.assert_called_once_with(E2E_COMPILE, cwd=WORKSPACE)
-            self.assertEqual(launched[:2], ["temporal_restart", "graph_query"])
-            self.assertEqual(set(launched), set(selected))
+            pool_factory.assert_called_once_with(max_workers=1)
+            self.assertEqual(launched, selected)
             self.assertEqual([row["suite"] for row in results[1:]], selected)
 
-    def test_parallel_architecture_rejects_missing_or_foreign_suite_before_compilation(self) -> None:
+    def test_serial_architecture_rejects_missing_or_foreign_suite_before_compilation(self) -> None:
         selected = ["graph_query", "temporal_restart"]
         suites = suite_commands_by_ci_job(self.report(selected))["architecture-and-rust"]
         with patch("run_scoped_cargo_feedback.run_cargo") as compile_cargo:
             with self.assertRaisesRegex(ValueError, "exact suite owner partition"):
-                run_parallel_precompiled_e2e(
+                run_precompiled_e2e_suites(
                     self.report(selected), suites[:1] + [(
                         "vector_projection", list(SUITE_OWNERS["vector_projection"]["command"]),
                     )], suite_job="architecture-and-rust",
@@ -528,7 +505,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execution),
             ):
                 with self.assertRaisesRegex(RuntimeError, "1 mandatory E2E suites failed"):
-                    run_parallel_precompiled_e2e(
+                    run_precompiled_e2e_suites(
                         self.report(selected), suites, suite_job="verify",
                     )
             self.assertEqual(set(ran), set(selected))
@@ -537,7 +514,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         suite = ("cms_review_revision", list(SUITE_OWNERS["cms_review_revision"]["command"]))
         with patch("run_scoped_cargo_feedback.run_cargo") as compile_cargo:
             with self.assertRaisesRegex(ValueError, "duplicated filters"):
-                run_parallel_precompiled_e2e(
+                run_precompiled_e2e_suites(
                     self.report(["cms_review_revision"]), [suite, suite], suite_job="verify",
                 )
         compile_cargo.assert_not_called()

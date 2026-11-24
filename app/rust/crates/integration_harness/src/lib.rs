@@ -122,8 +122,10 @@ mod tests {
     include!("tests/qa_persistence_tests.rs");
     include!("tests/publication_delivery_tests.rs");
     include!("tests/outbox_delivery_tests.rs");
+    include!("tests/pg_migration_upgrade_tests.rs");
     include!("tests/knowledge_read_tests.rs");
     include!("tests/truth_runtime_tests.rs");
     include!("tests/scenario_parity_tests.rs");
+    include!("tests/pure_dag_temporal_helpers.rs");
     include!("tests/manual_llm_temporal_tests.rs");
 }
