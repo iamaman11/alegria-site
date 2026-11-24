@@ -15,9 +15,9 @@ pub fn execute(input: &CmsPublishInputPayload) -> Result<CmsPublishOutputPayload
     let human_approved = input
         .approval_decision
         .as_ref()
-            .and_then(|decision| crate::cms_review_wire::from_wire(decision).ok())
-            .map(|decision| decision.is_human_approved())
-            .unwrap_or(false);
+        .and_then(|decision| crate::cms_review_wire::from_wire(decision).ok())
+        .map(|decision| decision.is_human_approved())
+        .unwrap_or(false);
     let blocking_reasons = cms_publication_blockers(
         intent,
         CmsPublicationGate {

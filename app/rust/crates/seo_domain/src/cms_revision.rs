@@ -237,7 +237,11 @@ mod tests {
         );
         assert!(cms_publication_blockers(
             CmsPublishIntent::ApproveForRelease,
-            CmsPublicationGate { human_approved: true, ..complete }
-        ).is_empty());
+            CmsPublicationGate {
+                human_approved: true,
+                ..complete
+            }
+        )
+        .is_empty());
     }
 }

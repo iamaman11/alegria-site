@@ -157,22 +157,33 @@ fn valid_typed_block(draft: &DraftQuality<'_>, block: &ContentBlock<'_>) -> bool
             Err(_) => return false,
         }
     }
-    let block_refs = block.support_refs.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    let block_refs = block
+        .support_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
     if block_refs.len() != block.support_refs.len() || block_refs != refs {
         return false;
     }
     if !matches!(block.role, "overview" | "faq")
-        && draft.verified_support
+        && draft
+            .verified_support
             .iter()
             .filter(|entry| role_matches_section(entry.role_type, block.role))
             .map(|entry| entry.support_ref)
-            .collect::<BTreeSet<_>>() != refs
+            .collect::<BTreeSet<_>>()
+            != refs
     {
         return false;
     }
     let expected = rendered.join("\n\n");
     block.markdown == expected
-        && draft.sections.iter().filter(|section| section.role == block.role).count() == 1
+        && draft
+            .sections
+            .iter()
+            .filter(|section| section.role == block.role)
+            .count()
+            == 1
         && draft.sections.iter().any(|section| {
             section.role == block.role
                 && section.body_markdown == expected
@@ -183,55 +194,89 @@ fn valid_typed_block(draft: &DraftQuality<'_>, block: &ContentBlock<'_>) -> bool
 
 pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
     let mut result = Result::default();
-    let verified_fragments = draft.supported_fragments.iter()
+    let verified_fragments = draft
+        .supported_fragments
+        .iter()
         .map(|fragment| fragment.trim())
         .filter(|fragment| !fragment.is_empty())
         .collect::<BTreeSet<_>>();
     let has_exact_evidence = |fragment: &str| verified_fragments.contains(fragment.trim());
-    result.supported_claims = draft.traceability.iter().filter(|entry| {
-        matches!(entry.traceability_label, "verified_fact" | "verified_summary")
-            && !entry.support_refs.is_empty()
-            && entry.validation_verdict == "supported"
-            && has_exact_evidence(entry.fragment_text)
-    }).count() as u32;
-    let unsupported_traceability = draft.traceability.iter().filter(|entry| {
-        entry.traceability_label == "unsupported_factual_fragment"
-            || (entry.fragment_kind == "factual" && (entry.support_refs.is_empty()
-                || entry.validation_verdict != "supported"
-                || !has_exact_evidence(entry.fragment_text)))
-    }).count() as u32;
-    let unsupported_ledger = draft.claims.iter().filter(|claim| {
-        claim.validation_verdict == "blocked"
-            || claim.traceability_label == "unsupported_factual_fragment"
-            || (claim.claim_kind == "factual" && (claim.support_refs.is_empty()
-                || claim.validation_verdict != "supported"
-                || !has_exact_evidence(claim.fragment_text)))
-    }).count() as u32;
+    result.supported_claims = draft
+        .traceability
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.traceability_label,
+                "verified_fact" | "verified_summary"
+            ) && !entry.support_refs.is_empty()
+                && entry.validation_verdict == "supported"
+                && has_exact_evidence(entry.fragment_text)
+        })
+        .count() as u32;
+    let unsupported_traceability = draft
+        .traceability
+        .iter()
+        .filter(|entry| {
+            entry.traceability_label == "unsupported_factual_fragment"
+                || (entry.fragment_kind == "factual"
+                    && (entry.support_refs.is_empty()
+                        || entry.validation_verdict != "supported"
+                        || !has_exact_evidence(entry.fragment_text)))
+        })
+        .count() as u32;
+    let unsupported_ledger = draft
+        .claims
+        .iter()
+        .filter(|claim| {
+            claim.validation_verdict == "blocked"
+                || claim.traceability_label == "unsupported_factual_fragment"
+                || (claim.claim_kind == "factual"
+                    && (claim.support_refs.is_empty()
+                        || claim.validation_verdict != "supported"
+                        || !has_exact_evidence(claim.fragment_text)))
+        })
+        .count() as u32;
     if draft.body_markdown.contains("[unsupported") || unsupported_traceability > 0 {
-        result.violations.push(Violation::UnsupportedFactualFragment);
+        result
+            .violations
+            .push(Violation::UnsupportedFactualFragment);
     }
     if unsupported_ledger > 0 {
-        result.violations.push(Violation::UnsupportedClaimLedgerEntry);
+        result
+            .violations
+            .push(Violation::UnsupportedClaimLedgerEntry);
     }
-    let typed_editorial = !draft.locale.is_empty()
-        || draft.claims.iter().any(|claim| claim.proposal.is_some());
+    let typed_editorial =
+        !draft.locale.is_empty() || draft.claims.iter().any(|claim| claim.proposal.is_some());
     if typed_editorial {
-        let expected_body = draft.sections.iter()
+        let expected_body = draft
+            .sections
+            .iter()
             .map(|section| format!("## {}\n\n{}\n", section.heading, section.body_markdown))
-            .collect::<Vec<_>>().join("\n");
-        let body_matches = draft.body_markdown.split_once("\n\n").is_some_and(|(title, body)| {
-            title.starts_with("# ") && !title.contains('\n') && body == expected_body
-        });
+            .collect::<Vec<_>>()
+            .join("\n");
+        let body_matches = draft
+            .body_markdown
+            .split_once("\n\n")
+            .is_some_and(|(title, body)| {
+                title.starts_with("# ") && !title.contains('\n') && body == expected_body
+            });
         let complete = !draft.locale.is_empty()
             && !draft.claims.is_empty()
             && draft.claims.iter().all(|claim| {
-                claim.proposal.is_some() && draft.blocks.iter().any(|block| {
-                    factual_role(block.role) && block.role == claim.source_section_key
-                })
+                claim.proposal.is_some()
+                    && draft.blocks.iter().any(|block| {
+                        factual_role(block.role) && block.role == claim.source_section_key
+                    })
             });
         let sections_match = draft.sections.len() == draft.blocks.len()
             && draft.sections.iter().all(|section| {
-                draft.blocks.iter().filter(|block| block.role == section.role).count() == 1
+                draft
+                    .blocks
+                    .iter()
+                    .filter(|block| block.role == section.role)
+                    .count()
+                    == 1
                     && draft.blocks.iter().any(|block| {
                         block.role == section.role
                             && block.heading == section.heading
@@ -239,17 +284,28 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
                             && block.support_refs == section.support_refs
                     })
             });
-        let non_factual_match = draft.blocks.iter().filter(|block| !factual_role(block.role))
+        let non_factual_match = draft
+            .blocks
+            .iter()
+            .filter(|block| !factual_role(block.role))
             .all(|block| match block.role {
                 "cta_disclaimer" => block.markdown == editorial_cta(draft.locale),
-                "related_pages" => block.markdown == render_verified_source_list(draft.verified_support, draft.locale),
+                "related_pages" => {
+                    block.markdown
+                        == render_verified_source_list(draft.verified_support, draft.locale)
+                }
                 _ => false,
             });
         if !body_matches || !complete || !sections_match || !non_factual_match {
-            result.violations.push(Violation::InvalidEditorialClaimRendering);
+            result
+                .violations
+                .push(Violation::InvalidEditorialClaimRendering);
         }
     }
-    let unsupported_blocks = draft.blocks.iter().filter(|block| factual_role(block.role))
+    let unsupported_blocks = draft
+        .blocks
+        .iter()
+        .filter(|block| factual_role(block.role))
         .filter(|block| {
             if typed_editorial {
                 return !valid_typed_block(draft, block);
@@ -258,14 +314,24 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
                 claim.claim_kind == "factual"
                     && claim.validation_verdict == "supported"
                     && has_exact_evidence(claim.fragment_text)
-                    && block.support_refs.iter().any(|support_ref| claim.support_refs.contains(support_ref))
+                    && block
+                        .support_refs
+                        .iter()
+                        .any(|support_ref| claim.support_refs.contains(support_ref))
                     && block.markdown.contains(claim.fragment_text.trim())
             })
-        }).count() as u32;
+        })
+        .count() as u32;
     if unsupported_blocks > 0 {
-        result.violations.push(Violation::FactualBlockWithoutExactEvidence);
+        result
+            .violations
+            .push(Violation::FactualBlockWithoutExactEvidence);
     }
-    if draft.traceability.iter().any(|entry| entry.traceability_label == "serp_pattern_reference") {
+    if draft
+        .traceability
+        .iter()
+        .any(|entry| entry.traceability_label == "serp_pattern_reference")
+    {
         result.violations.push(Violation::ForbiddenSerpAsFactUsage);
     }
     if !draft.sections.iter().any(|section| section.required) {
@@ -275,13 +341,17 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
         result.violations.push(Violation::MissingRequiredMetadata);
     }
     if draft.traceability.is_empty() {
-        result.violations.push(Violation::MissingTraceabilityManifest);
+        result
+            .violations
+            .push(Violation::MissingTraceabilityManifest);
     }
     if draft.claims.is_empty() {
         result.violations.push(Violation::MissingClaimLedger);
     }
     if draft.blocks.is_empty() {
-        result.violations.push(Violation::MissingRenderedContentBlocks);
+        result
+            .violations
+            .push(Violation::MissingRenderedContentBlocks);
     }
     if draft.schema_markup_json.trim().is_empty() || draft.schema_markup_json.trim() == "{}" {
         result.violations.push(Violation::MissingSchemaMarkup);
@@ -298,9 +368,16 @@ mod tests {
     #[test]
     fn empty_draft_fails_closed_with_stable_diagnostics() {
         let input = DraftQuality {
-            body_markdown: "", locale: "", truth_snapshot_ref: "", schema_markup_json: "",
-            sections: &[], blocks: &[], claims: &[], traceability: &[],
-            verified_support: &[], supported_fragments: &[],
+            body_markdown: "",
+            locale: "",
+            truth_snapshot_ref: "",
+            schema_markup_json: "",
+            sections: &[],
+            blocks: &[],
+            claims: &[],
+            traceability: &[],
+            verified_support: &[],
+            supported_fragments: &[],
         };
         let result = evaluate(&input);
         assert_eq!(result.supported_claims, 0);
@@ -312,9 +389,18 @@ mod tests {
 
     #[test]
     fn unsupported_ledger_remains_distinct_from_external_blocker_code() {
-        assert_eq!(Violation::UnsupportedClaimLedgerEntry.reason_code(), "unsupported_claim_ledger_entry");
-        assert_eq!(Violation::UnsupportedClaimLedgerEntry.blocker_reason_code(), "unsupported_factual_fragment");
-        assert_eq!(Violation::UnsupportedClaimLedgerEntry.task_type(), "unsupported_factual_fragment");
+        assert_eq!(
+            Violation::UnsupportedClaimLedgerEntry.reason_code(),
+            "unsupported_claim_ledger_entry"
+        );
+        assert_eq!(
+            Violation::UnsupportedClaimLedgerEntry.blocker_reason_code(),
+            "unsupported_factual_fragment"
+        );
+        assert_eq!(
+            Violation::UnsupportedClaimLedgerEntry.task_type(),
+            "unsupported_factual_fragment"
+        );
     }
 
     #[test]
@@ -337,28 +423,44 @@ mod tests {
         };
         let markdown = render_editorial_claim(claim, "en").unwrap();
         let sections = [Section {
-            role: "timing", heading: "Timing", body_markdown: &markdown,
-            support_refs: &refs, required: true,
+            role: "timing",
+            heading: "Timing",
+            body_markdown: &markdown,
+            support_refs: &refs,
+            required: true,
         }];
         let blocks = [ContentBlock {
-            role: "timing", heading: "Timing", markdown: &markdown, support_refs: &refs,
+            role: "timing",
+            heading: "Timing",
+            markdown: &markdown,
+            support_refs: &refs,
         }];
         let traceability = [Traceability {
-            fragment_kind: "factual", fragment_text: "15 days",
-            traceability_label: "verified_fact", validation_verdict: "supported",
+            fragment_kind: "factual",
+            fragment_text: "15 days",
+            traceability_label: "verified_fact",
+            validation_verdict: "supported",
             support_refs: &refs,
         }];
         let support = [VerifiedSupport {
-            support_ref: "rule:one", role_type: "timeline_item", freshness_class: "fresh",
-            fragment_text: "15 days", source_url: "https://example.org/official",
+            support_ref: "rule:one",
+            role_type: "timeline_item",
+            freshness_class: "fresh",
+            fragment_text: "15 days",
+            source_url: "https://example.org/official",
         }];
         let fragments = vec!["15 days".to_string()];
         let body = format!("# Title\n\n## Timing\n\n{markdown}\n");
         let result = evaluate(&DraftQuality {
-            body_markdown: &body, locale: "en", truth_snapshot_ref: "snapshot",
+            body_markdown: &body,
+            locale: "en",
+            truth_snapshot_ref: "snapshot",
             schema_markup_json: "{\"@type\":\"Article\"}",
-            sections: &sections, blocks: &blocks, claims: &[claim],
-            traceability: &traceability, verified_support: &support,
+            sections: &sections,
+            blocks: &blocks,
+            claims: &[claim],
+            traceability: &traceability,
+            verified_support: &support,
             supported_fragments: &fragments,
         });
         assert!(result.violations.is_empty(), "{:?}", result.violations);

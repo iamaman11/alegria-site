@@ -23,7 +23,10 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     }
     if seo_domain::publishing::license::has_restricted_source(
         draft.traceability_entries.iter().map(|entry| {
-            (entry.traceability_label.as_str(), entry.validation_verdict.as_str())
+            (
+                entry.traceability_label.as_str(),
+                entry.validation_verdict.as_str(),
+            )
         }),
     ) {
         let reason = seo_domain::publishing::license::RESTRICTED_SOURCE_REASON;
@@ -34,27 +37,41 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         ));
     }
 
-    let sections = draft.sections.iter().map(|section| Section {
-        role: &section.section_role,
-        heading: &section.heading,
-        body_markdown: &section.body_markdown,
-        support_refs: &section.support_refs,
-        required: section.required,
-    }).collect::<Vec<_>>();
-    let blocks = draft.content_blocks.iter().map(|block| ContentBlock {
-        role: &block.section_role,
-        heading: &block.heading,
-        markdown: &block.markdown,
-        support_refs: &block.support_refs,
-    }).collect::<Vec<_>>();
-    let traceability = draft.traceability_entries.iter().map(|entry| Traceability {
-        fragment_kind: &entry.fragment_kind,
-        fragment_text: &entry.fragment_text,
-        traceability_label: &entry.traceability_label,
-        validation_verdict: &entry.validation_verdict,
-        support_refs: &entry.support_refs,
-    }).collect::<Vec<_>>();
-    let claims = draft.claim_ledger.iter()
+    let sections = draft
+        .sections
+        .iter()
+        .map(|section| Section {
+            role: &section.section_role,
+            heading: &section.heading,
+            body_markdown: &section.body_markdown,
+            support_refs: &section.support_refs,
+            required: section.required,
+        })
+        .collect::<Vec<_>>();
+    let blocks = draft
+        .content_blocks
+        .iter()
+        .map(|block| ContentBlock {
+            role: &block.section_role,
+            heading: &block.heading,
+            markdown: &block.markdown,
+            support_refs: &block.support_refs,
+        })
+        .collect::<Vec<_>>();
+    let traceability = draft
+        .traceability_entries
+        .iter()
+        .map(|entry| Traceability {
+            fragment_kind: &entry.fragment_kind,
+            fragment_text: &entry.fragment_text,
+            traceability_label: &entry.traceability_label,
+            validation_verdict: &entry.validation_verdict,
+            support_refs: &entry.support_refs,
+        })
+        .collect::<Vec<_>>();
+    let claims = draft
+        .claim_ledger
+        .iter()
         .map(crate::editorial_wire::claim_view)
         .collect::<Vec<_>>();
     let verified_support = crate::editorial_wire::support_views(&input.verified_support);

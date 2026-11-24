@@ -1,9 +1,9 @@
 use contracts::generated::alegria::temporal::v1::{
     ClaimLedgerEntry, CmsPublishInputPayload, DraftAssembleInputPayload,
-    DraftNormalizeInputPayload, DraftQaInputPayload, IaBuildInputPayload,
-    GlobalSiteReconcileInputPayload, LinkRecommendInputPayload, LlmDraftCandidate,
-    OpportunityBuildInputPayload, SeoScopePayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
+    DraftNormalizeInputPayload, DraftQaInputPayload, GlobalSiteReconcileInputPayload,
+    IaBuildInputPayload, LinkRecommendInputPayload, LlmDraftCandidate,
+    OpportunityBuildInputPayload, SeoScopePayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 
 fn scope() -> SeoScopePayload {
@@ -34,26 +34,32 @@ fn invalid_supplied_scope_is_rejected_by_every_planning_step() {
         ..Default::default()
     })
     .is_err());
-    assert!(crate::serp_normalize_step::execute(&SerpNormalizeInputPayload {
-        scope: Some(invalid.clone()),
-        ..Default::default()
-    })
-    .is_err());
-    assert!(crate::opportunity_build_step::execute(&OpportunityBuildInputPayload {
-        scope: Some(invalid.clone()),
-        ..Default::default()
-    })
-    .is_err());
+    assert!(
+        crate::serp_normalize_step::execute(&SerpNormalizeInputPayload {
+            scope: Some(invalid.clone()),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    assert!(
+        crate::opportunity_build_step::execute(&OpportunityBuildInputPayload {
+            scope: Some(invalid.clone()),
+            ..Default::default()
+        })
+        .is_err()
+    );
     assert!(crate::ia_build_step::execute(&IaBuildInputPayload {
         scope: Some(invalid.clone()),
         ..Default::default()
     })
     .is_err());
-    assert!(crate::global_site_reconcile_step::execute(&GlobalSiteReconcileInputPayload {
-        scope: Some(invalid),
-        ..Default::default()
-    })
-    .is_err());
+    assert!(
+        crate::global_site_reconcile_step::execute(&GlobalSiteReconcileInputPayload {
+            scope: Some(invalid),
+            ..Default::default()
+        })
+        .is_err()
+    );
 }
 
 fn support(
