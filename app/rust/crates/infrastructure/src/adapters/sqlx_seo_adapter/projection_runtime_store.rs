@@ -515,20 +515,9 @@ fn verified_scope_target(
     truth_domain::truth_candidates::truth_scope_target(&typed)
 }
 
-pub async fn upsert_verified_rule_instance(
-    pool: &PgPool,
+fn validate_verified_rule_instance_write(
     rule: &VerifiedRuleInstanceWrite,
-) -> Result<(), DomainError> {
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
-    tx.commit().await.map_err(classify_sqlx)
-}
-
-pub async fn upsert_verified_rule_instance_in_tx(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    rule: &VerifiedRuleInstanceWrite,
-) -> Result<(), DomainError> {
-    // Validate the precise scope BEFORE any SQL mutation.
+) -> Result<truth_domain::truth_candidates::TruthScopeTarget, DomainError> {
     if rule
         .params
         .get("conditions_key")
@@ -542,9 +531,28 @@ pub async fn upsert_verified_rule_instance_in_tx(
             "unresolved verified conditions_key requires explicit condition evaluation",
         ));
     }
-    let target = verified_scope_target(&rule.scope).ok_or_else(|| {
+    verified_scope_target(&rule.scope).ok_or_else(|| {
         validation_failure("verified rule scope is not a supported exact applicant_profile")
-    })?;
+    })
+}
+
+pub async fn upsert_verified_rule_instance(
+    pool: &PgPool,
+    rule: &VerifiedRuleInstanceWrite,
+) -> Result<(), DomainError> {
+    // Invalid scope never opens a connection, including through this pool API.
+    validate_verified_rule_instance_write(rule)?;
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+pub async fn upsert_verified_rule_instance_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule: &VerifiedRuleInstanceWrite,
+) -> Result<(), DomainError> {
+    // Validate the precise scope BEFORE any SQL mutation.
+    let target = validate_verified_rule_instance_write(rule)?;
     if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
