@@ -15,7 +15,7 @@ async fn run_initial_phase<
                 &VerifiedSupportBundleRequest {
                     run_id,
                     context_key: request.site_input.context_key.clone(),
-                    scope_signature: scope_signature(&request.site_input),
+                    scope_signature: scope_signature(&request.site_input)?,
                     applicant_profile: applicant_profile(&request.site_input),
                 },
             )

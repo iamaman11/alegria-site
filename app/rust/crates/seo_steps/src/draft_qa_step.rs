@@ -1,324 +1,83 @@
-use std::collections::BTreeSet;
-
 use contracts::generated::alegria::temporal::v1::{
-    DraftQaInputPayload, DraftQaOutputPayload, SeoPublishBlockerState,
+    DraftQaInputPayload, DraftQaOutputPayload, DraftState, SeoPublishBlockerState,
 };
-use seo_domain::editorial::factual_role;
-fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerState {
+use seo_domain::draft_quality::{self, ContentBlock, DraftQuality, Section, Traceability};
+
+fn license_blocker(reason: &str, action: &str) -> SeoPublishBlockerState {
     SeoPublishBlockerState {
-        reason_code: reason_code.to_string(),
-        task_type: match reason_code {
-            "unsupported_factual_fragment" | "forbidden_serp_as_fact_usage" => {
-                "unsupported_factual_fragment"
-            }
-            "missing_required_sections"
-            | "missing_required_metadata"
-            | "missing_traceability_manifest" => "publish_gate_blocker",
-            _ => "publish_gate_blocker",
-        }
-        .to_string(),
-        required_next_action: required_next_action.to_string(),
+        reason_code: reason.to_string(),
+        task_type: "publish_gate_blocker".to_string(),
+        required_next_action: action.to_string(),
         recheck_trigger: "draft_qa_rerun".to_string(),
     }
 }
 
-fn typed_claim_block_valid(
-    draft: &contracts::generated::alegria::temporal::v1::DraftState,
-    block: &contracts::generated::alegria::temporal::v1::RenderedContentBlock,
-    support: &[contracts::generated::alegria::temporal::v1::SeoVerifiedFactSupportState],
-) -> bool {
-    use crate::editorial_wire::{claim_view, support_views};
-    use seo_domain::editorial::{
-        render_editorial_claim, role_matches_section, validate_editorial_claim,
-    };
-    let support_views = support_views(support);
-    let claims = draft
-        .claim_ledger
-        .iter()
-        .filter(|claim| claim.source_section_key == block.section_role)
-        .collect::<Vec<_>>();
-    if claims.is_empty() || draft.editorial_locale.is_empty() {
-        return false;
-    }
-    let mut rendered = Vec::new();
-    let mut refs = BTreeSet::new();
-    for claim in claims {
-        if validate_editorial_claim(claim_view(claim), &support_views).is_err()
-            || !refs.insert(claim.support_refs[0].as_str())
-        {
-            return false;
-        }
-        match render_editorial_claim(claim_view(claim), &draft.editorial_locale) {
-            Ok(text) => rendered.push(text),
-            Err(_) => return false,
-        }
-    }
-    let block_refs = block
-        .support_refs
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if block_refs.len() != block.support_refs.len() || block_refs != refs {
-        return false;
-    }
-    if !matches!(block.section_role.as_str(), "overview" | "faq")
-        && support_views
-            .iter()
-            .filter(|entry| role_matches_section(entry.role_type, &block.section_role))
-            .map(|entry| entry.support_ref)
-            .collect::<BTreeSet<_>>()
-            != refs
-    {
-        return false;
-    }
-    let expected = rendered.join("\n\n");
-    block.markdown == expected
-        && draft
-            .sections
-            .iter()
-            .filter(|section| section.section_role == block.section_role)
-            .count()
-            == 1
-        && draft.sections.iter().any(|section| {
-            section.section_role == block.section_role
-                && section.body_markdown == expected
-                && section.heading == block.heading
-                && section.support_refs == block.support_refs
-        })
-}
-
 pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
-    let draft = input.draft.clone().unwrap_or_default();
+    let empty = DraftState::default();
+    let draft = input.draft.as_ref().unwrap_or(&empty);
     let mut blocking_reasons = Vec::new();
     let mut blockers = Vec::new();
-    let contract_blockers = crate::content_contract_validate_step::validate_for_publish(input);
-    for blocker_state in contract_blockers {
-        blocking_reasons.push(blocker_state.reason_code.clone());
-        blockers.push(blocker_state);
+    for blocker in crate::content_contract_validate_step::validate_for_publish(input) {
+        blocking_reasons.push(blocker.reason_code.clone());
+        blockers.push(blocker);
     }
-    // This is a domain publish policy, not a separate Temporal activity.
-    // One blocker is emitted even when several restricted fragments occur.
     if seo_domain::publishing::license::has_restricted_source(
         draft.traceability_entries.iter().map(|entry| {
-            (
-                entry.traceability_label.as_str(),
-                entry.validation_verdict.as_str(),
-            )
+            (entry.traceability_label.as_str(), entry.validation_verdict.as_str())
         }),
     ) {
         let reason = seo_domain::publishing::license::RESTRICTED_SOURCE_REASON;
         blocking_reasons.push(reason.to_string());
-        blockers.push(blocker(
+        blockers.push(license_blocker(
             reason,
             seo_domain::publishing::license::RESTRICTED_SOURCE_ACTION,
         ));
     }
-    // The source-backed fragments come from the DB-resolved VERIFIED bundle,
-    // not self-declared support refs in the LLM response. An invented claim
-    // carrying a real ref cannot pass merely because the ref is well formed.
-    let verified_fragments = input
-        .supported_fragments
-        .iter()
-        .map(|fragment| fragment.trim())
-        .filter(|fragment| !fragment.is_empty())
-        .collect::<BTreeSet<_>>();
-    let has_exact_evidence = |fragment: &str| verified_fragments.contains(fragment.trim());
-    let supported_claims = draft
-        .traceability_entries
-        .iter()
-        .filter(|entry| {
-            matches!(
-                entry.traceability_label.as_str(),
-                "verified_fact" | "verified_summary"
-            ) && !entry.support_refs.is_empty()
-                && entry.validation_verdict == "supported"
-                && has_exact_evidence(&entry.fragment_text)
-        })
-        .count() as u32;
-    let unsupported_claims = draft
-        .traceability_entries
-        .iter()
-        .filter(|entry| {
-            entry.traceability_label == "unsupported_factual_fragment"
-                || (entry.fragment_kind == "factual"
-                    && (entry.support_refs.is_empty()
-                        || entry.validation_verdict != "supported"
-                        || !has_exact_evidence(&entry.fragment_text)))
-        })
-        .count() as u32;
-    let unsupported_ledger_claims = draft
-        .claim_ledger
-        .iter()
-        .filter(|claim| {
-            claim.validation_verdict == "blocked"
-                || claim.traceability_label == "unsupported_factual_fragment"
-                || (claim.claim_kind == "factual"
-                    && (claim.support_refs.is_empty()
-                        || claim.validation_verdict != "supported"
-                        || !has_exact_evidence(&claim.fragment_text)))
-        })
-        .count() as u32;
-    if draft.body_markdown.contains("[unsupported") || unsupported_claims > 0 {
-        blocking_reasons.push("unsupported_factual_fragment".to_string());
-        blockers.push(blocker(
-            "unsupported_factual_fragment",
-            "Bind every factual fragment to verified_fact or verified_summary support.",
-        ));
-    }
-    if unsupported_ledger_claims > 0 {
-        blocking_reasons.push("unsupported_claim_ledger_entry".to_string());
-        blockers.push(blocker(
-            "unsupported_factual_fragment",
-            "Regenerate the editorial draft or bind every claim-ledger entry to verified support.",
-        ));
-    }
-    let typed_editorial = !draft.editorial_locale.is_empty()
-        || draft
-            .claim_ledger
-            .iter()
-            .any(|claim| claim.editorial_proposal.is_some());
-    if typed_editorial {
-        let expected_body = draft
-            .sections
-            .iter()
-            .map(|section| format!("## {}\n\n{}\n", section.heading, section.body_markdown))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let body_matches = draft
-            .body_markdown
-            .split_once("\n\n")
-            .is_some_and(|(title, body)| {
-                title.starts_with("# ") && !title.contains('\n') && body == expected_body
-            });
-        let complete = !draft.editorial_locale.is_empty()
-            && !draft.claim_ledger.is_empty()
-            && draft.claim_ledger.iter().all(|claim| {
-                claim.editorial_proposal.is_some()
-                    && draft.content_blocks.iter().any(|block| {
-                        factual_role(&block.section_role)
-                            && block.section_role == claim.source_section_key
-                    })
-            });
-        let sections_match = draft.sections.len() == draft.content_blocks.len()
-            && draft.sections.iter().all(|section| {
-                draft
-                    .content_blocks
-                    .iter()
-                    .filter(|block| block.section_role == section.section_role)
-                    .count()
-                    == 1
-                    && draft.content_blocks.iter().any(|block| {
-                        block.section_role == section.section_role
-                            && block.heading == section.heading
-                            && block.markdown == section.body_markdown
-                            && block.support_refs == section.support_refs
-                    })
-            });
-        let non_factual_match = draft
-            .content_blocks
-            .iter()
-            .filter(|block| !factual_role(&block.section_role))
-            .all(|block| match block.section_role.as_str() {
-                "cta_disclaimer" => {
-                    block.markdown == seo_domain::editorial::editorial_cta(&draft.editorial_locale)
-                }
-                "related_pages" => {
-                    block.markdown
-                        == seo_domain::editorial::render_verified_source_list(
-                            &crate::editorial_wire::support_views(&input.verified_support),
-                            &draft.editorial_locale,
-                        )
-                }
-                _ => false,
-            });
-        if !body_matches || !complete || !sections_match || !non_factual_match {
-            blocking_reasons.push("invalid_editorial_claim_rendering".to_string());
-            blockers.push(blocker(
-                "invalid_editorial_claim_rendering",
-                "Rebuild the entire localized draft from its typed, source-bound claim ledger.",
-            ));
-        }
-    }
-    let unsupported_factual_blocks = draft
-        .content_blocks
-        .iter()
-        .filter(|block| factual_role(&block.section_role))
-        .filter(|block| {
-            if typed_editorial {
-                return !typed_claim_block_valid(&draft, block, &input.verified_support);
-            }
-            !draft.claim_ledger.iter().any(|claim| {
-                claim.claim_kind == "factual"
-                    && claim.validation_verdict == "supported"
-                    && has_exact_evidence(&claim.fragment_text)
-                    && block
-                        .support_refs
-                        .iter()
-                        .any(|support_ref| claim.support_refs.contains(support_ref))
-                    && block.markdown.contains(claim.fragment_text.trim())
-            })
-        })
-        .count();
-    if unsupported_factual_blocks > 0 {
-        blocking_reasons.push("factual_block_without_exact_evidence".to_string());
-        blockers.push(blocker(
-            "factual_block_without_exact_evidence",
-            "Use the exact verified source and canonical claim rendering for each factual block or request source revalidation.",
-        ));
-    }
-    if draft
-        .traceability_entries
-        .iter()
-        .any(|entry| entry.traceability_label == "serp_pattern_reference")
-    {
-        blocking_reasons.push("forbidden_serp_as_fact_usage".to_string());
-        blockers.push(blocker(
-            "forbidden_serp_as_fact_usage",
-            "Remove SERP-derived evidence from factual support and bind to verified truth.",
-        ));
-    }
-    let missing_required_section = !draft.sections.iter().any(|section| section.required);
-    if missing_required_section {
-        blocking_reasons.push("missing_required_sections".to_string());
-        blockers.push(blocker(
-            "missing_required_sections",
-            "Assemble all required expert page sections from the attached blueprint.",
-        ));
-    }
-    if draft.truth_snapshot_ref.trim().is_empty() {
-        blocking_reasons.push("missing_required_metadata".to_string());
-        blockers.push(blocker(
-            "missing_required_metadata",
-            "Populate truth snapshot metadata before publish gate.",
-        ));
-    }
-    if draft.traceability_entries.is_empty() {
-        blocking_reasons.push("missing_traceability_manifest".to_string());
-        blockers.push(blocker(
-            "missing_traceability_manifest",
-            "Persist fragment-level traceability metadata before publish gate.",
-        ));
-    }
-    if draft.claim_ledger.is_empty() {
-        blocking_reasons.push("missing_claim_ledger".to_string());
-        blockers.push(blocker(
-            "missing_claim_ledger",
-            "Persist the LLM/editorial claim ledger before publish gate.",
-        ));
-    }
-    if draft.content_blocks.is_empty() {
-        blocking_reasons.push("missing_rendered_content_blocks".to_string());
-        blockers.push(blocker(
-            "missing_rendered_content_blocks",
-            "Build typed content blocks for headless CMS rendering.",
-        ));
-    }
-    if draft.schema_markup_json.trim().is_empty() || draft.schema_markup_json.trim() == "{}" {
-        blocking_reasons.push("missing_schema_markup".to_string());
-        blockers.push(blocker(
-            "missing_schema_markup",
-            "Generate Article/Breadcrumb/FAQ schema candidates before review.",
-        ));
+
+    let sections = draft.sections.iter().map(|section| Section {
+        role: &section.section_role,
+        heading: &section.heading,
+        body_markdown: &section.body_markdown,
+        support_refs: &section.support_refs,
+        required: section.required,
+    }).collect::<Vec<_>>();
+    let blocks = draft.content_blocks.iter().map(|block| ContentBlock {
+        role: &block.section_role,
+        heading: &block.heading,
+        markdown: &block.markdown,
+        support_refs: &block.support_refs,
+    }).collect::<Vec<_>>();
+    let traceability = draft.traceability_entries.iter().map(|entry| Traceability {
+        fragment_kind: &entry.fragment_kind,
+        fragment_text: &entry.fragment_text,
+        traceability_label: &entry.traceability_label,
+        validation_verdict: &entry.validation_verdict,
+        support_refs: &entry.support_refs,
+    }).collect::<Vec<_>>();
+    let claims = draft.claim_ledger.iter()
+        .map(crate::editorial_wire::claim_view)
+        .collect::<Vec<_>>();
+    let verified_support = crate::editorial_wire::support_views(&input.verified_support);
+    let qa = draft_quality::evaluate(&DraftQuality {
+        body_markdown: &draft.body_markdown,
+        locale: &draft.editorial_locale,
+        truth_snapshot_ref: &draft.truth_snapshot_ref,
+        schema_markup_json: &draft.schema_markup_json,
+        sections: &sections,
+        blocks: &blocks,
+        claims: &claims,
+        traceability: &traceability,
+        verified_support: &verified_support,
+        supported_fragments: &input.supported_fragments,
+    });
+    for violation in qa.violations {
+        blocking_reasons.push(violation.reason_code().to_string());
+        blockers.push(SeoPublishBlockerState {
+            reason_code: violation.blocker_reason_code().to_string(),
+            task_type: violation.task_type().to_string(),
+            required_next_action: violation.required_next_action().to_string(),
+            recheck_trigger: "draft_qa_rerun".to_string(),
+        });
     }
     blocking_reasons.sort();
     blocking_reasons.dedup();
@@ -330,11 +89,9 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     DraftQaOutputPayload {
         verdict: verdict.to_string(),
         blocking_reasons,
-        supported_claims,
-        unsupported_claims: unsupported_claims
-            + unsupported_ledger_claims
-            + unsupported_factual_blocks as u32,
-        traceability_entries: draft.traceability_entries,
+        supported_claims: qa.supported_claims,
+        unsupported_claims: qa.unsupported_claims,
+        traceability_entries: draft.traceability_entries.clone(),
         blockers,
         required_next_action: if verdict == "publish_ready" {
             "request_human_review".to_string()
@@ -343,7 +100,6 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         },
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -4,6 +4,7 @@ pub mod block_validator;
 pub mod canonical_mapping;
 pub mod cms_revision;
 pub mod content_contract;
+pub mod draft_quality;
 pub mod editorial;
 pub mod extraction;
 pub mod ia_planning;

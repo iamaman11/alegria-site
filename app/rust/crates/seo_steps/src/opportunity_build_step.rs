@@ -4,6 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
     ContentGapState, GraphPlanningContextState, GraphPlanningTopicSignalState, KeywordClusterState,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
 };
+use primitives::errors::DomainError;
 
 use crate::seo_step_support::{artifact_key, scope_signature};
 use seo_domain::artifact_identity::ContentGapDetector;
@@ -63,8 +64,10 @@ fn cluster_ref_from_evidence(evidence_ref: &str) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPayload {
-    let fallback_scope = scope_signature(input.scope.as_ref());
+pub fn execute(
+    input: &OpportunityBuildInputPayload,
+) -> Result<OpportunityBuildOutputPayload, DomainError> {
+    let fallback_scope = scope_signature(input.scope.as_ref())?;
     let graph_context = input.graph_context.as_ref();
     let mut keyword_clusters = Vec::new();
     let mut content_gaps = Vec::new();
@@ -311,10 +314,10 @@ pub fn execute(input: &OpportunityBuildInputPayload) -> OpportunityBuildOutputPa
         }
     }
 
-    OpportunityBuildOutputPayload {
+    Ok(OpportunityBuildOutputPayload {
         keyword_clusters: by_keyword.into_values().collect(),
         content_gaps,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -354,7 +357,8 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.keyword_clusters.len(), 1);
         assert_eq!(
             output.keyword_clusters[0].reason_code,
@@ -387,11 +391,13 @@ mod tests {
         let result = execute(&OpportunityBuildInputPayload {
             serp_patterns: patterns.clone(),
             ..Default::default()
-        });
+        })
+        .unwrap();
         let reversed = execute(&OpportunityBuildInputPayload {
             serp_patterns: patterns.into_iter().rev().collect(),
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(result.keyword_clusters.len(), 1);
         assert_eq!(result.keyword_clusters, reversed.keyword_clusters);
         assert_eq!(result.keyword_clusters[0].dominant_intent, "commercial");
@@ -417,6 +423,7 @@ mod tests {
                 }).collect(),
                 ..Default::default()
             })
+            .unwrap()
         }
         let queries = vec![
             ("туристическая виза в Испанию", 0.78),
@@ -465,7 +472,8 @@ mod tests {
                 ..Default::default()
             }),
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.content_gaps.len(), 1);
         assert_eq!(
             output.content_gaps[0].reason_code,

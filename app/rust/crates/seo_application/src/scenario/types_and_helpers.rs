@@ -11,6 +11,7 @@ use contracts::generated::alegria::temporal::v1::{
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
     PublishMaterializeOutputPayload, RawKnowledgeIngestionInputPayload,
     RawKnowledgeIngestionOutputPayload, RenderPreviewValidateInputPayload,
+    RenderPreviewValidateOutputPayload,
     SeoSiteBuildInputPayload, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
@@ -101,6 +102,7 @@ struct PageState {
     cms_requested: Option<CmsPublishOutputPayload>,
     cms_approved: Option<CmsPublishOutputPayload>,
     materialized: Option<PublishMaterializeOutputPayload>,
+    render_validation: Option<RenderPreviewValidateOutputPayload>,
 }
 
 fn phase_report(
@@ -129,12 +131,8 @@ fn require_state_ref<'a, T>(value: &'a Option<T>, reason: &str) -> Result<&'a T,
         .ok_or_else(|| execution_plan_invariant_error(reason))
 }
 
-fn scope_signature(input: &SeoSiteBuildInputPayload) -> String {
-    input
-        .scope
-        .as_ref()
-        .map(|scope| scope.scope_signature.clone())
-        .unwrap_or_default()
+fn scope_signature(input: &SeoSiteBuildInputPayload) -> Result<String, DomainError> {
+    planning::validated_planning_graph_scope(input.scope.as_ref())
 }
 
 fn applicant_profile(input: &SeoSiteBuildInputPayload) -> String {

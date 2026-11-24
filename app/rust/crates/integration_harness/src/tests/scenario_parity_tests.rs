@@ -1,7 +1,7 @@
     #[cfg(feature = "e2e")]
     #[tokio::test]
     #[serial]
-    async fn synthetic_full_scenario_persists_page_draft_on_full_harness() {
+    async fn draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness() {
         let source = stub_servers::spawn_text_stub(
             "/official/spain-tourist-visa",
             r#"

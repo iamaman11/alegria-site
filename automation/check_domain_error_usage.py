@@ -16,7 +16,7 @@ ACTIVE_CANDIDATE_VALIDATION = (
 )
 PURE_RUST_LAYERS = [
     ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "knowledge.rs",
-    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "hitl.rs",
+    ROOT / "app" / "rust" / "crates" / "seo_application" / "src" / "cms_review.rs",
     ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations.rs",
 ]
 

@@ -115,7 +115,7 @@ def main() -> int:
             failures.append(f"production gate missing `{needle}`")
 
     for needle in [
-        "synthetic_full_scenario_persists_page_draft_on_full_harness",
+        "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
         "phase_reports.iter().any",
     ]:
         if not check_contains(harness, needle):

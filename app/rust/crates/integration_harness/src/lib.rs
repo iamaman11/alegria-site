@@ -119,6 +119,7 @@ mod tests {
     include!("tests/truth_certification_helpers.rs");
     include!("tests/synthetic_runtime_helpers.rs");
     include!("tests/provider_runtime_surface_tests.rs");
+    include!("tests/qa_persistence_tests.rs");
     include!("tests/publication_delivery_tests.rs");
     include!("tests/outbox_delivery_tests.rs");
     include!("tests/knowledge_read_tests.rs");

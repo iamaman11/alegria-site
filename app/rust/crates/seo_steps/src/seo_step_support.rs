@@ -1,8 +1,9 @@
 use crate::seo_identity;
 use contracts::generated::alegria::temporal::v1::SeoScopePayload;
+use primitives::errors::DomainError;
 use seo_domain::artifact_identity;
 
-pub fn scope_signature(scope: Option<&SeoScopePayload>) -> String {
+pub fn scope_signature(scope: Option<&SeoScopePayload>) -> Result<String, DomainError> {
     seo_identity::scope_signature_from_payload(scope)
 }
 

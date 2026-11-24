@@ -10,6 +10,33 @@ mod tests {
     };
     use std::sync::Mutex;
 
+    #[test]
+    fn malformed_explicit_scope_fails_before_graph_or_provider_io() {
+        let invalid = SeoScopePayload {
+            market: "alegria-site".into(),
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            applicant_profile: "standard".into(),
+            scope_signature: "forged".into(),
+            ..Default::default()
+        };
+        assert!(validated_planning_graph_scope(Some(&invalid)).is_err());
+        assert!(validated_planning_graph_scope(None).unwrap().is_empty());
+        let valid_without_wire_signature = SeoScopePayload {
+            scope_signature: String::new(),
+            ..invalid
+        };
+        let canonical = seo_steps::seo_identity::derive_scope_from_payload(
+            &valid_without_wire_signature,
+        )
+        .unwrap();
+        assert_eq!(
+            validated_planning_graph_scope(Some(&valid_without_wire_signature)).unwrap(),
+            canonical.scope_signature
+        );
+    }
+
     #[derive(Default)]
     struct FakePlanningRepo;
 

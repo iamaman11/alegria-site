@@ -2,6 +2,7 @@ use contracts::generated::alegria::temporal::v1::{
     CannibalizationConflictState, IaBuildInputPayload, IaBuildOutputPayload, PageBlueprintState,
     PageNodeState,
 };
+use primitives::errors::DomainError;
 
 use crate::seo_step_support::{artifact_key, scope_signature};
 use seo_domain::ia_planning::{self, IaClusterCandidate, IaClusterDisposition, IaScope};
@@ -49,8 +50,8 @@ fn push_blueprint(
     blueprint_key
 }
 
-pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
-    let fallback_scope = scope_signature(input.scope.as_ref());
+pub fn execute(input: &IaBuildInputPayload) -> Result<IaBuildOutputPayload, DomainError> {
+    let fallback_scope = scope_signature(input.scope.as_ref())?;
     let mut page_nodes = Vec::new();
     let mut page_blueprints = Vec::new();
     let mut canonical_owner: std::collections::BTreeMap<String, String> =
@@ -283,11 +284,11 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             canonical_url_family: "visa_type_leaf".into(),
         });
     }
-    IaBuildOutputPayload {
+    Ok(IaBuildOutputPayload {
         page_nodes,
         page_blueprints,
         cannibalization_conflicts,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -328,7 +329,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let detail_pages = output
             .page_nodes
             .iter()
@@ -366,7 +368,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let fee = output
             .page_nodes
             .iter()
@@ -414,7 +417,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let pages = output
             .page_nodes
             .iter()
@@ -443,7 +447,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let page = output
             .page_nodes
             .iter()
@@ -467,7 +472,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let page = output
             .page_nodes
             .iter()
@@ -502,7 +508,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert!(output.page_nodes.iter().any(
             |page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"
         ));
@@ -530,7 +537,8 @@ mod tests {
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 3); // country + visa hubs + first topic
         assert_eq!(output.cannibalization_conflicts.len(), 2);
         assert_eq!(
@@ -561,7 +569,8 @@ mod tests {
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 4);
         assert_eq!(output.cannibalization_conflicts.len(), 1);
         let conflict = &output.cannibalization_conflicts[0];
@@ -605,7 +614,8 @@ mod evidence_derived_ia_tests {
                 support("timeline_item"),
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 5);
         assert!(output
             .page_nodes

@@ -1,11 +1,14 @@
 use contracts::generated::alegria::temporal::v1::{
     SerpNormalizeInputPayload, SerpNormalizeOutputPayload, SerpPatternState,
 };
+use primitives::errors::DomainError;
 
 use crate::seo_step_support::{artifact_key, scope_signature, score};
 
-pub fn execute(input: &SerpNormalizeInputPayload) -> SerpNormalizeOutputPayload {
-    let scope_signature = scope_signature(input.scope.as_ref());
+pub fn execute(
+    input: &SerpNormalizeInputPayload,
+) -> Result<SerpNormalizeOutputPayload, DomainError> {
+    let scope_signature = scope_signature(input.scope.as_ref())?;
     let query_batch_key = if input.query_batch_key.trim().is_empty() {
         artifact_key("query_batch", &[&input.run_id, &scope_signature])
     } else {
@@ -71,9 +74,9 @@ pub fn execute(input: &SerpNormalizeInputPayload) -> SerpNormalizeOutputPayload 
             status: status.to_string(),
         });
     }
-    SerpNormalizeOutputPayload {
+    Ok(SerpNormalizeOutputPayload {
         scope_signature,
         normalized_query_count: serp_patterns.len() as u32,
         serp_patterns,
-    }
+    })
 }

@@ -5,9 +5,11 @@ use contracts::generated::alegria::temporal::v1::{
     LinkRecommendInputPayload, LinkRecommendOutputPayload, LinkRecommendationState,
     OpportunityBuildInputPayload, OpportunityBuildOutputPayload, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
+    SeoScopePayload,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
+use seo_domain::link_recommendation::linkable_state;
 use seo_ports::{
     GraphCapabilityPort, GraphReasoningPort, PlanningRepository, SemanticLinkSearchPort,
     SerpSearchPort,
@@ -26,16 +28,28 @@ fn env_flag(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn linkable_state(state: &str) -> bool {
-    !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
-}
-
 fn clamp01(value: f64) -> f64 {
     value.clamp(0.0, 1.0)
 }
 
 fn parse_graph_confidence(value: &str) -> f64 {
     value.trim().parse::<f64>().unwrap_or(0.0)
+}
+
+/// Validate supplied scope before any graph/storage/provider call and use its
+/// canonical signature even when the wire omitted the optional signature.
+/// For `None`, preserve the existing empty graph-query scope (the step itself
+/// uses its documented deterministic default artifact signature).
+pub(crate) fn validated_planning_graph_scope(
+    scope: Option<&SeoScopePayload>,
+) -> Result<String, DomainError> {
+    match scope {
+        Some(scope) => {
+            let validated = seo_steps::seo_identity::derive_scope_from_payload(scope)?;
+            Ok(validated.scope_signature)
+        }
+        None => Ok(String::new()),
+    }
 }
 
 fn high_similarity(score: f32) -> bool {

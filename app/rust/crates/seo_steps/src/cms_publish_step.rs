@@ -2,7 +2,9 @@ use contracts::generated::alegria::temporal::v1::{
     CmsPublishInputPayload, CmsPublishOutputPayload,
 };
 use primitives::errors::DomainError;
-use seo_domain::cms_revision::{CmsPublishIntent, CmsRevisionState};
+use seo_domain::cms_revision::{
+    cms_publication_blockers, CmsPublicationGate, CmsPublishIntent, CmsRevisionState,
+};
 
 use crate::seo_step_support::artifact_key;
 
@@ -10,36 +12,27 @@ pub fn execute(input: &CmsPublishInputPayload) -> Result<CmsPublishOutputPayload
     let intent = CmsPublishIntent::parse(&input.publish_mode)?;
     let page_node = input.page_node.clone().unwrap_or_default();
     let draft = input.draft.clone().unwrap_or_default();
-    let mut blocking_reasons = Vec::new();
-
-    if page_node.page_node_key.trim().is_empty() {
-        blocking_reasons.push("missing_page_node".to_string());
-    }
-    if draft.page_draft_key.trim().is_empty() {
-        blocking_reasons.push("missing_draft".to_string());
-    }
-    if draft.qa_verdict != "publish_ready" {
-        blocking_reasons.push("draft_not_publish_ready".to_string());
-    }
-    if draft.body_markdown.trim().is_empty() {
-        blocking_reasons.push("empty_body".to_string());
-    }
-    if page_node.canonical_url_path.trim().is_empty() {
-        blocking_reasons.push("missing_canonical_url".to_string());
-    }
-    if draft.llm_provider_key == "deterministic_fallback" {
-        blocking_reasons.push("deterministic_fallback_publish_blocked".to_string());
-    }
-    if intent.requires_human_approval() {
-        let approval = input.approval_decision.as_ref();
-        let human_approved = approval
+    let human_approved = input
+        .approval_decision
+        .as_ref()
             .and_then(|decision| crate::cms_review_wire::from_wire(decision).ok())
             .map(|decision| decision.is_human_approved())
             .unwrap_or(false);
-        if !human_approved {
-            blocking_reasons.push("human_approval_required".to_string());
-        }
-    }
+    let blocking_reasons = cms_publication_blockers(
+        intent,
+        CmsPublicationGate {
+            page_key: &page_node.page_node_key,
+            draft_key: &draft.page_draft_key,
+            qa_verdict: &draft.qa_verdict,
+            body_markdown: &draft.body_markdown,
+            canonical_path: &page_node.canonical_url_path,
+            llm_provider: &draft.llm_provider_key,
+            human_approved,
+        },
+    )
+    .into_iter()
+    .map(|reason| reason.reason_code().to_string())
+    .collect::<Vec<_>>();
 
     let revision_id = if draft.page_draft_key.trim().is_empty() {
         String::new()

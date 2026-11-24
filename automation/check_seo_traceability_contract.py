@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
 DRAFT_ASSEMBLE = ROOT / "app/rust/crates/seo_steps/src/draft_assemble_step.rs"
 DRAFT_QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
+DRAFT_QUALITY = ROOT / "app/rust/crates/seo_domain/src/draft_quality.rs"
 ADAPTER = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter.rs"
 SCHEMA = ROOT / "app/db/schema.sql"
 
@@ -26,6 +27,7 @@ def main() -> int:
     proto = PROTO.read_text(encoding="utf-8")
     assemble = DRAFT_ASSEMBLE.read_text(encoding="utf-8")
     qa = DRAFT_QA.read_text(encoding="utf-8")
+    qa_policy = DRAFT_QUALITY.read_text(encoding="utf-8")
     adapter = read_file_resolved(ADAPTER)
     schema = SCHEMA.read_text(encoding="utf-8")
     failures: list[str] = []
@@ -48,13 +50,14 @@ def main() -> int:
         if needle not in assemble:
             failures.append(f"draft assembly missing traceability needle `{needle}`")
 
-    for needle in [
-        "traceability_entries",
-        "unsupported_factual_fragment",
-        "missing_traceability_manifest",
-    ]:
+    for needle in ["traceability_entries", "draft_quality::evaluate(&DraftQuality {", "violation.reason_code()"]:
         if needle not in qa:
-            failures.append(f"draft QA missing traceability gate `{needle}`")
+            failures.append(f"draft QA adapter missing typed traceability mapping `{needle}`")
+    for needle in ["unsupported_factual_fragment", "missing_traceability_manifest"]:
+        if needle not in qa_policy:
+            failures.append(f"draft quality domain missing traceability gate `{needle}`")
+        if needle in qa.split("#[cfg(test)]", 1)[0]:
+            failures.append(f"draft QA wire adapter duplicates traceability policy `{needle}`")
 
     if "traceability_manifest" not in adapter or "traceability_manifest" not in schema:
         failures.append("draft traceability is not persisted to site.page_drafts")

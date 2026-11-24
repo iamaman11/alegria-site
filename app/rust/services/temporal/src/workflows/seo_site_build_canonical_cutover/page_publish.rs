@@ -103,6 +103,7 @@ async fn run_page_publish_phases(
         let mut cms_requested: Option<CmsPublishOutputPayload> = None;
         let mut cms_approved: Option<CmsPublishOutputPayload> = None;
         let mut materialized: Option<PublishMaterializeOutputPayload> = None;
+        let mut render_validation: Option<RenderPreviewValidateOutputPayload> = None;
         let mut page_blocked = false;
         let mut editorial_rework_required = false;
 
@@ -606,7 +607,7 @@ async fn run_page_publish_phases(
                             published_pages,
                         ));
                     };
-                    let render_validation = ctx
+                    let output = ctx
                         .start_activity(
                             AlegriaActivities::run_render_preview_validate_step,
                             RenderPreviewValidateInputPayload {
@@ -616,7 +617,7 @@ async fn run_page_publish_phases(
                             db_opts(30),
                         )
                         .await?;
-                    if render_validation.verdict != "render_ready" {
+                    if output.verdict != "render_ready" {
                         page_blocked = true;
                         ctx.state_mut(|s| {
                             s.phase = format!(
@@ -627,6 +628,7 @@ async fn run_page_publish_phases(
                         });
                         break;
                     }
+                    render_validation = Some(output);
                 }
                 SeoPhaseKey::FinalizePublish => {
                     let Some(cms_requested_ref) = cms_requested.as_ref() else {
@@ -645,16 +647,16 @@ async fn run_page_publish_phases(
                             published_pages,
                         ));
                     };
-                    let render_validation = ctx
-                        .start_activity(
-                            AlegriaActivities::run_render_preview_validate_step,
-                            RenderPreviewValidateInputPayload {
-                                run_id: run_id.to_string(),
-                                preview_pages: materialized_ref.preview_pages.clone(),
-                            },
-                            db_opts(30),
-                        )
-                        .await?;
+                    let Some(render_validation) = render_validation.as_ref() else {
+                        return Ok(PagePublishLoopOutcome::blocked(
+                            block_execution_plan_invariant(
+                                ctx,
+                                run_id,
+                                "render_preview_validate_required",
+                            ),
+                            published_pages,
+                        ));
+                    };
                     let finalized = ctx
                         .start_activity(
                             AlegriaActivities::run_finalize_publish_step,
@@ -663,7 +665,7 @@ async fn run_page_publish_phases(
                                 page_node_key: page_node.page_node_key.clone(),
                                 revision_id: cms_requested_ref.revision_id.clone(),
                                 publish_artifact: materialized_ref.publish_artifact.clone(),
-                                render_validation: Some(render_validation),
+                                render_validation: Some(render_validation.clone()),
                             },
                             db_opts(30),
                         )
