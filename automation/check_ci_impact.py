@@ -154,6 +154,32 @@ class ImpactFixtures(unittest.TestCase):
             "INTEGRATION_PURE_DAG_ORCHESTRATOR_BIN": "temporal_orchestrator",
         })
 
+    def test_pure_v3_runtime_replay_is_selected_by_actual_executor_and_contract_edits(self) -> None:
+        # A V3 Workflow-only source selector is insufficient: the Workflow
+        # executes seo_application's pure DAG and pins operation_protocol's
+        # contracts. Every direct behavioral edit must select server replay.
+        owners = {**self.owners, "app/rust/crates/operation_protocol": "operation_protocol"}
+        reverse = {**self.reverse, "operation_protocol": set()}
+        for changed in (
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/tests.rs",
+            "app/rust/crates/seo_application/src/execution/durable_plan.rs",
+            "app/rust/crates/operation_protocol/src/lib.rs",
+            "app/rust/crates/operation_protocol/src/tests.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertEqual(report["scope"], "scoped")
+                self.assertIn("pure_dag_v3", report["selected_suites"])
+                architecture = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])
+                self.assertEqual(architecture["pure_dag_v3"], list(SUITE_OWNERS["pure_dag_v3"]["command"]))
+                self.assertEqual(suite_commands_by_ci_job(report)["verify"], [])
+        unrelated = analyze(
+            ["app/rust/crates/seo_application/src/drafting.rs"],
+            owners, reverse, head="HEAD", base="BASE",
+        )
+        self.assertNotIn("pure_dag_v3", unrelated["selected_suites"])
+
     def test_pg_v3_sql_only_suite_has_no_temporal_server_or_runtime_binary_dependency(self) -> None:
         changed = "app/rust/services/temporal_pg_effects/src/main.rs"
         impact = analyze(
@@ -171,6 +197,35 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
         self.assertNotIn("prepare", SUITE_OWNERS["pg_effect_v3"])
         self.assertNotIn("runtime_binaries", SUITE_OWNERS["pg_effect_v3"])
+
+    def test_pg_v3_e2e_is_selected_by_real_hitl_mutation_and_shared_protocol(self) -> None:
+        # The V3 effect calls the existing HITL SQL owner directly. A change
+        # there must exercise admitted real-PostgreSQL effects even if neither
+        # the V3 wrapper nor its Temporal service changed.
+        owners = {
+            **self.owners,
+            "app/rust/crates/postgres_store": "postgres_store",
+            "app/rust/crates/operation_protocol": "operation_protocol",
+        }
+        reverse = {**self.reverse, "postgres_store": set(), "operation_protocol": set()}
+        for changed in (
+            "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
+            "app/rust/crates/postgres_store/src/lib.rs",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/operation_protocol/src/lib.rs",
+        ):
+            with self.subTest(changed=changed):
+                report = analyze([changed], owners, reverse, head="HEAD", base="BASE")
+                self.assertEqual(report["scope"], "scoped")
+                self.assertIn("pg_effect_v3", report["selected_suites"])
+                architecture = dict(suite_commands_by_ci_job(report)["architecture-and-rust"])
+                self.assertEqual(architecture["pg_effect_v3"], list(SUITE_OWNERS["pg_effect_v3"]["command"]))
+                self.assertEqual(suite_commands_by_ci_job(report)["verify"], [])
+        unrelated = analyze(
+            ["app/rust/crates/postgres_store/src/sqlx_outbox_adapter.rs"],
+            owners, reverse, head="HEAD", base="BASE",
+        )
+        self.assertNotIn("pg_effect_v3", unrelated["selected_suites"])
 
     def test_full_ci_suite_rebalance_rejects_ungated_or_mismatched_impact(self) -> None:
         report = self.impact(".github/workflows/ci.yml")

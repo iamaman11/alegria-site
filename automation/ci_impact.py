@@ -467,8 +467,16 @@ SUITE_OWNERS = {
             "app/rust/crates/integration_harness/src/lib.rs",
             "app/rust/crates/integration_harness/src/tests/pure_v3_temporal_tests.rs",
             "app/rust/crates/temporal_gateway/src/lib.rs",
+            # The Workflow calls this real executor; changes to immutable
+            # plan validation and payload handling require real History replay.
+            "app/rust/crates/seo_application/src/operation_adapter.rs",
+            "app/rust/crates/seo_application/src/execution/durable_plan.rs",
         },
-        "prefixes": ("app/rust/services/temporal_orchestrator/src/",),
+        "prefixes": (
+            "app/rust/services/temporal_orchestrator/src/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/operation_protocol/src/",
+        ),
         "lock_crates": {"temporal_orchestrator", "temporal_gateway"},
         # Unlike legacy certification, V3 is the mandatory source-to-runtime
         # queue-isolation check for a new executable; exercise it when a global
@@ -486,10 +494,15 @@ SUITE_OWNERS = {
             "app/db/schema.sql",
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
+            "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/integration_harness/src/lib.rs",
             "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
         },
-        "prefixes": ("app/rust/services/temporal_pg_effects/",),
+        "prefixes": (
+            "app/rust/services/temporal_pg_effects/",
+            "app/rust/crates/operation_protocol/src/",
+        ),
         "lock_crates": {"temporal_pg_effects", "postgres_store", "operation_protocol"},
         # The PostgreSQL-only fenced Activity owner must remain tested even
         # when a global schema/CI input cannot be safely narrowed.
