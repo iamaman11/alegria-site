@@ -153,9 +153,15 @@ pub async fn lock_and_ensure_verified_rules_writable_in_tx(
     .await?;
     if let Some((event_id, aggregate_key, missing_revision)) = unordered {
         return Err(if missing_revision {
-            VerifiedRuleTruthFenceError::LegacyUnordered { event_id, aggregate_key }
+            VerifiedRuleTruthFenceError::LegacyUnordered {
+                event_id,
+                aggregate_key,
+            }
         } else {
-            VerifiedRuleTruthFenceError::LegacyUnproven { event_id, aggregate_key }
+            VerifiedRuleTruthFenceError::LegacyUnproven {
+                event_id,
+                aggregate_key,
+            }
         });
     }
     Ok(())
