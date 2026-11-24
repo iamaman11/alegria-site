@@ -117,7 +117,7 @@ where
         })?;
         raw_crawl_adapter::ensure_source_in_tx(&mut tx, raw_section).await?;
         let fields = truth_candidate_write_fields(decision);
-        let slot_outcome = semantic_outcomes.get(&semantic_slot).ok_or_else(|| {
+        let slot_outcome = semantic_outcomes.get(semantic_slot).ok_or_else(|| {
             DomainError::ValidationFailure {
                 message: format!("missing write verdict for semantic identity {semantic_slot}"),
             }
