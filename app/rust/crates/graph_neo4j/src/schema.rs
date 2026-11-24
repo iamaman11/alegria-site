@@ -140,7 +140,10 @@ fn matches_constraint(spec: &ProjectionConstraint, found: &InstalledConstraint) 
         ConstraintEntity::Node => ("NODE", &["UNIQUENESS", "NODE_PROPERTY_UNIQUENESS"]),
         ConstraintEntity::Relationship => (
             "RELATIONSHIP",
-            &["RELATIONSHIP_UNIQUENESS", "RELATIONSHIP_PROPERTY_UNIQUENESS"],
+            &[
+                "RELATIONSHIP_UNIQUENESS",
+                "RELATIONSHIP_PROPERTY_UNIQUENESS",
+            ],
         ),
     };
     found.entity == expected_entity
