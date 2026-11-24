@@ -36,6 +36,7 @@ pub struct ContentBlock<'a> {
     pub support_refs: &'a [String],
 }
 
+#[derive(Clone, Copy)]
 pub struct DraftQuality<'a> {
     pub body_markdown: &'a str,
     pub locale: &'a str,
@@ -466,5 +467,90 @@ mod tests {
         assert!(result.violations.is_empty(), "{:?}", result.violations);
         assert_eq!(result.supported_claims, 1);
         assert_eq!(result.unsupported_claims, 0);
+    }
+
+    #[test]
+    fn canonical_render_gate_rejects_extra_prose_missing_support_and_forged_reference() {
+        let refs = vec!["rule1".to_string()];
+        let wrong_refs = vec!["wrong-ref".to_string()];
+        let spans = Vec::new();
+        let claim = EditorialClaim {
+            claim_kind: "factual",
+            traceability_label: "verified_fact",
+            validation_verdict: "supported",
+            source_section_key: "timing",
+            fragment_text: "The decision normally takes 15 days.",
+            support_refs: &refs,
+            proposal: Some(EditorialProposal {
+                text: "Обычно решение принимается за 15 дней.",
+                source_url: "https://example.org/official",
+                question: "",
+                evidence_spans: &spans,
+            }),
+        };
+        let source = VerifiedSupport {
+            support_ref: "rule1",
+            role_type: "timeline_item",
+            freshness_class: "fresh",
+            fragment_text: "The decision normally takes 15 days.",
+            source_url: "https://example.org/official",
+        };
+        let markdown = render_editorial_claim(claim, "ru").unwrap();
+        let block = ContentBlock {
+            role: "timing",
+            heading: "Сроки",
+            markdown: &markdown,
+            support_refs: &refs,
+        };
+        let sections = [Section {
+            role: "timing",
+            heading: block.heading,
+            body_markdown: &markdown,
+            support_refs: &refs,
+            required: true,
+        }];
+        let claims = [claim];
+        let support = [source];
+        let fragments = vec!["The decision normally takes 15 days.".to_string()];
+        let draft = DraftQuality {
+            body_markdown: "",
+            locale: "ru",
+            truth_snapshot_ref: "snapshot",
+            schema_markup_json: "{\"@type\":\"Article\"}",
+            sections: &sections,
+            blocks: &[],
+            claims: &claims,
+            traceability: &[],
+            verified_support: &support,
+            supported_fragments: &fragments,
+        };
+        // Same policy formerly exercised through Temporal-specific helpers.
+        assert!(valid_typed_block(&draft, &block));
+        let extra_markdown = format!("{markdown}\n\nГарантированное одобрение.");
+        assert!(!valid_typed_block(
+            &draft,
+            &ContentBlock {
+                markdown: &extra_markdown,
+                ..block
+            },
+        ));
+        assert!(!valid_typed_block(
+            &DraftQuality {
+                verified_support: &[],
+                ..draft
+            },
+            &block,
+        ));
+        let forged_claims = [EditorialClaim {
+            support_refs: &wrong_refs,
+            ..claim
+        }];
+        assert!(!valid_typed_block(
+            &DraftQuality {
+                claims: &forged_claims,
+                ..draft
+            },
+            &block,
+        ));
     }
 }
