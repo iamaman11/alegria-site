@@ -31,6 +31,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/http_client": "http_client",
             "app/rust/crates/infrastructure": "infrastructure",
             "app/rust/crates/integration_harness": "integration_harness",
+            "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
             "app/rust/crates/seo_domain": "seo_domain",
             "app/rust/crates/seo_ports": "seo_ports",
@@ -49,6 +50,7 @@ class ImpactFixtures(unittest.TestCase):
             "http_client": {"gsc_sync"},
             "infrastructure": set(),
             "integration_harness": set(),
+            "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
             "seo_ports": set(),
@@ -59,6 +61,23 @@ class ImpactFixtures(unittest.TestCase):
             "analytics_svc": set(),
             "temporal_worker": set(),
             "outbox_worker": set(),
+        }
+
+    def cargo_metadata(self) -> dict:
+        # Cargo metadata's target kinds, not a second manually maintained
+        # Cargo dependency graph, decide what can produce reusable rlibs.
+        binary_only = {"cli_tools", "gsc_sync", "temporal_worker", "analytics_svc"}
+        packages = [
+            {
+                "id": f"workspace#{name}",
+                "name": name,
+                "targets": [{"kind": ["bin" if name in binary_only else "lib"]}],
+            }
+            for name in self.owners.values()
+        ]
+        return {
+            "workspace_members": [pkg["id"] for pkg in packages],
+            "packages": packages,
         }
 
     def impact(self, *paths: str, lock_snapshots: tuple[str, str] | None = None) -> dict:
@@ -145,23 +164,28 @@ class ImpactFixtures(unittest.TestCase):
         with self.assertRaises(ValueError):
             main_cache_prime_required([])
 
-    def test_main_prime_compiles_pr_selected_leaf_tests_and_reverse_check_only(self) -> None:
+    def test_main_prime_compiles_cacheable_libraries_not_test_executables(self) -> None:
         report = self.impact("app/rust/crates/http_client/src/lib.rs")
         self.assertEqual(report["analysis"], "scoped")
         self.assertEqual(report["affected_crates"], ["gsc_sync", "http_client"])
         self.assertEqual(report["selected_suites"], [])
-        self.assertEqual(prime_commands_for_report(report), [
-            ["cargo", "check", "--locked", "--package", "gsc_sync"],
-            ["cargo", "test", "--locked", "--package", "http_client", "--no-run"],
+        self.assertEqual(prime_commands_for_report(report, self.cargo_metadata()), [
+            ["cargo", "build", "--locked", "--lib", "--package", "http_client"],
         ])
+
+    def test_main_prime_skips_binary_only_change_without_reusable_outputs(self) -> None:
+        report = self.impact("app/rust/services/gsc_sync/src/main.rs")
+        self.assertEqual(report["affected_crates"], ["gsc_sync"])
+        self.assertEqual(report["selected_suites"], [])
+        self.assertEqual(prime_commands_for_report(report, self.cargo_metadata()), [])
 
     def test_main_prime_compiles_e2e_feature_only_for_real_selected_suite(self) -> None:
         report = self.impact("app/rust/services/outbox_worker/src/worker.rs")
         self.assertEqual(report["selected_suites"], ["outbox_a14"])
-        self.assertEqual(prime_commands_for_report(report), [
-            ["cargo", "test", "--locked", "--package", "outbox_worker", "--no-run"],
-            ["cargo", "test", "--locked", "--package", "integration_harness",
-             "--features", "e2e", "--lib", "--no-run"],
+        self.assertEqual(prime_commands_for_report(report, self.cargo_metadata()), [
+            ["cargo", "build", "--locked", "--lib", "--package", "outbox_worker"],
+            ["cargo", "build", "--locked", "--package", "integration_harness",
+             "--features", "e2e", "--lib"],
         ])
 
     def test_main_prime_global_unknown_and_broken_lock_fall_back_to_full_workspace(self) -> None:
@@ -171,11 +195,14 @@ class ImpactFixtures(unittest.TestCase):
         ):
             with self.subTest(reason=report["full_scope_reasons"]):
                 self.assertEqual(report["analysis"], "full")
-                commands = prime_commands_for_report(report)
-                self.assertEqual(commands[0], ["cargo", "test", "--workspace", "--locked", "--no-run"])
-                self.assertEqual(commands[1], [
-                    "cargo", "test", "--locked", "--package", "integration_harness",
-                    "--features", "e2e", "--lib", "--no-run",
+                commands = prime_commands_for_report(report, self.cargo_metadata())
+                self.assertEqual(commands[0][:4], ["cargo", "build", "--locked", "--lib"])
+                self.assertIn("--package", commands[0])
+                self.assertNotIn("--no-run", str(commands))
+                self.assertNotIn("--bin", str(commands))
+                self.assertEqual(commands[-1], [
+                    "cargo", "build", "--locked", "--package", "integration_harness",
+                    "--features", "e2e", "--lib",
                 ])
 
     def test_main_prime_scoped_lockfile_tracks_real_consumer_and_suite(self) -> None:
@@ -186,26 +213,76 @@ class ImpactFixtures(unittest.TestCase):
         report = self.impact("app/rust/Cargo.lock", lock_snapshots=(old, new))
         self.assertEqual(report["analysis"], "scoped")
         self.assertEqual(report["selected_suites"], ["temporal_restart"])
-        self.assertEqual(prime_commands_for_report(report), [
-            ["cargo", "test", "--locked", "--package", "temporal_worker", "--no-run"],
-            list(WORKER_E2E_PREPARE),
-            ["cargo", "test", "--locked", "--package", "integration_harness",
-             "--features", "e2e", "--lib", "--no-run"],
+        self.assertEqual(prime_commands_for_report(report, self.cargo_metadata()), [
+            ["cargo", "build", "--locked", "--package", "integration_harness",
+             "--features", "e2e", "--lib"],
         ])
 
-    def test_main_prime_compiles_shared_runtime_processes_once(self) -> None:
+    def test_main_prime_does_not_recompile_non_cacheable_runtime_processes(self) -> None:
         report = self.impact(
             "app/rust/services/temporal/src/main.rs",
             TRUTH_FIXTURE_PREFIX + "happy_path_publish_allowed.html",
         )
         self.assertIn("truth_certification", report["selected_suites"])
         self.assertIn("temporal_restart", report["selected_suites"])
-        commands = prime_commands_for_report(report)
-        self.assertEqual(commands.count(list(WORKER_E2E_PREPARE)), 1)
+        commands = prime_commands_for_report(report, self.cargo_metadata())
+        self.assertNotIn(list(WORKER_E2E_PREPARE), commands)
         self.assertEqual(commands[-1], [
-            "cargo", "test", "--locked", "--package", "integration_harness",
-            "--features", "e2e", "--lib", "--no-run",
+            "cargo", "build", "--locked", "--package", "integration_harness",
+            "--features", "e2e", "--lib",
         ])
+
+    def test_main_prime_rejects_affected_crate_missing_from_cargo_metadata(self) -> None:
+        report = self.impact("app/rust/crates/http_client/src/lib.rs")
+        metadata = self.cargo_metadata()
+        metadata["packages"] = [p for p in metadata["packages"] if p["name"] != "http_client"]
+        with self.assertRaisesRegex(ValueError, "incomplete Cargo metadata"):
+            prime_commands_for_report(report, metadata)
+
+    def test_editorial_policy_only_changes_select_real_temporal_consumer(self) -> None:
+        # A domain-only or step-only rule change can change the canonical
+        # page outcome without touching Temporal workflow source. It must
+        # select the live worker/restart path, not just a Cargo unit test.
+        for path in (
+            "app/rust/crates/runtime_models/src/seo_blocks.rs",
+            "app/rust/crates/seo_steps/src/editorial_wire.rs",
+            "app/rust/crates/seo_steps/src/page_wire.rs",
+            "app/rust/crates/seo_domain/src/editorial.rs",
+            "app/rust/crates/seo_domain/src/page_readiness.rs",
+            "app/rust/crates/seo_domain/src/content_contract.rs",
+            "app/rust/crates/seo_domain/src/link_recommendation.rs",
+            "app/rust/crates/seo_application/src/drafting.rs",
+            "app/rust/crates/seo_steps/src/draft_qa_step.rs",
+            "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
+            "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
+        ):
+            with self.subTest(path=path):
+                report = self.impact(path)
+                self.assertIn("temporal_restart", report["selected_suites"])
+                self.assertNotIn("publishing_a17", report["selected_suites"])
+                self.assertIn("architecture-and-rust", report["selected_ci_jobs"])
+                if path in {
+                    "app/rust/crates/runtime_models/src/seo_blocks.rs",
+                    "app/rust/crates/seo_steps/src/editorial_wire.rs",
+                    "app/rust/crates/seo_steps/src/page_wire.rs",
+                    "app/rust/crates/seo_domain/src/editorial.rs",
+                    "app/rust/crates/seo_domain/src/page_readiness.rs",
+                    "app/rust/crates/seo_domain/src/content_contract.rs",
+                    "app/rust/crates/seo_application/src/drafting.rs",
+                    "app/rust/crates/seo_steps/src/draft_qa_step.rs",
+                    "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
+                    "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
+                }:
+                    self.assertIn("draft_qa_scenario", report["selected_suites"])
+
+        # Unit-level QA passes are not enough: ensure the bound E2E command
+        # exercises the actual persistence path with its existing full harness.
+        self.assertEqual(SUITE_OWNERS["draft_qa_scenario"]["command"][:7], (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib",
+        ))
+        self.assertIn("synthetic_full_scenario_persists_page_draft_on_full_harness",
+                      SUITE_OWNERS["draft_qa_scenario"]["command"])
 
     def test_main_prime_no_compilation_for_runtime_fixture_only(self) -> None:
         report = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path.html")
@@ -735,7 +812,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_planner_or_ci_driver_change_selects_every_registered_suite_and_image(self) -> None:
         outcome = self.impact("automation/ci_impact.py")
         self.assertEqual(outcome["scope"], "full")
-        self.assertEqual(len(outcome["selected_suites"]), 4)
+        self.assertEqual(len(outcome["selected_suites"]), 5)
         self.assertEqual(len(outcome["selected_images"]), 4)
         self.assertEqual(set(outcome["selected_ci_jobs"]), set(CI_PR_OWNERS))
         self.assertTrue(outcome["full_scope_reasons"])

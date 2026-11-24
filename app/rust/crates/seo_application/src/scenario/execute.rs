@@ -129,7 +129,8 @@ where
     let mut published_pages = 0u32;
     let page_keys = page_phase_keys(&plan);
     let ia = require_state_ref(&state.ia, "ia_build_required")?;
-    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    use seo_steps::page_wire::page_admissibility;
+    use seo_domain::page_readiness::PageAdmissibility;
     let gaps = &require_state_ref(&state.reconciled, "global_site_reconcile_required")?.content_gaps;
     let requires_editorial = page_keys.contains(&SeoPhaseKey::EditorialDraftGenerate);
     let mut support_blocked = false;
@@ -142,7 +143,7 @@ where
             .cloned()
             .unwrap_or_default();
         let page_support =
-            runtime_models::seo_blocks::page_verified_support(&page_blueprint, &state.verified_support);
+            seo_steps::page_wire::page_verified_support(&page_blueprint, &state.verified_support);
         match page_admissibility(&page_node, &page_blueprint, &page_support, gaps, requires_editorial) {
             PageAdmissibility::Retired => continue,
             PageAdmissibility::Blocked(reason) => {
@@ -162,7 +163,7 @@ where
             .filter(|text| page_support.iter().any(|support| support.fragment_text.as_str() == text.as_str()))
             .cloned()
             .collect::<Vec<_>>();
-        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+        let required_links = seo_steps::page_wire::required_links_for_published_targets(
             &link_recommendations, &page_node.page_node_key, &published_page_keys,
         );
         let mut page_state = PageState::default();

@@ -113,6 +113,15 @@ def main() -> int:
             or re.search(r"\bfn\s+(?:multi_section_demand|page_type_for_keyword|page_type_path_segment|required_sections_for_page_type|canonical_prefix|country_prefix)\s*\(", ia_step)):
         raise ValueError("IA page classification, routes and section policy must have one domain owner")
 
+    # The Temporal link step is a protobuf mapper, not an independent owner of
+    # structural page-link scoring or selection priority.
+    links_domain = (RUST / "crates/seo_domain/src/link_recommendation.rs").read_text(encoding="utf-8")
+    links_step = (RUST / "crates/seo_steps/src/link_recommend_step.rs").read_text(encoding="utf-8")
+    if ("pub fn recommend_links(" not in links_domain
+            or "recommend_links(" not in links_step
+            or re.search(r"\bfn\s+(?:link_kind|linkable_state|semantic_adjacency|topic_overlap|cluster_topics_by_key)\s*\(", links_step)):
+        raise ValueError("link scoring and selection must have one typed SEO domain owner")
+
     # Human-review decisions have one pure owner, not a second free-form
     # decision-to-HITL mapping inside the SQL adapter or Application.
     review_domain = (RUST / "crates/seo_domain/src/review_decision.rs").read_text(encoding="utf-8")

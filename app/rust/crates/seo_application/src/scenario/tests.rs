@@ -5,7 +5,7 @@ mod tests {
     use contracts::generated::alegria::temporal::v1::{
         EditorialDraftGenerateOutputPayload, GlobalSiteReconcileOutputPayload,
         IaBuildOutputPayload, LinkRecommendOutputPayload, LlmDraftCandidate,
-        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload, SectionTemplateBinding,
+        OpportunityBuildOutputPayload, RawKnowledgeIngestionOutputPayload,
         SeoScopePayload, SeoVerifiedFactSupportState, SerpIngestOutputPayload,
         SerpNormalizeOutputPayload,
     };
@@ -264,14 +264,6 @@ mod tests {
             Ok(Vec::new())
         }
 
-        async fn find_rebuild_impact_neighborhood(
-            &self,
-            _changed_truth_keys: &[String],
-            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
-        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
-            Ok(Vec::new())
-        }
-
         async fn evaluate_draft_coverage_neighborhood(
             &self,
             page_node_key: &str,
@@ -293,8 +285,8 @@ mod tests {
             &self,
             page_type_key: &str,
             dominant_intent: &str,
-        ) -> Result<Vec<SectionTemplateBinding>, DomainError> {
-            Ok(vec![SectionTemplateBinding {
+        ) -> Result<Vec<seo_ports::SectionTemplate>, DomainError> {
+            Ok(vec![seo_ports::SectionTemplate {
                 template_key: "tmpl:overview".to_string(),
                 page_type_key: page_type_key.to_string(),
                 dominant_intent: dominant_intent.to_string(),

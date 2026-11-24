@@ -6,7 +6,7 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, IaBuildInputPayload, IaBuildOutputPayload,
     LinkRecommendInputPayload, LinkRecommendOutputPayload, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, SectionTemplateBinding, SeoScopePayload, SeoSiteBuildInputPayload,
+    OpportunityBuildOutputPayload, SeoScopePayload, SeoSiteBuildInputPayload,
     SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpIngestOutputPayload,
     SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
@@ -19,6 +19,7 @@ use runtime_models::{
 };
 use seo_domain::rebuild::{RebuildDetectRequest, RebuildDetectResult, RebuildVerdict};
 use seo_domain::{applicability, identity, rebuild};
+use seo_ports::SectionTemplate;
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 use sqlx::{types::Json, PgPool, Row};

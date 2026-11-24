@@ -14,12 +14,12 @@ CONTRACT_VALIDATE = (
     / "app"
     / "rust"
     / "crates"
-    / "seo_steps"
+    / "seo_domain"
     / "src"
-    / "content_contract_validate_step.rs"
+    / "content_contract.rs"
 )
 QA_STEP = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "draft_qa_step.rs"
-SEO_BLOCKS = ROOT / "app" / "rust" / "crates" / "runtime_models" / "src" / "seo_blocks.rs"
+SEO_BLOCKS = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "editorial.rs"
 
 REQUIRED_RULE_TYPES = {
     "document_required": "documents",

@@ -187,6 +187,23 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }
 
+# The existing full-scenario PostgreSQL test follows a real draft through
+# assemble → editorial/content QA → persisted publish_ready. Neither CMS
+# review nor the Temporal restart filter alone exercises this CLI path.
+DRAFT_QA_SCENARIO_PATHS = {
+    "app/rust/crates/runtime_models/src/seo_blocks.rs",
+    "app/rust/crates/seo_steps/src/editorial_wire.rs",
+    "app/rust/crates/seo_steps/src/page_wire.rs",
+    "app/rust/crates/seo_domain/src/editorial.rs",
+    "app/rust/crates/seo_domain/src/page_readiness.rs",
+    "app/rust/crates/seo_domain/src/content_contract.rs",
+    "app/rust/crates/seo_application/src/drafting.rs",
+    "app/rust/crates/seo_steps/src/draft_qa_step.rs",
+    "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
+    "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
+    "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
+}
+
 
 # Both live Temporal restart and Truth certification spawn these actual Rust
 # processes. Prepare them once in the ordinary Cargo target, not recursively
@@ -228,6 +245,17 @@ KNOWLEDGE_A13_PATHS = {
 # commands are consumed by CI, never reconstructed in the runner/YAML. All
 # paths here name live production consumers or the suite's actual inputs.
 SUITE_OWNERS = {
+    "draft_qa_scenario": {
+        "paths": DRAFT_QA_SCENARIO_PATHS,
+        "prefixes": (),
+        "lock_crates": {"seo_domain", "runtime_models", "seo_application", "seo_steps"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "synthetic_full_scenario_persists_page_draft_on_full_harness",
+            "--locked", "--", "--nocapture",
+        ),
+    },
     "cms_review_revision": {
         "paths": CMS_REVIEW_PATHS,
         "prefixes": (),
@@ -308,6 +336,20 @@ SUITE_OWNERS = {
             "app/rust/services/temporal/Cargo.toml",
             "app/contracts/proto/temporal_payloads.proto",
             "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+            # These domain/editorial decisions are executed by the real
+            # canonical Temporal page workflow even when its orchestration
+            # source is untouched. A policy-only diff must still exercise it.
+            "app/rust/crates/runtime_models/src/seo_blocks.rs",
+            "app/rust/crates/seo_steps/src/editorial_wire.rs",
+            "app/rust/crates/seo_steps/src/page_wire.rs",
+            "app/rust/crates/seo_domain/src/editorial.rs",
+            "app/rust/crates/seo_domain/src/page_readiness.rs",
+            "app/rust/crates/seo_domain/src/content_contract.rs",
+            "app/rust/crates/seo_domain/src/link_recommendation.rs",
+            "app/rust/crates/seo_application/src/drafting.rs",
+            "app/rust/crates/seo_steps/src/draft_qa_step.rs",
+            "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
+            "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
         },
         "prefixes": ("app/rust/services/temporal/src/",),
         "lock_crates": {"temporal_worker"},

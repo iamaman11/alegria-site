@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use crate::editorial_wire::block_plan as planned_content_blocks;
+use crate::page_wire::supports_for_role;
 use crate::pii_redaction_prepass_step::{
     sanitize_candidate, sanitize_source_context_chunks, sanitize_support_bundle, sanitize_text,
 };
@@ -10,10 +12,9 @@ use contracts::generated::alegria::temporal::v1::{
     RenderedContentBlock, SectionTemplateBinding, SeoDraftSectionState, SeoTraceabilityEntryState,
     SeoVerifiedFactSupportState,
 };
-use runtime_models::seo_blocks::{
+use seo_domain::editorial::{
     default_section_roles, factual_role, heading_for_role, heading_for_role_locale,
-    locale_from_canonical_path, mandatory_section_roles, planned_content_blocks,
-    support_traceability_label, supports_for_role,
+    locale_from_canonical_path, mandatory_section_roles, support_traceability_label,
 };
 
 // Draft assembly must emit traceability_entries with verified_fact / verified_summary

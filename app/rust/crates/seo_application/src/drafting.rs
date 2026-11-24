@@ -3,13 +3,13 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleInputPayload, DraftAssembleOutputPayload, DraftNormalizeInputPayload,
     DraftNormalizeOutputPayload, DraftQaInputPayload, DraftQaOutputPayload,
     EditorialDraftGenerateInputPayload, EditorialDraftGenerateOutputPayload,
-    SeoTraceabilityEntryState, SourceContextChunkState,
+    SectionTemplateBinding, SeoTraceabilityEntryState, SourceContextChunkState,
 };
 use primitives::errors::DomainError;
 use seo_ports::knowledge::{SourceContextChunk, SourceContextQuery};
 use seo_ports::{
-    DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplateRepository,
-    SourceContextSearchPort,
+    DraftRepository, EditorialGenerationPort, GraphCapabilityPort, SectionTemplate,
+    SectionTemplateRepository, SourceContextSearchPort,
 };
 
 use crate::seo_runtime;
@@ -62,6 +62,19 @@ fn source_context_wire(chunk: SourceContextChunk) -> SourceContextChunkState {
     }
 }
 
+fn section_template_wire(template: SectionTemplate) -> SectionTemplateBinding {
+    SectionTemplateBinding {
+        template_key: template.template_key,
+        page_type_key: template.page_type_key,
+        dominant_intent: template.dominant_intent,
+        section_role: template.section_role,
+        heading: template.heading,
+        template_body: template.template_body,
+        template_version: template.template_version,
+        required: template.required,
+    }
+}
+
 pub async fn run_draft_assemble<
     R: DraftRepository + SectionTemplateRepository + SourceContextSearchPort + GraphCapabilityPort,
 >(
@@ -83,7 +96,10 @@ pub async fn run_draft_assemble<
         if let Some(blueprint) = enriched_input.page_blueprint.as_ref() {
             enriched_input.section_templates = repo
                 .load_section_templates(&blueprint.page_type_key, &blueprint.dominant_intent)
-                .await?;
+                .await?
+                .into_iter()
+                .map(section_template_wire)
+                .collect();
         }
     }
     if enriched_input.source_context_chunks.is_empty() {
@@ -347,8 +363,8 @@ mod tests {
             &self,
             page_type_key: &str,
             dominant_intent: &str,
-        ) -> Result<Vec<SectionTemplateBinding>, DomainError> {
-            Ok(vec![SectionTemplateBinding {
+        ) -> Result<Vec<SectionTemplate>, DomainError> {
+            Ok(vec![SectionTemplate {
                 template_key: "tmpl:overview".to_string(),
                 page_type_key: page_type_key.to_string(),
                 dominant_intent: dominant_intent.to_string(),
@@ -415,6 +431,33 @@ mod tests {
     }
 
     struct FakeEditorialPort;
+
+    #[test]
+    fn section_template_port_to_temporal_wire_preserves_all_fields() {
+        let template = SectionTemplate {
+            template_key: "catalog:custom".to_string(),
+            page_type_key: "guide".to_string(),
+            dominant_intent: "eligibility".to_string(),
+            section_role: "local_requirements".to_string(),
+            heading: "Local requirements".to_string(),
+            template_body: "Use verified support".to_string(),
+            template_version: 7,
+            required: false,
+        };
+        assert_eq!(
+            section_template_wire(template),
+            SectionTemplateBinding {
+                template_key: "catalog:custom".to_string(),
+                page_type_key: "guide".to_string(),
+                dominant_intent: "eligibility".to_string(),
+                section_role: "local_requirements".to_string(),
+                heading: "Local requirements".to_string(),
+                template_body: "Use verified support".to_string(),
+                template_version: 7,
+                required: false,
+            }
+        );
+    }
 
     #[async_trait]
     impl EditorialGenerationPort for FakeEditorialPort {
@@ -489,6 +532,14 @@ mod tests {
         .await
         .unwrap();
         assert!(output.content_block_plan.is_some());
+        assert_eq!(
+            output
+                .editorial_brief
+                .as_ref()
+                .and_then(|brief| brief.section_templates.first())
+                .map(|template| template.template_key.as_str()),
+            Some("tmpl:overview")
+        );
     }
 
     #[tokio::test]

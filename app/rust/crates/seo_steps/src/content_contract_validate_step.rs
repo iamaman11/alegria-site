@@ -1,133 +1,106 @@
-use std::collections::BTreeSet;
+//! Temporal transport adapter for the shared content-contract domain policy.
 
 use contracts::generated::alegria::temporal::v1::{
     ContentContractValidateInputPayload, ContentContractValidateOutputPayload, DraftQaInputPayload,
-    RenderedContentBlock, SeoPublishBlockerState,
+    DraftState, SeoPublishBlockerState,
 };
-use runtime_models::seo_blocks::{block_type_for_role, factual_role};
+use seo_domain::content_contract::{
+    self, ContentBlock, ContentContract, Evidence, LinkObligation, PublishLinkCoverage,
+};
 
-fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerState {
+fn blocker(violation: content_contract::Violation) -> SeoPublishBlockerState {
     SeoPublishBlockerState {
-        reason_code: reason_code.to_string(),
+        reason_code: violation.reason_code().to_string(),
         task_type: "publish_gate_blocker".to_string(),
-        required_next_action: required_next_action.to_string(),
+        required_next_action: violation.required_next_action().to_string(),
         recheck_trigger: "draft_qa_rerun".to_string(),
     }
 }
 
-fn find_block<'a>(
-    blocks: &'a [RenderedContentBlock],
-    section_role: &str,
-) -> Option<&'a RenderedContentBlock> {
-    blocks
+fn validate_with_coverage(
+    input: &DraftQaInputPayload,
+    verify_publish_links: bool,
+) -> Vec<SeoPublishBlockerState> {
+    let empty = DraftState::default();
+    let draft = input.draft.as_ref().unwrap_or(&empty);
+    let blocks = draft
+        .content_blocks
         .iter()
-        .find(|block| block.section_role == section_role)
-}
-
-pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
-    let draft = input.draft.as_ref().cloned().unwrap_or_default();
-    let mut blockers = Vec::new();
-    let mut seen_roles = BTreeSet::new();
-
-    // Non-empty refs are not evidence: require the same source-backed
-    // identity in both the supported claim ledger and traceability manifest.
-    let ledger_refs = draft
+        .map(|block| ContentBlock {
+            role: &block.section_role,
+            block_type: &block.block_type,
+            markdown: &block.markdown,
+            required: block.required,
+            support_refs: &block.support_refs,
+        })
+        .collect::<Vec<_>>();
+    let claims = draft
         .claim_ledger
         .iter()
-        .filter(|claim| {
-            claim.validation_verdict == "supported"
-                && matches!(
-                    claim.traceability_label.as_str(),
-                    "verified_fact" | "verified_summary"
-                )
+        .map(|claim| Evidence {
+            validation_verdict: &claim.validation_verdict,
+            traceability_label: &claim.traceability_label,
+            support_refs: &claim.support_refs,
         })
-        .flat_map(|claim| claim.support_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
-    let trace_refs = draft
+        .collect::<Vec<_>>();
+    let traceability = draft
         .traceability_entries
         .iter()
-        .filter(|entry| {
-            entry.validation_verdict == "supported"
-                && matches!(
-                    entry.traceability_label.as_str(),
-                    "verified_fact" | "verified_summary"
-                )
+        .map(|entry| Evidence {
+            validation_verdict: &entry.validation_verdict,
+            traceability_label: &entry.traceability_label,
+            support_refs: &entry.support_refs,
         })
-        .flat_map(|entry| entry.support_refs.iter().cloned())
-        .collect::<BTreeSet<_>>();
+        .collect::<Vec<_>>();
+    let links = input
+        .required_links
+        .iter()
+        .map(|link| LinkObligation {
+            target_page_key: &link.target_page_key,
+            role: &link.link_role,
+            required: link.required_flag,
+            bound_exactly: draft.required_links.contains(link),
+        })
+        .collect::<Vec<_>>();
+    let related_pages_body = if verify_publish_links {
+        draft
+            .sections
+            .iter()
+            .filter(|section| section.section_role == "related_pages")
+            .map(|section| section.body_markdown.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+    } else {
+        String::new()
+    };
+    let typed_editorial = !draft.editorial_locale.is_empty()
+        || draft
+            .claim_ledger
+            .iter()
+            .any(|claim| claim.editorial_proposal.is_some());
+    content_contract::validate(&ContentContract {
+        blocks: &blocks,
+        claims: &claims,
+        traceability: &traceability,
+        links: &links,
+        publish_links: verify_publish_links.then_some(PublishLinkCoverage {
+            typed_editorial,
+            related_pages_body: &related_pages_body,
+        }),
+    })
+    .into_iter()
+    .map(blocker)
+    .collect()
+}
 
-    for block in &draft.content_blocks {
-        if !seen_roles.insert(block.section_role.clone()) {
-            blockers.push(blocker(
-                "duplicate_content_block_role",
-                "Keep one canonical content block per section role.",
-            ));
-        }
-        let expected_block_type = block_type_for_role(&block.section_role);
-        if block.block_type != expected_block_type {
-            blockers.push(blocker(
-                "content_block_type_mismatch",
-                "Normalize content blocks so each section role maps to the canonical block type.",
-            ));
-        }
-        if block.required && block.markdown.trim().is_empty() {
-            blockers.push(blocker(
-                "empty_required_content_block",
-                "Populate every required content block before publish gate.",
-            ));
-        }
-        if factual_role(&block.section_role) && block.required {
-            if block.support_refs.is_empty() {
-                blockers.push(blocker(
-                    "unsupported_factual_content_block",
-                    "Attach verified support refs to every required factual content block.",
-                ));
-            } else if block.support_refs.iter().any(|support_ref| {
-                support_ref.trim().is_empty()
-                    || !ledger_refs.contains(support_ref)
-                    || !trace_refs.contains(support_ref)
-            }) {
-                blockers.push(blocker(
-                    "unmatched_factual_support_ref",
-                    "Resolve every factual block reference against supported claims and traceability.",
-                ));
-            }
-        }
-        if block
-            .markdown
-            .contains("Verified source-backed structured content")
-        {
-            blockers.push(blocker(
-                "placeholder_factual_content",
-                "Replace placeholder prose with actual verified evidence before publishing.",
-            ));
-        }
-    }
+/// Standalone pre-QA contract check, retained as a real Temporal activity.
+pub fn validate(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
+    validate_with_coverage(input, false)
+}
 
-    if !draft.content_blocks.iter().any(|block| block.required) {
-        blockers.push(blocker(
-            "missing_required_content_block",
-            "Build the complete canonical content block plan before publish gate.",
-        ));
-    }
-
-    if let Some(block) = find_block(&draft.content_blocks, "related_pages") {
-        if !input.required_links.is_empty() && block.markdown.trim().is_empty() {
-            blockers.push(blocker(
-                "missing_required_internal_links",
-                "Render required internal link obligations into the related pages block.",
-            ));
-        }
-    } else if !input.required_links.is_empty() {
-        blockers.push(blocker(
-            "missing_required_internal_links",
-            "Render required internal link obligations into the related pages block.",
-        ));
-    }
-
-    blockers.sort_by(|left, right| left.reason_code.cmp(&right.reason_code));
-    blockers.dedup_by(|left, right| left.reason_code == right.reason_code);
-    blockers
+/// Final QA uses the same domain owner and extends it with link-binding checks.
+pub fn validate_for_publish(input: &DraftQaInputPayload) -> Vec<SeoPublishBlockerState> {
+    validate_with_coverage(input, true)
 }
 
 pub fn execute(
@@ -136,16 +109,13 @@ pub fn execute(
     let blockers = validate(&DraftQaInputPayload {
         run_id: input.run_id.clone(),
         draft: input.draft.clone(),
-        supported_fragments: Vec::new(),
         required_links: input.required_links.clone(),
-        verified_support: Vec::new(),
+        ..DraftQaInputPayload::default()
     });
-    let mut blocking_reasons = blockers
+    let blocking_reasons = blockers
         .iter()
         .map(|blocker| blocker.reason_code.clone())
         .collect::<Vec<_>>();
-    blocking_reasons.sort();
-    blocking_reasons.dedup();
     ContentContractValidateOutputPayload {
         verdict: if blockers.is_empty() {
             "ready".to_string()
@@ -161,153 +131,106 @@ pub fn execute(
 mod tests {
     use super::*;
     use contracts::generated::alegria::temporal::v1::{
-        DraftQaInputPayload, DraftState, RenderedContentBlock,
+        ClaimLedgerEntry, LinkRecommendationState, RenderedContentBlock, SeoDraftSectionState,
+        SeoTraceabilityEntryState,
     };
 
-    fn block(section_role: &str, block_type: &str, with_support: bool) -> RenderedContentBlock {
+    fn block(role: &str, block_type: &str, refs: Vec<String>) -> RenderedContentBlock {
         RenderedContentBlock {
-            block_key: format!("block:{section_role}"),
+            section_role: role.to_string(),
             block_type: block_type.to_string(),
-            section_role: section_role.to_string(),
-            heading: section_role.to_string(),
-            markdown: "filled".to_string(),
-            support_refs: if with_support {
-                vec!["rule:1".to_string()]
-            } else {
-                Vec::new()
-            },
-            traceability_label: "verified_fact".to_string(),
+            markdown: "verified text".to_string(),
+            support_refs: refs,
             required: true,
+            ..RenderedContentBlock::default()
         }
     }
 
     #[test]
-    fn detects_mismatched_block_types() {
-        let input = DraftQaInputPayload {
-            run_id: "run".to_string(),
-            draft: Some(DraftState {
-                content_blocks: vec![
-                    block("overview", "prose", true),
-                    block("who_fits", "prose", true),
-                    block("documents", "prose", true),
-                    block("process", "prose", true),
-                    block("fees", "fees_table", true),
-                    block("timing", "timeline", true),
-                    block("where_to_apply", "prose", true),
-                    block("faq", "faq", true),
-                    block("related_pages", "related_links", true),
-                    block("cta_disclaimer", "cta_disclaimer", true),
-                ],
-                ..DraftState::default()
-            }),
-            supported_fragments: Vec::new(),
-            required_links: Vec::new(),
-            verified_support: Vec::new(),
-        };
-
-        let blockers = validate(&input);
-        assert!(blockers
-            .iter()
-            .any(|blocker| blocker.reason_code == "content_block_type_mismatch"));
-    }
-
-    #[test]
-    fn rejects_support_refs_not_present_in_supported_manifest() {
-        use contracts::generated::alegria::temporal::v1::{
-            ClaimLedgerEntry, SeoTraceabilityEntryState,
-        };
-
+    fn mismatched_content_block_type_is_reported() {
         let input = DraftQaInputPayload {
             draft: Some(DraftState {
-                content_blocks: vec![block("overview", "prose", true)],
-                claim_ledger: vec![ClaimLedgerEntry {
-                    support_refs: vec!["rule:2".to_string()],
-                    validation_verdict: "supported".to_string(),
-                    traceability_label: "verified_fact".to_string(),
-                    ..ClaimLedgerEntry::default()
-                }],
-                traceability_entries: vec![SeoTraceabilityEntryState {
-                    support_refs: vec!["rule:2".to_string()],
-                    validation_verdict: "supported".to_string(),
-                    traceability_label: "verified_fact".to_string(),
-                    ..SeoTraceabilityEntryState::default()
-                }],
-                ..DraftState::default()
-            }),
-            ..DraftQaInputPayload::default()
-        };
-        let blockers = validate(&input);
-        assert!(blockers
-            .iter()
-            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
-    }
-
-    #[test]
-    fn accepts_exact_manifest_binding_without_unmatched_ref() {
-        use contracts::generated::alegria::temporal::v1::{
-            ClaimLedgerEntry, SeoTraceabilityEntryState,
-        };
-
-        let input = DraftQaInputPayload {
-            draft: Some(DraftState {
-                content_blocks: vec![block("overview", "prose", true)],
-                claim_ledger: vec![ClaimLedgerEntry {
-                    support_refs: vec!["rule:1".to_string()],
-                    validation_verdict: "supported".to_string(),
-                    traceability_label: "verified_fact".to_string(),
-                    ..ClaimLedgerEntry::default()
-                }],
-                traceability_entries: vec![SeoTraceabilityEntryState {
-                    support_refs: vec!["rule:1".to_string()],
-                    validation_verdict: "supported".to_string(),
-                    traceability_label: "verified_fact".to_string(),
-                    ..SeoTraceabilityEntryState::default()
-                }],
-                ..DraftState::default()
-            }),
-            ..DraftQaInputPayload::default()
-        };
-        let blockers = validate(&input);
-        assert!(!blockers
-            .iter()
-            .any(|b| b.reason_code == "unmatched_factual_support_ref"));
-    }
-
-    #[test]
-    fn rejects_placeholder_even_with_a_support_ref() {
-        let mut placeholder = block("overview", "prose", true);
-        placeholder.markdown = "Verified source-backed structured content".to_string();
-        let input = DraftQaInputPayload {
-            draft: Some(DraftState {
-                content_blocks: vec![placeholder],
+                content_blocks: vec![block("fees", "prose", vec![])],
                 ..DraftState::default()
             }),
             ..DraftQaInputPayload::default()
         };
         assert!(validate(&input)
             .iter()
-            .any(|b| b.reason_code == "placeholder_factual_content"));
+            .any(|state| state.reason_code == "content_block_type_mismatch"));
     }
 
     #[test]
-    fn detects_missing_factual_support() {
+    fn matching_evidence_must_be_in_both_manifests() {
+        let refs = vec!["rule:1".to_string()];
+        let mut draft = DraftState {
+            content_blocks: vec![block("fees", "fees_table", refs.clone())],
+            claim_ledger: vec![ClaimLedgerEntry {
+                support_refs: refs.clone(),
+                validation_verdict: "supported".into(),
+                traceability_label: "verified_fact".into(),
+                ..ClaimLedgerEntry::default()
+            }],
+            ..DraftState::default()
+        };
+        assert!(validate(&DraftQaInputPayload {
+            draft: Some(draft.clone()),
+            ..DraftQaInputPayload::default()
+        })
+        .iter()
+        .any(|state| state.reason_code == "unmatched_factual_support_ref"));
+        draft.traceability_entries.push(SeoTraceabilityEntryState {
+            support_refs: refs,
+            validation_verdict: "supported".into(),
+            traceability_label: "verified_fact".into(),
+            ..SeoTraceabilityEntryState::default()
+        });
+        assert!(!validate(&DraftQaInputPayload {
+            draft: Some(draft),
+            ..DraftQaInputPayload::default()
+        })
+        .iter()
+        .any(|state| state.reason_code == "unmatched_factual_support_ref"));
+    }
+
+    #[test]
+    fn publish_links_have_one_blocker_when_missing_from_block_and_draft() {
         let input = DraftQaInputPayload {
-            run_id: "run".to_string(),
             draft: Some(DraftState {
-                content_blocks: runtime_models::seo_blocks::mandatory_section_roles()
-                    .iter()
-                    .map(|role| block(role, block_type_for_role(role), *role != "documents"))
-                    .collect(),
+                sections: vec![SeoDraftSectionState {
+                    section_role: "related_pages".into(),
+                    body_markdown: "".into(),
+                    ..SeoDraftSectionState::default()
+                }],
                 ..DraftState::default()
             }),
-            supported_fragments: Vec::new(),
-            required_links: Vec::new(),
-            verified_support: Vec::new(),
+            required_links: vec![LinkRecommendationState {
+                required_flag: true,
+                target_page_key: "target".into(),
+                ..LinkRecommendationState::default()
+            }],
+            ..DraftQaInputPayload::default()
         };
-
-        let blockers = validate(&input);
-        assert!(blockers
-            .iter()
-            .any(|blocker| blocker.reason_code == "unsupported_factual_content_block"));
+        let qa_blockers = validate_for_publish(&input);
+        assert_eq!(
+            qa_blockers
+                .iter()
+                .filter(|state| state.reason_code == "missing_required_internal_links")
+                .count(),
+            1
+        );
+        let standalone = execute(&ContentContractValidateInputPayload {
+            draft: input.draft,
+            required_links: input.required_links,
+            ..ContentContractValidateInputPayload::default()
+        });
+        assert_eq!(
+            standalone
+                .blockers
+                .iter()
+                .filter(|state| state.reason_code == "missing_required_internal_links")
+                .count(),
+            1
+        );
     }
 }

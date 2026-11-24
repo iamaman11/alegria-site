@@ -919,8 +919,8 @@ pub async fn retire_opaque_unpublished_plans(
         let key: String = row.get("page_node_key");
         let slug: String = row.get("canonical_slug");
         let path: String = row.get("canonical_url_path");
-        if !runtime_models::seo_blocks::is_opaque_topic_identifier(&slug)
-            && !path.split('/').any(runtime_models::seo_blocks::is_opaque_topic_identifier) {
+        if !seo_domain::page_readiness::is_opaque_topic_identifier(&slug)
+            && !path.split('/').any(seo_domain::page_readiness::is_opaque_topic_identifier) {
             continue;
         }
         let result = sqlx::query(
