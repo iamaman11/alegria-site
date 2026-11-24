@@ -141,10 +141,16 @@ provenance-checked main pushes may run it, and it performs heavy work only if
 Rust compilation inputs changed. Changes limited to CI files or the
 `integration_harness/src/tests/` regression sources do not launch another
 long compiler build. Mixed changes including production Rust still prime.
-It prepares the three Rust CI test/check profiles and no longer builds
-additional debug Worker binaries that release Docker cannot reuse; it
-does not execute tests. PRs read the shared compiler cache without uploading
-PR-local compiler objects. This is *not* proof that a cold PR will finish
+It now reuses the **same exact-source Cargo graph, reverse consumers and
+integration-suite selection** as the PR Rust owner: affected crate tests are
+compiled without running them, reverse consumers are checked, and the E2E
+feature profile is compiled only when an affected live suite needs it. For
+Temporal/Truth suites that spawn real workers, the corresponding debug binaries
+are prepared once, using the suite's existing shared command. A leaf-crate
+change does not unconditionally rebuild all three harness profiles. These
+debug builds are not release artifacts; Docker builds its own release image.
+PRs read the shared compiler cache without uploading PR-local compiler
+objects. This is *not* proof that a cold PR will finish
 within five minutes; exact new-PR timings and cache errors must be measured.
 The PR Rust owner and this trusted-main primer now share CI-only dev/test
 profiles with `debug=0`; production release profiles and local developer

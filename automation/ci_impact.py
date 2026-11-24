@@ -76,6 +76,13 @@ WORKER_PACKAGING_FILES = {
     "automation/check_first_site_release.py",
 }
 
+# This explanatory file is not copied into the Worker build context or used
+# by any release command. Keep the list shared with the context materializer;
+# every other static asset still has its real image/CI owner.
+WORKER_NONDELIVERY_FILES = frozenset({
+    "infra/cloudflare/seo-static/README.md",
+})
+
 # Explicitly verified CI-only inputs do not modify a Cargo compilation unit,
 # runtime image or live E2E fixture. Their source-level contract is executed by
 # the mandatory `verify` owner. Keep ci.yml, the impact planner itself, unknown
@@ -100,7 +107,12 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "automation/check_ci_merge_provenance.py",
     "automation/check_ci_cargo_cache.py",
     "automation/check_ci_rust_owned_check.py",
-    "automation/check_ci_sccache_diagnostics.py",
+    "automation/check_cargo_feedback.py",
+    "automation/dev_rust_feedback.py",
+    "automation/cargo_feedback.py",
+    "automation/run_scoped_cargo_feedback.py",
+    "automation/run_main_cache_prime.py",
+    "automation/report_sccache_failures.py",
     "automation/report_ci_cargo_cache.py",
     "automation/ci_impact.py",
     "automation/ci_fast_verify.sh",
@@ -109,7 +121,7 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "infra/local/windows_staging.ps1",
     "docs/ci-fast-path.md",
     "docs/ARCHITECTURE_BOUNDARIES.md",
-})
+}) | WORKER_NONDELIVERY_FILES
 
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
@@ -385,6 +397,8 @@ def main_cache_prime_required(changed: list[str]) -> bool:
     return any(
         path.startswith("app/rust/")
         and not path.startswith("app/rust/crates/integration_harness/src/tests/")
+        and not path.startswith(TRUTH_FIXTURE_PREFIX)
+        and not path.endswith("/Dockerfile")
         for path in changed
     )
 
@@ -442,7 +456,8 @@ def ci_jobs_for_change(
     if any(path.startswith(truth_prefixes) for path in changed) or "truth_certification" in suites:
         require("product-truth", "live Acquisition/Truth/Temporal source or fixture")
 
-    if any(path.startswith("infra/cloudflare/seo-static/") or path in WORKER_PACKAGING_FILES for path in changed):
+    if any((path.startswith("infra/cloudflare/seo-static/") and path not in WORKER_NONDELIVERY_FILES)
+           or path in WORKER_PACKAGING_FILES for path in changed):
         require("cloudflare-static-build", "Cloudflare static or delivered Python asset")
     if changed & WORKER_PACKAGING_FILES:
         require("product-truth", "first-site delivery and readback scripts feed Product smoke")
@@ -475,7 +490,7 @@ def ci_jobs_for_change(
 
     # New narrow allowlists must name the executable owner explicitly. This
     # catches future additions to the non-Rust `scope=none` classification.
-    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES - CI_ONLY_VERIFY_FILES
+    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES - CI_ONLY_VERIFY_FILES - WORKER_NONDELIVERY_FILES
     uncovered = {path for path in uncovered
                  if not (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md"))
                  and not (path.startswith("docs/runs/") and path.endswith(".json"))
@@ -816,6 +831,9 @@ def analyze(
     lock_changed = False
 
     for path in sorted(set(paths)):
+        if path in WORKER_NONDELIVERY_FILES:
+            classified_inputs[path] = "non-delivery documentation: excluded from Worker context"
+            continue
         if path in DOCUMENTATION_FILES or (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md")):
             classified_inputs[path] = ("source-policy Markdown: no Rust compile or image input"
                                        if path in SOURCE_POLICY_DOCUMENTS
@@ -929,7 +947,8 @@ def analyze(
         matched = [f"affected build crate: {crate}" for crate in sorted(rule["crates"] & affected)]
         matched.extend(
             f"packaged input: {path}" for path in sorted(set(paths))
-            if path in rule["paths"] or path.startswith(rule["prefixes"])
+            if path not in WORKER_NONDELIVERY_FILES
+            and (path in rule["paths"] or path.startswith(rule["prefixes"]))
         )
         if broad_reasons:
             matched.insert(0, "fail-closed: common/unmapped input")

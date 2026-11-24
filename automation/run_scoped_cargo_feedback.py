@@ -28,6 +28,27 @@ def require_clean_truth_filter_environment(
         raise ValueError("externally supplied Truth fixture filters cannot shrink exact-source CI")
 
 
+def selected_preparations(
+    integration_commands: list[tuple[str, list[str]]],
+) -> list[tuple[str, tuple[str, ...], bool]]:
+    """Order selected binary builds before E2E changes the Cargo feature graph.
+
+    The impact planner owns the suite selection and its exact commands. Build
+    each selected runtime binary command once, even if several suites share it;
+    do not build workers at all when no owner selected their preparation.
+    """
+    prepared: set[tuple[str, ...]] = set()
+    schedule: list[tuple[str, tuple[str, ...], bool]] = []
+    for name, _ in integration_commands:
+        require_clean_truth_filter_environment(name)
+        preparation = SUITE_OWNERS[name].get("prepare")
+        if preparation:
+            reused = preparation in prepared
+            schedule.append((name, preparation, reused))
+            prepared.add(preparation)
+    return schedule
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, required=True)
@@ -40,27 +61,28 @@ def main() -> int:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
     commands = commands_for_report(report, check_only=False)
     integration_commands = suite_commands_for_report(report)
+    preparations = selected_preparations(integration_commands)
 
     measurements = []
     for command in commands:
         print("CI_RUST_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
 
-    # All real integration commands and their owners come from ci_impact.py.
-    # The runner deliberately has no suite-specific branch or path logic.
-    prepared: set[tuple[str, ...]] = set()
+    # In the measured full CI, compiling --features e2e before a late Worker
+    # build invalidated the shared default-feature Cargo graph and rebuilt the
+    # same crates. Keep the exact prebuilt binaries in the ordinary target,
+    # immediately after default-feature tests and before any E2E compilation.
+    for name, preparation, reused in preparations:
+        if reused:
+            print(f"CI_SUITE_PREPARE_REUSED={name}", flush=True)
+        else:
+            print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
+            measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
+
+    # All real integration commands and owners come from ci_impact.py; the
+    # runner has no suite-specific compilation or filter-selection branches.
     for name, command in integration_commands:
         owner = SUITE_OWNERS[name]
-        require_clean_truth_filter_environment(name)
-        preparation = owner.get("prepare")
-        if preparation:
-            if preparation not in prepared:
-                print(f"CI_SUITE_PREPARE={name} COMMAND=" + " ".join(preparation), flush=True)
-                measurements.append(run_cargo(list(preparation), cwd=WORKSPACE))
-                prepared.add(preparation)
-            else:
-                print(f"CI_SUITE_PREPARE_REUSED={name}", flush=True)
-
         # The prebuilt-binary hook is generic. A runtime suite can use its
         # existing override variables without recompiling the same Rust graph
         # under a second Cargo target directory inside the test process.

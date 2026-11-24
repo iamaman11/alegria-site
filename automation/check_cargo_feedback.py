@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from cargo_feedback import run_cargo, workspace_artifact
+from ci_impact import SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE, suite_commands_for_report
+from run_scoped_cargo_feedback import main as run_scoped_cargo_feedback, selected_preparations
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,6 +109,99 @@ class CargoFeedbackTests(unittest.TestCase):
     def test_malformed_artifact_does_not_count_as_compiled(self) -> None:
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": {}}, WORKSPACE))
         self.assertIsNone(workspace_artifact({"reason": "compiler-artifact", "target": None}, WORKSPACE))
+
+
+class ScopedCargoFeedbackTests(unittest.TestCase):
+    """Exercise the production planner/runner ordering without installing Cargo."""
+
+    def report(self, suites: list[str]) -> dict:
+        return {
+            "source_sha": "exact-test-source-sha",
+            "schema_version": SCHEMA_VERSION,
+            "mandatory_full_ci_gate": True,
+            "selected_suites": suites,
+            "suite_fixture_ids": {},
+            "analysis": "full",
+        }
+
+    def run_plan(self, suites: list[str]) -> tuple[list[tuple[list[str], dict]], str, dict]:
+        report = self.report(suites)
+        executions: list[tuple[list[str], dict]] = []
+
+        def record(command: list[str], **kwargs: object) -> dict:
+            executions.append((command, kwargs))
+            return {"command": command, "exit_code": 0}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report_path = root / "impact.json"
+            report_path.write_text(json.dumps(report), encoding="utf-8")
+            target = root / "app/rust/target"
+            # A real build produces executable files at these exact paths.
+            # Make the stubs executable so production verification stays live.
+            for owner in SUITE_OWNERS.values():
+                for binary in owner.get("runtime_binaries", {}).values():
+                    path = target / "debug" / binary
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"test prebuilt binary")
+                    path.chmod(0o755)
+
+            with (
+                patch("run_scoped_cargo_feedback.ROOT", root),
+                patch("run_scoped_cargo_feedback.WORKSPACE", root / "app/rust"),
+                patch("run_scoped_cargo_feedback.subprocess.check_output",
+                      return_value="exact-test-source-sha\n"),
+                patch("run_scoped_cargo_feedback.commands_for_report",
+                      return_value=[["cargo", "test", "--workspace", "--locked"]]),
+                patch("run_scoped_cargo_feedback.run_cargo", side_effect=record),
+                patch.object(sys, "argv", ["runner", "--report", str(report_path)]),
+                patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}, clear=True),
+                patch("sys.stdout", new_callable=io.StringIO) as output,
+            ):
+                self.assertEqual(run_scoped_cargo_feedback(), 0)
+                lines = output.getvalue()
+            measurements = json.loads(
+                (root / "automation/reports/scoped_cargo_feedback.json").read_text(encoding="utf-8")
+            )
+        return executions, lines, measurements
+
+    def test_runtime_prebuild_runs_once_before_any_e2e_without_changing_tests(self) -> None:
+        suites = ["cms_review_revision", "truth_certification", "knowledge_a13", "temporal_restart"]
+        commands = suite_commands_for_report(self.report(suites))
+        executions, output, measurements = self.run_plan(suites)
+        expected = [
+            ["cargo", "test", "--workspace", "--locked"],
+            list(WORKER_E2E_PREPARE),
+            *(command for _, command in commands),
+        ]
+        self.assertEqual([command for command, _ in executions], expected)
+        self.assertEqual(len(measurements["measurements"]), len(expected))
+        self.assertEqual(output.count("CI_SUITE_PREPARE=truth_certification COMMAND="), 1)
+        self.assertIn("CI_SUITE_PREPARE_REUSED=temporal_restart", output)
+        self.assertEqual(output.count("CI_SUITE="), len(suites))
+        self.assertTrue(all(kwargs.get("env") is None for _, kwargs in executions[:2]))
+        for (name, _), (_, kwargs) in zip(commands, executions[2:]):
+            if name in {"truth_certification", "temporal_restart"}:
+                self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", kwargs["env"])
+                self.assertIn("INTEGRATION_OUTBOX_WORKER_BIN", kwargs["env"])
+            else:
+                self.assertIsNone(kwargs["env"])
+
+    def test_e2e_without_runtime_owner_does_not_build_workers(self) -> None:
+        suites = ["cms_review_revision", "knowledge_a13", "publishing_a17"]
+        executions, output, _ = self.run_plan(suites)
+        self.assertEqual([command for command, _ in executions], [
+            ["cargo", "test", "--workspace", "--locked"],
+            *(command for _, command in suite_commands_for_report(self.report(suites))),
+        ])
+        self.assertNotIn("CI_SUITE_PREPARE=", output)
+        self.assertNotIn("CI_SUITE_PREPARE_REUSED=", output)
+
+    def test_truth_filter_rejected_before_any_cargo_runs(self) -> None:
+        selected = suite_commands_for_report(self.report(["truth_certification"]))
+        with patch.dict(os.environ, {"TRUTH_CERT_LIMIT": "1"}):
+            with self.assertRaisesRegex(ValueError, "cannot shrink exact-source CI"):
+                selected_preparations(selected)
 
 
 if __name__ == "__main__":
