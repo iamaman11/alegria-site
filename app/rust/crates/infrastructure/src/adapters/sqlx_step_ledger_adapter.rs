@@ -227,7 +227,7 @@ mod commands {
         error_class: &str,
         error_message: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE pipeline.step_executions
             SET status = $1,
@@ -241,14 +241,14 @@ mod commands {
               -- marked this step done after another attempt began failing.
               -- A late error must never erase that durable replay fence.
               AND status <> 'done'
-            "#,
-            terminal_status,
-            error_class,
-            error_message,
-            run_id,
-            step_name,
-            idempotency_key
+            "#
         )
+        .bind(terminal_status)
+        .bind(error_class)
+        .bind(error_message)
+        .bind(run_id)
+        .bind(step_name)
+        .bind(idempotency_key)
         .execute(pool)
         .await?;
         Ok(())
