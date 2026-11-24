@@ -93,7 +93,11 @@ pub async fn run_worker_loop(
     max_cycles: Option<u32>,
 ) -> Result<()> {
     let target_system = configured_target_system()?;
-    info!(worker_id, target_system = target_system.as_deref().unwrap_or("all"), "outbox claim scope selected");
+    info!(
+        worker_id,
+        target_system = target_system.as_deref().unwrap_or("all"),
+        "outbox claim scope selected"
+    );
     let only_event_id = std::env::var("OUTBOX_ONLY_EVENT_ID")
         .ok()
         .and_then(|value| Uuid::parse_str(&value).ok());

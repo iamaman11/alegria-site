@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::env;
 
-use postgres_store::sqlx_adapter::connect_pg;
 use outbox_worker::worker;
+use postgres_store::sqlx_adapter::connect_pg;
 use tracing::info;
 
 #[tokio::main]
