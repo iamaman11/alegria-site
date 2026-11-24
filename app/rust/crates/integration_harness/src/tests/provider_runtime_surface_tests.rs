@@ -3216,11 +3216,11 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
         routes: vec![
             (
                 format!("{}/index.html", parent_path.trim_matches('/')),
-                parent_path.clone(),
+                parent_path.trim_end_matches('/').to_string(),
             ),
             (
                 format!("{}/index.html", child_path.trim_matches('/')),
-                child_path.clone(),
+                child_path.trim_end_matches('/').to_string(),
             ),
             ("sitemap.xml".into(), "/sitemap.xml".into()),
             ("robots.txt".into(), "/robots.txt".into()),
@@ -3400,7 +3400,7 @@ async fn cms_revision_navigation_only_refreshes_real_public_html_and_recovers_fr
             .remote
             .lock()
             .unwrap()
-            .get(&child_path)
+            .get(child_path.trim_end_matches('/'))
             .unwrap()
             .as_slice(),
         updated_html.as_bytes()
