@@ -169,6 +169,10 @@ pub async fn reconcile_target_system(
           FROM system.sync_outbox
           WHERE target_system = $1
             AND status = 'failed'
+            -- Unknown Qdrant RPCs MUST NOT be blindly requeued. A later
+            -- command for the same physical point checks this durable marker
+            -- under the per-identity advisory lock and fails closed.
+            AND last_error IS DISTINCT FROM 'projection_outcome_uncertain:v1'
             AND retry_count < $2
           ORDER BY updated_at DESC
           LIMIT $3
@@ -233,6 +237,7 @@ pub async fn reconcile_target_system(
           FROM system.sync_outbox
           WHERE target_system = $1
             AND status = 'failed'
+            AND last_error IS DISTINCT FROM 'projection_outcome_uncertain:v1'
             AND retry_count < $2
           ORDER BY updated_at DESC
           LIMIT $3

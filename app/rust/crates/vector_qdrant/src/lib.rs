@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use qdrant_client::qdrant::{PointsOperationResponse, UpdateStatus};
 pub use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
     PointStruct, PointsIdsList, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
@@ -194,6 +195,55 @@ pub async fn upsert_dense_point(
             text
         );
     }
+    // A 2xx response is not an application acknowledgement. Qdrant can return
+    // `acknowledged` for an operation that has only reached its WAL, or an
+    // unexpected response shape. Both cases must propagate an error to the
+    // dispatcher, never a successful delivery result.
+    let response_body = response
+        .bytes()
+        .await
+        .with_context(|| format!("failed to read qdrant REST upsert response: {endpoint}"))?;
+    ensure_completed_rest_update(&response_body).with_context(|| {
+        format!(
+            "qdrant REST upsert completion unconfirmed for collection={}, point_id={}",
+            collection_name, point_id
+        )
+    })
+}
+
+/// Qdrant's documented `wait=true` REST result contains `status: ok` and
+/// `result.status: completed`. Neither HTTP success nor `acknowledged` proves
+/// that the point is ready for search. Never infer success from missing fields.
+fn ensure_completed_rest_update(bytes: &[u8]) -> Result<()> {
+    let body: Value = serde_json::from_slice(bytes).context("invalid Qdrant update JSON")?;
+    let status = body
+        .get("status")
+        .and_then(Value::as_str)
+        .context("missing or non-string Qdrant response status")?;
+    anyhow::ensure!(status == "ok", "Qdrant response status is not ok: {status}");
+    let update_status = body
+        .get("result")
+        .and_then(Value::as_object)
+        .and_then(|result| result.get("status"))
+        .and_then(Value::as_str)
+        .context("missing or non-string Qdrant result.status")?;
+    anyhow::ensure!(
+        update_status == "completed",
+        "Qdrant update was not completed: {update_status}"
+    );
+    Ok(())
+}
+
+/// gRPC's counterpart of the REST completion check. In the generated proto,
+/// `result` is optional and status may be unknown, acknowledged, rejected by
+/// a clock fence or timed out. Only `Completed` is an applied effect.
+fn ensure_completed_grpc_update(response: PointsOperationResponse) -> Result<()> {
+    let update = response.result.context("missing Qdrant gRPC update result")?;
+    anyhow::ensure!(
+        update.status == UpdateStatus::Completed as i32,
+        "Qdrant gRPC update was not completed: status={}",
+        update.status
+    );
     Ok(())
 }
 
@@ -227,10 +277,11 @@ pub async fn upsert_batch(
             Ok(PointStruct::new(id, vec, p))
         })
         .collect();
-    client
+    let response = client
         .upsert_points(UpsertPointsBuilder::new(collection_name, pts?).wait(true))
         .await?;
-    Ok(())
+    ensure_completed_grpc_update(response)
+        .with_context(|| format!("qdrant batch upsert completion unconfirmed: {collection_name}"))
 }
 
 pub async fn upsert_batch_map(
@@ -252,10 +303,11 @@ pub async fn upsert_batch_map(
             Ok(PointStruct::new(id, vec, p))
         })
         .collect();
-    client
+    let response = client
         .upsert_points(UpsertPointsBuilder::new(collection_name, pts?).wait(true))
         .await?;
-    Ok(())
+    ensure_completed_grpc_update(response)
+        .with_context(|| format!("qdrant batch-map upsert completion unconfirmed: {collection_name}"))
 }
 
 pub async fn upsert_embedding_points(
@@ -278,7 +330,7 @@ pub async fn delete_point_ids(
     if point_ids.is_empty() {
         return Ok(());
     }
-    client
+    let response = client
         .delete_points(
             DeletePointsBuilder::new(collection_name)
                 .points(PointsIdsList {
@@ -288,7 +340,56 @@ pub async fn delete_point_ids(
         )
         .await
         .with_context(|| format!("failed qdrant delete for collection={collection_name}"))?;
-    Ok(())
+    ensure_completed_grpc_update(response).with_context(|| {
+        format!("qdrant delete completion unconfirmed for collection={collection_name}")
+    })
+}
+
+#[cfg(test)]
+mod qdrant_completion_tests {
+    use super::*;
+    use qdrant_client::qdrant::UpdateResult;
+
+    #[test]
+    fn rest_accepts_only_explicit_completed_result() {
+        let completed = br#"{"status":"ok","result":{"operation_id":7,"status":"completed"},"time":0.01}"#;
+        assert!(ensure_completed_rest_update(completed).is_ok());
+        for response in [
+            br#"{"status":"ok","result":{"status":"acknowledged"}}"#.as_slice(),
+            br#"{"status":"ok","result":{"status":"wait_timeout"}}"#,
+            br#"{"status":"error","result":{"status":"completed"}}"#,
+            br#"{"status":"ok","result":{}}"#,
+            br#"{"status":"ok","result":null}"#,
+            br#"{"result":{"status":"completed"}}"#,
+            br#"{"status":"ok","result":{"status":2}}"#,
+            br#"[]"#,
+            br#"not JSON"#,
+        ] {
+            assert!(ensure_completed_rest_update(response).is_err());
+        }
+    }
+
+    #[test]
+    fn grpc_accepts_only_completed_update_status() {
+        let result = |status| PointsOperationResponse {
+            result: Some(UpdateResult {
+                operation_id: Some(7),
+                status,
+            }),
+            ..Default::default()
+        };
+        assert!(ensure_completed_grpc_update(result(UpdateStatus::Completed as i32)).is_ok());
+        for status in [
+            UpdateStatus::UnknownUpdateStatus,
+            UpdateStatus::Acknowledged,
+            UpdateStatus::ClockRejected,
+            UpdateStatus::WaitTimeout,
+        ] {
+            assert!(ensure_completed_grpc_update(result(status as i32)).is_err());
+        }
+        assert!(ensure_completed_grpc_update(PointsOperationResponse::default()).is_err());
+        assert!(ensure_completed_grpc_update(result(999)).is_err());
+    }
 }
 
 pub async fn search_dense(

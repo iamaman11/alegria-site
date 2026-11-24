@@ -41,15 +41,15 @@ async fn lock_projection_keys_in_tx(
     run_id: &str,
     rule_ids: &[String],
 ) -> Result<(), DomainError> {
-    for rule_id in rule_ids.iter().collect::<std::collections::BTreeSet<_>>() {
-        let key = format!("qdrant|verified_rules_4|rule_instance|{rule_id}");
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-            .bind(&key)
-            .execute(&mut **tx)
-            .await
-            .map_err(|err| stage_error("lock_projection", run_id, err))?;
-    }
-    Ok(())
+    // The PG owner checks the committed uncertainty marker under the SAME
+    // per-rule advisory locks used by delivery. A previous provider request
+    // may still arrive after its sender timed out; mutating newer Truth while
+    // that outcome is unknown would make a late Qdrant write authoritative.
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx, rule_ids,
+    )
+    .await
+    .map_err(|err| stage_error("verified_rule_uncertainty_fence", run_id, err))
 }
 
 /// Stage a complete Truth projection tombstone in the caller's SQL transaction.

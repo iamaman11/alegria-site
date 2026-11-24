@@ -50,6 +50,10 @@ def check() -> None:
         assert f"      - {owner}\n" in gate, owner
         assert f"contains(fromJSON(needs.impact.outputs.selected_ci_jobs), '{owner}')" in workflow, owner
     assert len(re.findall(r"(?m)^    if: github.event_name == 'pull_request' && needs\.impact\.result == 'success' && contains\(", workflow)) == len(OWNERS)
+    # The real Outbox quarantine fence must be a required PR architecture
+    # regression, not merely an opt-in comprehensive/deep check.
+    architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    assert "python3 automation/check_reliability_contracts.py" in architecture
 
     # Main verifies exact source + the accepted PR before release/deployment.
     assert "commits/{merge_sha}/pulls" in workflow

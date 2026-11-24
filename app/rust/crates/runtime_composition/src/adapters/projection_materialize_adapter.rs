@@ -4,11 +4,13 @@ use contracts::generated::alegria::sync::v1::{
     Neo4jRuleUpsertPayload, QdrantDeleteCommand, QdrantEntityPayload, QdrantUpsertCommand,
     SeoCmsEventPayload, SeoGraphProjectionPayload,
 };
+use postgres_store::sqlx_outbox_adapter::{
+    dispatch_verified_rule_with_fence, OutboxEvent, VerifiedRuleDispatchError,
+};
 use primitives::errors::{DomainError, ErrorClass};
-use primitives::hash::blake3_hex;
 use primitives::qdrant_point_id::{is_valid_qdrant_point_id, qdrant_point_id_v1};
 use prost::Message;
-use sqlx::{Connection, Row};
+use sqlx::PgPool;
 
 use super::neo4j_materialization_adapter;
 use infrastructure::adapters::voyage_api_adapter::{
@@ -31,6 +33,8 @@ pub enum DispatchStage {
     Contract,
     Embedding,
     Registry,
+    /// External outcome may still complete late; never automatically retry.
+    Quarantine,
     Qdrant,
     Neo4j,
 }
@@ -285,72 +289,101 @@ async fn dispatch_qdrant_delete(payload_bytes: &[u8]) -> Result<(), DispatchErro
     delete_projection(projection).await.map_err(qdrant_error)
 }
 
-/// Outbox delivery may retry out of order (SKIP LOCKED claims). For verified
-/// rules the SQL registry and the most recent durable intent decide whether an
-/// event is still current. The advisory lock serializes Qdrant effects for one
-/// point; a delayed upsert can never resurrect a later tombstone, and a delayed
-/// tombstone cannot erase a newer verification. Truth writers never perform
-/// network calls inside their own SQL transaction.
-async fn dispatch_verified_rule_projection(
-    event_type: &str,
-    aggregate_key: &str,
-    payload_bytes: &[u8],
-) -> Result<(), DispatchError> {
-    let database_url = env::var("DATABASE_URL")
-        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let mut connection = sqlx::PgConnection::connect(&database_url)
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let mut tx = connection
-        .begin()
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let lock_key = format!("qdrant|verified_rules_4|rule_instance|{aggregate_key}");
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(&lock_key)
-        .execute(&mut *tx)
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let latest = sqlx::query(
-        "SELECT event_type, payload_hash
-         FROM system.sync_outbox
-         WHERE aggregate_type='rule_instance' AND aggregate_key=$1
-           AND target_system='qdrant'
-           AND event_type IN ('QdrantUpsertCommand', 'QdrantDeleteCommand')
-         ORDER BY created_at DESC, event_id DESC
-         LIMIT 1",
-    )
-    .bind(aggregate_key)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let latest_matches = latest.is_some_and(|row| {
-        row.get::<String, _>("event_type") == event_type
-            && row.get::<String, _>("payload_hash") == blake3_hex(payload_bytes)
-    });
-    let registry_active: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT 1 FROM kb.qdrant_points
-            WHERE collection_name='verified_rules_4'
-              AND entity_type='rule_instance' AND entity_key=$1
-        )",
-    )
-    .bind(aggregate_key)
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    let expected_active = event_type == "QdrantUpsertCommand";
-    if latest_matches && registry_active == expected_active {
-        match event_type {
-            "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload_bytes).await?,
-            "QdrantDeleteCommand" => dispatch_qdrant_delete(payload_bytes).await?,
-            _ => return Err(DispatchError::contract("unknown verified rule event")),
+/// An ordinary provider event needs a caller-owned Outbox ACK. Verified-rule
+/// events instead commit their ACK inside the PostgreSQL provider fence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchDisposition {
+    NeedsAck,
+    AcknowledgedByFence,
+}
+
+/// Production Outbox dispatch must be tied to an actual leased event. A
+/// verified-rule provider RPC runs only after the PostgreSQL owner committed
+/// its uncertainty barrier and while its advisory lock remains held. Never
+/// re-enter `dispatch_event` from the fenced effect: that legacy API refuses
+/// verified rules precisely to prevent bypass and self-locking.
+pub async fn dispatch_leased_event(
+    pool: &PgPool,
+    event: &OutboxEvent,
+) -> Result<DispatchDisposition, DispatchError> {
+    if event.target_system == "qdrant" {
+        let verified_rule = match event.event_type.as_str() {
+            "QdrantUpsertCommand" => {
+                let cmd = QdrantUpsertCommand::decode(event.payload_bytes.as_slice())
+                    .map_err(DispatchError::contract)?;
+                let any_verified_identity = cmd.collection_name == "verified_rules_4"
+                    || cmd.entity_type == "rule_instance"
+                    || event.aggregate_type == "rule_instance";
+                if any_verified_identity
+                    && !(cmd.collection_name == "verified_rules_4"
+                        && cmd.entity_type == "rule_instance"
+                        && event.aggregate_type == "rule_instance")
+                {
+                    return Err(DispatchError::contract(
+                        "verified-rule Qdrant identity must match the leased Outbox aggregate",
+                    ));
+                }
+                any_verified_identity
+            }
+            "QdrantDeleteCommand" => true,
+            _ => false,
+        };
+        if verified_rule {
+            let aggregate_key = &event.aggregate_key;
+            let payload = event.payload_bytes.as_slice();
+            // Point identity is validated before registering the effect with
+            // the PostgreSQL owner. No network call is possible on mismatch.
+            match event.event_type.as_str() {
+                "QdrantUpsertCommand" => {
+                    let cmd = QdrantUpsertCommand::decode(payload)
+                        .map_err(DispatchError::contract)?;
+                    if cmd.entity_key.as_str() != aggregate_key {
+                        return Err(DispatchError::contract(
+                            "QdrantUpsertCommand aggregate_key does not match rule identity",
+                        ));
+                    }
+                }
+                "QdrantDeleteCommand" => {
+                    let cmd = QdrantDeleteCommand::decode(payload)
+                        .map_err(DispatchError::contract)?;
+                    if cmd.entity_key.as_str() != aggregate_key {
+                        return Err(DispatchError::contract(
+                            "QdrantDeleteCommand aggregate_key does not match rule identity",
+                        ));
+                    }
+                }
+                _ => unreachable!("verified rule type checked above"),
+            }
+            dispatch_verified_rule_with_fence(pool, event, || async {
+                match event.event_type.as_str() {
+                    "QdrantUpsertCommand" => dispatch_qdrant_upsert(payload).await,
+                    "QdrantDeleteCommand" => dispatch_qdrant_delete(payload).await,
+                    _ => unreachable!("verified rule type checked above"),
+                }
+            })
+            .await
+            .map_err(|err| match err {
+                VerifiedRuleDispatchError::UnknownOutcome(source) =>
+                    DispatchError::external(DispatchStage::Quarantine, source),
+                blocked @ VerifiedRuleDispatchError::BlockedUncertain { .. } =>
+                    DispatchError::external(DispatchStage::Quarantine, blocked),
+                invalid @ VerifiedRuleDispatchError::InvalidEvent(_) =>
+                    DispatchError::contract(invalid),
+                other => DispatchError::external(DispatchStage::Registry, other),
+            })?;
+            return Ok(DispatchDisposition::AcknowledgedByFence);
         }
     }
-    tx.commit()
-        .await
-        .map_err(|err| DispatchError::external(DispatchStage::Registry, err))?;
-    Ok(())
+
+    dispatch_event(
+        &event.target_system,
+        &event.event_type,
+        &event.aggregate_key,
+        &event.payload_type,
+        &event.payload_bytes,
+    )
+    .await?;
+    Ok(DispatchDisposition::NeedsAck)
 }
 
 async fn dispatch_seo_graph_projection(
@@ -416,14 +449,17 @@ pub async fn dispatch_event(
             "QdrantUpsertCommand" => {
                 let cmd =
                     QdrantUpsertCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
-                if cmd.collection_name == "verified_rules_4" && cmd.entity_type == "rule_instance" {
+                if cmd.collection_name == "verified_rules_4"
+                    || cmd.entity_type == "rule_instance"
+                {
                     if cmd.entity_key != aggregate_key {
                         return Err(DispatchError::contract(
                             "QdrantUpsertCommand aggregate_key does not match rule identity",
                         ));
                     }
-                    dispatch_verified_rule_projection(event_type, aggregate_key, payload_bytes)
-                        .await
+                    Err(DispatchError::contract(
+                        "verified-rule Qdrant RPC requires a PostgreSQL leased Outbox fence",
+                    ))
                 } else {
                     dispatch_qdrant_upsert(payload_bytes).await
                 }
@@ -441,7 +477,9 @@ pub async fn dispatch_event(
                         "QdrantDeleteCommand aggregate_key does not match rule identity",
                     ));
                 }
-                dispatch_verified_rule_projection(event_type, aggregate_key, payload_bytes).await
+                Err(DispatchError::contract(
+                    "verified-rule Qdrant delete requires a PostgreSQL leased Outbox fence",
+                ))
             }
             _ => Err(DispatchError::contract(format!(
                 "unsupported qdrant event_type: {event_type}"

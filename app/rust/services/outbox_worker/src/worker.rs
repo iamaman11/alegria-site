@@ -12,6 +12,9 @@ use postgres_store::sqlx_outbox_adapter::{
     claim_outbox_batch, claim_outbox_batch_for_target, mark_done, mark_failed_with_dead_letter,
     mark_retry, read_sync_status, LeaseUpdate,
 };
+use runtime_composition::adapters::projection_materialize_adapter::{
+    DispatchDisposition, DispatchStage,
+};
 use telemetry::fbs_writer::write_runtime_window;
 
 use crate::materialize::dispatch_event;
@@ -216,17 +219,13 @@ pub async fn run_worker_loop(
                 "processing outbox event"
             );
 
-            match dispatch_event(
-                &event.target_system,
-                &event.event_type,
-                &event.aggregate_key,
-                &event.payload_type,
-                &event.payload_bytes,
-            )
-            .await
-            {
-                Ok(_) => {
-                    if mark_done(pool, &event).await? == LeaseUpdate::Lost {
+            match dispatch_event(pool, &event).await {
+                Ok(disposition) => {
+                    let completion = match disposition {
+                        DispatchDisposition::NeedsAck => mark_done(pool, &event).await?,
+                        DispatchDisposition::AcknowledgedByFence => LeaseUpdate::Applied,
+                    };
+                    if completion == LeaseUpdate::Lost {
                         warn!(worker_id, %event_id, run_id = %event.run_id,
                             "outbox completion rejected: another worker owns the lease");
                     } else {
@@ -236,6 +235,19 @@ pub async fn run_worker_loop(
                             attempt = event.retry_count + 1, result = "done",
                             "outbox event delivered");
                     }
+                }
+                Err(err) if err.stage == DispatchStage::Quarantine => {
+                    // The PostgreSQL owner committed an uncertainty marker
+                    // before the Qdrant RPC. It may still complete late.
+                    // Retrying or dead-lettering this event can resurrect
+                    // stale Truth, so only explicit reconciliation may clear
+                    // the marker and unblock this point's future writes.
+                    error!(worker_id, %event_id, run_id = %event.run_id,
+                        target_system = %event.target_system,
+                        operation = %event.event_type,
+                        result = "quarantined_no_retry",
+                        error = %err,
+                        "verified-rule remote outcome uncertain; manual reconciliation required");
                 }
                 Err(err) => {
                     let msg = err.to_string();

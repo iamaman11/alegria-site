@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 
@@ -16,6 +17,125 @@ OUTBOX_BUILDER = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "outbo
 PIPELINE_RUNTIME_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_pipeline_runtime_adapter.rs"
 PROTO_RUNTIME_PAYLOAD_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "proto_runtime_payload_store.rs"
 GATE = ROOT / "automation" / "temporal_production_gate.sh"
+POSTGRES_OUTBOX = ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_outbox_adapter.rs"
+POSTGRES_RECONCILE = ROOT / "app" / "rust" / "crates" / "postgres_store" / "src" / "sqlx_reconcile_adapter.rs"
+PROJECTION_DISPATCH = ROOT / "app" / "rust" / "crates" / "runtime_composition" / "src" / "adapters" / "projection_materialize_adapter.rs"
+OUTBOX_MATERIALIZE = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
+OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "worker.rs"
+TEMPORAL_RUNTIME_SUPPORT = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "operations" / "runtime_support_ops.rs"
+UNCERTAIN_MARKER = "projection_outcome_uncertain:v1"
+
+
+def match_arm_body(source: str, arm_end: int) -> str | None:
+    """Find a braced Rust match arm; fail closed on a missing/unterminated arm."""
+    cursor = arm_end
+    while cursor < len(source) and source[cursor].isspace():
+        cursor += 1
+    if cursor >= len(source) or source[cursor] != "{":
+        return None
+    start, depth = cursor, 0
+    for cursor in range(start, len(source)):
+        if source[cursor] == "{":
+            depth += 1
+        elif source[cursor] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1:cursor]
+    return None
+
+
+def fence_contract_failures(
+    postgres_outbox: str, reconcile: str, dispatcher: str,
+    worker_materialize: str, worker: str, temporal: str,
+) -> list[str]:
+    """Catch regressions in the executable PostgreSQL/Outbox safety boundary.
+
+    This is a cheap source-level guard, not a substitute for concurrent real-PG
+    kill/lease-reclaim tests. The two SQL queries are inspected separately:
+    excluding quarantine only in the dry-run count would be unsafe.
+    """
+    failures: list[str] = []
+    required_pg = (
+        f'pub const VERIFIED_RULE_UNCERTAIN_MARKER: &str = "{UNCERTAIN_MARKER}"',
+        "pub async fn dispatch_verified_rule_with_fence<",
+        "VerifiedRuleDispatchError::BlockedUncertain",
+        "VerifiedRuleDispatchError::UnknownOutcome",
+        ".bind(VERIFIED_RULE_UNCERTAIN_MARKER)",
+        "pg_advisory_xact_lock",
+    )
+    for needle in required_pg:
+        if needle not in postgres_outbox:
+            failures.append(f"PostgreSQL fenced delivery missing `{needle}`")
+
+    # The durable uncertain marker must be written before the external effect;
+    # a cancelled process may never have a chance to mark a result afterwards.
+    ordered = (
+        "SET status='failed', last_error=$4",
+        ".bind(VERIFIED_RULE_UNCERTAIN_MARKER)",
+        "effect()",
+        "let acknowledged = sqlx::query(",
+    )
+    positions: list[int] = []
+    next_offset = 0
+    for needle in ordered:
+        position = postgres_outbox.find(needle, next_offset)
+        positions.append(position)
+        if position != -1:
+            next_offset = position + len(needle)
+    if -1 in positions or positions != sorted(positions) or len(set(positions)) != len(positions):
+        failures.append("PostgreSQL uncertainty marker must be committed before provider effect and ack")
+
+    quarantine_filter = re.compile(
+        rf"\bAND\s+last_error\s+IS\s+DISTINCT\s+FROM\s+'{re.escape(UNCERTAIN_MARKER)}'",
+        re.IGNORECASE,
+    )
+    for variable in ("failed_candidates", "failed"):
+        statement = re.search(
+            rf"\blet\s+{variable}\s*=\s*sqlx::query\(\s*r#\"(.*?)\"#",
+            reconcile,
+            flags=re.DOTALL,
+        )
+        if not statement or not quarantine_filter.search(statement.group(1)):
+            failures.append(f"reconcile `{variable}` must exclude uncertain Outbox events before requeue")
+
+    for needle in (
+        "pub async fn dispatch_leased_event(",
+        "dispatch_verified_rule_with_fence(",
+        "AcknowledgedByFence",
+        "NeedsAck",
+        "Quarantine",
+        "verified-rule Qdrant RPC requires a PostgreSQL leased Outbox fence",
+        "verified-rule Qdrant delete requires a PostgreSQL leased Outbox fence",
+    ):
+        if needle not in dispatcher:
+            failures.append(f"projection dispatcher missing `{needle}`")
+
+    # A fenced call owns terminal acknowledgement itself. Both consumers must
+    # branch on quarantine BEFORE their generic retry/dead-letter branches.
+    if "dispatch_leased_event(pool, event)" not in worker_materialize:
+        failures.append("outbox materialize wrapper must invoke the leased projection dispatcher")
+    if "dispatch_event(pool, &event)" not in worker:
+        failures.append("outbox worker must pass its claimed event/PG pool to materialize wrapper")
+
+    for name, consumer in (("outbox-worker", worker), ("temporal-runtime", temporal)):
+        fenced_call = consumer.find("dispatch_event(pool, &event)") if name == "outbox-worker" else consumer.find("dispatch_leased_event(")
+        if fenced_call == -1:
+            failures.append(f"{name} bypasses the leased projection dispatcher")
+        if "AcknowledgedByFence" not in consumer:
+            failures.append(f"{name} has no fenced acknowledgement disposition")
+        fenced_branch = consumer[fenced_call:] if fenced_call != -1 else ""
+        quarantine_arm = re.search(
+            r"Err\s*\(\s*(\w+)\s*\)\s+if\s+\1\.stage\s*==\s*(?:\w+::)*DispatchStage::Quarantine\s*=>",
+            fenced_branch,
+        )
+        generic_error = re.search(r"\bErr\s*\(\s*\w+\s*\)\s*=>", fenced_branch)
+        if not quarantine_arm or not generic_error or quarantine_arm.start() > generic_error.start():
+            failures.append(f"{name} must quarantine unknown provider results before ordinary retry")
+        elif (body := match_arm_body(fenced_branch, quarantine_arm.end())) is None:
+            failures.append(f"{name} quarantine arm has no inspectable guarded body")
+        elif re.search(r"\bmark_(?:done|retry|failed_with_dead_letter)\s*\(", body):
+            failures.append(f"{name} must not mutate Outbox status in the quarantine arm")
+    return failures
 
 
 def read_file_resolved(path: Path) -> str:
@@ -105,6 +225,16 @@ def main() -> int:
         gate_text = GATE.read_text(encoding="utf-8")
         if "alegria.temporal.v1.JsonPayload" in gate_text or "json_payload_hex" in gate_text:
             failures.append("temporal gate still uses JsonPayload-based input path")
+
+    fence_paths = (
+        POSTGRES_OUTBOX, POSTGRES_RECONCILE, PROJECTION_DISPATCH,
+        OUTBOX_MATERIALIZE, OUTBOX_WORKER, TEMPORAL_RUNTIME_SUPPORT,
+    )
+    absent = [path for path in fence_paths if not path.is_file()]
+    if absent:
+        failures.extend(f"missing fenced delivery owner: {path.relative_to(ROOT)}" for path in absent)
+    else:
+        failures.extend(fence_contract_failures(*(path.read_text(encoding="utf-8") for path in fence_paths)))
 
     if failures:
         print("RELIABILITY_CONTRACTS: FAILED")

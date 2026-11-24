@@ -10,6 +10,7 @@ acquisition = { path = "../acquisition" }
 contracts = { path = "../contracts" }
 graph_neo4j = { path = "../graph_neo4j" }
 infrastructure = { path = "../infrastructure" }
+postgres_store = { path = "../postgres_store" }
 primitives = { path = "../primitives" }
 runtime_models = { path = "../runtime_models" }
 seo_domain = { path = "../seo_domain" }

@@ -4,8 +4,14 @@
 #[tokio::test]
 #[serial]
 async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_delete() {
-    use runtime_composition::adapters::projection_materialize_adapter::dispatch_event;
+    use runtime_composition::adapters::projection_materialize_adapter::{
+        dispatch_leased_event, DispatchDisposition,
+    };
     use infrastructure::adapters::{
+        sqlx_outbox_adapter::{
+            claim_outbox_batch_for_target, dispatch_verified_rule_with_fence,
+            VerifiedRuleDispatchOutcome,
+        },
         verified_rule_projection_adapter::{
             stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx, VerifiedRuleEmbeddingAdapter,
         },
@@ -60,14 +66,14 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         "SELECT count(*) FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
     ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!((points, events), (1, 1), "replay must leave one registry point and one event");
-    let (point_id, payload): (String, Vec<u8>) = {
+    let (point_id, upsert_event_id): (String, Uuid) = {
         let point_id: String = sqlx::query_scalar(
             "SELECT point_id FROM kb.qdrant_points WHERE entity_key=$1 AND collection_name='verified_rules_4'",
         ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
-        let payload: Vec<u8> = sqlx::query_scalar(
-            "SELECT payload_bytes FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
+        let upsert_event_id: Uuid = sqlx::query_scalar(
+            "SELECT event_id FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantUpsertCommand'",
         ).bind(&rule_id).fetch_one(&pg.pool).await.unwrap();
-        (point_id, payload)
+        (point_id, upsert_event_id)
     };
     let expected = [VerifiedRuleReadbackPoint {
         point_id, rule_instance_id: rule_id.clone(),
@@ -75,10 +81,24 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         source_key: "https://example.gov/passport".into(),
     }];
     assert!(!vector_qdrant::verify_verified_rule_readback(&expected).await.unwrap());
-    for _ in 0..2 {
-        dispatch_event("qdrant", "QdrantUpsertCommand", &rule_id,
-            "alegria.outbox.qdrant_upsert_command.v1", &payload).await.unwrap();
-    }
+    let mut initial_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-rule-first", "qdrant", 1, 120, Some(upsert_event_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(initial_claim.len(), 1);
+    assert_eq!(
+        dispatch_leased_event(&pg.pool, &initial_claim.pop().unwrap())
+            .await
+            .unwrap(),
+        DispatchDisposition::AcknowledgedByFence,
+    );
+    assert!(claim_outbox_batch_for_target(
+        &pg.pool, "a14-rule-replay", "qdrant", 1, 120, Some(upsert_event_id),
+    )
+    .await
+    .unwrap()
+    .is_empty(), "acknowledged rule effect was claimable for duplicate delivery");
     assert!(vector_qdrant::verify_verified_rule_readback(&expected).await.unwrap());
 
     // Force a real database error *between* point upsert and Outbox insert.
@@ -156,6 +176,29 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
         .await
         .unwrap();
 
+    // A genuine second canonical Truth transaction can stage a new upsert
+    // before the later tombstone. Delay only its Outbox delivery, never fake
+    // a verified-rule event through the forbidden standalone emitter.
+    let delayed_run_id = Uuid::new_v4().to_string();
+    let delayed_batch = VerifiedRuleUpsertBatch {
+        run_id: delayed_run_id.clone(),
+        ..command.clone()
+    };
+    let mut delayed_tx = pg.pool.begin().await.unwrap();
+    stage_rule_upserts_in_tx(&mut delayed_tx, &delayed_batch, embeddings.clone())
+        .await
+        .unwrap();
+    delayed_tx.commit().await.unwrap();
+    let delayed_upsert_id: Uuid = sqlx::query_scalar(
+        "SELECT event_id FROM system.sync_outbox \
+         WHERE run_id=$1 AND aggregate_key=$2 AND event_type='QdrantUpsertCommand'",
+    )
+    .bind(&delayed_run_id)
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+
     for _ in 0..2 {
         let mut tx = pg.pool.begin().await.unwrap();
         stage_rule_point_deletes_in_tx(
@@ -182,51 +225,54 @@ async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_dele
     .await
     .unwrap();
     assert_eq!(deletion_events, 1, "same deletion replay must not duplicate Outbox");
-    let delete_payload: Vec<u8> = sqlx::query_scalar(
-        "SELECT payload_bytes FROM system.sync_outbox \
+    let tombstone_id: Uuid = sqlx::query_scalar(
+        "SELECT event_id FROM system.sync_outbox \
          WHERE aggregate_key=$1 AND event_type='QdrantDeleteCommand'",
     )
     .bind(&rule_id)
     .fetch_one(&pg.pool)
     .await
     .unwrap();
-    // An old delayed insert may arrive after the delete intent. The
-    // rule-instance projection uses the newest SQL intent as its fencing key.
-    dispatch_event(
-        "qdrant",
-        "QdrantUpsertCommand",
-        &rule_id,
-        "alegria.outbox.qdrant_upsert_command.v1",
-        &payload,
+    // Concurrent delivery of two DISTINCT, actually claimed Outbox events.
+    // The stale upsert must be ACKed as SkippedStale without invoking the
+    // callback; the latest tombstone executes through the leased PG→Qdrant
+    // fence. If the callback is invoked, the injected error fails this test.
+    let mut delayed_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-stale-owner", "qdrant", 1, 120, Some(delayed_upsert_id),
     )
     .await
     .unwrap();
-    for _ in 0..2 {
-        dispatch_event(
-            "qdrant",
-            "QdrantDeleteCommand",
-            &rule_id,
-            "alegria.outbox.qdrant_delete_command.v1",
-            &delete_payload,
+    let mut delete_claim = claim_outbox_batch_for_target(
+        &pg.pool, "a14-delete-owner", "qdrant", 1, 120, Some(tombstone_id),
+    )
+    .await
+    .unwrap();
+    assert_eq!(delayed_claim.len(), 1);
+    assert_eq!(delete_claim.len(), 1);
+    let delayed_event = delayed_claim.pop().unwrap();
+    let tombstone_event = delete_claim.pop().unwrap();
+    let (stale_dispatch, tombstone_dispatch) = tokio::join!(
+        dispatch_verified_rule_with_fence(&pg.pool, &delayed_event, || async {
+            Err::<(), anyhow::Error>(anyhow::anyhow!("stale upsert reached Qdrant effect"))
+        }),
+        dispatch_leased_event(&pg.pool, &tombstone_event),
+    );
+    assert_eq!(stale_dispatch.unwrap(), VerifiedRuleDispatchOutcome::SkippedStale);
+    assert_eq!(tombstone_dispatch.unwrap(), DispatchDisposition::AcknowledgedByFence);
+    for event_id in [delayed_upsert_id, tombstone_id] {
+        assert!(claim_outbox_batch_for_target(
+            &pg.pool, "a14-repeat-owner", "qdrant", 1, 120, Some(event_id),
         )
         .await
-        .unwrap();
+        .unwrap()
+        .is_empty(), "ACKed rule effect was claimable again");
     }
-    assert!(!vector_qdrant::verify_verified_rule_readback(&expected)
-        .await
-        .unwrap());
-    dispatch_event(
-        "qdrant",
-        "QdrantUpsertCommand",
-        &rule_id,
-        "alegria.outbox.qdrant_upsert_command.v1",
-        &payload,
-    )
-    .await
-    .unwrap();
-    assert!(!vector_qdrant::verify_verified_rule_readback(&expected)
-        .await
-        .unwrap(), "stale Qdrant upsert resurrected a deleted rule");
+    assert!(
+        !vector_qdrant::verify_verified_rule_readback(&expected)
+            .await
+            .unwrap(),
+        "concurrent delayed upsert resurrected a rule after its tombstone"
+    );
 }
 
 /// A14/P0: the real Truth SQL writers compose into one transaction, including
@@ -676,20 +722,21 @@ async fn outbox_a14_target_scoped_claim_never_leases_another_provider_event() {
         .await
         .unwrap();
 
-    let mut graph_claims = claim_outbox_batch_for_target(
-        &pg.pool,
-        "graph-only-worker",
-        "neo4j",
-        16,
-        120,
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(graph_claims.len(), 1);
+    // Competing graph owners and a vector owner all lease concurrently. Only
+    // one graph worker may acquire the graph row, while the vector worker must
+    // still be able to acquire its own row without waiting for graph delivery.
+    let (graph_claims_a, graph_claims_b, vector_claims) = tokio::join!(
+        claim_outbox_batch_for_target(&pg.pool, "graph-owner-a", "neo4j", 16, 120, None),
+        claim_outbox_batch_for_target(&pg.pool, "graph-owner-b", "neo4j", 16, 120, None),
+        claim_outbox_batch_for_target(&pg.pool, "vector-only-worker", "qdrant", 16, 120, None),
+    );
+    let mut graph_claims = graph_claims_a.unwrap();
+    graph_claims.extend(graph_claims_b.unwrap());
+    assert_eq!(graph_claims.len(), 1, "two graph owners both claimed the same event");
     let graph = graph_claims.pop().unwrap();
     assert_eq!(graph.event_id.to_string(), graph_id);
     assert_eq!(graph.target_system, "neo4j");
+    assert!(matches!(graph.lease_worker_id.as_str(), "graph-owner-a" | "graph-owner-b"));
 
     let other_status: (String, Option<String>) = sqlx::query_as(
         "SELECT status, worker_id FROM system.sync_outbox WHERE event_id=$1",
@@ -698,18 +745,13 @@ async fn outbox_a14_target_scoped_claim_never_leases_another_provider_event() {
     .fetch_one(&pg.pool)
     .await
     .unwrap();
-    assert_eq!(other_status, ("pending".into(), None), "graph owner stole a Qdrant lease");
+    assert_eq!(
+        other_status,
+        ("processing".into(), Some("vector-only-worker".into())),
+        "graph owner stole a concurrently claimed Qdrant lease"
+    );
 
-    let mut vector_claims = claim_outbox_batch_for_target(
-        &pg.pool,
-        "vector-only-worker",
-        "qdrant",
-        16,
-        120,
-        None,
-    )
-    .await
-    .unwrap();
+    let mut vector_claims = vector_claims.unwrap();
     assert_eq!(vector_claims.len(), 1);
     let vector = vector_claims.pop().unwrap();
     assert_eq!(vector.event_id.to_string(), vector_id);
@@ -723,6 +765,249 @@ async fn outbox_a14_target_scoped_claim_never_leases_another_provider_event() {
     // Release both fixture leases through the real PostgreSQL ownership CAS.
     assert_eq!(mark_done(&pg.pool, &graph).await.unwrap(), LeaseUpdate::Applied);
     assert_eq!(mark_done(&pg.pool, &vector).await.unwrap(), LeaseUpdate::Applied);
+}
+
+/// A14: once a real PostgreSQL lease crosses the Qdrant uncertainty boundary,
+/// neither lease expiry nor a newer revision can issue an unproven effect.
+/// The durable `failed` marker is committed *before* invoking the provider.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn outbox_a14_verified_rule_uncertain_effect_quarantines_claim_and_new_revision() {
+    use infrastructure::adapters::verified_rule_projection_adapter::{
+        stage_rule_point_deletes_in_tx, stage_rule_upserts_in_tx,
+    };
+    use infrastructure::adapters::sqlx_outbox_adapter::{
+        claim_outbox_batch_for_run_target, dispatch_verified_rule_with_fence, OutboxEnvelope,
+    };
+    use infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx;
+    use infrastructure::adapters::sqlx_reconcile_adapter::{
+        reconcile_target_system, ReconcileOptionsRecord,
+    };
+    use seo_ports::knowledge::{
+        VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
+    };
+    use tokio::sync::oneshot;
+
+    let pg = PostgresHarness::start().await.unwrap();
+    let run_id = Uuid::new_v4().to_string();
+    let rule_id = format!("fence-a14-{}", Uuid::new_v4().simple());
+    let canonical_batch = VerifiedRuleUpsertBatch {
+        run_id: run_id.clone(),
+        context_key: format!("fence-context-{}", Uuid::new_v4().simple()),
+        upserts: vec![VerifiedRuleProjectionCandidate {
+            rule_instance_id: rule_id.clone(),
+            role_type: "document_required".into(),
+            concept_key: "passport".into(),
+            source_key: "https://example.gov/passport".into(),
+            evidence_quote: "A passport is required".into(),
+        }],
+    };
+    let embeddings = VerifiedRuleEmbeddingBatch {
+        model: "fixture-1024".into(),
+        vectors: vec![vec![0.1; 1024]],
+    };
+    let mut original_tx = pg.pool.begin().await.unwrap();
+    stage_rule_upserts_in_tx(&mut original_tx, &canonical_batch, embeddings.clone())
+        .await
+        .unwrap();
+    original_tx.commit().await.unwrap();
+    let (first_id, first_payload): (Uuid, Vec<u8>) = sqlx::query_as(
+        "SELECT event_id, payload_bytes FROM system.sync_outbox \
+         WHERE run_id=$1 AND aggregate_key=$2 AND event_type='QdrantUpsertCommand'",
+    )
+    .bind(&run_id)
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    let mut first_claim = claim_outbox_batch_for_run_target(
+        &pg.pool, "first-fenced-owner", &run_id, "qdrant", 1, 120,
+    )
+    .await
+    .unwrap();
+    assert_eq!(first_claim.len(), 1);
+    let first_claim = first_claim.pop().unwrap();
+    assert_eq!(first_claim.event_id, first_id);
+
+    // Hold the provider callback open. Its entrance proves the quarantine
+    // marker has been committed even though the remote outcome is unknown.
+    let (entered_tx, entered_rx) = oneshot::channel::<()>();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
+    let effect_pool = pg.pool.clone();
+    let effect_task = tokio::spawn(async move {
+        dispatch_verified_rule_with_fence(&effect_pool, &first_claim, move || async move {
+            entered_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            Err::<(), anyhow::Error>(anyhow::anyhow!("injected unknown provider outcome"))
+        })
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), entered_rx)
+        .await
+        .expect("provider callback did not start")
+        .expect("provider callback stopped unexpectedly");
+
+    let (status, last_error): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, last_error FROM system.sync_outbox WHERE event_id=$1",
+    )
+    .bind(first_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(status, "failed", "effect started before durable quarantine");
+    assert_eq!(last_error.as_deref(), Some("projection_outcome_uncertain:v1"));
+
+    // An expired lease does not override an unknown external outcome. Two
+    // simultaneous replacement workers must both observe zero eligible rows.
+    sqlx::query(
+        "UPDATE system.sync_outbox SET locked_until=now()-interval '1 second' WHERE event_id=$1",
+    )
+    .bind(first_id)
+    .execute(&pg.pool)
+    .await
+    .unwrap();
+    let (second_owner, third_owner) = tokio::join!(
+        claim_outbox_batch_for_run_target(&pg.pool, "second-fenced-owner", &run_id, "qdrant", 1, 120),
+        claim_outbox_batch_for_run_target(&pg.pool, "third-fenced-owner", &run_id, "qdrant", 1, 120),
+    );
+    assert!(second_owner.unwrap().is_empty());
+    assert!(third_owner.unwrap().is_empty());
+
+    // Truth's canonical tombstone attempts the same per-point advisory lock.
+    // While the remote RPC is unresolved, it must wait, not commit a newer
+    // registry state behind the older in-flight provider mutation.
+    let truth_pool = pg.pool.clone();
+    let truth_run_id = run_id.clone();
+    let truth_rule_id = rule_id.clone();
+    let (truth_started_tx, truth_started_rx) = oneshot::channel::<()>();
+    let mut competing_truth = tokio::spawn(async move {
+        let mut truth_tx = truth_pool.begin().await.unwrap();
+        truth_started_tx.send(()).unwrap();
+        let result = stage_rule_point_deletes_in_tx(
+            &mut truth_tx,
+            &truth_run_id,
+            "uncertain-rule-context",
+            std::slice::from_ref(&truth_rule_id),
+        )
+        .await;
+        truth_tx.rollback().await.unwrap();
+        result
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), truth_started_rx)
+        .await
+        .expect("competing Truth transaction did not start")
+        .expect("competing Truth transaction stopped unexpectedly");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(150), &mut competing_truth)
+            .await
+            .is_err(),
+        "Truth mutation completed while previous Qdrant callback was in flight"
+    );
+
+    release_tx.send(()).unwrap();
+    let unknown_outcome = effect_task.await.unwrap();
+    assert!(unknown_outcome.is_err(), "unknown provider outcome was acknowledged");
+    assert!(
+        competing_truth.await.unwrap().is_err(),
+        "Truth mutation ignored uncertainty after the Qdrant callback failed"
+    );
+
+    // Canonical Truth transaction writers must share the same per-rule fence.
+    // They may not stage a tombstone after a provider effect whose outcome is
+    // unknown: rolling back must leave both registry and intent unchanged.
+    let mut forbidden_delete = pg.pool.begin().await.unwrap();
+    let delete_error = stage_rule_point_deletes_in_tx(
+        &mut forbidden_delete,
+        &run_id,
+        "uncertain-rule-context",
+        std::slice::from_ref(&rule_id),
+    )
+    .await;
+    assert!(delete_error.is_err(), "Truth tombstone bypassed unresolved Qdrant effect");
+    forbidden_delete.rollback().await.unwrap();
+    let retained_points: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb.qdrant_points WHERE collection_name='verified_rules_4' AND entity_key=$1",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_points, 1, "failed Truth mutation changed canonical point registry");
+    let delete_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox WHERE aggregate_key=$1 AND event_type='QdrantDeleteCommand'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(delete_events, 0, "failed Truth mutation enqueued a new effect");
+
+    // Re-verification must also fail closed: no new canonical projection or
+    // Outbox revision may be committed until an operator reconciles the
+    // unknown old RPC. Both canonical staging and generic in-tx emission
+    // use the same point lock and uncertainty gate.
+    let newer_batch = VerifiedRuleUpsertBatch {
+        run_id: Uuid::new_v4().to_string(),
+        ..canonical_batch
+    };
+    let mut forbidden_upsert = pg.pool.begin().await.unwrap();
+    assert!(stage_rule_upserts_in_tx(&mut forbidden_upsert, &newer_batch, embeddings)
+        .await
+        .is_err(), "Truth re-verification bypassed unresolved Qdrant effect");
+    forbidden_upsert.rollback().await.unwrap();
+
+    let mut generic_tx = pg.pool.begin().await.unwrap();
+    let generic_reenqueue = OutboxEnvelope {
+        run_id: newer_batch.run_id,
+        aggregate_type: "rule_instance".into(),
+        aggregate_key: rule_id.clone(),
+        target_system: "qdrant".into(),
+        event_type: "QdrantUpsertCommand".into(),
+        payload_type: "alegria.outbox.qdrant_upsert_command.v1".into(),
+        schema_version: 1,
+        idempotency_key: format!("a14-guarded-reenqueue:{}", Uuid::new_v4()),
+        payload_bytes: first_payload,
+    };
+    assert!(outbox_emit_many_in_tx(&mut generic_tx, &[generic_reenqueue])
+        .await
+        .is_err(), "generic writer re-enqueued a quarantined verified rule");
+    generic_tx.rollback().await.unwrap();
+
+    let mut reconcile_options = ReconcileOptionsRecord {
+        max_retry_count: 10,
+        batch_limit: 100,
+        dry_run: true,
+        requeue_base_delay_sec: 0,
+        requeue_jitter_sec: 0,
+    };
+    let dry_run = reconcile_target_system(&pg.pool, "qdrant", &reconcile_options)
+        .await
+        .unwrap();
+    assert_eq!(dry_run.failed_candidates, 0, "dry-run offered unknown effect for replay");
+    reconcile_options.dry_run = false;
+    let mutating_reconcile = reconcile_target_system(&pg.pool, "qdrant", &reconcile_options)
+        .await
+        .unwrap();
+    assert_eq!(mutating_reconcile.requeued_failed, 0, "reconciler released unknown effect");
+
+    let (final_status, final_error): (String, Option<String>) = sqlx::query_as(
+        "SELECT status, last_error FROM system.sync_outbox WHERE event_id=$1",
+    )
+    .bind(first_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(final_status, "failed");
+    assert_eq!(final_error.as_deref(), Some("projection_outcome_uncertain:v1"));
+    let number_of_outbox_intents: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox WHERE aggregate_type='rule_instance' AND aggregate_key=$1 AND target_system='qdrant'",
+    )
+    .bind(&rule_id)
+    .fetch_one(&pg.pool)
+    .await
+    .unwrap();
+    assert_eq!(number_of_outbox_intents, 1, "Truth bypass created a later Outbox intent");
 }
 
 #[cfg(feature = "e2e")]
@@ -791,8 +1076,15 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     // Once the lease expires, the stale worker cannot acknowledge a new owner.
     sqlx::query("UPDATE system.sync_outbox SET locked_until = now() - interval '1 second' WHERE event_id = $1")
         .bind(first_claim.event_id).execute(&pg.pool).await.unwrap();
-    let mut new_claims = claim_outbox_batch_for_run_target(&pg.pool, "replacement-worker", &run_id, "qdrant", 1, 120)
-        .await.unwrap();
+    // Both replacements race for the *expired* lease. The real PostgreSQL
+    // SKIP LOCKED transition must grant exactly one fresh lease generation.
+    let (replacement_a, replacement_b) = tokio::join!(
+        claim_outbox_batch_for_run_target(&pg.pool, "replacement-worker-a", &run_id, "qdrant", 1, 120),
+        claim_outbox_batch_for_run_target(&pg.pool, "replacement-worker-b", &run_id, "qdrant", 1, 120),
+    );
+    let mut new_claims = replacement_a.unwrap();
+    new_claims.extend(replacement_b.unwrap());
+    assert_eq!(new_claims.len(), 1, "expired lease had two concurrent owners");
     let new_claim = new_claims.pop().unwrap();
     assert_eq!(new_claim.event_id, first_claim.event_id);
     assert_eq!(mark_done(&pg.pool, &first_claim).await.unwrap(), LeaseUpdate::Lost);

@@ -104,6 +104,14 @@ pub async fn outbox_emit_many(
     if events.is_empty() {
         return Ok(0);
     }
+    if events
+        .iter()
+        .any(|event| event.target_system == "qdrant" && event.aggregate_type == "rule_instance")
+    {
+        return Err(contract_violation(
+            "verified-rule Qdrant Outbox events require atomic Truth staging",
+        ));
+    }
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     let emitted = outbox_emit_many_in_tx(&mut tx, events).await?;
     tx.commit().await.map_err(classify_sqlx)?;
@@ -116,6 +124,21 @@ pub async fn outbox_emit_many_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     events: &[OutboxEnvelope],
 ) -> std::result::Result<i64, DomainError> {
+    // Even generic emitters must not bypass the canonical per-point Truth
+    // barrier. All verified-rule projection intents participate in the same
+    // advisory lock and fail closed while an earlier Qdrant RPC is uncertain.
+    let verified_rule_ids = events
+        .iter()
+        .filter(|event| event.target_system == "qdrant" && event.aggregate_type == "rule_instance")
+        .map(|event| event.aggregate_key.clone())
+        .collect::<Vec<_>>();
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx, &verified_rule_ids,
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("verified-rule Outbox enqueue blocked by uncertainty fence: {err}"),
+    })?;
     let mut emitted: i64 = 0;
     for event in events {
         let payload_hash = primitives::hash::blake3_hex(event.payload_bytes());
@@ -148,6 +171,14 @@ pub async fn outbox_emit_one(
     pool: &PgPool,
     event: &OutboxEnvelope,
 ) -> std::result::Result<String, DomainError> {
+    // The standalone one-event API cannot guarantee the atomic registry/
+    // canonical Truth mutation required for verified rules. Use the canonical
+    // transactional staging path (and its per-identity uncertainty fence).
+    if event.target_system == "qdrant" && event.aggregate_type == "rule_instance" {
+        return Err(contract_violation(
+            "verified-rule Qdrant Outbox events require atomic Truth staging",
+        ));
+    }
     let payload_hash = primitives::hash::blake3_hex(event.payload_bytes());
 
     let row = queries::insert_or_touch_outbox_event(pool, event, &payload_hash)

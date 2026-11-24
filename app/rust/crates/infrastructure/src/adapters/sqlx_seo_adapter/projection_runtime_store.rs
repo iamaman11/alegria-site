@@ -191,17 +191,14 @@ where
     let sorted = rule_ids
         .into_iter()
         .map(|id| id.as_ref().to_owned())
-        .collect::<std::collections::BTreeSet<_>>();
-    for rule_instance_id in sorted {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(format!(
-                "qdrant|verified_rules_4|rule_instance|{rule_instance_id}"
-            ))
-            .execute(&mut **tx)
-            .await
-            .map_err(classify_sqlx)?;
-    }
-    Ok(())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(tx, &sorted)
+        .await
+        .map_err(|err| DomainError::InfraUnavailable {
+            message: format!("verified Truth mutation blocked by Qdrant uncertainty fence: {err}"),
+        })
 }
 
 /// A delayed older workflow must not overwrite a newer Truth commit for the
@@ -553,6 +550,17 @@ pub async fn upsert_verified_rule_instance_in_tx(
 ) -> Result<(), DomainError> {
     // Validate the precise scope BEFORE any SQL mutation.
     let target = validate_verified_rule_instance_write(rule)?;
+    // This public low-level writer can also be called without the enclosing
+    // Truth workflow. Protect it independently from outstanding provider
+    // effects; the canonical caller's earlier lock is reentrant in this tx.
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx,
+        std::slice::from_ref(&rule.rule_instance_id),
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("verified Truth upsert blocked by Qdrant uncertainty fence: {err}"),
+    })?;
     if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
@@ -698,6 +706,14 @@ pub async fn demote_verified_rule_instance_in_tx(
     verification_method: &str,
     adjudication_reason: &str,
 ) -> Result<(), DomainError> {
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
+        tx,
+        &[rule_instance_id.to_string()],
+    )
+    .await
+    .map_err(|err| DomainError::InfraUnavailable {
+        message: format!("verified Truth demotion blocked by Qdrant uncertainty fence: {err}"),
+    })?;
     sqlx::query(
         "UPDATE verified.rule_instances
          SET status = $2,

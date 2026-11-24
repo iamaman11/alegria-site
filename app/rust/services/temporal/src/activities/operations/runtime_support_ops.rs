@@ -105,19 +105,18 @@ pub(crate) async fn projection_sync_impl(
     let failed_events = 0_i64;
 
     for event in batch {
-        match projection_materialize_adapter::dispatch_event(
-            &event.target_system,
-            &event.event_type,
-            &event.aggregate_key,
-            &event.payload_type,
-            &event.payload_bytes,
-        )
-        .await
-        {
-            Ok(_) => {
-                let status = sqlx_outbox_adapter::mark_done(&acts.pool, &event)
-                    .await
-                    .map_err(AlegriaActivities::classify_error)?;
+        match projection_materialize_adapter::dispatch_leased_event(&acts.pool, &event).await {
+            Ok(disposition) => {
+                let status = match disposition {
+                    projection_materialize_adapter::DispatchDisposition::NeedsAck => {
+                        sqlx_outbox_adapter::mark_done(&acts.pool, &event)
+                            .await
+                            .map_err(AlegriaActivities::classify_error)?
+                    }
+                    projection_materialize_adapter::DispatchDisposition::AcknowledgedByFence => {
+                        sqlx_outbox_adapter::LeaseUpdate::Applied
+                    }
+                };
                 if status == sqlx_outbox_adapter::LeaseUpdate::Applied {
                     processed_events += 1;
                 }
@@ -125,6 +124,16 @@ pub(crate) async fn projection_sync_impl(
                     target_system = %event.target_system, operation = %event.event_type,
                     attempt = event.retry_count + 1, lease = ?status,
                     "projection sync delivery completed");
+            }
+            Err(err) if err.stage == projection_materialize_adapter::DispatchStage::Quarantine => {
+                // The remote effect may commit after the Activity stops. The
+                // durable PostgreSQL marker prohibits both automatic retries
+                // and new Truth writes until explicit operator reconciliation.
+                tracing::error!(run_id = %event.run_id, event_id = %event.event_id,
+                    target_system = %event.target_system, operation = %event.event_type,
+                    result = "quarantined_no_retry", error = %err,
+                    "verified-rule projection requires manual reconciliation");
+                return Err(err.into_domain_error());
             }
             Err(err) => {
                 let message = err.to_string();
