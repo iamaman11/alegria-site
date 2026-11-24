@@ -2,6 +2,16 @@ pub async fn ensure_source(
     pool: &PgPool,
     section: &RawSectionRecord,
 ) -> std::result::Result<(), primitives::errors::DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    ensure_source_in_tx(&mut tx, section).await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+/// Compose source registration with the canonical Truth write transaction.
+pub async fn ensure_source_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    section: &RawSectionRecord,
+) -> std::result::Result<(), primitives::errors::DomainError> {
     let source_label = if section.source_domain.trim().is_empty() {
         section.source_url.clone()
     } else {
@@ -47,7 +57,7 @@ pub async fn ensure_source(
     .bind(source_trust_level(section))
     .bind(freshness_ttl_days_for_section(section))
     .bind(override_eligible_for_section(section))
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     Ok(())

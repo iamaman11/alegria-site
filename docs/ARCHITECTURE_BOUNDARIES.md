@@ -10,19 +10,26 @@
 | --- | --- | --- |
 | Общие значения | `primitives`: стабильные идентификаторы и чистые функции | Нет SQL, Temporal и внешних сервисов |
 | Acquisition | `acquisition::{html_sections,pdf_parser,source_relevance,crawl_policy}`: парсинг, релевантность, robots и retry | `infrastructure::adapters::raw_crawl_adapter`: сеть, очередь, сохранение |
-| Truth | `truth_domain::{candidate_intake,completeness,hitl_decision,persisted_candidates,semantic_truth_write}` и соседние предметные модули | SQL/LLM/Temporal остаются у адаптеров и runtime; JSON не определяет решение |
-| Knowledge | `seo_domain::canonical_mapping`, `seo_application::knowledge`, типизированные порты в `seo_ports::knowledge` | SQLx — авторитетное VERIFIED состояние, Qdrant — необязательная подсказка, Outbox — доставка проекций |
+| Truth | `truth_domain::{candidate_intake,completeness,hitl_decision,persisted_candidates,semantic_truth_write}` и соседние предметные модули | `verified_truth_write_impl` координирует **одну** PostgreSQL-транзакцию через `_in_tx` адаптеры: источники, кандидаты, HITL, rule state, registry и Outbox; внешний Voyage вызывается до неё, Qdrant — только через доставку Outbox |
+| Knowledge | `seo_domain::canonical_mapping`, `seo_application::knowledge`, типизированные порты в `seo_ports::knowledge` | SQLx — авторитетное VERIFIED состояние, Qdrant — восстанавливаемая поисковая проекция; UPSERT и DELETE проходят через типизированный Outbox с проверкой актуального состояния/порядка события, а не прямым вызовом из Truth |
 | SEO / editorial | `seo_domain::{editorial,draft_quality,page_readiness,content_contract,link_recommendation,ia_planning,whole_page,rebuild,review_decision,cms_revision,writer}`; один `editorial::ContentBlock` и общая проверка traceability | `seo_steps::{editorial_wire,page_wire,content_contract_validate_step,draft_qa_step,link_recommend_step}` адаптируют действующие Temporal DTO; решения остаются в домене; старый неиспользуемый HTML block-validator удалён |
 | Global Site Reconcile | `seo_steps::global_site_reconcile_step` решает, какие ссылки истекли, какие Content Gap закрыты и какие страницы актуальны | `infrastructure::adapters::seo_ports_sqlx_adapter::planning_ports` сохраняет IA, ссылки, gaps, retirement и навигацию **одной** PostgreSQL-транзакцией; SQL-адаптер не принимает редакционных решений |
 | Плановые проекции | `seo_domain::artifact_identity` и `seo_steps` определяют логический результат; `sqlx_seo_adapter` сохраняет SERP/Opportunity/IA и Outbox атомарно | Qdrant/Neo4j — проекции SQL-истины; один стабильный ключ Qdrant retry в `sqlx_seo_adapter/shared_helpers.rs`, без отдельных переопределений по шагам |
 | Application | `seo_application::{drafting,scenario,review_publish,knowledge,rebuild_detect,cms_review}` | Координирует typed ports; единый `GraphCapabilityPort::require_graph_contract`, без дублирования допуска Graph в трёх фазах |
-| Publishing | `seo_domain::{publishing,render_preview,cms_revision,review_decision}`; `seo_application::review_publish` | `infrastructure::adapters::sqlx_seo_cms_adapter` и `seo_ports::PublicReleaseDelivery`: PostgreSQL, Outbox, HTTP/CDN; CMS human review требует точного обязательного `revision_id`, QA — единственный владелец persisted blockers |
+| Publishing | `seo_domain::{publishing,render_preview,cms_revision,review_decision}`; `seo_application::review_publish` | `infrastructure::adapters::sqlx_seo_cms_adapter` и `seo_ports::PublicReleaseDelivery`: PostgreSQL, Outbox, HTTP/CDN; CMS review требует точного `revision_id`. Публичные обязательные ссылки берутся из **утверждённой CMS-ревизии** (`required_link_payload`), не из меняющихся рекомендаций; HTML связывает их с текущим release snapshot, не выводя служебные ключи |
+| Публичная навигация | `sqlx_seo_adapter::navigation_persistence` создаёт scoped-модель меню; `sqlx_static_site_adapter` читает её вместе с утверждёнными CMS-ревизиями | `static_site_builder_adapter` отображает **только опубликованные** пункты своей локали; меню не пересчитывает самостоятельно из полного каталога страниц, планирование навигации не становится отдельным источником публичной истины |
 | Runtime | `services/temporal`, `services/outbox_worker`, `services/cli_tools` | Activity/workflow orchestration, регистрацию, retry, логи и вызов адаптеров; не копирует бизнес-условия |
 
 `contracts` содержит действующие protobuf wire-формы, не предметные решения.
 `runtime_models` содержит общие типизированные данные выполнения (например,
 `ExecutionRun` и `RuleRoleType`), но не редакционную политику. Удалённый
 `runtime_models::seo_blocks` **не является допустимой точкой расширения**.
+
+Навигационная проекция входит в следующий approved CMS build через
+`run_publish_materialize_step`. Отдельный запуск публикационной сборки при
+изменении **только** навигации без новой CMS-ревизии пока не доказан; удалённый
+write-only `navigation_reconciled` план не был источником реального dispatch.
+Это открытая задача по рабочему пути, не основание возвращать фантомную очередь.
 
 ## При изменении операции
 

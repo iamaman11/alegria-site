@@ -59,7 +59,6 @@ pub struct GlobalNavigationReport {
     pub scope_count: u64,
     pub page_item_count: u64,
     pub silo_group_count: u64,
-    pub rebuild_plan_count: u64,
 }
 
 #[derive(Debug, Clone, Default)]

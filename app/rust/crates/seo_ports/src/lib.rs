@@ -18,7 +18,7 @@ use contracts::generated::alegria::temporal::v1::{
 use knowledge::{
     CanonicalVectorLookup, SemanticNeighborCandidate, SemanticNeighborCollection,
     SourceContextChunk, SourceContextCollection, VerifiedRuleEmbeddingBatch,
-    VerifiedRuleProjectionChange, VerifiedRulesQuery, VerifiedRulesView,
+    VerifiedRuleUpsertBatch, VerifiedRulesQuery, VerifiedRulesView,
 };
 use primitives::errors::DomainError;
 use runtime_models::GraphPlanningContext;
@@ -132,15 +132,6 @@ pub struct SectionTemplate {
     pub required: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct GlobalNavigationPersistReport {
-    pub navigation_tree_key: String,
-    pub scope_count: u64,
-    pub page_item_count: u64,
-    pub silo_group_count: u64,
-    pub rebuild_plan_count: u64,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CmsReviewDecisionRequest {
     pub page_node_key: String,
@@ -236,27 +227,18 @@ pub trait SourceContextSearchPort: Send + Sync {
     ) -> Result<Vec<SourceContextChunk>, DomainError>;
 }
 
-/// External effects of one Truth-to-Knowledge materialization. The adapter
-/// owns network I/O and an atomic PostgreSQL metadata+Outbox transaction.
+/// Embedding is the only external operation needed before the canonical Truth
+/// write. SQL registry and Outbox effects belong to the Truth transaction,
+/// rather than a second port that could commit independently.
 #[async_trait]
-pub trait VerifiedRuleProjectionPort: Send + Sync {
+pub trait VerifiedRuleEmbeddingPort: Send + Sync {
     fn retrieval_required(&self) -> bool;
 
-    async fn delete_rule_points(
-        &self,
-        run_id: &str,
-        rule_ids: &[String],
-    ) -> Result<(), DomainError>;
     async fn embed_rule_texts(
         &self,
         run_id: &str,
         texts: &[String],
     ) -> Result<Option<VerifiedRuleEmbeddingBatch>, DomainError>;
-    async fn stage_rule_upserts(
-        &self,
-        change: &VerifiedRuleProjectionChange,
-        embeddings: VerifiedRuleEmbeddingBatch,
-    ) -> Result<(), DomainError>;
 }
 
 #[async_trait]
@@ -431,7 +413,7 @@ pub trait PlanningRepository: Send + Sync {
         &self,
         input: &GlobalSiteReconcileInputPayload,
         output: &GlobalSiteReconcileOutputPayload,
-    ) -> Result<GlobalNavigationPersistReport, DomainError>;
+    ) -> Result<(), DomainError>;
 }
 
 #[async_trait]

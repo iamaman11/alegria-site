@@ -600,6 +600,30 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(result["analysis"], "scoped")
         self.assertEqual(result["selected_suites"], ["knowledge_a13", "outbox_a14"])
 
+    def test_truth_write_transaction_selects_actual_postgres_outbox_suite(self) -> None:
+        for path in (
+            "app/rust/services/temporal/src/activities/operations/truth_write_and_fixture_tests.rs",
+            "app/rust/crates/infrastructure/src/adapters/raw_crawl_adapter/source_registry.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_hitl_adapter.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_step_ledger_adapter.rs",
+            "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_runtime_store.rs",
+            "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertIn("outbox_a14", result["selected_suites"])
+                self.assertIn("outbox_a14_", dict(suite_commands_for_report(result))["outbox_a14"])
+
+    def test_public_static_render_change_selects_real_cms_and_pg_suite(self) -> None:
+        for path in (
+            "app/rust/crates/infrastructure/src/adapters/sqlx_static_site_adapter.rs",
+            "app/rust/crates/infrastructure/src/adapters/static_site_builder_adapter.rs",
+        ):
+            with self.subTest(path=path):
+                result = self.impact(path)
+                self.assertIn("cms_review_revision", result["selected_suites"])
+                self.assertIn("cms_revision_", dict(suite_commands_for_report(result))["cms_review_revision"])
+
     def test_knowledge_read_change_selects_postgres_a13(self) -> None:
         result = self.impact("app/rust/crates/seo_application/src/knowledge.rs")
         self.assertEqual(result["selected_suites"], ["knowledge_a13"])
@@ -768,6 +792,7 @@ class ImpactFixtures(unittest.TestCase):
     def test_planning_and_projection_atomicity_select_actual_postgres_suite(self) -> None:
         for path in (
             "app/rust/crates/seo_steps/src/global_site_reconcile_step.rs",
+            "app/rust/crates/seo_domain/src/link_recommendation.rs",
             "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/planning_ports.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/planning_persistence.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/navigation_persistence.rs",

@@ -11,6 +11,7 @@ pub struct LinkPage {
     pub scope: String,
     pub page_type: String,
     pub lifecycle_state: String,
+    pub canonical_slug: String,
     pub url_path: String,
     pub url_family: String,
     pub parent_key: String,
@@ -54,6 +55,17 @@ pub fn linkable_state(state: &str) -> bool {
     !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
 }
 
+/// The single owner of link eligibility, shared by Link Recommend and
+/// Global Site Reconcile. Opaque identity tokens are not public destinations.
+pub fn linkable_page(page: &LinkPage) -> bool {
+    linkable_state(&page.lifecycle_state)
+        && !crate::page_readiness::is_opaque_topic_identifier(&page.canonical_slug)
+        && !page
+            .url_path
+            .split('/')
+            .any(crate::page_readiness::is_opaque_topic_identifier)
+}
+
 fn semantic_adjacency(source_path: &str, target_path: &str) -> f64 {
     let source_tokens: BTreeSet<&str> = source_path
         .trim_matches('/')
@@ -72,7 +84,105 @@ fn semantic_adjacency(source_path: &str, target_path: &str) -> f64 {
         / source_tokens.union(&target_tokens).count() as f64
 }
 
-/// Returns required navigation links plus at most `max_optional_per_page`
+// Shared scoring and stable identity; no other module synthesizes link keys.
+fn recommendation_for_pair(
+    source: &LinkPage,
+    target: &LinkPage,
+    topics_by_cluster: &BTreeMap<String, Vec<String>>,
+) -> Option<RecommendedLink> {
+    if source.key == target.key || !linkable_page(source) || !linkable_page(target) {
+        return None;
+    }
+    let (role, anchor_strategy, required, base_score) =
+        link_kind(&source.page_type, &target.page_type);
+    let same_scope = source.scope == target.scope;
+    if !same_scope && required {
+        return None;
+    }
+    let semantic = semantic_adjacency(&source.url_path, &target.url_path);
+    let journey_bonus = if source.parent_key == target.key || target.parent_key == source.key {
+        0.08
+    } else {
+        0.0
+    };
+    let family_bonus = if source.url_family == target.url_family {
+        0.04
+    } else {
+        0.0
+    };
+    let source_topics = topics_by_cluster
+        .get(&source.cluster_key)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let target_topics = topics_by_cluster
+        .get(&target.cluster_key)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let shared_topics = source_topics
+        .iter()
+        .filter(|topic| target_topics.contains(topic))
+        .cloned()
+        .collect::<Vec<_>>();
+    let graph_bonus = if shared_topics.is_empty() { 0.0 } else { 0.08 };
+    let score = clamp_score(if same_scope {
+        (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus
+    } else {
+        (base_score * 0.42) + (semantic * 0.13) + (graph_bonus * 0.5)
+    });
+    Some(RecommendedLink {
+        key: seo_artifact_key(
+            "link_recommendation",
+            &[
+                &source.scope,
+                &source.key,
+                &target.key,
+                role,
+                anchor_strategy,
+                "seo_link_score@1",
+            ],
+        ),
+        scope: source.scope.clone(),
+        source_key: source.key.clone(),
+        target_key: target.key.clone(),
+        role,
+        anchor_strategy,
+        required,
+        score,
+        status: "candidate",
+        reason: if shared_topics.is_empty() {
+            "structural_link_scoring"
+        } else {
+            "graph_topic_adjacency"
+        },
+        graph_confidence: if shared_topics.is_empty() { 0.0 } else { score },
+        shared_topics,
+    })
+}
+
+/// Reconcile only mandatory links without generating, sorting or discarding
+/// optional/semantic candidates. Both paths use the exact same policy/ID.
+pub fn recommend_required_links(
+    pages: &[LinkPage],
+    topics_by_cluster: &BTreeMap<String, Vec<String>>,
+) -> Vec<RecommendedLink> {
+    let mut required = Vec::new();
+    for source in pages.iter().filter(|page| linkable_page(page)) {
+        for target in pages {
+            if source.scope != target.scope
+                || source.key == target.key
+                || !link_kind(&source.page_type, &target.page_type).2
+            {
+                continue;
+            }
+            if let Some(link) = recommendation_for_pair(source, target, topics_by_cluster) {
+                required.push(link);
+            }
+        }
+    }
+    required
+}
+
+/// Returns required structural links plus at most `max_optional_per_page`
 /// optional links for each eligible source. Input order cannot decide ties.
 pub fn recommend_links(
     pages: &[LinkPage],
@@ -86,80 +196,13 @@ pub fn recommend_links(
     };
     let mut recommendations = Vec::new();
     for source in pages {
-        if !linkable_state(&source.lifecycle_state) {
+        if !linkable_page(source) {
             continue;
         }
-        let mut candidates = Vec::new();
-        for target in pages {
-            if source.key == target.key || !linkable_state(&target.lifecycle_state) {
-                continue;
-            }
-            let (role, anchor_strategy, required, base_score) =
-                link_kind(&source.page_type, &target.page_type);
-            let same_scope = source.scope == target.scope;
-            if !same_scope && required {
-                continue;
-            }
-            let semantic = semantic_adjacency(&source.url_path, &target.url_path);
-            let journey_bonus =
-                if source.parent_key == target.key || target.parent_key == source.key {
-                    0.08
-                } else {
-                    0.0
-                };
-            let family_bonus = if source.url_family == target.url_family {
-                0.04
-            } else {
-                0.0
-            };
-            let source_topics = topics_by_cluster
-                .get(&source.cluster_key)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let target_topics = topics_by_cluster
-                .get(&target.cluster_key)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            let shared_topics = source_topics
-                .iter()
-                .filter(|topic| target_topics.contains(topic))
-                .cloned()
-                .collect::<Vec<_>>();
-            let graph_bonus = if shared_topics.is_empty() { 0.0 } else { 0.08 };
-            let score = clamp_score(if same_scope {
-                (base_score * 0.68) + (semantic * 0.2) + journey_bonus + family_bonus + graph_bonus
-            } else {
-                (base_score * 0.42) + (semantic * 0.13) + (graph_bonus * 0.5)
-            });
-            candidates.push(RecommendedLink {
-                key: seo_artifact_key(
-                    "link_recommendation",
-                    &[
-                        &source.scope,
-                        &source.key,
-                        &target.key,
-                        role,
-                        anchor_strategy,
-                        "seo_link_score@1",
-                    ],
-                ),
-                scope: source.scope.clone(),
-                source_key: source.key.clone(),
-                target_key: target.key.clone(),
-                role,
-                anchor_strategy,
-                required,
-                score,
-                status: "candidate",
-                reason: if shared_topics.is_empty() {
-                    "structural_link_scoring"
-                } else {
-                    "graph_topic_adjacency"
-                },
-                graph_confidence: if shared_topics.is_empty() { 0.0 } else { score },
-                shared_topics,
-            });
-        }
+        let candidates = pages
+            .iter()
+            .filter_map(|target| recommendation_for_pair(source, target, topics_by_cluster))
+            .collect::<Vec<_>>();
         let mut optional = candidates
             .iter()
             .filter(|link| !link.required)
@@ -186,6 +229,7 @@ mod tests {
             scope: "scope".into(),
             page_type: "detail_page".into(),
             lifecycle_state: "planned".into(),
+            canonical_slug: key.into(),
             url_path: "/visa/spain".into(),
             url_family: "visa_type_leaf".into(),
             parent_key: String::new(),
@@ -221,6 +265,9 @@ mod tests {
             assert!(!linkable_state(state));
         }
         assert!(linkable_state("planned"));
+        let mut opaque = page("opaque", "cluster");
+        opaque.canonical_slug = "a".repeat(64);
+        assert!(!linkable_page(&opaque));
     }
 
     #[test]
@@ -244,5 +291,22 @@ mod tests {
         assert!(result
             .iter()
             .any(|link| link.source_key == "hub" && link.required && link.target_key == "detail"));
+    }
+
+    #[test]
+    fn reconcile_required_only_is_identical_to_link_recommend_policy() {
+        let mut hub = page("hub", "hub-cluster");
+        hub.page_type = "hub_page".into();
+        let pages = vec![hub, page("detail", "detail-cluster")];
+        let all = recommend_links(&pages, &BTreeMap::new(), 2)
+            .into_iter()
+            .filter(|link| link.required)
+            .collect::<Vec<_>>();
+        let required = recommend_required_links(&pages, &BTreeMap::new());
+        assert_eq!(required, all);
+
+        let mut rebuilding = pages;
+        rebuilding[1].lifecycle_state = "needs_rebuild".into();
+        assert!(recommend_required_links(&rebuilding, &BTreeMap::new()).is_empty());
     }
 }

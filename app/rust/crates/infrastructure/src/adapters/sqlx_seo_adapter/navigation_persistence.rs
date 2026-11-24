@@ -1,14 +1,53 @@
+/// The scope tuple is authoritative even when a planned page has no keyword
+/// cluster. Do not infer an unknown page's market from the current caller.
+/// This metadata is also consumed by CMS and Temporal rebuild dispatch.
+pub async fn upsert_site_scope_identity_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    scope_signature: &str,
+    market: &str,
+    locale: &str,
+    country_code: &str,
+    visa_type: &str,
+    applicant_profile: &str,
+) -> Result<(), DomainError> {
+    if scope_signature.trim().is_empty() || market.trim().is_empty() || locale.trim().is_empty() {
+        return Err(DomainError::ContractViolation {
+            message: "global navigation requires authoritative scope signature, market and locale"
+                .to_string(),
+        });
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO site.site_scopes
+            (scope_signature, market, locale, country_code, visa_type, applicant_profile,
+             page_count, status, last_reconciled_at)
+        VALUES ($1, $2, $3, $4, $5, $6, 0, 'active', now())
+        ON CONFLICT (scope_signature) DO UPDATE
+        SET market = EXCLUDED.market, locale = EXCLUDED.locale,
+            country_code = EXCLUDED.country_code, visa_type = EXCLUDED.visa_type,
+            applicant_profile = EXCLUDED.applicant_profile,
+            updated_at = now()
+        "#,
+    )
+    .bind(scope_signature)
+    .bind(market)
+    .bind(locale)
+    .bind(blank_as_none(country_code))
+    .bind(blank_as_none(visa_type))
+    .bind(blank_as_none(applicant_profile))
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    Ok(())
+}
+
 pub async fn persist_global_navigation_from_active_pages(
     pool: &PgPool,
     market: &str,
     locale: &str,
-    reason: &str,
 ) -> Result<GlobalNavigationReport, DomainError> {
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
-    let report = persist_global_navigation_from_active_pages_in_tx(
-        &mut tx, market, locale, reason,
-    )
-    .await?;
+    let report = persist_global_navigation_from_active_pages_in_tx(&mut tx, market, locale).await?;
     tx.commit().await.map_err(classify_sqlx)?;
     Ok(report)
 }
@@ -19,7 +58,6 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     market: &str,
     locale: &str,
-    reason: &str,
 ) -> Result<GlobalNavigationReport, DomainError> {
     let market = if market.trim().is_empty() {
         "global"
@@ -31,6 +69,28 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
     } else {
         locale.trim()
     };
+    let navigation_tree_key = seo_domain::artifact_identity::seo_artifact_key(
+        "navigation_tree",
+        &[market, locale, "navigation_policy@1"],
+    );
+    // Lock the release's tree BEFORE reading its page snapshot. Otherwise
+    // two Global Reconciles for distinct scopes of one market can both read
+    // stale snapshots, then sequentially overwrite one another's menu.
+    sqlx::query(
+        r#"
+        INSERT INTO site.navigation_trees
+            (navigation_tree_key, market, locale, tree_version, policy_version, status, generated_at)
+        VALUES ($1, $2, $3, 1, 'navigation_policy@1', 'active', now())
+        ON CONFLICT (navigation_tree_key) DO UPDATE
+        SET status = 'active', generated_at = now(), updated_at = now()
+        "#,
+    )
+    .bind(&navigation_tree_key)
+    .bind(market)
+    .bind(locale)
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
     let rows = sqlx::query(
         r#"
         SELECT
@@ -42,17 +102,21 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
             p.canonical_url_path,
             p.hierarchy_depth,
             p.menu_group,
-            COALESCE(k.market, '') AS market,
-            COALESCE(k.locale, '') AS locale,
-            k.country_code,
-            k.visa_type,
-            k.applicant_profile
+            s.market,
+            s.locale,
+            COALESCE(s.country_code, k.country_code) AS country_code,
+            COALESCE(s.visa_type, k.visa_type) AS visa_type,
+            COALESCE(s.applicant_profile, k.applicant_profile) AS applicant_profile
         FROM site.page_nodes p
+        JOIN site.site_scopes s ON s.scope_signature = p.scope_signature
         LEFT JOIN site.keyword_clusters k ON k.cluster_key = p.keyword_cluster_key
         WHERE p.lifecycle_state NOT IN ('blocked', 'deprecated')
+          AND s.market = $1 AND s.locale = $2
         ORDER BY p.scope_signature, p.hierarchy_depth, p.canonical_url_path, p.page_node_key
         "#,
     )
+    .bind(market)
+    .bind(locale)
     .fetch_all(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
@@ -115,8 +179,7 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
 
     // The reconciled tree is one result: readers must never observe the tree
     // after its old items were deleted but before its replacement is complete.
-    // This also rolls back scope counts, silo groups and the rebuild request
-    // if a late write fails.
+    // This also rolls back scope counts and silo groups if a late write fails.
     let mut scope_count = 0u64;
     for (
         scope_signature,
@@ -153,34 +216,40 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         .map_err(classify_sqlx)?;
         scope_count += 1;
     }
-
-    let navigation_tree_key = seo_domain::artifact_identity::seo_artifact_key(
-        "navigation_tree",
-        &[market, locale, "navigation_policy@1"],
-    );
+    // An empty snapshot is a real revision: retire only scopes of this
+    // market/locale whose last active page disappeared, preserving all other
+    // markets (and their dispatch metadata).
+    let active_scope_keys = scope_fields_by_signature
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
     sqlx::query(
         r#"
-        INSERT INTO site.navigation_trees
-            (navigation_tree_key, market, locale, tree_version, policy_version, status, generated_at)
-        VALUES ($1, $2, $3, 1, 'navigation_policy@1', 'active', now())
-        ON CONFLICT (navigation_tree_key) DO UPDATE
-        SET status = 'active',
-            generated_at = now(),
-            updated_at = now()
+        UPDATE site.site_scopes
+        SET page_count = 0, status = 'deprecated',
+            last_reconciled_at = now(), updated_at = now()
+        WHERE market = $1 AND locale = $2
+          AND NOT (scope_signature = ANY($3))
+          AND (status <> 'deprecated' OR page_count <> 0)
         "#,
     )
-    .bind(&navigation_tree_key)
     .bind(market)
     .bind(locale)
+    .bind(&active_scope_keys)
     .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
 
-    sqlx::query("DELETE FROM site.navigation_items WHERE navigation_tree_key = $1")
+    let previous_groups = sqlx::query(
+        "DELETE FROM site.navigation_items WHERE navigation_tree_key = $1 RETURNING silo_group_key",
+    )
         .bind(&navigation_tree_key)
-        .execute(&mut **tx)
+        .fetch_all(&mut **tx)
         .await
-        .map_err(classify_sqlx)?;
+        .map_err(classify_sqlx)?
+        .into_iter()
+        .filter_map(|row| row.get::<Option<String>, _>("silo_group_key"))
+        .collect::<Vec<_>>();
 
     let mut silo_group_by_menu = BTreeMap::<String, String>::new();
     for page in &pages {
@@ -199,13 +268,17 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
                 (silo_group_key, scope_signature, group_type, label, canonical_url_path, sort_order, status)
             VALUES ($1, $2, 'directory', $3, '', 1000, 'active')
             ON CONFLICT (silo_group_key) DO UPDATE
-            SET label = EXCLUDED.label,
+            SET scope_signature = NULL,
+                label = EXCLUDED.label,
                 status = 'active',
                 updated_at = now()
             "#,
         )
         .bind(&silo_group_key)
-        .bind(blank_as_none(&page.scope_signature))
+        // A menu-group label is a shared dictionary entry. Its owner is the
+        // per-market navigation tree/item, not the first arbitrary scope
+        // that happened to insert the same group in this global table.
+        .bind(Option::<&str>::None)
         .bind(label_from_slug(&menu_group.replace(':', "-")))
         .execute(&mut **tx)
         .await
@@ -287,65 +360,34 @@ pub async fn persist_global_navigation_from_active_pages_in_tx(
         page_item_count += 1;
     }
 
-    // The reason is usually a stable workflow label, not a revision. A replay
-    // of identical navigation must preserve a completed request, while a new
-    // active-page snapshot needs a distinct rebuild even with the same label.
-    // The input order is deterministic (page_node_key breaks SQL sort ties).
-    let navigation_revision = primitives::hash::content_hash_v1(
-        &json!({
-            "market": market,
-            "locale": locale,
-            "pages": pages.iter().map(|page| json!({
-                "page_node_key": page.page_node_key,
-                "scope_signature": page.scope_signature,
-                "parent_page_node_key": page.parent_page_node_key,
-                "page_type_key": page.page_type_key,
-                "canonical_slug": page.canonical_slug,
-                "canonical_url_path": page.canonical_url_path,
-                "hierarchy_depth": page.hierarchy_depth,
-                "menu_group": page.menu_group,
-                "market": page.market,
-                "locale": page.locale,
-                "country_code": page.country_code,
-                "visa_type": page.visa_type,
-                "applicant_profile": page.applicant_profile,
-            })).collect::<Vec<_>>(),
-        })
-        .to_string(),
-    );
-    let rebuild_plan_key = seo_domain::artifact_identity::seo_artifact_key(
-        "global_rebuild_plan",
-        &[&navigation_tree_key, reason, &navigation_revision],
-    );
-    sqlx::query(
-        r#"
-        INSERT INTO site.global_rebuild_plan
-            (rebuild_plan_key, trigger_type, priority, reason_payload, status)
-        VALUES ($1, 'navigation_reconciled', 2, $2, 'queued')
-        ON CONFLICT (rebuild_plan_key) DO UPDATE
-        SET reason_payload = EXCLUDED.reason_payload,
-            updated_at = now()
-        WHERE site.global_rebuild_plan.status = 'queued'
-        "#,
-    )
-    .bind(&rebuild_plan_key)
-    .bind(Json(json!({
-        "reason": reason,
-        "navigation_tree_key": navigation_tree_key,
-        "navigation_revision": navigation_revision,
-        "scope_count": scope_count,
-        "page_item_count": page_item_count,
-    })))
-    .execute(&mut **tx)
-    .await
-    .map_err(classify_sqlx)?;
+    // Shared menu labels are a dictionary. Retire only groups affected by
+    // this tree's replacement; unrelated markets must not cause global
+    // scans or change state during a scoped rebuild.
+    if !previous_groups.is_empty() {
+        sqlx::query(
+            r#"
+            UPDATE site.silo_groups g
+            SET status = 'deprecated', updated_at = now()
+            WHERE g.silo_group_key = ANY($1) AND g.status = 'active'
+              AND NOT EXISTS (
+                  SELECT 1 FROM site.navigation_items i
+                  JOIN site.navigation_trees t ON t.navigation_tree_key = i.navigation_tree_key
+                  WHERE i.silo_group_key = g.silo_group_key
+                    AND i.status = 'active' AND t.status = 'active'
+              )
+            "#,
+        )
+        .bind(&previous_groups)
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
+    }
 
     Ok(GlobalNavigationReport {
         navigation_tree_key,
         scope_count,
         page_item_count,
         silo_group_count: silo_group_by_menu.len() as u64,
-        rebuild_plan_count: 1,
     })
 }
 

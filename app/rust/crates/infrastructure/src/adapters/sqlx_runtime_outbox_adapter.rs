@@ -122,8 +122,8 @@ pub async fn outbox_emit_many_in_tx(
 
         let res = sqlx::query(
             "INSERT INTO system.sync_outbox \
-             (run_id, aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             (run_id, aggregate_type, aggregate_key, target_system, event_type, payload_type, schema_version, idempotency_key, payload_bytes, payload_hash, created_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, clock_timestamp()) \
              ON CONFLICT (aggregate_key, event_type, idempotency_key) WHERE idempotency_key <> '' DO NOTHING",
         )
         .bind(&event.run_id)

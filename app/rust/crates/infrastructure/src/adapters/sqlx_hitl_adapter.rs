@@ -57,15 +57,28 @@ pub async fn reconcile_truth_candidate_reviews(
     context_key: &str,
     run_id: &str,
 ) -> std::result::Result<u64, DomainError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
+    let count = reconcile_truth_candidate_reviews_in_tx(&mut tx, context_key, run_id).await?;
+    tx.commit()
+        .await
+        .map_err(|e| infra_unavailable(e.to_string()))?;
+    Ok(count)
+}
+
+/// Reconcile canonical Truth review state inside the owning SQL transaction.
+pub async fn reconcile_truth_candidate_reviews_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context_key: &str,
+    run_id: &str,
+) -> std::result::Result<u64, DomainError> {
     if context_key.trim().is_empty() || run_id.trim().is_empty() {
         return Err(contract_violation(
             "truth HITL context_key and run_id are required",
         ));
     }
-    let mut tx = pool
-        .begin()
-        .await
-        .map_err(|e| infra_unavailable(e.to_string()))?;
     // Close obsolete open reviews only AFTER the canonical candidate's
     // independent status or exact source snapshot has changed. The audit is
     // append-only; human approval on its own cannot close a truth gap.
@@ -96,7 +109,7 @@ pub async fn reconcile_truth_candidate_reviews(
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
     // Raw re-extraction may cascade-delete a candidate after a review was
@@ -124,7 +137,7 @@ pub async fn reconcile_truth_candidate_reviews(
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
     // A candidate can become unresolved again after an independent recheck,
@@ -181,7 +194,7 @@ pub async fn reconcile_truth_candidate_reviews(
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
     let result = sqlx::query(
@@ -218,12 +231,9 @@ pub async fn reconcile_truth_candidate_reviews(
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
-    tx.commit()
-        .await
-        .map_err(|e| infra_unavailable(e.to_string()))?;
     Ok(result.rows_affected())
 }
 

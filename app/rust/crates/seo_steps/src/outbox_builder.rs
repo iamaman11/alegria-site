@@ -3,7 +3,8 @@
 /// Внутри seo_steps не используются ad hoc JSON runtime-contracts.
 /// Runtime wire для outbox строится строго через protobuf payload bytes.
 use contracts::generated::alegria::sync::v1::{
-    Neo4jRuleUpsertPayload, QdrantEntityPayload, QdrantUpsertCommand, RuleRoleTypeV1,
+    Neo4jRuleUpsertPayload, QdrantDeleteCommand, QdrantEntityPayload, QdrantUpsertCommand,
+    RuleRoleTypeV1,
 };
 use primitives::hash::{blake3_hex, content_hash_v1};
 use primitives::qdrant_point_id::qdrant_point_id_v1;
@@ -78,6 +79,7 @@ pub fn neo4j_rule_upserted(rule_instance_id: &str, context_key: &str) -> OutboxE
 }
 
 pub fn qdrant_rule_upsert(
+    run_id: &str,
     rule_instance_id: &str,
     context_key: &str,
     rule_type_key: &str,
@@ -115,10 +117,82 @@ pub fn qdrant_rule_upsert(
         payload_type: "alegria.outbox.qdrant_upsert_command.v1".to_string(),
         schema_version: 1,
         idempotency_key: make_idempotency_key(
-            rule_instance_id,
+            &format!("{run_id}|{rule_instance_id}"),
             "QdrantUpsertCommand",
             &payload_bytes,
         ),
         payload_bytes,
+    }
+}
+
+/// A repeated demotion within the same run has one effect, but a later
+/// re-verification followed by another demotion must enqueue a new tombstone.
+pub fn qdrant_rule_delete(
+    run_id: &str,
+    rule_instance_id: &str,
+    collection_name: &str,
+) -> OutboxEnvelope {
+    let payload_bytes = encode_payload(&QdrantDeleteCommand {
+        collection_name: collection_name.to_string(),
+        entity_type: "rule_instance".to_string(),
+        entity_key: rule_instance_id.to_string(),
+        point_id: qdrant_point_id_v1(collection_name, "rule_instance", rule_instance_id),
+    });
+    OutboxEnvelope {
+        aggregate_type: "rule_instance".to_string(),
+        aggregate_key: rule_instance_id.to_string(),
+        target_system: "qdrant".to_string(),
+        event_type: "QdrantDeleteCommand".to_string(),
+        payload_type: "alegria.outbox.qdrant_delete_command.v1".to_string(),
+        schema_version: 1,
+        idempotency_key: make_idempotency_key(
+            &format!("{run_id}|{rule_instance_id}"),
+            "QdrantDeleteCommand",
+            &payload_bytes,
+        ),
+        payload_bytes,
+    }
+}
+
+#[cfg(test)]
+mod projection_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn tombstones_are_idempotent_within_run_but_not_across_reverify_cycles() {
+        let first = qdrant_rule_delete("run-1", "rule-1", "verified_rules_4");
+        let replay = qdrant_rule_delete("run-1", "rule-1", "verified_rules_4");
+        let later = qdrant_rule_delete("run-2", "rule-1", "verified_rules_4");
+        assert_eq!(first.idempotency_key, replay.idempotency_key);
+        assert_ne!(first.idempotency_key, later.idempotency_key);
+        assert_eq!(first.event_type, "QdrantDeleteCommand");
+        let command = QdrantDeleteCommand::decode(first.payload_bytes()).unwrap();
+        assert_eq!(command.entity_key, "rule-1");
+        assert_eq!(command.collection_name, "verified_rules_4");
+    }
+
+    #[test]
+    fn reverified_rule_reenqueues_the_same_embedding_for_a_new_run() {
+        fn event(run: &str) -> OutboxEnvelope {
+            qdrant_rule_upsert(
+                run,
+                "rule-1",
+                "ctx",
+                "fee",
+                "fee",
+                "must_pay",
+                "source-1",
+                "verified_rules_4",
+                vec![0.1, 0.2],
+            )
+        }
+        assert_eq!(
+            event("run-1").idempotency_key,
+            event("run-1").idempotency_key
+        );
+        assert_ne!(
+            event("run-1").idempotency_key,
+            event("run-2").idempotency_key
+        );
     }
 }

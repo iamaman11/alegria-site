@@ -9,8 +9,10 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACT = ROOT / "docs" / "runs" / "r4_global_navigation_policy.json"
 STEP = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "global_site_reconcile_step.rs"
+LINK_DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "link_recommendation.rs"
 IA = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "ia_build_step.rs"
 ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_adapter.rs"
+STATIC_SNAPSHOT = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_static_site_adapter.rs"
 SCHEMA = ROOT / "app" / "db" / "schema.sql"
 
 
@@ -63,8 +65,10 @@ def main() -> int:
         failures.append("failure_class must equal `none`")
 
     step = STEP.read_text(encoding="utf-8")
+    links = LINK_DOMAIN.read_text(encoding="utf-8")
     ia = IA.read_text(encoding="utf-8")
     adapter = read_file_resolved(ADAPTER)
+    static_snapshot = STATIC_SNAPSHOT.read_text(encoding="utf-8")
     schema = SCHEMA.read_text(encoding="utf-8")
 
     for needle in [
@@ -75,7 +79,6 @@ def main() -> int:
         "visa_country_silo",
         "visa_type_silo",
         "visa_type_leaf",
-        "global_site_reconcile@1",
     ]:
         if needle not in step:
             failures.append(f"global site reconcile missing `{needle}`")
@@ -90,24 +93,27 @@ def main() -> int:
         if needle not in ia:
             failures.append(f"ia build missing `{needle}`")
 
-    for needle in [
-        "country_hub_to_visa_hub",
-        "hub_to_child",
-        "child_to_hub",
-    ]:
-        if needle not in step:
-            failures.append(f"global navigation step missing `{needle}`")
+    for needle in ["country_visa_hub", "hub_child", "child_hub", "linkable_state"]:
+        if needle not in links:
+            failures.append(f"canonical link domain missing `{needle}`")
+    if "fn required_link(" in step:
+        failures.append("global navigation must not duplicate the domain link policy")
 
     for needle in [
         "INSERT INTO site.navigation_trees",
         "INSERT INTO site.navigation_items",
-        "global_rebuild_plan",
-        "navigation_reconciled",
         "site.navigation_items",
         "site.navigation_trees",
+        "JOIN site.site_scopes",
     ]:
         if needle not in adapter:
             failures.append(f"navigation adapter missing `{needle}`")
+    if "navigation_reconciled" in adapter:
+        failures.append("navigation planning cannot enqueue a write-only rebuild plan")
+
+    for needle in ["FROM site.navigation_trees", "JOIN site.navigation_items"]:
+        if needle not in static_snapshot:
+            failures.append(f"public renderer snapshot missing `{needle}`")
 
     for needle in [
         "CREATE TABLE IF NOT EXISTS site.navigation_trees",

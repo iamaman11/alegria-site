@@ -15,11 +15,10 @@ use seo_ports::{
     knowledge::{
         CanonicalVectorLookup, SemanticNeighborCollection, SemanticNeighborLookup,
         SemanticNeighborQuery, SourceContextChunk, SourceContextCollection, SourceContextQuery,
-        VerifiedRule, VerifiedRuleProjectionCandidate, VerifiedRuleProjectionChange,
-        VerifiedRulesQuery,
+        VerifiedRule, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch, VerifiedRulesQuery,
     },
     CanonicalVectorSearchPort, SemanticNeighborSearchPort, SourceContextSearchPort,
-    VerifiedRuleProjectionPort, VerifiedRulesReader,
+    VerifiedRuleEmbeddingPort, VerifiedRulesReader,
 };
 
 fn verified_rule_projection_text(
@@ -38,18 +37,15 @@ fn verified_rule_projection_text(
     .to_string()
 }
 
-/// Truth already decided verification and global-scope eligibility. This
-/// operation only coordinates a rebuildable Knowledge search projection.
-pub async fn reconcile_verified_rule_projection<P: VerifiedRuleProjectionPort + ?Sized>(
+/// Prepare external embeddings before opening the canonical Truth SQL
+/// transaction; the resulting typed vectors can then be staged with Truth and
+/// its Outbox commands in one database commit.
+pub async fn prepare_verified_rule_embedding_batch<P: VerifiedRuleEmbeddingPort + ?Sized>(
     port: &P,
-    change: &VerifiedRuleProjectionChange,
-) -> Result<(), DomainError> {
-    if !change.delete_rule_ids.is_empty() {
-        port.delete_rule_points(&change.run_id, &change.delete_rule_ids)
-            .await?;
-    }
+    change: &VerifiedRuleUpsertBatch,
+) -> Result<Option<seo_ports::knowledge::VerifiedRuleEmbeddingBatch>, DomainError> {
     if change.upserts.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
     let texts = change
         .upserts
@@ -65,7 +61,7 @@ pub async fn reconcile_verified_rule_projection<P: VerifiedRuleProjectionPort + 
                 ),
             });
         }
-        return Ok(());
+        return Ok(None);
     };
     if embeddings.model.trim().is_empty()
         || embeddings.vectors.len() != change.upserts.len()
@@ -81,7 +77,7 @@ pub async fn reconcile_verified_rule_projection<P: VerifiedRuleProjectionPort + 
             ),
         });
     }
-    port.stage_rule_upserts(change, embeddings).await
+    Ok(Some(embeddings))
 }
 
 /// Select editorial evidence neighborhoods in one place. Search hits provide
@@ -428,9 +424,6 @@ mod tests {
         required: bool,
         embed_available: bool,
         vector_size: usize,
-        fail_after_effect_once: std::sync::atomic::AtomicBool,
-        deleted: std::sync::Mutex<Vec<String>>,
-        applied: std::sync::Mutex<BTreeSet<String>>,
     }
 
     impl FakeProjection {
@@ -439,29 +432,14 @@ mod tests {
                 required: true,
                 embed_available: true,
                 vector_size: 1024,
-                fail_after_effect_once: std::sync::atomic::AtomicBool::new(false),
-                deleted: std::sync::Mutex::new(Vec::new()),
-                applied: std::sync::Mutex::new(BTreeSet::new()),
             }
         }
     }
 
     #[async_trait]
-    impl VerifiedRuleProjectionPort for FakeProjection {
+    impl VerifiedRuleEmbeddingPort for FakeProjection {
         fn retrieval_required(&self) -> bool {
             self.required
-        }
-
-        async fn delete_rule_points(
-            &self,
-            _run_id: &str,
-            rule_ids: &[String],
-        ) -> Result<(), DomainError> {
-            self.deleted.lock().unwrap().extend_from_slice(rule_ids);
-            for rule in rule_ids {
-                self.applied.lock().unwrap().remove(rule);
-            }
-            Ok(())
         }
 
         async fn embed_rule_texts(
@@ -474,38 +452,12 @@ mod tests {
                 vectors: vec![vec![0.5; self.vector_size]; _texts.len()],
             }))
         }
-
-        async fn stage_rule_upserts(
-            &self,
-            change: &VerifiedRuleProjectionChange,
-            _vectors: VerifiedRuleEmbeddingBatch,
-        ) -> Result<(), DomainError> {
-            for candidate in &change.upserts {
-                self.applied
-                    .lock()
-                    .unwrap()
-                    .insert(candidate.rule_instance_id.clone());
-            }
-            if self
-                .fail_after_effect_once
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
-                return Err(DomainError::InfraUnavailable {
-                    message: format!(
-                        "simulated lost receipt after effect run_id={}",
-                        change.run_id
-                    ),
-                });
-            }
-            Ok(())
-        }
     }
 
-    fn projection_change() -> VerifiedRuleProjectionChange {
-        VerifiedRuleProjectionChange {
+    fn projection_change() -> VerifiedRuleUpsertBatch {
+        VerifiedRuleUpsertBatch {
             run_id: "run-projection".into(),
             context_key: "ES|tourist||BY".into(),
-            delete_rule_ids: Vec::new(),
             upserts: vec![VerifiedRuleProjectionCandidate {
                 rule_instance_id: "verified:passport".into(),
                 role_type: "document_required".into(),
@@ -517,34 +469,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verified_projection_port_replay_and_demote_have_one_logical_result() {
+    async fn verified_rule_embeddings_use_authoritative_truth_identity_and_shape() {
         let fake = FakeProjection::new();
         let change = projection_change();
         assert_eq!(
             verified_rule_projection_text(&change.context_key, &change.upserts[0]),
             "ES|tourist||BY document_required passport https://example.gov/visa A valid passport is required"
         );
-        fake.fail_after_effect_once
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        assert!(reconcile_verified_rule_projection(&fake, &change)
+        let embeddings = prepare_verified_rule_embedding_batch(&fake, &change)
             .await
-            .is_err());
-        reconcile_verified_rule_projection(&fake, &change)
+            .unwrap()
+            .expect("configured provider prepares verified rule embeddings");
+        assert_eq!(embeddings.model, "test-model");
+        assert_eq!(embeddings.vectors.len(), 1);
+        assert_eq!(embeddings.vectors[0].len(), 1024);
+
+        let empty = VerifiedRuleUpsertBatch {
+            upserts: Vec::new(),
+            ..change
+        };
+        assert!(prepare_verified_rule_embedding_batch(&fake, &empty)
             .await
-            .unwrap();
-        assert_eq!(fake.applied.lock().unwrap().len(), 1);
-        reconcile_verified_rule_projection(
-            &fake,
-            &VerifiedRuleProjectionChange {
-                delete_rule_ids: vec!["verified:passport".into()],
-                upserts: Vec::new(),
-                ..change
-            },
-        )
-        .await
-        .unwrap();
-        assert!(fake.applied.lock().unwrap().is_empty());
-        assert_eq!(*fake.deleted.lock().unwrap(), vec!["verified:passport"]);
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
@@ -552,28 +499,27 @@ mod tests {
         let mut fake = FakeProjection::new();
         fake.embed_available = false;
         let change = projection_change();
-        let error = reconcile_verified_rule_projection(&fake, &change)
+        let error = prepare_verified_rule_embedding_batch(&fake, &change)
             .await
             .unwrap_err();
         assert_eq!(error.class(), ErrorClass::InfraUnavailable);
         assert!(error.to_string().contains("run-projection"));
         fake.required = false;
-        reconcile_verified_rule_projection(&fake, &change)
+        assert!(prepare_verified_rule_embedding_batch(&fake, &change)
             .await
-            .unwrap();
-        assert!(fake.applied.lock().unwrap().is_empty());
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
     async fn verified_projection_rejects_bad_embedding_shape_before_effect() {
         let mut fake = FakeProjection::new();
         fake.vector_size = 4;
-        let error = reconcile_verified_rule_projection(&fake, &projection_change())
+        let error = prepare_verified_rule_embedding_batch(&fake, &projection_change())
             .await
             .unwrap_err();
         assert_eq!(error.class(), ErrorClass::ContractViolation);
         assert!(error.to_string().contains("stage=embedding_shape"));
-        assert!(fake.applied.lock().unwrap().is_empty());
     }
 
     struct FakeSourceContextSearch {

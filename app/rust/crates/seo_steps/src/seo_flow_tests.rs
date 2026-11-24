@@ -221,6 +221,8 @@ fn seo_steps_form_publish_ready_pipeline() {
         .find(|blueprint| blueprint.blueprint_key == page_node.blueprint_key)
         .cloned()
         .expect("blueprint for page node");
+    let expected_required_sections =
+        seo_domain::editorial::required_section_roles(&page_blueprint.required_sections);
     let verified_support = vec![
         support(
             "Required document: passport.",
@@ -340,11 +342,34 @@ fn seo_steps_form_publish_ready_pipeline() {
         run_id: run_id.clone(),
         draft: draft_state.clone(),
         supported_fragments: fragments.clone(),
-        required_links,
+        required_links: required_links.clone(),
         verified_support: verified_support.clone(),
+        expected_required_sections: expected_required_sections.clone(),
     });
     assert_eq!(qa.verdict, "publish_ready");
     assert!(qa.blocking_reasons.is_empty());
+
+    // A generated draft cannot silently downgrade the approved blueprint:
+    // removing one of several required sections blocks the actual QA step.
+    let missing_role = expected_required_sections
+        .first()
+        .expect("approved required role");
+    let mut incomplete = draft_state.clone().expect("draft for negative QA");
+    incomplete
+        .sections
+        .retain(|section| section.section_role.as_str() != missing_role.as_str());
+    let incomplete_qa = crate::draft_qa_step::execute(&DraftQaInputPayload {
+        run_id: run_id.clone(),
+        draft: Some(incomplete),
+        supported_fragments: fragments.clone(),
+        required_links: required_links.clone(),
+        verified_support: verified_support.clone(),
+        expected_required_sections: expected_required_sections.clone(),
+    });
+    assert_eq!(incomplete_qa.verdict, "qa_failed");
+    assert!(incomplete_qa
+        .blocking_reasons
+        .contains(&"missing_required_sections".to_string()));
 
     let draft_without_links = crate::draft_assemble_step::execute(&DraftAssembleInputPayload {
         run_id: run_id.clone(),
@@ -382,6 +407,7 @@ fn seo_steps_form_publish_ready_pipeline() {
         supported_fragments: fragments,
         required_links: Vec::new(),
         verified_support: verified_support.clone(),
+        expected_required_sections,
     });
     assert_eq!(qa_without_links.verdict, "publish_ready");
     assert!(!qa_without_links

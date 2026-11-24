@@ -3,7 +3,7 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use seo_ports::{
-        GlobalNavigationPersistReport, GraphCapabilityPort, GraphReasoningPort,
+        GraphCapabilityPort, GraphReasoningPort,
         OrganicSerpResponse, OrganicSerpResult,
         PlanningRepository, SemanticLinkCandidate,
         SemanticLinkSearchPort, SerpSearchPort,
@@ -166,8 +166,8 @@ mod tests {
             &self,
             _input: &GlobalSiteReconcileInputPayload,
             _output: &GlobalSiteReconcileOutputPayload,
-        ) -> Result<GlobalNavigationPersistReport, DomainError> {
-            Ok(GlobalNavigationPersistReport::default())
+        ) -> Result<(), DomainError> {
+            Ok(())
         }
     }
 
@@ -338,9 +338,9 @@ mod tests {
             &self,
             _input: &GlobalSiteReconcileInputPayload,
             output: &GlobalSiteReconcileOutputPayload,
-        ) -> Result<GlobalNavigationPersistReport, DomainError> {
+        ) -> Result<(), DomainError> {
             *self.reconcile_output.lock().unwrap() = Some(output.clone());
-            Ok(GlobalNavigationPersistReport::default())
+            Ok(())
         }
     }
 

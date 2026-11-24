@@ -469,6 +469,7 @@ mod typed_claim_overlay_tests {
             supported_fragments: fragments,
             required_links: links,
             verified_support: support,
+            expected_required_sections: seo_domain::editorial::required_section_roles(&[]),
         };
         let accepted = seo_steps::draft_qa_step::execute(&qa);
         assert_eq!(

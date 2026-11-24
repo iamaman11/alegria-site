@@ -115,7 +115,8 @@ def main() -> int:
                 if needle not in candidate_text:
                     failures.append(f"candidate snapshot missing `{needle}`")
 
-        failures += require(adapter, "site.link_recommendations", "internal link source")
+        failures += require(adapter, "r.required_link_payload", "revision-owned public link source")
+        failures += forbid(adapter, "site.link_recommendations", "mutable planning links in public release")
         failures += require(builder, "build_static_site_candidate_incremental", "candidate builder")
         failures += require(
             builder,
@@ -188,7 +189,7 @@ def main() -> int:
 
         for needle, label in [
             ("STATIC_SITE_BUILDER_VERSION", "versioned renderer"),
-            ("alegria_static_site_builder@3", "updated page layout generation"),
+            ("alegria_static_site_builder@5", "updated public navigation and revision-owned links"),
         ]:
             failures += require(builder, needle, label)
         for needle, label in [

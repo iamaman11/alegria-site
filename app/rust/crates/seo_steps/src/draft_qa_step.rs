@@ -64,6 +64,7 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         truth_snapshot_ref: &draft.truth_snapshot_ref,
         schema_markup_json: &draft.schema_markup_json,
         sections: &sections,
+        expected_required_sections: &input.expected_required_sections,
         blocks: &blocks,
         claims: &claims,
         traceability: &traceability,

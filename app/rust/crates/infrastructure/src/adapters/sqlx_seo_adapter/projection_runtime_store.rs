@@ -134,25 +134,6 @@ pub async fn load_seo_preflight_store_counts(
     })
 }
 
-pub async fn delete_qdrant_rule_points(
-    pool: &PgPool,
-    collection_name: &str,
-    rule_instance_ids: &[String],
-) -> Result<(), DomainError> {
-    sqlx::query(
-        "DELETE FROM kb.qdrant_points
-         WHERE collection_name = $1
-           AND entity_type = 'rule_instance'
-           AND entity_key = ANY($2)",
-    )
-    .bind(collection_name)
-    .bind(rule_instance_ids)
-    .execute(pool)
-    .await
-    .map_err(classify_sqlx)?;
-    Ok(())
-}
-
 pub async fn upsert_qdrant_rule_point_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     point_id: &str,
@@ -179,6 +160,95 @@ pub async fn upsert_qdrant_rule_point_in_tx(
     .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
+    Ok(())
+}
+
+/// Serialize context-wide Truth/HITL writes before acquiring any per-rule
+/// projection locks. The caller owns the transaction and its final commit.
+pub async fn lock_truth_context_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    context_key: &str,
+) -> Result<(), DomainError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("truth-context|{context_key}"))
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
+    Ok(())
+}
+
+/// Acquire the same sorted, transaction-scoped rule keys used by the Qdrant
+/// Outbox materializer. Truth holds these while mutating canonical SQL state.
+/// Lock order for the complete write is context first, then sorted rule IDs.
+pub async fn lock_truth_rule_projections_in_tx<I, S>(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule_ids: I,
+) -> Result<(), DomainError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let sorted = rule_ids
+        .into_iter()
+        .map(|id| id.as_ref().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    for rule_instance_id in sorted {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!(
+                "qdrant|verified_rules_4|rule_instance|{rule_instance_id}"
+            ))
+            .execute(&mut **tx)
+            .await
+            .map_err(classify_sqlx)?;
+    }
+    Ok(())
+}
+
+/// A delayed older workflow must not overwrite a newer Truth commit for the
+/// same context, even on its FIRST execution. This guard runs after the
+/// context advisory lock and before any canonical mutations. The completed
+/// step marker and its SQL state commit atomically in the Truth activity.
+pub async fn reject_stale_truth_run_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    run_id: &str,
+    context_key: &str,
+) -> Result<(), DomainError> {
+    let current_id = Uuid::parse_str(run_id)
+        .map_err(|error| validation_failure(format!("invalid Truth run_id UUID: {error}")))?;
+    let newer_committed: Option<bool> = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM pipeline.execution_runs AS newer
+             JOIN pipeline.step_executions AS done
+               ON done.run_id = newer.run_id
+              AND done.step_name = 'verified_truth_write'
+              AND done.status = 'done'
+             WHERE newer.context_key = this_run.context_key
+               AND newer.run_id <> this_run.run_id
+               -- UUID ordering cannot establish chronology when PostgreSQL
+               -- timestamps tie. Intentionally sacrifice progress on a tie:
+               -- the safety invariant forbids either ambiguous stale write.
+               AND newer.created_at >= this_run.created_at
+         )
+         FROM pipeline.execution_runs AS this_run
+         WHERE this_run.run_id = $1 AND this_run.context_key = $2",
+    )
+    .bind(current_id)
+    .bind(context_key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let Some(newer_committed) = newer_committed else {
+        return Err(validation_failure(format!(
+            "Truth run {run_id} does not belong to context {context_key}"
+        )));
+    };
+    if newer_committed {
+        return Err(DomainError::ConflictViolation {
+            message: format!(
+                "stale Truth run {run_id} cannot overwrite a newer completed Truth write for context {context_key}"
+            ),
+        });
+    }
     Ok(())
 }
 
@@ -210,8 +280,26 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     pool: &PgPool,
     candidate: &VerifiedTruthCandidateWrite,
 ) -> Result<String, DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let id =
+        upsert_extracted_rule_candidate_from_adjudication_in_tx(&mut tx, candidate).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(id)
+}
+
+/// The evidence-key unique constraint can collide with an extractor-specific
+/// candidate ID. A PostgreSQL SAVEPOINT restores the outer transaction before
+/// reconciling that canonical ID, so the whole Truth write can commit once.
+pub async fn upsert_extracted_rule_candidate_from_adjudication_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    candidate: &VerifiedTruthCandidateWrite,
+) -> Result<String, DomainError> {
     // Keep primary-key replay idempotent. Reconcile a second extractor ID
     // for the same unique source evidence after detecting that exact conflict.
+    sqlx::query("SAVEPOINT truth_candidate_insert")
+        .execute(&mut **tx)
+        .await
+        .map_err(classify_sqlx)?;
     let insert = sqlx::query(
         "INSERT INTO extracted.rule_candidates (
              rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
@@ -270,16 +358,26 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
     .bind(&candidate.provider_key)
     .bind(&candidate.model_key)
     .bind(&candidate.prompt_version)
-    .execute(pool)
+    .execute(&mut **tx)
     .await;
 
     match insert {
-        Ok(_) => Ok(candidate.rule_candidate_id.clone()),
+        Ok(_) => {
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            Ok(candidate.rule_candidate_id.clone())
+        }
         Err(sqlx::Error::Database(ref db))
             if db.is_unique_violation()
                 && db.constraint()
                     == Some("rule_candidates_raw_section_id_role_concept_canonical_key_e_key") =>
         {
+            sqlx::query("ROLLBACK TO SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
             // One evidence key can have multiple extractor proposals but only
             // ONE durable SQL identity. Keep existing HITL and verified FKs.
             // A conflicting claim, source, context or rejected review fails closed.
@@ -356,14 +454,28 @@ pub async fn upsert_extracted_rule_candidate_from_adjudication(
             .bind(&candidate.model_key)
             .bind(&candidate.prompt_version)
             .bind(&candidate.epistemic_status)
-            .fetch_optional(pool)
+            .fetch_optional(&mut **tx)
             .await
             .map_err(classify_sqlx)?;
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
             canonical_id.ok_or_else(|| DomainError::ValidationFailure {
                 message: "duplicate source evidence has incompatible claim, context, snapshot, or rejected human review".to_string(),
             })
         }
-        Err(err) => Err(classify_sqlx(err)),
+        Err(err) => {
+            sqlx::query("ROLLBACK TO SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            sqlx::query("RELEASE SAVEPOINT truth_candidate_insert")
+                .execute(&mut **tx)
+                .await
+                .map_err(classify_sqlx)?;
+            Err(classify_sqlx(err))
+        }
     }
 }
 
@@ -403,11 +515,9 @@ fn verified_scope_target(
     truth_domain::truth_candidates::truth_scope_target(&typed)
 }
 
-pub async fn upsert_verified_rule_instance(
-    pool: &PgPool,
+fn validate_verified_rule_instance_write(
     rule: &VerifiedRuleInstanceWrite,
-) -> Result<(), DomainError> {
-    // Validate the precise scope BEFORE any SQL mutation.
+) -> Result<truth_domain::truth_candidates::TruthScopeTarget, DomainError> {
     if rule
         .params
         .get("conditions_key")
@@ -421,17 +531,35 @@ pub async fn upsert_verified_rule_instance(
             "unresolved verified conditions_key requires explicit condition evaluation",
         ));
     }
-    let target = verified_scope_target(&rule.scope).ok_or_else(|| {
+    verified_scope_target(&rule.scope).ok_or_else(|| {
         validation_failure("verified rule scope is not a supported exact applicant_profile")
-    })?;
+    })
+}
+
+pub async fn upsert_verified_rule_instance(
+    pool: &PgPool,
+    rule: &VerifiedRuleInstanceWrite,
+) -> Result<(), DomainError> {
+    // Invalid scope never opens a connection, including through this pool API.
+    validate_verified_rule_instance_write(rule)?;
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    upsert_verified_rule_instance_in_tx(&mut tx, rule).await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+pub async fn upsert_verified_rule_instance_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    rule: &VerifiedRuleInstanceWrite,
+) -> Result<(), DomainError> {
+    // Validate the precise scope BEFORE any SQL mutation.
+    let target = validate_verified_rule_instance_write(rule)?;
     if let truth_domain::truth_candidates::TruthScopeTarget::ApplicantProfile(profile) = &target {
         let registered: Option<String> = sqlx::query_scalar(
             "SELECT profile_key FROM kb.applicant_profiles
              WHERE profile_key = $1 AND status = 'active' FOR SHARE",
         )
         .bind(profile)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         if registered.is_none() {
@@ -501,7 +629,7 @@ pub async fn upsert_verified_rule_instance(
     .bind("cutover@1")
     .bind("deterministic")
     .bind("truth_adjudication_runtime@1")
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -518,7 +646,7 @@ pub async fn upsert_verified_rule_instance(
         )
         .bind(&rule.rule_instance_id)
         .bind(&profile)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
         if has_conflicting_binding {
@@ -534,16 +662,36 @@ pub async fn upsert_verified_rule_instance(
         )
         .bind(&rule.rule_instance_id)
         .bind(profile)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await
         .map_err(classify_sqlx)?;
     }
-    tx.commit().await.map_err(classify_sqlx)?;
     Ok(())
 }
 
 pub async fn demote_verified_rule_instance(
     pool: &PgPool,
+    rule_instance_id: &str,
+    status: &str,
+    publish_admissibility: &str,
+    verification_method: &str,
+    adjudication_reason: &str,
+) -> Result<(), DomainError> {
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    demote_verified_rule_instance_in_tx(
+        &mut tx,
+        rule_instance_id,
+        status,
+        publish_admissibility,
+        verification_method,
+        adjudication_reason,
+    )
+    .await?;
+    tx.commit().await.map_err(classify_sqlx)
+}
+
+pub async fn demote_verified_rule_instance_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     rule_instance_id: &str,
     status: &str,
     publish_admissibility: &str,
@@ -564,7 +712,7 @@ pub async fn demote_verified_rule_instance(
     .bind(publish_admissibility)
     .bind(verification_method)
     .bind(adjudication_reason)
-    .execute(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
     Ok(())

@@ -36,6 +36,8 @@ pub struct DraftQuality<'a> {
     pub truth_snapshot_ref: &'a str,
     pub schema_markup_json: &'a str,
     pub sections: &'a [Section<'a>],
+    /// Approved blueprint roles, not self-reported section.required flags.
+    pub expected_required_sections: &'a [String],
     pub blocks: &'a [ContentBlock<'a>],
     pub claims: &'a [EditorialClaim<'a>],
     pub traceability: &'a [Traceability<'a>],
@@ -335,7 +337,18 @@ pub fn evaluate(draft: &DraftQuality<'_>) -> Result {
     {
         result.violations.push(Violation::ForbiddenSerpAsFactUsage);
     }
-    if !draft.sections.iter().any(|section| section.required) {
+    let present_required_roles = draft
+        .sections
+        .iter()
+        .filter(|section| section.required && !section.body_markdown.trim().is_empty())
+        .map(|section| section.role)
+        .collect::<BTreeSet<_>>();
+    if draft.expected_required_sections.is_empty()
+        || draft
+            .expected_required_sections
+            .iter()
+            .any(|role| !present_required_roles.contains(role.as_str()))
+    {
         result.violations.push(Violation::MissingRequiredSections);
     }
     if draft.truth_snapshot_ref.trim().is_empty() {
@@ -374,6 +387,7 @@ mod tests {
             truth_snapshot_ref: "",
             schema_markup_json: "",
             sections: &[],
+            expected_required_sections: &[],
             blocks: &[],
             claims: &[],
             traceability: &[],
@@ -473,6 +487,7 @@ mod tests {
             truth_snapshot_ref: "snapshot",
             schema_markup_json: "{\"@type\":\"Article\"}",
             sections: &sections,
+            expected_required_sections: &["timing".to_string()],
             blocks: &blocks,
             claims: &[claim],
             traceability: &traceability,
@@ -482,6 +497,22 @@ mod tests {
         assert!(result.violations.is_empty(), "{:?}", result.violations);
         assert_eq!(result.supported_claims, 1);
         assert_eq!(result.unsupported_claims, 0);
+        let missing_approved_section = evaluate(&DraftQuality {
+            body_markdown: &body,
+            locale: "en",
+            truth_snapshot_ref: "snapshot",
+            schema_markup_json: "{\"@type\":\"Article\"}",
+            sections: &sections,
+            expected_required_sections: &["timing".to_string(), "documents".to_string()],
+            blocks: &blocks,
+            claims: &[claim],
+            traceability: &traceability,
+            verified_support: &support,
+            supported_fragments: &fragments,
+        });
+        assert!(missing_approved_section
+            .violations
+            .contains(&Violation::MissingRequiredSections));
     }
 
     #[test]
@@ -535,6 +566,7 @@ mod tests {
             truth_snapshot_ref: "snapshot",
             schema_markup_json: "{\"@type\":\"Article\"}",
             sections: &sections,
+            expected_required_sections: &["timing".to_string()],
             blocks: &[],
             claims: &claims,
             traceability: &[],
