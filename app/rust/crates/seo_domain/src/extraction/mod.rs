@@ -44,12 +44,9 @@ mod tests {
             .mentions
             .iter()
             .any(|mention| mention.entity_type == "timeline" && mention.raw_text == "15 дней"));
-        assert!(mentions
-            .mentions
-            .iter()
-            .any(|mention| {
-                mention.entity_type == "concept" && mention.raw_text == "паспорт"
-            }));
+        assert!(mentions.mentions.iter().any(|mention| {
+            mention.entity_type == "concept" && mention.raw_text == "паспорт"
+        }));
 
         let operational =
             operational_entities::execute(&operational_entities::OperationalExtractionInput {
@@ -97,18 +94,22 @@ mod tests {
         })
         .mentions
         .is_empty());
-        assert!(operational_entities::execute(&operational_entities::OperationalExtractionInput {
-            section_id: "footer".into(),
-            raw_text: text.into(),
-        })
-        .entities
-        .is_empty());
-        assert!(editorial_topics::execute(&editorial_topics::EditorialExtractionInput {
-            section_id: "footer".into(),
-            raw_text: text.into(),
-        })
-        .topics
-        .is_empty());
+        assert!(
+            operational_entities::execute(&operational_entities::OperationalExtractionInput {
+                section_id: "footer".into(),
+                raw_text: text.into(),
+            })
+            .entities
+            .is_empty()
+        );
+        assert!(
+            editorial_topics::execute(&editorial_topics::EditorialExtractionInput {
+                section_id: "footer".into(),
+                raw_text: text.into(),
+            })
+            .topics
+            .is_empty()
+        );
     }
 
     #[test]
@@ -122,11 +123,8 @@ mod tests {
             )
             .into(),
             source_tier: "ключев seo serp ранжир интент".into(),
-            block_type: concat!(
-                "услуга стоимость услуги под ключ ",
-                "консультация заказать"
-            )
-            .into(),
+            block_type: concat!("услуга стоимость услуги под ключ ", "консультация заказать")
+                .into(),
         });
         assert_eq!(routed.primary_layer, "procedural");
         assert!(routed.confidence > 0.80);
@@ -134,6 +132,9 @@ mod tests {
         for pair in routed.secondary_layers.windows(2) {
             assert!(pair[0].confidence >= pair[1].confidence);
         }
-        assert!(routed.secondary_layers.iter().all(|lane| lane.confidence >= 0.50));
+        assert!(routed
+            .secondary_layers
+            .iter()
+            .all(|lane| lane.confidence >= 0.50));
     }
 }

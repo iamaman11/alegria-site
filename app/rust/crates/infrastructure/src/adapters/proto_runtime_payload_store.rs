@@ -19,10 +19,22 @@ mod semantic_extraction_payload_tests {
             };
         }
 
-        assert_id!(layer_routing::LayerRouterInput, "alegria.runtime.json.LayerRouterInput");
-        assert_id!(layer_routing::LayerRouterOutput, "alegria.runtime.json.LayerRouterOutput");
-        assert_id!(entity_spans::EntitySpanInput, "alegria.runtime.json.EntitySpanInput");
-        assert_id!(entity_spans::EntitySpanOutput, "alegria.runtime.json.EntitySpanOutput");
+        assert_id!(
+            layer_routing::LayerRouterInput,
+            "alegria.runtime.json.LayerRouterInput"
+        );
+        assert_id!(
+            layer_routing::LayerRouterOutput,
+            "alegria.runtime.json.LayerRouterOutput"
+        );
+        assert_id!(
+            entity_spans::EntitySpanInput,
+            "alegria.runtime.json.EntitySpanInput"
+        );
+        assert_id!(
+            entity_spans::EntitySpanOutput,
+            "alegria.runtime.json.EntitySpanOutput"
+        );
         assert_id!(
             operational_entities::OperationalExtractionInput,
             "alegria.runtime.json.OperationalExtractionInput"
@@ -52,13 +64,16 @@ mod semantic_extraction_payload_tests {
         };
         let bytes = router.encode_payload_bytes().unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(json, serde_json::json!({
-            "section_id": "s1",
-            "heading_text": "Title",
-            "raw_text": "80 EUR",
-            "source_tier": "official",
-            "block_type": "document"
-        }));
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "section_id": "s1",
+                "heading_text": "Title",
+                "raw_text": "80 EUR",
+                "source_tier": "official",
+                "block_type": "document"
+            })
+        );
         let decoded = layer_routing::LayerRouterInput::decode_payload_bytes(&bytes).unwrap();
         assert_eq!(decoded.block_type, "document");
 
