@@ -938,7 +938,9 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
     use contracts::generated::alegria::temporal::v1::{
         CmsPublishInputPayload, CmsPublishOutputPayload,
     };
-    use infrastructure::adapters::sqlx_seo_cms_adapter;
+    use infrastructure::adapters::{
+        sqlx_seo_adapter, sqlx_seo_cms_adapter, static_site_builder_adapter,
+    };
     use seo_ports::{CmsReviewDecisionRequest, HumanReviewDecision};
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -2634,7 +2636,10 @@ async fn planning_atomic_first_reconcile_registers_derived_scope_for_navigation(
     .fetch_one(&pg.pool)
     .await
     .unwrap();
-    assert_eq!((market, locale, page_count), (scope.market, scope.locale, 1));
+    assert_eq!(
+        (&market, &locale, page_count),
+        (&scope.market, &scope.locale, 1)
+    );
     let nav_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM site.navigation_items i \
          JOIN site.navigation_trees t ON t.navigation_tree_key=i.navigation_tree_key \
