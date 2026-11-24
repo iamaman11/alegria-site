@@ -645,7 +645,7 @@ mod tests {
             "Tourist visa document checklist, fee details and passport requirements.",
         )];
         let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
-        let baseline_confidence = snapshot.page_mode_confidence;
+        let baseline_confidence = snapshot.page_mode_confidence();
         let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
             prototype_id: "weak".to_string(),
             prototype_family: "content_operational".to_string(),
@@ -674,7 +674,7 @@ mod tests {
             "Passport and fee guidance only. Consular fee and passport copy.",
         )];
         let snapshot = deterministic_whole_page_snapshot(&sections, &sections[0].content_md);
-        assert!(snapshot.mixed_section_ids.is_empty());
+        assert!(snapshot.mixed_section_ids().is_empty());
         let advisory_hits = vec![whole_page_advisory_adapter::WholePageAdvisoryRetrievalHit {
             prototype_id: "mixed".to_string(),
             prototype_family: "content_mixed_procedural_operational".to_string(),
@@ -720,9 +720,11 @@ Footer navigation directory menu links help login cookie.";
             },
         ];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
-        assert_eq!(snapshot.page_mode_hint, "content_page");
-        assert!(snapshot.dominant_layers.contains(&"procedural".to_string()));
-        assert!(!snapshot.uncertainty_flags.is_empty() || snapshot.page_mode_confidence >= 0.45);
+        assert_eq!(snapshot.page_mode_hint(), "content_page");
+        assert!(snapshot.dominant_layers().contains(&"procedural".to_string()));
+        assert!(
+            !snapshot.uncertainty_flags().is_empty() || snapshot.page_mode_confidence() >= 0.45
+        );
     }
 
     #[test]
@@ -731,8 +733,8 @@ Footer navigation directory menu links help login cookie.";
             "Privacy policy. Cookie settings. Login and account access. Terms and legal notice.";
         let sections = vec![section(31, content)];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
-        assert_eq!(snapshot.page_mode_hint, "utility_page");
-        assert!(snapshot.page_mode_confidence >= 0.50);
+        assert_eq!(snapshot.page_mode_hint(), "utility_page");
+        assert!(snapshot.page_mode_confidence() >= 0.50);
     }
 
     #[test]
@@ -741,9 +743,10 @@ Footer navigation directory menu links help login cookie.";
         let sections = vec![section(41, content)];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
         assert!(
-            snapshot.page_mode_hint == "menu_page" || snapshot.page_mode_hint == "directory_page",
+            snapshot.page_mode_hint() == "menu_page"
+                || snapshot.page_mode_hint() == "directory_page",
             "expected menu/directory classification, got {}",
-            snapshot.page_mode_hint
+            snapshot.page_mode_hint()
         );
     }
 
@@ -752,12 +755,12 @@ Footer navigation directory menu links help login cookie.";
         let content = "Tourist visa requirements. Passport, insurance and fee 80 EUR. FAQ: why refusals happen and what mistakes to avoid.";
         let sections = vec![section(51, content)];
         let snapshot = deterministic_whole_page_snapshot(&sections, content);
-        assert!(snapshot.dominant_layers.contains(&"procedural".to_string()));
-        assert!(snapshot.dominant_layers.contains(&"editorial".to_string()));
+        assert!(snapshot.dominant_layers().contains(&"procedural".to_string()));
+        assert!(snapshot.dominant_layers().contains(&"editorial".to_string()));
         assert!(snapshot
-            .uncertainty_flags
+            .uncertainty_flags()
             .iter()
             .any(|flag| flag == "multi_layer_page"));
-        assert_eq!(snapshot.mixed_section_ids, vec![51]);
+        assert_eq!(snapshot.mixed_section_ids(), &[51]);
     }
 }

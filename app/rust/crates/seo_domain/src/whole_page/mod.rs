@@ -91,6 +91,29 @@ pub struct WholePageDeterministicSnapshot {
     reason_codes: Vec<String>,
 }
 
+impl WholePageDeterministicSnapshot {
+    /// Read-only evidence for runtime contract tests; decisions remain domain-owned.
+    pub fn page_mode_hint(&self) -> &str {
+        &self.page_mode_hint
+    }
+
+    pub fn page_mode_confidence(&self) -> f32 {
+        self.page_mode_confidence
+    }
+
+    pub fn dominant_layers(&self) -> &[String] {
+        &self.dominant_layers
+    }
+
+    pub fn mixed_section_ids(&self) -> &[i64] {
+        &self.mixed_section_ids
+    }
+
+    pub fn uncertainty_flags(&self) -> &[String] {
+        &self.uncertainty_flags
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
