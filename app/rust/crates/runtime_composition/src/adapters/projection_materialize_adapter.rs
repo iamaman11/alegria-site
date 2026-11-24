@@ -335,8 +335,8 @@ pub async fn dispatch_leased_event(
             // the PostgreSQL owner. No network call is possible on mismatch.
             match event.event_type.as_str() {
                 "QdrantUpsertCommand" => {
-                    let cmd = QdrantUpsertCommand::decode(payload)
-                        .map_err(DispatchError::contract)?;
+                    let cmd =
+                        QdrantUpsertCommand::decode(payload).map_err(DispatchError::contract)?;
                     if cmd.entity_key.as_str() != aggregate_key {
                         return Err(DispatchError::contract(
                             "QdrantUpsertCommand aggregate_key does not match rule identity",
@@ -344,8 +344,8 @@ pub async fn dispatch_leased_event(
                     }
                 }
                 "QdrantDeleteCommand" => {
-                    let cmd = QdrantDeleteCommand::decode(payload)
-                        .map_err(DispatchError::contract)?;
+                    let cmd =
+                        QdrantDeleteCommand::decode(payload).map_err(DispatchError::contract)?;
                     if cmd.entity_key.as_str() != aggregate_key {
                         return Err(DispatchError::contract(
                             "QdrantDeleteCommand aggregate_key does not match rule identity",
@@ -363,12 +363,15 @@ pub async fn dispatch_leased_event(
             })
             .await
             .map_err(|err| match err {
-                VerifiedRuleDispatchError::UnknownOutcome(source) =>
-                    DispatchError::external(DispatchStage::Quarantine, source),
-                blocked @ VerifiedRuleDispatchError::BlockedUncertain { .. } =>
-                    DispatchError::external(DispatchStage::Quarantine, blocked),
-                invalid @ VerifiedRuleDispatchError::InvalidEvent(_) =>
-                    DispatchError::contract(invalid),
+                VerifiedRuleDispatchError::UnknownOutcome(source) => {
+                    DispatchError::external(DispatchStage::Quarantine, source)
+                }
+                blocked @ VerifiedRuleDispatchError::BlockedUncertain { .. } => {
+                    DispatchError::external(DispatchStage::Quarantine, blocked)
+                }
+                invalid @ VerifiedRuleDispatchError::InvalidEvent(_) => {
+                    DispatchError::contract(invalid)
+                }
                 other => DispatchError::external(DispatchStage::Registry, other),
             })?;
             return Ok(DispatchDisposition::AcknowledgedByFence);
@@ -449,9 +452,7 @@ pub async fn dispatch_event(
             "QdrantUpsertCommand" => {
                 let cmd =
                     QdrantUpsertCommand::decode(payload_bytes).map_err(DispatchError::contract)?;
-                if cmd.collection_name == "verified_rules_4"
-                    || cmd.entity_type == "rule_instance"
-                {
+                if cmd.collection_name == "verified_rules_4" || cmd.entity_type == "rule_instance" {
                     if cmd.entity_key != aggregate_key {
                         return Err(DispatchError::contract(
                             "QdrantUpsertCommand aggregate_key does not match rule identity",

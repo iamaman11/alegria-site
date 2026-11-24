@@ -1,7 +1,7 @@
 use anyhow::Result;
-use std::future::Future;
 use sqlx::types::time::OffsetDateTime;
 use sqlx::{Connection, PgConnection, PgPool, Row};
+use std::future::Future;
 use uuid::Uuid;
 
 use primitives::errors::ErrorClass;
@@ -136,7 +136,9 @@ pub enum VerifiedRuleDispatchOutcome {
 pub enum VerifiedRuleDispatchError<E> {
     InvalidEvent(&'static str),
     LeaseLost,
-    BlockedUncertain { event_id: Uuid },
+    BlockedUncertain {
+        event_id: Uuid,
+    },
     /// UUIDv4 is not an ordering tie-breaker. A monotonic per-point revision
     /// is required to resolve the older-vs-newer intent correctly.
     AmbiguousOrdering,
@@ -194,9 +196,7 @@ fn validate_verified_rule_event(event: &OutboxEvent) -> std::result::Result<(), 
 /// Timestamp ties cannot be broken by random UUIDv4 ordering. This narrow
 /// guard refuses known ambiguity; it is *not* a substitute for a monotonic
 /// writer-owned revision (timestamps can regress or precede commit order).
-fn latest_intent_timestamp_unambiguous(
-    events: &[(Uuid, String, OffsetDateTime)],
-) -> bool {
+fn latest_intent_timestamp_unambiguous(events: &[(Uuid, String, OffsetDateTime)]) -> bool {
     events.len() < 2 || events[0].2 != events[1].2
 }
 
@@ -368,7 +368,7 @@ where
     .bind(&event.lease_worker_id)
     .bind(event.lease_locked_at)
     .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
-    .execute(&mut *marker_conn)
+    .execute(&mut marker_conn)
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
     if marked.rows_affected() != 1 {
@@ -388,7 +388,7 @@ where
     )
     .bind(event.event_id)
     .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
-    .execute(&mut *marker_conn)
+    .execute(&mut marker_conn)
     .await
     .map_err(VerifiedRuleDispatchError::Database)?;
     if acknowledged.rows_affected() != 1 {
@@ -794,9 +794,8 @@ pub async fn read_sync_status(pool: &PgPool) -> Result<SyncStatusSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::{
-        latest_intent_timestamp_unambiguous, validate_target_claim,
-        validate_verified_rule_event, OutboxEvent,
-        VERIFIED_RULE_UNCERTAIN_MARKER,
+        latest_intent_timestamp_unambiguous, validate_target_claim, validate_verified_rule_event,
+        OutboxEvent, VERIFIED_RULE_UNCERTAIN_MARKER,
     };
     use sqlx::types::time::OffsetDateTime;
     use uuid::Uuid;
@@ -847,13 +846,24 @@ mod tests {
         invalid.schema_version = 1;
         invalid.payload_bytes.clear();
         assert!(validate_verified_rule_event(&invalid).is_err());
-        assert_eq!(VERIFIED_RULE_UNCERTAIN_MARKER, "projection_outcome_uncertain:v1");
+        assert_eq!(
+            VERIFIED_RULE_UNCERTAIN_MARKER,
+            "projection_outcome_uncertain:v1"
+        );
     }
 
     #[test]
     fn random_uuid_tie_must_not_choose_latest_projection_intent() {
-        let one = (Uuid::new_v4(), "hash-a".to_owned(), OffsetDateTime::UNIX_EPOCH);
-        let tied = (Uuid::new_v4(), "hash-b".to_owned(), OffsetDateTime::UNIX_EPOCH);
+        let one = (
+            Uuid::new_v4(),
+            "hash-a".to_owned(),
+            OffsetDateTime::UNIX_EPOCH,
+        );
+        let tied = (
+            Uuid::new_v4(),
+            "hash-b".to_owned(),
+            OffsetDateTime::UNIX_EPOCH,
+        );
         let later = (
             Uuid::new_v4(),
             "hash-c".to_owned(),

@@ -8,6 +8,8 @@ pub async fn dispatch_event(
     pool: &PgPool,
     event: &OutboxEvent,
 ) -> Result<DispatchDisposition, DispatchError> {
-    runtime_composition::adapters::projection_materialize_adapter::dispatch_leased_event(pool, event)
-        .await
+    runtime_composition::adapters::projection_materialize_adapter::dispatch_leased_event(
+        pool, event,
+    )
+    .await
 }

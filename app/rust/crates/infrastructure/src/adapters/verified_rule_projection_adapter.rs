@@ -45,11 +45,9 @@ async fn lock_projection_keys_in_tx(
     // per-rule advisory locks used by delivery. A previous provider request
     // may still arrive after its sender timed out; mutating newer Truth while
     // that outcome is unknown would make a late Qdrant write authoritative.
-    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
-        tx, rule_ids,
-    )
-    .await
-    .map_err(|err| stage_error("verified_rule_uncertainty_fence", run_id, err))
+    postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(tx, rule_ids)
+        .await
+        .map_err(|err| stage_error("verified_rule_uncertainty_fence", run_id, err))
 }
 
 /// Stage a complete Truth projection tombstone in the caller's SQL transaction.

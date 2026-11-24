@@ -112,7 +112,10 @@ def fence_contract_failures(
 
     # A fenced call owns terminal acknowledgement itself. Both consumers must
     # branch on quarantine BEFORE their generic retry/dead-letter branches.
-    if "dispatch_leased_event(pool, event)" not in worker_materialize:
+    if not re.search(
+        r"\bdispatch_leased_event\s*\(\s*pool\s*,\s*event\s*,?\s*\)",
+        worker_materialize,
+    ):
         failures.append("outbox materialize wrapper must invoke the leased projection dispatcher")
     if "dispatch_event(pool, &event)" not in worker:
         failures.append("outbox worker must pass its claimed event/PG pool to materialize wrapper")

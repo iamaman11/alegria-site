@@ -133,7 +133,8 @@ pub async fn outbox_emit_many_in_tx(
         .map(|event| event.aggregate_key.clone())
         .collect::<Vec<_>>();
     postgres_store::sqlx_outbox_adapter::lock_and_ensure_verified_rules_writable_in_tx(
-        tx, &verified_rule_ids,
+        tx,
+        &verified_rule_ids,
     )
     .await
     .map_err(|err| DomainError::InfraUnavailable {

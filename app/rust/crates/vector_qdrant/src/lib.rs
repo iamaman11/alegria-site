@@ -1,10 +1,10 @@
 use anyhow::{bail, Context, Result};
-use qdrant_client::qdrant::{PointsOperationResponse, UpdateStatus};
 pub use qdrant_client::qdrant::{
     Condition, CountPointsBuilder, CreateCollectionBuilder, DeletePointsBuilder, Distance, Filter,
     PointStruct, PointsIdsList, ScoredPoint, SearchPointsBuilder, UpsertPointsBuilder,
     VectorParamsBuilder,
 };
+use qdrant_client::qdrant::{PointsOperationResponse, UpdateStatus};
 pub use qdrant_client::{Payload, Qdrant};
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -238,7 +238,9 @@ fn ensure_completed_rest_update(bytes: &[u8]) -> Result<()> {
 /// `result` is optional and status may be unknown, acknowledged, rejected by
 /// a clock fence or timed out. Only `Completed` is an applied effect.
 fn ensure_completed_grpc_update(response: PointsOperationResponse) -> Result<()> {
-    let update = response.result.context("missing Qdrant gRPC update result")?;
+    let update = response
+        .result
+        .context("missing Qdrant gRPC update result")?;
     anyhow::ensure!(
         update.status == UpdateStatus::Completed as i32,
         "Qdrant gRPC update was not completed: status={}",
@@ -306,8 +308,9 @@ pub async fn upsert_batch_map(
     let response = client
         .upsert_points(UpsertPointsBuilder::new(collection_name, pts?).wait(true))
         .await?;
-    ensure_completed_grpc_update(response)
-        .with_context(|| format!("qdrant batch-map upsert completion unconfirmed: {collection_name}"))
+    ensure_completed_grpc_update(response).with_context(|| {
+        format!("qdrant batch-map upsert completion unconfirmed: {collection_name}")
+    })
 }
 
 pub async fn upsert_embedding_points(
@@ -352,7 +355,8 @@ mod qdrant_completion_tests {
 
     #[test]
     fn rest_accepts_only_explicit_completed_result() {
-        let completed = br#"{"status":"ok","result":{"operation_id":7,"status":"completed"},"time":0.01}"#;
+        let completed =
+            br#"{"status":"ok","result":{"operation_id":7,"status":"completed"},"time":0.01}"#;
         assert!(ensure_completed_rest_update(completed).is_ok());
         for response in [
             br#"{"status":"ok","result":{"status":"acknowledged"}}"#.as_slice(),
