@@ -127,7 +127,7 @@ class SmokeDiagnosticsContract(unittest.TestCase):
         self.assertEqual([call[0] for call in calls], ["cargo"] * 3)
         self.assertIn("scenario_report_surface_serializes_phase_reports", calls[0])
         self.assertEqual(calls[1][-1], "--no-run")
-        self.assertIn("synthetic_full_scenario_persists_page_draft_on_full_harness", calls[2])
+        self.assertIn("draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness", calls[2])
 
     def test_report_smoke_exits_on_first_failure(self) -> None:
         with patch.object(

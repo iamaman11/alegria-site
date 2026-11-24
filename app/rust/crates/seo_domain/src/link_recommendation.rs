@@ -48,7 +48,9 @@ fn link_kind(
     }
 }
 
-fn linkable(state: &str) -> bool {
+/// Shared eligibility for structural and semantic link suggestions.
+/// Reconciliation retains a separate policy for existing links.
+pub fn linkable_state(state: &str) -> bool {
     !matches!(state, "blocked" | "deprecated" | "stale" | "needs_rebuild")
 }
 
@@ -84,12 +86,12 @@ pub fn recommend_links(
     };
     let mut recommendations = Vec::new();
     for source in pages {
-        if !linkable(&source.lifecycle_state) {
+        if !linkable_state(&source.lifecycle_state) {
             continue;
         }
         let mut candidates = Vec::new();
         for target in pages {
-            if source.key == target.key || !linkable(&target.lifecycle_state) {
+            if source.key == target.key || !linkable_state(&target.lifecycle_state) {
                 continue;
             }
             let (role, anchor_strategy, required, base_score) =
@@ -215,6 +217,10 @@ mod tests {
             recommend_links(&blocked_pages, &topics, 1)[0].target_key,
             "alpha"
         );
+        for state in ["blocked", "deprecated", "stale", "needs_rebuild"] {
+            assert!(!linkable_state(state));
+        }
+        assert!(linkable_state("planned"));
     }
 
     #[test]

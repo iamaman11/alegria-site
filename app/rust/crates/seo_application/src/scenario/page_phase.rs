@@ -319,6 +319,7 @@ async fn run_page_phase<
             if output.verdict != "render_ready" {
                 return Ok(Some(blocked_publish_gate_status().to_string()));
             }
+            page_state.render_validation = Some(output);
             Ok(None)
         }
         SeoPhaseKey::FinalizePublish => {
@@ -326,11 +327,10 @@ async fn run_page_phase<
                 require_state_ref(&page_state.cms_requested, "cms_request_review_required")?;
             let materialized =
                 require_state_ref(&page_state.materialized, "publish_materialize_required")?;
-            let render_validation =
-                review_publish::run_render_preview_validate(&RenderPreviewValidateInputPayload {
-                    run_id: run_id.clone(),
-                    preview_pages: materialized.preview_pages.clone(),
-                });
+            let render_validation = require_state_ref(
+                &page_state.render_validation,
+                "render_preview_validate_required",
+            )?;
             let output = review_publish::run_finalize_publish(
                 repo,
                 &FinalizePublishInputPayload {
@@ -338,7 +338,7 @@ async fn run_page_phase<
                     page_node_key: page_node.page_node_key.clone(),
                     revision_id: cms_requested.revision_id.clone(),
                     publish_artifact: materialized.publish_artifact.clone(),
-                    render_validation: Some(render_validation),
+                    render_validation: Some(render_validation.clone()),
                 },
             )
             .await?;

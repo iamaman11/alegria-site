@@ -19,6 +19,7 @@ CONTRACT_VALIDATE = (
     / "content_contract.rs"
 )
 QA_STEP = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "draft_qa_step.rs"
+QA_POLICY = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "draft_quality.rs"
 SEO_BLOCKS = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "editorial.rs"
 
 REQUIRED_RULE_TYPES = {
@@ -150,6 +151,7 @@ def main() -> int:
     flow_tests = load_text(FLOW_TESTS)
     contract_validate = load_text(CONTRACT_VALIDATE)
     qa_step = load_text(QA_STEP)
+    qa_policy = load_text(QA_POLICY)
     seo_blocks = load_text(SEO_BLOCKS)
 
     for rule_type, section_role in REQUIRED_RULE_TYPES.items():
@@ -175,8 +177,13 @@ def main() -> int:
         "missing_traceability_manifest",
         "missing_claim_ledger",
     ]:
+        if needle not in qa_policy:
+            failures.append(f"draft quality domain missing `{needle}`")
+        if needle in qa_step.split("#[cfg(test)]", 1)[0]:
+            failures.append(f"draft qa adapter duplicates domain gate `{needle}`")
+    for needle in ["draft_quality::evaluate(&DraftQuality {", "violation.reason_code()", "violation.required_next_action()"]:
         if needle not in qa_step:
-            failures.append(f"draft qa missing `{needle}`")
+            failures.append(f"draft QA adapter missing domain invocation `{needle}`")
 
     for needle in [
         "document_required",

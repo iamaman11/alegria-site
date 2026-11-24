@@ -213,7 +213,7 @@ def check() -> None:
     assert prime.count("if: steps.cache_scope.outputs.needed == 'true'") >= 6
     assert "if: always() && steps.cache_scope.outputs.needed == 'true'" in prime
     assert "SCCACHE_GHA_RW_MODE: READ_WRITE" in prime
-    assert 'CARGO_BUILD_JOBS: "2"' in prime
+    assert 'CARGO_BUILD_JOBS: "3"' in prime
     assert "SCCACHE_ERROR_LOG: /tmp/sccache-main-errors.log" in prime
     assert "SCCACHE_LOG: sccache::server=debug" in prime
     assert "runner.temp" not in prime

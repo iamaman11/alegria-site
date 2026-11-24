@@ -10,6 +10,57 @@ mod tests {
     };
     use std::sync::Mutex;
 
+    fn valid_scope() -> SeoScopePayload {
+        let scope = SeoScopePayload {
+            market: "alegria-site".into(),
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            applicant_profile: "standard".into(),
+            ..Default::default()
+        };
+        let validated = seo_domain::identity::derive_scope(
+            &scope.market,
+            &scope.locale,
+            &scope.country_code,
+            &scope.visa_type,
+            &scope.applicant_profile,
+        )
+        .unwrap();
+        SeoScopePayload {
+            raw_scope_tuple: validated.raw_scope_tuple,
+            scope_signature: validated.scope_signature,
+            ..scope
+        }
+    }
+
+    #[test]
+    fn malformed_explicit_scope_fails_before_graph_or_provider_io() {
+        let invalid = SeoScopePayload {
+            market: "alegria-site".into(),
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            applicant_profile: "standard".into(),
+            scope_signature: "forged".into(),
+            ..Default::default()
+        };
+        assert!(validated_planning_graph_scope(Some(&invalid)).is_err());
+        assert!(validated_planning_graph_scope(None).unwrap().is_empty());
+        let valid_without_wire_signature = SeoScopePayload {
+            scope_signature: String::new(),
+            ..invalid
+        };
+        let canonical = seo_steps::seo_identity::derive_scope_from_payload(
+            &valid_without_wire_signature,
+        )
+        .unwrap();
+        assert_eq!(
+            validated_planning_graph_scope(Some(&valid_without_wire_signature)).unwrap(),
+            canonical.scope_signature
+        );
+    }
+
     #[derive(Default)]
     struct FakePlanningRepo;
 
@@ -400,8 +451,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_opportunity_build_loads_graph_context_and_persists_reason_payload() {
+        let scope = valid_scope();
         let repo = RecordingPlanningRepo::new(runtime_models::GraphPlanningContext {
-            scope_signature: "scope".to_string(),
+            scope_signature: scope.scope_signature.clone(),
             topic_signals: vec![runtime_models::GraphPlanningTopicSignal {
                 topic_key: "spain-tourist-fee".to_string(),
                 topic_type: "fee".to_string(),
@@ -422,16 +474,11 @@ mod tests {
             &FakeSemanticSearchPort,
             &OpportunityBuildInputPayload {
                 run_id: "run-1".to_string(),
-                scope: Some(
-                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                        scope_signature: "scope".to_string(),
-                        ..Default::default()
-                    },
-                ),
+                scope: Some(scope.clone()),
                 serp_patterns: vec![
                     contracts::generated::alegria::temporal::v1::SerpPatternState {
                         serp_pattern_key: "p1".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         query: "Spain tourist visa fee".to_string(),
                         dominant_intent: "fee".to_string(),
                         reliability_score: 0.6,
@@ -439,7 +486,7 @@ mod tests {
                     },
                     contracts::generated::alegria::temporal::v1::SerpPatternState {
                         serp_pattern_key: "p2".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         query: "Spain tourist visa costs".to_string(),
                         dominant_intent: "fee".to_string(),
                         reliability_score: 0.58,
@@ -475,8 +522,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_global_site_reconcile_emits_graph_reasoned_gap_without_truth_side_effects() {
+        let scope = valid_scope();
         let repo = RecordingPlanningRepo::new(runtime_models::GraphPlanningContext {
-            scope_signature: "scope".to_string(),
+            scope_signature: scope.scope_signature.clone(),
             coverage_signals: vec![runtime_models::GraphPlanningCoverageSignal {
                 page_node_key: "page-spain".to_string(),
                 keyword_cluster_key: String::new(),
@@ -493,15 +541,10 @@ mod tests {
                 page_blueprints: Vec::new(),
                 verified_support: Vec::new(),
                 run_id: "run-2".to_string(),
-                scope: Some(
-                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                        scope_signature: "scope".to_string(),
-                        ..Default::default()
-                    },
-                ),
+                scope: Some(scope.clone()),
                 page_nodes: vec![contracts::generated::alegria::temporal::v1::PageNodeState {
                     page_node_key: "page-spain".to_string(),
-                    scope_signature: "scope".to_string(),
+                    scope_signature: scope.scope_signature.clone(),
                     page_type_key: "hub_page".to_string(),
                     dominant_intent: "requirements".to_string(),
                     canonical_url_path: "/visa/spain".to_string(),
@@ -566,6 +609,7 @@ mod tests {
     #[tokio::test]
     async fn run_ia_build_adds_semantic_overlap_conflict_when_cluster_owner_diverges() {
         std::env::set_var("VOYAGE_API_KEY", "test");
+        let scope = valid_scope();
         let repo = FakePlanningRepo;
         let output = run_ia_build(
             &repo,
@@ -573,19 +617,11 @@ mod tests {
             &IaBuildInputPayload {
                 verified_support: Vec::new(),
                 run_id: "run-ia".to_string(),
-                scope: Some(
-                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                        scope_signature: "scope".to_string(),
-                        locale: "ru-RU".to_string(),
-                        country_code: "ES".to_string(),
-                        visa_type: "tourist".to_string(),
-                        ..Default::default()
-                    },
-                ),
+                scope: Some(scope.clone()),
                 keyword_clusters: vec![
                     contracts::generated::alegria::temporal::v1::KeywordClusterState {
                         cluster_key: "cluster-a".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         seed_keyword: "spain visa requirements".to_string(),
                         dominant_intent: "informational".to_string(),
                         status: "active".to_string(),
@@ -593,7 +629,7 @@ mod tests {
                     },
                     contracts::generated::alegria::temporal::v1::KeywordClusterState {
                         cluster_key: "cluster-b".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         seed_keyword: "spain visa cost".to_string(),
                         dominant_intent: "informational".to_string(),
                         status: "active".to_string(),
@@ -622,6 +658,7 @@ mod tests {
     #[tokio::test]
     async fn run_global_site_reconcile_adds_semantic_overlap_conflict_key() {
         std::env::set_var("VOYAGE_API_KEY", "test");
+        let scope = valid_scope();
         let repo = FakePlanningRepo;
         let output = run_global_site_reconcile(
             &repo,
@@ -630,16 +667,11 @@ mod tests {
                 page_blueprints: Vec::new(),
                 verified_support: Vec::new(),
                 run_id: "run-global".to_string(),
-                scope: Some(
-                    contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                        scope_signature: "scope".to_string(),
-                        ..Default::default()
-                    },
-                ),
+                scope: Some(scope.clone()),
                 page_nodes: vec![
                     contracts::generated::alegria::temporal::v1::PageNodeState {
                         page_node_key: "source".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         page_type_key: "detail_page".to_string(),
                         dominant_intent: "informational".to_string(),
                         canonical_url_path: "/ru/visa/spain/source/".to_string(),
@@ -648,7 +680,7 @@ mod tests {
                     },
                     contracts::generated::alegria::temporal::v1::PageNodeState {
                         page_node_key: "target".to_string(),
-                        scope_signature: "scope".to_string(),
+                        scope_signature: scope.scope_signature.clone(),
                         page_type_key: "detail_page".to_string(),
                         dominant_intent: "informational".to_string(),
                         canonical_url_path: "/ru/visa/spain/target/".to_string(),

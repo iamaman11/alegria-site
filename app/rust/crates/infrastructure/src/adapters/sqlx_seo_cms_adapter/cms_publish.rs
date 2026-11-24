@@ -9,7 +9,10 @@ pub async fn persist_cms_publish_output(
             "cms_publish persistence requires page_draft_key",
         ));
     }
-    let Some(row) = load_publish_draft(pool, &planned.page_draft_key).await? else {
+    // Lock the candidate and its page before evaluating publication gates.
+    // All subsequent reads and writes share this transaction.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let Some(row) = load_publish_draft(&mut tx, &planned.page_draft_key).await? else {
         return Err(validation_failure(format!(
             "page_draft not found for cms_publish: {}",
             planned.page_draft_key
@@ -17,28 +20,25 @@ pub async fn persist_cms_publish_output(
     };
 
     let mut blockers = planned.blocking_reasons.clone();
-    if row.qa_verdict != "publish_ready" {
-        blockers.push("failing_draft_qa_verdict".to_string());
-    }
     if row.truth_snapshot_ref.trim().is_empty() {
         blockers.push("missing_traceability_manifest".to_string());
     }
     if row.locale_code.trim().is_empty() || row.locale_code == "und" {
         blockers.push("missing_scope_locale".to_string());
     }
-    if count_active_cannibalization(pool, &row.page_node_key).await? > 0 {
+    if count_active_cannibalization(&mut tx, &row.page_node_key).await? > 0 {
         blockers.push("active_cannibalization_conflict".to_string());
     }
-    let resolved_links = resolve_required_internal_links(pool, &row.page_node_key).await?;
+    let resolved_links = resolve_required_internal_links(&mut tx, &row.page_node_key).await?;
     // Require a structural link plan, but do not block a root/hub revision
     // merely because its first child pages have not been published yet.
-    if count_required_link_recommendations(pool, &row.page_node_key).await? == 0 {
+    if count_required_link_recommendations(&mut tx, &row.page_node_key).await? == 0 {
         blockers.push("required_link_obligations_unsatisfied".to_string());
     }
-    if count_unpublished_mandatory_links(pool, &row.page_node_key).await? > 0 {
+    if count_unpublished_mandatory_links(&mut tx, &row.page_node_key).await? > 0 {
         blockers.push("required_internal_target_not_published".to_string());
     }
-    if count_canonical_conflicts(pool, &row).await? > 0 {
+    if count_canonical_conflicts(&mut tx, &row).await? > 0 {
         blockers.push("canonical_url_conflict".to_string());
     }
 
@@ -62,7 +62,7 @@ pub async fn persist_cms_publish_output(
     };
     let valid_human_approval = if intent.requires_human_approval() {
         let persisted =
-            load_latest_approval_decision(pool, &row.page_node_key, &revision_id).await?;
+            load_latest_approval_decision_in_tx(&mut tx, &row.page_node_key, &revision_id).await?;
         let supplied = input
             .approval_decision
             .as_ref()
@@ -79,6 +79,35 @@ pub async fn persist_cms_publish_output(
     } else {
         false
     };
+    let persisted_llm_provider = row
+        .traceability_manifest
+        .get("llm_provider_key")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    blockers.extend(
+        seo_domain::cms_revision::cms_publication_blockers(
+            intent,
+            seo_domain::cms_revision::CmsPublicationGate {
+                page_key: &row.page_node_key,
+                draft_key: &row.page_draft_key,
+                qa_verdict: &row.qa_verdict,
+                body_markdown: &row.body_markdown,
+                canonical_path: &row.canonical_url_path,
+                llm_provider: persisted_llm_provider,
+                human_approved: valid_human_approval,
+            },
+        )
+        .into_iter()
+        .map(|violation| match violation {
+            seo_domain::cms_revision::CmsPublishGateViolation::DraftNotPublishReady => {
+                "failing_draft_qa_verdict".to_string()
+            }
+            seo_domain::cms_revision::CmsPublishGateViolation::HumanApprovalRequired => {
+                "missing_persisted_human_approval".to_string()
+            }
+            other => other.reason_code().to_string(),
+        }),
+    );
     // CMS persists the link plan; the static builder is the single owner of
     // displaying links using the current release's page titles and routes.
     let content_blocks = row
@@ -96,9 +125,6 @@ pub async fn persist_cms_publish_output(
             "link_role": link.link_role,
         }))
         .collect::<Vec<_>>();
-    if intent.requires_human_approval() && !valid_human_approval {
-        blockers.push("missing_persisted_human_approval".to_string());
-    }
     blockers.sort();
     blockers.dedup();
     let transition = seo_domain::cms_revision::CmsRevisionState::decide(
@@ -110,6 +136,9 @@ pub async fn persist_cms_publish_output(
     let event_type = transition.event_type();
     let verdict = transition.persisted_verdict();
 
+    // A CMS revision, its page state, review tasks, artifact and Outbox event
+    // are one durable decision. In particular, an Outbox failure must not leave
+    // a revision that appears approved but was never queued for publication.
     let revision_write = sqlx::query(
         r#"
         INSERT INTO site.cms_page_revisions
@@ -170,7 +199,7 @@ pub async fn persist_cms_publish_output(
     .bind(&row.blueprint_key)
     .bind(format!("draft_qa:{}", row.page_draft_key))
     .bind(revision_status)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -220,7 +249,7 @@ pub async fn persist_cms_publish_output(
     .bind(&revision_id)
     .bind(current_status)
     .bind(&row.locale_code)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -236,7 +265,7 @@ pub async fn persist_cms_publish_output(
     )
     .bind(page_lifecycle_state)
     .bind(&row.page_node_key)
-    .execute(pool)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
 
@@ -256,14 +285,20 @@ pub async fn persist_cms_publish_output(
         "canonical_slug": row.canonical_slug.clone(),
         "run_id": input.run_id.clone(),
     });
-    sqlx::query(
+    let occurred_at: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
         r#"
         INSERT INTO site.cms_publish_events
             (event_key, event_type, page_node_key, scope_signature, revision_id,
              actor_role, causal_step, payload_version, event_payload)
         VALUES ($1, $2, $3, $4, $5, $6, 'cms_publish', 'seo_cms_event@1', $7)
         ON CONFLICT (event_key) DO UPDATE
-        SET event_payload = EXCLUDED.event_payload
+        SET event_payload = site.cms_publish_events.event_payload
+        WHERE site.cms_publish_events.event_payload = EXCLUDED.event_payload
+          AND site.cms_publish_events.actor_role = EXCLUDED.actor_role
+          AND site.cms_publish_events.page_node_key = EXCLUDED.page_node_key
+          AND site.cms_publish_events.revision_id = EXCLUDED.revision_id
+          AND site.cms_publish_events.event_type = EXCLUDED.event_type
+        RETURNING occurred_at
         "#,
     )
     .bind(&event_key)
@@ -277,9 +312,10 @@ pub async fn persist_cms_publish_output(
         input.actor_role.as_str()
     })
     .bind(Json(event_payload.clone()))
-    .execute(pool)
+    .fetch_optional(&mut *tx)
     .await
-    .map_err(classify_sqlx)?;
+    .map_err(classify_sqlx)?
+    .ok_or_else(|| validation_failure("immutable CMS event payload changed"))?;
 
     if !blockers.is_empty() {
         for blocker in &blockers {
@@ -313,7 +349,7 @@ pub async fn persist_cms_publish_output(
                 "event": "publish_blocked",
                 "blocker": blocker,
             }])))
-            .execute(pool)
+            .execute(&mut *tx)
             .await
             .map_err(classify_sqlx)?;
         }
@@ -331,7 +367,9 @@ pub async fn persist_cms_publish_output(
             input.actor_role.clone()
         },
         causal_step: "cms_publish".to_string(),
-        occurred_at: chrono::Utc::now().to_rfc3339(),
+        // The durable event owns its timestamp. Retries must reuse identical
+        // Outbox payload bytes and the same idempotency key.
+        occurred_at: occurred_at.to_rfc3339(),
         payload_version: "seo_cms_event@1".to_string(),
         metadata: HashMap::from([
             ("verdict".to_string(), verdict.to_string()),
@@ -342,7 +380,8 @@ pub async fn persist_cms_publish_output(
             ("cms_document_id".to_string(), cms_document_id.clone()),
         ]),
     };
-    let emitted = outbox_emit_many(pool, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
+    let emitted =
+        outbox_emit_many_in_tx(&mut tx, &[cms_event_outbox(&cms_event, &input.run_id)]).await?;
     let publish_artifact = if verdict == "approved" {
         let manifest = json!({
             "page_node_key": row.page_node_key.clone(),
@@ -386,13 +425,15 @@ pub async fn persist_cms_publish_output(
         .bind(&artifact.artifact_uri)
         .bind(Json(manifest))
         .bind(&artifact.status)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
         Some(artifact)
     } else {
         None
     };
+
+    tx.commit().await.map_err(classify_sqlx)?;
 
     Ok(CmsPublishOutputPayload {
         page_node_key: row.page_node_key,

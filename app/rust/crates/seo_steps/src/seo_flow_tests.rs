@@ -1,8 +1,9 @@
 use contracts::generated::alegria::temporal::v1::{
     ClaimLedgerEntry, CmsPublishInputPayload, DraftAssembleInputPayload,
-    DraftNormalizeInputPayload, DraftQaInputPayload, IaBuildInputPayload,
-    LinkRecommendInputPayload, LlmDraftCandidate, OpportunityBuildInputPayload, SeoScopePayload,
-    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
+    DraftNormalizeInputPayload, DraftQaInputPayload, GlobalSiteReconcileInputPayload,
+    IaBuildInputPayload, LinkRecommendInputPayload, LlmDraftCandidate,
+    OpportunityBuildInputPayload, SeoScopePayload, SeoVerifiedFactSupportState,
+    SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 
 fn scope() -> SeoScopePayload {
@@ -22,6 +23,43 @@ fn scope() -> SeoScopePayload {
         raw_scope_tuple: String::new(),
         scope_signature,
     }
+}
+
+#[test]
+fn invalid_supplied_scope_is_rejected_by_every_planning_step() {
+    let mut invalid = scope();
+    invalid.scope_signature = "forged-scope".to_string();
+    assert!(crate::serp_ingest_step::execute(&SerpIngestInputPayload {
+        scope: Some(invalid.clone()),
+        ..Default::default()
+    })
+    .is_err());
+    assert!(
+        crate::serp_normalize_step::execute(&SerpNormalizeInputPayload {
+            scope: Some(invalid.clone()),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    assert!(
+        crate::opportunity_build_step::execute(&OpportunityBuildInputPayload {
+            scope: Some(invalid.clone()),
+            ..Default::default()
+        })
+        .is_err()
+    );
+    assert!(crate::ia_build_step::execute(&IaBuildInputPayload {
+        scope: Some(invalid.clone()),
+        ..Default::default()
+    })
+    .is_err());
+    assert!(
+        crate::global_site_reconcile_step::execute(&GlobalSiteReconcileInputPayload {
+            scope: Some(invalid),
+            ..Default::default()
+        })
+        .is_err()
+    );
 }
 
 fn support(
@@ -100,7 +138,8 @@ fn seo_steps_form_publish_ready_pipeline() {
             "spain tourist visa cost".to_string(),
             "spain tourist visa cost".to_string(),
         ],
-    });
+    })
+    .unwrap();
     assert_eq!(ingest.query_count, 3);
     assert_eq!(ingest.status, "done");
 
@@ -113,7 +152,8 @@ fn seo_steps_form_publish_ready_pipeline() {
             "spain tourist visa cost".to_string(),
             "spain tourist visa cost".to_string(),
         ],
-    });
+    })
+    .unwrap();
     assert_eq!(serp.normalized_query_count, 2);
     assert_eq!(serp.serp_patterns.len(), 2);
 
@@ -122,7 +162,8 @@ fn seo_steps_form_publish_ready_pipeline() {
         scope: Some(scope.clone()),
         serp_patterns: serp.serp_patterns,
         graph_context: None,
-    });
+    })
+    .unwrap();
     assert_eq!(opportunities.keyword_clusters.len(), 2);
     assert!(opportunities.content_gaps.is_empty());
 
@@ -132,7 +173,8 @@ fn seo_steps_form_publish_ready_pipeline() {
         scope: Some(scope),
         keyword_clusters: opportunities.keyword_clusters,
         graph_context: None,
-    });
+    })
+    .unwrap();
     assert_eq!(ia.page_nodes.len(), 4);
     assert!(ia
         .page_nodes

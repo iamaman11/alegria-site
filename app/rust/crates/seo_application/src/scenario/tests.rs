@@ -463,6 +463,14 @@ mod tests {
     }
 
     fn sample_site_input() -> SeoSiteBuildInputPayload {
+        let validated = seo_domain::identity::derive_scope(
+            "alegria-site",
+            "ru-RU",
+            "ES",
+            "tourist",
+            "standard",
+        )
+        .unwrap();
         SeoSiteBuildInputPayload {
             run_id: "run-1".to_string(),
             context_key: "ES|tourist||BY".to_string(),
@@ -472,8 +480,8 @@ mod tests {
                 country_code: "ES".to_string(),
                 visa_type: "tourist".to_string(),
                 applicant_profile: "standard".to_string(),
-                raw_scope_tuple: String::new(),
-                scope_signature: "sig-1".to_string(),
+                raw_scope_tuple: validated.raw_scope_tuple,
+                scope_signature: validated.scope_signature,
             }),
             query_batch_key: "batch-1".to_string(),
             queries: vec!["spain tourist visa".to_string()],

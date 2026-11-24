@@ -187,9 +187,8 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
 }
 
-# The existing full-scenario PostgreSQL test follows a real draft through
-# assemble → editorial/content QA → persisted publish_ready. Neither CMS
-# review nor the Temporal restart filter alone exercises this CLI path.
+# The full-scenario and fault-injected PostgreSQL tests exercise both
+# successful Draft QA persistence and atomic rollback/reject-missing-draft.
 DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/runtime_models/src/seo_blocks.rs",
     "app/rust/crates/seo_steps/src/editorial_wire.rs",
@@ -197,11 +196,13 @@ DRAFT_QA_SCENARIO_PATHS = {
     "app/rust/crates/seo_domain/src/editorial.rs",
     "app/rust/crates/seo_domain/src/page_readiness.rs",
     "app/rust/crates/seo_domain/src/content_contract.rs",
+    "app/rust/crates/seo_domain/src/draft_quality.rs",
     "app/rust/crates/seo_application/src/drafting.rs",
     "app/rust/crates/seo_steps/src/draft_qa_step.rs",
     "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
     "app/rust/crates/infrastructure/src/adapters/editorial_llm_adapter/generated_overlay.rs",
     "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs",
+    "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs",
 }
 
 
@@ -252,7 +253,7 @@ SUITE_OWNERS = {
         "on_unknown_global_input": True,
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
-            "--lib", "synthetic_full_scenario_persists_page_draft_on_full_harness",
+            "--lib", "draft_qa_",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -345,6 +346,7 @@ SUITE_OWNERS = {
             "app/rust/crates/seo_domain/src/editorial.rs",
             "app/rust/crates/seo_domain/src/page_readiness.rs",
             "app/rust/crates/seo_domain/src/content_contract.rs",
+            "app/rust/crates/seo_domain/src/draft_quality.rs",
             "app/rust/crates/seo_domain/src/link_recommendation.rs",
             "app/rust/crates/seo_application/src/drafting.rs",
             "app/rust/crates/seo_steps/src/draft_qa_step.rs",

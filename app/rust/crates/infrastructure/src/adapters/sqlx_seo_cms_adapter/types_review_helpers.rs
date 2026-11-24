@@ -13,12 +13,12 @@ use seo_ports::{
     PublicReleaseFile, ReleaseDeliveryError, ReleaseDeliveryStage,
 };
 use serde_json::json;
-use sqlx::{types::Json, PgPool, Row};
+use sqlx::{types::Json, PgConnection, PgPool, Row};
 use std::path::Path;
 
 use super::proto_runtime_payload_store::{classify_sqlx, validation_failure};
 use super::sqlx_outbox_adapter::OutboxEnvelope;
-use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
+use super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx;
 use super::static_site_builder_adapter;
 
 #[derive(Debug, Clone)]
@@ -46,9 +46,10 @@ fn encode_payload<T: Message>(value: &T) -> Vec<u8> {
     value.encode_to_vec()
 }
 
-fn make_idempotency_key(aggregate_key: &str, event_type: &str, payload_bytes: &[u8]) -> String {
-    let payload_hash = primitives::hash::blake3_hex(payload_bytes);
-    primitives::hash::content_hash_v1(&format!("{aggregate_key}|{event_type}|{payload_hash}"))
+fn make_idempotency_key(event_key: &str, event_type: &str) -> String {
+    // Event identity is durable. Hashing protobuf bytes here is unsafe because
+    // map<string,string> metadata has no guaranteed serialization order.
+    primitives::hash::content_hash_v1(&format!("{event_key}|{event_type}"))
 }
 
 fn cms_event_outbox(event: &SeoCmsEventPayload, run_id: &str) -> OutboxEnvelope {
@@ -61,7 +62,7 @@ fn cms_event_outbox(event: &SeoCmsEventPayload, run_id: &str) -> OutboxEnvelope 
         event_type: event.event_type.clone(),
         payload_type: "alegria.outbox.seo_cms_event.v1".to_string(),
         schema_version: 1,
-        idempotency_key: make_idempotency_key(&event.event_key, &event.event_type, &payload_bytes),
+        idempotency_key: make_idempotency_key(&event.event_key, &event.event_type),
         payload_bytes,
     }
 }
@@ -135,7 +136,7 @@ mod publish_runtime_config_tests {
     }
 }
 async fn load_publish_draft(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_draft_key: &str,
 ) -> Result<Option<PublishDraftRow>, DomainError> {
     let row = sqlx::query(
@@ -163,10 +164,11 @@ async fn load_publish_draft(
         JOIN site.page_nodes p ON p.page_node_key = d.page_node_key
         LEFT JOIN site.site_scopes scope ON scope.scope_signature = p.scope_signature
         WHERE d.page_draft_key = $1
+        FOR UPDATE OF d, p
         "#,
     )
     .bind(page_draft_key)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(classify_sqlx)?;
 
@@ -195,7 +197,7 @@ async fn load_publish_draft(
 }
 
 async fn count_active_cannibalization(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_node_key: &str,
 ) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
@@ -208,7 +210,7 @@ async fn count_active_cannibalization(
         "#,
     )
     .bind(page_node_key)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(classify_sqlx)
 }
@@ -220,7 +222,7 @@ async fn count_active_cannibalization(
 // yet published are intentionally deferred until their pages go live; they do
 // not become hard obligations until accepted or applied.
 async fn count_required_link_recommendations(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_node_key: &str,
 ) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
@@ -233,13 +235,13 @@ async fn count_required_link_recommendations(
         "#,
     )
     .bind(page_node_key)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(classify_sqlx)
 }
 
 async fn count_unpublished_mandatory_links(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_node_key: &str,
 ) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
@@ -260,7 +262,7 @@ async fn count_unpublished_mandatory_links(
         "#,
     )
     .bind(page_node_key)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(classify_sqlx)
 }
@@ -274,7 +276,7 @@ struct ResolvedInternalLink {
 }
 
 async fn resolve_required_internal_links(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_node_key: &str,
 ) -> Result<Vec<ResolvedInternalLink>, DomainError> {
     let rows = sqlx::query(
@@ -293,7 +295,7 @@ async fn resolve_required_internal_links(
         "#,
     )
     .bind(page_node_key)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(classify_sqlx)?;
     rows.into_iter()
@@ -324,7 +326,7 @@ async fn resolve_required_internal_links(
 }
 
 async fn count_canonical_conflicts(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     row: &PublishDraftRow,
 ) -> Result<i64, DomainError> {
     sqlx::query_scalar::<_, i64>(
@@ -340,13 +342,22 @@ async fn count_canonical_conflicts(
     .bind(&row.scope_signature)
     .bind(&row.canonical_url_path)
     .bind(&row.page_node_key)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await
     .map_err(classify_sqlx)
 }
 
 pub async fn load_latest_approval_decision(
     pool: &PgPool,
+    page_node_key: &str,
+    revision_id: &str,
+) -> Result<Option<seo_domain::review_decision::CmsApproval>, DomainError> {
+    let mut conn = pool.acquire().await.map_err(classify_sqlx)?;
+    load_latest_approval_decision_in_tx(&mut conn, page_node_key, revision_id).await
+}
+
+async fn load_latest_approval_decision_in_tx(
+    conn: &mut PgConnection,
     page_node_key: &str,
     revision_id: &str,
 ) -> Result<Option<seo_domain::review_decision::CmsApproval>, DomainError> {
@@ -363,7 +374,7 @@ pub async fn load_latest_approval_decision(
     )
     .bind(page_node_key)
     .bind(revision_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await
     .map_err(classify_sqlx)?;
     let Some(row) = row else {

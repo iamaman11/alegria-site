@@ -729,8 +729,10 @@ jobs:
       # Identical compile profiles on accepted main and read-only PR workers.
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
-      # Pace writes below the GitHub cache service's burst rate limit.
-      CARGO_BUILD_JOBS: "2"
+      # Controlled warm-cache experiment: #405 completed 69/69 writes without
+      # rate limiting. Use three compiler slots; preserve sccache diagnostics
+      # and restore two if real main runs show HTTP 429 or slower wall time.
+      CARGO_BUILD_JOBS: "3"
       SQLX_OFFLINE: "true"
       SCCACHE_GHA_ENABLED: "on"
       SCCACHE_GHA_RW_MODE: READ_WRITE

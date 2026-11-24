@@ -5,6 +5,7 @@ use contracts::generated::alegria::temporal::v1::{
     GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, LinkRecommendationState,
     PageNodeState,
 };
+use primitives::errors::DomainError;
 
 fn link_key(
     scope_signature: &str,
@@ -68,7 +69,10 @@ fn required_link(
     }
 }
 
-pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOutputPayload {
+pub fn execute(
+    input: &GlobalSiteReconcileInputPayload,
+) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
+    let fallback_scope = crate::seo_step_support::scope_signature(input.scope.as_ref())?;
     let mut page_nodes = input.page_nodes.clone();
     let mut orphan_page_node_keys = Vec::new();
     let mut cannibalization_conflict_keys = Vec::new();
@@ -340,7 +344,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         for coverage in &graph_context.coverage_signals {
             let scope = if coverage.page_node_key.is_empty() {
                 if graph_context.scope_signature.trim().is_empty() {
-                    crate::seo_step_support::scope_signature(input.scope.as_ref())
+                    fallback_scope.clone()
                 } else {
                     graph_context.scope_signature.clone()
                 }
@@ -378,7 +382,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         }
     }
 
-    GlobalSiteReconcileOutputPayload {
+    Ok(GlobalSiteReconcileOutputPayload {
         page_nodes,
         updated_page_count,
         updated_link_count: deduped.len() as u32,
@@ -387,7 +391,7 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
         cannibalization_conflict_keys,
         status: "done".to_string(),
         content_gaps,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -436,7 +440,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.content_gaps.len(), 1);
         assert_eq!(
             output.content_gaps[0].reason_code,
@@ -491,7 +496,8 @@ mod actual_coverage_tests {
                 ..Default::default()
             }],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(
             output
                 .page_nodes

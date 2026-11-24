@@ -329,13 +329,18 @@ pub async fn persist_draft_qa_output(
         return Err(validation_failure("draft_qa persistence requires draft"));
     };
     non_empty(&draft.page_draft_key, "page_draft_key")?;
-    sqlx::query(
+    non_empty(&draft.page_node_key, "page_node_key")?;
+    let lifecycle_state = draft_qa_lifecycle(&output.verdict, &output.blocking_reasons)?;
+    // The QA verdict, page lifecycle, audit failures and projection event are
+    // one logical result: a failed late write must not expose half a QA run.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    let updated_draft = sqlx::query(
         r#"
         UPDATE site.page_drafts
         SET qa_verdict  = $1,
             qa_blockers = $2,
             updated_at  = now()
-        WHERE page_draft_key = $3
+        WHERE page_draft_key = $3 AND page_node_key = $4
         "#,
     )
     .bind(&output.verdict)
@@ -345,12 +350,17 @@ pub async fn persist_draft_qa_output(
         "required_next_action": output.required_next_action,
     })))
     .bind(&draft.page_draft_key)
-    .execute(pool)
+    .bind(&draft.page_node_key)
+    .execute(&mut *tx)
     .await
     .map_err(classify_sqlx)?;
+    if updated_draft.rows_affected() != 1 {
+        return Err(validation_failure(
+            "draft_qa persistence requires an existing draft belonging to its page",
+        ));
+    }
 
-    let lifecycle_state = "review_required";
-    set_page_lifecycle(pool, &draft.page_node_key, lifecycle_state, "draft_qa").await?;
+    set_page_lifecycle_in_tx(&mut tx, &draft.page_node_key, lifecycle_state, "draft_qa").await?;
 
     for reason in &output.blocking_reasons {
         let quality_failure_key = seo_domain::artifact_identity::seo_artifact_key(
@@ -376,15 +386,12 @@ pub async fn persist_draft_qa_output(
             "supported_claims": output.supported_claims,
             "unsupported_claims": output.unsupported_claims,
         })))
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .map_err(classify_sqlx)?;
     }
 
-    emit_projection_events_for_run(
-        pool,
-        &input.run_id,
-        vec![seo_qdrant_projection_event(
+    let mut event = seo_qdrant_projection_event(
             &input.run_id,
             "editorial_topics_4",
             "page_draft",
@@ -400,11 +407,59 @@ pub async fn persist_draft_qa_output(
                     output.blocking_reasons.join("|"),
                 ),
             ]),
-        )],
-    )
-    .await?;
+        );
+    event.run_id = input.run_id.clone();
+    // Protobuf map fields may serialize in a different order on replay. QA
+    // identity is therefore based on stable inputs, never encoded map bytes.
+    event.idempotency_key = primitives::hash::content_hash_v1(&format!(
+        "draft_qa@1|{}|{}|{}|{}|{}|{}",
+        input.run_id,
+        draft.page_draft_key,
+        output.verdict,
+        output.supported_claims,
+        output.unsupported_claims,
+        output.blocking_reasons.join("|"),
+    ));
+    super::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx(&mut tx, &[event]).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
 
     Ok(())
+}
+
+/// QA verdict and blockers must agree. Preserve the established review/rework
+/// lifecycle for both verdicts until the human review state machine owns it.
+fn draft_qa_lifecycle(
+    verdict: &str,
+    blocking_reasons: &[String],
+) -> Result<&'static str, DomainError> {
+    match verdict {
+        "publish_ready" if blocking_reasons.is_empty() => Ok("review_required"),
+        "qa_failed" if !blocking_reasons.is_empty() => Ok("review_required"),
+        _ => Err(validation_failure(
+            "draft_qa verdict and blocking reasons must be consistent",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod qa_lifecycle_policy_tests {
+    use super::*;
+
+    #[test]
+    fn accepted_and_rejected_drafts_retain_existing_review_lifecycle() {
+        assert_eq!(draft_qa_lifecycle("publish_ready", &[]).unwrap(), "review_required");
+        assert_eq!(
+            draft_qa_lifecycle("qa_failed", &["missing_claim_ledger".into()]).unwrap(),
+            "review_required"
+        );
+        for (verdict, reasons) in [
+            ("publish_ready", vec!["unsafe_content".into()]),
+            ("qa_failed", vec![]),
+            ("unexpected", vec![]),
+        ] {
+            assert!(draft_qa_lifecycle(verdict, &reasons).is_err());
+        }
+    }
 }
 
 pub async fn persist_rebuild_detect_output(
@@ -606,37 +661,59 @@ async fn set_page_lifecycle(
     if page_node_key.trim().is_empty() {
         return Ok(());
     }
-    let previous_state: Option<String> = sqlx::query_scalar(
-        r#"
-        UPDATE site.page_nodes
-        SET lifecycle_state = $1,
-            updated_at = now()
-        WHERE page_node_key = $2
-        RETURNING lifecycle_state
-        "#,
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
+    set_page_lifecycle_in_tx(&mut tx, page_node_key, to_state, reason).await?;
+    tx.commit().await.map_err(classify_sqlx)?;
+    Ok(())
+}
+
+async fn set_page_lifecycle_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    page_node_key: &str,
+    to_state: &str,
+    reason: &str,
+) -> Result<(), DomainError> {
+    let from_state: Option<String> = sqlx::query_scalar(
+        "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key = $1 FOR UPDATE",
+    )
+    .bind(page_node_key)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
+    let Some(from_state) = from_state else {
+        return Ok(());
+    };
+
+    // Generating or rechecking a new draft must never unpublish the live page.
+    // Explicit rebuild transitions remain free to mark it as needs_rebuild.
+    if from_state == to_state
+        || (from_state == "published" && matches!(reason, "draft_assembled" | "draft_qa"))
+    {
+        return Ok(());
+    }
+
+    sqlx::query(
+        "UPDATE site.page_nodes SET lifecycle_state = $1, updated_at = now() WHERE page_node_key = $2",
     )
     .bind(to_state)
     .bind(page_node_key)
-    .fetch_optional(pool)
+    .execute(&mut **tx)
     .await
     .map_err(classify_sqlx)?;
-
-    if previous_state.is_some() {
-        sqlx::query(
-            r#"
-            INSERT INTO site.page_lifecycle_events
-                (page_node_key, from_state, to_state, reason, actor, event_payload)
-            VALUES ($1, NULL, $2, $3, 'seo_system', $4)
-            "#,
-        )
-        .bind(page_node_key)
-        .bind(to_state)
-        .bind(reason)
-        .bind(Json(json!({ "source": "temporal_activity" })))
-        .execute(pool)
-        .await
-        .map_err(classify_sqlx)?;
-    }
-
+    sqlx::query(
+        r#"
+        INSERT INTO site.page_lifecycle_events
+            (page_node_key, from_state, to_state, reason, actor, event_payload)
+        VALUES ($1, $2, $3, $4, 'seo_system', $5)
+        "#,
+    )
+    .bind(page_node_key)
+    .bind(&from_state)
+    .bind(to_state)
+    .bind(reason)
+    .bind(Json(json!({ "source": "temporal_activity" })))
+    .execute(&mut **tx)
+    .await
+    .map_err(classify_sqlx)?;
     Ok(())
 }

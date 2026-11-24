@@ -25,9 +25,11 @@ def main() -> int:
     if (
         "-p temporal_worker -p cli_tools" not in docker
         or "--bin temporal_worker --bin temporal_starter --bin cli_tools" not in docker
-        or docker.count("RUN cargo build --release --locked") != 1
+        # Locked dependency skeleton prime and one real source build are the
+        # intentional two stages of the same native binary delivery graph.
+        or docker.count("cargo build --release --locked") != 2
     ) or (
-        "COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools"
+        "COPY --link --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools"
         not in docker
     ):
         errors.append("Temporal Worker runtime must carry existing cli_tools operator binary")

@@ -5,19 +5,15 @@ pub async fn run_opportunity_build<
     search_port: &impl SemanticLinkSearchPort,
     input: &OpportunityBuildInputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
+    let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
     ensure_graph_required_for_phase(repo, "opportunity_build").await?;
-    let scope_signature = input
-        .scope
-        .as_ref()
-        .map(|scope| scope.scope_signature.clone())
-        .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let mut output = seo_steps::opportunity_build_step::execute(&enriched);
+    let mut output = seo_steps::opportunity_build_step::execute(&enriched)?;
     if voyage_retrieval_ready_or_optional()? {
         for cluster in &mut output.keyword_clusters {
             let query = format!("{} {}", cluster.seed_keyword, cluster.dominant_intent);
@@ -48,19 +44,15 @@ pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort + GraphCapa
     search_port: &impl SemanticLinkSearchPort,
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
+    let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
     ensure_graph_required_for_phase(repo, "ia_build").await?;
-    let scope_signature = input
-        .scope
-        .as_ref()
-        .map(|scope| scope.scope_signature.clone())
-        .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let mut output = seo_steps::ia_build_step::execute(&enriched);
+    let mut output = seo_steps::ia_build_step::execute(&enriched)?;
     let cluster_keys = output
         .page_nodes
         .iter()
@@ -186,19 +178,15 @@ pub async fn run_global_site_reconcile<
     search_port: &impl SemanticLinkSearchPort,
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
+    let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
     ensure_graph_required_for_phase(repo, "global_site_reconcile").await?;
-    let scope_signature = input
-        .scope
-        .as_ref()
-        .map(|scope| scope.scope_signature.clone())
-        .unwrap_or_default();
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
     );
     let mut enriched = input.clone();
     enriched.graph_context = Some(graph_context);
-    let mut output = seo_steps::global_site_reconcile_step::execute(&enriched);
+    let mut output = seo_steps::global_site_reconcile_step::execute(&enriched)?;
     if voyage_retrieval_ready_or_optional()? {
         let node_by_key = output
             .page_nodes

@@ -1011,6 +1011,60 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
         page_draft_key: tourist_draft,
         ..Default::default()
     };
+    // Fail at the *last* write, after the revision, page, lifecycle and CMS
+    // event have already been attempted. No partial publish may survive.
+    let original_lifecycle: String = sqlx::query_scalar(
+        "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key=$1",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "ALTER TABLE system.sync_outbox ADD CONSTRAINT cms_atomic_review_fault \
+         CHECK (event_type <> 'seo_page_review_requested')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(sqlx_seo_cms_adapter::persist_cms_publish_output(pool, &input, &planned)
+        .await
+        .is_err());
+    let surviving_revision: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.cms_page_revisions WHERE page_draft_key=$1",
+    )
+    .bind(&planned.page_draft_key)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let surviving_page: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.cms_pages WHERE page_node_key=$1",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let surviving_event: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.cms_publish_events WHERE page_node_key=$1",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let lifecycle_after_failure: String = sqlx::query_scalar(
+        "SELECT lifecycle_state FROM site.page_nodes WHERE page_node_key=$1",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!((surviving_revision, surviving_page, surviving_event), (0, 0, 0));
+    assert_eq!(lifecycle_after_failure, original_lifecycle);
+    sqlx::query("ALTER TABLE system.sync_outbox DROP CONSTRAINT cms_atomic_review_fault")
+        .execute(pool)
+        .await
+        .unwrap();
+
     let result = sqlx_seo_cms_adapter::persist_cms_publish_output(pool, &input, &planned)
         .await.unwrap();
     assert_eq!(result.verdict, "review_requested");
@@ -1045,6 +1099,63 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
         approval_decision: Some(seo_steps::cms_review_wire::to_wire(persisted)),
         ..input.clone()
     };
+    // This time fail after the Outbox insert but before committing the
+    // materialization artifact. The entire approval must roll back.
+    sqlx::query(
+        "ALTER TABLE site.publish_artifacts ADD CONSTRAINT cms_atomic_artifact_fault \
+         CHECK (status <> 'pending_materialization')",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    assert!(sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &approved_input,
+        &CmsPublishOutputPayload {
+            page_draft_key: result.page_draft_key.clone(),
+            revision_id: result.revision_id.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .is_err());
+    let still_review_required: String = sqlx::query_scalar(
+        "SELECT revision_status FROM site.cms_page_revisions WHERE revision_id=$1",
+    )
+    .bind(&result.revision_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let approved_events: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.cms_publish_events \
+         WHERE page_node_key=$1 AND event_type='seo_page_approved'",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let approved_outbox: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM system.sync_outbox \
+         WHERE aggregate_key=$1 AND event_type='seo_page_approved'",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let artifacts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.publish_artifacts WHERE page_node_key=$1",
+    )
+    .bind(&tourist_page)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(still_review_required, "review_required");
+    assert_eq!((approved_events, approved_outbox, artifacts), (0, 0, 0));
+    sqlx::query("ALTER TABLE site.publish_artifacts DROP CONSTRAINT cms_atomic_artifact_fault")
+        .execute(pool)
+        .await
+        .unwrap();
+
     let approved = sqlx_seo_cms_adapter::persist_cms_publish_output(
         pool,
         &approved_input,
@@ -1057,6 +1168,43 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
     .await
     .unwrap();
     assert_eq!(approved.verdict, "approved");
+    let replay = sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &approved_input,
+        &CmsPublishOutputPayload {
+            page_draft_key: result.page_draft_key.clone(),
+            revision_id: result.revision_id.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(replay.outbox_emitted, 0, "same approval must not duplicate Outbox");
+    let changed_run = CmsPublishInputPayload {
+        run_id: Uuid::new_v4().to_string(),
+        ..approved_input.clone()
+    };
+    assert!(sqlx_seo_cms_adapter::persist_cms_publish_output(
+        pool,
+        &changed_run,
+        &CmsPublishOutputPayload {
+            page_draft_key: result.page_draft_key.clone(),
+            revision_id: result.revision_id.clone(),
+            ..Default::default()
+        },
+    )
+    .await
+    .is_err(), "one immutable event key cannot acquire another run_id");
+    let durable_run_id: String = sqlx::query_scalar(
+        "SELECT event_payload->>'run_id' FROM site.cms_publish_events \
+         WHERE page_node_key=$1 AND revision_id=$2 AND event_type='seo_page_approved'",
+    )
+    .bind(&tourist_page)
+    .bind(&result.revision_id)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(durable_run_id, input.run_id);
     let (revision_status, page_status): (String, String) = sqlx::query_as(
         "SELECT r.revision_status,p.current_status FROM site.cms_page_revisions r JOIN site.cms_pages p ON p.page_node_key=r.page_node_key WHERE r.revision_id=$1",
     ).bind(&approved.revision_id).fetch_one(pool).await.unwrap();
@@ -1156,6 +1304,46 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
             ..Default::default()
         },
     ).await.is_err());
+
+    // The provisional wire plan is deliberately empty: persisted draft facts
+    // must still block both an LLM fallback and an empty public body.
+    for (revision, name, body, provider, reason) in [
+        (4, "fallback", "Generated fallback body", "deterministic_fallback", "deterministic_fallback_publish_blocked"),
+        (5, "empty", "", "source_backed_template@1", "empty_body"),
+    ] {
+        let draft_key = format!("cms-persisted-{name}-draft-{marker}");
+        sqlx::query(
+            "INSERT INTO site.page_drafts \
+             (page_draft_key,page_node_key,page_brief_key,draft_revision,body_markdown,qa_verdict,truth_snapshot_ref,traceability_manifest) \
+             VALUES ($1,$2,$3,$4,$5,'publish_ready','verified-truth',$6)",
+        )
+        .bind(&draft_key)
+        .bind(&tourist_page)
+        .bind(&tourist_brief)
+        .bind(revision)
+        .bind(body)
+        .bind(serde_json::json!({ "llm_provider_key": provider }))
+        .execute(pool)
+        .await
+        .unwrap();
+        let response = sqlx_seo_cms_adapter::persist_cms_publish_output(
+            pool,
+            &CmsPublishInputPayload {
+                run_id: Uuid::new_v4().to_string(),
+                publish_mode: "request_review".to_string(),
+                ..Default::default()
+            },
+            &CmsPublishOutputPayload {
+                page_draft_key: draft_key,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.verdict, "blocked");
+        assert!(response.blocking_reasons.iter().any(|value| value == reason));
+        assert!(response.publish_artifact.is_none());
+    }
 }
 
 #[cfg(feature = "e2e")]
@@ -1516,7 +1704,7 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
     let ia_input = IaBuildInputPayload {
         run_id: site.run_id.clone(), scope: site.scope.clone(), ..Default::default()
     };
-    let ia = seo_steps::ia_build_step::execute(&ia_input);
+    let ia = seo_steps::ia_build_step::execute(&ia_input).unwrap();
     assert_eq!(ia.page_nodes.len(), 2);
     sqlx_seo_adapter::persist_ia_build_output(pool, &ia_input, &ia).await.unwrap();
 
@@ -1524,7 +1712,7 @@ async fn content_gap_owner_identity_is_idempotent_and_independently_resolved() {
         run_id: site.run_id.clone(), scope: site.scope.clone(),
         page_nodes: ia.page_nodes.clone(), page_blueprints: ia.page_blueprints.clone(),
         ..Default::default()
-    });
+    }).unwrap();
     let shared = reconcile.content_gaps.into_iter()
         .filter(|gap| gap.missing_topic == "who_fits")
         .collect::<Vec<_>>();

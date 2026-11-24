@@ -3,7 +3,7 @@ pub async fn run_serp_ingest<R: PlanningRepository, S: SerpSearchPort>(
     search_port: &S,
     input: &SerpIngestInputPayload,
 ) -> Result<SerpIngestOutputPayload, DomainError> {
-    let mut output = seo_steps::serp_ingest_step::execute(input);
+    let mut output = seo_steps::serp_ingest_step::execute(input)?;
     let locale = input.scope.as_ref().map(|scope| scope.locale.as_str());
     let mut persisted_snapshots = 0u32;
     for (idx, query) in input
@@ -39,8 +39,8 @@ pub async fn run_serp_normalize<R: PlanningRepository + GraphCapabilityPort>(
     search_port: &impl SemanticLinkSearchPort,
     input: &SerpNormalizeInputPayload,
 ) -> Result<SerpNormalizeOutputPayload, DomainError> {
+    let mut output = seo_steps::serp_normalize_step::execute(input)?;
     ensure_graph_required_for_phase(repo, "serp_normalize").await?;
-    let mut output = seo_steps::serp_normalize_step::execute(input);
     if voyage_retrieval_ready_or_optional()? {
         let clusters = search_port
             .cluster_demand_queries(&input.queries)

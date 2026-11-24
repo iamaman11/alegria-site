@@ -33,18 +33,14 @@ pub fn derive_scope_from_payload(
     Ok(validated)
 }
 
-pub fn scope_signature_from_payload(scope: Option<&SeoScopePayload>) -> String {
+/// Missing scope is the explicit planning-default scope. A supplied, invalid
+/// scope is never replaced by a caller-controlled signature or a default.
+pub fn scope_signature_from_payload(
+    scope: Option<&SeoScopePayload>,
+) -> Result<String, DomainError> {
     match scope {
-        Some(scope) => derive_scope_from_payload(scope)
-            .map(|validated| validated.scope_signature)
-            .unwrap_or_else(|_| {
-                if !scope.scope_signature.trim().is_empty() {
-                    scope.scope_signature.trim().to_string()
-                } else {
-                    scope_signature(&[("scope", "default")])
-                }
-            }),
-        None => scope_signature(&[("scope", "default")]),
+        Some(scope) => Ok(derive_scope_from_payload(scope)?.scope_signature),
+        None => Ok(scope_signature(&[("scope", "default")])),
     }
 }
 
@@ -67,5 +63,23 @@ mod tests {
         assert!(err
             .to_string()
             .contains("raw_scope_tuple does not match canonical normalized scope"));
+    }
+
+    #[test]
+    fn invalid_explicit_scope_does_not_trust_a_supplied_signature() {
+        let scope = SeoScopePayload {
+            market: "alegria-site".into(),
+            locale: "ru-RU".into(),
+            country_code: "ES".into(),
+            visa_type: "tourist".into(),
+            applicant_profile: "standard".into(),
+            raw_scope_tuple: "invalid tuple".into(),
+            scope_signature: "attacker-controlled".into(),
+        };
+        assert!(scope_signature_from_payload(Some(&scope)).is_err());
+        assert_eq!(
+            scope_signature_from_payload(None).unwrap(),
+            scope_signature(&[("scope", "default")])
+        );
     }
 }

@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTO = ROOT / "app/contracts/proto/temporal_payloads.proto"
 DRAFT = ROOT / "app/rust/crates/seo_steps/src/draft_assemble_step.rs"
 QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
+QA_POLICY = ROOT / "app/rust/crates/seo_domain/src/draft_quality.rs"
 CMS = ROOT / "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter.rs"
 
 
@@ -28,6 +29,7 @@ def main() -> int:
     proto = PROTO.read_text(encoding="utf-8")
     draft = DRAFT.read_text(encoding="utf-8")
     qa = QA.read_text(encoding="utf-8")
+    qa_policy = QA_POLICY.read_text(encoding="utf-8")
     cms = read_file_resolved(CMS)
 
     for message in [
@@ -59,7 +61,11 @@ def main() -> int:
         "missing_rendered_content_blocks",
         "missing_schema_markup",
     ]:
-        require(qa, needle, "QA claim ledger gate", failures)
+        require(qa_policy, needle, "domain QA claim ledger gate", failures)
+        if needle in qa.split("#[cfg(test)]", 1)[0]:
+            failures.append(f"draft QA wire adapter duplicates domain gate `{needle}`")
+    for needle in ["draft_quality::evaluate(&DraftQuality {", "violation.reason_code()", "violation.blocker_reason_code()"]:
+        require(qa, needle, "QA claim ledger typed policy invocation", failures)
     for needle in [
         '"claim_ledger"',
         '"content_blocks"',

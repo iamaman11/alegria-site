@@ -250,6 +250,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/seo_domain/src/editorial.rs",
             "app/rust/crates/seo_domain/src/page_readiness.rs",
             "app/rust/crates/seo_domain/src/content_contract.rs",
+            "app/rust/crates/seo_domain/src/draft_quality.rs",
             "app/rust/crates/seo_domain/src/link_recommendation.rs",
             "app/rust/crates/seo_application/src/drafting.rs",
             "app/rust/crates/seo_steps/src/draft_qa_step.rs",
@@ -268,6 +269,7 @@ class ImpactFixtures(unittest.TestCase):
                     "app/rust/crates/seo_domain/src/editorial.rs",
                     "app/rust/crates/seo_domain/src/page_readiness.rs",
                     "app/rust/crates/seo_domain/src/content_contract.rs",
+                    "app/rust/crates/seo_domain/src/draft_quality.rs",
                     "app/rust/crates/seo_application/src/drafting.rs",
                     "app/rust/crates/seo_steps/src/draft_qa_step.rs",
                     "app/rust/crates/seo_steps/src/content_contract_validate_step.rs",
@@ -281,8 +283,19 @@ class ImpactFixtures(unittest.TestCase):
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib",
         ))
-        self.assertIn("synthetic_full_scenario_persists_page_draft_on_full_harness",
-                      SUITE_OWNERS["draft_qa_scenario"]["command"])
+        # One Cargo test filter executes both the successful full scenario
+        # and the SQL fault-injection rollback test, without a second job.
+        self.assertIn("draft_qa_", SUITE_OWNERS["draft_qa_scenario"]["command"])
+        repo = Path(__file__).resolve().parents[1]
+        scenario_test = repo / "app/rust/crates/integration_harness/src/tests/scenario_parity_tests.rs"
+        fault_test = repo / "app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs"
+        self.assertIn("fn draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness()", scenario_test.read_text())
+        self.assertIn("fn draft_qa_persistence_rolls_back_late_failure_and_rejects_missing_draft()", fault_test.read_text())
+        self.assertIn("draft_qa_scenario", self.impact("app/rust/crates/integration_harness/src/tests/qa_persistence_tests.rs")["selected_suites"])
+        self.assertIn("cms_revision_", SUITE_OWNERS["cms_review_revision"]["command"])
+        cms_test = repo / "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs"
+        self.assertIn("fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_body_sections()", cms_test.read_text())
+        self.assertIn("cms_atomic_artifact_fault", cms_test.read_text())
 
     def test_main_prime_no_compilation_for_runtime_fixture_only(self) -> None:
         report = self.impact(TRUTH_FIXTURE_PREFIX + "happy_path.html")

@@ -20,7 +20,7 @@ LIB_REQUIRED_SNIPPETS = [
     "SEO_LLM_LOCAL_ENDPOINT",
     "InfraHarness",
     "TemporalHarness",
-    "synthetic_full_scenario_persists_page_draft_on_full_harness",
+    "draft_qa_synthetic_full_scenario_persists_page_draft_on_full_harness",
 ]
 
 ENV_REQUIRED_SNIPPETS = [

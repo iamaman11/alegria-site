@@ -1,222 +1,55 @@
-# Alegria: owners and Rust boundaries (#43)
+# Alegria: действующие владельцы и границы (#43)
 
-This is the short source-linked map for the ongoing modularization. The owners
-below are *responsibilities*, not mandatory processes or one crate per owner.
-A target marked **planned** is not yet an implemented API.
-The current dependency graph is evidence of coupling, not the desired design.
+Этот документ описывает **текущий код**, а не обязательную схему из множества
+слоёв. История переносов, открытые A1–A18 и критерии приёмки находятся в
+[Issue #43](https://github.com/iamaman11/alegria-site/issues/43).
+Новые crates, порты, фасады и CI jobs добавляются только для действительной
+независимой ответственности; имена технологий сами по себе не границы.
 
-| Owner | Public Rust API and state | Allowed dependencies / current migration |
+| Владелец | Где правило / действующий вызов | Эффекты и внешние типы |
 | --- | --- | --- |
-| Core | `primitives::{stable_id,source_key,page_key,concept_key,context_key,hash}`: shared IDs and value objects; no mutable domain state | Shared data types and deterministic libraries only. `contracts`, `scraper`, `regex`, `serde` and editorial writer/validator/SEO-identity dependencies removed from Core. Dormant legacy fact-extraction sources removed. **Planned:** review storage-specific ID utilities. |
-| Acquisition | `acquisition::html_sections::{extract_meta_typed,extract_sections_typed,HtmlSection}`, `acquisition::pdf_parser` and `acquisition::source_relevance` own parsing, source/DOM classification and extraction prelude. **Current #43 cut:** `acquisition::crawl_policy::{evaluate_robots_rules,retry_after_http_response,retry_after_recoverable_failure}` owns robots eligibility and retry budgets. | `primitives` and parser libraries; fetching, queue scheduling and persistence remain in `infrastructure::adapters::raw_crawl_adapter`. No dependency on Truth, SEO or Publishing. |
-| Truth / review | **Implemented:** `truth_domain::{truth_candidates,fact_verifier,truth_governance,contradictions,completeness,hitl_decision,review_decisions,evidence,procedural_candidates,persisted_candidates,semantic_truth_write}` owns validated candidates, governance, contradictions, extracted-evidence completeness, deterministic HITL routing, scoped review veto, evidence, procedural mapping, typed persisted-candidate adjudication/canonical selection and per-semantic-slot Truth write decisions. **Current #43 cut:** `candidate_intake::{decide_disposition,validate_evidence,canonicalize_fee_parameters}` owns typed candidate status, source-bound span validation and monetary normalization. CLI retains JSON transport. **Planned:** remaining review operations. | Temporal orchestrates source-registry reads, HITL tasks and SQL/projection writes; `infrastructure` retains SQL persistence and JSON conversion. Existing activity names and registered JSON payload type identifiers are unchanged. Obsolete regex/keyword fact extraction is deleted. |
-| Knowledge / retrieval | `seo_domain::canonical_mapping` owns symbolic entity/alias mapping and the typed vector-score/HITL decision; `seo_ports::knowledge` defines typed canonical-vector, verified-rule, diagnostic-neighbor, editorial source-context and verified-rule projection contracts. `seo_application::knowledge` owns their use cases, including `reconcile_verified_rule_projection`. PostgreSQL verified rules alone authorize factual support; Qdrant hits are advisory. | SQLx reads authoritative Truth. `VerifiedRuleProjectionAdapter` owns Voyage embedding, Qdrant deletion and atomic PostgreSQL point-metadata+Outbox staging; the actual Qdrant upsert remains asynchronous Outbox delivery. Temporal only passes Truth's prevalidated global-rule delta. Source-context selection policy stays in Knowledge. Remaining projection operations are planned. |
-| SEO / editorial | `seo_domain::{identity,artifact_identity,writer,block_validator,review_decision,cms_revision}` owns scope, IDs, HTML, block QA, review and revision decisions. **Current #43 cuts:** `ia_planning::{scope_paths,plan_cluster,required_sections_for_page_type}` owns canonical IA routes/page types/sections; `rebuild::{RebuildDetectRequest,RebuildDetectResult,detect_rebuild}` owns typed rebuild verdict and page-impact decisions. `whole_page::{deterministic_whole_page_snapshot,fuse_with_advisory_retrieval,expert_section_semantics}` is an in-flight shared semantic scoring owner, not yet CI-proven. **Planned:** further draft/revision decisions. | `seo_application::rebuild_detect` composes `seo_ports::{RebuildRepository,GraphCapabilityPort}`; SQLx/Neo4j effects stay in adapters. `seo_steps` maps IA and review protobuf, while Temporal preserves workflows and registered payloads. `seo_domain` has no `contracts` dependency. Remaining `seo_steps`/`seo_ports` transport coupling and transport-heavy `runtime_models::seo_blocks` draft policy need later cuts; JSON decoding stays in adapters. |
-| Publishing | **Implemented:** `seo_domain::publishing::{ReleaseReadiness,PublicReleaseOutcome,plan_recovery,license,materialization}`, `seo_domain::render_preview::{RenderedPage,RenderBlocker,validate_render_preview}` and `seo_ports::PublicReleaseDelivery`. Domain owns licensing and required materialization state; `seo_application::review_publish` composes decisions and converts them to existing Temporal payloads. `seo_steps::render_preview_validate_step` maps render decisions; `infrastructure::adapters::sqlx_seo_cms_adapter` owns external release effects and PostgreSQL/Outbox transaction. **Planned:** remaining editorial revision transitions | Files/SQL/Cloudflare/HTTP are effects, not Truth decisions. Editorial approval, render validity, release readiness and verified publication are distinct. Isolated PostgreSQL/HTTP A17 is selected for the source owner; no real public release was performed. |
-| Runtime / composition | Existing `services/{temporal,outbox_worker,cli_tools,...}`: wiring, scheduling, retries, telemetry. Outbox's typed `DispatchError` belongs to the concrete projection operation; SQLx claims carry run/lease identifiers | Runtime logs `run_id`, target, event and stable class/stage; status updates are lease-fenced, and terminal failure and dead-letter insertion share one PostgreSQL transaction. A14 live-container verification is required before acceptance. Domain/application must not import runtime or implementation crates. |
+| Общие значения | `primitives`: стабильные идентификаторы и чистые функции | Нет SQL, Temporal и внешних сервисов |
+| Acquisition | `acquisition::{html_sections,pdf_parser,source_relevance,crawl_policy}`: парсинг, релевантность, robots и retry | `infrastructure::adapters::raw_crawl_adapter`: сеть, очередь, сохранение |
+| Truth | `truth_domain::{candidate_intake,completeness,hitl_decision,persisted_candidates,semantic_truth_write}` и соседние предметные модули | SQL/LLM/Temporal остаются у адаптеров и runtime; JSON не определяет решение |
+| Knowledge | `seo_domain::canonical_mapping`, `seo_application::knowledge`, типизированные порты в `seo_ports::knowledge` | SQLx — авторитетное VERIFIED состояние, Qdrant — необязательная подсказка, Outbox — доставка проекций |
+| SEO / editorial | `seo_domain::{editorial,page_readiness,content_contract,link_recommendation,ia_planning,whole_page,rebuild,review_decision,cms_revision,writer,block_validator}` | `seo_steps::{editorial_wire,page_wire,content_contract_validate_step,draft_qa_step,link_recommend_step}` адаптируют действующие Temporal DTO; решения остаются в домене |
+| Application | `seo_application::{drafting,scenario,review_publish,knowledge,rebuild_detect,cms_review}` | Координирует typed ports; не пишет SQL и не выбирает по transport DTO |
+| Publishing | `seo_domain::{publishing,render_preview}`; `seo_application::review_publish` | `infrastructure::adapters::sqlx_seo_cms_adapter` и `seo_ports::PublicReleaseDelivery`: PostgreSQL, Outbox, HTTP/CDN |
+| Runtime | `services/temporal`, `services/outbox_worker`, `services/cli_tools` | Activity/workflow orchestration, регистрацию, retry, логи и вызов адаптеров; не копирует бизнес-условия |
 
-### Rules for every code slice
+`contracts` содержит действующие protobuf wire-формы, не предметные решения.
+`runtime_models` содержит общие типизированные данные выполнения (например,
+`ExecutionRun` и `RuleRoleType`), но не редакционную политику. Удалённый
+`runtime_models::seo_blocks` **не является допустимой точкой расширения**.
 
-- A capability owns its state transitions and output types; another capability
-  reads the public result, and requests changes through the owner's operation.
-  Cross-capability flows are composed in Application, without cyclic imports.
-- Domain decisions are ordinary testable Rust functions; external effects are
-  isolated at actual ports. Do not introduce generic storage or plugin layers.
-- Move the operation *and all active callers/tests* together. No deprecated
-  re-export or parallel implementation. The source-controlled Cargo DAG and
-  public module signatures must reflect the actual boundary.
-- Preserve persisted identifiers/provenance and active workflow data while
-  changing code ownership. A historical identifier is not a Rust API alias.
+## При изменении операции
 
-**Working slices:** HTML/PDF acquisition parsing moved from Core into
-`acquisition`, with active crawl consumers and tests. Truth extraction,
-governance and write outcomes now belong to `truth_domain`; SQL effects stay
-in adapters. Editorial HTML rendering and block validation moved from Core
-into `seo_domain`, with the active Temporal caller and Rust migration guard.
-The source-page utility, DOM-block relevance and extraction-prelude policies
-now have one typed owner in `acquisition::source_relevance`. Their former
-`seo_steps` modules are removed; Temporal activity names and registered JSON
-payload identifiers remain unchanged, and both Temporal and expert extraction
-use the same section-role classifier.
-The publication license, materialization and readiness policies now belong to
-`seo_domain::publishing`, with Temporal wire conversion in
-`seo_application::review_publish`. The three former publication step policy
-modules are deleted. The real QA, publishing and A17 integration consumers
-use the new owner; changes in the new nested domain modules select A17.
-Persisted Truth claims are now grouped, adjudicated and selected by
-`truth_domain::persisted_candidates`; the SQL adapter only loads, converts
-and saves them. The former duplicate contradiction signatures are unified in
-the domain, using exact (non-rounded) typed numeric comparisons so that
-nearly equal disputed fees still trigger HITL instead of auto-verification.
-Completeness judgement and deterministic HITL escalation also belong to
-`truth_domain`; `seo_steps` no longer exports either policy, and all existing
-Temporal workflows, activity dispatch and expert extraction callers use the
-domain directly. Historical `alegria.runtime.json.*` type identifiers are
-preserved in the runtime payload adapter; no new Temporal activity is added.
-Core no longer pulls HTML parser or serialization libraries for editorial QA.
-SEO identity no longer imports Temporal payloads or compiles the `contracts`
-crate; the existing module-boundary check now guards direct dependency edges,
-their transitive heavy SDKs and leaked fully qualified transport imports in
-the pure domain modules. This does not yet certify all `seo_ports` contracts.
-SEO identity and the first Publishing ownership slice are implemented, with
-isolated A17 integration evidence; further editorial transitions remain.
-The Outbox A14/A18 slice covers correlation, typed dispatch errors, lease
-fencing and atomic dead-letter persistence; its PostgreSQL/Qdrant replay
-acceptance passed in the isolated CI. The first Knowledge read boundary now
-projects verified rules from PostgreSQL into pure Rust writer data via a typed
-port. A13 PostgreSQL acceptance is selected by the shared CI impact plan;
-retrieval projections remain non-authoritative.
-The A13 Knowledge reader and pure writer projection now reject incomplete
-numeric fee/timeline facts with a typed contract violation, including the
-affected rule and run identifier; an admissible PostgreSQL record alone must
-not cause an omitted amount/currency/duration to become `0` or `EUR`.
-Canonical vector resolution and Truth diagnostic neighbors also use typed,
-replaceable Knowledge ports, with real Qdrant/A13 evidence. Editorial
-source-context retrieval now owns its selection policy in Knowledge rather
-than the SQLx-named adapter; the active SEO drafting path converts typed
-results to Temporal wire DTOs only after the Knowledge operation returns.
-Truth's active verified-rule write now hands a typed delta to
-`seo_application::knowledge::reconcile_verified_rule_projection`. The
-Voyage/Qdrant/SQLx implementation is replaceable, and Qdrant point metadata
-and corresponding Outbox intent stage in one PostgreSQL transaction. The
-deduplicated Outbox transport, not an immediate direct write, owns projection
-materialization; a demoted point's deletion remains an explicit Qdrant effect.
-The active CMS human-review decision now parses the external decision string
-once in Application, passes `HumanReviewDecision` through its existing port,
-and uses the same `seo_domain::review_decision` policy in the SQL adapter.
-The adapter alone checks the exact pending PostgreSQL revision and active
-Temporal workflow and commits the decision and HITL queue state together.
-The existing disposable PostgreSQL revision-bound E2E is selected by the
-shared `cms_review_revision` suite owner for future changes to this path;
-this does not imply all editorial approval/revision operations are migrated.
-The same PostgreSQL readback now passes through the typed approval port and
-Application; `CmsApproval::approves_revision` is the sole human actor/revision
-eligibility policy, used by the publish adapter and scenario. The wire mapper
-in `seo_steps` is used by both Temporal activities and the existing legacy
-scenario input; malformed persisted decision values fail closed. No deprecated
-protobuf read port or duplicate approval predicate is retained.
-The CLI now parses the external review decision before any SQL/Temporal I/O;
-the Application input is a `HumanReviewDecision`, and it returns the port's
-typed `CmsReviewDecisionOutcome` directly, without another equivalent result
-DTO. Fake-port unit tests prove that invalid human/page requests cause no
-storage or workflow calls; the CLI binary test proves unsupported strings are
-refused before a database connection.
-The CMS publish state decision now lives in `seo_domain::cms_revision`:
-`CmsPublishIntent` rejects unknown external modes, and `CmsRevisionState`
-chooses `review_required`, `approved` or `blocked` together with the matching
-event and output verdict. Both the provisional `seo_steps` check and the SQLx
-persistence adapter use this single policy; only the latter checks the
-database-derived blockers, commits revisions and preserves a published live
-pointer atomically. The `cms_review_revision` impact suite now selects both
-the exact-workflow human-review and CMS-publish PostgreSQL tests. This does not
-prove every editorial revision operation or a public HTTPS release.
-The editorial post-review workflow gate now delegates to
-`seo_domain::review_decision::editorial_review_disposition`. The shared
-`seo_steps::cms_review_wire` mapper translates recorded Temporal strings to
-the typed decision; unknown historical values can only wait, never approve.
-Both the canonical cutover and legacy-compatible Temporal workflow use the
-same domain policy. Temporal still owns `patched` history compatibility,
-durable waiting and resume, while PostgreSQL validates immutable revision
-identity and human reviewer. Changes to either workflow select the actual CMS
-PostgreSQL suite and the Temporal worker-restart E2E.
+1. Найти текущего владельца решения и все реальные вызовы (`rg` по функции и типу).
+2. Менять предметное правило в одном доменном модуле; `seo_application`
+   координирует порты, `seo_steps` и Temporal переводят wire, `infrastructure`
+   исполняет I/O. Исключения требуют конкретного объяснения на примере операции.
+3. Сразу перенести настоящих потребителей и удалить прежний путь; не оставлять
+   совместимость ради тестового приложения.
+4. Проверить unit-поведение и выбранный **рабочий** путь с PostgreSQL/Temporal/
+   Outbox, если он действительно затронут. Точные владельцы suites и image
+   определяются `automation/ci_impact.py` по base/head SHA.
+5. Сохранить существующие persisted IDs и Temporal history/replay-семантику:
+   удаление дублирующего Rust API не означает разрешения менять wire без теста.
 
-The semantic canonical-mapping operation has one domain owner in
-`seo_domain::canonical_mapping`: deterministic symbolic aliases and the
-Qdrant-confidence/HITL policy share one typed output. `seo_steps` no longer
-owns or re-exports its old module. Application calls the existing vector
-search port, while the infrastructure adapter owns Qdrant access; both
-canonical extraction workflows, the direct section activity, expert
-extraction, and the exact registered Temporal JSON payload types use the new
-owner. No Temporal activity name, JSON discriminator, or HITL threshold was
-changed, and invalid/missing vector identities still cannot auto-map.
+## CI и сборка
 
-The current parallel #43 source cuts, **pending integration and canonical CI**,
-give `acquisition::crawl_policy` the robots/retry decisions previously embedded
-in the crawl adapter, and `truth_domain::candidate_intake` the extracted
-proposal's evidence-span, fee-parameter and epistemic-status gates previously
-spread through Temporal. `seo_domain::ia_planning` selects canonical page
-routes, page disposition and required sections; `seo_steps::ia_build_step`
-retains protobuf conversion, artifact IDs and conflict recording.
-`seo_domain::rebuild::detect_rebuild` owns typed rebuild decisions while
-`seo_application::rebuild_detect` coordinates the graph/SQL ports. The
-in-flight `seo_domain::whole_page` scoring/context/advisory cut aims to serve
-both the Temporal whole-page pass and expert extraction. Wider
-`expert_extraction_core/core_runner` gates and adjudication still reside in
-infrastructure, and `runtime_models::seo_blocks` retains draft policy mixed
-with transport types: these are follow-on boundaries, **not A16 completion**.
+- Только `.github/workflows/ci.yml`. PR проходит exact-source `impact`,
+  применимые owners и обязательный агрегат `CI`; пропущенный owner не PASS.
+- Действующие проверки запускаются командой
+  `python3 automation/dev_rust_feedback.py --base <base-ref>` локально и штатным
+  PR CI. Для внешних эффектов локальная команда не заменяет реальный CI.
+- На доверенном `main` `run_main_cache_prime.py` прогревает только повторно
+  используемые Rust libraries; полные тесты и реальные E2E уже принадлежат PR.
+  Rust cache и Docker release — разные графы с разными compile profiles.
+- `select-image` может пропустить Worker на недоставляемом изменении;
+  `package` при необходимости проверяет startup, exact-source SHA, сохраняет
+  архив и Sigstore provenance. Это не установка на staging/production.
 
-### Shared change-impact owner registry (in progress)
-
-`automation/ci_impact.py` is the common local/CI planner. It derives Cargo
-reverse dependencies from `cargo metadata --locked --no-deps` and reports
-`base_sha`, `head_sha`, `scope` (`none`, `scoped`, `full`), affected crates,
-selected real E2E suites, selected images, selected PR job owners and an
-auditable reason for each. Its `ci_job_status` records every owner as
-`required` or `not_applicable` for the exact evaluated source SHA.
-The Rust-backed suite runner consumes the named suite commands from that same
-module; it does not maintain an independent list of A13/A14/A17 test filters.
-Focused Temporal worker restart, Neo4j query and Qdrant materialization suites
-are also selected for their actual source owners. These longer suites are not
-silently counted as run on unrelated changes.
-For the selected Temporal restart suite the same registry first builds real
-`temporal_worker`/`outbox_worker` debug binaries into the **already warmed**
-Cargo target, then passes their absolute paths through the harness's existing
-`INTEGRATION_*_WORKER_BIN` variables. The test still starts, interrupts and
-resumes real processes; it no longer launches a second Cargo compilation tree.
-
-Non-executable Markdown and historical `docs/runs` reports do not select a Rust
-compile or image. Policy Markdown directly read by acceptance scripts still
-selects Product/Truth and source verification; explanatory Markdown needs no
-owner beyond the mandatory impact selector and aggregate CI gate. A live
-`integration_harness/fixtures/visa_truth_certification`
-input selects the actual Temporal/Truth certification E2E, not an archived PASS.
-The fixture-only fast path resolves modified `.html` names through every live
-JSON manifest's `source_inputs.pages[].html_file`, selects all consuming
-`fixture_id`s and passes those IDs via the harness's existing
-`TRUTH_CERT_FIXTURE_IDS` input. A manifest change, unreferenced/renamed HTML or
-incomplete mapping keeps the **entire** 16-fixture certification suite. The
-separate Temporal restart/manual-editorial E2E reads the canonical
-`happy_path_publish_allowed` fixture too; that ID (or an unresolved fixture
-mapping) also selects its real worker-restart test and prebuilt binary preparation.
-Other HTML fixtures do not trigger the restart test without a live consumer.
-The runner rejects externally supplied `TRUTH_CERT_LIMIT` or fixture IDs so that
-an accidental environment filter cannot weaken canonical CI. Runtime fixture
-files do not modify a compiled Rust unit: the selected E2E compiles the
-required harness, without a preceding redundant scoped Cargo check/test.
-The Truth and Temporal restart E2Es both use the same prebuilt real
-`temporal_worker`/`outbox_worker` binaries in the existing Cargo target; the
-runner prepares that shared pair once even when both suites are selected.
-This removes the measured 188.7s nested-worker compilation from the prior
-full Truth canary without replacing its actual PostgreSQL/Temporal processes.
-This optimization is **not** evidence that the full 16-fixture suite ran when
-only one ID is selected; the exact scope is reported in `suite_fixture_ids`
-and printed as `CI_SUITE_FIXTURE_IDS` in the Rust job.
-The Cloudflare static tree and the four Python scripts COPY'd into the Temporal
-image select its packaging even if no Rust crate changed. The `select-image`
-job in the single `ci.yml` workflow checks the report against the exact
-accepted main source and skips packaging for unrelated changes, including
-explicitly known CI/operator-only maintenance files. It records impact evidence
-without launching the release image build on PRs.
-Local feedback shows the same selections, but defers external Docker/provider
-E2E and all release packaging to canonical CI; it cannot be accepted as CI PASS.
-
-The PR workflow now runs the source-bound `impact` job first, then schedules
-only the named owners. Every skipped owner is visible as `skipped`, never as a
-test PASS. The `CI` aggregate requires all eight known owner results: `success`
-for selected jobs and `skipped` for explicitly non-applicable jobs, plus an
-accepted impact plan tied to the exact PR workflow SHA. Missing jobs, missing
-plans, a wrong SHA, unexpected execution/skips or a failed selector all fail
-the aggregate. The `main` merge provenance check still requires an accepted
-exact-source PR `impact` and `CI` result and the complete owner result set.
-The mandatory selector also runs the existing documentation layout contract,
-so a docs-only PR cannot hide an invalid nested docs tree by skipping `verify`.
-Unknown/global impacts and Dockerfiles without a narrow verified build owner
-retain all eight owners. This is source-policy acceptance, not certification
-that every selected image was built, deployed or smoke-tested.
-
-**Remaining:** known Cargo.lock/protobuf inputs have scoped exact-SHA canary
-evidence (Issue #43 A6), while unknown schemas still fail closed to `full`.
-Full editorial decision ownership, broader Temporal/graph coverage and
-complete signed/no-build release provenance still require separate evidence.
-PR #44 was merged at `d95927e`; follow-up regression PR #56 was merged at
-`498a866`. Keep Issue #43 open until the remaining criteria are proven.
+**Не объявлять #43 выполненным** только потому, что переносы завершены и CI
+зелёный. Нужны предусмотренные Issue интеграционные доказательства и реальные
+времена каждого класса изменений; прогретое ≤5:00 ещё не доказано устойчиво.

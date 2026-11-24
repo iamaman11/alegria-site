@@ -2,6 +2,7 @@ use contracts::generated::alegria::temporal::v1::{
     CannibalizationConflictState, IaBuildInputPayload, IaBuildOutputPayload, PageBlueprintState,
     PageNodeState,
 };
+use primitives::errors::DomainError;
 
 use crate::seo_step_support::{artifact_key, scope_signature};
 use seo_domain::ia_planning::{self, IaClusterCandidate, IaClusterDisposition, IaScope};
@@ -49,8 +50,8 @@ fn push_blueprint(
     blueprint_key
 }
 
-pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
-    let fallback_scope = scope_signature(input.scope.as_ref());
+pub fn execute(input: &IaBuildInputPayload) -> Result<IaBuildOutputPayload, DomainError> {
+    let fallback_scope = scope_signature(input.scope.as_ref())?;
     let mut page_nodes = Vec::new();
     let mut page_blueprints = Vec::new();
     let mut canonical_owner: std::collections::BTreeMap<String, String> =
@@ -283,10 +284,26 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
             canonical_url_family: "visa_type_leaf".into(),
         });
     }
-    IaBuildOutputPayload {
+    Ok(IaBuildOutputPayload {
         page_nodes,
         page_blueprints,
         cannibalization_conflicts,
+    })
+}
+
+#[cfg(test)]
+fn canonical_test_scope() -> contracts::generated::alegria::temporal::v1::SeoScopePayload {
+    let scope =
+        seo_domain::identity::derive_scope("alegria-site", "ru-RU", "ES", "tourist", "standard")
+            .unwrap();
+    contracts::generated::alegria::temporal::v1::SeoScopePayload {
+        market: scope.market,
+        locale: scope.locale,
+        country_code: scope.country_code,
+        visa_type: scope.visa_type,
+        applicant_profile: scope.applicant_profile,
+        raw_scope_tuple: scope.raw_scope_tuple,
+        scope_signature: scope.scope_signature,
     }
 }
 
@@ -296,21 +313,15 @@ mod tests {
 
     #[test]
     fn duplicate_topic_family_does_not_create_duplicate_page_nodes() {
+        let scope = canonical_test_scope();
+        let scope_signature = scope.scope_signature.clone();
         let output = execute(&IaBuildInputPayload {
             verified_support: Vec::new(),
-            scope: Some(
-                contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    locale: "ru-RU".to_string(),
-                    country_code: "ES".to_string(),
-                    visa_type: "tourist".to_string(),
-                    scope_signature: "scope".to_string(),
-                    ..Default::default()
-                },
-            ),
+            scope: Some(scope),
             keyword_clusters: vec![
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-a".to_string(),
-                    scope_signature: "scope".to_string(),
+                    scope_signature: scope_signature.clone(),
                     seed_keyword: "visa refusal guide".to_string(),
                     dominant_intent: "informational".to_string(),
                     topic_keys: vec!["visa_refusal_pain_point".to_string()],
@@ -319,7 +330,7 @@ mod tests {
                 },
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-b".to_string(),
-                    scope_signature: "scope".to_string(),
+                    scope_signature,
                     seed_keyword: "visa refusal appeal".to_string(),
                     dominant_intent: "informational".to_string(),
                     topic_keys: vec!["visa_refusal_pain_point".to_string()],
@@ -328,7 +339,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let detail_pages = output
             .page_nodes
             .iter()
@@ -340,33 +352,28 @@ mod tests {
 
     #[test]
     fn unicode_keyword_produces_human_slug_and_research_query_is_blocked() {
+        let scope = canonical_test_scope();
+        let scope_signature = scope.scope_signature.clone();
         let output = execute(&IaBuildInputPayload {
             verified_support: Vec::new(),
-            scope: Some(
-                contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    locale: "ru-RU".into(),
-                    country_code: "ES".into(),
-                    visa_type: "tourist".into(),
-                    scope_signature: "scope".into(),
-                    ..Default::default()
-                },
-            ),
+            scope: Some(scope),
             keyword_clusters: vec![
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-1".into(),
-                    scope_signature: "scope".into(),
+                    scope_signature: scope_signature.clone(),
                     seed_keyword: "Стоимость визы в Испанию для белорусов".into(),
                     ..Default::default()
                 },
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-2".into(),
-                    scope_signature: "scope".into(),
+                    scope_signature,
                     seed_keyword: "site:exteriores.gob.es визовая страница".into(),
                     ..Default::default()
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let fee = output
             .page_nodes
             .iter()
@@ -386,35 +393,30 @@ mod tests {
 
     #[test]
     fn specialized_pages_keep_distinct_canonical_paths_per_topic() {
+        let scope = canonical_test_scope();
+        let scope_signature = scope.scope_signature.clone();
         let output = execute(&IaBuildInputPayload {
             verified_support: Vec::new(),
-            scope: Some(
-                contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    locale: "ru-RU".into(),
-                    country_code: "ES".into(),
-                    visa_type: "tourist".into(),
-                    scope_signature: "scope".into(),
-                    ..Default::default()
-                },
-            ),
+            scope: Some(scope),
             keyword_clusters: vec![
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-documents".into(),
-                    scope_signature: "scope".into(),
+                    scope_signature: scope_signature.clone(),
                     seed_keyword: "Документы на туристическую визу".into(),
                     dominant_intent: "informational".into(),
                     ..Default::default()
                 },
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-requirements".into(),
-                    scope_signature: "scope".into(),
+                    scope_signature,
                     seed_keyword: "Visa requirements for tourists".into(),
                     dominant_intent: "informational".into(),
                     ..Default::default()
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let pages = output
             .page_nodes
             .iter()
@@ -443,7 +445,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let page = output
             .page_nodes
             .iter()
@@ -467,7 +470,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         let page = output
             .page_nodes
             .iter()
@@ -479,21 +483,15 @@ mod tests {
 
     #[test]
     fn ambiguous_topic_family_is_blocked() {
+        let scope = canonical_test_scope();
+        let scope_signature = scope.scope_signature.clone();
         let output = execute(&IaBuildInputPayload {
             verified_support: Vec::new(),
-            scope: Some(
-                contracts::generated::alegria::temporal::v1::SeoScopePayload {
-                    locale: "ru-RU".to_string(),
-                    country_code: "ES".to_string(),
-                    visa_type: "tourist".to_string(),
-                    scope_signature: "scope".to_string(),
-                    ..Default::default()
-                },
-            ),
+            scope: Some(scope),
             keyword_clusters: vec![
                 contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: "cluster-a".to_string(),
-                    scope_signature: "scope".to_string(),
+                    scope_signature,
                     seed_keyword: "visa support".to_string(),
                     dominant_intent: "informational".to_string(),
                     topic_keys: vec!["topic_a".to_string(), "topic_b".to_string()],
@@ -502,7 +500,8 @@ mod tests {
                 },
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert!(output.page_nodes.iter().any(
             |page| page.keyword_cluster_key == "cluster-a" && page.lifecycle_state == "blocked"
         ));
@@ -530,7 +529,8 @@ mod tests {
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 3); // country + visa hubs + first topic
         assert_eq!(output.cannibalization_conflicts.len(), 2);
         assert_eq!(
@@ -561,7 +561,8 @@ mod tests {
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 4);
         assert_eq!(output.cannibalization_conflicts.len(), 1);
         let conflict = &output.cannibalization_conflicts[0];
@@ -575,7 +576,7 @@ mod tests {
 mod evidence_derived_ia_tests {
     use super::*;
     use contracts::generated::alegria::temporal::v1::{
-        KeywordClusterState, SeoScopePayload, SeoVerifiedFactSupportState,
+        KeywordClusterState, SeoVerifiedFactSupportState,
     };
 
     #[test]
@@ -588,12 +589,7 @@ mod evidence_derived_ia_tests {
             ..Default::default()
         };
         let output = execute(&IaBuildInputPayload {
-            scope: Some(SeoScopePayload {
-                country_code: "ES".into(),
-                visa_type: "tourist".into(),
-                locale: "ru-RU".into(),
-                ..Default::default()
-            }),
+            scope: Some(canonical_test_scope()),
             keyword_clusters: vec![KeywordClusterState {
                 seed_keyword: "виза документы стоимость сроки".into(),
                 cluster_key: "cluster".into(),
@@ -605,7 +601,8 @@ mod evidence_derived_ia_tests {
                 support("timeline_item"),
             ],
             ..Default::default()
-        });
+        })
+        .unwrap();
         assert_eq!(output.page_nodes.len(), 5);
         assert!(output
             .page_nodes
