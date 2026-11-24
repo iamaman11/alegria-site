@@ -896,7 +896,7 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
     sqlx::query("INSERT INTO site.cms_publish_events (event_key,event_type,page_node_key,scope_signature,revision_id,event_payload) VALUES ($1,'seo_page_review_requested',$2,$3,$4,$5)")
         .bind(format!("cms-blocked-event-{marker}")).bind(&page).bind(&scope).bind(&blocked_revision)
         .bind(serde_json::json!({"run_id": run_id})).execute(pool).await.unwrap();
-    let mut rejected = request(Some(&blocked_revision));
+    let mut rejected = request(&blocked_revision);
     rejected.decision = HumanReviewDecision::Blocked;
     sqlx_seo_cms_adapter::apply_human_review_decision(pool, &rejected)
         .await.unwrap();
@@ -920,7 +920,7 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
 
     sqlx::query("UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1")
         .bind(Uuid::parse_str(&run_id).unwrap()).execute(pool).await.unwrap();
-    let mut after_terminal = request(Some(&replacement));
+    let mut after_terminal = request(&replacement);
     after_terminal.actor_role = "other_editor_fixture".to_string();
     assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &after_terminal).await.is_err());
     let count: i64 = sqlx::query_scalar(
