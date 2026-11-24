@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 
 use operation_protocol::{
-    ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId,
-    OperationOwnerId, OperationRef, PortId,
+    ArtifactSchema, IdempotencyPolicy, Operation, OperationContract, OperationId, OperationOwnerId,
+    OperationRef, PortId,
 };
 
 use super::{editorial_topics, entity_spans, layer_routing, operational_entities};

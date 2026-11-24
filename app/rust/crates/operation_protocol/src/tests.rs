@@ -516,7 +516,10 @@ fn pinned_contracts_use_json_safe_roundtrip_and_canonical_sorting() {
     let serialized = serde_json::to_string(&scenario).unwrap();
     let restored: ExecutionPlan = serde_json::from_str(&serialized).unwrap();
     assert_eq!(restored, scenario);
-    assert_eq!(restored.validate(&catalog()).unwrap().hash(), &scenario.hash);
+    assert_eq!(
+        restored.validate(&catalog()).unwrap().hash(),
+        &scenario.hash
+    );
 
     scenario.pinned_contracts.reverse();
     assert_eq!(scenario.canonical_hash().unwrap(), restored.hash);

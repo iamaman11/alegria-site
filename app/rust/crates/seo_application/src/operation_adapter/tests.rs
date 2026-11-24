@@ -1,11 +1,7 @@
 use super::*;
-use operation_protocol::{
-    ExternalArtifact, OperationNode, PlanHash, PLAN_SCHEMA_REVISION,
-};
-use seo_domain::extraction::{
-    editorial_topics, entity_spans, layer_routing, operational_entities,
-};
+use operation_protocol::{ExternalArtifact, OperationNode, PlanHash, PLAN_SCHEMA_REVISION};
 use seo_domain::canonical_mapping;
+use seo_domain::extraction::{editorial_topics, entity_spans, layer_routing, operational_entities};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -155,11 +151,15 @@ fn real_operations_execute_in_a_composable_order_without_a_site_pipeline() {
     let routed: layer_routing::LayerRouterOutput = result(&executed, "route-output");
     assert_eq!(routed.primary_layer, "procedural");
     let spans: entity_spans::EntitySpanOutput = result(&executed, "entity-output");
-    assert!(spans.mentions.iter().any(|mention| {
-        mention.entity_type == "fee" && mention.raw_text == "80 EUR"
-    }));
+    assert!(spans
+        .mentions
+        .iter()
+        .any(|mention| { mention.entity_type == "fee" && mention.raw_text == "80 EUR" }));
     let topics: editorial_topics::EditorialExtractionOutput = result(&executed, "editorial-output");
-    assert!(topics.topics.iter().any(|topic| topic.topic_type == "faq_topic"));
+    assert!(topics
+        .topics
+        .iter()
+        .any(|topic| topic.topic_type == "faq_topic"));
 }
 
 #[test]
@@ -167,13 +167,23 @@ fn subset_scenario_runs_editorial_without_required_acquisition_or_publish() {
     let registry = semantic_extraction_registry().unwrap();
     let (plan, admitted) = plan(
         &registry,
-        vec![node::<EditorialTopics>("faq", "editorial-input", "faq-output")],
-        vec![seed::<EditorialTopics>("editorial-input", &editorial_input())],
+        vec![node::<EditorialTopics>(
+            "faq",
+            "editorial-input",
+            "faq-output",
+        )],
+        vec![seed::<EditorialTopics>(
+            "editorial-input",
+            &editorial_input(),
+        )],
     );
     let executed = registry.execute(&plan, admitted).unwrap();
     assert_eq!(executed.order, [OperationInstanceId::from("faq")]);
     let topics: editorial_topics::EditorialExtractionOutput = result(&executed, "faq-output");
-    assert!(topics.topics.iter().any(|topic| topic.topic_type == "faq_topic"));
+    assert!(topics
+        .topics
+        .iter()
+        .any(|topic| topic.topic_type == "faq_topic"));
     assert!(!executed.artifacts.contains_key(&"route-output".into()));
 }
 
@@ -194,9 +204,15 @@ fn repeated_real_operation_is_not_a_retry_and_new_owner_binding_works() {
         ],
     );
     let checked = plan.validate(registry.catalog()).unwrap();
-    let first_key = checked.execution_key(&"mentions-1".into(), "same-input").unwrap();
-    let retry_key = checked.execution_key(&"mentions-1".into(), "same-input").unwrap();
-    let second_key = checked.execution_key(&"mentions-2".into(), "same-input").unwrap();
+    let first_key = checked
+        .execution_key(&"mentions-1".into(), "same-input")
+        .unwrap();
+    let retry_key = checked
+        .execution_key(&"mentions-1".into(), "same-input")
+        .unwrap();
+    let second_key = checked
+        .execution_key(&"mentions-2".into(), "same-input")
+        .unwrap();
     assert_eq!(first_key, retry_key);
     assert_ne!(first_key, second_key);
 
@@ -207,9 +223,10 @@ fn repeated_real_operation_is_not_a_retry_and_new_owner_binding_works() {
     assert!(!first.mentions.is_empty());
     let operations: operational_entities::OperationalExtractionOutput =
         result(&executed, "operations-output");
-    assert!(operations.entities.iter().any(|entity| {
-        entity.entity_kind == "office_schedule"
-    }));
+    assert!(operations
+        .entities
+        .iter()
+        .any(|entity| { entity.entity_kind == "office_schedule" }));
 }
 
 #[test]
@@ -241,17 +258,18 @@ fn real_entity_output_is_consumed_by_canonical_mapping_through_a_dag_edge() {
     let checked = plan.validate(registry.catalog()).unwrap();
     assert_eq!(
         checked.execution_order(),
-        [OperationInstanceId::from("entities"), OperationInstanceId::from("canonical")]
+        [
+            OperationInstanceId::from("entities"),
+            OperationInstanceId::from("canonical")
+        ]
     );
     let executed = registry.execute(&plan, admitted).unwrap();
     let mapping: canonical_mapping::CanonicalMappingOutput = result(&executed, "canonical-output");
     assert!(mapping.mappings.iter().any(|item| {
-        item.raw_text == "80 EUR"
-            && item.canonical_key.as_deref() == Some("consular_fee")
+        item.raw_text == "80 EUR" && item.canonical_key.as_deref() == Some("consular_fee")
     }));
     assert!(mapping.mappings.iter().any(|item| {
-        item.raw_text == "15 дней"
-            && item.canonical_key.as_deref() == Some("processing_time")
+        item.raw_text == "15 дней" && item.canonical_key.as_deref() == Some("processing_time")
     }));
 }
 
@@ -274,16 +292,27 @@ fn typed_validation_blocks_wrong_schema_or_scope_before_operation_execution() {
     );
 
     let mut wrong_schema = plan.clone();
-    wrong_schema.external_artifacts.get_mut(&"input".into()).unwrap().schema.revision = 9;
+    wrong_schema
+        .external_artifacts
+        .get_mut(&"input".into())
+        .unwrap()
+        .schema
+        .revision = 9;
     wrong_schema = wrong_schema.seal(registry.catalog()).unwrap();
     assert!(matches!(
         registry.execute(&wrong_schema, admitted.clone()),
-        Err(OperationRunError::InvalidPlan(PlanError::ArtifactSchemaMismatch { .. }))
+        Err(OperationRunError::InvalidPlan(
+            PlanError::ArtifactSchemaMismatch { .. }
+        ))
     ));
     assert_eq!(invocations.load(Ordering::SeqCst), 0);
 
     let mut wrong_scope = admitted;
-    wrong_scope.get_mut(&"input".into()).unwrap().scope.tenant_id = "another-tenant".into();
+    wrong_scope
+        .get_mut(&"input".into())
+        .unwrap()
+        .scope
+        .tenant_id = "another-tenant".into();
     assert!(matches!(
         registry.execute(&plan, wrong_scope),
         Err(OperationRunError::InvalidArtifactEnvelope(_))

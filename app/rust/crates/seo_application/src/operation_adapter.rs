@@ -57,7 +57,10 @@ pub enum OperationRunError {
         reason: String,
     },
     #[error("operation {operation:?} produced invalid output port {port:?}")]
-    InvalidOutputPort { operation: OperationRef, port: PortId },
+    InvalidOutputPort {
+        operation: OperationRef,
+        port: PortId,
+    },
 }
 
 type Payloads = BTreeMap<PortId, (ArtifactId, Vec<u8>)>;
@@ -88,7 +91,9 @@ impl OperationRegistry {
             || !contract.effects.is_empty()
             || contract.idempotency != IdempotencyPolicy::Pure
         {
-            return Err(OperationRunError::UnsupportedPureBinding(contract.reference));
+            return Err(OperationRunError::UnsupportedPureBinding(
+                contract.reference,
+            ));
         }
         let (input_port, _) = contract.inputs.iter().next().expect("checked len");
         let (output_port, _) = contract.outputs.iter().next().expect("checked len");
@@ -97,13 +102,14 @@ impl OperationRegistry {
         let reference = contract.reference.clone();
         let error_reference = reference.clone();
         let handler: CheckedHandler = Box::new(move |inputs: &Payloads| {
-            let (artifact, bytes) = inputs
-                .get(&input_port)
-                .ok_or_else(|| OperationRunError::InvalidInput {
-                    operation: error_reference.clone(),
-                    artifact: ArtifactId::from("missing-input"),
-                    reason: "required input port was not bound".to_owned(),
-                })?;
+            let (artifact, bytes) =
+                inputs
+                    .get(&input_port)
+                    .ok_or_else(|| OperationRunError::InvalidInput {
+                        operation: error_reference.clone(),
+                        artifact: ArtifactId::from("missing-input"),
+                        reason: "required input port was not bound".to_owned(),
+                    })?;
             let typed: O::Input =
                 serde_json::from_slice(bytes).map_err(|error| OperationRunError::InvalidInput {
                     operation: error_reference.clone(),
