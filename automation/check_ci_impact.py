@@ -176,13 +176,37 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertTrue(decision["worker_required"])
                 self.assertEqual(decision["reason"], "shared_impact_registry")
 
-    def test_worker_cache_export_preserves_source_only_then_asset_rebase(self) -> None:
-        # Exporting after a Rust edit is mandatory: the next asset-only main
-        # merge must find that compiled builder image in the shared cache.
+    def test_worker_cache_export_reuses_dependency_skeleton_on_source_and_asset_changes(self) -> None:
+        # A Rust implementation edit leaves the dependency skeleton unchanged.
+        # Let a later assets-only main recompile its exact current source
+        # instead of uploading the entire builder after this source change.
         source = ["app/rust/services/temporal/src/main.rs"]
         first = worker_release_decision(self.impact(*source), source, manual=False)
         self.assertTrue(first["worker_required"])
-        self.assertTrue(first["cache_export_required"])
+        self.assertFalse(first["cache_export_required"])
+
+        mixed = source + ["infra/cloudflare/seo-static/build-entry.js"]
+        mixed_decision = worker_release_decision(self.impact(*mixed), mixed, manual=False)
+        self.assertTrue(mixed_decision["worker_required"])
+        self.assertFalse(mixed_decision["cache_export_required"])
+
+        # The actual large cut mixes changed Worker source with the existing
+        # CI/impact-owner and documentation files. They do not enter the
+        # dependency-skeleton Docker context even though PR CI is FULL.
+        cut = [
+            "app/rust/crates/infrastructure/src/adapters/truth_extraction_llm_adapter.rs",
+            "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
+            "app/rust/crates/integration_harness/src/tests/provider_runtime_surface_tests.rs",
+            ".github/workflows/ci.yml",
+            "automation/ci_impact.py",
+            "automation/check_ci_impact.py",
+            "automation/check_cargo_feedback.py",
+            "automation/run_scoped_cargo_feedback.py",
+            "docs/ci-fast-path.md",
+        ]
+        cut_decision = worker_release_decision(self.impact(*cut), cut, manual=False)
+        self.assertTrue(cut_decision["worker_required"])
+        self.assertFalse(cut_decision["cache_export_required"])
 
         # Node dependency changes alter the other expensive reusable layer.
         manifest = ["infra/cloudflare/seo-static/package.json"]
@@ -209,7 +233,9 @@ class ImpactFixtures(unittest.TestCase):
             ["app/contracts/proto/temporal_payloads.proto"],
             ["automation/prepare_worker_build_context.py"],
             ["automation/new_release_helper.py"],
-            ["app/rust/services/temporal/src/main.rs", "infra/cloudflare/seo-static/build-entry.js"],
+            ["app/rust/unowned/src/lib.rs"],
+            [".github/workflows/ci.yml", "app/rust/unowned/src/lib.rs"],
+            ["app/rust/services/temporal/build.rs", "infra/cloudflare/seo-static/build-entry.js"],
             ["infra/cloudflare/seo-static/build-entry.js", "automation/new_release_helper.py"],
         ):
             with self.subTest(changed=changed):

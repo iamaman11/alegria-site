@@ -477,15 +477,28 @@ def worker_release_decision(report: dict[str, Any], changed: list[str], *, manua
         required, reason = False, "ci_operator_maintenance_only"
     else:
         required, reason = status == "selected", "shared_impact_registry"
-    # Buildx's reusable builder layers are source-specific, not just keyed by
-    # Cargo manifests. Even a source-only Rust edit must export the updated
-    # binary layer: a subsequent static-assets-only release reuses it. Pure
-    # delivered assets need only rebase unchanged Rust/Node dependency layers;
-    # exporting the whole builder cache again would be duplicate work.
-    # An explicit rebuild, an unknown input, or ANY executable/compiler input
-    # conservatively keeps cache export enabled.
-    static_delivery_only = all(
-        path in WORKER_PACKAGING_FILES
+    # The Docker dependency-skeleton layer contains Cargo manifests/lock and
+    # stub targets, not the real Rust src/ files. A Rust implementation edit
+    # therefore reuses the existing max-mode cache, and exporting that entire
+    # multi-GB builder again costs far more than rebuilding its changed native
+    # binary on a later assets-only release. Static assets likewise never
+    # change the dependency skeleton. Preserve the existing rich cache by
+    # skipping export for these known inputs; any manifest, Docker recipe,
+    # build script, unknown input or manual rebuild still refreshes it.
+    # CI/operator-only files are verified by the PR gate but never copied into
+    # the Worker Docker context. A mixed change must not turn a source-only
+    # build into a 169-second cache upload just because their planner scope is
+    # conservatively FULL. Any *other* global/unmapped reason stays fail-closed.
+    neutral_global_reasons = {
+        f"global input: {path}" for path in changed if path in NON_WORKER_DELIVERY_INPUTS
+    }
+    has_unknown_input = any(
+        reason not in neutral_global_reasons for reason in report.get("full_scope_reasons", [])
+    )
+    stable_dependency_inputs_only = not has_unknown_input and all(
+        path in NON_WORKER_DELIVERY_INPUTS
+        or (path.startswith("app/rust/") and "/src/" in path and path.endswith(".rs"))
+        or path in WORKER_PACKAGING_FILES
         or (path.startswith("infra/cloudflare/seo-static/")
             and Path(path).name not in {"package.json", "package-lock.json", "npm-shrinkwrap.json"}
             and path not in WORKER_NONDELIVERY_FILES)
@@ -493,7 +506,7 @@ def worker_release_decision(report: dict[str, Any], changed: list[str], *, manua
     )
     return {
         "worker_required": required,
-        "cache_export_required": required and (manual or not static_delivery_only),
+        "cache_export_required": required and (manual or not stable_dependency_inputs_only),
         "reason": reason,
         "changed_paths": sorted(set(changed)),
     }

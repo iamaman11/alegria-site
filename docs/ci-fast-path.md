@@ -95,9 +95,15 @@ The Docker release also isolates the Cloudflare `npm install` stage behind
 its package manifest: source-only, website asset-only and source-SHA-only
 changes cannot invalidate that dependency install. The GHA Buildx exporter
 uses low-level zstd compression while retaining intermediate Rust dependency
-layers (`mode=max`). The first accepted release after these changes must
-measure both the Rust cache reuse and the export time; stage order and
-synthetic impact checks alone are not a warm-cache measurement.
+layers (`mode=max`) when manifests/lock, the Docker recipe, or unknown native
+inputs change. Ordinary Rust implementation edits and static assets reuse that
+existing cache without exporting it again. A later assets-only release may
+recompile the exact current Rust source; its runtime, SHA, archive and
+attestation checks remain mandatory. Main CI #450 measured 134.8s for the
+dependency skeleton, 39.2s for the real Rust source build, and 169.2s for the
+full Buildx cache export (61.8s preparation + 107.4s upload). The new export
+policy targets this measured critical path; verify the five-minute goal on a
+real accepted-main run.
 
 The Dockerfile now requires worker-context.json produced by that exact-SHA
 preparation. For local reproduction, prepare the context from a clean checked

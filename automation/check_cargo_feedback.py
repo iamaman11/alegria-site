@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -19,7 +20,8 @@ from ci_impact import (
     suite_commands_by_ci_job, suite_commands_for_report,
 )
 from run_scoped_cargo_feedback import (
-    cargo_commands_for_ci, main as run_scoped_cargo_feedback, selected_preparations,
+    cargo_commands_for_ci, main as run_scoped_cargo_feedback,
+    run_verify_suites_in_parallel, selected_preparations,
 )
 
 
@@ -238,16 +240,73 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         ]
         executions, output, evidence = self.run_plan(suites, suite_job="verify")
         assigned = suite_commands_by_ci_job(self.report(suites))["verify"]
-        self.assertEqual([command for command, _ in executions], [command for _, command in assigned])
+        # One compile of the exact e2e binary precedes two independent lanes.
+        self.assertEqual(executions[0][0], [
+            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "--lib", "--no-run", "--locked",
+        ])
+        self.assertCountEqual(
+            [tuple(command) for command, _ in executions[1:]],
+            [tuple(command) for _, command in assigned],
+        )
         self.assertEqual({name for name, _ in assigned}, {
             "cms_review_revision", "draft_qa_scenario", "knowledge_a13", "outbox_a14",
             "planning_atomicity", "publishing_a17", "truth_adjudication_integrity",
         })
         self.assertNotIn("CI_SUITE_PREPARE=", output)
         self.assertNotIn("CI_WORKSPACE_UNIT_TESTS=", output)
+        self.assertIn("CI_VERIFY_E2E_PARALLEL=2 suites=7", output)
+        self.assertEqual(output.count("CI_SUITE="), len(assigned))
         self.assertEqual(evidence["suite_job"], "verify")
         self.assertEqual(evidence["selected_suites"], [name for name, _ in assigned])
-        self.assertEqual(len(evidence["measurements"]), len(assigned))
+        self.assertEqual(len(evidence["measurements"]), len(assigned) + 1)
+
+    def test_verify_parallel_suites_propagate_failures_without_silently_dropping_other_tests(self) -> None:
+        report = self.report(["cms_review_revision", "knowledge_a13", "outbox_a14"])
+        suites = suite_commands_by_ci_job(report)["verify"]
+        executed: list[tuple[str, ...]] = []
+
+        def run(command: list[str], **kwargs: object) -> dict:
+            executed.append(tuple(command))
+            output = kwargs.get("output")
+            if output is not None:
+                output.write("e2e suite executed\n")
+            if "knowledge_a13_" in command:
+                raise subprocess.CalledProcessError(7, command)
+            return {"command": command, "exit_code": 0}
+
+        with (patch("run_scoped_cargo_feedback.run_cargo", side_effect=run),
+              patch("run_scoped_cargo_feedback.WORKSPACE", WORKSPACE),
+              patch("sys.stdout", new_callable=io.StringIO) as output):
+            with self.assertRaises(subprocess.CalledProcessError) as error:
+                run_verify_suites_in_parallel(report, suites)
+        self.assertEqual(error.exception.returncode, 7)
+        self.assertEqual(len(executed), len(suites) + 1)
+        self.assertCountEqual(
+            [tuple(command) for command in executed[1:]],
+            [tuple(command) for _, command in suites],
+        )
+        self.assertIn("CI_SUITE_FAILED=knowledge_a13", output.getvalue())
+        self.assertEqual(output.getvalue().count("e2e suite executed"), len(suites))
+
+    def test_verify_parallel_suites_actually_overlap_after_single_precompile(self) -> None:
+        report = self.report(["cms_review_revision", "knowledge_a13"])
+        suites = suite_commands_by_ci_job(report)["verify"]
+        rendezvous = threading.Barrier(2)
+        started: list[tuple[str, ...]] = []
+
+        def run(command: list[str], **kwargs: object) -> dict:
+            started.append(tuple(command))
+            if "--no-run" not in command:
+                rendezvous.wait(timeout=3)
+            return {"command": command, "exit_code": 0}
+
+        with (patch("run_scoped_cargo_feedback.run_cargo", side_effect=run),
+              patch("sys.stdout", new_callable=io.StringIO)):
+            measurements = run_verify_suites_in_parallel(report, suites)
+        self.assertEqual(len(measurements), 3)
+        self.assertEqual(len(started), 3)
+        self.assertIn("--no-run", started[0])
 
     def test_delegation_rejects_ungated_verify_and_noncanonical_full_command(self) -> None:
         report = self.report([])
