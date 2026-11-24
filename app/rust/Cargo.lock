@@ -5124,6 +5124,7 @@ name = "temporal_pg_effects"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "futures",
  "futures-util",
  "postgres_store",
  "serde_json",

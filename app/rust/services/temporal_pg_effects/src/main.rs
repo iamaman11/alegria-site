@@ -12,6 +12,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
+use futures::FutureExt;
 use postgres_store::truth_review_effect_v3::{
     assert_unprivileged_pg_effect_role, execute_admitted_reconcile, ReconcileTruthReviewsError,
     ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
@@ -185,14 +186,14 @@ async fn main() -> Result<()> {
     // not join the legacy V1/V2 or pure-DAG worker Task Queue.
     let mut command_options = WorkerOptions::new(COMMAND_TASK_QUEUE).build();
     command_options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
-    let command_worker = Worker::new(&runtime, client.clone(), command_options)
+    let mut command_worker = Worker::new(&runtime, client.clone(), command_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let activity_options = WorkerOptions::new(PG_EFFECT_TASK_QUEUE)
         .register_activities(PgTruthReviewActivities {
             pool: Arc::new(pool),
         })
         .build();
-    let activity_worker = Worker::new(&runtime, client, activity_options)
+    let mut activity_worker = Worker::new(&runtime, client, activity_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     tracing::info!(
         command_queue = COMMAND_TASK_QUEUE,
