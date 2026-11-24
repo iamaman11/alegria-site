@@ -19,8 +19,8 @@ use contracts::generated::alegria::temporal::v1::{
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::{sqlx_adapter::AlegriaPgPool, sqlx_seo_adapter};
-use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use primitives::errors::DomainError;
+use runtime_composition::adapters::seo_ports_sqlx_adapter::SqlxSeoRuntimeRepository;
 use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::{
     CrawlIngestRepository, EditorialGenerationPort, ProjectionStatusRepository,

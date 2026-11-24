@@ -37,9 +37,7 @@ pub async fn load_planning_links(
     scope_signature: &str,
 ) -> Result<Vec<GraphLinkEvidence>> {
     let mut result = graph
-        .execute(
-            query(PLANNING_LINKS_CYPHER).param("scope_signature", scope_signature.to_string()),
-        )
+        .execute(query(PLANNING_LINKS_CYPHER).param("scope_signature", scope_signature.to_string()))
         .await
         .context("execute planning links Neo4j query")?;
     let mut links = Vec::new();
