@@ -2,6 +2,7 @@ pub mod cms_review;
 pub mod drafting;
 pub mod execution;
 pub mod knowledge;
+pub mod operation_adapter;
 pub mod planning;
 pub mod rebuild_detect;
 pub mod review_publish;

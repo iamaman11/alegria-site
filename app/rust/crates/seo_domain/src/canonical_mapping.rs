@@ -94,8 +94,15 @@ fn lexicon_token_lookup(s: &str) -> Option<&'static str> {
 }
 
 pub fn execute(input: &CanonicalMappingInput) -> CanonicalMappingOutput {
-    let mut out = Vec::with_capacity(input.mentions.len());
-    for m in &input.mentions {
+    map_mentions(&input.mentions)
+}
+
+/// Pure canonical lookup over typed mentions. The source section identity is
+/// carried by the admitted artifact envelope when this function is composed
+/// after entity extraction, rather than being invented by the adapter.
+pub fn map_mentions(mentions: &[MentionForMapping]) -> CanonicalMappingOutput {
+    let mut out = Vec::with_capacity(mentions.len());
+    for m in mentions {
         let entity_type = normalized(&m.entity_type);
         let entity_type_map = match entity_type.as_str() {
             "fee" => Some(("consular_fee", "typed_entity", 0.97f32)),

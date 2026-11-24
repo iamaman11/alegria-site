@@ -165,14 +165,22 @@ pub struct OperationNode {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PinnedContract {
+    pub reference: OperationRef,
+    pub fingerprint: ContractHash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExecutionPlan {
     pub schema_revision: u16,
     pub scope: RunScope,
     pub allowed_effects: BTreeSet<EffectId>,
     pub external_artifacts: BTreeMap<ArtifactId, ExternalArtifact>,
     /// Full contract fingerprints (including owner/effects/schemas), pinned to
-    /// operation identity and revision at the start of the plan.
-    pub contract_fingerprints: BTreeMap<OperationRef, ContractHash>,
+    /// operation identity and revision at the start of the plan. A sorted list
+    /// is required because JSON object keys cannot be struct-valued.
+    pub pinned_contracts: Vec<PinnedContract>,
     pub nodes: Vec<OperationNode>,
     pub hash: PlanHash,
 }
@@ -231,6 +239,8 @@ pub enum PlanError {
     ContractNotPinned(OperationRef),
     #[error("plan pins unused operation contract: {0:?}")]
     UnexpectedPinnedContract(OperationRef),
+    #[error("plan pins operation contract more than once: {0:?}")]
+    DuplicatePinnedContract(OperationRef),
     #[error("contract owner, schemas, effects or idempotency changed for pinned operation: {0:?}")]
     ContractFingerprintMismatch(OperationRef),
     #[error("duplicate operation instance: {0:?}")]
@@ -331,14 +341,24 @@ fn verify_contract(contract: &OperationContract) -> Result<(), PlanError> {
 impl ExecutionPlan {
     /// A manifest is sealed once, prior to scheduling. No ambient current
     /// state, remote service, clock or random generator affects its identity.
+    /// Only use on a newly authored draft: sealing replaces pinned contracts.
+    /// Loaded, untrusted or resumed plans MUST call `validate` as-is instead,
+    /// so an owner contract change cannot be silently re-pinned.
     pub fn seal(mut self, catalog: &ContractCatalog) -> Result<Self, PlanError> {
-        self.contract_fingerprints.clear();
-        for node in &self.nodes {
+        let referenced: BTreeSet<_> = self
+            .nodes
+            .iter()
+            .map(|node| node.operation.clone())
+            .collect();
+        self.pinned_contracts.clear();
+        for reference in referenced {
             let contract = catalog
-                .contract(&node.operation)
-                .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
-            self.contract_fingerprints
-                .insert(node.operation.clone(), contract.fingerprint()?);
+                .contract(&reference)
+                .ok_or_else(|| PlanError::UnknownOperation(reference.clone()))?;
+            self.pinned_contracts.push(PinnedContract {
+                reference,
+                fingerprint: contract.fingerprint()?,
+            });
         }
         self.hash = self.canonical_hash()?;
         Ok(self)
@@ -353,17 +373,23 @@ impl ExecutionPlan {
             scope: &'a RunScope,
             allowed_effects: &'a BTreeSet<EffectId>,
             external_artifacts: &'a BTreeMap<ArtifactId, ExternalArtifact>,
-            contract_fingerprints: &'a BTreeMap<OperationRef, ContractHash>,
+            pinned_contracts: Vec<&'a PinnedContract>,
             nodes: Vec<&'a OperationNode>,
         }
         let mut nodes: Vec<_> = self.nodes.iter().collect();
         nodes.sort_by(|a, b| a.instance.cmp(&b.instance));
+        let mut pinned_contracts: Vec<_> = self.pinned_contracts.iter().collect();
+        pinned_contracts.sort_by(|a, b| {
+            a.reference
+                .cmp(&b.reference)
+                .then_with(|| a.fingerprint.cmp(&b.fingerprint))
+        });
         let encoded = serde_json::to_vec(&Canonical {
             schema_revision: self.schema_revision,
             scope: &self.scope,
             allowed_effects: &self.allowed_effects,
             external_artifacts: &self.external_artifacts,
-            contract_fingerprints: &self.contract_fingerprints,
+            pinned_contracts,
             nodes,
         })
         .map_err(|error| PlanError::Serialization(error.to_string()))?;
@@ -388,20 +414,30 @@ impl ExecutionPlan {
             .iter()
             .map(|node| node.operation.clone())
             .collect();
+        let mut pinned = BTreeMap::<OperationRef, &ContractHash>::new();
+        for contract in &self.pinned_contracts {
+            if pinned
+                .insert(contract.reference.clone(), &contract.fingerprint)
+                .is_some()
+            {
+                return Err(PlanError::DuplicatePinnedContract(
+                    contract.reference.clone(),
+                ));
+            }
+        }
         for reference in &referenced {
             let contract = catalog
                 .contract(reference)
                 .ok_or_else(|| PlanError::UnknownOperation(reference.clone()))?;
             verify_contract(contract)?;
-            let pinned = self
-                .contract_fingerprints
+            let fingerprint = pinned
                 .get(reference)
                 .ok_or_else(|| PlanError::ContractNotPinned(reference.clone()))?;
-            if &contract.fingerprint()? != pinned {
+            if &contract.fingerprint()? != *fingerprint {
                 return Err(PlanError::ContractFingerprintMismatch(reference.clone()));
             }
         }
-        for reference in self.contract_fingerprints.keys() {
+        for reference in pinned.keys() {
             if !referenced.contains(reference) {
                 return Err(PlanError::UnexpectedPinnedContract(reference.clone()));
             }

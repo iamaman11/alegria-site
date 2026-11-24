@@ -9,6 +9,7 @@ pub mod editorial_topics;
 pub mod entity_spans;
 pub mod layer_routing;
 pub mod operational_entities;
+pub mod operations;
 
 #[cfg(test)]
 mod tests {

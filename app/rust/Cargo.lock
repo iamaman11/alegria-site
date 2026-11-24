@@ -4373,6 +4373,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "contracts",
+ "operation_protocol",
  "primitives",
  "runtime_models",
  "seo_domain",
@@ -4380,6 +4381,7 @@ dependencies = [
  "seo_steps",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "tokio",
 ]
 
@@ -4387,6 +4389,7 @@ dependencies = [
 name = "seo_domain"
 version = "0.1.0"
 dependencies = [
+ "operation_protocol",
  "primitives",
  "serde",
  "serde_json",

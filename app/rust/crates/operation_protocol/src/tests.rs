@@ -159,7 +159,7 @@ fn plan(nodes: Vec<OperationNode>) -> ExecutionPlan {
         scope: scope(),
         allowed_effects: BTreeSet::from([EffectId::from("release.write")]),
         external_artifacts: external(),
-        contract_fingerprints: BTreeMap::new(),
+        pinned_contracts: Vec::new(),
         nodes,
         hash: PlanHash(String::new()),
     }
@@ -469,7 +469,10 @@ fn unknown_manifest_fields_and_duplicate_contract_are_rejected() {
 fn old_plan_rejects_same_revision_contract_schema_or_owner_drift() {
     let pinned = plan(vec![score_node("score", "out")]);
     let reference = reference("content.score");
-    assert!(pinned.contract_fingerprints.contains_key(&reference));
+    assert!(pinned
+        .pinned_contracts
+        .iter()
+        .any(|contract| contract.reference == reference));
 
     let mut schema_changed = ContractCatalog::default();
     schema_changed.register::<ChangedScoreSchema>().unwrap();
@@ -486,10 +489,55 @@ fn old_plan_rejects_same_revision_contract_schema_or_owner_drift() {
     );
 
     let mut unpinned = pinned.clone();
-    unpinned.contract_fingerprints.clear();
+    unpinned.pinned_contracts.clear();
     unpinned.hash = unpinned.canonical_hash().unwrap();
     assert_eq!(
         unpinned.validate(&catalog()),
         Err(PlanError::ContractNotPinned(reference))
     );
+}
+
+#[test]
+fn pinned_contracts_use_json_safe_roundtrip_and_canonical_sorting() {
+    let source = OperationNode {
+        instance: "source".into(),
+        operation: reference("source.collect"),
+        inputs: BTreeMap::new(),
+        outputs: BTreeMap::from([("evidence".into(), "source-output".into())]),
+        after: BTreeSet::new(),
+        permitted_effects: BTreeSet::new(),
+    };
+    let mut scenario = plan(vec![
+        score_node("score-2", "out-2"),
+        score_node("score-1", "out-1"),
+        source,
+    ]);
+    assert_eq!(scenario.pinned_contracts.len(), 2);
+    let serialized = serde_json::to_string(&scenario).unwrap();
+    let restored: ExecutionPlan = serde_json::from_str(&serialized).unwrap();
+    assert_eq!(restored, scenario);
+    assert_eq!(restored.validate(&catalog()).unwrap().hash(), &scenario.hash);
+
+    scenario.pinned_contracts.reverse();
+    assert_eq!(scenario.canonical_hash().unwrap(), restored.hash);
+    assert!(scenario.validate(&catalog()).is_ok());
+
+    let duplicate = scenario.pinned_contracts[0].clone();
+    scenario.pinned_contracts.push(duplicate);
+    scenario.hash = scenario.canonical_hash().unwrap();
+    assert!(matches!(
+        scenario.validate(&catalog()),
+        Err(PlanError::DuplicatePinnedContract(_))
+    ));
+
+    let mut extra = restored.clone();
+    extra.pinned_contracts.push(PinnedContract {
+        reference: reference("unused.contract"),
+        fingerprint: "unused-hash".into(),
+    });
+    extra.hash = extra.canonical_hash().unwrap();
+    assert!(matches!(
+        extra.validate(&catalog()),
+        Err(PlanError::UnexpectedPinnedContract(_))
+    ));
 }

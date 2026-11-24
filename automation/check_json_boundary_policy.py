@@ -41,6 +41,10 @@ def is_allowed_json_boundary(path: Path) -> bool:
         # boundary; production domain/operation modules remain deny-by-default.
         "app/rust/crates/operation_protocol/src/tests.rs",
         "app/rust/crates/seo_application/src/rebuild_detect.rs",
+        # The checked, typed operation runner owns the in-process artifact
+        # serialization boundary. Domain implementations never decode JSON.
+        "app/rust/crates/seo_application/src/operation_adapter.rs",
+        "app/rust/crates/seo_application/src/operation_adapter/tests.rs",
         "app/rust/crates/seo_domain/src/applicability.rs",
         "app/rust/crates/seo_domain/src/rebuild.rs",
         "app/rust/services/temporal/src/activities/mod.rs",
