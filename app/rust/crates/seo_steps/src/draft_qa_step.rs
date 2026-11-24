@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use contracts::generated::alegria::temporal::v1::{
     DraftQaInputPayload, DraftQaOutputPayload, SeoPublishBlockerState,
 };
-use runtime_models::seo_blocks::factual_role;
+use seo_domain::editorial::factual_role;
 fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerState {
     SeoPublishBlockerState {
         reason_code: reason_code.to_string(),
@@ -11,7 +11,6 @@ fn blocker(reason_code: &str, required_next_action: &str) -> SeoPublishBlockerSt
             "unsupported_factual_fragment" | "forbidden_serp_as_fact_usage" => {
                 "unsupported_factual_fragment"
             }
-            "missing_required_internal_links" => "publish_gate_blocker",
             "missing_required_sections"
             | "missing_required_metadata"
             | "missing_traceability_manifest" => "publish_gate_blocker",
@@ -28,9 +27,11 @@ fn typed_claim_block_valid(
     block: &contracts::generated::alegria::temporal::v1::RenderedContentBlock,
     support: &[contracts::generated::alegria::temporal::v1::SeoVerifiedFactSupportState],
 ) -> bool {
-    use runtime_models::seo_blocks::{
-        render_editorial_claim, supports_for_role, validate_editorial_claim,
+    use crate::editorial_wire::{claim_view, support_views};
+    use seo_domain::editorial::{
+        render_editorial_claim, role_matches_section, validate_editorial_claim,
     };
+    let support_views = support_views(support);
     let claims = draft
         .claim_ledger
         .iter()
@@ -42,12 +43,12 @@ fn typed_claim_block_valid(
     let mut rendered = Vec::new();
     let mut refs = BTreeSet::new();
     for claim in claims {
-        if validate_editorial_claim(claim, support).is_err()
+        if validate_editorial_claim(claim_view(claim), &support_views).is_err()
             || !refs.insert(claim.support_refs[0].as_str())
         {
             return false;
         }
-        match render_editorial_claim(claim, &draft.editorial_locale) {
+        match render_editorial_claim(claim_view(claim), &draft.editorial_locale) {
             Ok(text) => rendered.push(text),
             Err(_) => return false,
         }
@@ -61,8 +62,9 @@ fn typed_claim_block_valid(
         return false;
     }
     if !matches!(block.section_role.as_str(), "overview" | "faq")
-        && supports_for_role(support, &block.section_role)
+        && support_views
             .iter()
+            .filter(|entry| role_matches_section(entry.role_type, &block.section_role))
             .map(|entry| entry.support_ref.as_str())
             .collect::<BTreeSet<_>>()
             != refs
@@ -89,7 +91,7 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     let draft = input.draft.clone().unwrap_or_default();
     let mut blocking_reasons = Vec::new();
     let mut blockers = Vec::new();
-    let contract_blockers = crate::content_contract_validate_step::validate(input);
+    let contract_blockers = crate::content_contract_validate_step::validate_for_publish(input);
     for blocker_state in contract_blockers {
         blocking_reasons.push(blocker_state.reason_code.clone());
         blockers.push(blocker_state);
@@ -219,12 +221,12 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
             .all(|block| match block.section_role.as_str() {
                 "cta_disclaimer" => {
                     block.markdown
-                        == runtime_models::seo_blocks::editorial_cta(&draft.editorial_locale)
+                        == seo_domain::editorial::editorial_cta(&draft.editorial_locale)
                 }
                 "related_pages" => {
                     block.markdown
-                        == runtime_models::seo_blocks::render_verified_source_list(
-                            &input.verified_support,
+                        == seo_domain::editorial::render_verified_source_list(
+                            &crate::editorial_wire::support_views(&input.verified_support),
                             &draft.editorial_locale,
                         )
                 }
@@ -275,38 +277,6 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
             "forbidden_serp_as_fact_usage",
             "Remove SERP-derived evidence from factual support and bind to verified truth.",
         ));
-    }
-    let required_link_obligations = input
-        .required_links
-        .iter()
-        .filter(|link| link.required_flag)
-        .collect::<Vec<_>>();
-    if !required_link_obligations.is_empty() {
-        let related_pages_body = draft
-            .sections
-            .iter()
-            .filter(|section| section.section_role == "related_pages")
-            .map(|section| section.body_markdown.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let missing_required_links = if typed_editorial {
-            related_pages_body.trim().is_empty()
-                || required_link_obligations
-                    .iter()
-                    .any(|link| !draft.required_links.iter().any(|bound| bound == *link))
-        } else {
-            required_link_obligations.iter().any(|link| {
-                !related_pages_body.contains(&link.target_page_key)
-                    && !related_pages_body.contains(&link.link_role)
-            })
-        };
-        if missing_required_links {
-            blocking_reasons.push("missing_required_internal_links".to_string());
-            blockers.push(blocker(
-                "missing_required_internal_links",
-                "Generate and attach at least one required internal link obligation.",
-            ));
-        }
     }
     let missing_required_section = !draft.sections.iter().any(|section| section.required);
     if missing_required_section {
@@ -541,7 +511,11 @@ mod typed_claim_qa_tests {
             }),
             ..Default::default()
         };
-        let markdown = runtime_models::seo_blocks::render_editorial_claim(&claim, "ru").unwrap();
+        let markdown = seo_domain::editorial::render_editorial_claim(
+            crate::editorial_wire::claim_view(&claim),
+            "ru",
+        )
+        .unwrap();
         let mut block = RenderedContentBlock {
             section_role: "timing".into(),
             heading: "Сроки".into(),

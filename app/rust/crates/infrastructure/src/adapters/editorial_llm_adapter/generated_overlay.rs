@@ -117,7 +117,11 @@ fn overlay_typed_claims(
     mut generated: GeneratedSections,
 ) -> Result<LlmDraftCandidate, DomainError> {
     use contracts::generated::alegria::temporal::v1::EditorialClaimProposal;
-    use runtime_models::seo_blocks::{render_editorial_claim, validate_editorial_claim};
+    use seo_steps::editorial_wire::{claim_view, support_views};
+    use seo_domain::editorial::{
+        editorial_cta, render_editorial_claim, render_verified_source_list,
+        validate_editorial_claim,
+    };
     use std::collections::BTreeSet;
 
     let fail = |message: String| DomainError::ValidationFailure { message };
@@ -125,6 +129,7 @@ fn overlay_typed_claims(
         .editorial_brief
         .as_ref()
         .ok_or_else(|| fail("missing brief".into()))?;
+    let verified_support = support_views(&brief.verified_support);
     let mut claims = generated
         .claims
         .take()
@@ -135,12 +140,9 @@ fn overlay_typed_claims(
         if !factual_role(role) {
             section.body_markdown = match role.as_str() {
                 "cta_disclaimer" => {
-                    runtime_models::seo_blocks::editorial_cta(&brief.locale_code).to_string()
+                    editorial_cta(&brief.locale_code).to_string()
                 }
-                "related_pages" => runtime_models::seo_blocks::render_verified_source_list(
-                    &brief.verified_support,
-                    &brief.locale_code,
-                ),
+                "related_pages" => render_verified_source_list(&verified_support, &brief.locale_code),
                 _ => return Err(fail(format!("unsupported non-factual section {role}"))),
             };
             continue;
@@ -188,13 +190,13 @@ fn overlay_typed_claims(
                     evidence_spans: item.evidence_spans,
                 }),
             };
-            validate_editorial_claim(&claim, &brief.verified_support).map_err(|err| {
+            validate_editorial_claim(claim_view(&claim), &verified_support).map_err(|err| {
                 fail(format!(
                     "editorial claim {role} failed evidence binding: {err:?}"
                 ))
             })?;
             text.push(
-                render_editorial_claim(&claim, &brief.locale_code).map_err(|err| {
+                render_editorial_claim(claim_view(&claim), &brief.locale_code).map_err(|err| {
                     fail(format!("editorial claim {role} failed rendering: {err:?}"))
                 })?,
             );

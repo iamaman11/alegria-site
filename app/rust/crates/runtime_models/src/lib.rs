@@ -3,8 +3,6 @@ use contracts::wire::condition::ConditionExprV1;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub mod seo_blocks;
-
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuleRoleType {

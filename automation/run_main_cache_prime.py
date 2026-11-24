@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Warm only compiler units exercised by exact-source scoped PR Rust feedback.
+"""Warm reusable Rust library objects after a fully accepted PR.
 
-This trusted-main-only runner consumes the same `ci_impact.py` report and
-`dev_rust_feedback.py` Cargo plan as the PR gate. It *compiles* the selected
-tests without executing them: live integration and full test acceptance stay
-solely in the mandatory PR gate. No second Cargo dependency graph or hard-coded
-set of packages is maintained here.
+The mandatory PR CI already compiled and ran the actual unit/integration
+tests. Main must not spend minutes relinking those tests and worker binaries:
+sccache cannot cache targets that invoke the system linker. A trusted-main
+writer therefore warms only cacheable rlib dependency objects for the exact
+impact graph, including the E2E feature graph when a live suite was selected.
 """
 
 from __future__ import annotations
@@ -16,50 +16,53 @@ import subprocess
 from pathlib import Path
 
 from cargo_feedback import run_cargo
-from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report
-from dev_rust_feedback import commands_for_report
+from ci_impact import ROOT, WORKSPACE, load_cargo_metadata, suite_commands_for_report
 
 
-def prime_commands_for_report(report: dict) -> list[list[str]]:
-    """Mirror PR compilation profiles while omitting test execution.
+def prime_commands_for_report(report: dict, metadata: dict) -> list[list[str]]:
+    """Compile affected library objects, not non-cacheable test/bin targets.
 
-    Cargo's `check` and test profiles produce distinct compiler objects. Only
-    check the PR's reverse consumers and compile the PR's direct package tests.
-    The E2E feature profile is needed only if a real selected integration suite
-    would run with `integration_harness --features e2e --lib` on that source.
+    Cargo's own metadata is authoritative for target kinds: do not infer a
+    package is a library from its path/name, or silently skip an unknown crate.
     """
-    commands = commands_for_report(report, check_only=False)
     selected_suites = suite_commands_for_report(report)
-    prime: list[list[str]] = []
-    for command in commands:
-        if command[:2] == ["cargo", "test"]:
-            if "--" in command or "--no-run" in command:
-                raise ValueError("unexpected test runner flags in scoped Cargo plan")
-            prime.append([*command, "--no-run"])
-        elif command[:2] == ["cargo", "check"]:
-            prime.append(command)
-        else:
-            raise ValueError("unexpected Cargo command in scoped feedback plan")
+    affected = report.get("affected_crates")
+    if not isinstance(affected, list) or len(set(affected)) != len(affected):
+        raise ValueError("invalid affected crate selection for cache priming")
+    members = set(metadata["workspace_members"])
+    packages = [pkg for pkg in metadata["packages"] if pkg["id"] in members]
+    if len(packages) != len(members):
+        raise ValueError("incomplete Cargo metadata for cache priming")
+    by_name = {pkg["name"]: pkg for pkg in packages}
+    if len(by_name) != len(packages) or not set(affected).issubset(by_name):
+        raise ValueError("unknown or ambiguous Cargo package in accepted-main impact")
 
-    # The real CI runner prepares these binaries before suites that spawn
-    # them. Reuse their declared commands, never maintain a second binary list.
-    # Multiple suites can share the same compilation and must prime it once.
-    prepared: set[tuple[str, ...]] = set()
-    for name, _ in selected_suites:
-        preparation = SUITE_OWNERS[name].get("prepare")
-        if preparation and preparation not in prepared:
-            if (preparation[:2] != ("cargo", "build")
-                    or "--locked" not in preparation or "--release" in preparation):
-                raise ValueError("unsafe runtime preparation in integration owner")
-            prime.append(list(preparation))
-            prepared.add(preparation)
+    libraries = sorted(
+        name for name in affected
+        if any("lib" in target["kind"] or "rlib" in target["kind"]
+               for target in by_name[name]["targets"])
+    )
+    commands: list[list[str]] = []
+    if libraries:
+        command = ["cargo", "build", "--locked", "--lib"]
+        for name in libraries:
+            command.extend(["--package", name])
+        commands.append(command)
 
+    # A live PR suite compiled a second E2E feature graph. Prime only its
+    # cacheable libraries; the non-cacheable harness executable and worker
+    # processes were already built and exercised by mandatory PR CI.
     if selected_suites:
-        prime.append([
-            "cargo", "test", "--locked", "--package", "integration_harness",
-            "--features", "e2e", "--lib", "--no-run",
+        if "integration_harness" not in by_name or not any(
+            "lib" in target["kind"] or "rlib" in target["kind"]
+            for target in by_name["integration_harness"]["targets"]
+        ):
+            raise ValueError("E2E suite selected without integration_harness library")
+        commands.append([
+            "cargo", "build", "--locked", "--package", "integration_harness",
+            "--features", "e2e", "--lib",
         ])
-    return prime
+    return commands
 
 
 def main() -> int:
@@ -78,9 +81,9 @@ def main() -> int:
             or report.get("base_sha") != args.base_sha or report.get("base") != args.base_sha):
         raise ValueError("MAIN_CACHE_PRIME=FAIL impact plan not bound to exact accepted main SHA")
 
-    commands = prime_commands_for_report(report)
+    commands = prime_commands_for_report(report, load_cargo_metadata())
     if not commands:
-        print("MAIN_CACHE_PRIME=SKIPPED planner found no affected compiler units", flush=True)
+        print("MAIN_CACHE_PRIME=SKIPPED no reusable library objects changed", flush=True)
         return 0
     print(
         f"MAIN_CACHE_PRIME=SCOPED analysis={report['analysis']} "
@@ -92,7 +95,7 @@ def main() -> int:
     for command in commands:
         print("MAIN_CACHE_PRIME_COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE))
-    # This is only compiler telemetry, not a test PASS or substitute for PR CI.
+    # Compiler-object telemetry only; the PR gate owns all test acceptance.
     print("MAIN_CACHE_PRIME=COMPILED measurements=" + str(len(measurements)), flush=True)
     return 0
 

@@ -144,20 +144,6 @@ impl GraphReasoningPort for SqlxSeoRuntimeRepository<'_> {
             .collect())
     }
 
-    async fn find_rebuild_impact_neighborhood(
-        &self,
-        changed_truth_keys: &[String],
-        page_nodes: &[PageNodeState],
-    ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
-        ensure_graph_contract_if_required("rebuild_impact_neighborhood").await?;
-        let page_node_keys = page_nodes
-            .iter()
-            .map(|page| page.page_node_key.clone())
-            .collect::<Vec<_>>();
-        self.semantic_neighbor_impacts(changed_truth_keys, &page_node_keys)
-            .await
-    }
-
     async fn evaluate_draft_coverage_neighborhood(
         &self,
         page_node_key: &str,

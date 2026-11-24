@@ -76,10 +76,15 @@ def main() -> int:
         failures.append("missing Temporal activity `load_seo_site_build_input`")
     if "load_seo_site_build_input" not in seo_workflow:
         failures.append("SeoSiteBuildWorkflow does not load runtime DB input first")
+    if "seo_application::rebuild_detect::execute(" not in activities:
+        failures.append("Temporal rebuild activity must delegate to seo_application::rebuild_detect")
     for step in SEO_STEP_NAMES:
-        module_path = SEO_STEPS_DIR / f"{step}_step.rs"
-        if not module_path.exists():
-            failures.append(f"missing seo_steps module `{module_path.relative_to(ROOT)}`")
+        # Rebuild detection is implemented by the typed Application owner,
+        # not by the deleted transport-era rebuild_detect_step facade.
+        if step != "rebuild_detect":
+            module_path = SEO_STEPS_DIR / f"{step}_step.rs"
+            if not module_path.exists():
+                failures.append(f"missing seo_steps module `{module_path.relative_to(ROOT)}`")
         if f"run_{step}_step" not in activities:
             failures.append(f"missing Temporal activity `run_{step}_step`")
         owner_module, owner_token = APPLICATION_OWNERS[step]

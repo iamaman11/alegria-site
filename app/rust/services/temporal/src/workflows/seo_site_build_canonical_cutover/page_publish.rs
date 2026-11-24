@@ -32,7 +32,8 @@ async fn run_page_publish_phases(
     scope: &SeoScopePayload,
     raw_page_ids: &[i64],
 ) -> WorkflowResult<PagePublishLoopOutcome> {
-    use runtime_models::seo_blocks::{page_admissibility, PageAdmissibility};
+    use seo_steps::page_wire::page_admissibility;
+    use seo_domain::page_readiness::PageAdmissibility;
     let active_pages = page_nodes
         .iter()
         .filter(|node| node.lifecycle_state != "deprecated")
@@ -58,7 +59,7 @@ async fn run_page_publish_phases(
             .cloned()
             .unwrap_or_default();
         let page_support =
-            runtime_models::seo_blocks::page_verified_support(&page_blueprint, support_bundle);
+            seo_steps::page_wire::page_verified_support(&page_blueprint, support_bundle);
         match page_admissibility(
             &page_node,
             &page_blueprint,
@@ -90,7 +91,7 @@ async fn run_page_publish_phases(
             .collect::<Vec<_>>();
         let support_bundle = page_support.as_slice();
         let factual_fragments = page_fragments.as_slice();
-        let required_links = runtime_models::seo_blocks::required_links_for_published_targets(
+        let required_links = seo_steps::page_wire::required_links_for_published_targets(
             link_recommendations,
             &page_node.page_node_key,
             &published_page_keys,

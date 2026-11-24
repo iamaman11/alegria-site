@@ -30,11 +30,11 @@ fn page_is_linkable(page: &PageNodeState) -> bool {
     !matches!(
         page.lifecycle_state.as_str(),
         "blocked" | "deprecated" | "stale"
-    ) && !runtime_models::seo_blocks::is_opaque_topic_identifier(&page.canonical_slug)
+    ) && !seo_domain::page_readiness::is_opaque_topic_identifier(&page.canonical_slug)
         && !page
             .canonical_url_path
             .split('/')
-            .any(runtime_models::seo_blocks::is_opaque_topic_identifier)
+            .any(seo_domain::page_readiness::is_opaque_topic_identifier)
 }
 
 fn required_link(
@@ -168,12 +168,12 @@ pub fn execute(input: &GlobalSiteReconcileInputPayload) -> GlobalSiteReconcileOu
                 .iter()
                 .find(|blueprint| blueprint.blueprint_key == page.blueprint_key);
             let (mut missing, mut refs) = if let Some(blueprint) = blueprint {
-                let support = runtime_models::seo_blocks::page_verified_support(
+                let support = crate::page_wire::page_verified_support(
                     blueprint,
                     &input.verified_support,
                 );
                 (
-                    runtime_models::seo_blocks::missing_required_factual_roles(blueprint, &support),
+                    crate::page_wire::missing_required_factual_roles(blueprint, &support),
                     support
                         .into_iter()
                         .map(|entry| entry.support_ref)

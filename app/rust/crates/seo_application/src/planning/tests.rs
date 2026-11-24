@@ -5,7 +5,7 @@ mod tests {
     use seo_ports::{
         GlobalNavigationPersistReport, GraphCapabilityPort, GraphCoverageEvaluation,
         GraphNeighborhoodHit, GraphReasoningPort, OrganicSerpResponse, OrganicSerpResult,
-        PlanningRepository, RebuildDependencyEvidence, SemanticLinkCandidate,
+        PlanningRepository, SemanticLinkCandidate,
         SemanticLinkSearchPort, SerpSearchPort,
     };
     use std::sync::Mutex;
@@ -113,14 +113,6 @@ mod tests {
             _scope_signature: &str,
             _page_node_key: &str,
         ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
-            Ok(Vec::new())
-        }
-
-        async fn find_rebuild_impact_neighborhood(
-            &self,
-            _changed_truth_keys: &[String],
-            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
-        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
             Ok(Vec::new())
         }
 
@@ -323,14 +315,6 @@ mod tests {
             _scope_signature: &str,
             _page_node_key: &str,
         ) -> Result<Vec<GraphNeighborhoodHit>, DomainError> {
-            Ok(Vec::new())
-        }
-
-        async fn find_rebuild_impact_neighborhood(
-            &self,
-            _changed_truth_keys: &[String],
-            _page_nodes: &[contracts::generated::alegria::temporal::v1::PageNodeState],
-        ) -> Result<Vec<RebuildDependencyEvidence>, DomainError> {
             Ok(Vec::new())
         }
 

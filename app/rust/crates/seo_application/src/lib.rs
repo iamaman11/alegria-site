@@ -2,7 +2,6 @@ pub mod cms_review;
 pub mod crawl_ingest;
 pub mod drafting;
 pub mod execution;
-pub mod hitl;
 pub mod knowledge;
 pub mod planning;
 pub mod rebuild_detect;

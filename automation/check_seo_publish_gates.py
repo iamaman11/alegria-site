@@ -6,6 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
+CONTRACT_ADAPTER = ROOT / "app/rust/crates/seo_steps/src/content_contract_validate_step.rs"
+CONTRACT_POLICY = ROOT / "app/rust/crates/seo_domain/src/content_contract.rs"
 PUBLISH = ROOT / "app/rust/crates/seo_steps/src/cms_publish_step.rs"
 REVISION = ROOT / "app/rust/crates/seo_domain/src/cms_revision.rs"
 RENDER_VALIDATE = ROOT / "app/rust/crates/seo_steps/src/render_preview_validate_step.rs"
@@ -18,6 +20,8 @@ PAGE_PUBLISH = (
 
 def main() -> int:
     qa = QA.read_text(encoding="utf-8")
+    contract_adapter = CONTRACT_ADAPTER.read_text(encoding="utf-8")
+    contract_policy = CONTRACT_POLICY.read_text(encoding="utf-8")
     publish = PUBLISH.read_text(encoding="utf-8")
     revision = REVISION.read_text(encoding="utf-8")
     render_validate = RENDER_VALIDATE.read_text(encoding="utf-8")
@@ -29,12 +33,20 @@ def main() -> int:
     for needle in [
         "unsupported_factual_fragment",
         "forbidden_serp_as_fact_usage",
-        "missing_required_internal_links",
         "SeoPublishBlockerState",
         "required_next_action",
     ]:
         if needle not in qa:
             failures.append(f"draft_qa_step missing publish gate `{needle}`")
+
+    if "validate_for_publish(input)" not in qa:
+        failures.append("draft QA must invoke the shared content-contract gate")
+    if "seo_domain::content_contract" not in contract_adapter:
+        failures.append("content-contract adapter must map typed domain policy")
+    if "missing_required_internal_links" not in contract_policy:
+        failures.append("content-contract domain must own the required-link publish gate")
+    if "missing_required_internal_links" in qa.split("#[cfg(test)]", 1)[0]:
+        failures.append("draft QA must not duplicate required-link blocker policy")
 
     for needle in ["human_approval_required", "CmsRevisionState::decide", "CmsPublishIntent::parse"]:
         if needle not in publish:

@@ -4,7 +4,7 @@ impl SectionTemplateRepository for SqlxSeoRuntimeRepository<'_> {
         &self,
         page_type_key: &str,
         dominant_intent: &str,
-    ) -> Result<Vec<SectionTemplateBinding>, DomainError> {
+    ) -> Result<Vec<SectionTemplate>, DomainError> {
         sqlx_seo_adapter::load_section_templates(self.pool, page_type_key, dominant_intent).await
     }
 }
@@ -174,25 +174,5 @@ impl VerifiedRulesReader for SqlxSeoRuntimeRepository<'_> {
             context_key: context_key.clone(),
             rules,
         }))
-    }
-}
-
-#[async_trait]
-impl HitlQueuePort for SqlxSeoRuntimeRepository<'_> {
-    async fn enqueue_hitl_task(
-        &self,
-        task_type: &str,
-        diagnostics: &HitlTaskContext,
-        priority: i32,
-    ) -> Result<i64, DomainError> {
-        sqlx_hitl_adapter::enqueue_hitl_task(self.pool, task_type, diagnostics, priority).await
-    }
-
-    async fn resolve_hitl_task(
-        &self,
-        task_id: i64,
-        resolution: &HitlDecision,
-    ) -> Result<(), DomainError> {
-        sqlx_hitl_adapter::resolve_hitl_task(self.pool, task_id, resolution).await
     }
 }

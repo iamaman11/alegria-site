@@ -401,7 +401,7 @@ pub async fn load_section_templates(
     pool: &PgPool,
     page_type_key: &str,
     dominant_intent: &str,
-) -> Result<Vec<SectionTemplateBinding>, DomainError> {
+) -> Result<Vec<SectionTemplate>, DomainError> {
     let rows = sqlx::query(
         r#"
         SELECT section_template_key, page_type_key, dominant_intent, section_role,
@@ -426,12 +426,12 @@ pub async fn load_section_templates(
         if !seen_roles.insert(section_role.clone()) {
             continue;
         }
-        templates.push(SectionTemplateBinding {
+        templates.push(SectionTemplate {
             template_key: row.get("section_template_key"),
             page_type_key: row.get("page_type_key"),
             dominant_intent: row.get("dominant_intent"),
             section_role: section_role.clone(),
-            heading: runtime_models::seo_blocks::heading_for_role(&section_role).to_string(),
+            heading: seo_domain::editorial::heading_for_role(&section_role).to_string(),
             template_body: row.get("template_body"),
             template_version: row.get::<i32, _>("template_version") as u32,
             required: true,

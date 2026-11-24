@@ -808,10 +808,10 @@ jobs:
           restore-keys: |
             cargo-registry-${{ runner.os }}-
 
-      # Reuse the PR's exact-source Cargo graph and suite owners. A leaf crate
-      # must not rebuild all three integration_harness compile profiles, while
-      # unknown/global Cargo inputs still compile the full workspace. Cache
-      # writes remain limited to this trusted, accepted-main-only job.
+      # Reuse the PR's exact-source Cargo graph and suite owners. Prime only
+      # cacheable library objects, not the previously tested binaries/harness
+      # executables that sccache cannot reuse. Unknown/global changes retain
+      # full affected-library coverage. Only trusted main writes this cache.
       - name: Select exact-source Cargo compiler units
         if: steps.cache_scope.outputs.needed == 'true'
         env:
@@ -823,7 +823,7 @@ jobs:
             --head "$SOURCE_SHA" \
             --report automation/reports/main_cache_prime_impact.json
 
-      - name: Prime only affected PR compilation units
+      - name: Prime affected reusable Rust library objects
         if: steps.cache_scope.outputs.needed == 'true'
         env:
           BEFORE_SHA: ${{ github.event.before }}

@@ -10,9 +10,9 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use primitives::errors::DomainError;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
-use runtime_models::seo_blocks::{
-    factual_role, planned_content_blocks, support_traceability_label, supports_for_role,
-};
+use seo_steps::editorial_wire::block_plan as planned_content_blocks;
+use seo_steps::page_wire::supports_for_role;
+use seo_domain::editorial::{factual_role, support_traceability_label};
 use serde_json::{json, Value};
 
 type ClientFuture<'a> =

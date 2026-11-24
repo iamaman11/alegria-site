@@ -4,7 +4,7 @@ use contracts::generated::alegria::temporal::v1::{
 };
 
 use crate::seo_step_support::{artifact_key, scope_signature};
-use runtime_models::seo_blocks::is_opaque_topic_identifier;
+use seo_domain::page_readiness::is_opaque_topic_identifier;
 use seo_domain::ia_planning::{self, IaClusterCandidate, IaClusterDisposition, IaScope};
 
 // A stable storage identifier is never a publishable topic. Resolve the
@@ -240,7 +240,7 @@ pub fn execute(input: &IaBuildInputPayload) -> IaBuildOutputPayload {
                 entry.freshness_class == "fresh"
                     && !entry.support_ref.trim().is_empty()
                     && !entry.fragment_text.trim().is_empty()
-                    && runtime_models::seo_blocks::role_matches_section(
+                    && seo_domain::editorial::role_matches_section(
                         &entry.role_type,
                         factual_section,
                     )

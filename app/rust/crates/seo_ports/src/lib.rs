@@ -7,11 +7,11 @@ use contracts::generated::alegria::temporal::v1::{
     DraftAssembleOutputPayload, DraftNormalizeInputPayload, DraftNormalizeOutputPayload,
     DraftQaInputPayload, DraftQaOutputPayload, EditorialDraftGenerateInputPayload,
     EditorialDraftGenerateOutputPayload, FinalizePublishInputPayload, FinalizePublishOutputPayload,
-    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, HitlDecision,
-    HitlTaskContext, IaBuildInputPayload, IaBuildOutputPayload, LinkRecommendInputPayload,
+    GlobalSiteReconcileInputPayload, GlobalSiteReconcileOutputPayload, IaBuildInputPayload,
+    IaBuildOutputPayload, LinkRecommendInputPayload,
     LinkRecommendOutputPayload, OpportunityBuildInputPayload, OpportunityBuildOutputPayload,
-    PageNodeState, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload, SectionTemplateBinding,
+    PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    RawKnowledgeIngestionInputPayload, RawKnowledgeIngestionOutputPayload,
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
     SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
@@ -116,6 +116,20 @@ pub struct SemanticDemandCluster {
     pub cluster_key: String,
     pub member_queries: Vec<String>,
     pub confidence: f32,
+}
+
+/// Section template loaded from the editorial catalog. The repository contract
+/// does not depend on the Temporal payload used to orchestrate draft assembly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SectionTemplate {
+    pub template_key: String,
+    pub page_type_key: String,
+    pub dominant_intent: String,
+    pub section_role: String,
+    pub heading: String,
+    pub template_body: String,
+    pub template_version: u32,
+    pub required: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -366,12 +380,6 @@ pub trait GraphReasoningPort: Send + Sync {
         page_node_key: &str,
     ) -> Result<Vec<GraphNeighborhoodHit>, DomainError>;
 
-    async fn find_rebuild_impact_neighborhood(
-        &self,
-        changed_truth_keys: &[String],
-        page_nodes: &[PageNodeState],
-    ) -> Result<Vec<RebuildDependencyEvidence>, DomainError>;
-
     async fn evaluate_draft_coverage_neighborhood(
         &self,
         page_node_key: &str,
@@ -451,7 +459,7 @@ pub trait SectionTemplateRepository: Send + Sync {
         &self,
         page_type_key: &str,
         dominant_intent: &str,
-    ) -> Result<Vec<SectionTemplateBinding>, DomainError>;
+    ) -> Result<Vec<SectionTemplate>, DomainError>;
 }
 
 #[async_trait]
@@ -547,20 +555,4 @@ pub trait VerifiedRulesReader: Send + Sync {
         &self,
         query: &VerifiedRulesQuery,
     ) -> Result<Option<VerifiedRulesView>, DomainError>;
-}
-
-#[async_trait]
-pub trait HitlQueuePort: Send + Sync {
-    async fn enqueue_hitl_task(
-        &self,
-        task_type: &str,
-        diagnostics: &HitlTaskContext,
-        priority: i32,
-    ) -> Result<i64, DomainError>;
-
-    async fn resolve_hitl_task(
-        &self,
-        task_id: i64,
-        resolution: &HitlDecision,
-    ) -> Result<(), DomainError>;
 }

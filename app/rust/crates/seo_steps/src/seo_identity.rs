@@ -1,12 +1,7 @@
 use contracts::generated::alegria::temporal::v1::SeoScopePayload;
 use primitives::errors::DomainError;
 use seo_domain::artifact_identity::scope_signature;
-
-pub use seo_domain::identity::{
-    assert_scope_matches_context, derive_scope, derive_truth_identity, normalize_applicant_profile,
-    normalize_optional_subtype, truth_identity_tuple, ValidatedSeoBuildIdentity, ValidatedSeoScope,
-    ValidatedTruthIdentity,
-};
+use seo_domain::identity::{derive_scope, ValidatedSeoScope};
 
 /// Decode the Temporal wire type at the boundary; pure SEO identity has no
 /// knowledge of protobuf or the workflow transport.
