@@ -327,11 +327,30 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                 self.assertEqual(precompiled_verify_executable({
                     "test_executables": [{"target": "integration_harness", "path": str(binary)}],
                 }), binary)
+                # This is the exact alternative layout observed in GitHub CI:
+                # Running unittests src/lib.rs (target/debug/build/integration_harness/<hash>/out/<bin>)
+                cargo_build_binary = (target / "debug/build/integration_harness"
+                                      / "b5e3e249052aa1c9/out/integration_harness-correct")
+                cargo_build_binary.parent.mkdir(parents=True)
+                cargo_build_binary.write_bytes(b"compiled test binary")
+                cargo_build_binary.chmod(0o755)
+                self.assertEqual(precompiled_verify_executable({
+                    "test_executables": [{"target": "integration_harness", "path": str(cargo_build_binary)}],
+                }), cargo_build_binary)
                 with self.assertRaisesRegex(RuntimeError, "expected one"):
                     precompiled_verify_executable({"test_executables": []})
                 with self.assertRaisesRegex(RuntimeError, "unusable"):
                     precompiled_verify_executable({"test_executables": [
                         {"target": "integration_harness", "path": "/tmp/foreign-test"},
+                    ]})
+                wrong_crate = (target / "debug/build/outbox_worker"
+                               / "b5e3e249052aa1c9/out/integration_harness-correct")
+                wrong_crate.parent.mkdir(parents=True)
+                wrong_crate.write_bytes(b"not integration harness")
+                wrong_crate.chmod(0o755)
+                with self.assertRaisesRegex(RuntimeError, "unusable"):
+                    precompiled_verify_executable({"test_executables": [
+                        {"target": "integration_harness", "path": str(wrong_crate)},
                     ]})
 
     def test_precompiled_filter_is_process_isolated_and_cannot_pass_zero_tests(self) -> None:

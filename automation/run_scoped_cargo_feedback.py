@@ -134,10 +134,25 @@ def precompiled_verify_executable(measurement: dict) -> Path:
     if not executable.is_absolute():
         executable = WORKSPACE / executable
     executable = executable.resolve()
-    # Cargo's test binary must be inside this exact workspace's selected
-    # target dir; do not execute an arbitrary path from a malformed JSON line.
-    if (not executable.is_relative_to(target.resolve() / "debug" / "deps")
-            or not executable.is_file()
+    # Cargo can emit the test binary either in debug/deps or in the package's
+    # hashed build output (observed in the real CI E2E logs). Never accept a
+    # binary under an unrelated crate, target directory or symlink escape.
+    debug = target.resolve() / "debug"
+    normal = (
+        executable.is_relative_to(debug / "deps")
+        and executable.name.startswith("integration_harness-")
+    )
+    build_root = debug / "build" / "integration_harness"
+    special = False
+    if executable.is_relative_to(build_root):
+        parts = executable.relative_to(build_root).parts
+        special = (
+            len(parts) == 3
+            and re.fullmatch(r"[0-9a-f]{16}", parts[0]) is not None
+            and parts[1] == "out"
+            and parts[2].startswith("integration_harness-")
+        )
+    if (not (normal or special) or not executable.is_file()
             or not os.access(executable, os.X_OK)):
         raise RuntimeError(f"Cargo returned an unusable integration_harness test binary: {executable}")
     return executable
