@@ -415,7 +415,10 @@ pub fn execute(
                     detector.key(&gap.scope_signature, &gap.page_node_key, &gap.missing_topic)
                 })
             };
-            let current_gaps = content_gaps.iter().filter_map(identity).collect::<BTreeSet<_>>();
+            let current_gaps = content_gaps
+                .iter()
+                .filter_map(identity)
+                .collect::<BTreeSet<_>>();
             for prior in &context.content_gaps {
                 if prior.status == "open"
                     && matches!(
