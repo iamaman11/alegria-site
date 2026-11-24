@@ -480,6 +480,14 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     ] {
         std::fs::write(uncommitted_release.join(name), bytes).unwrap();
     }
+    // The test delivery reads the release's complete page manifest, just as
+    // it does for actual multi-page publications. Preserve the committed page
+    // map while simulating a crash after switching to different HTML bytes.
+    std::fs::copy(
+        committed_release.join("alegria-static-manifest.json"),
+        uncommitted_release.join("alegria-static-manifest.json"),
+    )
+    .unwrap();
     delivery.deploy(&uncommitted_release, None).unwrap();
     let next_pointer = root.join(".a17-switch");
     std::os::unix::fs::symlink(&uncommitted_release, &next_pointer).unwrap();
