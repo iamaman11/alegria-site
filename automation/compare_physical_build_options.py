@@ -49,6 +49,19 @@ OWNER_SOURCE_PATHS = {
     "vector_qdrant": "app/rust/crates/vector_qdrant/src/lib.rs",
     "temporal_gateway": "app/rust/crates/temporal_gateway/src/lib.rs",
 }
+# A Cargo compiler-artifact with `fresh: false` is not proof that rustc ran
+# while a compiler cache wrapper is enabled. Both environment and Cargo's
+# config layering must be neutralized in empirical A/B probe subprocesses.
+RUSTC_WRAPPER_ENV = frozenset({
+    "RUSTC_WRAPPER",
+    "RUSTC_WORKSPACE_WRAPPER",
+    "CARGO_BUILD_RUSTC_WRAPPER",
+    "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER",
+})
+CARGO_DISABLE_WRAPPER_CONFIG = (
+    "--config", 'build.rustc-wrapper=""',
+    "--config", 'build.rustc-workspace-wrapper=""',
+)
 
 
 class EvidenceError(RuntimeError):
@@ -222,11 +235,29 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
 
 def compiler_artifacts(command: list[str], cwd: Path, *, isolated_target: bool = False) -> dict[str, Any]:
     started = time.monotonic()
-    # An opt-in isolated source study must not reuse, invalidate or poison the
-    # current checkout's target directory even if the caller configured one.
     environment = os.environ.copy()
     if isolated_target:
+        # The source study must never reuse/poison the checkout's target, any
+        # sccache object, or rustc incremental compilation artifacts. Cargo
+        # can otherwise emit fresh:false for a wrapper cache hit rather than
+        # executing rustc, invalidating this empirical comparison.
+        rustc = shutil.which("rustc")
+        if not rustc:
+            raise EvidenceError("rustc unavailable for wrapper-free compiler experiment")
+        for name in RUSTC_WRAPPER_ENV:
+            environment.pop(name, None)
+        for name in tuple(environment):
+            if name.startswith("SCCACHE_"):
+                environment.pop(name)
+        environment["RUSTC"] = rustc
+        environment["CARGO_BUILD_RUSTC"] = rustc
+        environment["CARGO_INCREMENTAL"] = "0"
         environment["CARGO_TARGET_DIR"] = str(cwd / "target")
+        if not command or command[0] != "cargo":
+            raise EvidenceError("isolated rustc probe requires direct Cargo invocation")
+        # Explicit CLI config outranks Cargo home/workspace config; otherwise
+        # an unnoticed [build] rustc-wrapper can survive environment cleanup.
+        command = [command[0], *CARGO_DISABLE_WRAPPER_CONFIG, *command[1:]]
     process = subprocess.Popen(
         command, cwd=cwd, env=environment,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
@@ -258,6 +289,12 @@ def compiler_artifacts(command: list[str], cwd: Path, *, isolated_target: bool =
         raise EvidenceError("Cargo emitted no executable binary artifact")
     return {
         "command": command,
+        "compiler_execution": {
+            "sccache_disabled": isolated_target,
+            "rustc_wrapper_disabled": isolated_target,
+            "rustc_incremental_disabled": isolated_target,
+            "isolated_cargo_target": isolated_target,
+        },
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "compiler_artifacts": units,
         "non_fresh_units": [u for u in units if not u["fresh"]],
@@ -424,18 +461,20 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                 name for name, image in build["binaries"].items()
                 if image["sha256"] != baseline_binaries[name]["sha256"]
             )
+            if (MONOLITH in touched) != (owner in a_closure):
+                raise EvidenceError(f"{owner}: monolith executable write inconsistent with Cargo closure")
             # A shared temporal_gateway is today's positive control that
             # detects a false-positive 'always fresh B' test harness.
             expected_b_relink = owner in b_closure
             if (ORCHESTRATOR in relinked) != expected_b_relink:
                 raise EvidenceError(f"{owner}: orchestrator binary relink unexpectedly {relinked}")
-            if ORCHESTRATOR in touched and not expected_b_relink:
-                raise EvidenceError(f"{owner}: unrelated owner wrote orchestrator binary")
+            if (ORCHESTRATOR in touched) != expected_b_relink:
+                raise EvidenceError(f"{owner}: orchestrator executable write inconsistent with Cargo closure")
             probe_result = {
                 "owner": owner,
                 "modified_only_in_temporary_export": source_path,
                 "compiler_rebuilt_units": rebuilt,
-                "compiler_relinked_bins": relinked,
+                "cargo_non_fresh_bin_targets": relinked,
                 "binary_files_written": touched,
                 "binary_hash_changed": changed,
                 "elapsed_seconds": build["elapsed_seconds"],

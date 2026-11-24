@@ -48,6 +48,17 @@ the next owner. A dirty tracked Rust source, missing real B package, missing
 Cargo/rustc, inconsistent metadata, incomplete compiler artifacts, missing
 owner rebuild, or unexpected binary relink causes **exit 2**, never a synthetic
 pass. The experiment does not modify the active worktree or its Cargo target.
+To make `fresh: false` meaningful, it disables `RUSTC_WRAPPER`,
+`RUSTC_WORKSPACE_WRAPPER`, both Cargo-config environment equivalents, any
+`SCCACHE_*` environment, and `CARGO_INCREMENTAL`; it forces the resolved
+`rustc` executable and an isolated `CARGO_TARGET_DIR`. Explicit Cargo CLI
+configuration also disables wrappers from Cargo home/workspace configuration.
+Thus sccache hits cannot be misreported as actual compiler executions. The
+study additionally requires matching executable-file mtime changes when a
+binary is reported relinked; a different SHA-256 is **not** required because
+recompiling identical semantics can reproduce identical binary bytes. Mtime
+is filesystem evidence of a write, not an independent trace of the linker
+process, and the study does not claim otherwise.
 The optional CI label is `physical-ab-probe`, inside the existing workflow;
 ordinary PR runs do not pay for this expensive study.
 
@@ -126,6 +137,9 @@ Before enabling V3 beyond Draft, require:
   SHA, including owner `rustc` units and binary relink identities; three
   provider-only changes must *not* relink the provider-free orchestrator, while
   the shared Temporal gateway change must relink it.
+- Interpret the uncached, wrapper-free owner probe as a graph/relink isolation
+  experiment, **not** a representative production CI wall-time benchmark.
+  The normal CI may still use sccache; record its hits/misses separately.
 - Cold and warm `cargo build --locked --timings --message-format=json` and
   independent Docker layer measurements. Account for Cargo target cache,
   sccache hits, registry sources and dependency skeleton invalidation.

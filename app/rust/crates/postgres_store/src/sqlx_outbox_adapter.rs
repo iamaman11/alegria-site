@@ -732,6 +732,36 @@ async fn claim_outbox_batch_scoped(
     only_event_id: Option<Uuid>,
     target_system: Option<&str>,
 ) -> Result<Vec<OutboxEvent>> {
+    // Explicitly requested historical events require a typed quarantine
+    // response, even when they are no longer due. Silent "not found" would
+    // be indistinguishable from successful processing to an operator.
+    if let Some(event_id) = only_event_id {
+        let unproven: Option<(String, bool)> = sqlx::query_as(
+            "SELECT aggregate_key, projection_revision IS NULL
+             FROM system.sync_outbox
+             WHERE event_id=$1 AND ($2::text IS NULL OR target_system=$2)
+               AND target_system='qdrant' AND aggregate_type='rule_instance'
+               AND (projection_revision IS NULL OR staged_xid IS NULL)",
+        )
+        .bind(event_id)
+        .bind(target_system)
+        .fetch_optional(pool)
+        .await?;
+        if let Some((aggregate_key, missing_revision)) = unproven {
+            return Err(if missing_revision {
+                VerifiedRuleTruthFenceError::LegacyUnordered {
+                    event_id,
+                    aggregate_key,
+                }
+            } else {
+                VerifiedRuleTruthFenceError::LegacyUnproven {
+                    event_id,
+                    aggregate_key,
+                }
+            }
+            .into());
+        }
+    }
     let rows = sqlx::query(
         r#"
         WITH candidates AS (
@@ -739,6 +769,11 @@ async fn claim_outbox_batch_scoped(
             FROM system.sync_outbox
             WHERE ($4::uuid IS NULL OR event_id = $4)
               AND ($5::text IS NULL OR target_system = $5)
+              -- A legacy verified-rule row is durable diagnostic evidence,
+              -- not a deliverable command. Skip it BEFORE LIMIT/SKIP LOCKED
+              -- so it cannot starve unrelated fresh target events.
+              AND NOT (target_system='qdrant' AND aggregate_type='rule_instance'
+                       AND (projection_revision IS NULL OR staged_xid IS NULL))
               AND (
                 (status = 'pending' AND next_retry_at <= now())
                 OR
@@ -819,6 +854,8 @@ pub async fn claim_outbox_batch_for_run_target(
             FROM system.sync_outbox
             WHERE run_id = $4
               AND target_system = $5
+              AND NOT (target_system='qdrant' AND aggregate_type='rule_instance'
+                       AND (projection_revision IS NULL OR staged_xid IS NULL))
               AND (
                 (status = 'pending' AND next_retry_at <= now())
                 OR

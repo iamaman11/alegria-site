@@ -2144,6 +2144,7 @@ dependencies = [
  "contracts",
  "graph_neo4j",
  "infrastructure",
+ "operation_protocol",
  "outbox_worker",
  "primitives",
  "prost",

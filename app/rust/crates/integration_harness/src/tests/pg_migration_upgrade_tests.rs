@@ -10,9 +10,10 @@
 #[serial]
 async fn outbox_a14_pg_transaction_fence_upgrade_quarantines_existing_history() {
     use infrastructure::adapters::sqlx_outbox_adapter::{
-        claim_outbox_batch_for_target, lock_and_ensure_verified_rules_writable_in_tx,
-        VerifiedRuleTruthFenceError,
+        claim_outbox_batch, claim_outbox_batch_for_run_target, claim_outbox_batch_for_target,
+        lock_and_ensure_verified_rules_writable_in_tx, VerifiedRuleTruthFenceError,
     };
+    use std::collections::BTreeSet;
     use infrastructure::adapters::verified_rule_projection_adapter::stage_rule_upserts_in_tx;
     use seo_ports::knowledge::{
         VerifiedRuleEmbeddingBatch, VerifiedRuleProjectionCandidate, VerifiedRuleUpsertBatch,
@@ -111,18 +112,16 @@ async fn outbox_a14_pg_transaction_fence_upgrade_quarantines_existing_history() 
         "a committed old revision without xid must remain quarantined");
     forbidden_tx.rollback().await.unwrap();
 
-    // Test the actual Rust leasing API, not an artificial direct status UPDATE.
-    // A pre-migration pending intent must never become claimable after upgrade.
+    // An explicitly addressed historical event must produce a typed, visible
+    // quarantine reason, rather than silently disappearing from operator view.
     let old_claim = claim_outbox_batch_for_target(
         pool, "migration-legacy-claim", "qdrant", 1, 120, Some(historical_event),
     ).await.unwrap_err();
-    let old_claim_db_error = old_claim.downcast_ref::<sqlx::Error>()
-        .expect("legacy claim must fail at the PostgreSQL constraint");
-    assert_eq!(
-        old_claim_db_error.as_database_error().and_then(|db| db.code()).as_deref(),
-        Some("23514"),
-        "legacy receipt must not be silently claimed or rewritten"
-    );
+    let quarantine = old_claim.downcast_ref::<VerifiedRuleTruthFenceError>()
+        .expect("explicit legacy claim must report a typed quarantine");
+    assert!(matches!(quarantine, VerifiedRuleTruthFenceError::LegacyUnproven {
+        aggregate_key, event_id
+    } if aggregate_key == &historical_rule && event_id == &historical_event));
     let durable_status: String = sqlx::query_scalar(
         "SELECT status FROM system.sync_outbox WHERE event_id=$1",
     ).bind(historical_event).fetch_one(pool).await.unwrap();
@@ -139,27 +138,52 @@ async fn outbox_a14_pg_transaction_fence_upgrade_quarantines_existing_history() 
 
     // A brand-new, unrelated identity can still use the production owner API.
     // Quarantine is per point and must not block the whole projection system.
-    let fresh_rule = format!("fresh-projected-{}", Uuid::new_v4().simple());
+    let fresh_rules = (0..3)
+        .map(|idx| format!("fresh-projected-{idx}-{}", Uuid::new_v4().simple()))
+        .collect::<Vec<_>>();
     let fresh_batch = VerifiedRuleUpsertBatch {
-        run_id: Uuid::new_v4().to_string(),
+        // Deliberately share the historical run identity to prove the
+        // run-target claim cannot be starved by the old pending receipt.
+        run_id: "historical-run".to_owned(),
         context_key: format!("fresh-context-{}", Uuid::new_v4().simple()),
-        upserts: vec![VerifiedRuleProjectionCandidate {
-            rule_instance_id: fresh_rule.clone(),
+        upserts: fresh_rules.iter().map(|rule_id| VerifiedRuleProjectionCandidate {
+            rule_instance_id: rule_id.clone(),
             role_type: "document_required".into(),
             concept_key: "passport".into(),
             source_key: "https://fixture.example.gov/passport".into(),
             evidence_quote: "A passport is required".into(),
-        }],
+        }).collect(),
     };
     let mut fresh_tx = pool.begin().await.unwrap();
     stage_rule_upserts_in_tx(&mut fresh_tx, &fresh_batch, VerifiedRuleEmbeddingBatch {
         model: "fixture".into(),
-        vectors: vec![vec![0.1; 1024]],
+        vectors: vec![vec![0.1; 1024]; fresh_rules.len()],
     }).await.unwrap();
     fresh_tx.commit().await.unwrap();
     let fresh_revision: (i64, bool) = sqlx::query_as(
         "SELECT projection_revision, staged_xid IS NOT NULL FROM system.sync_outbox
          WHERE aggregate_key=$1 AND target_system='qdrant'",
-    ).bind(&fresh_rule).fetch_one(pool).await.unwrap();
+    ).bind(&fresh_rules[0]).fetch_one(pool).await.unwrap();
     assert_eq!(fresh_revision, (1, true));
+
+    // The legacy receipt was inserted first. Every ordinary claim path must
+    // skip it before LIMIT, allowing independent fresh identities through.
+    let scoped = claim_outbox_batch_for_target(
+        pool, "upgrade-scoped", "qdrant", 1, 120, None,
+    ).await.unwrap();
+    let unscoped = claim_outbox_batch(
+        pool, "upgrade-global", 1, 120, None,
+    ).await.unwrap();
+    let run_scoped = claim_outbox_batch_for_run_target(
+        pool, "upgrade-run", &fresh_batch.run_id, "qdrant", 1, 120,
+    ).await.unwrap();
+    let claimed: BTreeSet<String> = scoped.iter().chain(&unscoped).chain(&run_scoped)
+        .map(|event| event.aggregate_key.clone()).collect();
+    assert_eq!(claimed, fresh_rules.iter().cloned().collect::<BTreeSet<_>>());
+    assert_eq!(scoped.len() + unscoped.len() + run_scoped.len(), 3);
+    let legacy_after_claims: (String, Option<String>) = sqlx::query_as(
+        "SELECT status, worker_id FROM system.sync_outbox WHERE event_id=$1",
+    ).bind(historical_event).fetch_one(pool).await.unwrap();
+    assert_eq!(legacy_after_claims, ("pending".into(), None),
+        "a quarantined old command must remain diagnosable without starving fresh work");
 }

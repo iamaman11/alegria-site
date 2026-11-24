@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -89,6 +90,52 @@ class ManifestEvidenceTests(unittest.TestCase):
 
 
 class CompilerEvidenceTests(unittest.TestCase):
+    def test_isolated_probe_invokes_real_rustc_without_wrapper_or_shared_target(self) -> None:
+        fake_cached = {
+            "RUSTC_WRAPPER": "sccache",
+            "RUSTC_WORKSPACE_WRAPPER": "custom-sccache",
+            "CARGO_BUILD_RUSTC_WRAPPER": "cached",
+            "CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER": "cached-workspace",
+            "SCCACHE_GHA_ENABLED": "on",
+            "SCCACHE_GHA_RW_MODE": "READ_ONLY",
+            "CARGO_TARGET_DIR": "/shared/poisoned-target",
+            "CARGO_INCREMENTAL": "1",
+            "RUSTC": "/some/wrapper-disguised-as-rustc",
+            "CARGO_BUILD_RUSTC": "/some/cached-rustc",
+        }
+        with patch.dict(os.environ, fake_cached), patch.object(ab.shutil, "which", return_value="/usr/bin/rustc"):
+            with patch.object(ab.subprocess, "Popen") as popen:
+                process = popen.return_value
+                process.communicate.return_value = (
+                    json.dumps({
+                        "reason": "compiler-artifact", "package_id": "package-1",
+                        "target": {"kind": ["bin"], "name": "temporal_worker"},
+                        "fresh": False, "executable": "/fake/temporal_worker",
+                    }) + "\n" + json.dumps({"reason": "build-finished", "success": True}),
+                    "",
+                )
+                process.returncode = 0
+                build = ab.compiler_artifacts(
+                    ["cargo", "build", "--locked"], Path("/tmp/isolated-source/app/rust"),
+                    isolated_target=True,
+                )
+                passed = popen.call_args.kwargs["env"]
+                for name in ab.RUSTC_WRAPPER_ENV:
+                    self.assertNotIn(name, passed)
+                self.assertNotIn("SCCACHE_GHA_ENABLED", passed)
+                self.assertNotIn("SCCACHE_GHA_RW_MODE", passed)
+                self.assertEqual(passed["RUSTC"], "/usr/bin/rustc")
+                self.assertEqual(passed["CARGO_BUILD_RUSTC"], "/usr/bin/rustc")
+                self.assertEqual(passed["CARGO_INCREMENTAL"], "0")
+                self.assertEqual(passed["CARGO_TARGET_DIR"], "/tmp/isolated-source/app/rust/target")
+                self.assertNotEqual(passed["CARGO_TARGET_DIR"], fake_cached["CARGO_TARGET_DIR"])
+                command = popen.call_args.args[0]
+                self.assertEqual(command[0], "cargo")
+                self.assertIn('build.rustc-wrapper=""', command)
+                self.assertIn('build.rustc-workspace-wrapper=""', command)
+                self.assertTrue(build["compiler_execution"]["rustc_wrapper_disabled"])
+                self.assertEqual(len(build["non_fresh_units"]), 1)
+
     def test_exact_head_export_is_isolated_from_current_worktree(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             exported = Path(folder)
