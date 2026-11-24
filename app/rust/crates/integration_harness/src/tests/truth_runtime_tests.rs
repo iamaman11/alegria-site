@@ -940,11 +940,11 @@
         );
         assert_eq!(
             verified_row.get::<String, _>("verification_method"),
-            "cross_source_consensus@1"
+            "truth_governance@1"
         );
         assert!(verified_row
             .get::<String, _>("adjudication_reason")
-            .contains("corroborated_structured_candidates"));
+            .contains("independent_corroboration"));
     }
 
     #[cfg(feature = "e2e")]

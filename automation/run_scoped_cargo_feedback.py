@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Mapping
 
 from cargo_feedback import run_cargo
-from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_for_report, suite_environment_for_report
+from ci_impact import ROOT, SUITE_OWNERS, WORKSPACE, suite_commands_by_ci_job, suite_environment_for_report
 from dev_rust_feedback import commands_for_report
 
 
@@ -83,6 +83,11 @@ def main() -> int:
         "--delegate-workspace-unit-tests-to-verify", action="store_true",
         help="For full impact only, require the parallel verify job to run cargo test --workspace",
     )
+    parser.add_argument(
+        "--suite-job", choices=("architecture-and-rust", "verify"),
+        default="architecture-and-rust",
+        help="Existing CI owner executing this exact-source suite partition",
+    )
     args = parser.parse_args()
     report = json.loads(args.report.read_text(encoding="utf-8"))
     actual_sha = subprocess.check_output(
@@ -90,11 +95,18 @@ def main() -> int:
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
-    commands, delegated = cargo_commands_for_ci(
-        report,
-        delegate_workspace_unit_tests_to_verify=args.delegate_workspace_unit_tests_to_verify,
-    )
-    integration_commands = suite_commands_for_report(report)
+    if args.suite_job == "verify":
+        if args.delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":
+            raise ValueError("verify executes delegated E2E suites only for full impact")
+        # The same verify job has already executed its mandatory workspace
+        # unit tests. Never re-run those Cargo commands through this runner.
+        commands, delegated = [], False
+    else:
+        commands, delegated = cargo_commands_for_ci(
+            report,
+            delegate_workspace_unit_tests_to_verify=args.delegate_workspace_unit_tests_to_verify,
+        )
+    integration_commands = suite_commands_by_ci_job(report)[args.suite_job]
     preparations = selected_preparations(integration_commands)
 
     measurements = []
@@ -137,11 +149,17 @@ def main() -> int:
         print(f"CI_SUITE={name} COMMAND=" + " ".join(command), flush=True)
         measurements.append(run_cargo(command, cwd=WORKSPACE, env=runtime_env or None))
 
-    output = ROOT / "automation/reports/scoped_cargo_feedback.json"
+    output = ROOT / (
+        "automation/reports/scoped_cargo_feedback.json"
+        if args.suite_job == "architecture-and-rust"
+        else "automation/reports/scoped_cargo_feedback_verify.json"
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(
         json.dumps(
             {"source_sha": actual_sha, "impact": report["analysis"],
+             "suite_job": args.suite_job,
+             "selected_suites": [name for name, _ in integration_commands],
              "delegated_workspace_unit_tests_to": "verify" if delegated else None,
              "measurements": measurements}, indent=2
         ) + "\n",
