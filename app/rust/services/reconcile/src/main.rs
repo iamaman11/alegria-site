@@ -6,7 +6,7 @@ use postgres_store::sqlx_reconcile_runtime_adapter::{
     finish_reconcile_run,
 };
 use postgres_store::sqlx_runtime_health_adapter;
-use runtime_models::{ReconcileSummary, ReconcileTargetReportRecord};
+use runtime_models::{ReconcileOutboxCommand, ReconcileSummary, ReconcileTargetReportRecord};
 use temporal_gateway::{connect_client, running_workflow_ids_older_than};
 use tracing::info;
 
@@ -33,10 +33,22 @@ async fn main() -> Result<()> {
     let qdrant_before = sqlx_reconcile_adapter::read_target_backlog(&pool, "qdrant").await?;
 
     let opts = reconcile_options();
-    let graph_report =
-        sqlx_reconcile_adapter::reconcile_target_system(&pool, "neo4j", &opts).await?;
-    let qdrant_report =
-        sqlx_reconcile_adapter::reconcile_target_system(&pool, "qdrant", &opts).await?;
+    let graph_report = sqlx_reconcile_adapter::execute_reconcile_outbox(
+        &pool,
+        &ReconcileOutboxCommand {
+            target_system: "neo4j".to_owned(),
+            options: opts.clone(),
+        },
+    )
+    .await?;
+    let qdrant_report = sqlx_reconcile_adapter::execute_reconcile_outbox(
+        &pool,
+        &ReconcileOutboxCommand {
+            target_system: "qdrant".to_owned(),
+            options: opts,
+        },
+    )
+    .await?;
 
     let graph_after = sqlx_reconcile_adapter::read_target_backlog(&pool, "neo4j").await?;
     let qdrant_after = sqlx_reconcile_adapter::read_target_backlog(&pool, "qdrant").await?;

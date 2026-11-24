@@ -3420,9 +3420,11 @@ name = "postgres_store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "operation_protocol",
  "primitives",
  "runtime_models",
  "sqlx",
+ "thiserror 2.0.21",
  "uuid",
 ]
 

@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = { workspace = true }
+operation_protocol = { path = "../operation_protocol" }
 primitives = { path = "../primitives" }
 runtime_models = { path = "../runtime_models" }
 sqlx = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }

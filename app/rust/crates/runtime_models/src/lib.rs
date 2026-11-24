@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub mod reconcile_wire;
+pub mod outbox_reconcile;
+
+pub use outbox_reconcile::{ReconcileOutboxCommand, ReconcileOutboxOptions};
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
