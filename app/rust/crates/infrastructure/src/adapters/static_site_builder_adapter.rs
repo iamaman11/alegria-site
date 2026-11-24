@@ -530,8 +530,7 @@ fn render_related_links(
         // The CMS revision approved an exact destination. A later route
         // change cannot silently redirect that immutable published link.
         if !link.canonical_url_path.is_empty()
-            && normalize_url_path(&link.canonical_url_path)?
-                != normalize_url_path(target_path)?
+            && normalize_url_path(&link.canonical_url_path)? != normalize_url_path(target_path)?
         {
             anyhow::bail!(
                 "approved CMS link target changed after revision: {}",
@@ -1178,18 +1177,26 @@ mod tests {
             canonical_url_path: "/en/foreign".into(),
         }];
         let (artifacts, previews) = build_static_artifacts(
-            &[source.clone()], &links, &published_targets, &[], "https://example.test",
+            &[source.clone()],
+            &links,
+            &published_targets,
+            &[],
+            "https://example.test",
         )
         .unwrap();
         assert_eq!(previews.len(), 1);
         assert_eq!(previews[0].required_link_count, 1);
         assert_eq!(previews[0].rendered_link_count, 1);
         assert!(previews[0].rendered_html.contains("href=\"/en/foreign\""));
-        assert!(previews[0].rendered_html.contains("Approved cross-scope title"));
-        assert!(!artifacts.iter().any(|artifact| artifact.relative_path == "en/foreign/index.html"));
-        assert!(build_static_artifacts(
-            &[source], &links, &[], &[], "https://example.test",
-        ).is_err());
+        assert!(previews[0]
+            .rendered_html
+            .contains("Approved cross-scope title"));
+        assert!(!artifacts
+            .iter()
+            .any(|artifact| artifact.relative_path == "en/foreign/index.html"));
+        assert!(
+            build_static_artifacts(&[source], &links, &[], &[], "https://example.test",).is_err()
+        );
     }
 
     #[test]
