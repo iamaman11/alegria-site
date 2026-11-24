@@ -159,8 +159,10 @@ mod tests {
             .collect::<HashSet<_>>();
         assert!(keys.contains("page:a"));
         assert!(keys.contains("page:b"));
-        assert!(output.impacts.iter().any(|impact| impact
-            .reason_package["semantic_neighbor_widening"] == true));
+        assert!(output
+            .impacts
+            .iter()
+            .any(|impact| impact.reason_package["semantic_neighbor_widening"] == true));
         let semantic_reason = &output
             .impacts
             .iter()
@@ -176,7 +178,10 @@ mod tests {
             json!(["verified.rule_instance:passport"])
         );
         assert_eq!(
-            *repo.persisted_run_ids.lock().expect("persisted rebuild run ID"),
+            *repo
+                .persisted_run_ids
+                .lock()
+                .expect("persisted rebuild run ID"),
             vec!["run-1".to_string()]
         );
     }

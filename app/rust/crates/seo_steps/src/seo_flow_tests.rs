@@ -1,9 +1,8 @@
 use contracts::generated::alegria::temporal::v1::{
     ClaimLedgerEntry, CmsPublishInputPayload, DraftAssembleInputPayload,
     DraftNormalizeInputPayload, DraftQaInputPayload, IaBuildInputPayload,
-    LinkRecommendInputPayload, LlmDraftCandidate, OpportunityBuildInputPayload,
-    SeoScopePayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpNormalizeInputPayload,
+    LinkRecommendInputPayload, LlmDraftCandidate, OpportunityBuildInputPayload, SeoScopePayload,
+    SeoVerifiedFactSupportState, SerpIngestInputPayload, SerpNormalizeInputPayload,
 };
 
 fn scope() -> SeoScopePayload {

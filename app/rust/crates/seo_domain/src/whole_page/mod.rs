@@ -13,9 +13,7 @@ mod context_profile;
 mod scoring;
 
 pub use advisory::fuse_with_advisory_retrieval;
-pub use scoring::{
-    build_page_sketch, deterministic_whole_page_snapshot, expert_section_semantics,
-};
+pub use scoring::{build_page_sketch, deterministic_whole_page_snapshot, expert_section_semantics};
 
 /// Exactly the fields consumed by page decisions, independent of SQL rows.
 #[derive(Debug, Clone)]
@@ -120,7 +118,10 @@ mod tests {
         let temporal =
             deterministic_whole_page_snapshot(std::slice::from_ref(&section), &section.content_md);
         assert_eq!(expert.page_mode_confidence, 0.70);
-        assert_eq!(expert.reason_codes, vec!["page_mode:content_page".to_string()]);
+        assert_eq!(
+            expert.reason_codes,
+            vec!["page_mode:content_page".to_string()]
+        );
         assert_eq!(expert.layer_scores["seo"], 0.25);
         assert_eq!(expert.layer_scores["commercial"], 0.25);
         assert_eq!(temporal.layer_scores["seo"], 0.20);

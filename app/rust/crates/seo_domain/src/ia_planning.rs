@@ -226,8 +226,7 @@ pub fn plan_cluster(candidate: &IaClusterCandidate<'_>) -> IaClusterDisposition 
         return IaClusterDisposition::UseExistingHub;
     }
 
-    let ambiguous_topic_family =
-        candidate.topic_keys.len() > 1 && candidate.graph_confidence < 0.6;
+    let ambiguous_topic_family = candidate.topic_keys.len() > 1 && candidate.graph_confidence < 0.6;
     let topic_family_key = if candidate.topic_keys.is_empty() {
         candidate.seed_keyword.to_string()
     } else {
@@ -311,7 +310,9 @@ mod tests {
             panic!("expected planned page")
         };
         assert_eq!(plan.page_type_key, "fee_page");
-        assert!(plan.canonical_url_path.contains("/fees/стоимость-визы-для-семьи/"));
+        assert!(plan
+            .canonical_url_path
+            .contains("/fees/стоимость-визы-для-семьи/"));
         assert_eq!(plan.dominant_intent, "informational");
         assert_eq!(plan.lifecycle, IaLifecycle::Planned);
         assert_eq!(
@@ -322,7 +323,10 @@ mod tests {
 
     #[test]
     fn broad_verified_query_reuses_hub_without_new_page() {
-        let mut candidate = cluster("документы стоимость сроки", Some("документы стоимость сроки"));
+        let mut candidate = cluster(
+            "документы стоимость сроки",
+            Some("документы стоимость сроки"),
+        );
         candidate.has_verified_support = true;
         assert!(matches!(
             plan_cluster(&candidate),

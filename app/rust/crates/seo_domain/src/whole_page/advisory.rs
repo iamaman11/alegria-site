@@ -9,9 +9,7 @@ use super::{
     WholePageDeterministicSnapshot, WholePageSection, WholePageSemanticPageState,
 };
 
-fn advisory_signal_from_hits(
-    advisory_hits: &[WholePageAdvisoryHit],
-) -> WholePageAdvisorySignal {
+fn advisory_signal_from_hits(advisory_hits: &[WholePageAdvisoryHit]) -> WholePageAdvisorySignal {
     let mut page_mode_candidates = Vec::new();
     let mut layer_candidates = Vec::new();
     let mut country_hints = Vec::new();

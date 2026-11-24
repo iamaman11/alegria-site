@@ -510,18 +510,22 @@ mod tests {
 
     #[test]
     fn three_duplicate_topic_candidates_keep_original_conflict_owner_order() {
-        let keywords = ["visa refusal guide", "visa refusal appeal", "visa refusal checklist"];
+        let keywords = [
+            "visa refusal guide",
+            "visa refusal appeal",
+            "visa refusal checklist",
+        ];
         let clusters = keywords
             .into_iter()
             .enumerate()
-            .map(|(index, seed)| {
-                contracts::generated::alegria::temporal::v1::KeywordClusterState {
+            .map(
+                |(index, seed)| contracts::generated::alegria::temporal::v1::KeywordClusterState {
                     cluster_key: format!("cluster-{index}"),
                     seed_keyword: seed.into(),
                     topic_keys: vec!["visa_refusal".into()],
                     ..Default::default()
-                }
-            })
+                },
+            )
             .collect();
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,
@@ -545,12 +549,14 @@ mod tests {
     fn two_topic_families_with_one_canonical_path_keep_blocking_conflict() {
         let clusters = ["family_a", "family_b"]
             .into_iter()
-            .map(|family| contracts::generated::alegria::temporal::v1::KeywordClusterState {
-                cluster_key: family.into(),
-                seed_keyword: "visa fees".into(),
-                topic_keys: vec![family.into()],
-                ..Default::default()
-            })
+            .map(
+                |family| contracts::generated::alegria::temporal::v1::KeywordClusterState {
+                    cluster_key: family.into(),
+                    seed_keyword: "visa fees".into(),
+                    topic_keys: vec![family.into()],
+                    ..Default::default()
+                },
+            )
             .collect();
         let output = execute(&IaBuildInputPayload {
             keyword_clusters: clusters,

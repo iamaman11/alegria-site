@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 use super::context_profile::{
     global_entities, page_context_profile, section_is_noise, summarize, weighted_family_score,
 };
-use super::{
-    WholePageDeterministicSnapshot, WholePageSection, WholePageSemanticPageState,
-};
+use super::{WholePageDeterministicSnapshot, WholePageSection, WholePageSemanticPageState};
 
 pub(super) fn dominant_layers(text: &str) -> Vec<String> {
     let scores = layer_scores_for_text(text);
@@ -142,7 +140,10 @@ fn layer_scores_for_profile(text: &str, profile: LayerScoringProfile) -> BTreeMa
             &["консультац", "заказать", "услуга", "под ключ"],
         ),
     };
-    scores.insert("seo".to_string(), normalized_marker_score(text, seo_markers));
+    scores.insert(
+        "seo".to_string(),
+        normalized_marker_score(text, seo_markers),
+    );
     scores.insert(
         "commercial".to_string(),
         normalized_marker_score(text, commercial_markers),
@@ -164,10 +165,7 @@ fn select_layers_from_scores(scores: &BTreeMap<String, f32>) -> Vec<String> {
         .collect()
 }
 
-fn page_mode_scores(
-    _text: &str,
-    sections: &[WholePageSection],
-) -> BTreeMap<String, f32> {
+fn page_mode_scores(_text: &str, sections: &[WholePageSection]) -> BTreeMap<String, f32> {
     let mut scores = BTreeMap::new();
     let source_url = sections
         .first()
@@ -235,7 +233,14 @@ fn page_mode_scores(
     );
     let navigation_markers = marker_hit_count(
         &primary_content,
-        &["breadcrumb", "menu", "directory", "sitemap", "category", "sidebar"],
+        &[
+            "breadcrumb",
+            "menu",
+            "directory",
+            "sitemap",
+            "category",
+            "sidebar",
+        ],
     );
     let primary_has_functional_mode = utility_markers >= 2 || navigation_markers >= 2;
     let content_support = if !primary_has_substantive_content && primary_has_functional_mode {
@@ -431,7 +436,8 @@ fn expert_page_mode_hint(section: &WholePageSection) -> String {
     .to_lowercase();
     if text.contains("sitemap") || text.contains("directory") || text.contains("каталог") {
         "directory_page".to_string()
-    } else if text.contains("breadcrumb") || text.contains("menu") || text.contains("навигац") {
+    } else if text.contains("breadcrumb") || text.contains("menu") || text.contains("навигац")
+    {
         "menu_page".to_string()
     } else if text.contains("privacy") || text.contains("cookie") || text.contains("login") {
         "utility_page".to_string()

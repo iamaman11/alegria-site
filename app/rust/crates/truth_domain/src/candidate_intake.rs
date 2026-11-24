@@ -310,12 +310,18 @@ mod tests {
         let mut fee = TruthParamValue::object([
             ("amount", TruthParamValue::Integer(80)),
             ("min_amount", TruthParamValue::Integer(35)),
-            ("max_amount", TruthParamValue::Integer(9_007_199_254_740_992)),
+            (
+                "max_amount",
+                TruthParamValue::Integer(9_007_199_254_740_992),
+            ),
         ]);
         canonicalize_fee_parameters("FEE_ITEM", &mut fee).unwrap();
         let fields = fee.as_object().unwrap();
         assert_eq!(fields.get("amount"), Some(&TruthParamValue::Decimal(80.0)));
-        assert_eq!(fields.get("min_amount"), Some(&TruthParamValue::Decimal(35.0)));
+        assert_eq!(
+            fields.get("min_amount"),
+            Some(&TruthParamValue::Decimal(35.0))
+        );
         assert_eq!(
             fields.get("max_amount"),
             Some(&TruthParamValue::Decimal(9_007_199_254_740_992.0))
