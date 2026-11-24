@@ -1,7 +1,7 @@
 use contracts::generated::alegria::temporal::v1::{
     CmsPublishInputPayload, CmsPublishOutputPayload, FinalizePublishInputPayload,
     FinalizePublishOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
-    RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
+    PublishArtifact, RenderPreviewValidateInputPayload, RenderPreviewValidateOutputPayload,
 };
 use primitives::errors::DomainError;
 use seo_ports::{CmsApproval, CmsReviewPort, PublishArtifactRepository};
@@ -40,9 +40,50 @@ pub async fn run_publish_materialize<P: PublishArtifactRepository>(
     input: &PublishMaterializeInputPayload,
 ) -> Result<PublishMaterializeOutputPayload, DomainError> {
     let resolved = repo.resolve_publish_materialize_input(input);
-    let output = seo_steps::publish_materialize_step::execute(&resolved);
+    let output = plan_publish_materialization(&resolved);
     repo.persist_publish_materialize_output(&resolved, &output)
         .await
+}
+
+/// Prepare a release artifact without touching the filesystem or deployment.
+/// The domain owns the required-field policy; the application owns the
+/// generated Temporal payload and deterministic artifact identity.
+pub fn plan_publish_materialization(
+    input: &PublishMaterializeInputPayload,
+) -> PublishMaterializeOutputPayload {
+    let blocking_reasons = seo_domain::publishing::materialization::MaterializationFields {
+        page_node_key: &input.page_node_key,
+        revision_id: &input.revision_id,
+        canonical_url_path: &input.canonical_url_path,
+        output_dir: &input.output_dir,
+        base_url: &input.base_url,
+    }
+    .missing_required()
+    .into_iter()
+    .map(|missing| missing.reason_code().to_string())
+    .collect::<Vec<_>>();
+    let artifact = input.publish_artifact.clone().unwrap_or(PublishArtifact {
+        artifact_key: seo_domain::artifact_identity::seo_artifact_key(
+            "publish_artifact",
+            &[&input.page_node_key, &input.revision_id, "headless_snapshot"],
+        ),
+        page_node_key: input.page_node_key.clone(),
+        revision_id: input.revision_id.clone(),
+        artifact_type: "headless_snapshot".to_string(),
+        artifact_uri: String::new(),
+        manifest_json: "{}".to_string(),
+        status: "pending_materialization".to_string(),
+    });
+    PublishMaterializeOutputPayload {
+        publish_artifact: Some(artifact),
+        preview_pages: Vec::new(),
+        materialization_status: if blocking_reasons.is_empty() {
+            "ready_to_build".to_string()
+        } else {
+            "blocked".to_string()
+        },
+        blocking_reasons,
+    }
 }
 
 pub fn run_render_preview_validate(
@@ -55,8 +96,24 @@ pub async fn run_finalize_publish<P: PublishArtifactRepository>(
     repo: &P,
     input: &FinalizePublishInputPayload,
 ) -> Result<FinalizePublishOutputPayload, DomainError> {
-    let output = seo_steps::finalize_publish_step::execute(input);
+    let output = plan_finalize_publish(input);
     repo.persist_finalize_publish_output(input, &output).await
+}
+
+/// Render readiness only plans a release candidate; public HTTPS readback
+/// remains mandatory before a repository may report a published revision.
+pub fn plan_finalize_publish(input: &FinalizePublishInputPayload) -> FinalizePublishOutputPayload {
+    let validation = input.render_validation.clone().unwrap_or_default();
+    let gate = seo_domain::publishing::ReleaseReadiness::from_render_validation(
+        &validation.verdict,
+        &validation.blocking_reasons,
+    );
+    FinalizePublishOutputPayload {
+        verdict: gate.verdict().to_string(),
+        current_status: gate.current_status().to_string(),
+        blocking_reasons: validation.blocking_reasons,
+        publish_artifact: input.publish_artifact.clone(),
+    }
 }
 
 #[cfg(test)]
@@ -67,6 +124,86 @@ mod tests {
         DraftState, PageNodeState, PublishArtifact, RenderPreviewPageState,
     };
     use seo_ports::{CmsReviewPort, PublishArtifactRepository};
+
+    #[test]
+    fn missing_materialization_fields_keep_stable_temporal_reason_order() {
+        let result = plan_publish_materialization(&PublishMaterializeInputPayload {
+            page_node_key: " ".to_string(),
+            revision_id: String::new(),
+            canonical_url_path: String::new(),
+            output_dir: String::new(),
+            base_url: String::new(),
+            ..Default::default()
+        });
+        assert_eq!(result.materialization_status, "blocked");
+        assert_eq!(
+            result.blocking_reasons,
+            vec![
+                "missing_page_node_key".to_string(),
+                "missing_revision_id".to_string(),
+                "missing_canonical_url_path".to_string(),
+                "missing_output_dir".to_string(),
+                "missing_base_url".to_string(),
+            ]
+        );
+        let artifact = result.publish_artifact.unwrap();
+        assert_eq!(
+            artifact.artifact_key,
+            seo_domain::artifact_identity::seo_artifact_key(
+                "publish_artifact",
+                &[" ", "", "headless_snapshot"],
+            )
+        );
+        assert_eq!(artifact.artifact_type, "headless_snapshot");
+        assert_eq!(artifact.status, "pending_materialization");
+        assert_eq!(artifact.manifest_json, "{}");
+    }
+
+    #[test]
+    fn preexisting_materialization_artifact_is_preserved() {
+        let artifact = PublishArtifact {
+            artifact_key: "unchanged-artifact".to_string(),
+            page_node_key: "page-1".to_string(),
+            revision_id: "rev-1".to_string(),
+            ..Default::default()
+        };
+        let output = plan_publish_materialization(&PublishMaterializeInputPayload {
+            page_node_key: "page-1".to_string(),
+            revision_id: "rev-1".to_string(),
+            canonical_url_path: "/visa/spain".to_string(),
+            output_dir: "/out".to_string(),
+            base_url: "https://example.test".to_string(),
+            publish_artifact: Some(artifact.clone()),
+            ..Default::default()
+        });
+        assert_eq!(output.materialization_status, "ready_to_build");
+        assert_eq!(output.publish_artifact, Some(artifact));
+    }
+
+    #[test]
+    fn finalize_never_reports_publication_before_public_readback() {
+        let candidate = plan_finalize_publish(&FinalizePublishInputPayload {
+            render_validation: Some(RenderPreviewValidateOutputPayload {
+                verdict: "render_ready".to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(candidate.verdict, "ready_for_release");
+        assert_eq!(candidate.current_status, "approved");
+
+        let blocked = plan_finalize_publish(&FinalizePublishInputPayload {
+            render_validation: Some(RenderPreviewValidateOutputPayload {
+                verdict: "render_ready".to_string(),
+                blocking_reasons: vec!["missing_approval".to_string()],
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(blocked.verdict, "blocked");
+        assert_eq!(blocked.current_status, "blocked");
+        assert_eq!(blocked.blocking_reasons, vec!["missing_approval".to_string()]);
+    }
 
     struct FakeReviewPort;
 

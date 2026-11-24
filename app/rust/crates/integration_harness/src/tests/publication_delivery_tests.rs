@@ -285,7 +285,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
         .bind(&page).bind(&scope).bind(format!("doc-{marker}")).bind(&first.revision_id)
         .execute(pool).await.unwrap();
 
-    let planned = seo_steps::finalize_publish_step::execute(&first);
+    let planned = seo_application::review_publish::plan_finalize_publish(&first);
     assert_eq!(planned.verdict, "ready_for_release");
     let published =
         persist_finalize_publish_output_with_delivery(pool, &first, &planned, &delivery)
@@ -302,7 +302,7 @@ async fn publishing_a17_postgres_outbox_http_faults_and_recovery() {
     assert_eq!(first_outbox, 1);
 
     let second = revision(pool, &root, &page, &brief, &blueprint, 2).await;
-    let planned = seo_steps::finalize_publish_step::execute(&second);
+    let planned = seo_application::review_publish::plan_finalize_publish(&second);
     for fault in [Fault::Upload, Fault::Readback] {
         delivery.set_fault(fault);
         let blocked =

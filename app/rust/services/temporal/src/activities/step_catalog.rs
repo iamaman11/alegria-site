@@ -11,16 +11,16 @@ pub(crate) fn run_layer_router(
 
 pub(crate) fn run_page_utility_classifier(
     _acts: &AlegriaActivities,
-    input: &seo_steps::page_utility_classifier_step::PageUtilityClassifierInput,
-) -> seo_steps::page_utility_classifier_step::PageUtilityClassifierOutput {
-    seo_steps::page_utility_classifier_step::execute(input)
+    input: &acquisition::source_relevance::PageUtilityClassifierInput,
+) -> acquisition::source_relevance::PageUtilityClassifierOutput {
+    acquisition::source_relevance::classify_page(input)
 }
 
 pub(crate) fn run_dom_block_relevance(
     _acts: &AlegriaActivities,
-    input: &[seo_steps::dom_block_relevance_step::DomBlockInput],
-) -> seo_steps::dom_block_relevance_step::DomBlockRelevanceOutput {
-    seo_steps::dom_block_relevance_step::execute(input)
+    input: &[acquisition::source_relevance::DomBlockInput],
+) -> acquisition::source_relevance::DomBlockRelevanceOutput {
+    acquisition::source_relevance::score_dom_blocks(input)
 }
 
 pub(crate) fn run_entity_span_detection(

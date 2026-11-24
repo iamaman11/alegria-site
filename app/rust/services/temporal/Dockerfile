@@ -51,16 +51,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Source provenance is added only after Rust compilation, preserving cache.
-COPY worker-context.json /app/worker-context.json
-COPY --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
-COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
-COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools
+# Native Cloudflare tooling changes only with its package manifest. Keep npm
+# ahead of the Rust binaries, website assets and source SHA: neither a Worker
+# rebuild nor an assets-only release should reinstall identical dependencies.
+COPY infra/cloudflare/seo-static/package.json /app/infra/cloudflare/seo-static/package.json
+RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund
+
+# Website config/assets and the exact-source release envelope are independent
+# of the compiler and Node dependency layers.
 COPY infra/cloudflare/seo-static /app/infra/cloudflare/seo-static
 COPY automation/deploy_seo_static_cloudflare.py \
      automation/check_public_static_output.py \
      automation/check_public_http_readback.py \
      automation/check_first_site_release.py /app/automation/
-RUN npm install --prefix /app/infra/cloudflare/seo-static --no-audit --no-fund
+COPY worker-context.json /app/worker-context.json
+COPY --from=builder /app/app/rust/target/release/temporal_worker /usr/local/bin/temporal_worker
+COPY --from=builder /app/app/rust/target/release/temporal_starter /usr/local/bin/temporal_starter
+COPY --from=builder /app/app/rust/target/release/cli_tools /usr/local/bin/cli_tools
 
 ENTRYPOINT ["/usr/local/bin/temporal_worker"]

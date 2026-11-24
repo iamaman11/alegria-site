@@ -17,6 +17,7 @@ temporalio-common = { workspace = true }
 temporalio-macros = { workspace = true }
 temporalio-workflow = { workspace = true }
 infrastructure = { path = "../../crates/infrastructure" }
+acquisition = { path = "../../crates/acquisition" }
 policies = { path = "../../crates/policies" }
 seo_steps = { path = "../../crates/seo_steps" }
 primitives = { path = "../../crates/primitives" }

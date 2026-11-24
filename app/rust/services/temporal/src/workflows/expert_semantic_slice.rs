@@ -123,7 +123,7 @@ impl ExpertSemanticSliceWorkflow {
         let page_utility = ctx
             .start_activity(
                 AlegriaActivities::run_page_utility_classifier_step,
-                seo_steps::page_utility_classifier_step::PageUtilityClassifierInput {
+                acquisition::source_relevance::PageUtilityClassifierInput {
                     url: section.source_url.clone(),
                     title: section.heading_path.clone(),
                     raw_text: section.raw_text.clone(),
@@ -137,9 +137,9 @@ impl ExpertSemanticSliceWorkflow {
         let dom = ctx
             .start_activity(
                 AlegriaActivities::run_dom_block_relevance_step,
-                vec![seo_steps::dom_block_relevance_step::DomBlockInput {
+                vec![acquisition::source_relevance::DomBlockInput {
                     dom_block_id: format!("section:{}", section.section_id),
-                    block_role: seo_steps::dom_block_relevance_step::BlockRole::ContentMain,
+                    block_role: acquisition::source_relevance::BlockRole::ContentMain,
                     text: section.raw_text.clone(),
                 }],
                 db_opts(30),

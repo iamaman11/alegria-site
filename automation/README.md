@@ -100,7 +100,6 @@ python3 automation/check_docs_layout.py
 
 ```bash
 python3 automation/check_json_boundary_policy.py
-python3 automation/check_allowed_boundary_points.py
 python3 automation/check_seo_steps_external_sdk_ban.py
 python3 automation/check_services_temporal_boundary.py
 ```

@@ -29,6 +29,17 @@ def validate_cache_policy(workflow: str) -> None:
             body.append(line)
         blocks.append("\n".join(body))
     (saver,) = blocks
+    # The trusted-main compiler cache is useful only when its rustc profile
+    # matches the PR reader. A one-sided DEBUG=0 change silently invalidates
+    # every sccache entry, turning a warm regression into a cold build.
+    prime = workflow.split("  rust-cache-prime:\n", 1)[1].split("  select-image:\n", 1)[0]
+    for name, block in (("PR", saver), ("accepted-main", prime)):
+        for profile in ("DEV", "TEST"):
+            key = f'CARGO_PROFILE_{profile}_DEBUG: "0"'
+            if block.count(key) != 1:
+                raise ValueError(f"{name} must use the same symbol-free Rust {profile} profile")
+    if 'CARGO_PROFILE_DEV_DEBUG: "0"' in workflow.split("  architecture-and-rust:\n", 1)[0]:
+        raise ValueError("CI-only Rust profile must not change repository-global release settings")
     if ("SCCACHE_GHA_ENABLED: \"on\"" not in saver
             or "uses: actions/github-script@v8" not in saver
             or "core.exportVariable('ACTIONS_RESULTS_URL', url)" not in saver
@@ -85,6 +96,20 @@ class CargoCachePolicy(unittest.TestCase):
         product = original.split("  product-truth:\n", 1)[1].split("  rust-security:\n", 1)[0]
         self.assertNotIn("cargo-registry-", product)
         validate_cache_policy(original)
+
+    def test_ci_dev_and_test_profiles_must_match_trusted_main(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        for name in ("DEV", "TEST"):
+            key = f'CARGO_PROFILE_{name}_DEBUG: "0"'
+            for occurrence in (1, 2):
+                position = original.find(key)
+                if occurrence == 2:
+                    position = original.find(key, position + len(key))
+                self.assertGreaterEqual(position, 0)
+                changed = original[:position] + f'CARGO_PROFILE_{name}_DEBUG: "2"' + original[position + len(key):]
+                with self.subTest(name=name, occurrence=occurrence):
+                    with self.assertRaisesRegex(ValueError, "same symbol-free Rust"):
+                        validate_cache_policy(changed)
 
     def test_missing_authenticated_sccache_backend_is_rejected(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()

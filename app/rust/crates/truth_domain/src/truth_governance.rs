@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::truth_candidates::{
-    TruthAdjudicationDecision, TruthAdjudicationResult, TruthStructuredCandidate,
+    contradiction_count, TruthAdjudicationDecision, TruthAdjudicationResult,
+    TruthStructuredCandidate,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -311,24 +312,6 @@ pub fn adjudicate_truth_candidates_with_governance(
     }
 }
 
-fn contradiction_count(candidates: &[&TruthStructuredCandidate]) -> usize {
-    let signatures = BTreeSet::from_iter(
-        candidates
-            .iter()
-            .map(|candidate| stable_value_signature(candidate)),
-    );
-    signatures.len().saturating_sub(1)
-}
-
-fn stable_value_signature(candidate: &TruthStructuredCandidate) -> String {
-    format!(
-        "{}|{}|{}",
-        candidate.role,
-        candidate.concept_canonical_key,
-        serde_json::to_string(&candidate.params).unwrap_or_else(|_| "null".to_string())
-    )
-}
-
 fn independence_group(
     candidate: &TruthStructuredCandidate,
     registry: &BTreeMap<String, SourceGovernanceRecord>,
@@ -414,6 +397,48 @@ mod tests {
             evidence_quote: "Consular fee".to_string(),
             epistemic_status: "structured".to_string(),
         }
+    }
+
+    #[test]
+    fn near_decimal_conflict_blocks_governance_auto_verification() {
+        let registry = BTreeMap::from([
+            (
+                "a".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "primary_authority".to_string(),
+                    independence_group_key: "gov-a".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+            (
+                "b".to_string(),
+                SourceGovernanceRecord {
+                    authority_class: "delegated_authority".to_string(),
+                    independence_group_key: "gov-b".to_string(),
+                    ..SourceGovernanceRecord::default()
+                },
+            ),
+        ]);
+        let mut first = candidate("1", "a", 35);
+        let mut second = candidate("2", "b", 35);
+        first.params = TruthParamValue::object([(
+            "amount",
+            TruthParamValue::Decimal(35.000000001),
+        )]);
+        second.params = TruthParamValue::object([(
+            "amount",
+            TruthParamValue::Decimal(35.000000002),
+        )]);
+
+        let result = adjudicate_truth_candidates_with_governance(&[first, second], &registry);
+        assert_eq!(result.overall_status, "needs_hitl");
+        assert_eq!(result.contradiction_count, 1);
+        assert!(result.decisions.iter().all(|decision| {
+            decision.decision == "needs_hitl"
+                && decision
+                    .adjudication_reason
+                    .contains("contradictory_structured_candidates")
+        }));
     }
 
     #[test]

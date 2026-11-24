@@ -80,6 +80,39 @@ impl TruthParamValue {
             ),
         }
     }
+
+    /// Contradiction decisions must distinguish every representable numeric
+    /// value. `stable_signature` intentionally rounds decimals for historical
+    /// identity use, so it is unsafe for comparing disputed facts.
+    fn exact_conflict_signature(&self) -> String {
+        match self {
+            Self::Null => "n".to_string(),
+            Self::Bool(value) => format!("b{}", u8::from(*value)),
+            Self::Integer(value) => format!("i{value}"),
+            Self::Decimal(value) => format!("d{:016x}", value.to_bits()),
+            Self::Text(value) => format!("t{}:{value}", value.len()),
+            Self::List(values) => {
+                let encoded = values
+                    .iter()
+                    .map(|value| {
+                        let signature = value.exact_conflict_signature();
+                        format!("{}:{signature}", signature.len())
+                    })
+                    .collect::<String>();
+                format!("l{}:{encoded}", values.len())
+            }
+            Self::Object(values) => {
+                let encoded = values
+                    .iter()
+                    .map(|(key, value)| {
+                        let signature = value.exact_conflict_signature();
+                        format!("{}:{key}{}:{signature}", key.len(), signature.len())
+                    })
+                    .collect::<String>();
+                format!("o{}:{encoded}", values.len())
+            }
+        }
+    }
 }
 
 fn stable_escape(value: &str) -> String {
@@ -915,7 +948,7 @@ fn has_range_params(params: &TruthParamValue) -> bool {
         .unwrap_or(false)
 }
 
-fn contradiction_count(candidates: &[&TruthStructuredCandidate]) -> usize {
+pub(crate) fn contradiction_count(candidates: &[&TruthStructuredCandidate]) -> usize {
     let signatures = BTreeSet::from_iter(
         candidates
             .iter()
@@ -929,7 +962,7 @@ fn stable_value_signature(candidate: &TruthStructuredCandidate) -> String {
         "{}|{}|{}",
         candidate.role,
         candidate.concept_canonical_key,
-        candidate.params.stable_signature()
+        candidate.params.exact_conflict_signature()
     )
 }
 
@@ -944,6 +977,56 @@ fn join_signal_tiers(signal_tiers: &BTreeSet<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stable_contradiction_signature_is_shared_with_governance() {
+        let params = TruthParamValue::object([
+            ("currency", TruthParamValue::Text("EUR".into())),
+            ("value", TruthParamValue::Integer(35)),
+        ]);
+        let one = TruthStructuredCandidate {
+            role: "fee".into(),
+            concept_canonical_key: "visa_fee".into(),
+            params: params.clone(),
+            ..Default::default()
+        };
+        let two = TruthStructuredCandidate {
+            params,
+            ..one.clone()
+        };
+        let changed = TruthStructuredCandidate {
+            params: TruthParamValue::object([
+                ("value", TruthParamValue::Integer(36)),
+                ("currency", TruthParamValue::Text("EUR".into())),
+            ]),
+            ..one.clone()
+        };
+        assert_eq!(contradiction_count(&[&one, &two]), 0);
+        assert_eq!(contradiction_count(&[&one, &changed]), 1);
+    }
+
+    #[test]
+    fn near_decimal_values_must_never_be_merged_by_rounding() {
+        let a = TruthStructuredCandidate {
+            role: "fee".into(),
+            concept_canonical_key: "visa_fee".into(),
+            params: TruthParamValue::object([(
+                "amount",
+                TruthParamValue::Decimal(35.000000001),
+            )]),
+            ..Default::default()
+        };
+        let b = TruthStructuredCandidate {
+            params: TruthParamValue::object([(
+                "amount",
+                TruthParamValue::Decimal(35.000000002),
+            )]),
+            ..a.clone()
+        };
+        assert_eq!(a.params.stable_signature(), b.params.stable_signature());
+        assert_ne!(a.params.exact_conflict_signature(), b.params.exact_conflict_signature());
+        assert_eq!(contradiction_count(&[&a, &b]), 1);
+    }
 
     fn obj(entries: Vec<(&str, TruthParamValue)>) -> TruthParamValue {
         TruthParamValue::object(entries)

@@ -87,8 +87,8 @@ pub(crate) async fn page_utility_sweep_impl(
     let decisions = sections
         .iter()
         .map(|section| {
-            let output = seo_steps::page_utility_classifier_step::execute(
-                &seo_steps::page_utility_classifier_step::PageUtilityClassifierInput {
+            let output = acquisition::source_relevance::classify_page(
+                &acquisition::source_relevance::PageUtilityClassifierInput {
                     url: section.source_url.clone(),
                     title: section.heading_path.clone(),
                     raw_text: section.content_md.clone(),
@@ -124,8 +124,8 @@ pub(crate) async fn dom_block_relevance_sweep_impl(
         .iter()
         .map(|section| {
             let role = block_role_for_section(section);
-            let output = seo_steps::dom_block_relevance_step::execute(&[
-                seo_steps::dom_block_relevance_step::DomBlockInput {
+            let output = acquisition::source_relevance::score_dom_blocks(&[
+                acquisition::source_relevance::DomBlockInput {
                     dom_block_id: format!("raw-section:{}", section.id),
                     block_role: role.clone(),
                     text: section.content_md.clone(),

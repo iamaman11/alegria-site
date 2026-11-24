@@ -91,6 +91,13 @@ changes to analytics_svc, gsc_sync, integration_harness, outbox_worker or
 reconcile therefore cannot invalidate the release compilation layer unless
 the Cargo dependency graph changes. BuildKit's existing GHA cache is reused;
 no second impact selector, release workflow or cargo-chef was added.
+The Docker release also isolates the Cloudflare `npm install` stage behind
+its package manifest: source-only, website asset-only and source-SHA-only
+changes cannot invalidate that dependency install. The GHA Buildx exporter
+uses low-level zstd compression while retaining intermediate Rust dependency
+layers (`mode=max`). The first accepted release after these changes must
+measure both the Rust cache reuse and the export time; stage order and
+synthetic impact checks alone are not a warm-cache measurement.
 
 The Dockerfile now requires worker-context.json produced by that exact-SHA
 preparation. For local reproduction, prepare the context from a clean checked
@@ -139,10 +146,16 @@ additional debug Worker binaries that release Docker cannot reuse; it
 does not execute tests. PRs read the shared compiler cache without uploading
 PR-local compiler objects. This is *not* proof that a cold PR will finish
 within five minutes; exact new-PR timings and cache errors must be measured.
+The PR Rust owner and this trusted-main primer now share CI-only dev/test
+profiles with `debug=0`; production release profiles and local developer
+defaults stay unchanged. This targets the measured 14-GB unarchived Rust
+test build tree, reducing symbol emission and linking work. It intentionally
+invalidates previous debug-enabled sccache objects on the first PR, so only
+subsequent warmed runs can establish whether the change achieves ≤300s.
 
 ## Dependency strategy
 
-- Cargo already uses 20 workspace members. Another crate split only helps if
+- Cargo already uses 22 workspace members. Another crate split only helps if
   it actually removes a heavy transitive dependency from a frequently tested
   package; it does not improve a four-way rebuild of the same graph.
 - Preserve one owner for Cargo registry cache writes and use `sccache` in the

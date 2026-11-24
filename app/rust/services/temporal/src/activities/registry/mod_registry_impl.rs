@@ -30,8 +30,8 @@ impl AlegriaActivities {
     pub async fn run_page_utility_classifier_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: seo_steps::page_utility_classifier_step::PageUtilityClassifierInput,
-    ) -> Result<seo_steps::page_utility_classifier_step::PageUtilityClassifierOutput, ActivityError>
+        input: acquisition::source_relevance::PageUtilityClassifierInput,
+    ) -> Result<acquisition::source_relevance::PageUtilityClassifierOutput, ActivityError>
     {
         let run_id = if input.url.trim().is_empty() {
             "page_utility_classifier".to_string()
@@ -52,8 +52,8 @@ impl AlegriaActivities {
     pub async fn run_dom_block_relevance_step(
         self: Arc<Self>,
         _ctx: ActivityContext,
-        input: Vec<seo_steps::dom_block_relevance_step::DomBlockInput>,
-    ) -> Result<seo_steps::dom_block_relevance_step::DomBlockRelevanceOutput, ActivityError> {
+        input: Vec<acquisition::source_relevance::DomBlockInput>,
+    ) -> Result<acquisition::source_relevance::DomBlockRelevanceOutput, ActivityError> {
         let run_id = input
             .first()
             .map(|item| item.dom_block_id.clone())

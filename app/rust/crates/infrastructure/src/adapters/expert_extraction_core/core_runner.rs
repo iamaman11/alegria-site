@@ -46,12 +46,12 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let page_input = seo_steps::page_utility_classifier_step::PageUtilityClassifierInput {
+        let page_input = acquisition::source_relevance::PageUtilityClassifierInput {
             url: section.source_url.clone(),
             title: section.heading_path.clone(),
             raw_text: section.content_md.clone(),
         };
-        let page_utility = seo_steps::page_utility_classifier_step::execute(&page_input);
+        let page_utility = acquisition::source_relevance::classify_page(&page_input);
         stage_records.push(stage_record(
             "page_utility_classifier",
             section,
@@ -61,12 +61,12 @@ pub fn run_expert_extraction_core(
             None,
         ));
 
-        let dom_inputs = vec![seo_steps::dom_block_relevance_step::DomBlockInput {
+        let dom_inputs = vec![acquisition::source_relevance::DomBlockInput {
             dom_block_id: format!("raw-section:{}", section.id),
             block_role: block_role_for_section(section),
             text: section.content_md.clone(),
         }];
-        let dom_output = seo_steps::dom_block_relevance_step::execute(&dom_inputs);
+        let dom_output = acquisition::source_relevance::score_dom_blocks(&dom_inputs);
         stage_records.push(stage_record(
             "dom_block_relevance_filter",
             section,

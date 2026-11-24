@@ -3,3 +3,4 @@
 pub mod html_sections;
 pub mod html_sections_json;
 pub mod pdf_parser;
+pub mod source_relevance;
