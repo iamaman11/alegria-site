@@ -857,6 +857,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       worker_required: ${{ steps.select.outputs.worker_required }}
+      cache_export_required: ${{ steps.select.outputs.cache_export_required }}
     env:
       SOURCE_SHA: ${{ github.sha }}
       MANUAL_PACKAGE: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image' }}
@@ -913,10 +914,12 @@ jobs:
           decision = report['worker_release_decision']
           print('WORKER_IMAGE_SELECTION=' + ('SELECTED' if decision['worker_required'] else 'SKIPPED'))
           print('WORKER_IMAGE_REASON=' + decision['reason'])
+          print('WORKER_CACHE_EXPORT=' + ('REQUIRED' if decision['cache_export_required'] else 'SKIPPED'))
           with open('automation/reports/worker_image_impact.json', 'w', encoding='utf-8') as f:
               json.dump(report, f, indent=2, sort_keys=True)
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write('worker_required=' + str(decision['worker_required']).lower() + '\n')
+              f.write('cache_export_required=' + str(decision['cache_export_required']).lower() + '\n')
           PY
 
       - name: Preserve image-selection evidence even when packaging is unnecessary
@@ -980,9 +983,14 @@ jobs:
             org.opencontainers.image.revision=${{ env.SOURCE_SHA }}
             by.alegria.source-head-sha=${{ env.SOURCE_SHA }}
           cache-from: type=gha,scope=alegria-temporal-worker
-          # Export dependency layers for source-only reuse with low-overhead
-          # compression; first warm release must prove the real time benefit.
-          cache-to: type=gha,scope=alegria-temporal-worker,mode=max,compression=zstd,compression-level=1
+          # The previous successful image already cached the entire native
+          # builder for assets-only changes. Rebasing assets does not change
+          # Cargo objects or Node dependencies, so skip a redundant multi-GB
+          # max-mode export. Any changed compiled source, dependency, Docker
+          # recipe, unknown input or explicit rebuild exports the cache for
+          # future source and asset releases. Keep cache-from and runtime
+          # startup/source verification unchanged even when export is skipped.
+          cache-to: ${{ needs.select-image.outputs.cache_export_required == 'true' && 'type=gha,scope=alegria-temporal-worker,mode=max,compression=zstd,compression-level=1' || '' }}
 
       - name: Verify runtime startup, source identity and native deployment tools
         run: |

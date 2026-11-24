@@ -65,6 +65,8 @@ def check() -> None:
     assert "python3 automation/ci_impact.py" in release
     assert "--head \"$SOURCE_SHA\"" in release
     assert "worker_release_decision(" in release
+    assert "cache_export_required: ${{ steps.select.outputs.cache_export_required }}" in release
+    assert "f.write('cache_export_required=' + str(decision['cache_export_required']).lower() + '\\n')" in release
     assert "    needs: [gate, select-image]" in release
     assert "needs.gate.result == 'success' && needs.select-image.result == 'success'" in release
     assert "needs.select-image.outputs.worker_required == 'true' && github.ref == 'refs/heads/main'" in release
@@ -75,6 +77,8 @@ def check() -> None:
     assert "python3 automation/prepare_worker_build_context.py" in release
     assert "--source-sha \"$SOURCE_SHA\" --destination \"$RELEASE_CONTEXT\"" in release
     assert "context: ${{ runner.temp }}/alegria-worker-context" in release
+    assert "cache-from: type=gha,scope=alegria-temporal-worker" in release
+    assert "cache-to: ${{ needs.select-image.outputs.cache_export_required == 'true' && 'type=gha,scope=alegria-temporal-worker,mode=max" in release
     assert "test -f /app/worker-context.json" in release
     assert "env -u DATABASE_URL temporal_worker" in release
     assert "DATABASE_URL must be set" in release
