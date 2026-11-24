@@ -414,6 +414,11 @@ pub fn advance_cursor(cursor: &mut SeoExecutionCursor) {
 // description of step inputs, outputs and supported ordering. A recipe does
 // not run steps or own their side effects; execution remains with each owner.
 mod recipe;
+mod durable_plan;
+pub use durable_plan::{
+    SeoDurableArtifact, SeoDurablePlan, SeoDurablePlanError, SeoDurableScenario, SeoDurableStep,
+    SeoDurableStepContract, SEO_DURABLE_PLAN_SCHEMA_VERSION,
+};
 pub use recipe::{
     SeoPhaseRecipe, SeoRecipeManifest, SeoStepArtifact, SeoStepContract, SeoStepRecipeError,
     SEO_RECIPE_SCHEMA_VERSION,

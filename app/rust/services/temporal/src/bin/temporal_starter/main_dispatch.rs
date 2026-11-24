@@ -42,6 +42,33 @@ fn report_workflow_completion(
     Ok(())
 }
 
+/// A completed source-only V2 run is not a published site. Require its own
+/// exact receipt; never apply the canonical page/truth publication gate to it,
+/// and never interpret its result as permission to publish content.
+fn validate_source_acquisition_receipt(workflow_id: &str, result: &str) -> Result<()> {
+    if !result.starts_with("seo_source_acquisition_v2_ok ") {
+        anyhow::bail!("V2 source-only workflow did not return a source receipt");
+    }
+    let fields: std::collections::BTreeMap<_, _> = result
+        .split_whitespace()
+        .filter_map(|part| part.split_once('='))
+        .collect();
+    if fields.get("run_id").copied() != Some(workflow_id) {
+        anyhow::bail!("V2 source-only receipt run_id mismatch");
+    }
+    if !matches!(fields.get("source_status").copied(), Some("done" | "partial")) {
+        anyhow::bail!("V2 source-only receipt lacks terminal source status");
+    }
+    if fields
+        .get("crawled")
+        .and_then(|count| count.parse::<u64>().ok())
+        .is_none()
+    {
+        anyhow::bail!("V2 source-only receipt lacks a valid crawl count");
+    }
+    Ok(())
+}
+
 // Temporal owns workflow lifecycle. PostgreSQL stores a read model, never an
 // independent guess about whether a job is still active. Fail closed on any
 // inaccessible or unexpected Temporal execution.
@@ -67,16 +94,20 @@ async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<Stri
             .describe(WorkflowDescribeOptions::default())
             .await
             .with_context(|| format!("Temporal description unavailable for {workflow_id}"))?;
+        let temporal_type = description.workflow_type();
         if description.id() != workflow_id
-            || description.workflow_type() != "SeoSiteBuildCanonicalCutoverWorkflow"
+            || !matches!(
+                temporal_type,
+                "SeoSiteBuildCanonicalCutoverWorkflow" | "SeoSiteBuildComposableV2Workflow"
+            )
         {
             anyhow::bail!("unexpected Temporal workflow identity for {workflow_id}");
         }
         let terminal_status = match description.status() {
             WorkflowClientStatus::Running | WorkflowClientStatus::Paused => None,
             WorkflowClientStatus::Completed => {
-                // A completed workflow may contain a blocked/non-publishable
-                // result. Treat it as done ONLY with verified pages and truth.
+                // A canonical V1 completion needs verified pages and truth;
+                // a V2 completion needs its distinct source-only receipt.
                 let raw = handle
                     .get_result(WorkflowGetResultOptions::default())
                     .await
@@ -84,9 +115,28 @@ async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<Stri
                 let result: String = serde_json::from_slice(
                     &raw.payloads.first().context("completed workflow missing payload")?.data,
                 )?;
-                if report_workflow_completion(
-                    "SeoSiteBuildCanonicalCutoverWorkflow", &workflow_id, &result, true,
-                ).is_ok() {
+                let valid_receipt = if temporal_type == "SeoSiteBuildCanonicalCutoverWorkflow" {
+                    // Preserve the unchanged canonical publish/truth validation.
+                    report_workflow_completion(temporal_type, &workflow_id, &result, true)
+                } else {
+                    // The same registration table stores a run-mode-specific
+                    // input. Verify that the immutable source-only Temporal
+                    // type matches its persisted crawl-only scope before
+                    // reconciling status; no publication is inferred.
+                    let persisted = sqlx_seo_adapter::load_seo_site_build_input(
+                        &pool,
+                        &workflow_id,
+                    )
+                    .await
+                    .map_err(|error| anyhow::anyhow!("V2 persisted registration unavailable: {error}"))?;
+                    if persisted.run_id != workflow_id || persisted.run_mode != "crawl_only" {
+                        anyhow::bail!("V2 Temporal identity does not match persisted crawl_only registration");
+                    }
+                    validate_source_acquisition_receipt(&workflow_id, &result).and_then(|()| {
+                        report_workflow_completion(temporal_type, &workflow_id, &result, false)
+                    })
+                };
+                if valid_receipt.is_ok() {
                     Some("done")
                 } else {
                     Some("failed")
@@ -115,6 +165,32 @@ async fn reconcile_terminal_site_runs(client: &Client, database_url: Option<Stri
     }
     println!("RUN_RECONCILE complete active={active} reconciled={reconciled}");
     Ok(())
+}
+
+#[cfg(test)]
+mod source_only_reconcile_tests {
+    use super::validate_source_acquisition_receipt;
+
+    #[test]
+    fn exact_source_receipt_is_not_a_published_site_success() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        let done = format!(
+            "seo_source_acquisition_v2_ok run_id={id} source_status=done crawled=2 verified_support=0"
+        );
+        let partial = format!(
+            "seo_source_acquisition_v2_ok run_id={id} source_status=partial crawled=1 verified_support=1"
+        );
+        assert!(validate_source_acquisition_receipt(id, &done).is_ok());
+        assert!(validate_source_acquisition_receipt(id, &partial).is_ok());
+        for false_receipt in [
+            done.replace(id, "unexpected-run"),
+            done.replace("source_status=done", "source_status=pending_retry"),
+            done.replace("crawled=2", "crawled=bogus"),
+            done.replace("seo_source_acquisition_v2_ok", "seo_site_build_canonical_cutover_ok"),
+        ] {
+            assert!(validate_source_acquisition_receipt(id, &false_receipt).is_err());
+        }
+    }
 }
 
 #[tokio::main]
@@ -216,8 +292,22 @@ async fn main() -> Result<()> {
             query_batch_key,
             reuse_corpus_from,
             run_mode,
+            v2_order,
             wait,
         } => {
+            let durable_plan = if workflow == WorkflowKind::SeoSiteBuildComposableV2 {
+                if run_mode.trim() != "crawl_only" {
+                    anyhow::bail!(
+                        "V2 currently supports only --run-mode crawl_only; no publication or content-building steps are enabled"
+                    );
+                }
+                Some(v2_order.unwrap_or(V2Order::SupportFirst).durable_plan()?)
+            } else {
+                if v2_order.is_some() {
+                    anyhow::bail!("--v2-order requires --workflow seo-site-build-composable-v2");
+                }
+                None
+            };
             if matches!(
                 workflow,
                 WorkflowKind::ExpertDecomposedExtraction
@@ -245,6 +335,7 @@ async fn main() -> Result<()> {
             if matches!(
                 workflow,
                 WorkflowKind::SeoSiteBuildCanonicalCutover
+                    | WorkflowKind::SeoSiteBuildComposableV2
                     | WorkflowKind::ExpertDecomposedExtraction
                     | WorkflowKind::ExpertExtraction
                     | WorkflowKind::ExpertProjection
@@ -271,10 +362,16 @@ async fn main() -> Result<()> {
                 .await?;
             }
             let options = WorkflowStartOptions::new(task_queue, wf_id.clone()).build();
+            // The typed, versioned plan is serialized into Temporal's Workflow
+            // Started event. Worker replay therefore repeats the same order.
+            let start_payload = match durable_plan {
+                Some(plan) => RawValue::from_value(&plan, &PayloadConverter::serde_json()),
+                None => empty_payload(),
+            };
             let handle = client
                 .start_workflow(
                     UntypedWorkflow::new(workflow.workflow_type()),
-                    empty_payload(),
+                    start_payload,
                     options,
                 )
                 .await
@@ -297,6 +394,12 @@ async fn main() -> Result<()> {
                     .context("workflow completed without a result payload")?;
                 let result: String = serde_json::from_slice(&first.data)
                     .context("workflow result was not a JSON string")?;
+                if workflow == WorkflowKind::SeoSiteBuildComposableV2 {
+                    // --wait is an operator-facing success boundary too:
+                    // source-only V2 must never report arbitrary payloads as
+                    // successful completions just because Temporal finished.
+                    validate_source_acquisition_receipt(&wf_id, &result)?;
+                }
                 report_workflow_completion(
                     workflow.workflow_type(),
                     &wf_id,

@@ -18,7 +18,9 @@
     #[cfg(feature = "e2e")]
     use temporal_gateway::connect_client;
     #[cfg(feature = "e2e")]
-    use temporalio_client::{UntypedWorkflow, WorkflowGetResultOptions, WorkflowStartOptions};
+    use temporalio_client::{
+        UntypedWorkflow, WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowStartOptions,
+    };
     #[cfg(feature = "e2e")]
     use temporalio_common::data_converters::RawValue;
     use seo_application::{
@@ -306,6 +308,93 @@
             eprintln!("CI_WORKER_BINARY_SOURCE kind=temporal origin=nested");
             nested_worker_binaries().0.clone()
         }
+    }
+
+    /// Exercise the *actual* registered workflow implementation against bytes
+    /// fetched from the real Temporal server. This confirms deterministic
+    /// offline replay on the same source SHA; cross-version replay still needs
+    /// immutable histories captured before the code changed. The subprocess
+    /// uses no DB, poller, network client, metrics, or Activity adapter.
+    #[cfg(feature = "e2e")]
+    fn assert_saved_temporal_history_replays(history_json: &[u8]) {
+        assert!(
+            history_json.len() > 100,
+            "Temporal server returned no meaningful workflow history"
+        );
+        let history_path = env::temp_dir().join(format!(
+            "alegria-canonical-history-{}-{}.json",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        fs::write(&history_path, history_json).expect("write actual Temporal history for replay");
+        let output = Command::new(build_temporal_worker_binary())
+            .arg("--replay-history")
+            .arg(&history_path)
+            .current_dir(workspace_root())
+            .output();
+        fs::remove_file(&history_path).expect("remove disposable Temporal history fixture");
+        let output = output.expect("run exact-source Temporal history replayer");
+        assert!(
+            output.status.success(),
+            "V1 Temporal history failed actual SDK replay: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("CI_TEMPORAL_HISTORY_REPLAY=PASS"),
+            "offline Temporal replay did not report completion"
+        );
+    }
+
+    /// Read actual scheduled Activity commands, preserving Temporal event order.
+    /// A missing or unknown history layout is rejected, never interpreted as
+    /// an empty command sequence.
+    #[cfg(feature = "e2e")]
+    fn scheduled_temporal_activities(history_json: &[u8]) -> Vec<String> {
+        let history: serde_json::Value =
+            serde_json::from_slice(history_json).expect("decode real V2 Temporal history JSON");
+        let events = history
+            .get("events")
+            .or_else(|| history.pointer("/history/events"))
+            .and_then(serde_json::Value::as_array)
+            .expect("real V2 history must contain a list of Temporal events");
+        events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .get("activityTaskScheduledEventAttributes")
+                    .or_else(|| event.get("activity_task_scheduled_event_attributes"))
+                    .and_then(|attributes| {
+                        attributes
+                            .get("activityType")
+                            .or_else(|| attributes.get("activity_type"))
+                    })
+                    .and_then(|activity_type| activity_type.get("name"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect()
+    }
+
+    /// Assert the actual command stream persisted by Temporal, not merely the
+    /// typed recipe or final result. Both recipes schedule the same Activities,
+    /// but a different topological order is an observable runtime contract.
+    #[cfg(feature = "e2e")]
+    fn assert_composable_activity_order(history_json: &[u8], support_first: bool) {
+        let activities = scheduled_temporal_activities(history_json);
+        let support_index = activities
+            .iter()
+            .position(|activity| activity == "load_verified_support_bundle")
+            .unwrap_or_else(|| panic!("missing scheduled support Activity in {activities:?}"));
+        let source_index = activities
+            .iter()
+            .position(|activity| activity == "run_serp_ingest_step")
+            .unwrap_or_else(|| panic!("missing scheduled source Activity in {activities:?}"));
+        assert_eq!(
+            support_index < source_index,
+            support_first,
+            "V2 executed a different real Activity command order: {activities:?}"
+        );
     }
 
     fn build_outbox_worker_binary() -> PathBuf {

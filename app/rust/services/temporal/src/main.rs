@@ -12,6 +12,19 @@ mod workflows;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Real history replay must execute before DB/metrics/client initialization.
+    // It runs the same registered workflow code entirely offline and exits.
+    let mut args = std::env::args_os().skip(1);
+    if let Some(argument) = args.next() {
+        if argument == std::ffi::OsStr::new("--replay-history") {
+            let path = args.next().context("--replay-history requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected extra replay arguments");
+            workflows::replay_history(std::path::Path::new(&path)).await?;
+            println!("CI_TEMPORAL_HISTORY_REPLAY=PASS");
+            return Ok(());
+        }
+        anyhow::bail!("unexpected temporal_worker argument: {argument:?}");
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),

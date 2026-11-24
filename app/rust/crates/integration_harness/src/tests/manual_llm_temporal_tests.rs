@@ -45,9 +45,11 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     let infra = InfraHarness::start().await.unwrap();
     checkpoint("infra_ready");
     let voyage_stub = stub_servers::spawn_voyage_contract_stub().await.unwrap();
-    let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_responses[0].1.clone()])
-    .await
-    .unwrap();
+    // The same worker also exercises two distinct V2 crawl recipes below;
+    // give each independent workflow its own deterministic SERP task result.
+    let serp_stub = stub_servers::spawn_standard_serp_stub(vec![serp_responses[0].1.clone(); 3])
+        .await
+        .unwrap();
     let truth_stub = stub_servers::spawn_json_sequence_stub(
         "/v1/chat/completions",
         truth_certification_truth_sequence(std::slice::from_ref(&fixture)),
@@ -490,6 +492,13 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         );
         assert!(result.contains("published_pages=0"), "{result}");
         checkpoint("blocked_rework_completed");
+        let saved_history = handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json()
+            .await
+            .expect("fetch real blocked V1 history from Temporal server");
+        assert_saved_temporal_history_replays(&saved_history);
+        checkpoint("blocked_rework_replayed");
 
         // The revision-bound transaction must persist who blocked publication
         // and why, not merely wake Temporal with an untraceable boolean.
@@ -544,6 +553,13 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
     );
     result.unwrap().expect("canonical manual workflow failed");
     checkpoint("workflow_completed");
+    let saved_history = handle
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .to_json()
+        .await
+        .expect("fetch real completed V1 history from Temporal server");
+    assert_saved_temporal_history_replays(&saved_history);
+    checkpoint("workflow_replayed");
     let drafted: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")
         .fetch_one(&infra.postgres.pool)
         .await
@@ -552,5 +568,111 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         drafted > 0,
         "manual editorial did not produce a real page draft"
     );
+
+    // Reuse the already running PostgreSQL/Temporal/Worker fixture. Each V2
+    // invocation has a separate durable workflow ID and immutable typed plan;
+    // these are two actual command orders, not just validated descriptors.
+    use seo_application::execution::{SeoDurablePlan, SeoDurableStep};
+    use temporalio_common::data_converters::PayloadConverter;
+    let converter = PayloadConverter::serde_json();
+    for (order_name, steps) in [
+        (
+            "support-first",
+            vec![
+                SeoDurableStep::LoadVerifiedSupport,
+                SeoDurableStep::SourceAcquisition,
+            ],
+        ),
+        (
+            "acquisition-first",
+            vec![
+                SeoDurableStep::SourceAcquisition,
+                SeoDurableStep::LoadVerifiedSupport,
+            ],
+        ),
+    ] {
+        let v2_run_id = Uuid::new_v4().to_string();
+        let v2_input = register_truth_certification_input(
+            &repo,
+            v2_run_id.clone(),
+            format!("composable-v2-{order_name}-{v2_run_id}"),
+            fixture.source_inputs.query.clone(),
+            "crawl_only".to_string(),
+        )
+        .await;
+        reset_truth_certification_state(&infra.postgres.pool, &v2_input.context_key).await;
+        seed_truth_certification_support_bundle(
+            &infra.postgres.pool,
+            &v2_input.context_key,
+            &fixture,
+        )
+        .await;
+        let immutable_plan = SeoDurablePlan::source_acquisition_only(steps).unwrap();
+        let v2_handle = client
+            .start_workflow(
+                UntypedWorkflow::new("SeoSiteBuildComposableV2Workflow"),
+                RawValue::from_value(&immutable_plan, &converter),
+                WorkflowStartOptions::new("alegria-pipeline", v2_run_id.clone()).build(),
+            )
+            .await
+            .expect("start real typed V2 workflow");
+        // Both external providers are deterministic localhost stubs and the
+        // existing worker is warm; bound each recipe on the critical CI path.
+        let completed = timeout(
+            Duration::from_secs(45),
+            v2_handle.get_result(WorkflowGetResultOptions::default()),
+        )
+        .await
+        .expect("composable V2 workflow timed out")
+        .expect("composable V2 workflow failed");
+        let result: String = completed.to_value(&converter);
+        assert!(
+            result.contains("seo_source_acquisition_v2_ok") && result.contains(&v2_run_id),
+            "composable {order_name} V2 returned {result}"
+        );
+        let saved_history = v2_handle
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json()
+            .await
+            .expect("fetch real completed V2 history from Temporal server");
+        assert_composable_activity_order(&saved_history, order_name == "support-first");
+        assert_saved_temporal_history_replays(&saved_history);
+        checkpoint(order_name);
+    }
+
+    // A future/unknown plan schema must fail in real Temporal before the first
+    // Activity is scheduled. A unit-only plan.validate() test cannot establish
+    // that the Worker has no side effects on the rejected execution.
+    let mut invalid_plan =
+        SeoDurablePlan::source_acquisition_only(vec![SeoDurableStep::SourceAcquisition])
+            .unwrap();
+    invalid_plan.schema_version += 1;
+    let rejected_run_id = Uuid::new_v4().to_string();
+    let rejected_handle = client
+        .start_workflow(
+            UntypedWorkflow::new("SeoSiteBuildComposableV2Workflow"),
+            RawValue::from_value(&invalid_plan, &converter),
+            WorkflowStartOptions::new("alegria-pipeline", rejected_run_id).build(),
+        )
+        .await
+        .expect("start real invalid-schema V2 workflow");
+    let rejected = timeout(
+        Duration::from_secs(20),
+        rejected_handle.get_result(WorkflowGetResultOptions::default()),
+    )
+    .await
+    .expect("invalid V2 plan did not reach terminal failure");
+    assert!(rejected.is_err(), "invalid V2 plan unexpectedly succeeded");
+    let rejected_history = rejected_handle
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .to_json()
+        .await
+        .expect("fetch rejected V2 history from real Temporal server");
+    assert!(
+        scheduled_temporal_activities(&rejected_history).is_empty(),
+        "invalid V2 plan scheduled a side-effecting Activity"
+    );
+    assert_saved_temporal_history_replays(&rejected_history);
+    checkpoint("invalid_plan_rejected_without_activities");
     drop(worker);
 }

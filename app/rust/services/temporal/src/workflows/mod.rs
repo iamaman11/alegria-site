@@ -16,10 +16,14 @@ mod expert_extraction;
 mod expert_projection;
 mod expert_semantic_slice;
 mod freshness;
+mod history_replay;
 mod projection_reconcile;
 mod runtime;
 mod seo_site_build_canonical_cutover;
+mod seo_site_build_composable_v2;
 mod test_hitl;
+
+pub(crate) use history_replay::replay_history;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkerProfile {
@@ -167,6 +171,7 @@ pub(crate) fn build_worker_options(
     freshness::register(&mut opts)?;
     projection_reconcile::register(&mut opts)?;
     seo_site_build_canonical_cutover::register(&mut opts)?;
+    seo_site_build_composable_v2::register(&mut opts)?;
     if env_flag("ALLOW_TEST_HITL_WORKFLOW") || profile.allows_test() {
         test_hitl::register(&mut opts)?;
     }
