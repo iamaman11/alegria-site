@@ -6,7 +6,8 @@ pub async fn run_opportunity_build<
     input: &OpportunityBuildInputPayload,
 ) -> Result<OpportunityBuildOutputPayload, DomainError> {
     let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
-    ensure_graph_required_for_phase(repo, "opportunity_build").await?;
+    repo.require_graph_contract("planning", "opportunity_build")
+        .await?;
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
@@ -45,7 +46,7 @@ pub async fn run_ia_build<R: PlanningRepository + GraphReasoningPort + GraphCapa
     input: &IaBuildInputPayload,
 ) -> Result<IaBuildOutputPayload, DomainError> {
     let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
-    ensure_graph_required_for_phase(repo, "ia_build").await?;
+    repo.require_graph_contract("planning", "ia_build").await?;
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,
@@ -152,7 +153,8 @@ pub async fn run_link_recommend<
     search_port: &S,
     input: &LinkRecommendInputPayload,
 ) -> Result<LinkRecommendOutputPayload, DomainError> {
-    ensure_graph_required_for_phase(repo, "link_recommend").await?;
+    repo.require_graph_contract("planning", "link_recommend")
+        .await?;
     let scope_signature = input
         .page_nodes
         .first()
@@ -179,7 +181,8 @@ pub async fn run_global_site_reconcile<
     input: &GlobalSiteReconcileInputPayload,
 ) -> Result<GlobalSiteReconcileOutputPayload, DomainError> {
     let scope_signature = validated_planning_graph_scope(input.scope.as_ref())?;
-    ensure_graph_required_for_phase(repo, "global_site_reconcile").await?;
+    repo.require_graph_contract("planning", "global_site_reconcile")
+        .await?;
     let graph_context = to_graph_planning_context_state(
         repo.load_planning_graph_context(&scope_signature, &input.run_id)
             .await?,

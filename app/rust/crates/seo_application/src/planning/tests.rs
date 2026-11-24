@@ -64,6 +64,36 @@ mod tests {
     #[derive(Default)]
     struct FakePlanningRepo;
 
+    struct UnavailableGraph;
+
+    #[async_trait]
+    impl GraphCapabilityPort for UnavailableGraph {
+        async fn ensure_graph_contract(&self, _context_key: &str) -> Result<(), DomainError> {
+            Err(DomainError::ValidationFailure {
+                message: "graph provider refused connection".to_string(),
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn mandatory_graph_check_maps_failures_consistently_across_phases() {
+        for (family, phase) in [
+            ("planning", "ia_build"),
+            ("drafting", "draft_qa"),
+            ("rebuild", "rebuild_detect"),
+        ] {
+            let err = UnavailableGraph
+                .require_graph_contract(family, phase)
+                .await
+                .unwrap_err();
+            assert_eq!(err.class_str(), "infra_unavailable");
+            assert!(err.to_string().contains(&format!(
+                "graph capability contract failed for {family} phase `{phase}`"
+            )));
+            assert!(err.to_string().contains("graph provider refused connection"));
+        }
+    }
+
     #[async_trait]
     impl GraphCapabilityPort for FakePlanningRepo {
         async fn ensure_graph_contract(&self, _context_key: &str) -> Result<(), DomainError> {
@@ -73,14 +103,6 @@ mod tests {
 
     #[async_trait]
     impl PlanningRepository for FakePlanningRepo {
-        async fn load_graph_planning_context(
-            &self,
-            _run_id: &str,
-            _scope_signature: &str,
-        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
-            Ok(runtime_models::GraphPlanningContext::default())
-        }
-
         async fn existing_page_owners_by_cluster(
             &self,
             _scope_signature: &str,
@@ -272,14 +294,6 @@ mod tests {
 
     #[async_trait]
     impl PlanningRepository for RecordingPlanningRepo {
-        async fn load_graph_planning_context(
-            &self,
-            _run_id: &str,
-            _scope_signature: &str,
-        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
-            Ok(self.graph_context.clone())
-        }
-
         async fn existing_page_owners_by_cluster(
             &self,
             _scope_signature: &str,

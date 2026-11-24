@@ -9,7 +9,7 @@ SYNC_PROTO = ROOT / "app" / "contracts" / "proto" / "sync.proto"
 TEMPORAL_PROTO = ROOT / "app" / "contracts" / "proto" / "temporal_payloads.proto"
 CMS_ADAPTER = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "sqlx_seo_cms_adapter.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
-WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
+WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build_canonical_cutover.rs"
 OUTBOX_WORKER = ROOT / "app" / "rust" / "services" / "outbox_worker" / "src" / "materialize.rs"
 PAYLOAD_STORE = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src" / "adapters" / "proto_runtime_payload_store.rs"
 
@@ -61,6 +61,9 @@ def read_file_resolved(path: Path) -> str:
         delegate_path = path.parents[3] / "crates" / "infrastructure" / "src" / "adapters" / "projection_materialize_adapter.rs"
         if delegate_path.exists():
             text += "\n" + delegate_path.read_text(encoding="utf-8")
+    elif path.name == "seo_site_build_canonical_cutover.rs":
+        for part in sorted(path.parent.glob("seo_site_build_canonical_cutover/*.rs")):
+            text += "\n" + part.read_text(encoding="utf-8")
     return text
 
 
@@ -70,7 +73,7 @@ def main() -> int:
     temporal_proto = TEMPORAL_PROTO.read_text(encoding="utf-8")
     cms_adapter = read_file_resolved(CMS_ADAPTER) if CMS_ADAPTER.exists() else ""
     activities = read_file_resolved(ACTIVITIES)
-    workflow = WORKFLOW.read_text(encoding="utf-8")
+    workflow = read_file_resolved(WORKFLOW)
     outbox_worker = read_file_resolved(OUTBOX_WORKER)
     payload_store = read_file_resolved(PAYLOAD_STORE)
     failures: list[str] = []
@@ -108,10 +111,15 @@ def main() -> int:
         if needle not in cms_adapter:
             failures.append(f"CMS adapter missing `{needle}`")
 
-    if "run_cms_publish_step" not in activities or '"cms_publish"' not in activities:
-        failures.append("Temporal activity surface missing ledger-backed cms_publish step")
-    if "run_cms_publish_step" not in workflow:
-        failures.append("SeoSiteBuildWorkflow does not call cms_publish step")
+    for activity, ledger in (
+        ("run_cms_request_review_step", '"cms_request_review"'),
+        ("run_cms_publish_approved_step", '"cms_publish_approved"'),
+    ):
+        if activity not in activities or ledger not in activities:
+            failures.append(f"Temporal activity surface missing ledger-backed `{activity}`")
+    for phase in ("run_cms_request_review_step", "run_cms_publish_approved_step"):
+        if phase not in workflow:
+            failures.append(f"canonical SeoSiteBuild workflow does not call `{phase}`")
     if "CmsPublishInputPayload" not in payload_store or "CmsPublishOutputPayload" not in payload_store:
         failures.append("runtime payload store missing CMS publish payloads")
     if "target_system == \"cms\"" not in outbox_worker or "SeoCmsEventPayload" not in outbox_worker:

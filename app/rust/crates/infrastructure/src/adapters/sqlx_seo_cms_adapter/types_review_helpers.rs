@@ -397,7 +397,7 @@ async fn load_latest_approval_decision_in_tx(
 }
 
 async fn resolve_seo_workflow_id(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     page_node_key: &str,
     revision_id: &str,
 ) -> Result<Option<String>, DomainError> {
@@ -417,7 +417,7 @@ async fn resolve_seo_workflow_id(
     )
     .bind(page_node_key)
     .bind(revision_id)
-    .fetch_all(pool)
+    .fetch_all(&mut *conn)
     .await
     .map_err(classify_sqlx)?;
     if rows.len() > 1 {

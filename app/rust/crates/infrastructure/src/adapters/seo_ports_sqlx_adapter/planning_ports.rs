@@ -1,13 +1,5 @@
 #[async_trait]
 impl PlanningRepository for SqlxSeoRuntimeRepository<'_> {
-    async fn load_graph_planning_context(
-        &self,
-        run_id: &str,
-        scope_signature: &str,
-    ) -> Result<GraphPlanningContext, DomainError> {
-        sqlx_seo_adapter::load_graph_planning_context(self.pool, run_id, scope_signature).await
-    }
-
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,

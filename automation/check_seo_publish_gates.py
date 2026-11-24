@@ -6,6 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 QA = ROOT / "app/rust/crates/seo_steps/src/draft_qa_step.rs"
+STEP_SUPPORT = ROOT / "app/rust/crates/seo_steps/src/seo_step_support.rs"
 QA_POLICY = ROOT / "app/rust/crates/seo_domain/src/draft_quality.rs"
 CONTRACT_ADAPTER = ROOT / "app/rust/crates/seo_steps/src/content_contract_validate_step.rs"
 CONTRACT_POLICY = ROOT / "app/rust/crates/seo_domain/src/content_contract.rs"
@@ -21,6 +22,7 @@ PAGE_PUBLISH = (
 
 def main() -> int:
     qa = QA.read_text(encoding="utf-8")
+    step_support = STEP_SUPPORT.read_text(encoding="utf-8")
     qa_policy = QA_POLICY.read_text(encoding="utf-8")
     contract_adapter = CONTRACT_ADAPTER.read_text(encoding="utf-8")
     contract_policy = CONTRACT_POLICY.read_text(encoding="utf-8")
@@ -40,9 +42,12 @@ def main() -> int:
     ]:
         if needle not in qa_policy:
             failures.append(f"draft_quality domain missing publish gate `{needle}`")
-    for needle in ["SeoPublishBlockerState", "draft_quality::evaluate(&DraftQuality {", "violation.reason_code()", "violation.required_next_action()"]:
+    for needle in ["draft_quality::evaluate(&DraftQuality {", "violation.reason_code()", "violation.required_next_action()", "crate::seo_step_support::publish_blocker("]:
         if needle not in qa:
             failures.append(f"draft QA wire adapter missing policy invocation/mapping `{needle}`")
+    for needle in ["SeoPublishBlockerState", "pub fn publish_blocker(", "reason_code:", "task_type:", "required_next_action:"]:
+        if needle not in step_support:
+            failures.append(f"shared publish blocker wire mapping missing `{needle}`")
     for needle in ["unsupported_factual_fragment", "forbidden_serp_as_fact_usage"]:
         if needle in qa.split("#[cfg(test)]", 1)[0]:
             failures.append(f"draft QA wire adapter duplicates domain gate `{needle}`")

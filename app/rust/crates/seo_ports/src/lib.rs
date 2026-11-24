@@ -162,9 +162,9 @@ pub struct GraphCoverageEvaluation {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CmsReviewDecisionRequest {
     pub page_node_key: String,
-    /// Exact immutable review candidate. None retains the legacy current-page
-    /// route, which must fail closed if that revision is already published.
-    pub revision_id: Option<String>,
+    /// Exact immutable review candidate. Page-only review is not supported:
+    /// the current published pointer may differ from the pending candidate.
+    pub revision_id: String,
     pub actor_role: String,
     pub decision: HumanReviewDecision,
     pub reason: String,
@@ -390,16 +390,27 @@ pub trait GraphReasoningPort: Send + Sync {
 #[async_trait]
 pub trait GraphCapabilityPort: Send + Sync {
     async fn ensure_graph_contract(&self, context_key: &str) -> Result<(), DomainError>;
+
+    /// One error boundary for the mandatory graph capability shared by
+    /// planning, drafting and rebuild. The adapter owns the connection check;
+    /// the application identifies the phase that cannot proceed.
+    async fn require_graph_contract(
+        &self,
+        phase_family: &str,
+        phase: &str,
+    ) -> Result<(), DomainError> {
+        self.ensure_graph_contract(phase)
+            .await
+            .map_err(|err| DomainError::InfraUnavailable {
+                message: format!(
+                    "graph capability contract failed for {phase_family} phase `{phase}`: {err}"
+                ),
+            })
+    }
 }
 
 #[async_trait]
 pub trait PlanningRepository: Send + Sync {
-    async fn load_graph_planning_context(
-        &self,
-        run_id: &str,
-        scope_signature: &str,
-    ) -> Result<GraphPlanningContext, DomainError>;
-
     async fn persist_serp_ingest_output(
         &self,
         input: &SerpIngestInputPayload,

@@ -6,7 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
 WORKFLOWS_MOD = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "mod.rs"
-SEO_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
+SEO_WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build_canonical_cutover.rs"
 TEMPORAL_STARTER = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "bin" / "temporal_starter.rs"
 SEO_STEPS_DIR = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src"
 SEO_APPLICATION = ROOT / "app" / "rust" / "crates" / "seo_application" / "src"
@@ -53,13 +53,16 @@ def read_file_resolved(path: Path) -> str:
         if sub_dir.is_dir():
             for sub_file in sub_dir.glob("*.rs"):
                 text += "\n" + sub_file.read_text(encoding="utf-8")
+    elif path.name == "seo_site_build_canonical_cutover.rs":
+        for part in sorted(path.parent.glob("seo_site_build_canonical_cutover/*.rs")):
+            text += "\n" + part.read_text(encoding="utf-8")
     return text
 
 
 def main() -> int:
     activities = read_file_resolved(ACTIVITIES)
     workflows_mod = WORKFLOWS_MOD.read_text(encoding="utf-8")
-    seo_workflow = SEO_WORKFLOW.read_text(encoding="utf-8") if SEO_WORKFLOW.exists() else ""
+    seo_workflow = read_file_resolved(SEO_WORKFLOW)
     temporal_starter = read_file_resolved(TEMPORAL_STARTER)
     application_modules = {}
     for path in sorted(SEO_APPLICATION.glob("*.rs")):
@@ -74,8 +77,8 @@ def main() -> int:
     failures: list[str] = []
     if "load_seo_site_build_input" not in activities:
         failures.append("missing Temporal activity `load_seo_site_build_input`")
-    if "load_seo_site_build_input" not in seo_workflow:
-        failures.append("SeoSiteBuildWorkflow does not load runtime DB input first")
+    if "AlegriaActivities::load_seo_site_build_input" not in seo_workflow:
+        failures.append("canonical workflow does not load persisted runtime input")
     if "seo_application::rebuild_detect::execute(" not in activities:
         failures.append("Temporal rebuild activity must delegate to seo_application::rebuild_detect")
     for step in SEO_STEP_NAMES:
@@ -85,16 +88,28 @@ def main() -> int:
             module_path = SEO_STEPS_DIR / f"{step}_step.rs"
             if not module_path.exists():
                 failures.append(f"missing seo_steps module `{module_path.relative_to(ROOT)}`")
-        if f"run_{step}_step" not in activities:
+        if step == "cms_publish":
+            for phase in ("run_cms_request_review_step", "run_cms_publish_approved_step"):
+                if phase not in activities:
+                    failures.append(f"missing canonical Temporal activity `{phase}`")
+        elif f"run_{step}_step" not in activities:
             failures.append(f"missing Temporal activity `run_{step}_step`")
         owner_module, owner_token = APPLICATION_OWNERS[step]
         owner_text = application_modules.get(owner_module, "")
         if owner_token not in owner_text and f"run_{step}" not in owner_text:
             failures.append(f"missing seo_application orchestration for `{step}`")
-        if f"\"{step}\"" not in activities:
+        if step == "cms_publish":
+            for phase in ("cms_request_review", "cms_publish_approved"):
+                if f'"{phase}"' not in activities:
+                    failures.append(f"canonical CMS activity `{phase}` is not ledger-backed")
+        elif f'"{step}"' not in activities:
             failures.append(f"activity `{step}` is not ledger-backed with execute_step step_name")
-        if f"run_{step}_step" not in seo_workflow:
-            failures.append(f"SeoSiteBuildWorkflow does not call `run_{step}_step`")
+        if step == "cms_publish":
+            for phase in ("run_cms_request_review_step", "run_cms_publish_approved_step"):
+                if phase not in seo_workflow:
+                    failures.append(f"canonical workflow does not call `{phase}`")
+        elif f"run_{step}_step" not in seo_workflow:
+            failures.append(f"canonical workflow does not call `run_{step}_step`")
     for payload in [
         "SeoSiteBuildInputPayload",
         "SerpIngestInputPayload",
@@ -110,10 +125,12 @@ def main() -> int:
     ]:
         if payload not in payload_store:
             failures.append(f"runtime payload store missing `{payload}`")
-    if "mod seo_site_build;" not in workflows_mod or "seo_site_build::register" not in workflows_mod:
-        failures.append("SeoSiteBuildWorkflow is not registered in worker options")
-    if "SeoSiteBuild" not in temporal_starter or "SeoSiteBuildWorkflow" not in temporal_starter:
-        failures.append("temporal_starter cannot start SeoSiteBuildWorkflow")
+    if "mod seo_site_build_canonical_cutover;" not in workflows_mod or "seo_site_build_canonical_cutover::register" not in workflows_mod:
+        failures.append("canonical SeoSiteBuild workflow is not registered in worker options")
+    if "mod seo_site_build;" in workflows_mod or "mod content_generation;" in workflows_mod:
+        failures.append("removed legacy workflows must not be registered")
+    if "SeoSiteBuildCanonicalCutoverWorkflow" not in temporal_starter:
+        failures.append("temporal_starter cannot start canonical SeoSiteBuild workflow")
     if "register_site_build_input(" not in temporal_starter or "SeoSiteBuildRegistrationRequest" not in temporal_starter:
         failures.append("temporal_starter does not use shared SeoSiteBuild registration path")
     if failures:

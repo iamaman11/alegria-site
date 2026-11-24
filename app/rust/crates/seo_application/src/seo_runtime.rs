@@ -2,6 +2,7 @@ use contracts::generated::alegria::temporal::v1::{
     SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
 };
 use primitives::errors::DomainError;
+use seo_domain::page_readiness::{truth_support_defect, TruthSupportDefect};
 use seo_ports::{SeoBuildInputRepository, VerifiedSupportBundleRequest, VerifiedSupportRepository};
 
 pub async fn load_site_build_input<R: SeoBuildInputRepository>(
@@ -37,26 +38,25 @@ pub fn truth_admissibility_gate(
         });
     }
     for support in bundle {
-        if support.support_ref.trim().is_empty()
-            || support.fragment_text.trim().is_empty()
-            || support.role_type.trim().is_empty()
-            || support.source_label.trim().is_empty()
-        {
-            return Err(DomainError::ValidationFailure {
-                message: format!(
-                    "truth_admissibility_gate failed: support row `{}` is missing mandatory admissibility fields",
-                    support.support_ref
-                ),
-            });
-        }
-        if support.freshness_class != "fresh" {
-            return Err(DomainError::ValidationFailure {
-                message: format!(
-                    "truth_admissibility_gate failed: support row `{}` has non-fresh freshness_class `{}`",
-                    support.support_ref, support.freshness_class
-                ),
-            });
-        }
+        let defect = truth_support_defect(
+            &support.support_ref,
+            &support.fragment_text,
+            &support.role_type,
+            &support.source_label,
+            &support.freshness_class,
+        );
+        let message = match defect {
+            Some(TruthSupportDefect::MissingMandatoryFields) => format!(
+                "truth_admissibility_gate failed: support row `{}` is missing mandatory admissibility fields",
+                support.support_ref
+            ),
+            Some(TruthSupportDefect::NonFresh) => format!(
+                "truth_admissibility_gate failed: support row `{}` has non-fresh freshness_class `{}`",
+                support.support_ref, support.freshness_class
+            ),
+            None => continue,
+        };
+        return Err(DomainError::ValidationFailure { message });
     }
     Ok(())
 }

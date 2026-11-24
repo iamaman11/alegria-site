@@ -5,16 +5,16 @@ use contracts::generated::alegria::temporal::v1::{
     DraftState, SeoPublishBlockerState,
 };
 use seo_domain::content_contract::{
-    self, ContentBlock, ContentContract, Evidence, LinkObligation, PublishLinkCoverage,
+    self, ContentContract, Evidence, LinkObligation, PublishLinkCoverage,
 };
+use seo_domain::editorial::ContentBlock;
 
 fn blocker(violation: content_contract::Violation) -> SeoPublishBlockerState {
-    SeoPublishBlockerState {
-        reason_code: violation.reason_code().to_string(),
-        task_type: "publish_gate_blocker".to_string(),
-        required_next_action: violation.required_next_action().to_string(),
-        recheck_trigger: "draft_qa_rerun".to_string(),
-    }
+    crate::seo_step_support::publish_blocker(
+        violation.reason_code(),
+        "publish_gate_blocker",
+        violation.required_next_action(),
+    )
 }
 
 fn validate_with_coverage(
@@ -29,6 +29,7 @@ fn validate_with_coverage(
         .map(|block| ContentBlock {
             role: &block.section_role,
             block_type: &block.block_type,
+            heading: &block.heading,
             markdown: &block.markdown,
             required: block.required,
             support_refs: &block.support_refs,
@@ -56,8 +57,6 @@ fn validate_with_coverage(
         .required_links
         .iter()
         .map(|link| LinkObligation {
-            target_page_key: &link.target_page_key,
-            role: &link.link_role,
             required: link.required_flag,
             bound_exactly: draft.required_links.contains(link),
         })
@@ -73,18 +72,12 @@ fn validate_with_coverage(
     } else {
         String::new()
     };
-    let typed_editorial = !draft.editorial_locale.is_empty()
-        || draft
-            .claim_ledger
-            .iter()
-            .any(|claim| claim.editorial_proposal.is_some());
     content_contract::validate(&ContentContract {
         blocks: &blocks,
         claims: &claims,
         traceability: &traceability,
         links: &links,
         publish_links: verify_publish_links.then_some(PublishLinkCoverage {
-            typed_editorial,
             related_pages_body: &related_pages_body,
         }),
     })
@@ -232,5 +225,28 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn optional_link_recommendations_do_not_block_standalone_or_final_qa() {
+        let input = DraftQaInputPayload {
+            required_links: vec![LinkRecommendationState {
+                required_flag: false,
+                target_page_key: "optional-target".into(),
+                link_role: "contextual".into(),
+                ..LinkRecommendationState::default()
+            }],
+            ..DraftQaInputPayload::default()
+        };
+        assert!(!validate_for_publish(&input)
+            .iter()
+            .any(|blocker| blocker.reason_code == "missing_required_internal_links"));
+        let standalone = execute(&ContentContractValidateInputPayload {
+            required_links: input.required_links,
+            ..ContentContractValidateInputPayload::default()
+        });
+        assert!(!standalone
+            .blocking_reasons
+            .contains(&"missing_required_internal_links".to_string()));
     }
 }

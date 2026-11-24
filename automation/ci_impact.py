@@ -67,6 +67,23 @@ SOURCE_POLICY_DOCUMENTS = {
     "docs/V6_SeoSiteBuildWorkflow_Working_Plan.md",
 }
 
+# These existing Markdown files document operator/architecture procedures.
+# They are not Rust source, CI drivers or Worker delivery inputs. The fast
+# `verify` owner validates their source-policy wording; the generated
+# PROTO_CONTRACTS.md is deliberately excluded because it is a live contract
+# inventory and retains its separate fail-closed generator rules below.
+# Unknown automation files, including newly added Markdown, remain global.
+AUTOMATION_SOURCE_DOCUMENTS = frozenset({
+    "automation/00_ENTRYPOINT.md",
+    "automation/FSM_TYPED_PHASE_IMPERATIVE_PLAN.md",
+    "automation/INTEGRITY_RUNBOOK.md",
+    "automation/LAYER_MAP.md",
+    "automation/NEW_OPERATION_PLAYBOOK.md",
+    "automation/OPS_CANONICALS.md",
+    "automation/PROJECT_NAVIGATION_MAP.md",
+    "automation/README.md",
+})
+
 # Non-Rust inputs with a known downstream image. Do not make every release
 # script change recompile the entire Cargo workspace.
 WORKER_PACKAGING_FILES = {
@@ -121,7 +138,7 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "infra/local/windows_staging.ps1",
     "docs/ci-fast-path.md",
     "docs/ARCHITECTURE_BOUNDARIES.md",
-}) | WORKER_NONDELIVERY_FILES
+}) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS
 
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
@@ -180,7 +197,8 @@ CMS_REVIEW_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/sqlx_seo_cms_adapter/cms_publish.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/draft_publish_context_ports.rs",
     "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
-    "app/rust/services/temporal/src/workflows/seo_site_build.rs",
+    "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs",
+    "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
     "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
     "app/rust/services/cli_tools/src/cli/cms_decision.rs",
     "app/rust/crates/integration_harness/src/tests/manual_llm_temporal_tests.rs",
@@ -190,7 +208,6 @@ CMS_REVIEW_PATHS = {
 # The full-scenario and fault-injected PostgreSQL tests exercise both
 # successful Draft QA persistence and atomic rollback/reject-missing-draft.
 DRAFT_QA_SCENARIO_PATHS = {
-    "app/rust/crates/runtime_models/src/seo_blocks.rs",
     "app/rust/crates/seo_steps/src/editorial_wire.rs",
     "app/rust/crates/seo_steps/src/page_wire.rs",
     "app/rust/crates/seo_domain/src/editorial.rs",
@@ -234,7 +251,7 @@ KNOWLEDGE_A13_PATHS = {
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/types_and_helpers.rs",
     "app/rust/crates/infrastructure/src/adapters/seo_ports_sqlx_adapter/source_context_projection_ports.rs",
     "app/rust/crates/seo_application/src/drafting.rs",
-    "app/rust/services/temporal/src/activities/content_generation.rs",
+    "app/rust/services/temporal/src/activities/registry/mod_registry_impl.rs",
     "app/rust/crates/integration_harness/src/tests/knowledge_read_tests.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/triple_builder.rs",
     "app/rust/services/temporal/src/activities/operations/truth_extraction_ops/completeness_resolution.rs",
@@ -340,7 +357,6 @@ SUITE_OWNERS = {
             # These domain/editorial decisions are executed by the real
             # canonical Temporal page workflow even when its orchestration
             # source is untouched. A policy-only diff must still exercise it.
-            "app/rust/crates/runtime_models/src/seo_blocks.rs",
             "app/rust/crates/seo_steps/src/editorial_wire.rs",
             "app/rust/crates/seo_steps/src/page_wire.rs",
             "app/rust/crates/seo_domain/src/editorial.rs",
@@ -486,6 +502,9 @@ def ci_jobs_for_change(
         require("product-truth", "Markdown is a source-policy input, not just explanatory documentation")
         require("verify", "source-policy documents are read by acceptance scripts")
 
+    if changed & AUTOMATION_SOURCE_DOCUMENTS:
+        require("verify", "reviewed automation Markdown is checked by source-policy contracts")
+
     if changed & KNOWN_CONTRACT_CRATES.keys():
         require("product-truth", "generated protobuf contracts feed live source-policy checks")
 
@@ -534,7 +553,8 @@ def ci_jobs_for_change(
 
     # New narrow allowlists must name the executable owner explicitly. This
     # catches future additions to the non-Rust `scope=none` classification.
-    uncovered = changed - SOURCE_POLICY_DOCUMENTS - DOCUMENTATION_FILES - CI_ONLY_VERIFY_FILES - WORKER_NONDELIVERY_FILES
+    uncovered = (changed - SOURCE_POLICY_DOCUMENTS - AUTOMATION_SOURCE_DOCUMENTS
+                 - DOCUMENTATION_FILES - CI_ONLY_VERIFY_FILES - WORKER_NONDELIVERY_FILES)
     uncovered = {path for path in uncovered
                  if not (path.startswith(DOCUMENTATION_PREFIXES) and path.endswith(".md"))
                  and not (path.startswith("docs/runs/") and path.endswith(".json"))
@@ -882,6 +902,9 @@ def analyze(
             classified_inputs[path] = ("source-policy Markdown: no Rust compile or image input"
                                        if path in SOURCE_POLICY_DOCUMENTS
                                        else "documentation: no executable Rust or image input")
+            continue
+        if path in AUTOMATION_SOURCE_DOCUMENTS:
+            classified_inputs[path] = "reviewed automation source-policy Markdown: no Rust or Worker input"
             continue
         if path.startswith("docs/runs/") and path.endswith(".json"):
             classified_inputs[path] = "historical run evidence: not a live test input or a Rust regression"

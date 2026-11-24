@@ -4,37 +4,39 @@ pub async fn apply_human_review_decision(
 ) -> Result<CmsReviewDecisionOutcome, DomainError> {
     seo_domain::review_decision::validate_human_reviewer(
         &request.page_node_key,
-        request.revision_id.as_deref(),
+        &request.revision_id,
         &request.actor_role,
     )?;
     let actor_role = request.actor_role.trim();
     let decision = request.decision.as_str();
 
     // The live pointer intentionally stays on the published revision while a
-    // replacement waits for review. Never let a page-key-only decision select
-    // that published revision or silently choose an older review candidate.
+    // replacement waits for review. Always approve the explicit candidate;
+    // deriving it from the live pointer would review the wrong revision.
+    // Validate and lock the candidate in the same transaction that records
+    // approval. A concurrent publish/reject must not invalidate this check.
+    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     let row = sqlx::query(
         r#"
         SELECT r.revision_id
         FROM site.cms_pages p
         JOIN site.cms_page_revisions r ON r.page_node_key = p.page_node_key
         WHERE p.page_node_key = $1
-          AND r.revision_id = COALESCE($2, p.current_revision_id)
+          AND r.revision_id = $2
           AND r.revision_status = 'review_required'
+        FOR UPDATE OF r
         "#,
     )
     .bind(&request.page_node_key)
-    .bind(request.revision_id.as_deref())
-    .fetch_optional(pool)
+    .bind(&request.revision_id)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(classify_sqlx)?
-    .ok_or_else(|| validation_failure(
-        "exact review_required revision not found; specify --revision-id for a published page"
-    ))?;
+    .ok_or_else(|| validation_failure("exact review_required revision not found"))?;
     let revision_id: String = row.get("revision_id");
     // Reject reviews not associated with a real canonical Temporal workflow
     // before changing any CMS decision or HITL row.
-    let workflow_id = resolve_seo_workflow_id(pool, &request.page_node_key, &revision_id)
+    let workflow_id = resolve_seo_workflow_id(&mut *tx, &request.page_node_key, &revision_id)
         .await?
         .ok_or_else(|| {
             validation_failure("seo workflow run_id not found for current review revision")
@@ -48,7 +50,6 @@ pub async fn apply_human_review_decision(
             decision,
         ],
     );
-    let mut tx = pool.begin().await.map_err(classify_sqlx)?;
     sqlx::query(
         r#"
         INSERT INTO site.cms_approval_decisions

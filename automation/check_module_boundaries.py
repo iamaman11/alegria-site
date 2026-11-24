@@ -155,7 +155,6 @@ def main() -> int:
             or "pub fn workflow_disposition(" not in review_wire):
         raise ValueError("editorial review disposition must be owned by seo_domain")
     for relative in (
-        "services/temporal/src/workflows/seo_site_build.rs",
         "services/temporal/src/workflows/seo_site_build_canonical_cutover/page_publish.rs",
     ):
         text = (RUST / relative).read_text(encoding="utf-8")

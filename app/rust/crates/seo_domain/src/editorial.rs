@@ -87,6 +87,12 @@ pub fn support_traceability_label(section_role: &str) -> &'static str {
     }
 }
 
+/// A traceability entry is verified evidence only when its verdict and label
+/// agree; both content-contract and final QA use this editorial definition.
+pub fn verified_traceability_evidence(verdict: &str, label: &str) -> bool {
+    verdict == "supported" && matches!(label, "verified_fact" | "verified_summary")
+}
+
 pub fn default_section_roles() -> &'static [&'static str] {
     &[
         "overview",
@@ -127,6 +133,19 @@ pub struct PlannedContentBlock {
     pub heading: String,
     pub required: bool,
     pub deterministic_only: bool,
+}
+
+/// The one domain shape of a rendered editorial content block. The content
+/// contract checks its required structure; final QA checks the same block's
+/// source-bound text against its assembled section and claim ledger.
+#[derive(Clone, Copy)]
+pub struct ContentBlock<'a> {
+    pub role: &'a str,
+    pub block_type: &'a str,
+    pub heading: &'a str,
+    pub markdown: &'a str,
+    pub required: bool,
+    pub support_refs: &'a [String],
 }
 
 /// Select and describe the blocks to generate, consistently for both the
@@ -427,6 +446,19 @@ mod tests {
         assert_eq!(heading_for_role_locale("fees", "ru"), "Консульский сбор");
         assert_eq!(heading_for_role_locale("unknown", "ru"), "Section");
         assert_eq!(block_type_for_role("documents"), "documents_checklist");
+    }
+
+    #[test]
+    fn only_supported_facts_and_summaries_are_verified_traceability() {
+        assert!(verified_traceability_evidence("supported", "verified_fact"));
+        assert!(verified_traceability_evidence("supported", "verified_summary"));
+        for (verdict, label) in [
+            ("blocked", "verified_fact"),
+            ("supported", "unsupported_factual_fragment"),
+            ("", "verified_summary"),
+        ] {
+            assert!(!verified_traceability_evidence(verdict, label));
+        }
     }
 
     #[test]

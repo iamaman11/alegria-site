@@ -1,30 +1,6 @@
 #[allow(dead_code)]
 #[activities]
 impl AlegriaActivities {
-    #[activity]
-    pub async fn generate_content(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<String, ActivityError> {
-        self.execute_step(&run_id, "generate_content", 1, &run_id, || async {
-            content_generation::generate_content_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
-    #[activity]
-    pub async fn validate_blocks(
-        self: Arc<Self>,
-        _ctx: ActivityContext,
-        run_id: String,
-    ) -> Result<String, ActivityError> {
-        self.execute_step(&run_id, "validate_blocks", 1, &run_id, || async {
-            content_generation::validate_blocks_impl(self.as_ref(), &run_id).await
-        })
-        .await
-    }
-
     #[allow(dead_code)]
     #[activity]
     pub async fn run_page_utility_classifier_step(
@@ -1361,7 +1337,7 @@ impl AlegriaActivities {
         run_id: String,
     ) -> Result<String, ActivityError> {
         self.execute_step(&run_id, "finalize_run", 1, &run_id, || async {
-            content_generation::finalize_run_impl(self.as_ref(), &run_id).await
+            self.finalize_run_impl(&run_id).await
         })
         .await
     }

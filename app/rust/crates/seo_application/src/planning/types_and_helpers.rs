@@ -71,19 +71,6 @@ fn voyage_retrieval_ready_or_optional() -> Result<bool, DomainError> {
     Ok(false)
 }
 
-async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
-    repo: &R,
-    phase: &str,
-) -> Result<(), DomainError> {
-    repo.ensure_graph_contract(phase)
-        .await
-        .map_err(|err| DomainError::InfraUnavailable {
-            message: format!(
-                "graph capability contract failed for planning phase `{phase}`: {err}"
-            ),
-        })
-}
-
 fn to_graph_planning_context_state(context: GraphPlanningContext) -> GraphPlanningContextState {
     GraphPlanningContextState {
         scope_signature: context.scope_signature,

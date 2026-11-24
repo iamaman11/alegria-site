@@ -169,14 +169,6 @@ mod tests {
 
     #[async_trait]
     impl PlanningRepository for FakeRepo {
-        async fn load_graph_planning_context(
-            &self,
-            _run_id: &str,
-            _scope_signature: &str,
-        ) -> Result<runtime_models::GraphPlanningContext, DomainError> {
-            Ok(runtime_models::GraphPlanningContext::default())
-        }
-
         async fn existing_page_owners_by_cluster(
             &self,
             _scope_signature: &str,

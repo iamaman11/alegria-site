@@ -101,11 +101,10 @@ fn human_actor(actor_role: &str) -> bool {
 }
 
 /// Shared precondition for the application use case and the direct SQL port.
-/// A missing revision is a deliberate legacy lookup, which the persistence
-/// adapter must refuse if it cannot resolve an exact pending review revision.
+/// Human review always identifies the exact revision being approved.
 pub fn validate_human_reviewer(
     page_node_key: &str,
-    revision_id: Option<&str>,
+    revision_id: &str,
     actor_role: &str,
 ) -> Result<(), DomainError> {
     if page_node_key.trim().is_empty() {
@@ -113,7 +112,7 @@ pub fn validate_human_reviewer(
             message: "page_node_key is required".to_string(),
         });
     }
-    if revision_id.is_some_and(|revision| revision.trim().is_empty()) {
+    if revision_id.trim().is_empty() {
         return Err(DomainError::ValidationFailure {
             message: "revision_id must be an exact non-empty review candidate".to_string(),
         });
@@ -176,16 +175,13 @@ mod tests {
 
     #[test]
     fn only_human_reviewers_with_identified_pages_are_admitted() {
-        assert!(validate_human_reviewer("page", Some("revision"), "editor").is_ok());
-        // Absence is permitted only so the adapter can refuse ambiguous or
-        // already-published current-revision lookups using the live database.
-        assert!(validate_human_reviewer("page", None, "editor").is_ok());
+        assert!(validate_human_reviewer("page", "revision", "editor").is_ok());
         for (page, revision, actor) in [
-            (" ", Some("revision"), "editor"),
-            ("page", Some(" "), "editor"),
-            ("page", Some("revision"), " "),
-            ("page", Some("revision"), "seo_system"),
-            ("page", Some("revision"), " seo_system "),
+            (" ", "revision", "editor"),
+            ("page", " ", "editor"),
+            ("page", "revision", " "),
+            ("page", "revision", "seo_system"),
+            ("page", "revision", " seo_system "),
         ] {
             assert_eq!(
                 validate_human_reviewer(page, revision, actor)

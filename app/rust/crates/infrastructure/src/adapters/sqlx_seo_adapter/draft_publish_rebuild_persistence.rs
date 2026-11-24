@@ -296,28 +296,10 @@ pub async fn persist_content_contract_validate_output(
     input: &ContentContractValidateInputPayload,
     output: &ContentContractValidateOutputPayload,
 ) -> Result<(), DomainError> {
-    upsert_runtime_blob(pool, &input.run_id, "content_contract_validation", output).await?;
-    if let Some(draft) = input.draft.as_ref() {
-        non_empty(&draft.page_draft_key, "page_draft_key")?;
-        sqlx::query(
-            r#"
-            UPDATE site.page_drafts
-            SET qa_blockers = $1,
-                updated_at = now()
-            WHERE page_draft_key = $2
-            "#,
-        )
-        .bind(Json(json!({
-            "content_contract_verdict": output.verdict,
-            "blocking_reasons": output.blocking_reasons,
-            "blockers": output.blockers,
-        })))
-        .bind(&draft.page_draft_key)
-        .execute(pool)
-        .await
-        .map_err(classify_sqlx)?;
-    }
-    Ok(())
+    // The content contract is a per-run intermediate result, not a second QA
+    // verdict. Keep it in the runtime blob; Draft QA alone owns the durable
+    // page_drafts.qa_verdict/qa_blockers fields and their lifecycle transition.
+    upsert_runtime_blob(pool, &input.run_id, "content_contract_validation", output).await
 }
 
 pub async fn persist_draft_qa_output(
@@ -330,7 +312,11 @@ pub async fn persist_draft_qa_output(
     };
     non_empty(&draft.page_draft_key, "page_draft_key")?;
     non_empty(&draft.page_node_key, "page_node_key")?;
-    let lifecycle_state = draft_qa_lifecycle(&output.verdict, &output.blocking_reasons)?;
+    let lifecycle_state = seo_domain::draft_quality::review_lifecycle(
+        &output.verdict,
+        output.blocking_reasons.len(),
+    )
+    .ok_or_else(|| validation_failure("draft_qa verdict and blocking reasons must be consistent"))?;
     // The QA verdict, page lifecycle, audit failures and projection event are
     // one logical result: a failed late write must not expose half a QA run.
     let mut tx = pool.begin().await.map_err(classify_sqlx)?;
@@ -424,42 +410,6 @@ pub async fn persist_draft_qa_output(
     tx.commit().await.map_err(classify_sqlx)?;
 
     Ok(())
-}
-
-/// QA verdict and blockers must agree. Preserve the established review/rework
-/// lifecycle for both verdicts until the human review state machine owns it.
-fn draft_qa_lifecycle(
-    verdict: &str,
-    blocking_reasons: &[String],
-) -> Result<&'static str, DomainError> {
-    match verdict {
-        "publish_ready" if blocking_reasons.is_empty() => Ok("review_required"),
-        "qa_failed" if !blocking_reasons.is_empty() => Ok("review_required"),
-        _ => Err(validation_failure(
-            "draft_qa verdict and blocking reasons must be consistent",
-        )),
-    }
-}
-
-#[cfg(test)]
-mod qa_lifecycle_policy_tests {
-    use super::*;
-
-    #[test]
-    fn accepted_and_rejected_drafts_retain_existing_review_lifecycle() {
-        assert_eq!(draft_qa_lifecycle("publish_ready", &[]).unwrap(), "review_required");
-        assert_eq!(
-            draft_qa_lifecycle("qa_failed", &["missing_claim_ledger".into()]).unwrap(),
-            "review_required"
-        );
-        for (verdict, reasons) in [
-            ("publish_ready", vec!["unsafe_content".into()]),
-            ("qa_failed", vec![]),
-            ("unexpected", vec![]),
-        ] {
-            assert!(draft_qa_lifecycle(verdict, &reasons).is_err());
-        }
-    }
 }
 
 pub async fn persist_rebuild_detect_output(

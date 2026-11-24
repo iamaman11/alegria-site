@@ -1,33 +1,3 @@
-    async fn register_synthetic_site_input(
-        repo: &SqlxSeoRuntimeRepository<'_>,
-        run_id: String,
-        query_batch_key: String,
-    ) -> contracts::generated::alegria::temporal::v1::SeoSiteBuildInputPayload {
-        register_site_build_input(
-            repo,
-            &SeoSiteBuildRegistrationRequest {
-                run_id,
-                context_key: None,
-                market: "alegria-site".to_string(),
-                locale: "ru-RU".to_string(),
-                country_code: "ES".to_string(),
-                visa_type: "tourist".to_string(),
-                visa_subtype: None,
-                applicant_profile: "standard".to_string(),
-                citizenship_code: "BY".to_string(),
-                bootstrap_context: true,
-                queries: vec!["spain tourist visa belarus".to_string()],
-                query_batch_key: Some(query_batch_key),
-                retained_source_run_id: None,
-                run_mode: Some(
-                    run_mode_for_scenario(SeoScenarioKind::Full, false, false, true).to_string(),
-                ),
-            },
-        )
-        .await
-        .unwrap()
-    }
-
     // The positive full-site fixture must cover the same required factual
     // roles as the production blueprints. These are disposable DB test facts,
     // not a fallback or a source of production truth.
@@ -408,37 +378,3 @@
             page_drafts,
         }
     }
-
-    fn normalized_cli_phase_multiset(
-        result: &seo_application::scenario::SeoScenarioResult,
-    ) -> BTreeMap<String, usize> {
-        let allowed = [
-            "serp_ingest",
-            "crawl_sources",
-            "raw_knowledge_ingestion",
-            "serp_normalize",
-            "opportunity_build",
-            "ia_build",
-            "link_recommend",
-            "global_site_reconcile",
-            "draft_assemble",
-            "editorial_draft_generate",
-            "draft_normalize",
-            "content_contract_validate",
-            "draft_qa",
-            "rebuild_detect",
-        ];
-        let mut counts = BTreeMap::new();
-        for report in &result.phase_reports {
-            if allowed.contains(&report.phase.as_str()) {
-                *counts.entry(report.phase.clone()).or_insert(0) += 1;
-            }
-        }
-        for phase in ["raw_knowledge_ingestion", "global_site_reconcile"] {
-            if let Some(count) = counts.get_mut(phase) {
-                *count = 1;
-            }
-        }
-        counts
-    }
-

@@ -178,9 +178,6 @@ python3 automation/check_seo_steps_infra_surface.py
 echo "[35e/56] Temporal SEO planning cluster boundary"
 python3 automation/check_temporal_seo_activity_surface.py
 
-echo "[35e1/56] Temporal workflow execution plan"
-python3 automation/check_temporal_workflow_execution_plan.py
-
 echo "[35f/57] Temporal step catalog SEO surface"
 python3 automation/check_temporal_step_catalog_surface.py
 
@@ -192,9 +189,6 @@ python3 automation/check_cli_tools_seo_surface.py
 
 echo "[35g1/58] Cutover shadow verification surface"
 python3 automation/check_shadow_verification_surface.py
-
-echo "[35g2/58] Cutover convergence policy"
-python3 automation/check_cutover_convergence_policy.py
 
 fi
 
@@ -276,12 +270,6 @@ python3 automation/smoke_hitl_operator_surface.py
 
 echo "[50/53] Headless CMS publish flow smoke"
 python3 automation/smoke_headless_cms_publish_flow.py
-
-echo "[51/53] Expert draft LLM fixture smoke"
-python3 automation/smoke_expert_draft_llm_fixture.py
-
-echo "[52/53] SEO site-build fixture smoke"
-python3 automation/smoke_seo_site_build_fixture.py
 
 echo "[52a/53] Support bundle required smoke"
 python3 automation/smoke_support_bundle_required.py
@@ -379,12 +367,6 @@ python3 automation/check_metrics_contract.py
 
 echo "[43/57] Run modes contract"
 python3 automation/check_run_modes_contract.py
-
-echo "[44/57] SEO site-build replay contract"
-python3 automation/check_seo_site_build_replay_contract.py
-
-echo "[45/57] SEO rollout/compat contract"
-python3 automation/check_seo_rollout_compat_contract.py
 
 echo "[46/58] Projection barrier run-scope contract"
 python3 automation/check_projection_barrier_run_scoped.py

@@ -8,7 +8,7 @@ use seo_ports::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApplyHumanReviewDecisionInput {
     pub page_node_key: String,
-    pub revision_id: Option<String>,
+    pub revision_id: String,
     pub actor_role: String,
     pub decision: HumanReviewDecision,
     pub reason: String,
@@ -26,7 +26,7 @@ where
 {
     validate_human_reviewer(
         &request.page_node_key,
-        request.revision_id.as_deref(),
+        &request.revision_id,
         &request.actor_role,
     )?;
     let outcome = repo
@@ -90,7 +90,7 @@ mod tests {
             &workflow,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: "page-1".to_string(),
-                revision_id: Some("revision-1".to_string()),
+                revision_id: "revision-1".to_string(),
                 actor_role: "editor".to_string(),
                 decision: HumanReviewDecision::Approved,
                 reason: "ok".to_string(),
@@ -114,7 +114,7 @@ mod tests {
             &workflow,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: "page-1".to_string(),
-                revision_id: Some("revision-1".to_string()),
+                revision_id: "revision-1".to_string(),
                 actor_role: "seo_system".to_string(),
                 decision: HumanReviewDecision::Approved,
                 reason: String::new(),
@@ -137,7 +137,7 @@ mod tests {
             &workflow,
             &ApplyHumanReviewDecisionInput {
                 page_node_key: " ".to_string(),
-                revision_id: Some("revision-1".to_string()),
+                revision_id: "revision-1".to_string(),
                 actor_role: "editor".to_string(),
                 decision: HumanReviewDecision::Approved,
                 reason: String::new(),
@@ -147,6 +147,30 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err.class_str(), "validation_failure");
+        assert_eq!(repo.calls.load(Ordering::SeqCst), 0);
+        assert_eq!(workflow.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn cms_review_requires_exact_revision_before_effects() {
+        let repo = FakeRepo::default();
+        let workflow = FakeWorkflow::default();
+        let err = apply_human_review_decision(
+            &repo,
+            &workflow,
+            &ApplyHumanReviewDecisionInput {
+                page_node_key: "page-1".to_string(),
+                revision_id: "  ".to_string(),
+                actor_role: "editor".to_string(),
+                decision: HumanReviewDecision::Approved,
+                reason: String::new(),
+                source: "test".to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.class_str(), "validation_failure");
+        assert!(err.to_string().contains("revision_id"));
         assert_eq!(repo.calls.load(Ordering::SeqCst), 0);
         assert_eq!(workflow.calls.load(Ordering::SeqCst), 0);
     }

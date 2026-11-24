@@ -28,7 +28,6 @@ use primitives::errors::DomainError;
 use runtime_models::ReconcileTargetReportRecord;
 use seo_ports::{ProjectionStatusRepository, VerifiedSupportBundleRequest};
 
-mod content_generation;
 pub(crate) mod operations;
 mod runtime;
 mod step_catalog;

@@ -269,8 +269,7 @@ def main() -> int:
         "ExpertSemanticSliceWorkflow",
         "ProjectionReconcileWorkflow",
         "SeoSiteBuildCanonicalCutoverWorkflow",
-        "default_value_t = RebuildDispatchWorkflowKind::SeoSiteBuildCanonicalCutover",
-        "SeoSiteBuildLegacyCompat",
+        "WorkflowKind::SeoSiteBuildCanonicalCutover.workflow_type()",
         "ALLOW_EXPERT_MIGRATION_WORKFLOWS",
         "Expert migration workflows are diagnostic-only. Set ALLOW_EXPERT_MIGRATION_WORKFLOWS=true for explicit migration diagnostics, or use SeoSiteBuildCanonicalCutoverWorkflow for canonical execution.",
     ]:

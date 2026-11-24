@@ -1,16 +1,8 @@
 use contracts::generated::alegria::temporal::v1::{
-    DraftQaInputPayload, DraftQaOutputPayload, DraftState, SeoPublishBlockerState,
+    DraftQaInputPayload, DraftQaOutputPayload, DraftState,
 };
-use seo_domain::draft_quality::{self, ContentBlock, DraftQuality, Section, Traceability};
-
-fn license_blocker(reason: &str, action: &str) -> SeoPublishBlockerState {
-    SeoPublishBlockerState {
-        reason_code: reason.to_string(),
-        task_type: "publish_gate_blocker".to_string(),
-        required_next_action: action.to_string(),
-        recheck_trigger: "draft_qa_rerun".to_string(),
-    }
-}
+use seo_domain::draft_quality::{self, DraftQuality, Section, Traceability};
+use seo_domain::editorial::ContentBlock;
 
 pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     let empty = DraftState::default();
@@ -31,8 +23,9 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     ) {
         let reason = seo_domain::publishing::license::RESTRICTED_SOURCE_REASON;
         blocking_reasons.push(reason.to_string());
-        blockers.push(license_blocker(
+        blockers.push(crate::seo_step_support::publish_blocker(
             reason,
+            "publish_gate_blocker",
             seo_domain::publishing::license::RESTRICTED_SOURCE_ACTION,
         ));
     }
@@ -53,8 +46,10 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
         .iter()
         .map(|block| ContentBlock {
             role: &block.section_role,
+            block_type: &block.block_type,
             heading: &block.heading,
             markdown: &block.markdown,
+            required: block.required,
             support_refs: &block.support_refs,
         })
         .collect::<Vec<_>>();
@@ -89,12 +84,11 @@ pub fn execute(input: &DraftQaInputPayload) -> DraftQaOutputPayload {
     });
     for violation in qa.violations {
         blocking_reasons.push(violation.reason_code().to_string());
-        blockers.push(SeoPublishBlockerState {
-            reason_code: violation.blocker_reason_code().to_string(),
-            task_type: violation.task_type().to_string(),
-            required_next_action: violation.required_next_action().to_string(),
-            recheck_trigger: "draft_qa_rerun".to_string(),
-        });
+        blockers.push(crate::seo_step_support::publish_blocker(
+            violation.blocker_reason_code(),
+            violation.task_type(),
+            violation.required_next_action(),
+        ));
     }
     blocking_reasons.sort();
     blocking_reasons.dedup();

@@ -218,11 +218,6 @@ async fn main() -> Result<()> {
             run_mode,
             wait,
         } => {
-            if workflow == WorkflowKind::ContentGeneration {
-                anyhow::bail!(
-                    "ContentGenerationWorkflow is legacy-only. Use SeoSiteBuildCanonicalCutoverWorkflow for production SEO generation."
-                );
-            }
             if matches!(
                 workflow,
                 WorkflowKind::ExpertDecomposedExtraction
@@ -249,8 +244,7 @@ async fn main() -> Result<()> {
             };
             if matches!(
                 workflow,
-                WorkflowKind::SeoSiteBuild
-                    | WorkflowKind::SeoSiteBuildCanonicalCutover
+                WorkflowKind::SeoSiteBuildCanonicalCutover
                     | WorkflowKind::ExpertDecomposedExtraction
                     | WorkflowKind::ExpertExtraction
                     | WorkflowKind::ExpertProjection
@@ -318,7 +312,6 @@ async fn main() -> Result<()> {
             database_url,
             limit,
             dry_run,
-            workflow,
             report_json,
         } => {
             let code = run_rebuild_dispatch(
@@ -327,7 +320,6 @@ async fn main() -> Result<()> {
                 database_url,
                 limit,
                 dry_run,
-                workflow,
                 report_json,
             )
             .await?;

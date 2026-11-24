@@ -273,9 +273,9 @@ enum Command {
         temporal_url: Option<String>,
         #[arg(long)]
         page_node_key: String,
-        /// Required for replacing an already published page.
+        /// Exact immutable revision being reviewed; required for every decision.
         #[arg(long)]
-        revision_id: Option<String>,
+        revision_id: String,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]
@@ -293,7 +293,7 @@ enum Command {
         #[arg(long)]
         page_node_key: String,
         #[arg(long)]
-        revision_id: Option<String>,
+        revision_id: String,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]
@@ -307,7 +307,7 @@ enum Command {
         #[arg(long)]
         page_node_key: String,
         #[arg(long)]
-        revision_id: Option<String>,
+        revision_id: String,
         #[arg(long)]
         actor_role: String,
         #[arg(long, default_value = "")]

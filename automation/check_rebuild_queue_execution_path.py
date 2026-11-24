@@ -15,7 +15,7 @@ DOMAIN = ROOT / "app" / "rust" / "crates" / "seo_domain" / "src" / "rebuild.rs"
 PORTS = ROOT / "app" / "rust" / "crates" / "seo_ports" / "src" / "lib.rs"
 OBSOLETE_STEP = ROOT / "app" / "rust" / "crates" / "seo_steps" / "src" / "rebuild_detect_step.rs"
 ACTIVITIES = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "activities" / "mod.rs"
-WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build.rs"
+WORKFLOW = ROOT / "app" / "rust" / "services" / "temporal" / "src" / "workflows" / "seo_site_build_canonical_cutover.rs"
 
 
 def read_file_resolved(path: Path) -> str:

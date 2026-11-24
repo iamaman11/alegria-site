@@ -34,7 +34,7 @@ impl SeoBuildRegistrationRepository for SqlxSeoRuntimeRepository<'_> {
         };
         if non_empty_queries.is_empty() {
             return Err(DomainError::ValidationFailure {
-                message: "SeoSiteBuildWorkflow requires at least one --query".to_string(),
+                message: "Site build requires at least one --query".to_string(),
             });
         }
         Uuid::parse_str(&request.run_id).map_err(|err| DomainError::ValidationFailure {

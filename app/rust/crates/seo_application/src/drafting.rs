@@ -15,19 +15,6 @@ use seo_ports::{
 use crate::seo_runtime;
 use std::collections::HashSet;
 
-async fn ensure_graph_required_for_phase<R: GraphCapabilityPort>(
-    repo: &R,
-    phase: &str,
-) -> Result<(), DomainError> {
-    repo.ensure_graph_contract(phase)
-        .await
-        .map_err(|err| DomainError::InfraUnavailable {
-            message: format!(
-                "graph capability contract failed for drafting phase `{phase}`: {err}"
-            ),
-        })
-}
-
 fn draft_source_context_query(input: &DraftAssembleInputPayload) -> String {
     let page_node = input.page_node.clone().unwrap_or_default();
     let page_blueprint = input.page_blueprint.clone().unwrap_or_default();
@@ -81,7 +68,8 @@ pub async fn run_draft_assemble<
     repo: &R,
     input: &DraftAssembleInputPayload,
 ) -> Result<DraftAssembleOutputPayload, DomainError> {
-    ensure_graph_required_for_phase(repo, "draft_assemble").await?;
+    repo.require_graph_contract("drafting", "draft_assemble")
+        .await?;
     seo_runtime::truth_admissibility_gate(
         &input.verified_support,
         input
@@ -155,7 +143,7 @@ pub async fn run_draft_qa<R: DraftRepository + GraphCapabilityPort>(
 where
     R: SourceContextSearchPort,
 {
-    ensure_graph_required_for_phase(repo, "draft_qa").await?;
+    repo.require_graph_contract("drafting", "draft_qa").await?;
     let mut output = seo_steps::draft_qa_step::execute(input);
     append_retrieval_diagnostics(repo, input, &mut output).await?;
     repo.persist_draft_qa_output(input, &output).await?;

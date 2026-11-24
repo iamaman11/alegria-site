@@ -826,17 +826,17 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
         .bind(format!("cms-event-{marker}")).bind(&page).bind(&scope).bind(&replacement)
         .bind(serde_json::json!({"run_id": run_id})).execute(pool).await.unwrap();
 
-    let request = |revision_id: Option<&str>| CmsReviewDecisionRequest {
+    let request = |revision_id: &str| CmsReviewDecisionRequest {
         page_node_key: page.clone(),
-        revision_id: revision_id.map(str::to_string),
+        revision_id: revision_id.to_string(),
         actor_role: "real_editor_fixture".to_string(),
         decision: HumanReviewDecision::Approved,
         reason: "Review of exact pending revision".to_string(),
         source: "e2e_revision_bound_human_gate".to_string(),
     };
-    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(None)).await.is_err());
-    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(Some(&original))).await.is_err());
-    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(Some("wrong-revision"))).await.is_err());
+    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request("")).await.is_err());
+    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(&original)).await.is_err());
+    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request("wrong-revision")).await.is_err());
 
     // A reused immutable candidate may never signal an arbitrarily chosen
     // workflow when two still-active runs claim the same review event.
@@ -847,11 +847,11 @@ async fn cms_revision_review_requires_exact_pending_revision_and_active_workflow
         .bind(format!("cms-second-event-{marker}")).bind(&page).bind(&scope).bind(&replacement)
         .bind(serde_json::json!({"run_id": second_run.to_string()}))
         .execute(pool).await.unwrap();
-    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(Some(&replacement))).await.is_err());
+    assert!(sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(&replacement)).await.is_err());
     sqlx::query("UPDATE pipeline.execution_runs SET status='done' WHERE run_id=$1")
         .bind(second_run).execute(pool).await.unwrap();
 
-    let result = sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(Some(&replacement)))
+    let result = sqlx_seo_cms_adapter::apply_human_review_decision(pool, &request(&replacement))
         .await.unwrap();
     assert_eq!(result.revision_id, replacement);
     assert_eq!(result.workflow_id, run_id);
@@ -1077,7 +1077,7 @@ async fn cms_revision_publish_keeps_verified_links_structured_without_duplicate_
 
     let reviewer = CmsReviewDecisionRequest {
         page_node_key: tourist_page.clone(),
-        revision_id: Some(result.revision_id.clone()),
+        revision_id: result.revision_id.clone(),
         actor_role: "editor_fixture".to_string(),
         decision: HumanReviewDecision::Approved,
         reason: "Exact revision approved".to_string(),
