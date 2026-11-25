@@ -12,9 +12,8 @@ use uuid::Uuid;
 
 use operation_protocol::{
     canonical_effect_dispatch_input_bytes, checked_execution_key, ArtifactSchema, ArtifactTypeId,
-    BoundEffectInputV4, CheckedDispatch, EffectId, IdempotencyPolicy, Operation,
-    OperationContract, OperationId, OperationOwnerId, OperationRef, PortId,
-    TemporalExecutionIdentityV4,
+    BoundEffectInputV4, CheckedDispatch, EffectId, IdempotencyPolicy, Operation, OperationContract,
+    OperationId, OperationOwnerId, OperationRef, PortId, TemporalExecutionIdentityV4,
 };
 
 use super::qdrant_effect_child_v1::{QdrantChildOutcomeV1, QdrantKeywordProjectionCommandV1};
@@ -61,9 +60,7 @@ impl Operation for QdrantKeywordProjectionContractV2 {
             invalidates: BTreeSet::from([ArtifactTypeId(
                 "qdrant.keyword_projection_snapshot".to_owned(),
             )]),
-            effects: BTreeSet::from([EffectId(
-                QDRANT_EFFECT_OPERATION_ID_V2.to_owned(),
-            )]),
+            effects: BTreeSet::from([EffectId(QDRANT_EFFECT_OPERATION_ID_V2.to_owned())]),
             idempotency: IdempotencyPolicy::Idempotent,
         }
     }
@@ -108,7 +105,10 @@ pub enum QdrantChildProtocolErrorV2 {
 impl QdrantKeywordChildInvocationV2 {
     pub fn canonical_dispatch_input_bytes(&self) -> Result<Vec<u8>, QdrantChildProtocolErrorV2> {
         let command = serde_json::to_vec(&self.command)?;
-        Ok(canonical_effect_dispatch_input_bytes(&self.bound_input, &command)?)
+        Ok(canonical_effect_dispatch_input_bytes(
+            &self.bound_input,
+            &command,
+        )?)
     }
 
     /// Identity and canonical byte-level self-consistency only. The provider
@@ -116,14 +116,18 @@ impl QdrantKeywordChildInvocationV2 {
     /// canonical source revision and the exact durable effect receipt.
     pub fn verify_integrity(&self) -> Result<(), QdrantChildProtocolErrorV2> {
         if self.schema_revision != QDRANT_CHILD_SCHEMA_REVISION_V2 {
-            return Err(QdrantChildProtocolErrorV2::SchemaRevision(self.schema_revision));
+            return Err(QdrantChildProtocolErrorV2::SchemaRevision(
+                self.schema_revision,
+            ));
         }
         if self.canonical_run_id.is_nil()
             || self.parent.workflow_id.trim().is_empty()
             || self.parent.run_id.trim().is_empty()
             || self.checked_dispatch.execution_key.trim().is_empty()
         {
-            return Err(QdrantChildProtocolErrorV2::InvalidField("execution identity"));
+            return Err(QdrantChildProtocolErrorV2::InvalidField(
+                "execution identity",
+            ));
         }
         self.command
             .validate()
@@ -230,7 +234,8 @@ mod tests {
     #[test]
     fn rejects_forged_owner_operation_and_effect_even_with_matching_execution_key() {
         let mut actual = valid_invocation();
-        actual.checked_dispatch.owner = operation_protocol::OperationOwnerId::from("postgres_store");
+        actual.checked_dispatch.owner =
+            operation_protocol::OperationOwnerId::from("postgres_store");
         actual.checked_dispatch.execution_key = checked_execution_key(
             &actual.checked_dispatch,
             &actual.checked_dispatch.input_hash,

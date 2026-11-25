@@ -9,8 +9,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use operation_protocol::{
-    OperationContract, PinnedOwnerRouteV1, TrustedRouteCatalog,
-    OPERATION_DAG_PARENT_QUEUE, OWNER_OPERATION_CHILD_TYPE_V1,
+    OperationContract, PinnedOwnerRouteV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
 
@@ -41,7 +41,9 @@ fn validate_config_file_trust(path: &Path) -> Result<()> {
         let meta = std::fs::symlink_metadata(dir)
             .with_context(|| format!("inspect trusted catalog directory {}", dir.display()))?;
         anyhow::ensure!(
-            meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == 0
+            meta.is_dir()
+                && !meta.file_type().is_symlink()
+                && meta.uid() == 0
                 && meta.mode() & 0o022 == 0,
             "catalog directory must be root-owned, nonsymlink, non-group/world writable"
         );
@@ -50,7 +52,9 @@ fn validate_config_file_trust(path: &Path) -> Result<()> {
     let file = std::fs::symlink_metadata(path)
         .with_context(|| format!("inspect trusted catalog file {}", path.display()))?;
     anyhow::ensure!(
-        file.is_file() && !file.file_type().is_symlink() && file.uid() == 0
+        file.is_file()
+            && !file.file_type().is_symlink()
+            && file.uid() == 0
             && file.mode() & 0o022 == 0,
         "catalog file must be regular, root-owned, nonsymlink and non-group/world writable"
     );
@@ -81,13 +85,19 @@ struct TrustedRegistrationV1 {
 }
 
 pub(crate) fn load_trusted_owner_catalog(path: &Path) -> Result<TrustedRouteCatalog> {
-    anyhow::ensure!(path.is_absolute(), "trusted route catalog path must be absolute");
+    anyhow::ensure!(
+        path.is_absolute(),
+        "trusted route catalog path must be absolute"
+    );
     validate_config_file_trust(path)?;
     let data = std::fs::read(path)
         .with_context(|| format!("read operator-owned route catalog {}", path.display()))?;
-    let config: TrustedCatalogFileV1 = serde_json::from_slice(&data)
-        .context("decode trusted owner route catalog")?;
-    anyhow::ensure!(config.schema_revision == 1, "unsupported trusted route catalog version");
+    let config: TrustedCatalogFileV1 =
+        serde_json::from_slice(&data).context("decode trusted owner route catalog")?;
+    anyhow::ensure!(
+        config.schema_revision == 1,
+        "unsupported trusted route catalog version"
+    );
     anyhow::ensure!(!config.entries.is_empty(), "trusted route catalog is empty");
     let mut catalog = TrustedRouteCatalog::default();
     for entry in config.entries {

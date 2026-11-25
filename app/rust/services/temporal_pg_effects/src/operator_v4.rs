@@ -148,15 +148,23 @@ fn first_parent_started_payload(parent: &History) -> Result<(Vec<u8>, ParentHist
         .map(|value| value.name.as_str());
     let parent_queue = start.task_queue.as_ref().map(|value| value.name.as_str());
     let (valid_pair, schema) = match (parent_type, parent_queue) {
-        (Some(PARENT_TYPE), Some(PARENT_QUEUE)) =>
-            ((PARENT_TYPE, PARENT_QUEUE), ParentHistorySchema::LegacyV4V5),
-        (Some(PARENT_TYPE_V5), Some(PARENT_QUEUE_V5)) =>
-            ((PARENT_TYPE_V5, PARENT_QUEUE_V5), ParentHistorySchema::LegacyV4V5),
-        (Some(PARENT_TYPE_V6), Some(PARENT_QUEUE_V6)) =>
-            ((PARENT_TYPE_V6, PARENT_QUEUE_V6), ParentHistorySchema::MixedV6),
+        (Some(PARENT_TYPE), Some(PARENT_QUEUE)) => {
+            ((PARENT_TYPE, PARENT_QUEUE), ParentHistorySchema::LegacyV4V5)
+        }
+        (Some(PARENT_TYPE_V5), Some(PARENT_QUEUE_V5)) => (
+            (PARENT_TYPE_V5, PARENT_QUEUE_V5),
+            ParentHistorySchema::LegacyV4V5,
+        ),
+        (Some(PARENT_TYPE_V6), Some(PARENT_QUEUE_V6)) => (
+            (PARENT_TYPE_V6, PARENT_QUEUE_V6),
+            ParentHistorySchema::MixedV6,
+        ),
         _ => bail!("Temporal parent did not start on an exact allowed native parent type/queue"),
     };
-    Ok((first_started_payload(parent, valid_pair.0, valid_pair.1)?, schema))
+    Ok((
+        first_started_payload(parent, valid_pair.0, valid_pair.1)?,
+        schema,
+    ))
 }
 
 fn prove_parent_plan_and_command(
@@ -177,7 +185,10 @@ fn prove_parent_plan_and_command(
         ParentHistorySchema::MixedV6 => {
             let mixed: OperationDagRunV6 = serde_json::from_slice(parent_bytes)
                 .context("parent did not start with typed OperationDagRunV6")?;
-            ensure!(mixed.schema_revision == 6, "invalid immutable operation DAG schema");
+            ensure!(
+                mixed.schema_revision == 6,
+                "invalid immutable operation DAG schema"
+            );
             ensure!(
                 serde_json::to_vec(&mixed)? == parent_bytes,
                 "parent History did not contain canonical typed operation DAG bytes"
@@ -326,7 +337,10 @@ fn prove_reciprocal_temporal_histories(
         "V4 child History payload is not canonical typed JSON; SQL executor would hash different bytes");
     ensure!(
         request.child_workflow_id
-            == format!("{child_id_prefix}{}", invocation.checked_dispatch.execution_key),
+            == format!(
+                "{child_id_prefix}{}",
+                invocation.checked_dispatch.execution_key
+            ),
         "V4 child Workflow ID does not follow the deterministic checked execution key identity"
     );
     ensure!(
@@ -589,7 +603,10 @@ pub(super) async fn locked_source_hash(
         .context("compute authoritative PostgreSQL Truth source fingerprint")
 }
 
-pub(super) async fn sha256_pg(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, bytes: &[u8]) -> Result<String> {
+pub(super) async fn sha256_pg(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    bytes: &[u8],
+) -> Result<String> {
     sqlx::query_scalar("SELECT encode(digest($1::bytea, 'sha256'), 'hex')")
         .bind(bytes)
         .fetch_one(&mut **tx)
@@ -933,15 +950,21 @@ mod tests {
         let (bytes, schema) = first_parent_started_payload(&valid).unwrap();
         assert_eq!(bytes, b"verified-server-history-input");
         assert_eq!(schema, ParentHistorySchema::MixedV6);
-        assert!(first_parent_started_payload(
-            &synthetic_temporal_start(PARENT_TYPE_V6, PARENT_QUEUE_V5)
-        ).is_err());
-        assert!(first_parent_started_payload(
-            &synthetic_temporal_start(PARENT_TYPE_V5, PARENT_QUEUE_V6)
-        ).is_err());
-        assert!(first_parent_started_payload(
-            &synthetic_temporal_start("ArbitraryCallerWorkflow", PARENT_QUEUE_V6)
-        ).is_err());
+        assert!(first_parent_started_payload(&synthetic_temporal_start(
+            PARENT_TYPE_V6,
+            PARENT_QUEUE_V5
+        ))
+        .is_err());
+        assert!(first_parent_started_payload(&synthetic_temporal_start(
+            PARENT_TYPE_V5,
+            PARENT_QUEUE_V6
+        ))
+        .is_err());
+        assert!(first_parent_started_payload(&synthetic_temporal_start(
+            "ArbitraryCallerWorkflow",
+            PARENT_QUEUE_V6
+        ))
+        .is_err());
     }
 
     #[test]

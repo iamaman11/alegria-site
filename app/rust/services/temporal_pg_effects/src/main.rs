@@ -19,11 +19,11 @@ use operation_protocol::{
 #[cfg(test)]
 use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
 use postgres_store::truth_review_effect_v3::{
-    assert_unprivileged_pg_effect_role, execute_admitted_reconcile, execute_admitted_reconcile_v4,
-    execute_admitted_reconcile_owner_v1, validate_pg_owner_invocation_v1,
-    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
-    PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4, PG_EFFECT_WORKFLOW_TYPE_V5,
-    PG_OWNER_TASK_QUEUE_V1,
+    assert_unprivileged_pg_effect_role, execute_admitted_reconcile,
+    execute_admitted_reconcile_owner_v1, execute_admitted_reconcile_v4,
+    validate_pg_owner_invocation_v1, ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt,
+    RetryClass, PG_EFFECT_TASK_QUEUE, PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4,
+    PG_EFFECT_WORKFLOW_TYPE_V5, PG_OWNER_TASK_QUEUE_V1,
 };
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
@@ -37,8 +37,8 @@ use temporalio_sdk::{
 };
 
 mod operator;
-mod operator_v4;
 mod operator_owner_v1;
+mod operator_v4;
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
@@ -107,12 +107,14 @@ impl PgTruthReviewActivities {
         invocation: OwnerInvocationV1,
     ) -> Result<ReconcileTruthReviewsReceipt, ActivityError> {
         let info = ctx.info();
-        let workflow_id = info.workflow_id.as_deref().ok_or_else(|| {
-            activity_terminal("PG owner needs server child Workflow ID")
-        })?;
-        let run_id = info.workflow_run_id.as_deref().ok_or_else(|| {
-            activity_terminal("PG owner needs server child Workflow Run ID")
-        })?;
+        let workflow_id = info
+            .workflow_id
+            .as_deref()
+            .ok_or_else(|| activity_terminal("PG owner needs server child Workflow ID"))?;
+        let run_id = info
+            .workflow_run_id
+            .as_deref()
+            .ok_or_else(|| activity_terminal("PG owner needs server child Workflow Run ID"))?;
         if info.workflow_type.as_deref() != Some(OWNER_OPERATION_CHILD_TYPE_V1)
             || info.task_queue != PG_EFFECT_TASK_QUEUE
         {
@@ -124,10 +126,12 @@ impl PgTruthReviewActivities {
             .await
             .map_err(|err| {
                 let failure = match err.retry_class() {
-                    RetryClass::Never =>
-                        ApplicationFailure::non_retryable(std::io::Error::other(err.to_string())),
-                    RetryClass::RetryWithSameAdmission =>
-                        ApplicationFailure::new(std::io::Error::other(err.to_string())),
+                    RetryClass::Never => {
+                        ApplicationFailure::non_retryable(std::io::Error::other(err.to_string()))
+                    }
+                    RetryClass::RetryWithSameAdmission => {
+                        ApplicationFailure::new(std::io::Error::other(err.to_string()))
+                    }
                 };
                 ActivityError::application(failure)
             })
@@ -277,7 +281,8 @@ impl AlegriaOwnerOperationV1Workflow {
         })?;
         // Signal is deliberately NOT a capability. SQL independently checks
         // exact operator-issued rev5 admission and candidate snapshot.
-        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        ctx.wait_condition(|state| state.admission_signal_received)
+            .await?;
         let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
         options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
         let receipt: ReconcileTruthReviewsReceipt = ctx
@@ -294,11 +299,17 @@ impl AlegriaOwnerOperationV1Workflow {
         })?;
         let output_contract = truth_domain::review_effect_contract::operation_contract();
         let output_port = PortId::from(truth_domain::review_effect_contract::OUTPUT_PORT);
-        let output_schema = output_contract.outputs.get(&output_port).cloned().ok_or_else(|| {
-            temporalio_sdk::WorkflowTermination::failed_application(
-                ApplicationFailure::non_retryable(std::io::Error::other("missing PG output schema")),
-            )
-        })?;
+        let output_schema = output_contract
+            .outputs
+            .get(&output_port)
+            .cloned()
+            .ok_or_else(|| {
+                temporalio_sdk::WorkflowTermination::failed_application(
+                    ApplicationFailure::non_retryable(std::io::Error::other(
+                        "missing PG output schema",
+                    )),
+                )
+            })?;
         Ok(OwnerResultV1 {
             dispatch_execution_key: invocation.checked_dispatch.execution_key,
             outputs: BTreeMap::from([(
@@ -527,9 +538,13 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-owner-v1") {
-            let path = args.next()
+            let path = args
+                .next()
                 .context("--operator-issue-owner-v1 requires one strict JSON locator file")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected PG owner operator arguments");
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected PG owner operator arguments"
+            );
             operator_owner_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
@@ -604,8 +619,10 @@ async fn main() -> Result<()> {
     let mut generic_worker = if generic_enabled {
         let mut owner_options = WorkerOptions::new(PG_OWNER_TASK_QUEUE_V1).build();
         owner_options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
-        Some(Worker::new(&runtime, client.clone(), owner_options)
-            .map_err(|error| anyhow::anyhow!("{error}"))?)
+        Some(
+            Worker::new(&runtime, client.clone(), owner_options)
+                .map_err(|error| anyhow::anyhow!("{error}"))?,
+        )
     } else {
         None
     };
@@ -628,8 +645,13 @@ async fn main() -> Result<()> {
             std::future::pending().await
         }
     };
-    tokio::try_join!(command_worker.run(), v5_command_worker.run(), activity_worker.run(), generic_run)
-        .context("PG effect owner stopped")?;
+    tokio::try_join!(
+        command_worker.run(),
+        v5_command_worker.run(),
+        activity_worker.run(),
+        generic_run
+    )
+    .context("PG effect owner stopped")?;
     Ok(())
 }
 

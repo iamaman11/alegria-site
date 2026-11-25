@@ -191,15 +191,13 @@ pub async fn execute_admitted_qdrant_projection_v2(
         "V2 immutable provider command differs from exact operator-approved DAG node"
     );
 
-    let state: String = sqlx::query_scalar(
-        "SELECT pipeline.begin_qdrant_projection_v2($1,$2,$3)",
-    )
-    .bind(admission_id)
-    .bind(&bytes)
-    .bind(dispatch_execution_key)
-    .fetch_one(pool)
-    .await
-    .context("PostgreSQL denied V2 checked DAG Qdrant effect before provider I/O")?;
+    let state: String = sqlx::query_scalar("SELECT pipeline.begin_qdrant_projection_v2($1,$2,$3)")
+        .bind(admission_id)
+        .bind(&bytes)
+        .bind(dispatch_execution_key)
+        .fetch_one(pool)
+        .await
+        .context("PostgreSQL denied V2 checked DAG Qdrant effect before provider I/O")?;
 
     let entity_key = entity_key(&command);
     let metadata = metadata(&command, &sha256);
@@ -232,17 +230,19 @@ pub async fn execute_admitted_qdrant_projection_v2(
     )
     .await
     .context("Qdrant V2 exact readback unavailable: effect remains uncertain")?;
-    ensure!(exact, "unknown or drifted Qdrant V2 remote effect; reconcile manually");
+    ensure!(
+        exact,
+        "unknown or drifted Qdrant V2 remote effect; reconcile manually"
+    );
 
-    let confirmed: bool = sqlx::query_scalar(
-        "SELECT pipeline.confirm_qdrant_projection_v2($1,$2,$3)",
-    )
-    .bind(admission_id)
-    .bind(&bytes)
-    .bind(dispatch_execution_key)
-    .fetch_one(pool)
-    .await
-    .context("Qdrant V2 provider readback passed but SQL receipt failed; reconcile only")?;
+    let confirmed: bool =
+        sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v2($1,$2,$3)")
+            .bind(admission_id)
+            .bind(&bytes)
+            .bind(dispatch_execution_key)
+            .fetch_one(pool)
+            .await
+            .context("Qdrant V2 provider readback passed but SQL receipt failed; reconcile only")?;
     ensure!(confirmed, "PostgreSQL refused V2 provider receipt");
     Ok(match state.as_str() {
         "started" => QdrantProjectionOutcomeV1::Applied,

@@ -11,8 +11,8 @@ use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
-    ArtifactBinding, OperationDagRunV6, OwnerInvocationV1, PortId,
-    OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
+    ArtifactBinding, OperationDagRunV6, OwnerInvocationV1, PortId, OPERATION_DAG_PARENT_QUEUE,
+    OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use postgres_store::truth_review_effect_v3::{
     contract_fingerprint, validate_pg_owner_invocation_v1, ReconcileTruthReviewsInput,
@@ -63,11 +63,14 @@ fn prove_plan_source_and_own_command(
         .context("PG typed command, owner dispatch or external artifact invalid")?;
     let run: OperationDagRunV6 = serde_json::from_slice(parent_bytes)
         .context("parent did not start with typed provider-neutral OperationDagRunV6")?;
-    ensure!(run.schema_revision == 6
-            && serde_json::to_vec(&run)? == parent_bytes,
-        "parent V6 History is not exact canonical versioned DAG input");
-    ensure!(run.plan.hash == run.plan.canonical_hash()?,
-        "parent immutable DAG plan hash invalid");
+    ensure!(
+        run.schema_revision == 6 && serde_json::to_vec(&run)? == parent_bytes,
+        "parent V6 History is not exact canonical versioned DAG input"
+    );
+    ensure!(
+        run.plan.hash == run.plan.canonical_hash()?,
+        "parent immutable DAG plan hash invalid"
+    );
     let checked = &invocation.checked_dispatch;
     let pg_contract = operation_contract();
     let fingerprint = pg_contract.fingerprint()?;
@@ -82,11 +85,15 @@ fn prove_plan_source_and_own_command(
         "PG child dispatch is not a pinned exact operation in canonical plan"
     );
     ensure!(
-        run.plan.pinned_contracts.iter().any(|p|
-            p.reference == checked.operation && p.fingerprint == fingerprint),
+        run.plan
+            .pinned_contracts
+            .iter()
+            .any(|p| p.reference == checked.operation && p.fingerprint == fingerprint),
         "canonical DAG omitted exact PG operation contract fingerprint"
     );
-    let owner_wire = run.owner_commands.get(&checked.instance)
+    let owner_wire = run
+        .owner_commands
+        .get(&checked.instance)
         .context("parent History omitted this exact PG owner command")?;
     ensure!(
         owner_wire.operation == checked.operation
@@ -95,7 +102,10 @@ fn prove_plan_source_and_own_command(
             && owner_wire.command_bytes == invocation.command_bytes,
         "PG parent owner command bytes/type/contract do not match real child History"
     );
-    let node = run.plan.nodes.iter()
+    let node = run
+        .plan
+        .nodes
+        .iter()
         .find(|node| node.instance == checked.instance)
         .context("parent DAG lacks this checked PG instance")?;
     ensure!(
@@ -106,34 +116,48 @@ fn prove_plan_source_and_own_command(
     );
     ensure!(
         node.inputs.len() == invocation.bound_inputs.len()
-            && node.inputs.iter().all(|(port, binding)|
-                invocation.bound_inputs.get(port)
-                    .is_some_and(|bound| &bound.source == binding)),
+            && node.inputs.iter().all(|(port, binding)| invocation
+                .bound_inputs
+                .get(port)
+                .is_some_and(|bound| &bound.source == binding)),
         "bound child input source differs from exact parent node's binding"
     );
     let port = PortId::from(INPUT_PORT);
-    let bound = invocation.bound_inputs.get(&port)
+    let bound = invocation
+        .bound_inputs
+        .get(&port)
         .context("PG owner missing exact Truth-review input port")?;
     let ArtifactBinding::External { artifact } = &bound.source else {
         bail!("Produced-to-PG requires independent upstream owner receipt; unsupported");
     };
-    ensure!(artifact == &bound.artifact_id,
-        "PG child's external artifact ID is not the sealed parent binding");
-    let parent_artifact = run.admitted.get(artifact)
+    ensure!(
+        artifact == &bound.artifact_id,
+        "PG child's external artifact ID is not the sealed parent binding"
+    );
+    let parent_artifact = run
+        .admitted
+        .get(artifact)
         .context("PG external input not present in parent's admitted snapshot")?;
     ensure!(
         parent_artifact == &bound.artifact,
         "PG artifact bytes/schema/scope/provenance mismatch immutable parent History"
     );
-    let route = run.pinned_routes.iter().find(|route|
-        route.operation == checked.operation && route.owner == checked.owner)
+    let route = run
+        .pinned_routes
+        .iter()
+        .find(|route| route.operation == checked.operation && route.owner == checked.owner)
         .context("parent lacks PG owner pinned route")?;
     ensure!(
         route.contract_hash == fingerprint
             && route.workflow_type == OWNER_OPERATION_CHILD_TYPE_V1
             && route.task_queue == PG_OWNER_TASK_QUEUE_V1
             && route.build_id == trusted_build_id
-            && run.pinned_routes.iter().filter(|r| r.operation == checked.operation).count() == 1,
+            && run
+                .pinned_routes
+                .iter()
+                .filter(|r| r.operation == checked.operation)
+                .count()
+                == 1,
         "PG route in parent History differs from operator-owned type/queue/build ID"
     );
     ensure!(
@@ -153,25 +177,33 @@ fn prove_temporal_histories(
     trusted_build_id: &str,
 ) -> Result<Attested> {
     let parent_input = first_started_payload(
-        parent, OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_QUEUE)?;
-    let child_input = first_started_payload(
-        child, OWNER_OPERATION_CHILD_TYPE_V1, PG_OWNER_TASK_QUEUE_V1)?;
+        parent,
+        OPERATION_DAG_PARENT_TYPE,
+        OPERATION_DAG_PARENT_QUEUE,
+    )?;
+    let child_input =
+        first_started_payload(child, OWNER_OPERATION_CHILD_TYPE_V1, PG_OWNER_TASK_QUEUE_V1)?;
     let invocation: OwnerInvocationV1 = serde_json::from_slice(&child_input)
         .context("child History did not start with typed native OwnerInvocationV1")?;
     ensure!(
         serde_json::to_vec(&invocation)? == child_input
-            && request.child_workflow_id == format!(
-                "{GENERIC_CHILD_ID_PREFIX}{}", invocation.checked_dispatch.execution_key)
+            && request.child_workflow_id
+                == format!(
+                    "{GENERIC_CHILD_ID_PREFIX}{}",
+                    invocation.checked_dispatch.execution_key
+                )
             && invocation.parent.workflow_id == request.parent_workflow_id
             && invocation.parent.run_id == request.parent_workflow_run_id,
         "child's canonical start bytes, deterministic ID or parent identity mismatch"
     );
     let first = child.events.first().context("child History is empty")?;
-    let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) =
-        &first.attributes else {
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) = &first.attributes
+    else {
         bail!("child History lacks server WorkflowExecutionStarted")
     };
-    let actual_parent = child_start.parent_workflow_execution.as_ref()
+    let actual_parent = child_start
+        .parent_workflow_execution
+        .as_ref()
         .context("child start has no server-attested parent")?;
     ensure!(
         actual_parent.workflow_id == request.parent_workflow_id
@@ -181,7 +213,8 @@ fn prove_temporal_histories(
     let mut matched = None;
     for event in &parent.events {
         let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(initiated)) =
-            &event.attributes else {
+            &event.attributes
+        else {
             continue;
         };
         if initiated.workflow_id != request.child_workflow_id {
@@ -192,20 +225,25 @@ fn prove_temporal_histories(
                 == Some(OWNER_OPERATION_CHILD_TYPE_V1)
                 && initiated.task_queue.as_ref().map(|v| v.name.as_str())
                     == Some(PG_OWNER_TASK_QUEUE_V1)
-                && initiated.input.as_ref().is_some_and(|v|
-                    v.payloads.len() == 1
+                && initiated
+                    .input
+                    .as_ref()
+                    .is_some_and(|v| v.payloads.len() == 1
                         && v.payloads[0].data.as_slice() == child_input.as_slice()),
             "parent server Initiated event scheduled different native PG child/input/queue"
         );
         for started_event in &parent.events {
             let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(started)) =
-                &started_event.attributes else {
+                &started_event.attributes
+            else {
                 continue;
             };
             if started.initiated_event_id != event.event_id {
                 continue;
             }
-            let actual_child = started.workflow_execution.as_ref()
+            let actual_child = started
+                .workflow_execution
+                .as_ref()
                 .context("server ChildStarted lacks actual child execution")?;
             ensure!(
                 actual_child.workflow_id == request.child_workflow_id
@@ -215,16 +253,24 @@ fn prove_temporal_histories(
                     && child_start.parent_initiated_event_id == event.event_id,
                 "parent and child server histories are not reciprocal exact executions"
             );
-            ensure!(matched.replace(started_event.event_id).is_none(),
-                "duplicate ambiguous child start attestation");
+            ensure!(
+                matched.replace(started_event.event_id).is_none(),
+                "duplicate ambiguous child start attestation"
+            );
         }
     }
-    let child_started_event_id = matched.context(
-        "parent Temporal History did not attest unique reciprocal child-start event")?;
+    let child_started_event_id = matched
+        .context("parent Temporal History did not attest unique reciprocal child-start event")?;
     let command = prove_plan_source_and_own_command(
-        &parent_input, &invocation, request.canonical_run_id, trusted_build_id)?;
-    ensure!(command.admission_id == request.admission_id,
-        "operator admission UUID differs from server-attested PG command");
+        &parent_input,
+        &invocation,
+        request.canonical_run_id,
+        trusted_build_id,
+    )?;
+    ensure!(
+        command.admission_id == request.admission_id,
+        "operator admission UUID differs from server-attested PG command"
+    );
     Ok(Attested {
         invocation,
         exact_invocation_bytes: child_input,
@@ -240,16 +286,30 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<At
         .context("PG owner requires exact Temporal namespace")?;
     ensure!(
         (url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:"))
-            && !namespace.trim().is_empty() && namespace == namespace.trim(),
+            && !namespace.trim().is_empty()
+            && namespace == namespace.trim(),
         "PG native owner issuer currently trusts only explicitly configured local Temporal"
     );
     let client = temporal_gateway::connect_client(
-        &url, format!("alegria-pg-native-operator-{}", std::process::id()), &namespace
-    ).await?;
-    let parent = fetch_exact_history(&client, &namespace,
-        &request.parent_workflow_id, &request.parent_workflow_run_id).await?;
-    let child = fetch_exact_history(&client, &namespace,
-        &request.child_workflow_id, &request.child_workflow_run_id).await?;
+        &url,
+        format!("alegria-pg-native-operator-{}", std::process::id()),
+        &namespace,
+    )
+    .await?;
+    let parent = fetch_exact_history(
+        &client,
+        &namespace,
+        &request.parent_workflow_id,
+        &request.parent_workflow_run_id,
+    )
+    .await?;
+    let child = fetch_exact_history(
+        &client,
+        &namespace,
+        &request.child_workflow_id,
+        &request.child_workflow_run_id,
+    )
+    .await?;
     prove_temporal_histories(&parent, &child, request, build_id)
 }
 
@@ -260,17 +320,25 @@ async fn insert_admission(
     tenant: &str,
 ) -> Result<()> {
     super::operator::enforce_authoritative_pg_tenant(pool, tenant).await?;
-    ensure!(attested.command.scope.tenant_id == tenant && !tenant.trim().is_empty(),
-        "server-attested PG command does not match authenticated operator tenant");
+    ensure!(
+        attested.command.scope.tenant_id == tenant && !tenant.trim().is_empty(),
+        "server-attested PG command does not match authenticated operator tenant"
+    );
     let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout = '5s'").execute(&mut *tx).await?;
-    sqlx::query("SET LOCAL statement_timeout = '30s'").execute(&mut *tx).await?;
+    sqlx::query("SET LOCAL lock_timeout = '5s'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL statement_timeout = '30s'")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
         .bind(format!("truth-context|{}", attested.command.context_key))
-        .execute(&mut *tx).await?;
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
         .bind(format!("truth-run-status|{}", request.canonical_run_id))
-        .execute(&mut *tx).await?;
+        .execute(&mut *tx)
+        .await?;
     // Until a separate owner-neutral run-governance contract exists, do NOT
     // weaken the canonical SEO/HITL eligibility gate for this pilot.
     let run = sqlx::query(
@@ -278,24 +346,31 @@ async fn insert_admission(
          FROM pipeline.execution_runs WHERE run_id=$1",
     )
     .bind(request.canonical_run_id)
-    .fetch_optional(&mut *tx).await?
+    .fetch_optional(&mut *tx)
+    .await?
     .context("PG owner operator found no authoritative canonical Truth run")?;
     ensure!(
-        run.get::<String,_>("context_key") == attested.command.context_key
-            && run.get::<String,_>("workflow_run_id") == request.parent_workflow_run_id
-            && run.get::<String,_>("workflow_type") == "seo_site_build"
-            && matches!(run.get::<String,_>("status").as_str(),
-                "verifying" | "pending_hitl"),
+        run.get::<String, _>("context_key") == attested.command.context_key
+            && run.get::<String, _>("workflow_run_id") == request.parent_workflow_run_id
+            && run.get::<String, _>("workflow_type") == "seo_site_build"
+            && matches!(
+                run.get::<String, _>("status").as_str(),
+                "verifying" | "pending_hitl"
+            ),
         "generic PG owner is not an approved tenant/site-build Truth-run experiment"
     );
     let source_hash = locked_source_hash(&mut tx, &attested.command.context_key).await?;
-    let tenant_ready: bool = sqlx::query_scalar(
-        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)")
-        .bind(tenant)
-        .bind(&attested.command.context_key)
-        .bind(request.canonical_run_id)
-        .fetch_one(&mut *tx).await?;
-    ensure!(tenant_ready, "source and HITL rows lack authoritative PG tenant ownership");
+    let tenant_ready: bool =
+        sqlx::query_scalar("SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)")
+            .bind(tenant)
+            .bind(&attested.command.context_key)
+            .bind(request.canonical_run_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    ensure!(
+        tenant_ready,
+        "source and HITL rows lack authoritative PG tenant ownership"
+    );
     let attestation = V4TemporalAttestation {
         parent_workflow_id: request.parent_workflow_id.clone(),
         parent_workflow_run_id: request.parent_workflow_run_id.clone(),
@@ -305,7 +380,10 @@ async fn insert_admission(
     };
     let checked = &attested.invocation.checked_dispatch;
     let port = PortId::from(INPUT_PORT);
-    let bound = attested.invocation.bound_inputs.get(&port)
+    let bound = attested
+        .invocation
+        .bound_inputs
+        .get(&port)
         .context("PG owner admission lacked its checked bound input")?;
     let bound_bytes = serde_json::to_vec(bound)?;
     let invocation_sha256 = sha256_pg(&mut tx, &attested.exact_invocation_bytes).await?;
@@ -351,16 +429,23 @@ async fn insert_admission(
     .bind(command_sha256)
     .bind(attestation_sha256)
     .bind(attested.child_started_event_id)
-    .fetch_one(&mut *tx).await?;
-    ensure!(inserted == request.admission_id, "PG rev5 admission identity mismatch");
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        inserted == request.admission_id,
+        "PG rev5 admission identity mismatch"
+    );
     tx.commit().await?;
-    println!("{}", serde_json::json!({
-        "operation": "issue_pg_owner_v1",
-        "admission_id": inserted,
-        "status": "issued",
-        "checked_execution_key": checked.execution_key,
-        "child_workflow_run_id": request.child_workflow_run_id
-    }));
+    println!(
+        "{}",
+        serde_json::json!({
+            "operation": "issue_pg_owner_v1",
+            "admission_id": inserted,
+            "status": "issued",
+            "checked_execution_key": checked.execution_key,
+            "child_workflow_run_id": request.child_workflow_run_id
+        })
+    );
     Ok(())
 }
 
@@ -369,8 +454,11 @@ async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
     let url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")?;
     let client = temporal_gateway::connect_client(
-        &url, format!("alegria-pg-owner-signal-{}", std::process::id()), &namespace,
-    ).await?;
+        &url,
+        format!("alegria-pg-owner-signal-{}", std::process::id()),
+        &namespace,
+    )
+    .await?;
     WorkflowExecutionInfo::builder()
         .namespace(namespace)
         .workflow_id(request.child_workflow_id.clone())
@@ -379,35 +467,45 @@ async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
         .bind_untyped(client)
         .signal(
             UntypedSignal::<UntypedWorkflow>::new("operator_admission_ready_v5"),
-            RawValue::default(), WorkflowSignalOptions::default(),
-        ).await.context("signal PG native child AFTER committed revision-5 admission")
+            RawValue::default(),
+            WorkflowSignalOptions::default(),
+        )
+        .await
+        .context("signal PG native child AFTER committed revision-5 admission")
 }
 
 pub async fn issue_from_file(path: &Path) -> Result<()> {
-    let bytes = fs::read(path).with_context(|| format!("read PG owner locator {}",path.display()))?;
+    let bytes =
+        fs::read(path).with_context(|| format!("read PG owner locator {}", path.display()))?;
     let request: IssueRequest = serde_json::from_slice(&bytes)
         .context("decode strict locator-only PG owner admission request")?;
     ensure!(
         (1..=MAX_ADMISSION_SECONDS).contains(&request.expires_in_seconds)
-            && !request.admission_id.is_nil() && !request.canonical_run_id.is_nil()
+            && !request.admission_id.is_nil()
+            && !request.canonical_run_id.is_nil()
             && Uuid::parse_str(&request.parent_workflow_run_id).is_ok()
             && Uuid::parse_str(&request.child_workflow_run_id).is_ok()
             && request.parent_workflow_id == request.canonical_run_id.to_string()
-            && request.child_workflow_id.starts_with(GENERIC_CHILD_ID_PREFIX),
+            && request
+                .child_workflow_id
+                .starts_with(GENERIC_CHILD_ID_PREFIX),
         "PG owner issue request contains invalid canonical IDs/expiry"
     );
     let build_id = env::var("PG_OWNER_EXPECTED_BUILD_ID")
         .context("PG owner operator must pin explicit trusted build ID")?;
-    ensure!(!build_id.trim().is_empty() && build_id.trim() == build_id,
-        "untrusted blank PG owner build ID");
+    ensure!(
+        !build_id.trim().is_empty() && build_id.trim() == build_id,
+        "untrusted blank PG owner build ID"
+    );
     let attested = attest_from_server(&request, &build_id).await?;
     let tenant = env::var("PG_EFFECT_OPERATOR_TENANT_ID")
         .context("PG owner operator must configure authoritative tenant")?;
     let (pool, _) =
         super::operator::operator_pool_with_enable_flag("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1")
-        .await?;
+            .await?;
     insert_admission(&pool, &request, &attested, &tenant).await?;
-    signal_after_commit(&request).await
+    signal_after_commit(&request)
+        .await
         .context("PG rev5 admission committed but Signal failed; manual review required")
 }
 
@@ -425,12 +523,19 @@ mod tests {
             event_id: 1,
             attributes: Some(Attributes::WorkflowExecutionStartedEventAttributes(
                 WorkflowExecutionStartedEventAttributes {
-                    workflow_type: Some(WorkflowType { name: workflow_type.into() }),
-                    task_queue: Some(TaskQueue { name: queue.into(), ..Default::default() }),
-                    input: Some(Payloads { payloads: vec![Payload {
-                        data: b"forged-self-consistent-input".to_vec().into(),
+                    workflow_type: Some(WorkflowType {
+                        name: workflow_type.into(),
+                    }),
+                    task_queue: Some(TaskQueue {
+                        name: queue.into(),
                         ..Default::default()
-                    }] }),
+                    }),
+                    input: Some(Payloads {
+                        payloads: vec![Payload {
+                            data: b"forged-self-consistent-input".to_vec().into(),
+                            ..Default::default()
+                        }],
+                    }),
                     ..Default::default()
                 },
             )),
@@ -440,7 +545,10 @@ mod tests {
 
     #[test]
     fn generic_child_prefix_is_not_a_legacy_pg_workflow() {
-        assert_ne!(OWNER_OPERATION_CHILD_TYPE_V1, "PgTruthReviewReconcileV4Workflow");
+        assert_ne!(
+            OWNER_OPERATION_CHILD_TYPE_V1,
+            "PgTruthReviewReconcileV4Workflow"
+        );
         assert_ne!(PG_OWNER_TASK_QUEUE_V1, "alegria-pg-command-v3");
         assert!(GENERIC_CHILD_ID_PREFIX.starts_with("alegria-owner-operation-v1-"));
     }
@@ -462,6 +570,7 @@ mod tests {
             &started(OWNER_OPERATION_CHILD_TYPE_V1, PG_OWNER_TASK_QUEUE_V1),
             &request,
             "trusted-build-id"
-        ).is_err());
+        )
+        .is_err());
     }
 }

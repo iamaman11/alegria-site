@@ -37,7 +37,11 @@ struct Attested {
     parent_child_started_event_id: i64,
 }
 
-pub(super) fn start_payload(history: &History, workflow_type: &str, queue: &str) -> Result<Vec<u8>> {
+pub(super) fn start_payload(
+    history: &History,
+    workflow_type: &str,
+    queue: &str,
+) -> Result<Vec<u8>> {
     let first = history
         .events
         .first()

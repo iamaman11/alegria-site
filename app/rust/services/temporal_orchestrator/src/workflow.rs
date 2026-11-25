@@ -248,7 +248,9 @@ impl AlegriaOperationDagV1Workflow {
             // Native Temporal SDK Input/Output are typed owner-neutral
             // envelopes; the owner separately decodes concrete Rust DTOs.
             let result: OwnerResultV1 = started.result().await.map_err(workflow_failure)?;
-            machine.advance_owner_result(result).map_err(workflow_failure)?;
+            machine
+                .advance_owner_result(result)
+                .map_err(workflow_failure)?;
         }
         machine.finish().map_err(workflow_failure)
     }

@@ -11,9 +11,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    checked_execution_key, ArtifactBinding, ArtifactId, ArtifactSchema, CheckedDispatch, ContractCatalog,
-    ContractHash, ExecutionPlan, OperationContract, OperationInstanceId, OperationOwnerId,
-    OperationRef, PlanError, PortId, RunScope, TemporalExecutionIdentityV4,
+    checked_execution_key, ArtifactBinding, ArtifactId, ArtifactSchema, CheckedDispatch,
+    ContractCatalog, ContractHash, ExecutionPlan, OperationContract, OperationInstanceId,
+    OperationOwnerId, OperationRef, PlanError, PortId, RunScope, TemporalExecutionIdentityV4,
 };
 
 pub const OPERATION_DAG_RUN_SCHEMA_REVISION_V6: u16 = 6;
@@ -146,10 +146,7 @@ pub enum RouteCatalogError {
 }
 
 impl OwnerInvocationV1 {
-    pub fn verify_integrity(
-        &self,
-        catalog: &TrustedRouteCatalog,
-    ) -> Result<(), RouteCatalogError> {
+    pub fn verify_integrity(&self, catalog: &TrustedRouteCatalog) -> Result<(), RouteCatalogError> {
         if self.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
             || self.parent.workflow_id.trim().is_empty()
             || self.parent.run_id.trim().is_empty()
@@ -157,8 +154,12 @@ impl OwnerInvocationV1 {
         {
             return Err(RouteCatalogError::InvalidInvocation);
         }
-        let contract = catalog.catalog().contract(&self.checked_dispatch.operation)
-            .ok_or_else(|| RouteCatalogError::Unregistered(self.checked_dispatch.operation.clone()))?;
+        let contract = catalog
+            .catalog()
+            .contract(&self.checked_dispatch.operation)
+            .ok_or_else(|| {
+                RouteCatalogError::Unregistered(self.checked_dispatch.operation.clone())
+            })?;
         catalog.route_for_dispatch(&self.checked_dispatch)?;
         if self.bound_inputs.len() != contract.inputs.len()
             || self.bound_inputs.keys().collect::<BTreeSet<_>>()
@@ -179,9 +180,7 @@ impl OwnerInvocationV1 {
                 return Err(RouteCatalogError::InvalidInvocation);
             }
         }
-        let bytes = canonical_owner_dispatch_input_bytes(
-            &self.bound_inputs, &self.command_bytes,
-        )?;
+        let bytes = canonical_owner_dispatch_input_bytes(&self.bound_inputs, &self.command_bytes)?;
         let digest = blake3::hash(&bytes).to_hex().to_string();
         if digest != self.checked_dispatch.input_hash
             || checked_execution_key(&self.checked_dispatch, &digest)
@@ -202,7 +201,9 @@ impl OwnerResultV1 {
         dispatch: &CheckedDispatch,
         catalog: &TrustedRouteCatalog,
     ) -> Result<(), RouteCatalogError> {
-        let contract = catalog.catalog().contract(&dispatch.operation)
+        let contract = catalog
+            .catalog()
+            .contract(&dispatch.operation)
             .ok_or_else(|| RouteCatalogError::Unregistered(dispatch.operation.clone()))?;
         catalog.route_for_dispatch(dispatch)?;
         if self.dispatch_execution_key != dispatch.execution_key
@@ -263,9 +264,13 @@ impl TrustedRouteCatalog {
         &self,
         dispatch: &CheckedDispatch,
     ) -> Result<&PinnedOwnerRouteV1, RouteCatalogError> {
-        let route = self.routes.get(&dispatch.operation)
+        let route = self
+            .routes
+            .get(&dispatch.operation)
             .ok_or_else(|| RouteCatalogError::Unregistered(dispatch.operation.clone()))?;
-        let contract = self.contracts.contract(&dispatch.operation)
+        let contract = self
+            .contracts
+            .contract(&dispatch.operation)
             .ok_or_else(|| RouteCatalogError::Unregistered(dispatch.operation.clone()))?;
         if route.owner != dispatch.owner
             || contract.owner != dispatch.owner
@@ -273,22 +278,27 @@ impl TrustedRouteCatalog {
             || contract.idempotency != dispatch.idempotency
             || route.contract_hash != contract.fingerprint()?
         {
-            return Err(RouteCatalogError::MismatchedDispatch(dispatch.operation.clone()));
+            return Err(RouteCatalogError::MismatchedDispatch(
+                dispatch.operation.clone(),
+            ));
         }
         Ok(route)
     }
 
     /// Require exact set equality, not merely a matching subset: a forged
     /// extra route could otherwise be recorded and reinterpreted on replay.
-    pub fn validate_run_routes(&self, run: &OperationDagRunV6)
-        -> Result<(), RouteCatalogError>
-    {
+    pub fn validate_run_routes(&self, run: &OperationDagRunV6) -> Result<(), RouteCatalogError> {
         if run.schema_revision != OPERATION_DAG_RUN_SCHEMA_REVISION_V6 {
             return Err(RouteCatalogError::UnsupportedRunSchema(run.schema_revision));
         }
-        let used: BTreeSet<_> = run.owner_commands.values()
-            .map(|command| command.operation.clone()).collect();
-        let expected: Vec<_> = self.routes.iter()
+        let used: BTreeSet<_> = run
+            .owner_commands
+            .values()
+            .map(|command| command.operation.clone())
+            .collect();
+        let expected: Vec<_> = self
+            .routes
+            .iter()
             .filter(|(operation, _)| used.contains(*operation))
             .map(|(_, route)| route.clone())
             .collect();
@@ -304,8 +314,12 @@ impl TrustedRouteCatalog {
     ) -> Result<Vec<PinnedOwnerRouteV1>, RouteCatalogError> {
         let used: BTreeSet<_> = operations.into_iter().cloned().collect();
         used.iter()
-            .map(|operation| self.routes.get(operation).cloned()
-                .ok_or_else(|| RouteCatalogError::Unregistered(operation.clone())))
+            .map(|operation| {
+                self.routes
+                    .get(operation)
+                    .cloned()
+                    .ok_or_else(|| RouteCatalogError::Unregistered(operation.clone()))
+            })
             .collect()
     }
 }

@@ -491,7 +491,9 @@ pub fn validate_pg_owner_invocation_v1(
     let input: ReconcileTruthReviewsInput = serde_json::from_slice(&invocation.command_bytes)?;
     validate(&input)?;
     if serde_json::to_vec(&input)? != invocation.command_bytes {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.canonical_command"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v5.canonical_command",
+        ));
     }
     let checked = &invocation.checked_dispatch;
     let port = PortId::from(INPUT_PORT);
@@ -506,8 +508,7 @@ pub fn validate_pg_owner_invocation_v1(
             "v5.unattested_produced_artifact",
         ));
     }
-    let artifact: TruthReviewScopeArtifactV1 =
-        serde_json::from_slice(&bound.artifact.payload)?;
+    let artifact: TruthReviewScopeArtifactV1 = serde_json::from_slice(&bound.artifact.payload)?;
     if serde_json::to_vec(&artifact)? != bound.artifact.payload
         || artifact.run_id != input.run_id
         || artifact.context_key != input.context_key
@@ -522,7 +523,9 @@ pub fn validate_pg_owner_invocation_v1(
         || contract.inputs.get(&port) != Some(&bound.artifact.schema)
         || Uuid::parse_str(&invocation.parent.run_id).is_err()
     {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.owner_binding"));
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v5.owner_binding",
+        ));
     }
     Ok(input)
 }
@@ -540,10 +543,10 @@ pub async fn execute_admitted_reconcile_owner_v1(
     use truth_domain::review_effect_contract::INPUT_PORT;
 
     let input = validate_pg_owner_invocation_v1(invocation)?;
-    if child_workflow_id.trim().is_empty()
-        || Uuid::parse_str(child_workflow_run_id).is_err()
-    {
-        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.actual_child"));
+    if child_workflow_id.trim().is_empty() || Uuid::parse_str(child_workflow_run_id).is_err() {
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v5.actual_child",
+        ));
     }
     assert_unprivileged_pg_effect_role(pool).await?;
     let fingerprint = contract_fingerprint()?;

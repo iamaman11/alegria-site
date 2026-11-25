@@ -24,8 +24,8 @@ use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 use futures_util as _;
 use temporalio_common as _;
 
-mod qdrant_child_wire_json;
 mod owner_catalog;
+mod qdrant_child_wire_json;
 mod replay;
 mod workflow;
 

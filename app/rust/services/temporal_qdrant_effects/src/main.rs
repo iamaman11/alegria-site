@@ -409,7 +409,9 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if arg == std::ffi::OsStr::new("--replay-history-v2") {
-            let file = args.next().context("--replay-history-v2 requires real History JSON")?;
+            let file = args
+                .next()
+                .context("--replay-history-v2 requires real History JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
             owner_v2::replay_history(std::path::Path::new(&file)).await?;
             println!("CI_TEMPORAL_QDRANT_EFFECT_V2_REPLAY=PASS");
@@ -430,12 +432,16 @@ async fn main() -> Result<()> {
             return operator::resignal_from_file(std::path::Path::new(&file)).await;
         }
         if arg == std::ffi::OsStr::new("--operator-issue-v2") {
-            let file = args.next().context("--operator-issue-v2 requires exact-run locator JSON")?;
+            let file = args
+                .next()
+                .context("--operator-issue-v2 requires exact-run locator JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected V2 operator arguments");
             return operator_v2::issue_from_file(std::path::Path::new(&file)).await;
         }
         if arg == std::ffi::OsStr::new("--operator-resignal-v2") {
-            let file = args.next().context("--operator-resignal-v2 requires exact-run locator JSON")?;
+            let file = args
+                .next()
+                .context("--operator-resignal-v2 requires exact-run locator JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected V2 operator arguments");
             return operator_v2::resignal_from_file(std::path::Path::new(&file)).await;
         }
@@ -490,7 +496,10 @@ async fn main() -> Result<()> {
         .fetch_one(&pool)
         .await
         .context("V2 SQL schema and least-privileged Activity LOGIN must be ready")?;
-        anyhow::ensure!(!can_admit_v2, "Qdrant V2 Activity cannot hold operator INSERT privilege");
+        anyhow::ensure!(
+            !can_admit_v2,
+            "Qdrant V2 Activity cannot hold operator INSERT privilege"
+        );
         let mut command_opts =
             WorkerOptions::new(qdrant_contracts::QDRANT_OWNER_COMMAND_QUEUE_V2).build();
         owner_v2::register_command(&mut command_opts)?;

@@ -21,16 +21,18 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     canonical_owner_dispatch_input_bytes, AdmittedArtifactV1, ArtifactBinding, ArtifactId,
-    BoundArtifactV1, CheckedDispatch, DispatchAttempt, OperationDagRunV6,
-    OperationInstanceId, OwnerInvocationV1, OwnerResultV1, PinnedOwnerRouteV1, PlanError,
-    PlanHash, PortId, RouteCatalogError, TemporalExecutionIdentityV4, TrustedRouteCatalog,
-    ValidatedPlan, OWNER_INVOCATION_SCHEMA_REVISION,
+    BoundArtifactV1, CheckedDispatch, DispatchAttempt, OperationDagRunV6, OperationInstanceId,
+    OwnerInvocationV1, OwnerResultV1, PinnedOwnerRouteV1, PlanError, PlanHash, PortId,
+    RouteCatalogError, TemporalExecutionIdentityV4, TrustedRouteCatalog, ValidatedPlan,
+    OWNER_INVOCATION_SCHEMA_REVISION,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::{enforce_json_budget, OperationRunError, PURE_DAG_MAX_INPUT_BYTES,
-    PURE_DAG_MAX_NODES, PURE_DAG_MAX_RESULT_BYTES};
+use super::{
+    enforce_json_budget, OperationRunError, PURE_DAG_MAX_INPUT_BYTES, PURE_DAG_MAX_NODES,
+    PURE_DAG_MAX_RESULT_BYTES,
+};
 
 #[derive(Debug, Error)]
 pub enum GenericDagError {
@@ -93,13 +95,16 @@ impl OperationDagMachine {
             return Err(OperationRunError::ResourceBudgetExceeded {
                 resource: "operation_nodes",
                 limit: PURE_DAG_MAX_NODES,
-            }.into());
+            }
+            .into());
         }
         enforce_json_budget(&run, PURE_DAG_MAX_INPUT_BYTES, "generic_dag_input")?;
         routes.validate_run_routes(&run)?;
         let validated = run.plan.validate(routes.catalog())?;
         for (id, expected) in &run.plan.external_artifacts {
-            let actual = run.admitted.get(id)
+            let actual = run
+                .admitted
+                .get(id)
                 .ok_or_else(|| GenericDagError::InvalidArtifact(id.clone()))?;
             if actual.schema != expected.schema
                 || actual.scope != expected.scope
@@ -111,30 +116,43 @@ impl OperationDagMachine {
         }
         if run.admitted.len() != run.plan.external_artifacts.len() {
             return Err(GenericDagError::InvalidArtifact(
-                run.admitted.keys().find(|key|
-                    !run.plan.external_artifacts.contains_key(*key))
-                    .cloned().unwrap_or_else(|| ArtifactId::from("missing-external")),
+                run.admitted
+                    .keys()
+                    .find(|key| !run.plan.external_artifacts.contains_key(*key))
+                    .cloned()
+                    .unwrap_or_else(|| ArtifactId::from("missing-external")),
             ));
         }
         // Each operation, not only externally effectful operations, has one
         // trusted owner command. The kernel knows no provider-specific type.
         if run.owner_commands.len() != run.plan.nodes.len() {
             return Err(GenericDagError::InvalidCommand(
-                run.plan.nodes.first().expect("nonempty DAG").instance.clone(),
+                run.plan
+                    .nodes
+                    .first()
+                    .expect("nonempty DAG")
+                    .instance
+                    .clone(),
             ));
         }
         let mut seen = BTreeSet::new();
         for node in &run.plan.nodes {
-            let command = run.owner_commands.get(&node.instance)
+            let command = run
+                .owner_commands
+                .get(&node.instance)
                 .ok_or_else(|| GenericDagError::InvalidCommand(node.instance.clone()))?;
-            let contract = routes.catalog().contract(&node.operation)
+            let contract = routes
+                .catalog()
+                .contract(&node.operation)
                 .ok_or_else(|| PlanError::UnknownOperation(node.operation.clone()))?;
             if command.operation != node.operation
                 || command.owner != contract.owner
                 || command.contract_hash != contract.fingerprint()?
                 || command.command_bytes.is_empty()
             {
-                return Err(GenericDagError::CommandContractMismatch(node.instance.clone()));
+                return Err(GenericDagError::CommandContractMismatch(
+                    node.instance.clone(),
+                ));
             }
             if !seen.insert(node.instance.clone()) {
                 return Err(GenericDagError::InvalidCommand(node.instance.clone()));
@@ -163,11 +181,22 @@ impl OperationDagMachine {
         &self,
     ) -> Result<(CheckedDispatch, BTreeMap<PortId, BoundArtifactV1>), GenericDagError> {
         let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
-        let node = self.run.plan.nodes.iter()
-            .find(|node| &node.instance == instance).expect("validated node");
-        let contract = self.routes.catalog().contract(&node.operation)
+        let node = self
+            .run
+            .plan
+            .nodes
+            .iter()
+            .find(|node| &node.instance == instance)
+            .expect("validated node");
+        let contract = self
+            .routes
+            .catalog()
+            .contract(&node.operation)
             .expect("validated owner contract");
-        let command = self.run.owner_commands.get(instance)
+        let command = self
+            .run
+            .owner_commands
+            .get(instance)
             .expect("preflight command");
         let mut bound = BTreeMap::new();
         for (port, source) in &node.inputs {
@@ -175,7 +204,9 @@ impl OperationDagMachine {
                 ArtifactBinding::External { artifact }
                 | ArtifactBinding::Produced { artifact, .. } => artifact,
             };
-            let actual = self.artifacts.get(id)
+            let actual = self
+                .artifacts
+                .get(id)
                 .ok_or_else(|| GenericDagError::MissingProducedArtifact(id.clone()))?;
             if contract.inputs.get(port) != Some(&actual.schema)
                 || actual.scope != self.run.plan.scope
@@ -183,18 +214,20 @@ impl OperationDagMachine {
             {
                 return Err(GenericDagError::InvalidArtifact(id.clone()));
             }
-            bound.insert(port.clone(), BoundArtifactV1 {
-                artifact_id: id.clone(),
-                source: source.clone(),
-                artifact: actual.clone(),
-            });
+            bound.insert(
+                port.clone(),
+                BoundArtifactV1 {
+                    artifact_id: id.clone(),
+                    source: source.clone(),
+                    artifact: actual.clone(),
+                },
+            );
         }
-        let actual_bytes = canonical_owner_dispatch_input_bytes(
-            &bound, &command.command_bytes,
-        ).map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
-        let dispatch = self.validated.checked_dispatch(
-            instance, &actual_bytes, DispatchAttempt::First,
-        )?;
+        let actual_bytes = canonical_owner_dispatch_input_bytes(&bound, &command.command_bytes)
+            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+        let dispatch =
+            self.validated
+                .checked_dispatch(instance, &actual_bytes, DispatchAttempt::First)?;
         self.routes.route_for_dispatch(&dispatch)?;
         Ok((dispatch, bound))
     }
@@ -204,7 +237,10 @@ impl OperationDagMachine {
         parent: TemporalExecutionIdentityV4,
     ) -> Result<(PinnedOwnerRouteV1, OwnerInvocationV1), GenericDagError> {
         let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
-        let command = self.run.owner_commands.get(instance)
+        let command = self
+            .run
+            .owner_commands
+            .get(instance)
             .expect("preflight owner command");
         let (checked, bound_inputs) = self.checked_input()?;
         let route = self.routes.route_for_dispatch(&checked)?.clone();
@@ -225,15 +261,21 @@ impl OperationDagMachine {
     /// Budget-check the projected *entire* receipt before publishing any
     /// artifact, because a finish-only budget check would be too late to stop
     /// subsequent external effects. Already committed owners cannot roll back.
-    pub fn advance_owner_result(&mut self, result: OwnerResultV1)
-        -> Result<(), GenericDagError>
-    {
-        let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?.clone();
+    pub fn advance_owner_result(&mut self, result: OwnerResultV1) -> Result<(), GenericDagError> {
+        let instance = self
+            .next_instance()
+            .ok_or(GenericDagError::Incomplete)?
+            .clone();
         let (checked, _) = self.checked_input()?;
         result.verify_integrity(&checked, &self.routes)?;
         enforce_json_budget(&result, PURE_DAG_MAX_RESULT_BYTES, "owner_result_bytes")?;
-        let node = self.run.plan.nodes.iter()
-            .find(|node| node.instance == instance).expect("validated DAG node");
+        let node = self
+            .run
+            .plan
+            .nodes
+            .iter()
+            .find(|node| node.instance == instance)
+            .expect("validated DAG node");
         let mut next_artifacts = self.artifacts.clone();
         for (port, value) in &result.outputs {
             let id = node.outputs.get(port).expect("validated output port");
@@ -250,8 +292,11 @@ impl OperationDagMachine {
             artifacts: next_artifacts.clone(),
             owner_results: next_results.clone(),
         };
-        enforce_json_budget(&prospective_receipt, PURE_DAG_MAX_RESULT_BYTES,
-            "generic_dag_result")?;
+        enforce_json_budget(
+            &prospective_receipt,
+            PURE_DAG_MAX_RESULT_BYTES,
+            "generic_dag_result",
+        )?;
         self.artifacts = next_artifacts;
         self.owner_results = next_results;
         self.cursor += 1;
@@ -277,26 +322,38 @@ impl OperationDagMachine {
 mod tests {
     use super::*;
     use operation_protocol::{
-        ArtifactSchema, ArtifactTypeId, ContractHash, EffectId, ExecutionPlan,
-        IdempotencyPolicy, OperationContract, OperationId, OperationNode, OperationOwnerId,
-        OperationRef, OwnerCommandWireV1, PLAN_SCHEMA_REVISION, PlanHash, RunScope,
-        OWNER_OPERATION_CHILD_TYPE_V1, OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+        ArtifactSchema, ArtifactTypeId, ContractHash, EffectId, ExecutionPlan, IdempotencyPolicy,
+        OperationContract, OperationId, OperationNode, OperationOwnerId, OperationRef,
+        OwnerCommandWireV1, PlanHash, RunScope, OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+        OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
     };
 
     fn scope() -> RunScope {
-        RunScope { tenant_id: "tenant-a".into(), run_id: "run-a".into() }
+        RunScope {
+            tenant_id: "tenant-a".into(),
+            run_id: "run-a".into(),
+        }
     }
 
     fn schema() -> ArtifactSchema {
-        ArtifactSchema { id: ArtifactTypeId::from("validated.document"), revision: 1 }
+        ArtifactSchema {
+            id: ArtifactTypeId::from("validated.document"),
+            revision: 1,
+        }
     }
 
     fn contract(name: &str, input: bool) -> OperationContract {
         OperationContract {
-            reference: OperationRef { id: OperationId(name.into()), revision: 1 },
+            reference: OperationRef {
+                id: OperationId(name.into()),
+                revision: 1,
+            },
             owner: OperationOwnerId(format!("{name}.owner")),
-            inputs: if input { BTreeMap::from([(PortId::from("source"), schema())]) }
-                else { BTreeMap::new() },
+            inputs: if input {
+                BTreeMap::from([(PortId::from("source"), schema())])
+            } else {
+                BTreeMap::new()
+            },
             outputs: BTreeMap::from([(PortId::from("document"), schema())]),
             invalidates: BTreeSet::new(),
             effects: BTreeSet::new(),
@@ -310,64 +367,98 @@ mod tests {
         for name in ["producer", "consumer"] {
             let contract = contract(name, name == "consumer");
             let hash = contract.fingerprint().unwrap();
-            commands.insert(OperationInstanceId::from(name), OwnerCommandWireV1 {
-                operation: contract.reference.clone(), owner: contract.owner.clone(),
-                contract_hash: hash.clone(), command_bytes: format!("{name}-typed-command").into_bytes(),
-            });
-            routes.register(contract.clone(), PinnedOwnerRouteV1 {
-                operation: contract.reference, owner: contract.owner, contract_hash: hash,
-                workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
-                task_queue: format!("{name}-independent-owner-queue"),
-                build_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
-            }).unwrap();
+            commands.insert(
+                OperationInstanceId::from(name),
+                OwnerCommandWireV1 {
+                    operation: contract.reference.clone(),
+                    owner: contract.owner.clone(),
+                    contract_hash: hash.clone(),
+                    command_bytes: format!("{name}-typed-command").into_bytes(),
+                },
+            );
+            routes
+                .register(
+                    contract.clone(),
+                    PinnedOwnerRouteV1 {
+                        operation: contract.reference,
+                        owner: contract.owner,
+                        contract_hash: hash,
+                        workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+                        task_queue: format!("{name}-independent-owner-queue"),
+                        build_id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                    },
+                )
+                .unwrap();
         }
         let plan = ExecutionPlan {
-            schema_revision: PLAN_SCHEMA_REVISION, scope: scope(),
+            schema_revision: PLAN_SCHEMA_REVISION,
+            scope: scope(),
             allowed_effects: BTreeSet::<EffectId>::new(),
-            external_artifacts: BTreeMap::new(), pinned_contracts: vec![],
+            external_artifacts: BTreeMap::new(),
+            pinned_contracts: vec![],
             nodes: vec![
                 OperationNode {
                     instance: "producer".into(),
                     operation: contract("producer", false).reference,
                     inputs: BTreeMap::new(),
                     outputs: BTreeMap::from([("document".into(), "artifact-a".into())]),
-                    after: BTreeSet::new(), permitted_effects: BTreeSet::new(),
+                    after: BTreeSet::new(),
+                    permitted_effects: BTreeSet::new(),
                 },
                 OperationNode {
                     instance: "consumer".into(),
                     operation: contract("consumer", true).reference,
-                    inputs: BTreeMap::from([("source".into(), ArtifactBinding::Produced {
-                        producer: "producer".into(), port: "document".into(),
-                        artifact: "artifact-a".into(),
-                    })]),
+                    inputs: BTreeMap::from([(
+                        "source".into(),
+                        ArtifactBinding::Produced {
+                            producer: "producer".into(),
+                            port: "document".into(),
+                            artifact: "artifact-a".into(),
+                        },
+                    )]),
                     outputs: BTreeMap::from([("document".into(), "artifact-b".into())]),
-                    after: BTreeSet::new(), permitted_effects: BTreeSet::new(),
+                    after: BTreeSet::new(),
+                    permitted_effects: BTreeSet::new(),
                 },
             ],
             hash: PlanHash::from("unsealed"),
-        }.seal(routes.catalog()).unwrap();
-        let pinned_routes = routes.trusted_snapshot_for(
-            commands.values().map(|command| &command.operation),
-        ).unwrap();
-        (OperationDagRunV6 {
-            schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
-            plan, admitted: BTreeMap::new(), owner_commands: commands, pinned_routes,
-        }, routes)
+        }
+        .seal(routes.catalog())
+        .unwrap();
+        let pinned_routes = routes
+            .trusted_snapshot_for(commands.values().map(|command| &command.operation))
+            .unwrap();
+        (
+            OperationDagRunV6 {
+                schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+                plan,
+                admitted: BTreeMap::new(),
+                owner_commands: commands,
+                pinned_routes,
+            },
+            routes,
+        )
     }
 
     fn parent() -> TemporalExecutionIdentityV4 {
         TemporalExecutionIdentityV4 {
-            workflow_id: "run-a".into(), run_id: "temporal-server-run".into(),
+            workflow_id: "run-a".into(),
+            run_id: "temporal-server-run".into(),
         }
     }
 
     fn result(invocation: &OwnerInvocationV1, payload: &[u8]) -> OwnerResultV1 {
         OwnerResultV1 {
             dispatch_execution_key: invocation.checked_dispatch.execution_key.clone(),
-            outputs: BTreeMap::from([("document".into(), AdmittedArtifactV1 {
-                schema: schema(), scope: scope(), provenance: "attested-child-receipt".into(),
-                payload: payload.to_vec(),
-            })]),
+            outputs: BTreeMap::from([(
+                "document".into(),
+                AdmittedArtifactV1 {
+                    schema: schema(),
+                    scope: scope(),
+                    provenance: "attested-child-receipt".into(),
+                    payload: payload.to_vec(),
+                },
+            )]),
             receipt_bytes: b"independent-operator-receipt".to_vec(),
         }
     }
@@ -378,35 +469,56 @@ mod tests {
         let mut machine = OperationDagMachine::new("run-a", run, routes).unwrap();
         let (_, producer) = machine.next_owner_invocation(parent()).unwrap();
         assert!(producer.bound_inputs.is_empty());
-        machine.advance_owner_result(result(&producer, b"real-owner-payload")).unwrap();
+        machine
+            .advance_owner_result(result(&producer, b"real-owner-payload"))
+            .unwrap();
 
         let (_, consumer) = machine.next_owner_invocation(parent()).unwrap();
         let binding = consumer.bound_inputs.get(&PortId::from("source")).unwrap();
         assert_eq!(binding.artifact_id, ArtifactId::from("artifact-a"));
         assert_eq!(binding.artifact.payload, b"real-owner-payload");
-        assert_eq!(binding.source, ArtifactBinding::Produced {
-            producer: "producer".into(), port: "document".into(),
-            artifact: "artifact-a".into(),
-        });
-        assert_ne!(producer.checked_dispatch.execution_key, consumer.checked_dispatch.execution_key);
-        machine.advance_owner_result(result(&consumer, b"second-owner-output")).unwrap();
+        assert_eq!(
+            binding.source,
+            ArtifactBinding::Produced {
+                producer: "producer".into(),
+                port: "document".into(),
+                artifact: "artifact-a".into(),
+            }
+        );
+        assert_ne!(
+            producer.checked_dispatch.execution_key,
+            consumer.checked_dispatch.execution_key
+        );
+        machine
+            .advance_owner_result(result(&consumer, b"second-owner-output"))
+            .unwrap();
         let completed = machine.finish().unwrap();
-        assert_eq!(completed.artifacts[&ArtifactId::from("artifact-b")].payload,
-            b"second-owner-output");
+        assert_eq!(
+            completed.artifacts[&ArtifactId::from("artifact-b")].payload,
+            b"second-owner-output"
+        );
     }
 
     #[test]
     fn preflight_rejects_forged_route_and_owner_contract() {
         let (mut run, routes) = setup();
         run.pinned_routes[0].task_queue = "attacker-queue".into();
-        assert!(matches!(OperationDagMachine::new("run-a", run, routes),
-            Err(GenericDagError::Route(RouteCatalogError::UntrustedRouteSnapshot))));
+        assert!(matches!(
+            OperationDagMachine::new("run-a", run, routes),
+            Err(GenericDagError::Route(
+                RouteCatalogError::UntrustedRouteSnapshot
+            ))
+        ));
 
         let (mut run, routes) = setup();
-        run.owner_commands.get_mut(&OperationInstanceId::from("producer"))
-            .unwrap().contract_hash = ContractHash::from("forged");
-        assert!(matches!(OperationDagMachine::new("run-a", run, routes),
-            Err(GenericDagError::CommandContractMismatch(_))));
+        run.owner_commands
+            .get_mut(&OperationInstanceId::from("producer"))
+            .unwrap()
+            .contract_hash = ContractHash::from("forged");
+        assert!(matches!(
+            OperationDagMachine::new("run-a", run, routes),
+            Err(GenericDagError::CommandContractMismatch(_))
+        ));
     }
 
     #[test]
@@ -415,28 +527,49 @@ mod tests {
         let mut machine = OperationDagMachine::new("run-a", run, routes).unwrap();
         let (_, producer) = machine.next_owner_invocation(parent()).unwrap();
         let mut forged = result(&producer, b"real-owner-payload");
-        forged.outputs.get_mut(&PortId::from("document")).unwrap().schema.revision = 4;
-        assert!(matches!(machine.advance_owner_result(forged),
-            Err(GenericDagError::Route(RouteCatalogError::InvalidOwnerResult))));
+        forged
+            .outputs
+            .get_mut(&PortId::from("document"))
+            .unwrap()
+            .schema
+            .revision = 4;
+        assert!(matches!(
+            machine.advance_owner_result(forged),
+            Err(GenericDagError::Route(
+                RouteCatalogError::InvalidOwnerResult
+            ))
+        ));
 
         let mut forged = result(&producer, b"real-owner-payload");
-        forged.outputs.get_mut(&PortId::from("document")).unwrap().scope.tenant_id = "other".into();
+        forged
+            .outputs
+            .get_mut(&PortId::from("document"))
+            .unwrap()
+            .scope
+            .tenant_id = "other".into();
         assert!(machine.advance_owner_result(forged).is_err());
 
         let mut forged = result(&producer, b"real-owner-payload");
         forged.outputs.clear();
         assert!(machine.advance_owner_result(forged).is_err());
         // Rejections never advance the cursor or publish attacker artifacts.
-        assert_eq!(machine.next_instance(), Some(&OperationInstanceId::from("producer")));
+        assert_eq!(
+            machine.next_instance(),
+            Some(&OperationInstanceId::from("producer"))
+        );
     }
 
     #[test]
     fn rejects_unbound_produced_edge_with_incompatible_static_input_schema() {
         let (mut run, routes) = setup();
-        run.plan.nodes[1].inputs.insert("source".into(), ArtifactBinding::Produced {
-            producer: "producer".into(), port: "document".into(),
-            artifact: "artifact-b".into(),
-        });
+        run.plan.nodes[1].inputs.insert(
+            "source".into(),
+            ArtifactBinding::Produced {
+                producer: "producer".into(),
+                port: "document".into(),
+                artifact: "artifact-b".into(),
+            },
+        );
         run.plan.hash = run.plan.canonical_hash().unwrap();
         assert!(OperationDagMachine::new("run-a", run, routes).is_err());
     }
@@ -447,8 +580,15 @@ mod tests {
         let mut machine = OperationDagMachine::new("run-a", run, routes).unwrap();
         let (_, producer) = machine.next_owner_invocation(parent()).unwrap();
         let excessive = result(&producer, &vec![0xff; PURE_DAG_MAX_RESULT_BYTES]);
-        assert!(matches!(machine.advance_owner_result(excessive),
-            Err(GenericDagError::Run(OperationRunError::ResourceBudgetExceeded { .. }))));
-        assert_eq!(machine.next_instance(), Some(&OperationInstanceId::from("producer")));
+        assert!(matches!(
+            machine.advance_owner_result(excessive),
+            Err(GenericDagError::Run(
+                OperationRunError::ResourceBudgetExceeded { .. }
+            ))
+        ));
+        assert_eq!(
+            machine.next_instance(),
+            Some(&OperationInstanceId::from("producer"))
+        );
     }
 }

@@ -8,10 +8,9 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use operation_protocol::{IdempotencyPolicy, Operation};
 use qdrant_contracts::{
-    QdrantChildOutcomeV1, QdrantKeywordChildInvocationV2,
-    QdrantKeywordChildResultV2, QdrantKeywordProjectionContractV2,
-    QDRANT_CHILD_SCHEMA_REVISION_V2, QDRANT_OWNER_ACTIVITY_QUEUE_V2,
-    QDRANT_OWNER_CHILD_TYPE_V2, QDRANT_OWNER_COMMAND_QUEUE_V2,
+    QdrantChildOutcomeV1, QdrantKeywordChildInvocationV2, QdrantKeywordChildResultV2,
+    QdrantKeywordProjectionContractV2, QDRANT_CHILD_SCHEMA_REVISION_V2,
+    QDRANT_OWNER_ACTIVITY_QUEUE_V2, QDRANT_OWNER_CHILD_TYPE_V2, QDRANT_OWNER_COMMAND_QUEUE_V2,
 };
 use qdrant_effects_core::{execute_admitted_qdrant_projection_v2, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
@@ -20,8 +19,8 @@ use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 use temporalio_sdk::{
-    ActivityCloseTimeouts, ActivityOptions, ApplicationFailure, SyncWorkflowContext,
-    WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult, WorkflowTermination,
+    ActivityCloseTimeouts, ActivityOptions, ApplicationFailure, SyncWorkflowContext, WorkerOptions,
+    WorkflowContext, WorkflowContextView, WorkflowResult, WorkflowTermination,
 };
 
 use super::{admission_probe_activity_error, terminal_activity_error, AdmissionProbeError};
@@ -52,7 +51,10 @@ pub(crate) struct QdrantKeywordProjectionV2Workflow {
 impl QdrantKeywordProjectionV2Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, invocation: QdrantKeywordChildInvocationV2) -> Self {
-        Self { immutable_invocation: invocation, admission_signals_received: 0 }
+        Self {
+            immutable_invocation: invocation,
+            admission_signals_received: 0,
+        }
     }
 
     #[run]
@@ -66,7 +68,8 @@ impl QdrantKeywordProjectionV2Workflow {
         let mut observed = 0;
         loop {
             let previous = observed;
-            ctx.wait_condition(move |s| s.admission_signals_received > previous).await?;
+            ctx.wait_condition(move |s| s.admission_signals_received > previous)
+                .await?;
             observed = ctx.state(|s| s.admission_signals_received);
             let admitted: bool = ctx
                 .start_activity(
@@ -75,13 +78,16 @@ impl QdrantKeywordProjectionV2Workflow {
                     admission_probe_options(),
                 )
                 .await?;
-            if admitted { break; }
+            if admitted {
+                break;
+            }
         }
         ctx.start_activity(
             QdrantV2Activities::materialize_admitted_keyword_v2,
             invocation,
             materialize_options(),
-        ).await
+        )
+        .await
     }
 
     #[signal(name = "operator_admission_ready_qdrant_v2")]
@@ -116,8 +122,10 @@ impl QdrantV2Activities {
         ctx: ActivityContext,
         invocation: QdrantKeywordChildInvocationV2,
     ) -> Result<QdrantKeywordChildResultV2, ActivityError> {
-        if !self.matches_server_admission(&ctx, &invocation)
-            .await.map_err(admission_probe_activity_error)?
+        if !self
+            .matches_server_admission(&ctx, &invocation)
+            .await
+            .map_err(admission_probe_activity_error)?
         {
             return Err(terminal_activity_error(
                 "Qdrant V2 owner has no independently issued exact DAG operator admission",
@@ -127,7 +135,9 @@ impl QdrantV2Activities {
             &self.pool,
             invocation.command.admission_id,
             &invocation.checked_dispatch.execution_key,
-        ).await.map_err(terminal_activity_error)?;
+        )
+        .await
+        .map_err(terminal_activity_error)?;
         Ok(QdrantKeywordChildResultV2 {
             schema_revision: QDRANT_CHILD_SCHEMA_REVISION_V2,
             admission_id: invocation.command.admission_id,
@@ -135,7 +145,9 @@ impl QdrantV2Activities {
             outcome: match outcome {
                 QdrantProjectionOutcomeV1::Applied => QdrantChildOutcomeV1::Applied,
                 QdrantProjectionOutcomeV1::Reconciled => QdrantChildOutcomeV1::Reconciled,
-                QdrantProjectionOutcomeV1::AlreadyConfirmed => QdrantChildOutcomeV1::AlreadyConfirmed,
+                QdrantProjectionOutcomeV1::AlreadyConfirmed => {
+                    QdrantChildOutcomeV1::AlreadyConfirmed
+                }
             },
         })
     }
@@ -149,12 +161,22 @@ impl QdrantV2Activities {
     ) -> std::result::Result<bool, AdmissionProbeError> {
         let info = ctx.info();
         let (actual_id, actual_run_id) = (|| -> Result<(&str, &str)> {
-            let id = info.workflow_id.as_deref().context("missing V2 child Workflow ID")?;
-            let run_id = info.workflow_run_id.as_deref().context("missing V2 child Run ID")?;
+            let id = info
+                .workflow_id
+                .as_deref()
+                .context("missing V2 child Workflow ID")?;
+            let run_id = info
+                .workflow_run_id
+                .as_deref()
+                .context("missing V2 child Run ID")?;
             anyhow::ensure!(
                 info.workflow_type.as_deref() == Some(QDRANT_OWNER_CHILD_TYPE_V2)
                     && info.task_queue == QDRANT_OWNER_ACTIVITY_QUEUE_V2
-                    && id == format!("alegria-qdrant-effect-v2-{}", invocation.command.admission_id),
+                    && id
+                        == format!(
+                            "alegria-qdrant-effect-v2-{}",
+                            invocation.command.admission_id
+                        ),
                 "Qdrant V2 Activity is outside its pinned child Workflow Type/Queue"
             );
             invocation.verify_integrity()?;
@@ -167,7 +189,8 @@ impl QdrantV2Activities {
                 "Qdrant V2 cannot execute a foreign owner, operation revision, or effect set"
             );
             Ok((id, run_id))
-        })().map_err(AdmissionProbeError::Denied)?;
+        })()
+        .map_err(AdmissionProbeError::Denied)?;
         let row = sqlx::query(
             "SELECT child_workflow_id,child_workflow_run_id,parent_workflow_id,
                     parent_workflow_run_id,run_id,tenant_id,context_key,keyword_key,
@@ -178,7 +201,9 @@ impl QdrantV2Activities {
         .fetch_optional(&*self.pool)
         .await
         .map_err(super::classify_admission_sql_error)?;
-        let Some(row) = row else { return Ok(false); };
+        let Some(row) = row else {
+            return Ok(false);
+        };
         (|| -> Result<()> {
             anyhow::ensure!(
                 row.try_get::<String, _>("child_workflow_id")? == actual_id
