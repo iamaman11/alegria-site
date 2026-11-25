@@ -94,9 +94,10 @@ class PgRuntimeOwnerBoundaryTests(unittest.TestCase):
 
 
 class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
-    def test_runtime_exception_is_exact_four_reviewed_files_and_four_sdks(self) -> None:
+    def test_runtime_exception_is_exact_six_reviewed_files_and_four_sdks(self) -> None:
         self.assertEqual({path.name for path in QDRANT_EFFECTS_SDK_SOURCE_FILES},
-                         {"main.rs", "operator.rs", "operator_v2.rs", "owner_v2.rs"})
+                         {"main.rs", "operator.rs", "operator_v2.rs", "owner_v2.rs",
+                          "operator_v3.rs", "owner_generic_v1.rs"})
         self.assertEqual(QDRANT_EFFECTS_RUNTIME_SDKS, {
             "temporalio-sdk", "temporalio-client",
             "temporalio-common", "temporalio-macros",
@@ -116,9 +117,11 @@ class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
     def test_future_runtime_modules_and_domain_crates_cannot_import_sdk(self) -> None:
         for path in (
             QDRANT_EFFECTS_MANIFEST.parent / "src" / "future_effect.rs",
-            QDRANT_EFFECTS_MANIFEST.parent / "src" / "operator_v3.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "operator_v4.rs",
             QDRANT_EFFECTS_MANIFEST.parent / "src" / "owner_v3.rs",
             QDRANT_EFFECTS_MANIFEST.parent / "src" / "nested" / "operator_v2.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "nested" / "operator_v3.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "nested" / "owner_generic_v1.rs",
             RUST_ROOT / "crates" / "qdrant_effects_core" / "src" / "lib.rs",
             RUST_ROOT / "crates" / "operation_protocol" / "src" / "lib.rs",
             RUST_ROOT / "services" / "temporal_pg_effects" / "src" / "operator.rs",
@@ -128,6 +131,15 @@ class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
                 with self.subTest(path=path, sdk=sdk):
                     self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
                         path, re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
+
+    def test_new_generic_owner_files_do_not_allow_other_provider_or_sdk_imports(self) -> None:
+        for filename in ("operator_v3.rs", "owner_generic_v1.rs"):
+            path = QDRANT_EFFECTS_MANIFEST.parent / "src" / filename
+            for forbidden in ("qdrant_client", "neo4rs", "reqwest", "temporalio_sdk_core",
+                              "tokio_postgres", "hyper", "tonic"):
+                with self.subTest(file=filename, forbidden=forbidden):
+                    self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
+                        path, re.compile(rf"\buse\s+{forbidden}::")))
 
     def test_e2e_is_exact_optional_native_temporal_sdk_set(self) -> None:
         self.assertEqual(QDRANT_TEMPORAL_E2E_SDKS, {

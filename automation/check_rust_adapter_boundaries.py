@@ -49,13 +49,17 @@ QDRANT_EFFECTS_RUNTIME_SDKS = frozenset({
 })
 # This dedicated production Activity owner must not become a generic escape
 # hatch for domain crates or any new file added without architectural review.
-# V2's operator and Activity/Workflow are independently reviewed runtime
-# entrypoints, not permission for future modules or another owner to use SDKs.
+# V2 and the generic native V3 operator/owner bridge are separately reviewed
+# runtime entrypoints. The latter attests real server Histories and registers
+# the same typed child Workflow on its own Qdrant-only Task Queue; neither
+# grants future modules or any unrelated provider/direct domain SDK access.
 QDRANT_EFFECTS_SDK_SOURCE_FILES = frozenset({
     (QDRANT_EFFECTS_SRC / "main.rs").resolve(),
     (QDRANT_EFFECTS_SRC / "operator.rs").resolve(),
     (QDRANT_EFFECTS_SRC / "operator_v2.rs").resolve(),
     (QDRANT_EFFECTS_SRC / "owner_v2.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "operator_v3.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "owner_generic_v1.rs").resolve(),
 })
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
 COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
