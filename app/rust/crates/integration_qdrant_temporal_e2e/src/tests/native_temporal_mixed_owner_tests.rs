@@ -502,6 +502,44 @@ fn mixed_v2_install_ci_trusted_catalog(
     trusted_path
 }
 
+/// V2 operator locators inherit the production security boundary: a private
+/// regular file is not enough when an ancestor (such as /tmp, mode 1777) is
+/// writable by another user. Put disposable CI requests under a trusted
+/// checkout ancestor and a dedicated 0700 directory. The old V1 fixture's
+/// temp files are deliberately unaffected.
+#[cfg(feature = "e2e")]
+struct MixedV2PrivateLocatorFiles {
+    root: PathBuf,
+}
+
+#[cfg(feature = "e2e")]
+impl MixedV2PrivateLocatorFiles {
+    fn new() -> Self {
+        assert_eq!(env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+        let workspace = PathBuf::from(env::var("GITHUB_WORKSPACE")
+            .expect("CI must provide trusted checkout ancestry for strict V2 operator files"));
+        assert!(workspace.is_absolute());
+        let root = workspace.join(format!(".ci-native-v2-private-{}", Uuid::new_v4()));
+        fs::create_dir(&root).expect("create CI-only private locator directory");
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+        Self { root }
+    }
+
+    fn request(&self, prefix: &str, contents: &str) -> PathBuf {
+        let file = self.root.join(format!("{prefix}-{}.json", Uuid::new_v4()));
+        fs::write(&file, contents).expect("write typed operator locator in private directory");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        file
+    }
+}
+
+#[cfg(feature = "e2e")]
+impl Drop for MixedV2PrivateLocatorFiles {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
 /// The committed baseline schema deliberately does not auto-enable pilot
 /// owner admissions. Apply each immutable opt-in migration in release order
 /// to a fresh disposable database, not by granting execution in production.
@@ -1704,6 +1742,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     ]);
     let produced_issuer_catalog = mixed_v6_governance_issuer_catalog(&produced_run, &produced_routes);
     let parallel_issuer_catalog = mixed_v6_governance_issuer_catalog(&parallel_run, &parallel_routes);
+    let private_locators = MixedV2PrivateLocatorFiles::new();
     let base_roles = mixed_v6_native_owner_roles(&pg, tenant).await;
     let roles = mixed_v2_native_roles(&pg, tenant, &base_roles).await;
 
@@ -1763,7 +1802,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         ).await.expect("start actual V2 Temporal typed parent");
         let parent_run = parent.info().run_id.clone().expect("server V2 parent Run ID");
         mixed_v2_authorize_business_root(&roles, run, context, &parent_id).await;
-        let governance_request = secret("v2-governance-locator", &serde_json::json!({
+        let governance_request = private_locators.request("v2-governance-locator", &serde_json::json!({
             "canonical_run_id": run_id, "context_key": context,
             "parent_workflow_id": parent_id, "parent_workflow_run_id": parent_run,
             "expires_in_seconds": 600,
@@ -1862,7 +1901,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         let (pg_child_id, pg_child_run, _, _) = classified.iter()
             .find(|(_,_,_,operation)| operation == "pg.vector_projection.read")
             .expect("PG projection owner Child initiated independently of start order");
-        let pg_request = secret("v2-pg-child-locator", &serde_json::json!({
+        let pg_request = private_locators.request("v2-pg-child-locator", &serde_json::json!({
             "admission_id": pg_admission, "canonical_run_id": run_id,
             "parent_workflow_id": parent_id, "parent_workflow_run_id": parent_run,
             "child_workflow_id": pg_child_id, "child_workflow_run_id": pg_child_run,
@@ -1877,7 +1916,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             .env("PG_EFFECT_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
             .env("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE", &temporal.namespace)
             .env_remove("DATABASE_URL").output().unwrap();
-        let forged_pg = secret("v2-forged-pg-child", &serde_json::json!({
+        let forged_pg = private_locators.request("v2-forged-pg-child", &serde_json::json!({
             "admission_id": pg_admission, "canonical_run_id": run_id,
             "parent_workflow_id": parent_id, "parent_workflow_run_id": parent_run,
             "child_workflow_id": pg_child_id,
@@ -1886,7 +1925,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         }).to_string());
         assert!(!pg_issuer(&forged_pg).status.success(),
             "{case}: forged PG server-issued Child Run ID must not create V2 admission");
-        let legacy_parent_pg = secret("v2-reused-legacy-parent", &serde_json::json!({
+        let legacy_parent_pg = private_locators.request("v2-reused-legacy-parent", &serde_json::json!({
             "admission_id": pg_admission, "canonical_run_id": run_id,
             "parent_workflow_id": operation_protocol::operation_dag_parent_workflow_id(
                 &run_id.to_string()),
@@ -1937,7 +1976,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
                 }
             }).await.expect("PG actual Produced result never enabled Qdrant V2 child")
         };
-        let q_request = secret("v2-qdrant-child-locator", &serde_json::json!({
+        let q_request = private_locators.request("v2-qdrant-child-locator", &serde_json::json!({
             "admission_id": q_admission, "canonical_run_id": run_id,
             "parent_workflow_id": parent_id, "parent_workflow_run_id": parent_run,
             "child_workflow_id": q_child_id, "child_workflow_run_id": q_child_run,
@@ -1955,7 +1994,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
             .env_remove("DATABASE_URL").output().unwrap();
         assert!(!q_issuer(&q_request, "foreign-v2-tenant").status.success(),
             "{case}: cross-tenant Qdrant V2 operator must fail closed");
-        let q_wrong = secret("v2-forged-q-child", &serde_json::json!({
+        let q_wrong = private_locators.request("v2-forged-q-child", &serde_json::json!({
             "admission_id": q_admission, "canonical_run_id": run_id,
             "parent_workflow_id": parent_id, "parent_workflow_run_id": parent_run,
             "child_workflow_id": q_child_id,
