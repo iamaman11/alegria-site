@@ -635,8 +635,10 @@ fn v5_duplicate_admission_id_and_different_context_fail_whole_dag_preflight() {
     let OwnerCommandV1::PgTruthReviewReconcileV1(first_command) =
         &repeated.owner_commands[&OperationInstanceId::from("review_a")];
     let repeated_admission = first_command.admission_id;
-    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) =
-        repeated.owner_commands.get_mut(&OperationInstanceId::from("review_b")).unwrap();
+    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) = repeated
+        .owner_commands
+        .get_mut(&OperationInstanceId::from("review_b"))
+        .unwrap();
     second_command.admission_id = repeated_admission;
     assert!(matches!(
         super::super::MixedDagMachineV5::new(&scope().run_id, repeated),
@@ -652,7 +654,8 @@ fn v5_duplicate_admission_id_and_different_context_fail_whole_dag_preflight() {
     distinct_source.payload = serde_json::to_vec(&TruthReviewScopeArtifactV1 {
         run_id: Uuid::from_u128(RUN_ID),
         context_key: distinct_context.into(),
-    }).unwrap();
+    })
+    .unwrap();
     mismatched.plan.external_artifacts.insert(
         distinct_artifact_id.clone(),
         ExternalArtifact {
@@ -661,22 +664,36 @@ fn v5_duplicate_admission_id_and_different_context_fail_whole_dag_preflight() {
             provenance: distinct_source.provenance.clone(),
         },
     );
-    mismatched.admitted.insert(distinct_artifact_id.clone(), distinct_source);
-    let second_node = mismatched.plan.nodes.iter_mut()
+    mismatched
+        .admitted
+        .insert(distinct_artifact_id.clone(), distinct_source);
+    let second_node = mismatched
+        .plan
+        .nodes
+        .iter_mut()
         .find(|node| node.instance == OperationInstanceId::from("review_b"))
         .unwrap();
-    second_node.inputs.insert(PortId::from(INPUT_PORT),
-        ArtifactBinding::External { artifact: distinct_artifact_id });
+    second_node.inputs.insert(
+        PortId::from(INPUT_PORT),
+        ArtifactBinding::External {
+            artifact: distinct_artifact_id,
+        },
+    );
     let mut catalog = semantic_extraction_registry().unwrap();
-    catalog.catalog.register::<ReconcileTruthReviewsContractV1>().unwrap();
+    catalog
+        .catalog
+        .register::<ReconcileTruthReviewsContractV1>()
+        .unwrap();
     mismatched.plan = mismatched.plan.clone().seal(&catalog.catalog).unwrap();
     let new_hash = mismatched.plan.hash.as_str().to_owned();
     for command in mismatched.owner_commands.values_mut() {
         let OwnerCommandV1::PgTruthReviewReconcileV1(value) = command;
         value.plan_hash = new_hash.clone();
     }
-    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) =
-        mismatched.owner_commands.get_mut(&OperationInstanceId::from("review_b")).unwrap();
+    let OwnerCommandV1::PgTruthReviewReconcileV1(second_command) = mismatched
+        .owner_commands
+        .get_mut(&OperationInstanceId::from("review_b"))
+        .unwrap();
     second_command.context_key = distinct_context.into();
     // Both owner commands now have individually valid typed source envelopes.
     // Nonetheless a canonical execution_run owns only one context_key, so
@@ -713,21 +730,26 @@ fn v5_ordered_pg_children_use_distinct_dispatches_and_strict_fanin() {
         let command: ReconcileTruthReviewsInput =
             serde_json::from_slice(&child.invocation.owner_command_bytes).unwrap();
         machine
-            .advance_owner_receipt(truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
-                receipt_id: Uuid::new_v4(),
-                admission_id: command.admission_id,
-                execution_key: child.checked.execution_key.clone(),
-                run_id: command.run_id,
-                context_key: command.context_key,
-                candidate_set_hash: "typed-unit-fixture-not-a-real-pg-hash".into(),
-                created_review_tasks: 0,
-                open_review_tasks: 0,
-            })
+            .advance_owner_receipt(
+                truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
+                    receipt_id: Uuid::new_v4(),
+                    admission_id: command.admission_id,
+                    execution_key: child.checked.execution_key.clone(),
+                    run_id: command.run_id,
+                    context_key: command.context_key,
+                    candidate_set_hash: "typed-unit-fixture-not-a-real-pg-hash".into(),
+                    created_review_tasks: 0,
+                    open_review_tasks: 0,
+                },
+            )
             .unwrap();
     }
     assert_ne!(keys[0], keys[1]);
     let result = machine.finish().unwrap();
-    assert_eq!(result.schema_revision, super::super::ADMITTED_DAG_RECEIPT_SCHEMA_V5);
+    assert_eq!(
+        result.schema_revision,
+        super::super::ADMITTED_DAG_RECEIPT_SCHEMA_V5
+    );
     assert_eq!(result.result.owner_receipts.len(), 2);
     assert_eq!(result.result.artifacts.len(), 3);
 }

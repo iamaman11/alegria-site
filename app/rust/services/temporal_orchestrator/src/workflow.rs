@@ -142,10 +142,8 @@ impl AlegriaAdmittedEffectDagV3Workflow {
                     // exact immutable PG admission. This is not batch auth.
                     let mut started_children = Vec::with_capacity(children.len());
                     for child in children {
-                        let child_id = format!(
-                            "alegria-pg-effect-v4-{}",
-                            child.checked.execution_key
-                        );
+                        let child_id =
+                            format!("alegria-pg-effect-v4-{}", child.checked.execution_key);
                         let options = ChildWorkflowOptions::builder()
                             .workflow_id(child_id)
                             .task_queue(PG_V4_CHILD_COMMAND_QUEUE.to_string())

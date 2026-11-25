@@ -62,16 +62,11 @@ fn enforce_operator_tenant(configured: &str, claimed: &str) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn enforce_authoritative_pg_tenant(
-    pool: &PgPool,
-    tenant: &str,
-) -> Result<()> {
-    let actual: Option<String> = sqlx::query_scalar(
-        "SELECT pipeline.current_session_tenant_v1()",
-    )
-    .fetch_one(pool)
-    .await
-    .context("resolve tenant from authenticated PostgreSQL session LOGIN")?;
+pub(crate) async fn enforce_authoritative_pg_tenant(pool: &PgPool, tenant: &str) -> Result<()> {
+    let actual: Option<String> = sqlx::query_scalar("SELECT pipeline.current_session_tenant_v1()")
+        .fetch_one(pool)
+        .await
+        .context("resolve tenant from authenticated PostgreSQL session LOGIN")?;
     ensure!(
         actual.as_deref() == Some(tenant),
         "operator PostgreSQL LOGIN is not provisioned for requested tenant"
@@ -335,14 +330,13 @@ async fn issue_with_pool(
         .fetch_one(&mut *tx)
         .await
         .context("compute authoritative scoped evidence fingerprint")?;
-    let tenant_ready: bool = sqlx::query_scalar(
-        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
-    )
-    .bind(&request.command.scope.tenant_id)
-    .bind(&request.command.context_key)
-    .bind(request.command.run_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let tenant_ready: bool =
+        sqlx::query_scalar("SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)")
+            .bind(&request.command.scope.tenant_id)
+            .bind(&request.command.context_key)
+            .bind(request.command.run_id)
+            .fetch_one(&mut *tx)
+            .await?;
     ensure!(
         tenant_ready,
         "canonical run, Truth sources or existing HITL rows lack authoritative tenant ownership"

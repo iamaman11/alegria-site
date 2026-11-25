@@ -125,11 +125,17 @@ fn first_started_payload(
 }
 
 fn first_parent_started_payload(parent: &History) -> Result<Vec<u8>> {
-    let first = parent.events.first().context("Temporal parent History is empty")?;
+    let first = parent
+        .events
+        .first()
+        .context("Temporal parent History is empty")?;
     let Some(Attributes::WorkflowExecutionStartedEventAttributes(start)) = &first.attributes else {
         bail!("Temporal parent History does not start with WorkflowExecutionStarted");
     };
-    let parent_type = start.workflow_type.as_ref().map(|value| value.name.as_str());
+    let parent_type = start
+        .workflow_type
+        .as_ref()
+        .map(|value| value.name.as_str());
     let parent_queue = start.task_queue.as_ref().map(|value| value.name.as_str());
     let valid_pair = match (parent_type, parent_queue) {
         (Some(PARENT_TYPE), Some(PARENT_QUEUE)) => (PARENT_TYPE, PARENT_QUEUE),
@@ -568,14 +574,13 @@ async fn insert_attested_admission(
         "V4 server-attested parent does not match live canonical PostgreSQL run"
     );
     let source_hash = locked_source_hash(&mut tx, &attested.command.context_key).await?;
-    let tenant_ready: bool = sqlx::query_scalar(
-        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
-    )
-    .bind(tenant)
-    .bind(&attested.command.context_key)
-    .bind(request.canonical_run_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let tenant_ready: bool =
+        sqlx::query_scalar("SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)")
+            .bind(tenant)
+            .bind(&attested.command.context_key)
+            .bind(request.canonical_run_id)
+            .fetch_one(&mut *tx)
+            .await?;
     ensure!(
         tenant_ready,
         "canonical V4 Truth run, source evidence or HITL rows lack authoritative tenant ownership"

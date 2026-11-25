@@ -17,8 +17,15 @@ DECLARE
     next_scope TEXT;
 BEGIN
     IF TG_OP = 'TRUNCATE' THEN
-        RAISE EXCEPTION 'Truth HITL history cannot be truncated around admitted effects'
-            USING ERRCODE = '23514';
+        -- PostgreSQL's TRUNCATE CASCADE also fires on an *empty* referencing
+        -- table during isolated fixture resets. No Truth history can be
+        -- erased when there are zero rows; ACCESS EXCLUSIVE serializes a
+        -- concurrent writer. Never permit truncating a nonempty HITL queue.
+        IF EXISTS (SELECT 1 FROM site.seo_hitl_tasks) THEN
+            RAISE EXCEPTION 'Truth HITL history cannot be truncated around admitted effects'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
     END IF;
     IF TG_OP <> 'INSERT' AND OLD.task_type = 'truth_candidate_review' THEN
         previous_scope := OLD.scope_signature;

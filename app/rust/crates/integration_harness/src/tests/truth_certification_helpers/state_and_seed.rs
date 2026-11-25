@@ -1,4 +1,11 @@
 async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str) {
+    // Real migrations forbid TRUNCATE of the protected Truth review queue,
+    // including inside a broader site.* CASCADE cleanup. Exercise its ordinary
+    // row-level DELETE lock/fence contract in this isolated E2E database.
+    sqlx::query("DELETE FROM site.seo_hitl_tasks")
+        .execute(pool)
+        .await
+        .unwrap();
     // PostgreSQL owns identifier quoting: tablenames originate from pg_catalog
     // and are never interpolated into client-side SQL. The statement text
     // remains a compile-time literal under SQLx 0.9's SqlSafeStr contract.
@@ -11,7 +18,7 @@ async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str)
               INTO site_table_list
             FROM pg_tables
             WHERE schemaname = 'site'
-              AND tablename NOT IN ('section_templates', 'page_blueprints');
+              AND tablename NOT IN ('section_templates', 'page_blueprints', 'seo_hitl_tasks');
             IF site_table_list IS NOT NULL THEN
                 EXECUTE 'TRUNCATE TABLE ' || site_table_list || ' RESTART IDENTITY CASCADE';
             END IF;

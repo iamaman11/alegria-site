@@ -37,6 +37,10 @@ ALLOWED_SQL_FILES: set[Path] = {
     (ROOT / "automation" / "check_seo_provenance_invariants.py").resolve(),
     (ROOT / "automation" / "check_serp_intelligence_contract.py").resolve(),
     (ROOT / "automation" / "local_db_baseline.py").resolve(),
+    # Optional read-only operator diagnostic: invokes psql with an explicitly
+    # read-only role to inventory Temporal/Truth histories before a cutover.
+    # Never imported by the runtime; SQL writes are prohibited by its tests.
+    (ROOT / "automation" / "temporal_history_transition.py").resolve(),
     (ROOT / "automation" / "smoke_outbox_qdrant.py").resolve(),
     (ROOT / "automation" / "smoke_broken_schema_to_dlq_behavioral.py").resolve(),
     (ROOT / "automation" / "smoke_exhausted_retry_to_dlq_behavioral.py").resolve(),

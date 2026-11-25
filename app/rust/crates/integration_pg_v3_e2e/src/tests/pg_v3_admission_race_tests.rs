@@ -33,6 +33,34 @@ async fn pg_v3_wait_for_lock(
 }
 
 #[cfg(feature = "e2e")]
+async fn pg_v3_wait_for_truth_context_owner(pool: &sqlx::PgPool, context_key: &str) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        // A transaction-local nonblocking probe directly observes the
+        // security invariant. A pg_stat_activity relation wait alone cannot
+        // distinguish a receipt replay query from a writer holding the
+        // canonical context fence.
+        let mut probe = pool.begin().await.expect("open independent context lock probe");
+        let available: bool = sqlx::query_scalar(
+            "SELECT pg_try_advisory_xact_lock(hashtextextended('truth-context|' || $1::text, 0))",
+        )
+        .bind(context_key)
+        .fetch_one(&mut *probe)
+        .await
+        .expect("probe canonical Truth context lock");
+        probe.rollback().await.expect("release nonblocking context probe");
+        if !available {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "admitted Activity never acquired canonical Truth context fence"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+#[cfg(feature = "e2e")]
 async fn pg_v3_wait_until_expired(pool: &sqlx::PgPool, admission_id: Uuid) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
@@ -539,8 +567,8 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
     .await
     .expect("original evidence page");
     let separate_evidence_id: i64 = sqlx::query_scalar(
-        "INSERT INTO raw.sections (page_id, content_md, content_hash)
-         VALUES ($1, 'separate evidence', 'evidence-original') RETURNING id",
+        "INSERT INTO raw.sections (page_id, content_md, content_hash, tenant_id)
+         VALUES ($1, 'separate evidence', 'evidence-original', 'ci-pg-v3-tenant') RETURNING id",
     )
     .bind(separate_page)
     .fetch_one(&postgres.pool)
@@ -590,8 +618,8 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
     .await
     .expect("original section parent");
     let new_page: i64 = sqlx::query_scalar(
-        "INSERT INTO raw.pages (url, domain, dtype, content)
-         VALUES ('https://example.org/reparent', 'example.org', 'html', '{}'::jsonb)
+        "INSERT INTO raw.pages (url, domain, dtype, content, tenant_id)
+         VALUES ('https://example.org/reparent', 'example.org', 'html', '{}'::jsonb, 'ci-pg-v3-tenant')
          RETURNING id",
     )
     .fetch_one(&postgres.pool)
@@ -959,7 +987,11 @@ async fn pg_v3_hitl_concurrent_mutation_fenced() {
     let postgres = PostgresHarness::start()
         .await
         .expect("disposable real PostgreSQL Truth HITL writer race");
-    let (effect_pool, activity_role) = pg_v3_unprivileged_effect_identity(&postgres).await;
+    let (effect_pool, _) = pg_v3_unprivileged_effect_identity(&postgres).await;
+    let activity_role: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&effect_pool)
+        .await
+        .expect("identify actual Activity PostgreSQL role, not connection DSN");
     let accepted = pg_v3_seed_review_fixture(&postgres.pool).await;
     pg_v3_issue_operator_admission(&postgres.pool, &accepted).await;
     // A real reviewer may have an unrelated resolved task in the same Truth
@@ -993,7 +1025,7 @@ async fn pg_v3_hitl_concurrent_mutation_fenced() {
         .await
         .expect("pause Activity after it acquires Truth context");
     let pending = pg_v3_spawn_effect(&effect_pool, &accepted);
-    pg_v3_wait_for_lock(&postgres.pool, &activity_role, "relation").await;
+    pg_v3_wait_for_truth_context_owner(&postgres.pool, &accepted.command.context_key).await;
 
     for mutation in [
         "UPDATE site.seo_hitl_tasks SET queue_state = 'reopened' WHERE task_key = $1",

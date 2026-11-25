@@ -133,7 +133,9 @@ pub enum EffectDagError {
         first: OperationInstanceId,
         second: OperationInstanceId,
     },
-    #[error("V5 does not admit parallel owner batches without a separately proven compensation policy")]
+    #[error(
+        "V5 does not admit parallel owner batches without a separately proven compensation policy"
+    )]
     ParallelOwnerBatchNotSupported,
     #[error("mixed DAG was completed before all operations finished")]
     IncompleteDag,

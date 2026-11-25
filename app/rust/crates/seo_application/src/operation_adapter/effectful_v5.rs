@@ -81,13 +81,13 @@ fn depends_on(
             .iter()
             .find(|node| node.instance == current)
             .expect("validated DAG has every producer node");
-        for previous in node
-            .after
-            .iter()
-            .chain(node.inputs.values().filter_map(|input| match input {
-                ArtifactBinding::External { .. } => None,
-                ArtifactBinding::Produced { producer, .. } => Some(producer),
-            }))
+        for previous in
+            node.after
+                .iter()
+                .chain(node.inputs.values().filter_map(|input| match input {
+                    ArtifactBinding::External { .. } => None,
+                    ArtifactBinding::Produced { producer, .. } => Some(producer),
+                }))
         {
             if previous == ancestor {
                 return true;
@@ -172,7 +172,13 @@ impl MixedDagMachineV5 {
         let mut scheduled = BTreeSet::<OperationInstanceId>::new();
         let mut write_scopes = BTreeSet::<(String, String)>::new();
         for step in prepared.steps.iter().skip(self.inner.cursor) {
-            let PreparedDagStepV1::Owner { instance, command, checked, .. } = step else {
+            let PreparedDagStepV1::Owner {
+                instance,
+                command,
+                checked,
+                ..
+            } = step
+            else {
                 break;
             };
             let node = run
@@ -182,13 +188,10 @@ impl MixedDagMachineV5 {
                 .find(|node| &node.instance == instance)
                 .expect("validated owner instance");
             let has_batch_dependency = !node.after.is_disjoint(&scheduled)
-                || node
-                    .inputs
-                    .values()
-                    .any(|binding| match binding {
-                        ArtifactBinding::External { .. } => false,
-                        ArtifactBinding::Produced { producer, .. } => scheduled.contains(producer),
-                    });
+                || node.inputs.values().any(|binding| match binding {
+                    ArtifactBinding::External { .. } => false,
+                    ArtifactBinding::Produced { producer, .. } => scheduled.contains(producer),
+                });
             let OwnerCommandV1::PgTruthReviewReconcileV1(input) = command;
             let write_scope = (input.run_id.to_string(), input.context_key.clone());
             // Same-source effects need a deterministic sequential barrier even
