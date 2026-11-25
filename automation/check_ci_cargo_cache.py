@@ -24,7 +24,11 @@ OWNERS = (
     "rust-e2e-truth-harness",
     "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
 )
-READERS = OWNERS[1:]
+# Exactly one PR-local compiler-object writer warms unchanged compiler units
+# across distinct source SHAs on this PR ref. All other PR jobs remain readers;
+# this cache is distinct from the trusted-main cache write scope.
+PR_COMPILER_WRITER = "rust-e2e-temporal-harness"
+READERS = tuple(owner for owner in OWNERS[1:] if owner != PR_COMPILER_WRITER)
 SOURCE_BOUND_COMPILERS = frozenset({
     "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness",
@@ -73,8 +77,16 @@ def validate_cache_policy(workflow: str) -> None:
             raise ValueError(f"{owner} must not initialize a second Cargo registry writer")
         if block.count("uses: actions/cache/restore@v4") != 1:
             raise ValueError(f"{owner} must restore Cargo sources without writing cache")
-        if "SCCACHE_GHA_RW_MODE: READ_ONLY" not in block:
-            raise ValueError(f"{owner} must use read-only compiler object cache")
+        expected_mode = "READ_WRITE" if owner == PR_COMPILER_WRITER else "READ_ONLY"
+        if f"SCCACHE_GHA_RW_MODE: {expected_mode}" not in block:
+            raise ValueError(f"{owner} must use {expected_mode} compiler object cache")
+        if owner == PR_COMPILER_WRITER and (
+            'CARGO_BUILD_JOBS: "3"' not in block
+            or "SCCACHE_ERROR_LOG: /tmp/sccache-pr-temporal-errors.log" not in block
+            or 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' not in block
+            or "--compile-owner-harness temporal_harness" not in block
+        ):
+            raise ValueError("PR-local compiler writer lacks bounded jobs or native cache diagnostics")
         if ("SCCACHE_GHA_ENABLED: \"on\"" not in block
                 or "uses: actions/github-script@v8" not in block
                 or "core.exportVariable('ACTIONS_RESULTS_URL'," not in block
@@ -141,6 +153,24 @@ class CargoCachePolicy(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ValueError, "second Cargo registry writer"):
                     validate_cache_policy(changed)
+
+    def test_exactly_one_pr_local_compiler_writer_is_required(self) -> None:
+        original = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertEqual(PR_COMPILER_WRITER, "rust-e2e-temporal-harness")
+        self.assertEqual(len(READERS), len(OWNERS) - 2)
+        self.assertEqual(original.count("SCCACHE_GHA_RW_MODE: READ_WRITE"), 2)
+        writer_start = original.index(f"  {PR_COMPILER_WRITER}:\n")
+        changed = original[:writer_start] + original[writer_start:].replace(
+            "SCCACHE_GHA_RW_MODE: READ_WRITE", "SCCACHE_GHA_RW_MODE: READ_ONLY", 1,
+        )
+        with self.assertRaisesRegex(ValueError, "READ_WRITE compiler object cache"):
+            validate_cache_policy(changed)
+        reader_start = original.index("  rust-e2e-graph-harness:\n")
+        changed = original[:reader_start] + original[reader_start:].replace(
+            "SCCACHE_GHA_RW_MODE: READ_ONLY", "SCCACHE_GHA_RW_MODE: READ_WRITE", 1,
+        )
+        with self.assertRaisesRegex(ValueError, "READ_ONLY compiler object cache"):
+            validate_cache_policy(changed)
 
     def test_verify_cargo_setup_cannot_run_for_scoped_or_non_rust_changes(self) -> None:
         original = (ROOT / ".github/workflows/ci.yml").read_text()

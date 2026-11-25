@@ -173,8 +173,9 @@ SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE, schema CREATE, sequence mutation
 or application writer grants**. Its only allowed application mutation is
 `INSERT/UPDATE pipeline.pg_effect_v3_admissions`; it needs SELECT on that
 table, `pipeline.execution_runs`, `pipeline.pg_effect_v3_receipts`,
-`extracted.rule_candidates`, `raw.sections`, `raw.pages`, and schema USAGE for
-those reads. The operator runtime validates effective privileges before
+`extracted.rule_candidates`, `raw.sections`, `raw.pages`, and **read-only
+`kb.sources`** authority (including `USAGE` on `kb`) for the V6 trust/status
+snapshot. The operator runtime validates effective privileges before
 every command, requires `session_user = current_user`, and rejects a
 privileged LOGIN using `SET ROLE` to impersonate the restricted operator (it
 could otherwise `RESET ROLE` to regain privilege). The role must not be the

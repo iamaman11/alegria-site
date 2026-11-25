@@ -36,7 +36,8 @@ async fn pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect() {
     let provision = format!(
         "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {role};
-         GRANT USAGE ON SCHEMA pipeline, site, raw, extracted TO {role};
+         GRANT USAGE ON SCHEMA pipeline, site, raw, extracted, kb TO {role};
+         GRANT SELECT ON kb.sources TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages, site.seo_hitl_tasks TO {role};
@@ -195,7 +196,8 @@ async fn pg_v3_native_operator_cli_least_privilege_issue_revoke() {
     let provision = format!(
         "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {role};
-         GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role};
+         GRANT USAGE ON SCHEMA pipeline, extracted, raw, kb TO {role};
+         GRANT SELECT ON kb.sources TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages TO {role};
@@ -550,7 +552,8 @@ async fn pg_v3_v4_live_parent_child_operator_attestation_effect_receipt() {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {role};
-         GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role};
+         GRANT USAGE ON SCHEMA pipeline, extracted, raw, kb TO {role};
+         GRANT SELECT ON kb.sources TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages TO {role};

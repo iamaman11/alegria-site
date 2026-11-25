@@ -170,6 +170,84 @@ pub async fn upsert_projection(command: ProjectionUpsert) -> Result<(), Projecti
     .map_err(ProjectionError::Provider)
 }
 
+/// Read the *complete* externally stored business projection, not merely a
+/// successful HTTP upsert response or a SQL receipt. This is also the only
+/// allowed recovery check after the RPC outcome becomes uncertain (for
+/// example Qdrant accepted a write but the PostgreSQL receipt failed).
+///
+/// A missing/mismatched point is NOT permission to send a second RPC: a
+/// delayed first write could still arrive after this read.
+fn cosine_vector_matches(expected: &[f32], actual: &[Value]) -> bool {
+    // Qdrant stores normalized unit vectors for Cosine collections. Comparing
+    // to the submitted unnormalized f32 values would reject every legitimate
+    // readback. The approved command SHA-256 stays in the *exact* payload;
+    // all coordinates must independently match the provider's canonical
+    // normalized direction within its f32 arithmetic tolerance.
+    let norm_squared: f64 = expected.iter().map(|v| (*v as f64).powi(2)).sum();
+    let norm = norm_squared.sqrt();
+    norm.is_finite()
+        && norm > 0.0
+        && actual.len() == expected.len()
+        && actual.iter().zip(expected.iter()).all(|(got, want)| {
+            let normalized = *want as f64 / norm;
+            got.as_f64().map(|value| (value - normalized).abs() <= 0.00001)
+                == Some(true)
+        })
+}
+
+pub async fn projection_readback_exact(
+    collection: &str,
+    point_id: &str,
+    entity_type: &str,
+    entity_key: &str,
+    vector: &[f32],
+    metadata: &Value,
+) -> Result<bool, ProjectionError> {
+    let base = env::var("QDRANT_REST_URL")
+        .or_else(|_| env::var("QDRANT_URL").map(|url| url.replace(":6334", ":6333")))
+        .map_err(|_| ProjectionError::Contract("QDRANT_REST_URL is required for exact readback".into()))?;
+    let url = format!(
+        "{}/collections/{collection}/points",
+        base.trim_end_matches('/')
+    );
+    let response = reqwest::Client::new()
+        .post(&url)
+        .timeout(std::time::Duration::from_secs(10))
+        .json(&serde_json::json!({
+            "ids": [point_id], "with_payload": true, "with_vector": true
+        }))
+        .send()
+        .await
+        .map_err(|err| ProjectionError::Provider(err.into()))?;
+    if !response.status().is_success() {
+        return Err(ProjectionError::Provider(anyhow::anyhow!(
+            "Qdrant exact projection readback HTTP {}",
+            response.status()
+        )));
+    }
+    let body: Value = response
+        .json()
+        .await
+        .map_err(|err| ProjectionError::Provider(err.into()))?;
+    let points = body
+        .get("result")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ProjectionError::Provider(anyhow::anyhow!(
+            "Qdrant exact readback omitted result array"
+        )))?;
+    if points.len() != 1 || points[0].get("id").and_then(Value::as_str) != Some(point_id) {
+        return Ok(false);
+    }
+    let expected_payload = normalize_payload(entity_type, entity_key, Some(metadata));
+    if points[0].get("payload") != Some(&expected_payload) {
+        return Ok(false);
+    }
+    let Some(actual_vector) = points[0].get("vector").and_then(Value::as_array) else {
+        return Ok(false);
+    };
+    Ok(cosine_vector_matches(vector, actual_vector))
+}
+
 #[derive(Debug)]
 pub struct ProjectionDelete {
     collection_name: String,
@@ -211,6 +289,23 @@ pub async fn delete_projection(command: ProjectionDelete) -> Result<(), Projecti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cosine_readback_checks_every_normalized_coordinate() {
+        let submitted = [3.0_f32, 4.0_f32];
+        assert!(cosine_vector_matches(&submitted, &[
+            serde_json::json!(0.6), serde_json::json!(0.8)
+        ]));
+        assert!(!cosine_vector_matches(&submitted, &[
+            serde_json::json!(0.6), serde_json::json!(0.79)
+        ]));
+        assert!(!cosine_vector_matches(&submitted, &[
+            serde_json::json!(0.6)
+        ]));
+        assert!(!cosine_vector_matches(&[0.0, 0.0], &[
+            serde_json::json!(0.0), serde_json::json!(0.0)
+        ]));
+    }
 
     fn identity() -> ProjectionIdentity {
         ProjectionIdentity::new(" verified_rules_4 ", " rule_instance ", " rule-1 ").unwrap()

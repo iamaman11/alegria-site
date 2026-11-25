@@ -17,4 +17,5 @@ mod tests {
 
     include!("tests/knowledge_read_tests.rs");
     include!("tests/qdrant_rest_projection_tests.rs");
+    include!("tests/admitted_qdrant_projection_tests.rs");
 }

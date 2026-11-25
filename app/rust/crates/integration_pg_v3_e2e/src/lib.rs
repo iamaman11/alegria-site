@@ -105,4 +105,5 @@ mod tests {
     include!("tests/pg_v3_operator_cli_tests.rs");
     include!("tests/pg_v5_ordered_children_tests.rs");
     include!("tests/pg_v3_temporal_cross_queue_tests.rs");
+    include!("tests/pg_v6_tenant_ingress_tests.rs");
 }

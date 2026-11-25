@@ -34,6 +34,7 @@ FORBIDDEN_PG_ENV = frozenset({
     "GOOGLE_API_KEY", "CLOUDFLARE_API_TOKEN",
 })
 PURE_CONTROL_NETWORK = "temporal_pure_control"
+PG_EFFECT_DATA_NETWORK = "temporal_pg_effect_data"
 
 
 def service_sections(compose: str) -> dict[str, str]:
@@ -88,6 +89,17 @@ def unsafe_wiring(body: str) -> list[str]:
     return forbidden
 
 
+def isolated_native_image(body: str, target: str, package: str) -> bool:
+    """A default release may not silently link the provider-heavy legacy bin."""
+    required = (
+        "    build:",
+        "      dockerfile: ./infra/temporal/Dockerfile.v3",
+        f"      target: {target}",
+        f"        OWNER_PACKAGE: {package}",
+    )
+    return all(line in body.splitlines() for line in required)
+
+
 def check(compose: str) -> dict[str, Any]:
     services = service_sections(compose)
     issues: list[str] = []
@@ -97,9 +109,13 @@ def check(compose: str) -> dict[str, Any]:
         rf"(?m)^networks:\n  {PURE_CONTROL_NETWORK}:\n    internal: true\s*$", compose
     ):
         issues.append("experimental isolated Temporal control network is missing or not internal")
+    if not re.search(
+        rf"(?m)^  {PG_EFFECT_DATA_NETWORK}:\n    internal: true\s*$", compose
+    ):
+        issues.append("experimental isolated PostgreSQL Activity data network is missing or not internal")
     temporal_server = services.get("temporal-server", "")
-    if set(service_networks(temporal_server)) != {"default", PURE_CONTROL_NETWORK}:
-        issues.append("Temporal server must bridge default and isolated pure control networks")
+    if set(service_networks(temporal_server)) != {"default", PURE_CONTROL_NETWORK, PG_EFFECT_DATA_NETWORK}:
+        issues.append("Temporal server must bridge default, pure control and PG Activity networks")
 
     for name in ("temporal-effect-dag-v4", "temporal-effect-dag-v5", "temporal-orchestrator-v3"):
         body = services.get(name)
@@ -133,12 +149,23 @@ def check(compose: str) -> dict[str, Any]:
             issues.append(f"experimental PostgreSQL owner has forbidden credentials: {leaked}")
         if PURE_CONTROL_NETWORK in service_networks(pg_experiment):
             issues.append("experimental PostgreSQL Activity owner can join isolated Temporal parent network")
+        if service_networks(pg_experiment) != [PG_EFFECT_DATA_NETWORK]:
+            issues.append("experimental PostgreSQL Activity owner must have only its internal PG data network")
         experiments.append("temporal-pg-effects-v3")
+
+    for name in ("postgres", "pgbouncer"):
+        body = services.get(name)
+        if body is not None and set(service_networks(body)) != {"default", PG_EFFECT_DATA_NETWORK}:
+            issues.append(f"experimental PostgreSQL endpoint has wrong network isolation: {name}")
 
     for name in ("postgres", "pgbouncer", "neo4j", "qdrant", "outbox-worker", "temporal-worker"):
         body = services.get(name)
         if body is not None and PURE_CONTROL_NETWORK in service_networks(body):
             issues.append(f"experimental provider store/legacy Worker has pure control network access: {name}")
+    for name in ("neo4j", "qdrant", "outbox-worker", "temporal-worker"):
+        body = services.get(name)
+        if body is not None and PG_EFFECT_DATA_NETWORK in service_networks(body):
+            issues.append(f"experimental foreign provider/legacy Worker can reach PG Activity network: {name}")
 
     default_parents = [
         (name, body)
@@ -152,6 +179,8 @@ def check(compose: str) -> dict[str, Any]:
         and not is_opt_in(body)
     ]
     for name, body in default_parents:
+        if not isolated_native_image(body, "pure", "temporal_orchestrator"):
+            issues.append(f"production Temporal parent is not a source-scoped pure native image: {name}")
         leaked = sorted(environment(body) & FORBIDDEN_PARENT_ENV)
         if leaked:
             issues.append(f"production Temporal process retains owner/provider credentials {name}: {leaked}")
@@ -176,11 +205,20 @@ def check(compose: str) -> dict[str, Any]:
     if not default_pg:
         issues.append("no default-enabled separate PostgreSQL effect Activity owner")
     for name, body in default_pg:
+        if not isolated_native_image(body, "pg", "temporal_pg_effects"):
+            issues.append(f"production PostgreSQL Activity owner is not a source-scoped PG native image: {name}")
         if "PG_EFFECT_WORKER_DATABASE_URL_FILE" not in environment(body):
             issues.append(f"production PostgreSQL owner lacks file-scoped least-privilege DSN: {name}")
+        if service_networks(body) != [PG_EFFECT_DATA_NETWORK]:
+            issues.append(f"production PostgreSQL owner has a provider/default network path: {name}")
+        if "    secrets:" not in body or "      - source: pg_effect_worker_dsn" not in body:
+            issues.append(f"production PostgreSQL owner lacks external secret mount: {name}")
         leaked = sorted(environment(body) & FORBIDDEN_PG_ENV)
         if leaked:
             issues.append(f"production PostgreSQL owner retains foreign credentials {name}: {leaked}")
+        unsafe = unsafe_wiring(body)
+        if unsafe:
+            issues.append(f"production PostgreSQL owner has unsafe host/environment wiring {name}: {unsafe}")
 
     experiment_issues = [issue for issue in issues if issue.startswith((
         "missing optional", "experimental ", "missing isolated opt-in", "Temporal server"
@@ -193,6 +231,7 @@ def check(compose: str) -> dict[str, Any]:
         "production_release_authorized": False,
         "evidence_scope": "Compose topology only; no server mTLS, historical drain, RLS or live attestation",
         "experimental_services": experiments,
+        "isolated_pg_effect_network": PG_EFFECT_DATA_NETWORK,
         "default_temporal_processes": [name for name, _ in default_parents],
         "default_pg_owner_processes": [name for name, _ in default_pg],
         "issues": issues,

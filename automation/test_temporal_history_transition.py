@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -48,6 +50,31 @@ def snap(*, captured_at, pg=None, temporal_data=None):
         "status": "BLOCKED" if reasons else "DRAIN_CANDIDATE_ONLY",
         "blockers": reasons, "cutover_authorized": False,
     }
+
+
+def replay_fixture(*, workflow_type="AlegriaAdmittedEffectDagV3Workflow",
+                   task_queue="alegria-effect-dag-v5", history_count=1):
+    """Create a captured census and a matching exported History envelope."""
+    t = temporal()
+    t["legacy_workflow_types"][workflow_type] = {"total": history_count, "open": 0}
+    t["total_all_before"] = t["total_all_after"] = history_count
+    capture = snap(captured_at=NOW - timedelta(seconds=10), temporal_data=t)
+    history = json.dumps({"events": [{
+        "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+        "workflowExecutionStartedEventAttributes": {
+            "workflowType": {"name": workflow_type}, "taskQueue": {"name": task_queue},
+        },
+    }]}, sort_keys=True).encode("utf-8")
+    manifest = {
+        "schema_version": 1, "source": capture["source"],
+        "environment": capture["environment"], "namespace": t["namespace"],
+        "histories": [{
+            "workflow_type": workflow_type, "task_queue": task_queue,
+            "workflow_id": "workflow-1", "run_id": "run-1", "file": "history.json",
+            "sha256": hashlib.sha256(history).hexdigest(),
+        }],
+    }
+    return capture, manifest, history
 
 
 class TemporalHistoryTransitionTests(unittest.TestCase):
@@ -261,6 +288,255 @@ class TemporalHistoryTransitionTests(unittest.TestCase):
             transition.atomic_json(output, {"status": "BLOCKED", "cutover_authorized": False})
             self.assertEqual(json.loads(output.read_text())["status"], "BLOCKED")
             self.assertEqual(list(Path(folder).glob("*.tmp")), [])
+
+
+class TemporalOfflineReplayAuditTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.capture, self.manifest, self.history = replay_fixture()
+        (self.root / "history.json").write_bytes(self.history)
+        self.binary = self.root / "temporal_orchestrator"
+        self.binary.write_bytes(b"fake executable for mocked test")
+        self.binary.chmod(0o700)
+        self.binaries = {"orchestrator": self.binary}
+
+    def audit(self, *, marker="CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"):
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", return_value=marker) as run:
+            result = transition.replay_audit(
+                self.capture, self.manifest, history_root=self.root,
+                binaries=self.binaries, clock=NOW,
+            )
+        return result, run
+
+    def test_real_registered_sdk_replay_route_never_authorizes_cutover(self):
+        result, command = self.audit()
+        self.assertEqual(result["status"], "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY")
+        self.assertFalse(result["cutover_authorized"])
+        self.assertEqual(result["replay_count"], 1)
+        self.assertEqual(result["replayed_by_type"]["AlegriaAdmittedEffectDagV3Workflow"], 1)
+        self.assertEqual(result["replayed_sha256"], [hashlib.sha256(self.history).hexdigest()])
+        self.assertIn("independent_server_history_export_identity_and_completeness",
+                      result["unverified_external_gates"])
+        args, kwargs = command.call_args
+        self.assertEqual(args[0], [
+            str(self.binary), "--replay-v5-effect-history", str(self.root / "history.json"),
+        ])
+        self.assertEqual(set(kwargs), {"env"})
+        self.assertTrue(set(kwargs["env"]) <= set(transition.REPLAY_ENV_ALLOW))
+
+    def test_native_sdk_process_never_inherits_temporal_pg_or_provider_credentials(self):
+        with patch.dict(os.environ, {
+            "ALEGRIA_HISTORY_AUDIT_DSN": "postgres://secret@database",
+            "TEMPORAL_API_KEY": "temporal-secret",
+            "OPENAI_API_KEY": "provider-secret",
+        }):
+            _, command = self.audit()
+        self.assertNotIn("ALEGRIA_HISTORY_AUDIT_DSN", command.call_args.kwargs["env"])
+        self.assertNotIn("TEMPORAL_API_KEY", command.call_args.kwargs["env"])
+        self.assertNotIn("OPENAI_API_KEY", command.call_args.kwargs["env"])
+
+    def test_history_type_and_queue_come_from_first_actual_start_event(self):
+        self.assertEqual(transition.history_type_and_queue(self.history),
+                         ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"))
+        for invalid in (b"not JSON", b"{}", b'{"events": []}',
+                        b'{"events": [{"eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED"}]}'):
+            with self.subTest(invalid=invalid), self.assertRaises(transition.EvidenceError):
+                transition.history_type_and_queue(invalid)
+
+    def test_missing_history_count_blocks_before_any_sdk_invocation(self):
+        self.capture["temporal"]["legacy_workflow_types"]["AlegriaAdmittedEffectDagV3Workflow"]["total"] = 2
+        self.capture["temporal"]["total_all_before"] = 2
+        self.capture["temporal"]["total_all_after"] = 2
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command") as command, \
+             self.assertRaisesRegex(transition.EvidenceError, "every counted"):
+            transition.replay_audit(self.capture, self.manifest, history_root=self.root,
+                                    binaries=self.binaries, clock=NOW)
+        command.assert_not_called()
+
+    def test_unsupported_retired_workflow_type_fails_closed(self):
+        self.capture, self.manifest, history = replay_fixture(
+            workflow_type="SeoSiteBuildWorkflow", task_queue="alegria-pipeline",
+        )
+        (self.root / "history.json").write_bytes(history)
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command") as command, \
+             self.assertRaisesRegex(transition.EvidenceError, "lacks an SDK replay route"):
+            transition.replay_audit(self.capture, self.manifest, history_root=self.root,
+                                    binaries=self.binaries, clock=NOW)
+        command.assert_not_called()
+
+    def test_manifest_mismatched_task_queue_or_workflow_type_blocks(self):
+        for field, modified in (
+            ("task_queue", "alegria-pure-dag-v3"),
+            ("workflow_type", "AlegriaAdmittedEffectDagV2Workflow"),
+        ):
+            with self.subTest(field=field):
+                original = self.manifest["histories"][0][field]
+                self.manifest["histories"][0][field] = modified
+                with self.assertRaises(transition.EvidenceError):
+                    self.audit()
+                self.manifest["histories"][0][field] = original
+
+    def test_manifest_hash_and_exported_bytes_must_match(self):
+        self.manifest["histories"][0]["sha256"] = "a" * 64
+        with self.assertRaisesRegex(transition.EvidenceError, "SHA-256"):
+            self.audit()
+
+    def test_manifest_duplicate_run_and_history_rejected(self):
+        self.manifest["histories"].append(dict(self.manifest["histories"][0]))
+        with self.assertRaisesRegex(transition.EvidenceError, "duplicate"):
+            self.audit()
+
+    def test_path_traversal_symlink_and_oversized_exports_rejected(self):
+        self.manifest["histories"][0]["file"] = "../secrets.json"
+        with self.assertRaisesRegex(transition.EvidenceError, "escapes export directory"):
+            self.audit()
+        self.manifest["histories"][0]["file"] = "sym.json"
+        (self.root / "sym.json").symlink_to(self.root / "history.json")
+        with self.assertRaisesRegex(transition.EvidenceError, "symlink"):
+            self.audit()
+        self.manifest["histories"][0]["file"] = "history.json"
+        with patch.object(transition, "MAX_HISTORY_BYTES", 1), \
+             self.assertRaisesRegex(transition.EvidenceError, "oversized"):
+            self.audit()
+
+    def test_pg_owner_mismatch_and_open_workflows_block_replay(self):
+        self.capture["postgres"]["candidate_source_mismatches"] = 1
+        with self.assertRaisesRegex(transition.EvidenceError, "PG tenant blockers"):
+            self.audit()
+        self.capture["postgres"]["candidate_source_mismatches"] = 0
+        self.capture["temporal"]["legacy_workflow_types"]["AlegriaAdmittedEffectDagV3Workflow"]["open"] = 1
+        self.capture["temporal"]["open_all_before"] = 1
+        self.capture["temporal"]["open_all_after"] = 1
+        with self.assertRaisesRegex(transition.EvidenceError, "Temporal drain"):
+            self.audit()
+
+    def test_capture_source_binding_and_freshness_immutable(self):
+        self.manifest["source"] = {"sha": "e" * 40, "tree": TREE}
+        with self.assertRaisesRegex(transition.EvidenceError, "bound to captured source"):
+            self.audit()
+        self.manifest["source"] = self.capture["source"]
+        self.capture["captured_at"] = (NOW - timedelta(minutes=11)).isoformat()
+        with self.assertRaisesRegex(transition.EvidenceError, "stale"):
+            self.audit()
+
+    def test_replay_rejects_boolean_schema_and_untyped_git_identity(self):
+        self.manifest["schema_version"] = True
+        with self.assertRaisesRegex(transition.EvidenceError, "manifest"):
+            self.audit()
+        self.manifest["schema_version"] = 1
+        self.capture["source"]["sha"] = 3
+        with self.assertRaisesRegex(transition.EvidenceError, "exact source identity"):
+            self.audit()
+
+    def test_native_replayer_must_really_return_exact_pass_marker(self):
+        with self.assertRaisesRegex(transition.EvidenceError, "did not attest PASS"):
+            self.audit(marker="ignored CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS unrelated")
+
+    def test_unexecutable_binary_is_not_invoked(self):
+        self.binary.chmod(0o600)
+        with self.assertRaisesRegex(transition.EvidenceError, "required executable"):
+            self.audit()
+
+    def test_available_replay_routes_match_native_sdk_registered_workflows(self):
+        self.assertEqual(set(transition.REPLAY_ROUTES) - {
+            ("SeoSiteBuildCanonicalCutoverWorkflow", "alegria-pipeline"),
+            ("SeoSiteBuildComposableV2Workflow", "alegria-pipeline"),
+            ("AlegriaPureOperationDagV1Workflow", "alegria-pipeline"),
+            ("AlegriaPureOperationDagV1Workflow", "alegria-pure-dag-v3"),
+            ("AlegriaCheckedEffectDagV1Workflow", "alegria-pure-dag-v3"),
+            ("AlegriaAdmittedEffectDagV2Workflow", "alegria-effect-dag-v4"),
+            ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"),
+            ("PgTruthReviewReconcileV3Workflow", "alegria-pg-command-v3"),
+            ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"),
+        }, set(), "SDK replay queue routes require explicit test coverage")
+        self.assertTrue(set(t for t, _ in transition.REPLAY_ROUTES) <= set(transition.WORKFLOW_TYPES))
+
+    def test_two_stable_historical_censuses_can_attach_replay_candidate(self):
+        evidence, _ = self.audit()
+        earlier = snap(
+            captured_at=NOW - timedelta(seconds=75),
+            temporal_data=self.capture["temporal"],
+        )
+        later = self.capture
+        result = transition.check_pair(earlier, later, replay_evidence=evidence, clock=NOW)
+        self.assertEqual(result["status"], "HISTORY_REPLAY_PRECONDITIONS_CAPTURED")
+        self.assertFalse(result["cutover_authorized"])
+        self.assertIn("independent_server_attestation_of_exported_history_and_run_identity",
+                      result["still_required"])
+        self.assertEqual(transition.check_pair(earlier, later, clock=NOW)["status"], "BLOCKED")
+
+    def test_historical_pair_rejects_forged_replay_coverage(self):
+        evidence, _ = self.audit()
+        earlier = snap(
+            captured_at=NOW - timedelta(seconds=75),
+            temporal_data=self.capture["temporal"],
+        )
+        for mutate in (
+            lambda: evidence.update({"cutover_authorized": True}),
+            lambda: evidence.update({"replay_count": 2}),
+            lambda: evidence.update({"replayed_by_type": {}}),
+            lambda: evidence.update({"source": {"sha": "d" * 40, "tree": TREE}}),
+        ):
+            with self.subTest(mutate=mutate):
+                tested = dict(evidence)
+                mutate()
+                self.assertEqual(
+                    transition.check_pair(earlier, self.capture,
+                                          replay_evidence=evidence, clock=NOW)["status"],
+                    "BLOCKED",
+                )
+                evidence = tested
+
+    def test_historical_pair_rechecks_blockers_before_ignoring_replay_only(self):
+        evidence, _ = self.audit()
+        earlier = snap(
+            captured_at=NOW - timedelta(seconds=75),
+            temporal_data=self.capture["temporal"],
+        )
+        earlier["postgres"]["raw_pages_unowned"] = 1
+        self.assertEqual(transition.check_pair(
+            earlier, self.capture, replay_evidence=evidence, clock=NOW,
+        )["status"], "BLOCKED")
+
+    def test_read_only_cli_replay_and_compare_files_end_to_end(self):
+        first = snap(captured_at=NOW - timedelta(seconds=75),
+                     temporal_data=self.capture["temporal"])
+        files = {
+            "first.json": first,
+            "capture.json": self.capture,
+            "manifest.json": self.manifest,
+        }
+        for name, value in files.items():
+            (self.root / name).write_text(json.dumps(value), encoding="utf-8")
+        replay_report = self.root / "sdk-replay-result.json"
+        compare_report = self.root / "preconditions-result.json"
+        with patch.object(transition, "now_utc", return_value=NOW), \
+             patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", return_value="CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"):
+            rc_replay = transition.main([
+                "replay-audit", "--capture", str(self.root / "capture.json"),
+                "--manifest", str(self.root / "manifest.json"),
+                "--history-root", str(self.root),
+                "--legacy-bin", str(self.binary), "--orchestrator-bin", str(self.binary),
+                "--pg-bin", str(self.binary), "--output", str(replay_report),
+            ])
+            rc_compare = transition.main([
+                "compare", "--earlier", str(self.root / "first.json"),
+                "--later", str(self.root / "capture.json"),
+                "--replay-evidence", str(replay_report), "--output", str(compare_report),
+            ])
+        self.assertEqual(rc_replay, 0)
+        self.assertEqual(rc_compare, 0)
+        self.assertEqual(json.loads(replay_report.read_text())["status"],
+                         "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY")
+        report = json.loads(compare_report.read_text())
+        self.assertEqual(report["status"], "HISTORY_REPLAY_PRECONDITIONS_CAPTURED")
+        self.assertFalse(report["cutover_authorized"])
 
 
 if __name__ == "__main__":

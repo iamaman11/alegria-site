@@ -61,6 +61,9 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     # Authentic Qdrant/PG test fixture JSON, moved from the broad harness.
     # No blanket JSON permission is granted to the new production-adjacent crate.
     "app/rust/crates/integration_qdrant_e2e/src/tests/knowledge_read_tests.rs",
+    # Opt-in real two-container E2E inspects Qdrant REST/gRPC wire payloads
+    # while proving the typed PostgreSQL admission/receipt fence end to end.
+    "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
     # Real PostgreSQL/HTTP fault-injection tests moved byte-for-byte from the
     # broad test harness, not permission to use JSON in production PG ports.
     "app/rust/crates/integration_pg_app_e2e/src/tests/qa_persistence_tests.rs",
@@ -71,6 +74,10 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/integration_pg_app_e2e/src/tests/cms_cross_scope_pg_tests.rs",
     "app/rust/crates/integration_pg_app_e2e/src/tests/cms_navigation_pg_tests.rs",
     "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
+    # This single explicitly admitted operator wire adapter verifies
+    # normalized Qdrant JSON at the external RPC boundary; no domain module
+    # or other projection_delivery source gains blanket JSON privileges.
+    "app/rust/crates/projection_delivery/src/admitted_qdrant_projection_v1.rs",
     "app/rust/crates/voyage_api/src/lib.rs",
     # Real Temporal/history and full-stack tests were moved verbatim out of
     # the broad harness. Grant exact test files, never an E2E crate prefix.

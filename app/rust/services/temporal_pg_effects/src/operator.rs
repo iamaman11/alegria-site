@@ -137,13 +137,15 @@ async fn assert_operator_role(pool: &PgPool) -> Result<String> {
     let can_issue: bool = sqlx::query_scalar(
         "SELECT has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'SELECT')
              AND has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'INSERT')
-             AND has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'UPDATE')",
+             AND has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'UPDATE')
+             AND has_schema_privilege(current_user, 'kb', 'USAGE')
+             AND has_table_privilege(current_user, 'kb.sources', 'SELECT')",
     )
     .fetch_one(pool)
     .await?;
     ensure!(
         can_issue,
-        "V3 operator role needs SELECT, INSERT and UPDATE on admissions"
+        "V3 operator role needs SELECT, INSERT, UPDATE on admissions and read-only kb.sources authority"
     );
     let excess_table: Option<String> = sqlx::query_scalar(
         "SELECT n.nspname || '.' || c.relname
@@ -616,10 +618,11 @@ mod tests {
         .execute(&admin)
         .await?;
         let grants = [
-            format!("GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role}"),
+            format!("GRANT USAGE ON SCHEMA pipeline, extracted, raw, kb TO {role}"),
             format!(
                 "GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions, \
-                 pipeline.pg_effect_v3_receipts, extracted.rule_candidates, raw.sections, raw.pages \
+                 pipeline.pg_effect_v3_receipts, extracted.rule_candidates, raw.sections, raw.pages, \
+                 kb.sources \
                  TO {role}"
             ),
             format!(

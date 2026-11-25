@@ -473,6 +473,94 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
     pg_v3_assert_no_effect(&postgres.pool, &stale).await;
     eprintln!("CI_PG_V3_RAW_SOURCE_WRITER_FIRST=PASS");
 
+    // The registry is an independent mutable authority input. It is not
+    // sufficient to hash raw.pages/sections while an operator can downgrade
+    // kb.sources after the original admission. Registry writers share the
+    // *same* context key as V3 and V4 admitted SQL effects.
+    let source_writer_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &source_writer_first).await;
+    let source_key: String = sqlx::query_scalar(
+        "SELECT source_key FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+    )
+    .bind(&source_writer_first.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("find admitted registry authority source");
+    let mut registry_writer = postgres.pool.begin().await.expect("registry writer tx");
+    sqlx::query("UPDATE kb.sources SET trust_level = 1 WHERE source_key = $1")
+        .bind(&source_key)
+        .execute(&mut *registry_writer)
+        .await
+        .expect("registry downgrade obtains canonical Truth context first");
+    let refused_effect = pg_v3_spawn_effect(&effect_pool, &source_writer_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "advisory").await;
+    registry_writer.commit().await.expect("commit authority downgrade first");
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), refused_effect)
+            .await
+            .expect("Activity resumes after source registry writer")
+            .expect("registry-race Activity did not panic"),
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &source_writer_first).await;
+    eprintln!("CI_PG_V6_SOURCE_AUTHORITY_WRITER_FIRST=PASS");
+
+    // Every trust policy field participates in the immutable admission
+    // snapshot, including status and the mutable authority classification.
+    // A source cannot stay implicitly trusted through a registry-only edit.
+    for (registry_mutation, case_name) in [
+        (
+            "UPDATE kb.sources SET status = 'deprecated' WHERE source_key = $1",
+            "status",
+        ),
+        (
+            "UPDATE kb.sources SET authority_class = 'editorial' WHERE source_key = $1",
+            "authority class",
+        ),
+        (
+            "UPDATE kb.sources SET independence_group_key = 'new-owner' WHERE source_key = $1",
+            "independence group",
+        ),
+        (
+            "UPDATE kb.sources SET override_eligible = true WHERE source_key = $1",
+            "override eligibility",
+        ),
+        (
+            "UPDATE kb.sources SET freshness_ttl_days = 0 WHERE source_key = $1",
+            "freshness TTL",
+        ),
+    ] {
+        let registry_changed = pg_v3_seed_review_fixture(&postgres.pool).await;
+        pg_v3_issue_operator_admission(&postgres.pool, &registry_changed).await;
+        let registry_key: String = sqlx::query_scalar(
+            "SELECT source_key FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+        )
+        .bind(&registry_changed.candidate_id)
+        .fetch_one(&postgres.pool)
+        .await
+        .expect("find registry source for authority policy mutation");
+        sqlx::query(registry_mutation)
+            .bind(&registry_key)
+            .execute(&postgres.pool)
+            .await
+            .expect("operator modified registry authority after issuing admission");
+        assert!(
+            matches!(
+                execute_admitted_reconcile(
+                    &effect_pool,
+                    &registry_changed.workflow_id,
+                    &registry_changed.workflow_run_id,
+                    &registry_changed.command,
+                )
+                .await,
+                Err(ReconcileTruthReviewsError::CandidateSetChanged)
+            ),
+            "{case_name} source authority mutation escaped fingerprint"
+        );
+        pg_v3_assert_no_effect(&postgres.pool, &registry_changed).await;
+    }
+    eprintln!("CI_PG_V6_SOURCE_AUTHORITY_POLICY_FINGERPRINT=PASS");
+
     // The page bytes are also included in the operator's snapshot, not only
     // the candidate and section data. A pre-effect page rewrite is stale.
     let page_stale = pg_v3_seed_review_fixture(&postgres.pool).await;
@@ -978,6 +1066,240 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
             .expect("read source bytes after receipt");
     assert!(stored.is_none(), "forged HTML did not remain uncommitted");
     eprintln!("CI_PG_V3_ADMITTED_SOURCE_IMMUTABLE=PASS");
+
+    // Reverse race: once an admitted Activity owns the Truth context key,
+    // registry trust changes must fail *immediately* rather than blocking on
+    // a row lock and deadlocking a later receipt/FK read. Only the operational
+    // updated_at field is allowed to progress during that transaction.
+    let registry_effect_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &registry_effect_first).await;
+    let registry_key: String = sqlx::query_scalar(
+        "SELECT source_key FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+    )
+    .bind(&registry_effect_first.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("find authority source for Activity-first case");
+    let mut registry_hitl_blocker = postgres.pool.begin().await.expect("registry HITL blocker");
+    sqlx::query("LOCK TABLE site.seo_hitl_tasks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *registry_hitl_blocker)
+        .await
+        .expect("pause admitted Activity inside canonical Truth transaction");
+    let registry_admitted = pg_v3_spawn_effect(&effect_pool, &registry_effect_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "relation").await;
+    let authority_busy = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE kb.sources SET status = 'deprecated' WHERE source_key = $1")
+            .bind(&registry_key)
+            .execute(&postgres.pool),
+    )
+    .await
+    .expect("source authority writer blocked rather than failing fast")
+    .expect_err("source status changed during an admitted Activity");
+    assert_eq!(
+        authority_busy.as_database_error().and_then(|error| error.code()).as_deref(),
+        Some("55P03"),
+        "admitted Activity must protect source registry policy changes"
+    );
+    let timestamp_only = sqlx::query(
+        "UPDATE kb.sources SET updated_at = clock_timestamp() WHERE source_key = $1",
+    )
+    .bind(&registry_key)
+    .execute(&postgres.pool)
+    .await
+    .expect("non-authority registry bookkeeping remains available");
+    assert_eq!(timestamp_only.rows_affected(), 1);
+    registry_hitl_blocker.commit().await.expect("unblock admitted registry race");
+    tokio::time::timeout(std::time::Duration::from_secs(10), registry_admitted)
+        .await
+        .expect("admitted registry race Activity completes")
+        .expect("Activity task did not panic")
+        .expect("unmodified source registry authority remains admitted");
+    let source_status: String = sqlx::query_scalar(
+        "SELECT status FROM kb.sources WHERE source_key = $1",
+    )
+    .bind(&registry_key)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("source status persisted across competing writer");
+    assert_eq!(source_status, "active");
+    // TRUNCATE takes ACCESS EXCLUSIVE relation locks before its statement
+    // trigger fires, so test this denial only after the Activity commits.
+    // The explicit guard must reject even a DBA's CASCADE request.
+    let forbidden_truncate = sqlx::query("TRUNCATE kb.sources CASCADE")
+        .execute(&postgres.pool)
+        .await
+        .expect_err("TRUNCATE bypassed registry authority row trigger");
+    assert_eq!(
+        forbidden_truncate.as_database_error().and_then(|error| error.code()).as_deref(),
+        Some("23514"),
+        "TRUNCATE must fail closed even for a privileged registry editor"
+    );
+    eprintln!("CI_PG_V6_SOURCE_AUTHORITY_EFFECT_FIRST=PASS");
+
+    // A globally trusted registry entry can support candidate evidence in
+    // different tenants. A registry editor is not allowed to read any tenant's
+    // extracted candidates, yet its SECURITY DEFINER trigger must fence *all*
+    // referencing contexts. Under future FORCE RLS, row_security=off must
+    // reject filtered execution instead of silently missing another tenant.
+    let fail_closed_rls: bool = sqlx::query_scalar(
+        "SELECT COALESCE('row_security=off' = ANY(proconfig), false)
+         FROM pg_catalog.pg_proc
+         WHERE oid = 'kb.guard_truth_source_authority_writer_v1()'::regprocedure",
+    )
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("inspect canonical source writer RLS execution guard");
+    assert!(fail_closed_rls, "source registry trigger cannot silently filter foreign-tenant candidates");
+
+    let primary_tenant = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &primary_tenant).await;
+    let shared_registry_key: String = sqlx::query_scalar(
+        "SELECT source_key FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+    )
+    .bind(&primary_tenant.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("identify the shared global authority source");
+    let tenant_marker = Uuid::new_v4().simple().to_string();
+    let second_tenant_context = format!("pg-v6:cross-tenant:{tenant_marker}");
+    sqlx::query(
+        "INSERT INTO kb.visa_contexts (context_key, country_code, visa_family, citizenship_code)
+         VALUES ($1, 'ZZ', 'tourist', 'BY')",
+    )
+    .bind(&second_tenant_context)
+    .execute(&postgres.pool)
+    .await
+    .expect("seed foreign tenant's independent Truth context");
+    sqlx::query(
+        "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id)
+         VALUES ($1,'ci-pg-v6-other-tenant')",
+    )
+    .bind(&second_tenant_context)
+    .execute(&postgres.pool)
+    .await
+    .expect("provision second tenant from disposable DBA session");
+    let foreign_page_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages (url, domain, dtype, tenant_id)
+         VALUES ($1, 'ci-foreign.example.org', 'government', 'ci-pg-v6-other-tenant')
+         RETURNING id",
+    )
+    .bind(format!("https://ci-foreign.example.org/{tenant_marker}"))
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("seed second tenant's raw provenance");
+    let foreign_section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.sections (page_id, content_md, content_hash, tenant_id)
+         VALUES ($1, 'different tenant evidence', 'other-source', 'ci-pg-v6-other-tenant')
+         RETURNING id",
+    )
+    .bind(foreign_page_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("seed second tenant's extracted evidence section");
+    sqlx::query(
+        "INSERT INTO extracted.rule_candidates
+         (rule_candidate_id, context_key, raw_section_id, role, concept_canonical_key,
+          raw_mention, confidence, evidence_section_id, evidence_quote,
+          span_start, span_end, source_key, source_snapshot_hash,
+          llm_provider, llm_model, prompt_version, epistemic_status, tenant_id)
+         VALUES ($1,$2,$3,'FEE_ITEM','consular_fee','50 EUR',0.91,$3,
+                 'different tenant evidence',0,25,$4,'other-source',
+                 'chat_manual','gpt-6','ci_truth@1','needs_hitl','ci-pg-v6-other-tenant')",
+    )
+    .bind(format!("pg_v6_other_candidate_{tenant_marker}"))
+    .bind(&second_tenant_context)
+    .bind(foreign_section_id)
+    .bind(&shared_registry_key)
+    .execute(&postgres.pool)
+    .await
+    .expect("different tenant references the same global kb.sources row");
+
+    // Non-owner/non-superuser login has only narrowly scoped registry UPDATE;
+    // it has no USAGE on extracted and cannot inspect foreign-tenant evidence.
+    let registry_editor_role = format!("ci_v6_registry_editor_{tenant_marker}");
+    const EDITOR_PASSWORD: &str = "ci_disposable_registry_editor_password";
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {registry_editor_role} LOGIN NOINHERIT PASSWORD '{EDITOR_PASSWORD}';
+         GRANT CONNECT ON DATABASE alegria TO {registry_editor_role};
+         GRANT USAGE ON SCHEMA kb TO {registry_editor_role};
+         GRANT SELECT(source_key) ON kb.sources TO {registry_editor_role};
+         GRANT UPDATE(trust_level) ON kb.sources TO {registry_editor_role};"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("provision minimal source registry editor without extracted grants");
+    assert!(
+        postgres
+            .database_url
+            .starts_with("postgres://postgres:postgres_password@"),
+        "refuse to derive a registry editor from an unexpected database URL"
+    );
+    let editor_url = postgres.database_url.replacen(
+        "postgres://postgres:postgres_password@",
+        &format!("postgres://{registry_editor_role}:{EDITOR_PASSWORD}@"),
+        1,
+    );
+    let registry_editor = sqlx::PgPool::connect(&editor_url)
+        .await
+        .expect("connect as nonprivileged registry editor");
+    let (editor_identity, editor_superuser): (String, bool) = sqlx::query_as(
+        "SELECT current_user::text, rolsuper FROM pg_catalog.pg_roles
+         WHERE rolname = current_user",
+    )
+    .fetch_one(&registry_editor)
+    .await
+    .expect("verify actual non-owner registry editor identity");
+    assert_eq!(editor_identity, registry_editor_role);
+    assert!(!editor_superuser, "registry writer must not be a superuser");
+    let can_read_extracted: bool = sqlx::query_scalar(
+        "SELECT has_schema_privilege(current_user, 'extracted', 'USAGE')",
+    )
+    .fetch_one(&registry_editor)
+    .await
+    .expect("check editor cannot enumerate tenant evidence");
+    assert!(!can_read_extracted, "registry editor accidentally gained extracted schema visibility");
+
+    // Hold only the *other* tenant's Truth context. An implementation that
+    // sees only the first tenant would falsely allow the global trust change.
+    let mut foreign_context_lock = postgres.pool.begin().await.expect("foreign Truth lock");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended('truth-context|' || $1::text, 0))")
+        .bind(&second_tenant_context)
+        .execute(&mut *foreign_context_lock)
+        .await
+        .expect("hold exact second-tenant canonical context key");
+    let foreign_tenant_busy = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE kb.sources SET trust_level = 4 WHERE source_key = $1")
+            .bind(&shared_registry_key)
+            .execute(&registry_editor),
+    )
+    .await
+    .expect("foreign tenant registry edit blocked instead of immediate refusal")
+    .expect_err("source editor bypassed a different tenant's admitted Truth context");
+    assert_eq!(
+        foreign_tenant_busy.as_database_error().and_then(|error| error.code()).as_deref(),
+        Some("55P03"),
+        "shared source authority must fence every tenant referencing it"
+    );
+    foreign_context_lock.commit().await.expect("release second tenant context");
+    sqlx::query("UPDATE kb.sources SET trust_level = 4 WHERE source_key = $1")
+        .bind(&shared_registry_key)
+        .execute(&registry_editor)
+        .await
+        .expect("nonprivileged registry editor can update after context unlock");
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &primary_tenant.workflow_id,
+            &primary_tenant.workflow_run_id,
+            &primary_tenant.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &primary_tenant).await;
+    eprintln!("CI_PG_V6_CROSS_TENANT_SOURCE_REGISTRY_FENCE=PASS");
 }
 
 #[cfg(feature = "e2e")]

@@ -3320,3 +3320,585 @@ BEFORE UPDATE OF tenant_id ON pipeline.execution_runs
 FOR EACH ROW EXECUTE FUNCTION pipeline.guard_execution_run_tenant_transfer_v1();
 
 COMMIT;
+
+-- V6: an operator admission pins the authoritative registry status and trust
+-- of every candidate's source, not just its raw HTML and extraction rows.
+-- A registry editor shares the canonical Truth context advisory lock with
+-- the admitted PostgreSQL Activity. This migration does not backfill trust,
+-- mint a new admission, or switch the production Temporal Worker.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
+CREATE OR REPLACE FUNCTION pipeline.pg_truth_candidate_set_hash_v1(p_context_key TEXT)
+RETURNS TEXT LANGUAGE sql STABLE SECURITY INVOKER
+SET search_path = pg_catalog AS $$
+    SELECT encode(public.digest(COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'candidate', to_jsonb(c),
+            'raw_section', to_jsonb(s),
+            'evidence_section', to_jsonb(es),
+            -- A missing registry row (including a broken historical FK) is
+            -- explicit NULL in the digest. Operational updated_at alone is
+            -- excluded; trust_level/status/authority_class/independence,
+            -- override eligibility, freshness and every other field are
+            -- part of the operator's admitted source identity.
+            'source_authority', CASE WHEN registry.source_key IS NULL THEN NULL
+                ELSE to_jsonb(registry) - 'updated_at' END,
+            'raw_page', CASE WHEN p.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'id', p.id, 'url', p.url, 'domain', p.domain, 'dtype', p.dtype,
+                'status_code', p.status_code, 'content_type', p.content_type,
+                'snapshot_at', p.snapshot_at, 'crawled_at', p.crawled_at,
+                'final_url', p.final_url, 'title', p.title,
+                'meta_desc', p.meta_desc, 'canonical', p.canonical,
+                'word_count', p.word_count, 'content_hash', p.content_hash,
+                'raw_html_bytes', p.raw_html_bytes,
+                'content_sha256', CASE WHEN p.content IS NULL THEN NULL
+                    ELSE encode(public.digest(p.content::text, 'sha256'), 'hex') END,
+                'raw_html_sha256', CASE WHEN p.raw_html IS NULL THEN NULL
+                    ELSE encode(public.digest(p.raw_html, 'sha256'), 'hex') END,
+                'redirect_chain', p.redirect_chain, 'robots_trace', p.robots_trace,
+                'source_observation', p.source_observation
+            ) END,
+            'evidence_page', CASE WHEN ep.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'id', ep.id, 'url', ep.url, 'domain', ep.domain, 'dtype', ep.dtype,
+                'status_code', ep.status_code, 'content_type', ep.content_type,
+                'snapshot_at', ep.snapshot_at, 'crawled_at', ep.crawled_at,
+                'final_url', ep.final_url, 'title', ep.title,
+                'meta_desc', ep.meta_desc, 'canonical', ep.canonical,
+                'word_count', ep.word_count, 'content_hash', ep.content_hash,
+                'raw_html_bytes', ep.raw_html_bytes,
+                'content_sha256', CASE WHEN ep.content IS NULL THEN NULL
+                    ELSE encode(public.digest(ep.content::text, 'sha256'), 'hex') END,
+                'raw_html_sha256', CASE WHEN ep.raw_html IS NULL THEN NULL
+                    ELSE encode(public.digest(ep.raw_html, 'sha256'), 'hex') END,
+                'redirect_chain', ep.redirect_chain, 'robots_trace', ep.robots_trace,
+                'source_observation', ep.source_observation
+            ) END
+        ) ORDER BY c.rule_candidate_id)::text, '[]'), 'sha256'), 'hex')
+    FROM extracted.rule_candidates AS c
+    LEFT JOIN kb.sources AS registry ON registry.source_key = c.source_key
+    LEFT JOIN raw.sections AS s ON s.id = c.raw_section_id
+    LEFT JOIN raw.sections AS es ON es.id = c.evidence_section_id
+    LEFT JOIN raw.pages AS p ON p.id = s.page_id
+    LEFT JOIN raw.pages AS ep ON ep.id = es.page_id
+    WHERE c.context_key = p_context_key
+$$;
+
+CREATE OR REPLACE FUNCTION kb.guard_truth_source_authority_writer_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog
+SET row_security = off AS $$
+DECLARE
+    affected_context TEXT;
+BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+        -- TRUNCATE bypasses row triggers and can CASCADE to candidates.
+        RAISE EXCEPTION 'source authority registry cannot be truncated'
+            USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'UPDATE' AND
+       (to_jsonb(NEW) - 'updated_at') IS NOT DISTINCT FROM
+       (to_jsonb(OLD) - 'updated_at') THEN
+        -- Registry bookkeeping, not an admission-authority change.
+        RETURN NEW;
+    END IF;
+
+    -- Canonical contexts are fixed by authoritative extracted candidates.
+    -- Sorted advisory keys prevent an opposite-order writer deadlock when
+    -- one authority source supports multiple contexts. A direct DML writer
+    -- cannot outrun an admitted effect's receipt/HITL transaction.
+    FOR affected_context IN
+        SELECT DISTINCT c.context_key
+        FROM extracted.rule_candidates AS c
+        WHERE c.source_key = OLD.source_key
+        ORDER BY c.context_key
+    LOOP
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || affected_context, 0)) THEN
+            RAISE EXCEPTION 'source authority is locked by admitted Truth effect'
+                USING ERRCODE = '55P03';
+        END IF;
+    END LOOP;
+    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS guard_truth_source_authority_write_v1 ON kb.sources;
+CREATE TRIGGER guard_truth_source_authority_write_v1
+    BEFORE UPDATE OR DELETE ON kb.sources
+    FOR EACH ROW EXECUTE FUNCTION kb.guard_truth_source_authority_writer_v1();
+DROP TRIGGER IF EXISTS guard_truth_source_authority_truncate_v1 ON kb.sources;
+CREATE TRIGGER guard_truth_source_authority_truncate_v1
+    BEFORE TRUNCATE ON kb.sources
+    FOR EACH STATEMENT EXECUTE FUNCTION kb.guard_truth_source_authority_writer_v1();
+
+COMMIT;
+
+-- Forward-only ingress owner provenance. An authenticated tenant's database
+-- LOGIN is the only source of new raw snapshots; a request GUC or URL is not
+-- sufficient identity. Existing unattributed historical rows stay NULL and
+-- cannot become admitted Truth evidence without a separately audited backfill.
+-- This migration deliberately does not FORCE RLS for legacy superuser/table-
+-- owner paths: full role cutover is still an explicit production NO-GO.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
+CREATE OR REPLACE FUNCTION pipeline.tenant_ingress_dba_v1()
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog AS $$
+    SELECT COALESCE((SELECT r.rolsuper FROM pg_catalog.pg_roles r
+                     WHERE r.rolname = session_user), false);
+$$;
+REVOKE ALL ON FUNCTION pipeline.tenant_ingress_dba_v1() FROM PUBLIC;
+
+-- No API-supplied tenant is trusted. A bound LOGIN gets its tenant from the
+-- immutable owner ledger; a legacy unbound role may write only NULL rows.
+CREATE OR REPLACE FUNCTION raw.stamp_ingress_page_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog SET row_security = off AS $$
+DECLARE
+    actor_tenant TEXT := pipeline.current_session_tenant_v1();
+    is_dba BOOLEAN := pipeline.tenant_ingress_dba_v1();
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF actor_tenant IS NOT NULL THEN
+            IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> actor_tenant THEN
+                RAISE EXCEPTION 'raw page tenant differs from authenticated LOGIN'
+                    USING ERRCODE = 'AV001';
+            END IF;
+            NEW.tenant_id := actor_tenant;
+        ELSIF NEW.tenant_id IS NOT NULL AND NOT is_dba THEN
+            RAISE EXCEPTION 'unprovisioned LOGIN cannot claim raw page ownership'
+                USING ERRCODE = 'AV001';
+        END IF;
+    ELSE
+        IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id AND NOT is_dba THEN
+            RAISE EXCEPTION 'raw page tenant reassignment requires audited DBA migration'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF NOT is_dba AND (actor_tenant IS DISTINCT FROM OLD.tenant_id) THEN
+            RAISE EXCEPTION 'raw page writer LOGIN does not own source evidence'
+                USING ERRCODE = 'AV001';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION raw.stamp_ingress_page_tenant_v1() FROM PUBLIC;
+DROP TRIGGER IF EXISTS stamp_ingress_page_tenant_v1 ON raw.pages;
+CREATE TRIGGER stamp_ingress_page_tenant_v1
+    BEFORE INSERT OR UPDATE ON raw.pages FOR EACH ROW
+    EXECUTE FUNCTION raw.stamp_ingress_page_tenant_v1();
+
+-- Section tenancy follows its actual parent page, never an independent
+-- caller-supplied label. Reparenting across tenants is rejected atomically.
+CREATE OR REPLACE FUNCTION raw.stamp_ingress_section_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog SET row_security = off AS $$
+DECLARE
+    parent_tenant TEXT;
+    actor_tenant TEXT := pipeline.current_session_tenant_v1();
+    is_dba BOOLEAN := pipeline.tenant_ingress_dba_v1();
+BEGIN
+    SELECT p.tenant_id INTO parent_tenant FROM raw.pages p WHERE p.id = NEW.page_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'raw section has no canonical parent page'
+            USING ERRCODE = 'AV001';
+    END IF;
+    IF parent_tenant IS NULL THEN
+        IF actor_tenant IS NOT NULL OR NEW.tenant_id IS NOT NULL THEN
+            RAISE EXCEPTION 'tenant writer cannot attach to unattributed raw page'
+                USING ERRCODE = 'AV001';
+        END IF;
+    ELSE
+        IF NOT is_dba AND actor_tenant IS DISTINCT FROM parent_tenant THEN
+            RAISE EXCEPTION 'section writer LOGIN does not own parent raw page'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> parent_tenant THEN
+            RAISE EXCEPTION 'raw section and parent page tenant mismatch'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF TG_OP = 'INSERT' THEN
+            NEW.tenant_id := parent_tenant;
+        ELSIF OLD.tenant_id IS DISTINCT FROM parent_tenant OR
+              NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN
+            RAISE EXCEPTION 'raw section tenant transfer requires audited backfill'
+                USING ERRCODE = 'AV001';
+        END IF;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NOT is_dba AND
+       OLD.tenant_id IS DISTINCT FROM actor_tenant THEN
+        RAISE EXCEPTION 'unowned historical section is quarantined'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION raw.stamp_ingress_section_tenant_v1() FROM PUBLIC;
+DROP TRIGGER IF EXISTS stamp_ingress_section_tenant_v1 ON raw.sections;
+CREATE TRIGGER stamp_ingress_section_tenant_v1
+    BEFORE INSERT OR UPDATE ON raw.sections FOR EACH ROW
+    EXECUTE FUNCTION raw.stamp_ingress_section_tenant_v1();
+
+-- A registered canonical run is attributed to its DBA-owned Truth context.
+-- A tenant-bound LOGIN cannot create an unprovisioned run or impersonate
+-- another tenant, even through a SECURITY DEFINER caller or forged GUC.
+CREATE OR REPLACE FUNCTION pipeline.stamp_ingress_run_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog SET row_security = off AS $$
+DECLARE
+    canonical_tenant TEXT;
+    actor_tenant TEXT := pipeline.current_session_tenant_v1();
+    is_dba BOOLEAN := pipeline.tenant_ingress_dba_v1();
+BEGIN
+    SELECT t.tenant_id INTO canonical_tenant
+    FROM pipeline.tenant_context_ownership t WHERE t.context_key = NEW.context_key;
+    IF canonical_tenant IS NULL THEN
+        IF NOT is_dba AND (actor_tenant IS NOT NULL OR NEW.tenant_id IS NOT NULL) THEN
+            RAISE EXCEPTION 'tenant run requires DBA-provisioned canonical context'
+                USING ERRCODE = 'AV001';
+        END IF;
+    ELSE
+        IF NOT is_dba AND actor_tenant IS DISTINCT FROM canonical_tenant THEN
+            RAISE EXCEPTION 'run writer LOGIN does not own canonical context'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> canonical_tenant THEN
+            RAISE EXCEPTION 'run tenant differs from canonical context owner'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF TG_OP = 'UPDATE' AND OLD.tenant_id IS DISTINCT FROM canonical_tenant THEN
+            RAISE EXCEPTION 'legacy run needs audited tenant backfill before use'
+                USING ERRCODE = 'AV001';
+        END IF;
+        NEW.tenant_id := canonical_tenant;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NOT is_dba AND
+       (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR
+        NEW.context_key IS DISTINCT FROM OLD.context_key) THEN
+        RAISE EXCEPTION 'run tenant/context identity cannot be reassigned'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION pipeline.stamp_ingress_run_tenant_v1() FROM PUBLIC;
+DROP TRIGGER IF EXISTS stamp_ingress_run_tenant_v1 ON pipeline.execution_runs;
+CREATE TRIGGER stamp_ingress_run_tenant_v1
+    BEFORE INSERT OR UPDATE ON pipeline.execution_runs FOR EACH ROW
+    EXECUTE FUNCTION pipeline.stamp_ingress_run_tenant_v1();
+
+-- A candidate can never claim a tenant other than both source/evidence
+-- sections and the immutably provisioned context. This closes an ingress
+-- path where RLS would otherwise filter the tenant mismatch from a reviewer.
+CREATE OR REPLACE FUNCTION extracted.stamp_ingress_candidate_tenant_v1()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog SET row_security = off AS $$
+DECLARE
+    canonical_tenant TEXT;
+    source_tenant TEXT;
+    evidence_tenant TEXT;
+    actor_tenant TEXT := pipeline.current_session_tenant_v1();
+    is_dba BOOLEAN := pipeline.tenant_ingress_dba_v1();
+BEGIN
+    SELECT t.tenant_id INTO canonical_tenant FROM pipeline.tenant_context_ownership t
+    WHERE t.context_key = NEW.context_key;
+    SELECT s.tenant_id INTO source_tenant FROM raw.sections s WHERE s.id = NEW.raw_section_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'candidate source section missing' USING ERRCODE = 'AV001'; END IF;
+    SELECT s.tenant_id INTO evidence_tenant FROM raw.sections s WHERE s.id = NEW.evidence_section_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'candidate evidence section missing' USING ERRCODE = 'AV001'; END IF;
+    IF canonical_tenant IS NULL THEN
+        IF NOT is_dba AND (actor_tenant IS NOT NULL OR NEW.tenant_id IS NOT NULL) THEN
+            RAISE EXCEPTION 'tenant candidate requires provisioned canonical context'
+                USING ERRCODE = 'AV001';
+        END IF;
+    ELSE
+        IF source_tenant IS DISTINCT FROM canonical_tenant OR
+           evidence_tenant IS DISTINCT FROM canonical_tenant THEN
+            RAISE EXCEPTION 'candidate sources differ from canonical tenant owner'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF NOT is_dba AND actor_tenant IS DISTINCT FROM canonical_tenant THEN
+            RAISE EXCEPTION 'candidate writer LOGIN does not own canonical context'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF NEW.tenant_id IS NOT NULL AND NEW.tenant_id <> canonical_tenant THEN
+            RAISE EXCEPTION 'candidate tenant spoofing refused'
+                USING ERRCODE = 'AV001';
+        END IF;
+        IF TG_OP = 'UPDATE' AND OLD.tenant_id IS DISTINCT FROM canonical_tenant THEN
+            RAISE EXCEPTION 'legacy candidate needs audited tenant backfill'
+                USING ERRCODE = 'AV001';
+        END IF;
+        NEW.tenant_id := canonical_tenant;
+    END IF;
+    IF TG_OP = 'UPDATE' AND NOT is_dba AND
+       (NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR
+        NEW.context_key IS DISTINCT FROM OLD.context_key) THEN
+        RAISE EXCEPTION 'candidate tenant/context identity cannot be reassigned'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION extracted.stamp_ingress_candidate_tenant_v1() FROM PUBLIC;
+DROP TRIGGER IF EXISTS stamp_ingress_candidate_tenant_v1 ON extracted.rule_candidates;
+CREATE TRIGGER stamp_ingress_candidate_tenant_v1
+    BEFORE INSERT OR UPDATE ON extracted.rule_candidates FOR EACH ROW
+    EXECUTE FUNCTION extracted.stamp_ingress_candidate_tenant_v1();
+
+COMMIT;
+
+-- V6 experimental *second* external-effect owner: an immutable, tenant-scoped
+-- Qdrant keyword projection with an explicit unknown-outcome barrier.
+--
+-- IMPORTANT: this does not authorize production use. Temporal parent/child
+-- History must be attested independently by an operator before a real worker
+-- role receives EXECUTE privileges. The values below are EXPECTED identities,
+-- not cryptographic proof of a Temporal server History.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
+CREATE TABLE IF NOT EXISTS pipeline.qdrant_projection_v1_admissions (
+    admission_id UUID PRIMARY KEY,
+    run_id UUID NOT NULL REFERENCES pipeline.execution_runs(run_id),
+    tenant_id TEXT NOT NULL CHECK (tenant_id = btrim(tenant_id) AND length(tenant_id) > 0),
+    context_key TEXT NOT NULL REFERENCES kb.visa_contexts(context_key),
+    keyword_key TEXT NOT NULL CHECK (keyword_key = btrim(keyword_key) AND length(keyword_key) > 0),
+    parent_workflow_id TEXT NOT NULL CHECK (length(btrim(parent_workflow_id)) > 0),
+    parent_workflow_run_id TEXT NOT NULL CHECK (length(btrim(parent_workflow_run_id)) > 0),
+    child_workflow_id TEXT NOT NULL CHECK (length(btrim(child_workflow_id)) > 0),
+    child_workflow_run_id TEXT NOT NULL CHECK (length(btrim(child_workflow_run_id)) > 0),
+    child_started_event_id BIGINT NOT NULL CHECK (child_started_event_id > 0),
+    operation_instance TEXT NOT NULL CHECK (length(btrim(operation_instance)) > 0),
+    plan_sha256 TEXT NOT NULL CHECK (plan_sha256 ~ '^[0-9a-f]{64}$'),
+    command_sha256 TEXT NOT NULL CHECK (command_sha256 ~ '^[0-9a-f]{64}$'),
+    -- The operator approves EXACT serialized bytes, never an editable URL or SQL.
+    command_bytes BYTEA NOT NULL CHECK (octet_length(command_bytes) > 0),
+    issued_by NAME NOT NULL DEFAULT session_user,
+    issued_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ,
+    UNIQUE (tenant_id, context_key, keyword_key),
+    UNIQUE (run_id, plan_sha256, operation_instance),
+    UNIQUE (child_workflow_run_id, operation_instance),
+    CHECK (command_sha256 = encode(public.digest(command_bytes, 'sha256'), 'hex')),
+    CHECK (expires_at > issued_at)
+);
+
+-- After START, provider outcome is UNKNOWN until independent exact readback.
+-- An uncertain row MUST NEVER be automatically sent a second provider RPC.
+CREATE TABLE IF NOT EXISTS pipeline.qdrant_projection_v1_attempts (
+    admission_id UUID PRIMARY KEY REFERENCES pipeline.qdrant_projection_v1_admissions(admission_id),
+    tenant_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'uncertain' CHECK (state IN ('uncertain', 'confirmed')),
+    started_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+    confirmed_at TIMESTAMPTZ,
+    CHECK ((state = 'uncertain' AND confirmed_at IS NULL)
+        OR (state = 'confirmed' AND confirmed_at IS NOT NULL))
+);
+
+CREATE TABLE IF NOT EXISTS pipeline.qdrant_projection_v1_receipts (
+    admission_id UUID PRIMARY KEY REFERENCES pipeline.qdrant_projection_v1_admissions(admission_id),
+    tenant_id TEXT NOT NULL,
+    command_sha256 TEXT NOT NULL CHECK (command_sha256 ~ '^[0-9a-f]{64}$'),
+    point_id UUID NOT NULL UNIQUE,
+    collection_name TEXT NOT NULL DEFAULT 'seo_keyword_clusters_4'
+        CHECK (collection_name = 'seo_keyword_clusters_4'),
+    -- Point was independently retrieved, including all 1024 floats and payload.
+    exact_provider_readback BOOLEAN NOT NULL CHECK (exact_provider_readback),
+    committed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+REVOKE ALL ON pipeline.qdrant_projection_v1_admissions,
+    pipeline.qdrant_projection_v1_attempts,
+    pipeline.qdrant_projection_v1_receipts FROM PUBLIC;
+
+-- These are not application-insertable tenant claims. Only DBA-provisioned
+-- PostgreSQL LOGINs can issue an admission for their canonical context/run.
+CREATE OR REPLACE FUNCTION pipeline.guard_qdrant_projection_admission_v1()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE v_owner TEXT;
+BEGIN
+    IF TG_OP <> 'INSERT' THEN
+        RAISE EXCEPTION 'Qdrant effect admissions are append-only; no delete or rewrite'
+            USING ERRCODE = 'AV001';
+    END IF;
+    v_owner := pipeline.current_session_tenant_v1();
+    IF v_owner IS DISTINCT FROM NEW.tenant_id OR NEW.issued_by <> session_user THEN
+        RAISE EXCEPTION 'Qdrant effect operator LOGIN is not provisioned for tenant'
+            USING ERRCODE = 'AV001';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pipeline.tenant_context_ownership o
+        JOIN pipeline.execution_runs r ON r.context_key = o.context_key
+        WHERE o.context_key = NEW.context_key AND o.tenant_id = NEW.tenant_id
+          AND r.run_id = NEW.run_id AND r.tenant_id = NEW.tenant_id
+    ) THEN
+        RAISE EXCEPTION 'Qdrant projection context/run has no authoritative tenant owner'
+            USING ERRCODE = 'AV001';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS qdrant_projection_admission_insert_v1
+    ON pipeline.qdrant_projection_v1_admissions;
+CREATE TRIGGER qdrant_projection_admission_insert_v1
+    BEFORE INSERT ON pipeline.qdrant_projection_v1_admissions
+    FOR EACH ROW EXECUTE FUNCTION pipeline.guard_qdrant_projection_admission_v1();
+DROP TRIGGER IF EXISTS qdrant_projection_admission_immutable_v1
+    ON pipeline.qdrant_projection_v1_admissions;
+CREATE TRIGGER qdrant_projection_admission_immutable_v1
+    BEFORE UPDATE OR DELETE ON pipeline.qdrant_projection_v1_admissions
+    FOR EACH ROW EXECUTE FUNCTION pipeline.guard_qdrant_projection_admission_v1();
+
+-- Operator and worker must use different PostgreSQL LOGINs (both DBA bound to
+-- the same tenant). The app role is deliberately granted NOTHING here.
+CREATE OR REPLACE FUNCTION pipeline.begin_qdrant_projection_v1(
+    p_admission_id UUID, p_command_bytes BYTEA
+) RETURNS TEXT LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE a RECORD; v_existing TEXT;
+BEGIN
+    SELECT * INTO a FROM pipeline.qdrant_projection_v1_admissions
+        WHERE admission_id = p_admission_id FOR UPDATE;
+    IF NOT FOUND OR a.tenant_id IS DISTINCT FROM pipeline.current_session_tenant_v1()
+       OR a.issued_by = session_user
+       OR a.revoked_at IS NOT NULL OR a.expires_at <= clock_timestamp()
+       OR a.command_bytes IS DISTINCT FROM p_command_bytes
+       OR encode(public.digest(p_command_bytes, 'sha256'), 'hex') <> a.command_sha256
+       OR NOT EXISTS (
+            SELECT 1 FROM pipeline.execution_runs r
+            JOIN pipeline.tenant_context_ownership o ON o.context_key = r.context_key
+            WHERE r.run_id = a.run_id AND r.context_key = a.context_key
+              AND r.tenant_id = a.tenant_id AND o.tenant_id = a.tenant_id
+       )
+    THEN
+        RAISE EXCEPTION 'Qdrant projection admission denied or stale' USING ERRCODE = 'AV001';
+    END IF;
+    SELECT state INTO v_existing FROM pipeline.qdrant_projection_v1_attempts
+        WHERE admission_id = p_admission_id FOR UPDATE;
+    IF FOUND THEN
+        RETURN v_existing; -- uncertain means NEVER retry the RPC blindly
+    END IF;
+    INSERT INTO pipeline.qdrant_projection_v1_attempts (admission_id, tenant_id)
+        VALUES (p_admission_id, a.tenant_id);
+    RETURN 'started';
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION pipeline.confirm_qdrant_projection_v1(
+    p_admission_id UUID, p_command_bytes BYTEA
+) RETURNS BOOLEAN LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
+DECLARE a RECORD; v_attempt RECORD;
+BEGIN
+    SELECT * INTO a FROM pipeline.qdrant_projection_v1_admissions
+        WHERE admission_id = p_admission_id FOR UPDATE;
+    IF NOT FOUND OR a.tenant_id IS DISTINCT FROM pipeline.current_session_tenant_v1()
+       OR a.issued_by = session_user
+       OR a.command_bytes IS DISTINCT FROM p_command_bytes
+       OR encode(public.digest(p_command_bytes, 'sha256'), 'hex') <> a.command_sha256
+    THEN
+        RAISE EXCEPTION 'Qdrant projection confirmation denied' USING ERRCODE = 'AV001';
+    END IF;
+    SELECT * INTO v_attempt FROM pipeline.qdrant_projection_v1_attempts
+        WHERE admission_id = p_admission_id FOR UPDATE;
+    IF NOT FOUND OR v_attempt.tenant_id IS DISTINCT FROM a.tenant_id THEN
+        RAISE EXCEPTION 'provider RPC was never admitted' USING ERRCODE = 'AV001';
+    END IF;
+    IF v_attempt.state = 'confirmed' THEN
+        RETURN TRUE;
+    END IF;
+    INSERT INTO pipeline.qdrant_projection_v1_receipts (
+        admission_id, tenant_id, command_sha256, point_id, exact_provider_readback
+    ) VALUES (p_admission_id, a.tenant_id, a.command_sha256, p_admission_id, TRUE);
+    UPDATE pipeline.qdrant_projection_v1_attempts
+       SET state = 'confirmed', confirmed_at = clock_timestamp()
+     WHERE admission_id = p_admission_id;
+    RETURN TRUE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION pipeline.begin_qdrant_projection_v1(UUID, BYTEA) FROM PUBLIC;
+REVOKE ALL ON FUNCTION pipeline.confirm_qdrant_projection_v1(UUID, BYTEA) FROM PUBLIC;
+
+-- Role-identity RLS, never GUC identity. Superuser/owner bypass remains an
+-- explicit production NO-GO until a separately attested worker is provisioned.
+ALTER TABLE pipeline.qdrant_projection_v1_admissions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline.qdrant_projection_v1_attempts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE pipeline.qdrant_projection_v1_receipts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS qdrant_admission_tenant_v1 ON pipeline.qdrant_projection_v1_admissions;
+CREATE POLICY qdrant_admission_tenant_v1 ON pipeline.qdrant_projection_v1_admissions
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS qdrant_attempt_tenant_v1 ON pipeline.qdrant_projection_v1_attempts;
+CREATE POLICY qdrant_attempt_tenant_v1 ON pipeline.qdrant_projection_v1_attempts
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+DROP POLICY IF EXISTS qdrant_receipt_tenant_v1 ON pipeline.qdrant_projection_v1_receipts;
+CREATE POLICY qdrant_receipt_tenant_v1 ON pipeline.qdrant_projection_v1_receipts
+    USING (tenant_id = pipeline.current_session_tenant_v1())
+    WITH CHECK (tenant_id = pipeline.current_session_tenant_v1());
+
+COMMIT;
+
+-- RLS never applies to TRUNCATE. An accidentally overgranted native LOGIN,
+-- table owner, or privileged maintenance session must not erase canonical
+-- Truth evidence, executions, or Qdrant operator admission/receipts through
+-- that bypass. This remains a forward-only fail-closed guard, not a historical
+-- tenant backfill or authorization to use a production table-owner LOGIN.
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+
+CREATE OR REPLACE FUNCTION pipeline.deny_tenant_scoped_truncate_v1()
+RETURNS trigger LANGUAGE plpgsql
+SET search_path = pg_catalog AS $$
+BEGIN
+    RAISE EXCEPTION 'tenant-bound canonical operation ledger cannot be truncated'
+        USING ERRCODE = '23514';
+END;
+$$;
+REVOKE ALL ON FUNCTION pipeline.deny_tenant_scoped_truncate_v1() FROM PUBLIC;
+
+-- Revocation alone is insufficient when a specific operator LOGIN has an
+-- inherited or mistakenly granted TRUNCATE privilege. The BEFORE triggers
+-- enforce the prohibition even then, and also for table-owner DBA paths.
+REVOKE TRUNCATE ON extracted.rule_candidates,
+    pipeline.execution_runs,
+    pipeline.pg_effect_v3_receipts,
+    pipeline.qdrant_projection_v1_admissions,
+    pipeline.qdrant_projection_v1_attempts,
+    pipeline.qdrant_projection_v1_receipts FROM PUBLIC;
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON extracted.rule_candidates;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON extracted.rule_candidates
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON pipeline.execution_runs;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON pipeline.execution_runs
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON pipeline.pg_effect_v3_receipts;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON pipeline.pg_effect_v3_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON pipeline.qdrant_projection_v1_admissions;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON pipeline.qdrant_projection_v1_admissions
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON pipeline.qdrant_projection_v1_attempts;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON pipeline.qdrant_projection_v1_attempts
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+DROP TRIGGER IF EXISTS deny_tenant_scoped_truncate_v1 ON pipeline.qdrant_projection_v1_receipts;
+CREATE TRIGGER deny_tenant_scoped_truncate_v1
+    BEFORE TRUNCATE ON pipeline.qdrant_projection_v1_receipts
+    FOR EACH STATEMENT EXECUTE FUNCTION pipeline.deny_tenant_scoped_truncate_v1();
+
+COMMIT;

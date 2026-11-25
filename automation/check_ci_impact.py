@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 45)
+                             for _, _, _, count in rows), 47)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -171,7 +171,7 @@ class ImpactFixtures(unittest.TestCase):
         package_owners = {
             "integration_harness": {"truth_certification"},
             "integration_graph_e2e": {"graph_query"},
-            "integration_qdrant_e2e": {"knowledge_a13", "vector_projection"},
+            "integration_qdrant_e2e": {"knowledge_a13", "vector_projection", "vector_admitted_projection"},
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
                                        "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity"},
@@ -188,7 +188,7 @@ class ImpactFixtures(unittest.TestCase):
         })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
-    def test_pg_v3_package_is_physically_isolated_and_owns_nine_pg_tests_once(self) -> None:
+    def test_pg_v3_package_is_physically_isolated_and_owns_ten_pg_tests_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
         owner_root = root / "app/rust/crates/integration_pg_v3_e2e"
         manifest = tomllib.loads((owner_root / "Cargo.toml").read_text(encoding="utf-8"))
@@ -212,6 +212,7 @@ class ImpactFixtures(unittest.TestCase):
             "pg_v3_admission_race_tests.rs",
             "pg_v3_operator_cli_tests.rs",
             "pg_v5_ordered_children_tests.rs",
+            "pg_v6_tenant_ingress_tests.rs",
             "pg_v3_temporal_cross_queue_tests.rs",
         )
         physical_test_names: list[str] = []
@@ -225,6 +226,7 @@ class ImpactFixtures(unittest.TestCase):
                     "pg_v3_admission_race_tests.rs": 3,
                     "pg_v3_operator_cli_tests.rs": 3,
                     "pg_v5_ordered_children_tests.rs": 1,
+                    "pg_v6_tenant_ingress_tests.rs": 1,
                     "pg_v3_temporal_cross_queue_tests.rs": 1,
                 }[filename]
                 self.assertEqual(source.count("#[tokio::test]"), expected)
@@ -238,13 +240,14 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("pg_v3_v5_live_ordered_two_child_operator_attestations", physical_test_names)
         self.assertIn("pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect", physical_test_names)
         self.assertIn("pg_v3_hitl_concurrent_mutation_fenced", physical_test_names)
-        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 9)
+        self.assertIn("pg_v3_tenant_ingress_native_login_and_rls_provenance", physical_test_names)
+        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 10)
         self.assertEqual(len([name for name in physical_test_names if name.startswith("temporal_effect_v3_")]), 1)
-        self.assertEqual(len(physical_test_names), 10, "a new PG E2E must be assigned to a mandatory filter")
+        self.assertEqual(len(physical_test_names), 11, "a new PG E2E must be assigned to a mandatory filter")
         self.assertEqual(set(SUITE_OWNERS["pg_effect_v3"]["paths"]) & {
             "app/rust/crates/integration_harness/src/lib.rs",
         }, set())
-        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 9))
+        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 10))
         self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
         self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
@@ -264,10 +267,55 @@ class ImpactFixtures(unittest.TestCase):
         })
         self.assertEqual(E2E_SHARD_RUNS["outbox"], (("outbox_a14", "outbox_a14_", 9),))
         self.assertEqual(E2E_SHARD_RUNS["qdrant_knowledge"], (("knowledge_a13", "knowledge_a13_", 3),))
+        self.assertEqual(E2E_SHARD_RUNS["vector"], (
+            ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+            ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+        ))
+        self.assertIn("app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
         self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
                       E2E_SHARD_RUNS["pg_app_delivery"])
 
-    def test_full_real_e2e_shards_cover_all_46_including_optional_certification(self) -> None:
+    def test_real_qdrant_owner_discovers_each_native_projection_test_exactly_once(self) -> None:
+        # All five tests use a real Qdrant container. The new PG-admitted
+        # external effect must never disappear behind the older qdrant_rest_
+        # filter or become a mock-only Python surface test.
+        root = Path(__file__).resolve().parents[1] / "app/rust/crates/integration_qdrant_e2e/src"
+        library = (root / "lib.rs").read_text(encoding="utf-8")
+        names: list[str] = []
+        for filename, expected in (
+            ("knowledge_read_tests.rs", 3),
+            ("qdrant_rest_projection_tests.rs", 1),
+            ("admitted_qdrant_projection_tests.rs", 1),
+        ):
+            self.assertEqual(library.count(f'include!("tests/{filename}")'), 1)
+            source = (root / "tests" / filename).read_text(encoding="utf-8")
+            self.assertEqual(source.count("#[tokio::test]"), expected)
+            declared = re.findall(
+                r"#\[tokio::test\]\s+(?:#\[[^\]]+\]\s+)*async fn ([a-z0-9_]+)\s*\(",
+                source,
+            )
+            self.assertEqual(len(declared), expected)
+            names.extend(declared)
+        selected = {
+            "knowledge_a13": ("knowledge_a13_", 3),
+            "vector_projection": ("qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+            "vector_admitted_projection": (
+                "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1,
+            ),
+        }
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(names), 5)
+        for suite, (prefix, count) in selected.items():
+            self.assertEqual(SUITE_OWNERS[suite]["command"][3], "integration_qdrant_e2e")
+            self.assertEqual(SUITE_OWNERS[suite]["command"][7], prefix)
+            self.assertEqual(sum(name.startswith(prefix) for name in names), count)
+        self.assertEqual({name for name in names if name.startswith("admitted_qdrant_")},
+                         {"admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc"})
+        self.assertEqual({suite for rows in E2E_SHARD_RUNS.values()
+                          for suite, *_ in rows if suite in selected}, set(selected))
+
+    def test_full_real_e2e_shards_cover_all_48_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -283,11 +331,11 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
         self.assertTrue(all(shards[shard] for shard in shards))
         self.assertEqual(
-            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 38
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 39
         )
         self.assertEqual(
-            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 8
-        )  # Seven ordinary architecture regressions + optional Truth cert.
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 9
+        )  # Eight ordinary architecture regressions + optional Truth cert.
         self.assertEqual(
             [(name, test_filter) for rows in shards.values()
              for name, _, test_filter, _ in rows if name == "temporal_restart"],
@@ -1104,7 +1152,7 @@ class ImpactFixtures(unittest.TestCase):
             {"vector_qdrant", "runtime_composition", "temporal_worker", "outbox_worker",
              "integration_harness"},
         )
-        self.assertEqual(result["selected_suites"], ["vector_projection"])
+        self.assertEqual(result["selected_suites"], ["vector_admitted_projection", "vector_projection"])
 
     def test_common_contracts_are_transitive(self) -> None:
         self.assertEqual(set(self.impact("app/rust/crates/contracts/src/lib.rs")["affected_crates"]), {"contracts", "primitives", "temporal_worker"})

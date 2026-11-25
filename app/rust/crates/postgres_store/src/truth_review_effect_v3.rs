@@ -244,7 +244,12 @@ pub async fn assert_unprivileged_pg_effect_role(
 /// Exact SHA-256 candidate snapshot hash for privileged manual issuance. The SQL must
 /// be executed by the operator in the SAME snapshot that selects its canonical
 /// run/context; never accept a caller-supplied hash without PG recomputation.
-// Frozen V3 source-identity contract: the full candidate row, both extraction
+// V6 tightened source-identity contract: operator admission also pins the
+// live kb.sources authority/trust/status row (except updated_at bookkeeping),
+// and a registry writer shares the canonical Truth context fence. Old
+// unconsumed admissions with a pre-V6 source hash fail closed after migration;
+// durable receipts can still replay by their original execution identity.
+// The full candidate row, both extraction
 // and evidence sections (including heading/ordering/markdown/hash/parent), and
 // both parent pages' acquisition identity, redirects, HTTP/robots observation,
 // canonical metadata, structured content and HTML bytes. Only `processed` is

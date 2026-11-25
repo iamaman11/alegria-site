@@ -497,6 +497,29 @@ SUITE_OWNERS = {
             "--locked", "--", "--nocapture",
         ),
     },
+    # This is a distinct real PostgreSQL + Qdrant external-effect contract.
+    # Preserve the older REST-to-gRPC test as its own exact filter: broadening
+    # it would silently mask a missing newly admitted/recoverable projection.
+    "vector_admitted_projection": {
+        "paths": {
+            "app/db/schema.sql",
+            "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+            "app/rust/crates/integration_qdrant_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/projection_delivery/",
+            "app/rust/crates/integration_qdrant_e2e/",
+            "app/rust/crates/vector_qdrant/",
+        ),
+        "lock_crates": {"projection_delivery", "vector_qdrant"},
+        "on_unknown_global_input": False,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_e2e", "--features", "e2e",
+            "--lib", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc",
+            "--locked", "--", "--nocapture",
+        ),
+    },
     "temporal_restart": {
         "paths": {
             "app/rust/services/temporal/Cargo.toml",
@@ -578,6 +601,9 @@ SUITE_OWNERS = {
             "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
             "app/db/migrations/20261125_0006_truth_hitl_writer_fence.sql",
             "app/db/migrations/20261125_0007_authoritative_tenant_truth_rls.sql",
+            "app/db/migrations/20261125_0008_truth_source_authority_fence.sql",
+            "app/db/migrations/20261125_0009_tenant_ingress_writer_provenance.sql",
+            "app/db/migrations/20261125_0011_tenant_operator_truncate_fence.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
@@ -586,6 +612,7 @@ SUITE_OWNERS = {
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v5_ordered_children_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v6_tenant_ingress_tests.rs",
         },
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
@@ -993,7 +1020,10 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "temporal_blocked": (
         ("temporal_restart", "canonical_temporal_blocked_review_ends_for_rework_without_publication", 1),
     ),
-    "vector": (("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),),
+    "vector": (
+        ("vector_projection", "qdrant_rest_outbox_upsert_is_visible_to_grpc_retrieval", 1),
+        ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+    ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
     ),
@@ -1008,9 +1038,8 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
     ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    # Six V3/V4 plus three additional real V5-boundary E2E: native ordered
-    # child execution, HITL racing writes, and authoritative tenant RLS.
-    "verify_d": (("pg_effect_v3", "pg_v3_", 9),),
+    # All prior V3/V4/V5 tests plus V6 real native LOGIN/tenant ingress.
+    "verify_d": (("pg_effect_v3", "pg_v3_", 10),),
 }
 
 

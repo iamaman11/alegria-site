@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,7 @@ SELECT json_build_object(
  'raw_sections_unowned', (SELECT count(*) FROM raw.sections WHERE tenant_id IS NULL),
  'candidates_unowned', (SELECT count(*) FROM extracted.rule_candidates WHERE tenant_id IS NULL),
  'hitl_unowned', (SELECT count(*) FROM site.seo_hitl_tasks WHERE tenant_id IS NULL),
+ 'admissions_unowned', (SELECT count(*) FROM pipeline.pg_effect_v3_admissions WHERE tenant_id IS NULL),
  'receipts_unowned', (SELECT count(*) FROM pipeline.pg_effect_v3_receipts WHERE tenant_id IS NULL),
  'unfinished_runs', (SELECT count(*) FROM pipeline.execution_runs WHERE status NOT IN ('done','failed')),
  'unregistered_run_contexts', (
@@ -73,19 +75,19 @@ SELECT json_build_object(
  ),
  'admission_owner_mismatches', (
    SELECT count(*) FROM pipeline.pg_effect_v3_admissions a
-   JOIN pipeline.execution_runs r ON r.run_id = a.run_id
+   LEFT JOIN pipeline.execution_runs r ON r.run_id = a.run_id
    LEFT JOIN pipeline.tenant_context_ownership o ON o.context_key = a.context_key
-   WHERE o.context_key IS NULL
+   WHERE r.run_id IS NULL OR o.context_key IS NULL
       OR a.tenant_id IS DISTINCT FROM o.tenant_id
       OR a.tenant_id IS DISTINCT FROM r.tenant_id
       OR a.context_key IS DISTINCT FROM r.context_key
  ),
  'receipt_owner_mismatches', (
    SELECT count(*) FROM pipeline.pg_effect_v3_receipts receipt
-   JOIN pipeline.pg_effect_v3_admissions a ON a.admission_id = receipt.admission_id
-   JOIN pipeline.execution_runs r ON r.run_id = receipt.run_id
+   LEFT JOIN pipeline.pg_effect_v3_admissions a ON a.admission_id = receipt.admission_id
+   LEFT JOIN pipeline.execution_runs r ON r.run_id = receipt.run_id
    LEFT JOIN pipeline.tenant_context_ownership o ON o.context_key = receipt.context_key
-   WHERE o.context_key IS NULL
+   WHERE a.admission_id IS NULL OR r.run_id IS NULL OR o.context_key IS NULL
       OR receipt.tenant_id IS DISTINCT FROM o.tenant_id
       OR receipt.tenant_id IS DISTINCT FROM a.tenant_id
       OR receipt.tenant_id IS DISTINCT FROM r.tenant_id
@@ -116,12 +118,42 @@ SELECT json_build_object(
 """
 COUNT_FIELDS = (
     "execution_runs_unowned", "raw_pages_unowned", "raw_sections_unowned",
-    "candidates_unowned", "hitl_unowned", "receipts_unowned", "unfinished_runs",
+    "candidates_unowned", "hitl_unowned", "admissions_unowned", "receipts_unowned", "unfinished_runs",
     "unregistered_run_contexts", "unregistered_candidate_contexts",
     "admission_owner_mismatches", "receipt_owner_mismatches",
     "section_page_mismatches", "candidate_source_mismatches",
     "hitl_candidate_mismatches",
 )
+
+# A route exists only if this exact native binary registers the Workflow in
+# its offline Temporal SDK replayer. The other historical types remain a hard
+# NO-GO until an owner supplies its real replay implementation. A Workflow
+# Type alone is not a queue identity: pure V1 exists in two Worker generations.
+REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
+    ("SeoSiteBuildCanonicalCutoverWorkflow", "alegria-pipeline"):
+        ("legacy", "--replay-history", "CI_TEMPORAL_HISTORY_REPLAY=PASS"),
+    ("SeoSiteBuildComposableV2Workflow", "alegria-pipeline"):
+        ("legacy", "--replay-history", "CI_TEMPORAL_HISTORY_REPLAY=PASS"),
+    ("AlegriaPureOperationDagV1Workflow", "alegria-pipeline"):
+        ("legacy", "--replay-history", "CI_TEMPORAL_HISTORY_REPLAY=PASS"),
+    ("AlegriaPureOperationDagV1Workflow", "alegria-pure-dag-v3"):
+        ("orchestrator", "--replay-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("AlegriaCheckedEffectDagV1Workflow", "alegria-pure-dag-v3"):
+        ("orchestrator", "--replay-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("AlegriaAdmittedEffectDagV2Workflow", "alegria-effect-dag-v4"):
+        ("orchestrator", "--replay-effect-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("AlegriaAdmittedEffectDagV3Workflow", "alegria-effect-dag-v5"):
+        ("orchestrator", "--replay-v5-effect-history", "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+    ("PgTruthReviewReconcileV3Workflow", "alegria-pg-command-v3"):
+        ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
+    ("PgTruthReviewReconcileV4Workflow", "alegria-pg-command-v3"):
+        ("pg", "--replay-history", "CI_TEMPORAL_PG_EFFECT_REPLAY=PASS"),
+}
+MAX_HISTORY_BYTES = 16 * 1024 * 1024
+HISTORY_SHA_RE = re.compile(r"[a-f0-9]{64}\Z")
+# Native replay must not inherit live PG, Temporal, provider, signing, or
+# deployment credentials from the operator's census environment.
+REPLAY_ENV_ALLOW = ("PATH", "LD_LIBRARY_PATH", "LANG", "LC_ALL", "TZ", "RUST_BACKTRACE", "TMPDIR")
 
 
 class EvidenceError(RuntimeError):
@@ -307,6 +339,166 @@ def blockers(temporal: dict[str, Any], postgres: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def history_type_and_queue(raw: bytes) -> tuple[str, str]:
+    """Read the server-exported WorkflowExecutionStarted metadata, not labels.
+
+    This validates the outer Temporal JSON envelope before passing the exact
+    bytes to the SDK; a plausible manifest alone is never enough to choose a
+    replay binary. Export variants with unknown shapes fail closed.
+    """
+    try:
+        document = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise EvidenceError("Temporal History export is not JSON") from error
+    if not isinstance(document, dict):
+        raise EvidenceError("Temporal History must be a JSON object")
+    envelope = document.get("history", document)
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("events"), list):
+        raise EvidenceError("Temporal History has no complete events array")
+    events = envelope["events"]
+    if not events:
+        raise EvidenceError("Temporal History is empty")
+    first = events[0]
+    if not isinstance(first, dict) or first.get("eventType") not in (
+        "WorkflowExecutionStarted", "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+    ):
+        raise EvidenceError("Temporal History first event is not WorkflowExecutionStarted")
+    attributes = first.get("workflowExecutionStartedEventAttributes")
+    if not isinstance(attributes, dict):
+        raise EvidenceError("Temporal History has no started-event attributes")
+    workflow = attributes.get("workflowType")
+    queue = attributes.get("taskQueue")
+    if not isinstance(workflow, dict) or not isinstance(queue, dict):
+        raise EvidenceError("Temporal History lacks Workflow Type or Task Queue")
+    workflow_type, task_queue = workflow.get("name"), queue.get("name")
+    if not isinstance(workflow_type, str) or not workflow_type or not isinstance(task_queue, str) or not task_queue:
+        raise EvidenceError("Temporal History Workflow Type or Task Queue is invalid")
+    return workflow_type, task_queue
+
+
+def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
+                 history_root: Path, binaries: dict[str, Path],
+                 clock: datetime | None = None) -> dict[str, Any]:
+    """Replay exact exported histories offline with the registered native SDK.
+
+    Returns only candidate evidence; user-supplied exports cannot prove their
+    own live server provenance, signature, or completeness. Production remains
+    NO-GO and only an independent server-side attestation may close that gate.
+    """
+    clock = clock or now_utc()
+    if (not isinstance(snapshot, dict) or type(snapshot.get("schema_version")) is not int
+            or snapshot["schema_version"] != SCHEMA_VERSION):
+        raise EvidenceError("unsupported historical capture schema")
+    source = snapshot.get("source")
+    if (not isinstance(source, dict) or set(source) != {"sha", "tree"}
+            or any(not isinstance(value, str) or not SHA_RE.fullmatch(value)
+                   for value in source.values())):
+        raise EvidenceError("replay snapshot has no exact source identity")
+    if source != exact_source(source["sha"]):
+        raise EvidenceError("replay snapshot source differs from clean checkout")
+    if snapshot.get("environment") not in ("staging", "production"):
+        raise EvidenceError("replay snapshot lacks explicit environment")
+    captured = timestamp(snapshot.get("captured_at"))
+    if clock - captured > timedelta(minutes=10) or captured > clock + timedelta(seconds=15):
+        raise EvidenceError("replay snapshot is stale or in the future")
+    temporal, postgres = snapshot.get("temporal"), snapshot.get("postgres")
+    if not isinstance(temporal, dict) or not isinstance(postgres, dict):
+        raise EvidenceError("replay snapshot has no live owner inventories")
+    reasons = blockers(temporal, postgres)
+    non_replay = [reason for reason in reasons if not reason.startswith("historical SDK replay remains unproved:")]
+    if non_replay:
+        raise EvidenceError("replay cannot bypass live Temporal drain or PG tenant blockers")
+    if (not isinstance(manifest, dict) or type(manifest.get("schema_version")) is not int
+            or manifest["schema_version"] != SCHEMA_VERSION
+            or manifest.get("source") != source
+            or manifest.get("environment") != snapshot["environment"]
+            or manifest.get("namespace") != temporal["namespace"]
+            or set(manifest) != {"schema_version", "source", "environment", "namespace", "histories"}
+            or not isinstance(manifest["histories"], list)):
+        raise EvidenceError("replay manifest is not bound to captured source and namespace")
+    expected = {name: counts["total"] for name, counts in temporal["legacy_workflow_types"].items()}
+    observed = {name: 0 for name in WORKFLOW_TYPES}
+    seen_runs: set[tuple[str, str]] = set()
+    seen_bytes: set[str] = set()
+    prepared: list[tuple[str, str, str, Path, str]] = []
+    try:
+        root = history_root.resolve(strict=True)
+    except OSError as error:
+        raise EvidenceError("history export directory is unavailable") from error
+    if not root.is_dir():
+        raise EvidenceError("history root is not a directory")
+    for entry in manifest["histories"]:
+        if not isinstance(entry, dict) or set(entry) != {
+            "workflow_type", "workflow_id", "run_id", "task_queue", "file", "sha256",
+        }:
+            raise EvidenceError("invalid history manifest entry")
+        workflow_type, task_queue = entry["workflow_type"], entry["task_queue"]
+        if workflow_type not in observed or (workflow_type, task_queue) not in REPLAY_ROUTES:
+            raise EvidenceError("historical Workflow Type/Task Queue lacks an SDK replay route")
+        for name in ("workflow_id", "run_id"):
+            if not isinstance(entry[name], str) or not entry[name].strip() or len(entry[name]) > 256:
+                raise EvidenceError("historical Workflow ID or Run ID is invalid")
+        identity = (entry["workflow_id"], entry["run_id"])
+        if identity in seen_runs:
+            raise EvidenceError("duplicate historical Workflow ID/Run ID")
+        seen_runs.add(identity)
+        if not isinstance(entry["sha256"], str) or not HISTORY_SHA_RE.fullmatch(entry["sha256"]):
+            raise EvidenceError("invalid SHA-256 of exported History")
+        if entry["sha256"] in seen_bytes:
+            raise EvidenceError("same exported History reused for different Workflow runs")
+        seen_bytes.add(entry["sha256"])
+        relative = entry["file"]
+        if not isinstance(relative, str) or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
+            raise EvidenceError("History path is absolute or escapes export directory")
+        path = root / relative
+        if path.is_symlink():
+            raise EvidenceError("History symlink is not trusted")
+        try:
+            path = path.resolve(strict=True)
+            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > MAX_HISTORY_BYTES:
+                raise EvidenceError("History file is missing, oversized or outside export root")
+            raw = path.read_bytes()
+        except OSError as error:
+            raise EvidenceError("History file cannot be read safely") from error
+        if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
+            raise EvidenceError("exported History SHA-256 differs from manifest")
+        if history_type_and_queue(raw) != (workflow_type, task_queue):
+            raise EvidenceError("exported History conflicts with claimed Type/Queue")
+        owner, command, marker = REPLAY_ROUTES[(workflow_type, task_queue)]
+        observed[workflow_type] += 1
+        prepared.append((owner, command, marker, path, entry["sha256"]))
+    if observed != expected:
+        raise EvidenceError("exported History set does not cover every counted Workflow Type")
+    # First check the complete manifest, THEN run any offline replay. An
+    # incomplete or unsupported history must never yield partial green output.
+    verified_binaries: dict[str, Path] = {}
+    for owner in {item[0] for item in prepared}:
+        binary = binaries.get(owner)
+        if (not isinstance(binary, Path) or binary.is_symlink() or not binary.is_file()
+                or not os.access(binary, os.X_OK)):
+            raise EvidenceError("required executable SDK replay binary is absent")
+        verified_binaries[owner] = binary.resolve(strict=True)
+    replay_env = {key: os.environ[key] for key in REPLAY_ENV_ALLOW if key in os.environ}
+    for owner, command, marker, path, _ in prepared:
+        binary = verified_binaries[owner]
+        stdout = run_command([str(binary), command, str(path)], env=replay_env)
+        if marker not in stdout.splitlines():
+            raise EvidenceError("native Temporal SDK replay did not attest PASS")
+    return {
+        "schema_version": SCHEMA_VERSION, "status": "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY",
+        "environment": snapshot["environment"], "source": source,
+        "temporal_namespace": temporal["namespace"],
+        "replayed_by_type": observed, "replayed_sha256": sorted(seen_bytes),
+        "replay_count": len(prepared), "cutover_authorized": False,
+        "unverified_external_gates": [
+            "independent_server_history_export_identity_and_completeness",
+            "authoritative_legacy_starter_fence_and_worker_routing",
+            "operator_signed_replay_binary_provenance_and_rollback_drill",
+            "production_mTLS_and_explicit_cutover_authorization",
+        ],
+    }
+
+
 def capture(*, environment: str, address: str, namespace: str,
             dsn_env: str, source_sha: str) -> dict[str, Any]:
     if environment not in {"staging", "production"}:
@@ -335,6 +527,7 @@ def capture(*, environment: str, address: str, namespace: str,
 
 
 def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
+               replay_evidence: dict[str, Any] | None = None,
                clock: datetime | None = None) -> dict[str, Any]:
     """Compare two independently captured live snapshots after a drain window.
 
@@ -349,7 +542,15 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
             continue
         if document.get("cutover_authorized") is not False:
             errors.append(f"{name}: forbidden cutover_authorized marker")
-        if document.get("status") != "DRAIN_CANDIDATE_ONLY" or document.get("blockers") != []:
+        temporal_record = document.get("temporal")
+        historical = temporal_record.get("legacy_workflow_types") if isinstance(temporal_record, dict) else None
+        historical = historical if isinstance(historical, dict) else {}
+        expected_status = "BLOCKED" if replay_evidence is not None and any(
+            counts.get("total", 0) for counts in historical.values() if isinstance(counts, dict)
+        ) else "DRAIN_CANDIDATE_ONLY"
+        if document.get("status") != expected_status:
+            errors.append(f"{name}: drain inventory status conflicts with historical counts")
+        if replay_evidence is None and document.get("blockers") != []:
             errors.append(f"{name}: drain inventory did not pass all read-only criteria")
         for top in ("environment", "source", "temporal", "postgres"):
             if top not in document:
@@ -367,6 +568,11 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
     for name, record in (("earlier", earlier), ("later", later)):
         try:
             reasons = blockers(record["temporal"], record["postgres"])
+            if replay_evidence is not None:
+                if record.get("blockers") != reasons:
+                    errors.append(f"{name}: capture blocker list differs from live inventory")
+                reasons = [reason for reason in reasons if not reason.startswith(
+                    "historical SDK replay remains unproved:")]
             if reasons:
                 errors.extend(f"{name}: {reason}" for reason in reasons)
         except (KeyError, TypeError, ValueError, EvidenceError):
@@ -380,14 +586,48 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
             errors.append("last drain snapshot too old or in the future")
     except (EvidenceError, KeyError, TypeError):
         errors.append("invalid drain snapshot times")
+    if errors:
+        return {"status": "BLOCKED", "errors": errors, "cutover_authorized": False}
+    if replay_evidence is not None:
+        if not isinstance(replay_evidence, dict):
+            errors.append("replay evidence is not an object")
+        else:
+            if (replay_evidence.get("schema_version") != SCHEMA_VERSION
+                    or replay_evidence.get("status") != "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY"
+                    or replay_evidence.get("cutover_authorized") is not False
+                    or replay_evidence.get("source") != later["source"]
+                    or replay_evidence.get("environment") != later["environment"]
+                    or replay_evidence.get("temporal_namespace") != later["temporal"].get("namespace")):
+                errors.append("replay evidence source/environment/namespace/status mismatch")
+            expected = {
+                name: counts["total"] for name, counts in
+                later["temporal"]["legacy_workflow_types"].items()
+            }
+            counts = replay_evidence.get("replayed_by_type")
+            if (not isinstance(counts, dict) or counts != expected
+                    or any(type(value) is not int or value < 0 for value in counts.values())):
+                errors.append("SDK replay coverage differs from historical census")
+            replay_hashes = replay_evidence.get("replayed_sha256")
+            replay_count = replay_evidence.get("replay_count")
+            if (not isinstance(replay_hashes, list)
+                    or not all(isinstance(value, str) and HISTORY_SHA_RE.fullmatch(value)
+                               for value in replay_hashes)
+                    or len(set(replay_hashes)) != len(replay_hashes)
+                    or type(replay_count) is not int or replay_count != sum(expected.values())
+                    or len(replay_hashes) != replay_count):
+                errors.append("SDK replay run identities or hashes are incomplete")
     return {
-        "status": "BLOCKED" if errors else "DRAIN_PRECONDITIONS_CAPTURED",
+        "status": "BLOCKED" if errors else (
+            "HISTORY_REPLAY_PRECONDITIONS_CAPTURED" if replay_evidence is not None
+            else "DRAIN_PRECONDITIONS_CAPTURED"
+        ),
         "errors": errors, "cutover_authorized": False,
         "still_required": [
             "server_verified_legacy_starter_freeze_and_no_duplicate_pollers",
             "official_sdk_replay_of_all_historical_workflow_types",
             "verified_rollback_fleet_and_routing_reversal",
             "production_operator_authorization_and_mTLS",
+            "independent_server_attestation_of_exported_history_and_run_identity",
         ],
     }
 
@@ -417,7 +657,20 @@ def main(argv: list[str] | None = None) -> int:
     compare = sub.add_parser("compare", help="validate two drain snapshots; no cutover action")
     compare.add_argument("--earlier", type=Path, required=True)
     compare.add_argument("--later", type=Path, required=True)
+    compare.add_argument("--replay-evidence", type=Path,
+                         help="optional OFFLINE_SDK_REPLAY_CANDIDATE_ONLY report")
     compare.add_argument("--output", type=Path, required=True)
+    replay = sub.add_parser(
+        "replay-audit",
+        help="offline SDK replay of exact exported histories; never authorizes cutover",
+    )
+    replay.add_argument("--capture", type=Path, required=True)
+    replay.add_argument("--manifest", type=Path, required=True)
+    replay.add_argument("--history-root", type=Path, required=True)
+    replay.add_argument("--legacy-bin", type=Path, required=True)
+    replay.add_argument("--orchestrator-bin", type=Path, required=True)
+    replay.add_argument("--pg-bin", type=Path, required=True)
+    replay.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "capture":
@@ -426,14 +679,32 @@ def main(argv: list[str] | None = None) -> int:
                 namespace=args.temporal_namespace, dsn_env=args.dsn_env,
                 source_sha=args.source_sha,
             )
-        else:
+        elif args.command == "compare":
             outcome = check_pair(
                 json.loads(args.earlier.read_text(encoding="utf-8")),
                 json.loads(args.later.read_text(encoding="utf-8")),
+                replay_evidence=(
+                    json.loads(args.replay_evidence.read_text(encoding="utf-8"))
+                    if args.replay_evidence is not None else None
+                ),
+            )
+        else:
+            outcome = replay_audit(
+                json.loads(args.capture.read_text(encoding="utf-8")),
+                json.loads(args.manifest.read_text(encoding="utf-8")),
+                history_root=args.history_root,
+                binaries={
+                    "legacy": args.legacy_bin,
+                    "orchestrator": args.orchestrator_bin,
+                    "pg": args.pg_bin,
+                },
             )
         atomic_json(args.output, outcome)
         print(f"TEMPORAL_HISTORY_TRANSITION={outcome['status']} cutover_authorized=false")
-        return 0 if outcome["status"] in {"DRAIN_CANDIDATE_ONLY", "DRAIN_PRECONDITIONS_CAPTURED"} else 1
+        return 0 if outcome["status"] in {
+            "DRAIN_CANDIDATE_ONLY", "DRAIN_PRECONDITIONS_CAPTURED",
+            "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY", "HISTORY_REPLAY_PRECONDITIONS_CAPTURED",
+        } else 1
     except (EvidenceError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         # The error reason must never include a DSN, URI query, token or stderr.
         print(f"TEMPORAL_HISTORY_TRANSITION=BLOCKED reason={type(error).__name__}", file=sys.stderr)

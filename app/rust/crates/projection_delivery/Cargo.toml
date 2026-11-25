@@ -12,7 +12,9 @@ graph_neo4j = { path = "../graph_neo4j" }
 postgres_store = { path = "../postgres_store" }
 primitives = { path = "../primitives" }
 prost = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
+uuid = { workspace = true }
 vector_qdrant = { path = "../vector_qdrant" }
 voyage_api = { path = "../voyage_api" }

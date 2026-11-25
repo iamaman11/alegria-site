@@ -7,3 +7,4 @@
 
 pub mod neo4j_materialization_adapter;
 pub mod projection_materialize_adapter;
+pub mod admitted_qdrant_projection_v1;

@@ -134,7 +134,8 @@ async fn pg_v3_v5_live_ordered_two_child_operator_attestations() {
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          GRANT CONNECT ON DATABASE alegria TO {role};
-         GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role};
+         GRANT USAGE ON SCHEMA pipeline, extracted, raw, kb TO {role};
+         GRANT SELECT ON kb.sources TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages TO {role};

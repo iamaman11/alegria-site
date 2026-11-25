@@ -18,6 +18,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
+      - temporal_pg_effect_data
 
   # 1b. Отдельная БД для Temporal (service persistence)
   postgres-temporal:
@@ -58,6 +61,9 @@ services:
       POOL_MODE: session
       MAX_CLIENT_CONN: 200
       DEFAULT_POOL_SIZE: 20
+    networks:
+      - default
+      - temporal_pg_effect_data
 
   # 2. Слой графов (Neo4j с плагинами APOC и GDS)
   neo4j:
@@ -141,6 +147,7 @@ services:
     networks:
       - default
       - temporal_pure_control
+      - temporal_pg_effect_data
     ports:
       - "127.0.0.1:7233:7233"
     healthcheck:
@@ -404,6 +411,11 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    # A third, private L3 plane admits only Temporal + PG endpoints. The
+    # PostgreSQL effect Activity cannot laterally reach Neo4j, Qdrant,
+    # providers, or the legacy multi-owner production Worker.
+    networks:
+      - temporal_pg_effect_data
 
   # 10. Runtime outbox materializer (PostgreSQL -> Neo4j/Qdrant projections)
   outbox-worker:
@@ -473,6 +485,8 @@ secrets:
 # pending explicit historical drain and parity evidence; this is NOT cutover.
 networks:
   temporal_pure_control:
+    internal: true
+  temporal_pg_effect_data:
     internal: true
 
 volumes:
