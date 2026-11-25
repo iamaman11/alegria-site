@@ -122,10 +122,20 @@ fn exactly_one_payload<'a>(
     Ok(payloads.payloads[0].data.as_slice())
 }
 
+fn verify_validation_result_wire(
+    request: &OwnerValidationRequestV1,
+    result_bytes: &[u8],
+) -> Result<()> {
+    let result: OwnerValidationResultV1 = serde_json::from_slice(result_bytes)?;
+    result.verify_success(request)?;
+    Ok(())
+}
+
 /// V2 never permits a Qdrant effect Child unless EVERY DAG owner finished
 /// its pure ValidateOnly Child before the first provider effect was even
-/// initiated. The Qdrant operator independently verifies its own validator's
-/// exact deployed contract/command and reciprocal server result.
+/// initiated. The Qdrant operator independently verifies every owner's
+/// typed validation result and reciprocal server History. Only Qdrant's own
+/// concrete command is re-decoded here; foreign commands belong to owners.
 async fn attest_v2_validation_barrier(
     client: &temporalio_client::Client,
     namespace: &str,
@@ -192,7 +202,7 @@ async fn attest_v2_validation_barrier(
             && actual_validation_ids == expected_validation_ids,
         "V2 validation wave has duplicate, missing or foreign owner ValidateChild IDs"
     );
-    for (id, _) in &validations {
+    for (id, initiated) in &validations {
         ensure!(
             *id < first_effect_id,
             "V2 validation Child began after first effect"
@@ -205,16 +215,177 @@ async fn attest_v2_validation_barrier(
                     &event.attributes
                 {
                     if attrs.initiated_event_id == *id {
-                        return Some(event.event_id);
+                        return Some((event.event_id, attrs));
                     }
                 }
                 None
             })
             .collect::<Vec<_>>();
         ensure!(
-            completed.len() == 1 && completed[0] < first_effect_id,
+            completed.len() == 1 && completed[0].0 < first_effect_id,
             "V2 effect started before every owner validation completed"
         );
+
+        // The own Qdrant validation is checked below, including its concrete
+        // command. Check every OTHER owner here; successful completion alone
+        // does not establish that the typed result accepted the exact request.
+        let node = run
+            .plan
+            .nodes
+            .iter()
+            .find(|node| {
+                owner_validation_child_workflow_id_v1(
+                    &effect.invocation.parent,
+                    &run.plan.hash,
+                    &node.instance,
+                ) == initiated.workflow_id
+            })
+            .context("V2 validation Child is not in the immutable plan")?;
+        if node.instance == effect.invocation.checked_dispatch.instance {
+            continue;
+        }
+        let owner_command = run
+            .owner_commands
+            .get(&node.instance)
+            .context("V2 foreign validation has no pinned owner command")?;
+        let matching_routes = run
+            .pinned_routes
+            .iter()
+            .filter(|route| {
+                route.operation == node.operation && route.owner == owner_command.owner
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            matching_routes.len() == 1
+                && matching_routes[0].contract_hash == owner_command.contract_hash
+                && initiated.workflow_type.as_ref().map(|workflow| workflow.name.as_str())
+                    == Some(OWNER_VALIDATION_CHILD_TYPE_V1)
+                && initiated.task_queue.as_ref().map(|queue| queue.name.as_str())
+                    == Some(matching_routes[0].task_queue.as_str()),
+            "V2 foreign ValidateOnly Child used an untrusted route or Task Queue"
+        );
+        let initiated_bytes = exactly_one_payload(
+            initiated.input.as_ref(),
+            "foreign ValidateOnly initiated input",
+        )?;
+        let validated: OwnerValidationRequestV1 = serde_json::from_slice(initiated_bytes)?;
+        validated.validate_shape()?;
+        ensure!(
+            serde_json::to_vec(&validated)? == initiated_bytes
+                && validated.parent == effect.invocation.parent
+                && validated.plan_hash == run.plan.hash
+                && validated.scope == run.plan.scope
+                && validated.instance == node.instance
+                && validated.operation == node.operation
+                && validated.owner == owner_command.owner
+                && validated.contract_hash == owner_command.contract_hash
+                && validated.command_bytes == owner_command.command_bytes,
+            "V2 foreign ValidateOnly Child request differs from exact parent plan"
+        );
+        ensure!(
+            validated.external_inputs.len() + validated.produced_input_ports.len()
+                == node.inputs.len(),
+            "V2 foreign ValidateOnly contains extra or missing input ports"
+        );
+        for (port, binding) in &node.inputs {
+            match binding {
+                ArtifactBinding::External { artifact } => ensure!(
+                    validated.external_inputs.get(port) == run.admitted.get(artifact)
+                        && !validated.produced_input_ports.contains(port),
+                    "V2 foreign ValidateOnly External bytes differ from sealed DAG"
+                ),
+                ArtifactBinding::Produced { .. } => ensure!(
+                    validated.produced_input_ports.contains(port)
+                        && !validated.external_inputs.contains_key(port),
+                    "V2 foreign ValidateOnly Produced port differs from sealed DAG"
+                ),
+            }
+        }
+        let started = parent
+            .events
+            .iter()
+            .filter_map(|event| {
+                if let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) =
+                    &event.attributes
+                {
+                    if attrs.initiated_event_id == *id {
+                        return Some((event.event_id, attrs));
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+        ensure!(
+            started.len() == 1,
+            "V2 foreign ValidateOnly Child did not start exactly once"
+        );
+        let child_identity = started[0]
+            .1
+            .workflow_execution
+            .as_ref()
+            .context("V2 foreign ValidateOnly ChildStarted omitted execution identity")?;
+        ensure!(
+            child_identity.workflow_id == initiated.workflow_id
+                && !child_identity.run_id.is_empty()
+                && completed[0].1.started_event_id == started[0].0
+                && completed[0].1.workflow_execution.as_ref().is_some_and(|execution| {
+                    execution.workflow_id == child_identity.workflow_id
+                        && execution.run_id == child_identity.run_id
+                }),
+            "V2 foreign ValidateOnly ChildStarted/Completed identities disagree"
+        );
+        let child_history = exact_history(
+            client,
+            namespace,
+            &child_identity.workflow_id,
+            &child_identity.run_id,
+        )
+        .await?;
+        let child_input = start_payload(
+            &child_history,
+            OWNER_VALIDATION_CHILD_TYPE_V1,
+            &matching_routes[0].task_queue,
+        )?;
+        ensure!(
+            child_input.as_slice() == initiated_bytes,
+            "V2 foreign ValidateOnly parent/child server start bytes differ"
+        );
+        let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) =
+            &child_history
+                .events
+                .first()
+                .context("V2 foreign ValidateOnly Child has no server start")?
+                .attributes
+        else {
+            bail!("V2 foreign ValidateOnly Child lacks server WorkflowStarted");
+        };
+        ensure!(
+            child_start.parent_workflow_execution.as_ref().is_some_and(|parent| {
+                parent.workflow_id == request.parent_workflow_id
+                    && parent.run_id == request.parent_workflow_run_id
+            }) && child_start.parent_initiated_event_id == *id,
+            "V2 foreign ValidateOnly child is not reciprocally parent-attested"
+        );
+        let Some(Attributes::WorkflowExecutionCompletedEventAttributes(child_done)) =
+            &child_history
+                .events
+                .last()
+                .context("V2 foreign ValidateOnly Child has no terminal event")?
+                .attributes
+        else {
+            bail!("V2 foreign ValidateOnly Child did not complete successfully");
+        };
+        let result_bytes = exactly_one_payload(
+            completed[0].1.result.as_ref(),
+            "foreign parent ValidateOnly result",
+        )?;
+        ensure!(
+            result_bytes == exactly_one_payload(
+                child_done.result.as_ref(), "foreign child ValidateOnly result",
+            )?,
+            "V2 foreign ValidateOnly parent/child server results differ"
+        );
+        verify_validation_result_wire(&validated, result_bytes)?;
     }
 
     let expected_id = owner_validation_child_workflow_id_v1(
@@ -358,8 +529,7 @@ async fn attest_v2_validation_barrier(
             )?,
         "Qdrant ValidateOnly result differs between parent and child server Histories"
     );
-    let accepted: OwnerValidationResultV1 = serde_json::from_slice(result_bytes)?;
-    accepted.verify_success(&validated)?;
+    verify_validation_result_wire(&validated, result_bytes)?;
     let start = validation_history
         .events
         .first()
@@ -1405,6 +1575,60 @@ pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn foreign_v2_validation_receipt_must_accept_exact_request() {
+        use operation_protocol::{
+            ContractHash, OperationRef, PlanHash, RunScope, TemporalExecutionIdentityV4,
+        };
+
+        let scope = RunScope {
+            tenant_id: "tenant-a".into(),
+            run_id: Uuid::new_v4().to_string(),
+        };
+        let request = OwnerValidationRequestV1 {
+            schema_revision: 1,
+            parent: TemporalExecutionIdentityV4 {
+                workflow_id: operation_dag_parent_workflow_id_v2(&scope.run_id),
+                run_id: Uuid::new_v4().to_string(),
+            },
+            plan_hash: PlanHash("a".repeat(64)),
+            scope,
+            instance: "foreign_node".into(),
+            operation: OperationRef {
+                id: "foreign.validated".into(),
+                revision: 1,
+            },
+            owner: "foreign_owner".into(),
+            contract_hash: ContractHash("foreign-contract".into()),
+            command_bytes: vec![1, 2, 3],
+            input_schemas: Default::default(),
+            external_inputs: Default::default(),
+            produced_input_ports: Default::default(),
+        };
+        let accepted = OwnerValidationResultV1::accepted(&request).unwrap();
+        assert!(verify_validation_result_wire(
+            &request,
+            &serde_json::to_vec(&accepted).unwrap(),
+        )
+        .is_ok());
+
+        let mut refused = accepted.clone();
+        refused.accepted = false;
+        assert!(verify_validation_result_wire(
+            &request,
+            &serde_json::to_vec(&refused).unwrap(),
+        )
+        .is_err());
+
+        let mut forged = accepted;
+        forged.request_hash = "different-validation-request".into();
+        assert!(verify_validation_result_wire(
+            &request,
+            &serde_json::to_vec(&forged).unwrap(),
+        )
+        .is_err());
+    }
 
     #[test]
     fn generic_qdrant_operator_never_confuses_v1_and_v2_parent_identities() {

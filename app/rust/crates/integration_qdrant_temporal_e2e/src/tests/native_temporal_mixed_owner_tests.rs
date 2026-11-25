@@ -1683,9 +1683,11 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let produced_id = Uuid::new_v4();
     let parallel_id = Uuid::new_v4();
     let invalid_id = Uuid::new_v4();
+    let foreign_id = Uuid::new_v4();
     let contexts = [format!("native-v2-produced-{produced_id}"),
         format!("native-v2-parallel-{parallel_id}"),
-        format!("native-v2-invalid-{invalid_id}")];
+        format!("native-v2-invalid-{invalid_id}"),
+        format!("native-v2-foreign-{foreign_id}")];
     for context in &contexts {
         sqlx::query(
             "INSERT INTO kb.visa_contexts(context_key,country_code,visa_family,citizenship_code)
@@ -1698,8 +1700,14 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     let produced_q_admission = Uuid::new_v4();
     let parallel_pg_admission = Uuid::new_v4();
     let parallel_q_admission = Uuid::new_v4();
+    let invalid_pg_admission = Uuid::new_v4();
+    let invalid_q_admission = Uuid::new_v4();
+    let foreign_pg_admission = Uuid::new_v4();
+    let foreign_q_admission = Uuid::new_v4();
     let produced_keyword = format!("v2-pg-produced-{produced_q_admission}");
     let parallel_keyword = format!("v2-pg-parallel-{parallel_q_admission}");
+    let invalid_keyword = format!("v2-invalid-{invalid_q_admission}");
+    let foreign_keyword = format!("v2-foreign-{foreign_q_admission}");
     let produced_vector = (0..1024).map(|i| 0.125 + i as f32 / 16384.0)
         .collect::<Vec<_>>();
     let parallel_vector = vec![0.375_f32; 1024];
@@ -1712,8 +1720,8 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         parallel_q_admission, parallel_keyword.clone(), &build_id,
     );
     let (mut invalid_run, invalid_routes) = mixed_v2_independent_fixture_for(
-        invalid_id, tenant, contexts[2].clone(), Uuid::new_v4(), Uuid::new_v4(),
-        format!("v2-invalid-{}", Uuid::new_v4()), &build_id,
+        invalid_id, tenant, contexts[2].clone(), invalid_pg_admission,
+        invalid_q_admission, invalid_keyword.clone(), &build_id,
     );
     // A structurally valid plan with a *semantic* bad owner DTO: only the
     // Qdrant ValidateChild may reject it. PG's earlier root is never started.
@@ -1725,6 +1733,23 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     bad_wire.command_bytes = bad_bytes.clone();
     invalid_run.admitted.get_mut(&"external_vector_command".into()).unwrap().payload = bad_bytes;
 
+    // A different semantic fault: the JSON shape and vector are valid, but
+    // the owner's concrete DTO claims another tenant than the immutable plan.
+    // This must also fail in the owner's pure ValidateChild, without starting
+    // the otherwise valid independent PostgreSQL operation.
+    let (mut foreign_run, foreign_routes) = mixed_v2_independent_fixture_for(
+        foreign_id, tenant, contexts[3].clone(), foreign_pg_admission,
+        foreign_q_admission, foreign_keyword.clone(), &build_id,
+    );
+    let foreign_wire = foreign_run.owner_commands
+        .get_mut(&"qdrant_external_upsert".into()).unwrap();
+    let mut foreign_command: qdrant_contracts::QdrantKeywordProjectionCommandV1 =
+        serde_json::from_slice(&foreign_wire.command_bytes).unwrap();
+    foreign_command.tenant_id = "foreign-v2-tenant".into();
+    let foreign_bytes = serde_json::to_vec(&foreign_command).unwrap();
+    foreign_wire.command_bytes = foreign_bytes.clone();
+    foreign_run.admitted.get_mut(&"external_vector_command".into()).unwrap().payload = foreign_bytes;
+
     mixed_v7_seed_pg_vector_projection_source(
         &pg.pool, produced_id, tenant, &contexts[0], &produced_keyword, &produced_vector,
     ).await;
@@ -1732,13 +1757,25 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         &pg.pool, parallel_id, tenant, &contexts[1],
         &format!("pg-source-{parallel_keyword}"), &parallel_vector,
     ).await;
+    // Both rejected plans have a real, readable PG-owned source. An absence
+    // of effects therefore cannot be explained by a missing source row.
+    for (run_id, context, keyword) in [
+        (invalid_id, &contexts[2], &invalid_keyword),
+        (foreign_id, &contexts[3], &foreign_keyword),
+    ] {
+        mixed_v7_seed_pg_vector_projection_source(
+            &pg.pool, run_id, tenant, context,
+            &format!("pg-source-{keyword}"), &parallel_vector,
+        ).await;
+    }
     for (run, routes) in [(&produced_run, &produced_routes),
-        (&parallel_run, &parallel_routes), (&invalid_run, &invalid_routes)] {
+        (&parallel_run, &parallel_routes), (&invalid_run, &invalid_routes),
+        (&foreign_run, &foreign_routes)] {
         routes.validate_run_routes(run).expect("V2 trusted per-owner routes");
     }
     let catalog = mixed_v2_install_ci_trusted_catalog(&[
         (&produced_run, &produced_routes), (&parallel_run, &parallel_routes),
-        (&invalid_run, &invalid_routes),
+        (&invalid_run, &invalid_routes), (&foreign_run, &foreign_routes),
     ]);
     let produced_issuer_catalog = mixed_v6_governance_issuer_catalog(&produced_run, &produced_routes);
     let parallel_issuer_catalog = mixed_v6_governance_issuer_catalog(&parallel_run, &parallel_routes);
@@ -2051,31 +2088,52 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         let _ = routes;
     }
 
-    // A valid typed plan with a malformed *concrete downstream owner DTO*
-    // must fail at Qdrant ValidateChild, before PG can run its effect Child.
-    let invalid_parent_id = operation_dag_parent_workflow_id_v2(&invalid_id.to_string());
-    let invalid_parent = client.start_workflow(
-        UntypedWorkflow::new(OPERATION_DAG_PARENT_TYPE_V2),
-        RawValue::from_value(&invalid_run, &PayloadConverter::serde_json()),
-        WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE_V2, invalid_parent_id).build(),
-    ).await.expect("start malformed downstream V2 business DTO test");
-    let invalid_result = timeout(Duration::from_secs(45),
-        invalid_parent.get_result(WorkflowGetResultOptions::default()))
-        .await.expect("invalid downstream V2 ValidateChild must terminate");
-    assert!(invalid_result.is_err(),
-        "malformed downstream Qdrant owner DTO cannot pass ValidateOnly");
-    let rejected_history = invalid_parent.fetch_history(
-        WorkflowFetchHistoryOptions::builder().build())
-        .into_events().await.expect("rejected real V2 parent History");
-    assert!(rejected_history.iter().any(|event| matches!(
-        &event.attributes,
-        Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
-            if a.workflow_id.starts_with("alegria-owner-validate-v1-")
-    )), "V2 malformed Qdrant command must be rejected in actual ValidateChild");
-    assert!(!rejected_history.iter().any(|event| matches!(
-        &event.attributes,
-        Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
-            if a.workflow_id.starts_with("alegria-owner-operation-v2-")
-    )), "V2 barrier must forbid ALL PG/Qdrant effects on malformed downstream DTO");
+    // A structurally legal plan with either malformed concrete bytes or an
+    // exact-shape foreign-tenant DTO must fail at Qdrant ValidateChild before
+    // the parallel PostgreSQL Child performs an effect. Assert not only the
+    // server History fence but also the durable SQL admission/effect ledgers.
+    for (case, rejected_id, rejected_run, pg_admission, q_admission) in [
+        ("bad-vector", invalid_id, &invalid_run, invalid_pg_admission, invalid_q_admission),
+        ("foreign-tenant", foreign_id, &foreign_run, foreign_pg_admission, foreign_q_admission),
+    ] {
+        let rejected_parent_id = operation_dag_parent_workflow_id_v2(&rejected_id.to_string());
+        let rejected_parent = client.start_workflow(
+            UntypedWorkflow::new(OPERATION_DAG_PARENT_TYPE_V2),
+            RawValue::from_value(rejected_run, &PayloadConverter::serde_json()),
+            WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE_V2, rejected_parent_id).build(),
+        ).await.expect("start invalid downstream owner V2 DTO test");
+        let rejected_result = timeout(Duration::from_secs(45),
+            rejected_parent.get_result(WorkflowGetResultOptions::default()))
+            .await.expect("invalid downstream V2 ValidateChild must terminate");
+        assert!(rejected_result.is_err(),
+            "{case}: invalid Qdrant owner DTO cannot pass ValidateOnly");
+        let rejected_history = rejected_parent.fetch_history(
+            WorkflowFetchHistoryOptions::builder().build())
+            .into_events().await.expect("rejected real V2 parent History");
+        assert!(rejected_history.iter().any(|event| matches!(
+            &event.attributes,
+            Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                if a.workflow_id.starts_with("alegria-owner-validate-v1-")
+        )), "{case}: actual owner ValidateChild must initiate before rejecting");
+        assert!(!rejected_history.iter().any(|event| matches!(
+            &event.attributes,
+            Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(a))
+                if a.workflow_id.starts_with("alegria-owner-operation-v2-")
+        )), "{case}: V2 barrier must forbid ALL PG/Qdrant effect Children");
+        let pg_admissions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pipeline.pg_vector_projection_admissions_v1 WHERE admission_id=$1"
+        ).bind(pg_admission).fetch_one(&pg.pool).await.unwrap();
+        let q_admissions: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
+        ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+        let q_attempts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pipeline.qdrant_projection_v4_attempts WHERE admission_id=$1"
+        ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+        let q_receipts: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM pipeline.qdrant_projection_v4_receipts WHERE admission_id=$1"
+        ).bind(q_admission).fetch_one(&pg.pool).await.unwrap();
+        assert_eq!((pg_admissions, q_admissions, q_attempts, q_receipts), (0, 0, 0, 0),
+            "{case}: a failed semantic preflight must leave both owner ledgers untouched");
+    }
     eprintln!("CI_MIXED_V2_NATIVE_VALIDATE_BARRIER_NO_EFFECT=PASS");
 }

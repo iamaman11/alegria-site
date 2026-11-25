@@ -25,6 +25,17 @@ STUDIES = {
     "compiler-owners": ("FOUR_OWNER_ACTUAL_RUSTC_AB_CAPTURED", "four_owner_probes"),
     "owner-rebuild": ("EVIDENCE_CAPTURED", "probes"),
 }
+# The full owner-rebuild mode compiles all native Temporal processes together.
+# A provider-local edit may still relink the historical monolith, but it must
+# never relink a different native owner or the provider-free DAG coordinator.
+FORBIDDEN_NATIVE_CROSS_RELINKS = {
+    "postgres_store": frozenset({"temporal_qdrant_effects", "temporal_orchestrator"}),
+    "vector_qdrant": frozenset({"temporal_pg_effects", "temporal_orchestrator"}),
+    "graph_neo4j": frozenset({
+        "temporal_pg_effects", "temporal_qdrant_effects", "temporal_orchestrator",
+    }),
+    "temporal_orchestrator": frozenset({"temporal_pg_effects", "temporal_qdrant_effects"}),
+}
 
 
 def require_number(value: Any, context: str) -> float:
@@ -39,6 +50,17 @@ def require_names(value: Any, context: str) -> list[str]:
     if len(value) != len(set(value)):
         raise ValueError(f"{context}: duplicate binary names")
     return sorted(value)
+
+
+def reject_native_cross_owner_relinks(owner: str, relinked: list[str], written: list[str]) -> None:
+    """Only evaluate measured full-build binaries, not manifest closure guesses."""
+    forbidden = FORBIDDEN_NATIVE_CROSS_RELINKS[owner]
+    for evidence, names in (("compiler relink", relinked), ("binary file write", written)):
+        # Cargo keys are package-id::binary-name; the final segment is the
+        # actual target identity. Bare names also work for test fixtures.
+        leaked = sorted({name.rsplit("::", 1)[-1] for name in names} & forbidden)
+        if leaked:
+            raise ValueError(f"{owner}: unexpected native cross-owner {evidence}: {leaked}")
 
 
 def summarize(report: dict[str, Any], study: str, expected_sha: str) -> dict[str, Any]:
@@ -70,6 +92,8 @@ def summarize(report: dict[str, Any], study: str, expected_sha: str) -> dict[str
         written = require_names(
             entry.get("binary_files_written"), entry["owner"],
         )
+        if study == "owner-rebuild":
+            reject_native_cross_owner_relinks(entry["owner"], relinked, written)
         result.append({
             "owner": entry["owner"], "elapsed_seconds": elapsed,
             "relinked_bins": relinked, "binary_files_written": written,

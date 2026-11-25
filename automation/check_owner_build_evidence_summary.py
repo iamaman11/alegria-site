@@ -67,7 +67,7 @@ class OwnerBuildEvidenceSummaryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicate binary"):
             summarize(report, "compiler-owners", SHA)
 
-    def test_full_seven_binary_owner_rebuild_mode_uses_own_schema(self) -> None:
+    def test_full_eight_binary_owner_rebuild_mode_uses_own_schema(self) -> None:
         report = {
             "status": "EVIDENCE_CAPTURED", "source_sha": SHA,
             "probes": [
@@ -79,6 +79,34 @@ class OwnerBuildEvidenceSummaryTests(unittest.TestCase):
         output = summarize(report, "owner-rebuild", SHA)
         self.assertEqual(output["study"], "owner-rebuild")
         self.assertEqual({item["owner"] for item in output["owners"]}, OWNERS)
+
+    def test_full_owner_rebuild_rejects_unrelated_native_relinks_and_writes(self) -> None:
+        report = {
+            "status": "EVIDENCE_CAPTURED", "source_sha": SHA,
+            "probes": [
+                {"owner": owner, "build": {"elapsed_seconds": 2.75},
+                 "relinked_binaries": ["path+file:///repo#temporal_worker@0.1.0::temporal_worker"],
+                 "binary_files_written": ["path+file:///repo#temporal_worker@0.1.0::temporal_worker"]}
+                for owner in sorted(OWNERS)
+            ],
+        }
+        # The historical mixed-provider worker is allowed to relink; a
+        # provider-free coordinator and unrelated native effect worker are not.
+        self.assertEqual(len(summarize(report, "owner-rebuild", SHA)["owners"]), 4)
+        cases = (
+            ("postgres_store", "temporal_qdrant_effects"),
+            ("vector_qdrant", "temporal_pg_effects"),
+            ("graph_neo4j", "temporal_orchestrator"),
+            ("temporal_orchestrator", "temporal_qdrant_effects"),
+        )
+        for owner, binary in cases:
+            for evidence_key in ("relinked_binaries", "binary_files_written"):
+                with self.subTest(owner=owner, binary=binary, field=evidence_key):
+                    probe = next(p for p in report["probes"] if p["owner"] == owner)
+                    probe[evidence_key].append(f"path+file:///repo#{binary}@0.1.0::{binary}")
+                    with self.assertRaisesRegex(ValueError, "unexpected native cross-owner"):
+                        summarize(report, "owner-rebuild", SHA)
+                    probe[evidence_key].pop()
 
 
 if __name__ == "__main__":

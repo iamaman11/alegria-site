@@ -23,6 +23,8 @@ struct DraftFromEvidence;
 struct ReviewDraft;
 struct InvalidateAndDraft;
 struct InvalidateAndRefresh;
+struct MergeScores;
+struct ExtensionReport;
 
 fn schema(name: &str) -> ArtifactSchema {
     ArtifactSchema {
@@ -245,6 +247,47 @@ impl Operation for InvalidateAndRefresh {
     }
 }
 
+// Test-only operations deliberately use owner identities unrelated to any
+// provider. The neutral planner must accept them through the same catalog.
+impl Operation for MergeScores {
+    type Input = Input;
+    type Output = Output;
+    type Failure = std::io::Error;
+
+    fn contract() -> OperationContract {
+        OperationContract {
+            reference: reference("synthetic.merge-scores"),
+            owner: "independent_merge_owner".into(),
+            inputs: BTreeMap::from([
+                ("left".into(), schema("score")),
+                ("right".into(), schema("score")),
+            ]),
+            outputs: BTreeMap::from([("merged".into(), schema("merged"))]),
+            invalidates: BTreeSet::new(),
+            effects: BTreeSet::new(),
+            idempotency: IdempotencyPolicy::Pure,
+        }
+    }
+}
+
+impl Operation for ExtensionReport {
+    type Input = Input;
+    type Output = Output;
+    type Failure = std::io::Error;
+
+    fn contract() -> OperationContract {
+        OperationContract {
+            reference: reference("extension.report"),
+            owner: "newly_registered_owner".into(),
+            inputs: BTreeMap::from([("merged".into(), schema("merged"))]),
+            outputs: BTreeMap::from([("report".into(), schema("report"))]),
+            invalidates: BTreeSet::new(),
+            effects: BTreeSet::new(),
+            idempotency: IdempotencyPolicy::Pure,
+        }
+    }
+}
+
 fn catalog() -> ContractCatalog {
     let mut catalog = ContractCatalog::default();
     catalog.register::<Source>().unwrap();
@@ -257,6 +300,7 @@ fn catalog() -> ContractCatalog {
     catalog.register::<ReviewDraft>().unwrap();
     catalog.register::<InvalidateAndDraft>().unwrap();
     catalog.register::<InvalidateAndRefresh>().unwrap();
+    catalog.register::<MergeScores>().unwrap();
     catalog
 }
 
@@ -1055,5 +1099,175 @@ fn pinned_contracts_use_json_safe_roundtrip_and_canonical_sorting() {
     assert!(matches!(
         extra.validate(&catalog()),
         Err(PlanError::UnexpectedPinnedContract(_))
+    ));
+}
+
+fn source_node(id: &str, output: &str) -> OperationNode {
+    OperationNode {
+        instance: id.into(),
+        operation: reference("source.collect"),
+        inputs: BTreeMap::new(),
+        outputs: BTreeMap::from([("evidence".into(), output.into())]),
+        after: BTreeSet::new(),
+        permitted_effects: BTreeSet::new(),
+    }
+}
+
+fn fan_out_fan_in_nodes() -> Vec<OperationNode> {
+    let source = source_node("seed", "seed-evidence");
+    let independent = source_node("d-free", "free-evidence");
+    let mut left = score_node("b-right", "right-score");
+    left.inputs.insert(
+        "evidence".into(),
+        produced("seed", "evidence", "seed-evidence"),
+    );
+    let mut right = score_node("z-left", "left-score");
+    right.inputs.insert(
+        "evidence".into(),
+        produced("seed", "evidence", "seed-evidence"),
+    );
+    let merge = OperationNode {
+        instance: "a-join".into(),
+        operation: reference("synthetic.merge-scores"),
+        inputs: BTreeMap::from([
+            ("left".into(), produced("z-left", "score", "left-score")),
+            ("right".into(), produced("b-right", "score", "right-score")),
+        ]),
+        outputs: BTreeMap::from([("merged".into(), "merged-result".into())]),
+        after: BTreeSet::new(),
+        permitted_effects: BTreeSet::new(),
+    };
+    vec![merge, left, independent, right, source]
+}
+
+fn for_each_permutation(
+    nodes: &mut [OperationNode],
+    first: usize,
+    visit: &mut impl FnMut(&[OperationNode]),
+) {
+    if first == nodes.len() {
+        visit(nodes);
+        return;
+    }
+    for index in first..nodes.len() {
+        nodes.swap(first, index);
+        for_each_permutation(nodes, first + 1, visit);
+        nodes.swap(first, index);
+    }
+}
+
+#[test]
+fn every_serialization_of_fan_out_fan_in_and_independent_work_is_one_dag() {
+    // All 5! authoring orders are valid. The source fans out to two independent
+    // scoring instances, then both must finish before the typed merge owner.
+    // The unrelated source is not a dependency even when the tie-break runs
+    // it first. This is a protocol property, not another provider route.
+    let mut nodes = fan_out_fan_in_nodes();
+    let baseline = plan(nodes.clone());
+    let expected_order = vec![
+        OperationInstanceId::from("d-free"),
+        OperationInstanceId::from("seed"),
+        OperationInstanceId::from("b-right"),
+        OperationInstanceId::from("z-left"),
+        OperationInstanceId::from("a-join"),
+    ];
+    let mut checked_permutations = 0;
+    for_each_permutation(&mut nodes, 0, &mut |arrangement| {
+        let actual = plan(arrangement.to_vec());
+        assert_eq!(actual.hash, baseline.hash);
+        let validated = actual.validate(&catalog()).unwrap();
+        assert_eq!(validated.execution_order(), expected_order.as_slice());
+        let merge = validated
+            .checked_dispatch(&"a-join".into(), b"two-checked-scores", DispatchAttempt::First)
+            .unwrap();
+        assert_eq!(merge.owner, OperationOwnerId::from("independent_merge_owner"));
+        assert_eq!(merge.idempotency, IdempotencyPolicy::Pure);
+        checked_permutations += 1;
+    });
+    assert_eq!(checked_permutations, 120);
+}
+
+#[test]
+fn fan_in_rejects_wrong_typed_edge_and_back_edge_before_effect_dispatch() {
+    let mut wrong_schema = fan_out_fan_in_nodes();
+    let join = wrong_schema
+        .iter_mut()
+        .find(|node| node.instance.as_str() == "a-join")
+        .unwrap();
+    join.inputs.insert(
+        "left".into(),
+        produced("seed", "evidence", "seed-evidence"),
+    );
+    assert!(matches!(
+        plan(wrong_schema).validate(&catalog()),
+        Err(PlanError::ArtifactSchemaMismatch { instance, port, artifact })
+            if instance == OperationInstanceId::from("a-join")
+                && port == PortId::from("left")
+                && artifact == ArtifactId::from("seed-evidence")
+    ));
+
+    let mut cycle = fan_out_fan_in_nodes();
+    let consumer = cycle
+        .iter_mut()
+        .find(|node| node.instance.as_str() == "z-left")
+        .unwrap();
+    consumer.after.insert("a-join".into());
+    assert_eq!(plan(cycle).validate(&catalog()), Err(PlanError::Cycle));
+}
+
+#[test]
+fn registering_a_new_owner_extends_the_graph_without_engine_changes() {
+    let base = plan(fan_out_fan_in_nodes());
+    let mut extended = base.clone();
+    extended.nodes.push(OperationNode {
+        instance: "extension".into(),
+        operation: reference("extension.report"),
+        inputs: BTreeMap::from([(
+            "merged".into(),
+            produced("a-join", "merged", "merged-result"),
+        )]),
+        outputs: BTreeMap::from([("report".into(), "extension-report".into())]),
+        after: BTreeSet::new(),
+        permitted_effects: BTreeSet::new(),
+    });
+    let mut trusted = catalog();
+    assert!(matches!(
+        extended.clone().seal(&trusted),
+        Err(PlanError::UnknownOperation(operation))
+            if operation == reference("extension.report")
+    ));
+
+    // This is the same owner-neutral registration path available to future
+    // separately built adapters; there is no core enum or provider switch.
+    trusted.register_contract(ExtensionReport::contract()).unwrap();
+    let sealed = extended.seal(&trusted).unwrap();
+    let validated = sealed.validate(&trusted).unwrap();
+    assert_eq!(
+        validated.execution_order().last(),
+        Some(&OperationInstanceId::from("extension"))
+    );
+    let dispatch = validated
+        .checked_dispatch(&"extension".into(), b"merged-result-bytes", DispatchAttempt::First)
+        .unwrap();
+    assert_eq!(dispatch.owner, OperationOwnerId::from("newly_registered_owner"));
+    assert_eq!(dispatch.operation, reference("extension.report"));
+    assert_ne!(sealed.hash, base.hash);
+
+    // A newly registered owner gets exactly the same typed-port protection.
+    let mut incompatible = sealed.clone();
+    incompatible
+        .nodes
+        .iter_mut()
+        .find(|node| node.instance.as_str() == "extension")
+        .unwrap()
+        .inputs
+        .insert("merged".into(), produced("b-right", "score", "right-score"));
+    let incompatible = incompatible.seal(&trusted).unwrap();
+    assert!(matches!(
+        incompatible.validate(&trusted),
+        Err(PlanError::ArtifactSchemaMismatch { instance, port, artifact })
+            if instance == OperationInstanceId::from("extension")
+                && port == PortId::from("merged")
+                && artifact == ArtifactId::from("right-score")
     ));
 }
