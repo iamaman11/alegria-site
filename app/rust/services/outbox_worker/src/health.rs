@@ -41,8 +41,7 @@ pub fn publish(file: &Path) -> Result<()> {
     let temporary = file.with_extension(format!("ready-{}", std::process::id()));
     fs::write(&temporary, timestamp.to_string())
         .with_context(|| format!("write Outbox readiness {temporary:?}"))?;
-    fs::rename(&temporary, file)
-        .with_context(|| format!("publish Outbox readiness {file:?}"))
+    fs::rename(&temporary, file).with_context(|| format!("publish Outbox readiness {file:?}"))
 }
 
 fn fresh(timestamp: u128, now: u128) -> bool {
@@ -72,7 +71,10 @@ mod tests {
         ));
         assert!(!ready(&path), "missing worker is never ready");
         publish(&path).unwrap();
-        assert!(ready(&path), "successful first PG poll may make worker ready");
+        assert!(
+            ready(&path),
+            "successful first PG poll may make worker ready"
+        );
         fs::write(&path, "not a timestamp").unwrap();
         assert!(!ready(&path), "corrupt health cannot unblock Temporal");
         clear(&path).unwrap();

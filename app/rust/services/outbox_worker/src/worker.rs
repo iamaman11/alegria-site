@@ -17,9 +17,9 @@ use runtime_composition::adapters::projection_materialize_adapter::{
 };
 use telemetry::fbs_writer::write_runtime_window;
 
+use crate::health;
 use crate::materialize::dispatch_event;
 use crate::retry::next_retry_delay_sec;
-use crate::health;
 
 // A serial dispatcher must not reserve a batch whose tail can lose its lease
 // before the first slow provider call returns. Claim one just-in-time event;
@@ -342,12 +342,14 @@ mod target_selection_tests {
         }
     }
 
-
     #[test]
     fn malformed_one_event_scope_never_becomes_unscoped_delivery() {
         let expected = uuid::Uuid::new_v4();
         assert_eq!(parse_only_event_id(None).unwrap(), None);
-        assert_eq!(parse_only_event_id(Some(&expected.to_string())).unwrap(), Some(expected));
+        assert_eq!(
+            parse_only_event_id(Some(&expected.to_string())).unwrap(),
+            Some(expected)
+        );
         for invalid in ["", "bogus", " ", "not-a-uuid"] {
             assert!(parse_only_event_id(Some(invalid)).is_err());
         }

@@ -7,7 +7,10 @@ use tracing::info;
 
 fn parse_max_cycles(value: Option<&str>) -> Result<Option<u32>> {
     value
-        .map(|raw| raw.parse::<u32>().context("invalid OUTBOX_MAX_CYCLES integer"))
+        .map(|raw| {
+            raw.parse::<u32>()
+                .context("invalid OUTBOX_MAX_CYCLES integer")
+        })
         .transpose()
 }
 
