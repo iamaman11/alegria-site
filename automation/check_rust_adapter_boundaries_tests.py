@@ -94,9 +94,9 @@ class PgRuntimeOwnerBoundaryTests(unittest.TestCase):
 
 
 class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
-    def test_runtime_exception_is_exact_two_files_and_four_sdks(self) -> None:
+    def test_runtime_exception_is_exact_four_reviewed_files_and_four_sdks(self) -> None:
         self.assertEqual({path.name for path in QDRANT_EFFECTS_SDK_SOURCE_FILES},
-                         {"main.rs", "operator.rs"})
+                         {"main.rs", "operator.rs", "operator_v2.rs", "owner_v2.rs"})
         self.assertEqual(QDRANT_EFFECTS_RUNTIME_SDKS, {
             "temporalio-sdk", "temporalio-client",
             "temporalio-common", "temporalio-macros",
@@ -116,13 +116,18 @@ class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
     def test_future_runtime_modules_and_domain_crates_cannot_import_sdk(self) -> None:
         for path in (
             QDRANT_EFFECTS_MANIFEST.parent / "src" / "future_effect.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "operator_v3.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "owner_v3.rs",
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "nested" / "operator_v2.rs",
             RUST_ROOT / "crates" / "qdrant_effects_core" / "src" / "lib.rs",
             RUST_ROOT / "crates" / "operation_protocol" / "src" / "lib.rs",
             RUST_ROOT / "services" / "temporal_pg_effects" / "src" / "operator.rs",
+            RUST_ROOT / "services" / "temporal_orchestrator" / "src" / "owner_v2.rs",
         ):
-            with self.subTest(path=path):
-                self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
-                    path, re.compile(r"\buse\s+temporalio_client::")))
+            for sdk in QDRANT_EFFECTS_RUNTIME_SDKS:
+                with self.subTest(path=path, sdk=sdk):
+                    self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
+                        path, re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
 
     def test_e2e_is_exact_optional_native_temporal_sdk_set(self) -> None:
         self.assertEqual(QDRANT_TEMPORAL_E2E_SDKS, {
