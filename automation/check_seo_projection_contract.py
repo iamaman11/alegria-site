@@ -108,8 +108,8 @@ def main() -> int:
 
     if "SeoGraphProjectionUpserted" not in seo_adapter:
         failures.append("SEO persistence adapter does not emit SeoGraphProjectionUpserted")
-    if "projection_materialize_adapter::dispatch_event" not in outbox_worker:
-        failures.append("outbox worker does not delegate projection dispatch to infrastructure materializer")
+    if "projection_materialize_adapter::dispatch_leased_event(" not in outbox_worker:
+        failures.append("outbox worker must delegate only leased, fenced projection dispatch")
     if "SeoGraphProjectionUpserted" not in projection_materializer:
         failures.append("projection materializer does not dispatch SeoGraphProjectionUpserted")
     if "cmd.metadata" not in projection_materializer:

@@ -27,6 +27,8 @@ DB_DSN="postgres://postgres:postgres_password@localhost:5433/alegria"
 WORKER_MODE="${TEMPORAL_GATE_WORKER_MODE:-local}" # local | docker
 SKIP_BUILD="${TEMPORAL_GATE_SKIP_BUILD:-1}"       # 1 skip docker build, 0 build
 WORKER_PID=""
+OUTBOX_PID=""
+OUTBOX_READY_FILE=""
 METRICS_URL="${TEMPORAL_GATE_METRICS_URL:-http://localhost:9464/metrics}"
 TEMPORAL_CLI_ADDRESS="${TEMPORAL_GATE_CLI_ADDRESS:-127.0.0.1:7233}"
 
@@ -215,6 +217,37 @@ start_services() {
       [ "$i" -lt 30 ] || die "local temporal_worker did not become ready; see /tmp/alegria_temporal_worker_gate.log"
       sleep 1
     done
+    # The Temporal Activity now only observes durable projection completion.
+    # A short-lived occasional Outbox drain is not a delivery owner for an
+    # active workflow: keep one real Outbox process running for the whole gate.
+    # Run the binary directly so the process recorded by the trap is the
+    # actual provider caller, not a cargo wrapper that can leave an orphan.
+    log "building independent local Outbox binary"
+    (cd app/rust && cargo build -q --locked -p outbox_worker --bin outbox_worker)
+    local outbox_target_dir outbox_bin
+    outbox_target_dir="$(cd app/rust && cargo metadata --no-deps --format-version 1 | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])')"
+    outbox_bin="$outbox_target_dir/debug/outbox_worker"
+    [ -x "$outbox_bin" ] || die "Outbox binary absent after successful cargo build: $outbox_bin"
+    OUTBOX_READY_FILE="$(mktemp /tmp/alegria-outbox-gate.XXXXXXXX)"
+    log "starting independent local Outbox delivery owner"
+    (
+      cd app/rust
+      OUTBOX_READY_FILE="$OUTBOX_READY_FILE" \
+      DATABASE_URL="$DB_DSN" \
+      QDRANT_URL="${QDRANT_URL:-http://localhost:6334}" \
+      QDRANT_SKIP_COMPATIBILITY_CHECK="${QDRANT_SKIP_COMPATIBILITY_CHECK:-true}" \
+      RUST_LOG=info \
+      exec "$outbox_bin" \
+      > /tmp/alegria_outbox_worker_gate.log 2>&1
+    ) &
+    OUTBOX_PID="$!"
+    local ready=0
+    for ((attempt=0; attempt<90; attempt++)); do
+      if [ -s "$OUTBOX_READY_FILE" ]; then ready=1; break; fi
+      kill -0 "$OUTBOX_PID" 2>/dev/null || die "Outbox exited before readiness; see /tmp/alegria_outbox_worker_gate.log"
+      sleep 1
+    done
+    [ "$ready" = "1" ] || die "Outbox did not claim PostgreSQL within 90s; see /tmp/alegria_outbox_worker_gate.log"
   fi
   wait_temporal_cli_ready 60
 }
@@ -246,16 +279,16 @@ drain_open_outbox_events() {
   if [ "${open_events:-0}" -eq 0 ]; then
     return 0
   fi
-  log "draining open outbox events count=$open_events"
-  (
-    cd app/rust
-    DATABASE_URL="$DB_DSN" \
-    QDRANT_URL="${QDRANT_URL:-http://localhost:6334}" \
-    QDRANT_SKIP_COMPATIBILITY_CHECK="${QDRANT_SKIP_COMPATIBILITY_CHECK:-true}" \
-    OUTBOX_MAX_CYCLES="${PRODUCTION_GATE_OUTBOX_DRAIN_MAX_CYCLES:-12}" \
-    OUTBOX_WORKER_ID="production-gate-drain-$$" \
-      cargo run -q -p outbox_worker --bin outbox_worker
-  ) || die "outbox drain failed"
+  # Never launch a second on-demand delivery authority. PostgreSQL SKIP
+  # LOCKED remains the safety net for replicas, not an orchestration policy.
+  if [ "$WORKER_MODE" = "local" ]; then
+    [ -n "$OUTBOX_PID" ] && kill -0 "$OUTBOX_PID" 2>/dev/null || die "local Outbox delivery owner stopped"
+  else
+    local health
+    health="$(docker inspect alegria_outbox_worker --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}unconfigured{{end}}' 2>/dev/null || true)"
+    [ "$health" = "healthy" ] || die "Docker Outbox delivery owner unavailable: $health"
+  fi
+  log "waiting for independent Outbox delivery count=$open_events"
 }
 
 approve_review_pages_until_wf_closed() {
@@ -471,7 +504,11 @@ main() {
   PRODUCTION_GATE_CLI_TARGET_DIR="${PRODUCTION_GATE_CLI_TARGET_DIR:-/tmp/temporal-production-gate-cli-target}"
   export RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR="${RETRIEVAL_CONTRACT_GATE_CLI_TARGET_DIR:-$PRODUCTION_GATE_CLI_TARGET_DIR}"
   export GRAPH_CONTRACT_GATE_CLI_TARGET_DIR="${GRAPH_CONTRACT_GATE_CLI_TARGET_DIR:-$PRODUCTION_GATE_CLI_TARGET_DIR}"
-  trap 'if [ -n "${WORKER_PID:-}" ]; then kill "${WORKER_PID}" >/dev/null 2>&1 || true; fi' EXIT
+  trap '
+    if [ -n "${WORKER_PID:-}" ]; then kill "${WORKER_PID}" >/dev/null 2>&1 || true; fi
+    if [ -n "${OUTBOX_PID:-}" ]; then kill "${OUTBOX_PID}" >/dev/null 2>&1 || true; fi
+    if [ -n "${OUTBOX_READY_FILE:-}" ]; then rm -f -- "${OUTBOX_READY_FILE}"; fi
+  ' EXIT
   start_services
   assert_invariants
   run_retrieval_contract_gate

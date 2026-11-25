@@ -83,6 +83,24 @@ def check_outbox_voyage_route(text: str) -> list[str]:
         if value not in lines
     ]
 
+
+def check_outbox_delivery_readiness(text: str) -> list[str]:
+    """Temporal must not start without an active, PostgreSQL-ready Outbox owner."""
+    temporal = re.search(r"(?ms)^  temporal-worker:\n(.*?)(?=^  [a-z][a-z0-9_-]*:|\Z)", text)
+    outbox = re.search(r"(?ms)^  outbox-worker:\n(.*?)(?=^  [a-z][a-z0-9_-]*:|\Z)", text)
+    if not temporal or not outbox:
+        return ["missing Temporal or Outbox service for delivery readiness"]
+    failures = []
+    worker = temporal.group(1)
+    outbox_owner = outbox.group(1)
+    if not re.search(r"(?m)^      outbox-worker:\n        condition: service_healthy$", worker):
+        failures.append("Temporal must wait for healthy independent Outbox owner")
+    if "      OUTBOX_READY_FILE: /tmp/alegria-outbox-ready" not in outbox_owner:
+        failures.append("Outbox needs private readiness state")
+    if '      test: ["CMD", "/usr/local/bin/outbox_worker", "--healthcheck"]' not in outbox_owner:
+        failures.append("Outbox must healthcheck the real delivery process")
+    return failures
+
 def check_release_volume(text: str) -> list[str]:
     """Keep immutable releases in Docker storage, not a Windows bind mount."""
     required_mount = "      - static_site_releases:/app/app/rust/dist"
@@ -113,6 +131,17 @@ def main() -> int:
             or not check_outbox_voyage_route(voyage_example.replace('VOYAGE_API_KEY', 'MISSING_API_KEY'))):
         print("COMPOSE_LOOPBACK_PORTS: FAILED Voyage config self-test", file=sys.stderr)
         return 1
+    readiness_example = ('services:\n  temporal-worker:\n    depends_on:\n'
+                         '      outbox-worker:\n        condition: service_healthy\n'
+                         '  outbox-worker:\n    environment:\n'
+                         '      OUTBOX_READY_FILE: /tmp/alegria-outbox-ready\n'
+                         '    healthcheck:\n'
+                         '      test: ["CMD", "/usr/local/bin/outbox_worker", "--healthcheck"]\n')
+    if (check_outbox_delivery_readiness(readiness_example)
+            or not check_outbox_delivery_readiness(readiness_example.replace('service_healthy', 'service_started'))
+            or not check_outbox_delivery_readiness(readiness_example.replace('--healthcheck', '--version'))):
+        print("COMPOSE_LOOPBACK_PORTS: FAILED Outbox readiness self-test", file=sys.stderr)
+        return 1
     release_example = ('services:\n  temporal-worker:\n    volumes:\n'
                        '      - static_site_releases:/app/app/rust/dist\n'
                        'volumes:\n  static_site_releases:\n')
@@ -127,6 +156,7 @@ def main() -> int:
     count, errors = check(compose_text)
     errors.extend(check_temporal_graph_route(compose_text))
     errors.extend(check_outbox_voyage_route(compose_text))
+    errors.extend(check_outbox_delivery_readiness(compose_text))
     errors.extend(check_release_volume(compose_text))
     if not count:
         errors.append("no explicit loopback port mappings found")

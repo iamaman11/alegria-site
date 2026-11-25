@@ -3,14 +3,13 @@ pub struct ProjectionSyncInput {
     pub run_id: String,
     pub target_system: String,
     pub step_name: String,
-    pub batch_limit: i64,
-    pub lease_seconds: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectionSyncOutput {
     pub run_id: String,
     pub target_system: String,
+    /// Delivery is owned by Outbox Worker; this Activity never processes events.
     pub processed_events: i64,
     pub retried_events: i64,
     pub failed_events: i64,

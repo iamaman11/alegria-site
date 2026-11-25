@@ -65,6 +65,61 @@ def match_arm_body(source: str, arm_end: int) -> str | None:
     return None
 
 
+def temporal_projection_observer_failures(temporal: str) -> list[str]:
+    """Prevent a second delivery authority and false Temporal `done`.
+
+    The status predicate is extracted as executable Rust match branches, not
+    accepted just because a matching explanation appears in a comment.
+    """
+    failures: list[str] = []
+    activity = temporal.split("pub(crate) async fn projection_sync_impl(", 1)
+    if len(activity) != 2:
+        return ["Temporal projection_sync status observer is missing"]
+    observer = activity[1].split("pub(crate) async fn ", 1)[0]
+    for forbidden in (
+        "claim_outbox_batch", "dispatch_leased_event(", "dispatch_event(",
+        "mark_done(", "mark_retry(", "mark_failed_with_dead_letter(",
+    ):
+        if forbidden in observer:
+            failures.append(f"Temporal must not deliver Outbox projections: `{forbidden}`")
+    if "projection_backlog_counts(" not in observer:
+        failures.append("Temporal must observe run/target-scoped durable projection backlog")
+    if "projection_drain_state(&backlog" not in observer:
+        failures.append("Temporal must derive durable status through the typed drain state")
+    if "status: drain_state.as_status().to_string()" not in observer:
+        failures.append("Temporal must not forge success outside the durable state predicate")
+
+    helper = temporal.split("fn projection_drain_state(", 1)
+    mapping = temporal.split("impl ProjectionDrainState {", 1)
+    if len(helper) != 2 or len(mapping) != 2:
+        return failures + ["Temporal typed projection drain state mapping is missing"]
+    predicate = helper[1].split("pub(crate) async fn projection_sync_impl(", 1)[0]
+    status_map = mapping[1].split("fn projection_drain_state(", 1)[0]
+    if not re.search(
+        r"else\s+if\s+backlog\.pending_events\s*==\s*0\s*&&\s*"
+        r"backlog\.failed_events\s*==\s*0\s*\{\s*ProjectionDrainState::Drained",
+        predicate,
+    ):
+        failures.append("Temporal Drained requires zero pending AND zero failed durable events")
+    if not re.search(
+        r"if\s+backlog\.failed_events\s*>\s*backlog\.uncertain_events\s*"
+        r"\{\s*ProjectionDrainState::Blocked",
+        predicate,
+    ):
+        failures.append("Temporal must block proven terminal delivery failures")
+    if not re.search(
+        r"else\s+if\s+backlog\.uncertain_events\s*>\s*0\s*"
+        r"\{\s*ProjectionDrainState::Quarantined",
+        predicate,
+    ):
+        failures.append("Temporal must fail closed on timed-out uncertain provider effects")
+    if not re.search(r'Self::Drained\s*=>\s*"done"', status_map):
+        failures.append("Only the typed Drained state may map to `done`")
+    if re.search(r'Self::(?:Blocked|Quarantined|Stalled|AwaitingOwner)\s*=>\s*"done"', status_map):
+        failures.append("Non-drained Temporal state must never return `done`")
+    return failures
+
+
 def fence_contract_failures(
     postgres_outbox: str, reconcile: str, dispatcher: str,
     worker_materialize: str, worker: str, temporal: str,
@@ -131,8 +186,9 @@ def fence_contract_failures(
         if needle not in dispatcher:
             failures.append(f"projection dispatcher missing `{needle}`")
 
-    # A fenced call owns terminal acknowledgement itself. Both consumers must
-    # branch on quarantine BEFORE their generic retry/dead-letter branches.
+    # The dedicated Outbox Worker is the sole projection-delivery authority.
+    # A fenced call owns terminal acknowledgement itself, and quarantine must
+    # precede the generic retry/dead-letter branch in this single consumer.
     if not re.search(
         r"\bdispatch_leased_event\s*\(\s*pool\s*,\s*event\s*,?\s*\)",
         worker_materialize,
@@ -141,24 +197,26 @@ def fence_contract_failures(
     if "dispatch_event(pool, &event)" not in worker:
         failures.append("outbox worker must pass its claimed event/PG pool to materialize wrapper")
 
-    for name, consumer in (("outbox-worker", worker), ("temporal-runtime", temporal)):
-        fenced_call = consumer.find("dispatch_event(pool, &event)") if name == "outbox-worker" else consumer.find("dispatch_leased_event(")
-        if fenced_call == -1:
-            failures.append(f"{name} bypasses the leased projection dispatcher")
-        if "AcknowledgedByFence" not in consumer:
-            failures.append(f"{name} has no fenced acknowledgement disposition")
-        fenced_branch = consumer[fenced_call:] if fenced_call != -1 else ""
-        quarantine_arm = re.search(
-            r"Err\s*\(\s*(\w+)\s*\)\s+if\s+\1\.stage\s*==\s*(?:\w+::)*DispatchStage::Quarantine\s*=>",
-            fenced_branch,
-        )
-        generic_error = re.search(r"\bErr\s*\(\s*\w+\s*\)\s*=>", fenced_branch)
-        if not quarantine_arm or not generic_error or quarantine_arm.start() > generic_error.start():
-            failures.append(f"{name} must quarantine unknown provider results before ordinary retry")
-        elif (body := match_arm_body(fenced_branch, quarantine_arm.end())) is None:
-            failures.append(f"{name} quarantine arm has no inspectable guarded body")
-        elif re.search(r"\bmark_(?:done|retry|failed_with_dead_letter)\s*\(", body):
-            failures.append(f"{name} must not mutate Outbox status in the quarantine arm")
+    fenced_call = worker.find("dispatch_event(pool, &event)")
+    if fenced_call == -1:
+        failures.append("outbox-worker bypasses the leased projection dispatcher")
+    if "AcknowledgedByFence" not in worker:
+        failures.append("outbox-worker has no fenced acknowledgement disposition")
+    fenced_branch = worker[fenced_call:] if fenced_call != -1 else ""
+    quarantine_arm = re.search(
+        r"Err\s*\(\s*(\w+)\s*\)\s+if\s+\1\.stage\s*==\s*(?:\w+::)*DispatchStage::Quarantine\s*=>",
+        fenced_branch,
+    )
+    generic_error = re.search(r"\bErr\s*\(\s*\w+\s*\)\s*=>", fenced_branch)
+    if not quarantine_arm or not generic_error or quarantine_arm.start() > generic_error.start():
+        failures.append("outbox-worker must quarantine unknown provider results before ordinary retry")
+    elif (body := match_arm_body(fenced_branch, quarantine_arm.end())) is None:
+        failures.append("outbox-worker quarantine arm has no inspectable guarded body")
+    elif re.search(r"\bmark_(?:done|retry|failed_with_dead_letter)\s*\(", body):
+        failures.append("outbox-worker must not mutate Outbox status in the quarantine arm")
+
+    # Temporal may observe completion; only the dedicated worker may deliver.
+    failures.extend(temporal_projection_observer_failures(temporal))
     return failures
 
 

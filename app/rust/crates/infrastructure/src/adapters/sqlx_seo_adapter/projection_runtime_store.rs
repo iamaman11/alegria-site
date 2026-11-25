@@ -29,13 +29,17 @@ use super::proto_runtime_payload_store::{
     classify_sqlx, contract_violation, encode_runtime_payload, validation_failure,
     RuntimeProtoPayload,
 };
-use super::sqlx_outbox_adapter::OutboxEnvelope;
+use super::sqlx_outbox_adapter::{OutboxEnvelope, VERIFIED_RULE_UNCERTAIN_MARKER};
 use super::sqlx_runtime_outbox_adapter::{outbox_emit_many, outbox_emit_many_in_tx};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionBacklogCounts {
     pub pending_events: i64,
     pub failed_events: i64,
+    /// Subset of failures fenced before an external verified-rule Qdrant RPC.
+    /// These rows may become `done` on the worker's successful acknowledgement;
+    /// no observer may automatically requeue or clear an uncertain row.
+    pub uncertain_events: i64,
 }
 
 pub async fn projection_backlog_counts(
@@ -48,7 +52,13 @@ pub async fn projection_backlog_counts(
         SELECT
           -- Processing leases are still outstanding, not materialized points.
           COUNT(*) FILTER (WHERE status IN ('pending', 'processing')) AS pending_events,
-          COUNT(*) FILTER (WHERE status = 'failed') AS failed_events
+          COUNT(*) FILTER (WHERE status = 'failed') AS failed_events,
+          COUNT(*) FILTER (
+            WHERE status = 'failed'
+              AND target_system = 'qdrant'
+              AND aggregate_type = 'rule_instance'
+              AND last_error = $3
+          ) AS uncertain_events
         FROM system.sync_outbox
         WHERE run_id = $1
           AND target_system = $2
@@ -56,6 +66,7 @@ pub async fn projection_backlog_counts(
     )
     .bind(run_id)
     .bind(target_system)
+    .bind(VERIFIED_RULE_UNCERTAIN_MARKER)
     .fetch_one(pool)
     .await
     .map_err(classify_sqlx)?;
@@ -63,6 +74,7 @@ pub async fn projection_backlog_counts(
     Ok(ProjectionBacklogCounts {
         pending_events: row.get("pending_events"),
         failed_events: row.get("failed_events"),
+        uncertain_events: row.get("uncertain_events"),
     })
 }
 

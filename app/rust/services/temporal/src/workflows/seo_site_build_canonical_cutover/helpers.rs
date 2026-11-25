@@ -43,8 +43,6 @@ async fn sync_target(
                 run_id: run_id.to_string(),
                 step_name: step_name.to_string(),
                 target_system: target_system.to_string(),
-                batch_limit: 500,
-                lease_seconds: 120,
             },
             db_opts(120),
         )

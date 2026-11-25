@@ -272,6 +272,11 @@ WORKER_E2E_RUNTIME_BINARIES = {
     "INTEGRATION_TEMPORAL_WORKER_BIN": "temporal_worker",
     "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
 }
+# The A14 acceptance suite now launches the actual Outbox process. The old
+# in-process Rust function isn't equivalent to independent Worker lifecycle.
+OUTBOX_E2E_PREPARE = (
+    "cargo", "build", "--locked", "-p", "outbox_worker", "--bin", "outbox_worker",
+)
 
 # The new pure DAG Temporal worker owns a different queue and has no provider
 # processes. Never pull the legacy worker/outbox binaries into this test's
@@ -367,6 +372,8 @@ SUITE_OWNERS = {
         "prefixes": ("app/rust/services/outbox_worker/src/",),
         "lock_crates": {"outbox_worker", "infrastructure"},
         "on_unknown_global_input": True,
+        "prepare": OUTBOX_E2E_PREPARE,
+        "runtime_binaries": {"INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker"},
         "command": (
             "cargo", "test", "-p", "integration_harness", "--features", "e2e",
             "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
@@ -636,6 +643,7 @@ CI_PR_OWNERS = (
     "rust-e2e-v3-binaries",
     "rust-architecture-e2e",
     "rust-verify-e2e",
+    "rust-pg-e2e",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
@@ -847,6 +855,16 @@ E2E_ARCH_SHARDS = (
     "vector", "truth_certification",
 )
 E2E_VERIFY_SHARDS = ("verify_a", "verify_b", "verify_c", "verify_d")
+# Execution (not business-suite) routing: the physically independent PG V3
+# owner must never wait for compilation of the unrelated legacy E2E harness.
+# Preserve the original source-suite owner partition above for exhaustive
+# exact-filter/count verification and fail-closed impact selection.
+E2E_PG_SHARDS = ("pg_temporal", "verify_d")
+E2E_ARCH_RUNNER_SHARDS = tuple(name for name in E2E_ARCH_SHARDS if name not in E2E_PG_SHARDS)
+E2E_VERIFY_RUNNER_SHARDS = tuple(name for name in E2E_VERIFY_SHARDS if name not in E2E_PG_SHARDS)
+if (set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS)
+        != set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)):
+    raise ValueError("PG E2E runner partition lost a required shard")
 E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "graph": (("graph_query", "graph_capability_", 2),),
     "pg_temporal": (("pg_temporal_v3", "temporal_effect_v3_", 1),),
@@ -869,9 +887,12 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
                  ("knowledge_a13", "knowledge_a13_", 3),
                  ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1)),
     "verify_c": (("cms_review_revision", "cms_revision_", 4),
-                 ("planning_atomicity", "planning_atomic_", 6)),
-    "verify_d": (("pg_effect_v3", "pg_v3_", 2),
+                 ("planning_atomicity", "planning_atomic_", 6),
+                 # Pure DAG owns the independent V3 executor but tests the
+                 # legacy broad harness. Keep it on a broad-harness runner;
+                 # this frees verify_d to run on PG-only compiler evidence.
                  ("pure_dag_v3", "pure_v3_", 1)),
+    "verify_d": (("pg_effect_v3", "pg_v3_", 2),),
 }
 
 

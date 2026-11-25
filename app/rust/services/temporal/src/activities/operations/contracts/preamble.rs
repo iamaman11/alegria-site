@@ -5,11 +5,9 @@ use contracts::generated::alegria::temporal::v1::{
 };
 use runtime_composition::adapters::graph_capability_adapter;
 use graph_neo4j as neo4rs_adapter;
-use runtime_composition::adapters::projection_materialize_adapter;
 use vector_qdrant as qdrant_client_adapter;
 use infrastructure::adapters::raw_crawl_adapter;
 use infrastructure::adapters::sqlx_freshness_adapter::load_freshness_snapshot;
-use infrastructure::adapters::sqlx_outbox_adapter;
 use infrastructure::adapters::sqlx_pipeline_runtime_adapter::RuntimeProtoPayload;
 use infrastructure::adapters::sqlx_reconcile_adapter;
 use infrastructure::adapters::sqlx_runtime_outbox_adapter;

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from ci_impact import (
     CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
+    E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS,
     FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
@@ -174,7 +175,23 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/integration_harness/src/lib.rs",
         }, set())
         self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 2))
+        self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
+        self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["verify_c"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
+
+    def test_pg_runner_does_not_require_legacy_harness_or_drop_live_shards(self) -> None:
+        self.assertEqual(E2E_PG_SHARDS, ("pg_temporal", "verify_d"))
+        self.assertEqual(set(E2E_ARCH_RUNNER_SHARDS), set(E2E_ARCH_SHARDS) - set(E2E_PG_SHARDS))
+        self.assertEqual(set(E2E_VERIFY_RUNNER_SHARDS), set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS))
+        self.assertEqual(
+            set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS),
+            set(E2E_SHARD_RUNS),
+        )
+        self.assertEqual({suite for shard in E2E_PG_SHARDS
+                          for suite, *_ in E2E_SHARD_RUNS[shard]}, {"pg_temporal_v3", "pg_effect_v3"})
+        self.assertEqual(SUITE_OWNERS["outbox_a14"]["runtime_binaries"], {
+            "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
+        })
 
     def test_full_real_e2e_shards_cover_all_38_existing_tests_without_duplicate_filters(self) -> None:
         # Select all known live sources, including the optional canonical

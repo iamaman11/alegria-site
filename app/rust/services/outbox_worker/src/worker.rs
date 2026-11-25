@@ -19,8 +19,12 @@ use telemetry::fbs_writer::write_runtime_window;
 
 use crate::materialize::dispatch_event;
 use crate::retry::next_retry_delay_sec;
+use crate::health;
 
-const DEFAULT_BATCH_SIZE: i64 = 64;
+// A serial dispatcher must not reserve a batch whose tail can lose its lease
+// before the first slow provider call returns. Claim one just-in-time event;
+// the next non-empty cycle begins immediately without the idle polling delay.
+const DEFAULT_BATCH_SIZE: i64 = 1;
 const DEFAULT_LEASE_SECONDS: i64 = 120;
 const DEFAULT_IDLE_POLL_MS: u64 = 1500;
 const DEFAULT_MAX_RETRIES: i32 = 10;
@@ -53,6 +57,20 @@ fn configured_target_system() -> Result<Option<String>> {
         }
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(error) => Err(error).context("invalid OUTBOX_TARGET_SYSTEM setting"),
+    }
+}
+
+fn parse_only_event_id(value: Option<&str>) -> Result<Option<Uuid>> {
+    value
+        .map(|raw| Uuid::parse_str(raw).context("invalid OUTBOX_ONLY_EVENT_ID UUID"))
+        .transpose()
+}
+
+fn configured_only_event_id() -> Result<Option<Uuid>> {
+    match std::env::var("OUTBOX_ONLY_EVENT_ID") {
+        Ok(value) => parse_only_event_id(Some(&value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(error) => Err(error).context("invalid OUTBOX_ONLY_EVENT_ID setting"),
     }
 }
 
@@ -95,15 +113,20 @@ pub async fn run_worker_loop(
     worker_id: &str,
     max_cycles: Option<u32>,
 ) -> Result<()> {
+    let readiness = health::configured_file();
+    if let Some(file) = readiness.as_deref() {
+        // A restart may re-use the same ephemeral container filesystem.
+        // Never expose the previous process's health before a real PG poll.
+        health::clear(file)?;
+    }
     let target_system = configured_target_system()?;
     info!(
         worker_id,
         target_system = target_system.as_deref().unwrap_or("all"),
         "outbox claim scope selected"
     );
-    let only_event_id = std::env::var("OUTBOX_ONLY_EVENT_ID")
-        .ok()
-        .and_then(|value| Uuid::parse_str(&value).ok());
+    // Never silently widen a requested one-event lease to every event.
+    let only_event_id = configured_only_event_id()?;
     let mut cycle: u32 = 0;
     let mut listener = match PgListener::connect(database_url).await {
         Ok(mut l) => {
@@ -161,6 +184,9 @@ pub async fn run_worker_loop(
                 .await?
             }
         };
+        if let Some(file) = readiness.as_deref() {
+            health::publish(file)?;
+        }
         if batch.is_empty() {
             emit_heartbeat(worker_id, cycle, 0);
             if let Some(l) = listener.as_mut() {
@@ -295,12 +321,16 @@ pub async fn run_worker_loop(
         emit_sync_status(pool).await;
     }
 
+    if let Some(file) = readiness.as_deref() {
+        health::clear(file)?;
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod target_selection_tests {
-    use super::checked_target_system;
+    use super::{checked_target_system, parse_only_event_id};
 
     #[test]
     fn target_scoped_worker_is_not_tied_to_the_current_three_providers() {
@@ -309,6 +339,17 @@ mod target_selection_tests {
         }
         for invalid in ["", "Neo4j", " qdrant", "cms ", "../qdrant", "qdrant\n"] {
             assert!(checked_target_system(invalid).is_err());
+        }
+    }
+
+
+    #[test]
+    fn malformed_one_event_scope_never_becomes_unscoped_delivery() {
+        let expected = uuid::Uuid::new_v4();
+        assert_eq!(parse_only_event_id(None).unwrap(), None);
+        assert_eq!(parse_only_event_id(Some(&expected.to_string())).unwrap(), Some(expected));
+        for invalid in ["", "bogus", " ", "not-a-uuid"] {
+            assert!(parse_only_event_id(Some(invalid)).is_err());
         }
     }
 }

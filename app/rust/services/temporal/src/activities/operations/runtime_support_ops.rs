@@ -84,88 +84,64 @@ pub(crate) async fn projection_reconcile_impl(
     })
 }
 
+/// A durable outbox snapshot is the only authority for this gate: the
+/// standalone Outbox Worker owns claims, external RPCs, acknowledgement,
+/// retries, and dead letters. Temporal cannot take a delivery lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionDrainState {
+    Drained,
+    AwaitingOwner,
+    Blocked,
+    Quarantined,
+    Stalled,
+}
+
+impl ProjectionDrainState {
+    fn as_status(self) -> &'static str {
+        match self {
+            Self::Drained => "done",
+            Self::AwaitingOwner => "waiting",
+            Self::Blocked => "blocked",
+            Self::Quarantined => "quarantined",
+            Self::Stalled => "stalled",
+        }
+    }
+}
+
+fn projection_drain_state(
+    backlog: &sqlx_seo_adapter::ProjectionBacklogCounts,
+    timed_out: bool,
+) -> ProjectionDrainState {
+    // Verified-rule Qdrant fencing commits `failed` + uncertainty marker
+    // BEFORE its remote RPC, then changes the row to `done` after ACK.
+    // A transient marker is not a terminal error; wait for the Worker until
+    // the bounded deadline, without retrying, acknowledging or clearing it.
+    if backlog.failed_events > backlog.uncertain_events {
+        ProjectionDrainState::Blocked
+    } else if backlog.pending_events == 0 && backlog.failed_events == 0 {
+        ProjectionDrainState::Drained
+    } else if !timed_out {
+        ProjectionDrainState::AwaitingOwner
+    } else if backlog.uncertain_events > 0 {
+        ProjectionDrainState::Quarantined
+    } else {
+        ProjectionDrainState::Stalled
+    }
+}
+
 pub(crate) async fn projection_sync_impl(
     acts: &AlegriaActivities,
     input: &ProjectionSyncInput,
 ) -> Result<ProjectionSyncOutput, DomainError> {
-    let worker_id = format!("projection-sync:{}:{}", input.step_name, input.run_id);
-    let batch = sqlx_outbox_adapter::claim_outbox_batch_for_run_target(
-        &acts.pool,
-        &worker_id,
-        &input.run_id,
-        &input.target_system,
-        input.batch_limit.max(1),
-        input.lease_seconds.max(30),
-    )
-    .await
-    .map_err(AlegriaActivities::classify_error)?;
-
-    let mut processed_events = 0_i64;
-    let retried_events = 0_i64;
-    let failed_events = 0_i64;
-
-    for event in batch {
-        match projection_materialize_adapter::dispatch_leased_event(&acts.pool, &event).await {
-            Ok(disposition) => {
-                let status = match disposition {
-                    projection_materialize_adapter::DispatchDisposition::NeedsAck => {
-                        sqlx_outbox_adapter::mark_done(&acts.pool, &event)
-                            .await
-                            .map_err(AlegriaActivities::classify_error)?
-                    }
-                    projection_materialize_adapter::DispatchDisposition::AcknowledgedByFence => {
-                        sqlx_outbox_adapter::LeaseUpdate::Applied
-                    }
-                };
-                if status == sqlx_outbox_adapter::LeaseUpdate::Applied {
-                    processed_events += 1;
-                }
-                tracing::info!(run_id = %event.run_id, event_id = %event.event_id,
-                    target_system = %event.target_system, operation = %event.event_type,
-                    attempt = event.retry_count + 1, lease = ?status,
-                    "projection sync delivery completed");
-            }
-            Err(err) if err.stage == projection_materialize_adapter::DispatchStage::Quarantine => {
-                // The remote effect may commit after the Activity stops. The
-                // durable PostgreSQL marker prohibits both automatic retries
-                // and new Truth writes until explicit operator reconciliation.
-                tracing::error!(run_id = %event.run_id, event_id = %event.event_id,
-                    target_system = %event.target_system, operation = %event.event_type,
-                    result = "quarantined_no_retry", error = %err,
-                    "verified-rule projection requires manual reconciliation");
-                return Err(err.into_domain_error());
-            }
-            Err(err) => {
-                let message = err.to_string();
-                let terminal = event.retry_count + 1 >= 10;
-                let status = if terminal {
-                    sqlx_outbox_adapter::mark_failed_with_dead_letter(
-                        &acts.pool, &event, "projection_sync", err.class,
-                        &AlegriaActivities::current_build_id(), &message,
-                    )
-                        .await
-                        .map_err(AlegriaActivities::classify_error)?
-                } else {
-                    sqlx_outbox_adapter::mark_retry(&acts.pool, &event, &message, 30)
-                        .await
-                        .map_err(AlegriaActivities::classify_error)?
-                };
-                tracing::warn!(run_id = %event.run_id, event_id = %event.event_id,
-                    target_system = %event.target_system, operation = %event.event_type,
-                    attempt = event.retry_count + 1,
-                    error_class = err.class.as_str(), stage = ?err.stage,
-                    result = if terminal { "dead_letter" } else { "retry" },
-                    lease = ?status, error = %message,
-                    "projection sync delivery failed");
-                return Err(err.into_domain_error());
-            }
-        }
+    if input.run_id.trim().is_empty() || input.target_system.trim().is_empty() {
+        return Err(DomainError::ValidationFailure {
+            message: "projection sync requires nonempty run_id and target_system".to_string(),
+        });
     }
 
-    // The main outbox worker may have claimed an event concurrently. Its
-    // processing lease is NOT an already materialized point. Wait for actual
-    // durable completion rather than failing a healthy run on that race.
-    // The bounded drain never treats a failed or stalled event as success.
+    // A leased/processing event is never materialized. Poll the exact run
+    // and target, not a global provider status. The Worker is the only
+    // producer of durable `done`, while a missing/crashed Worker times out.
     let drain_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
     let mut backlog = sqlx_seo_adapter::projection_backlog_counts(
         &acts.pool,
@@ -173,8 +149,7 @@ pub(crate) async fn projection_sync_impl(
         &input.target_system,
     )
     .await?;
-    while backlog.pending_events > 0
-        && backlog.failed_events == 0
+    while projection_drain_state(&backlog, false) == ProjectionDrainState::AwaitingOwner
         && tokio::time::Instant::now() < drain_deadline
     {
         tokio::time::sleep(std::time::Duration::from_millis(300)).await;
@@ -187,22 +162,29 @@ pub(crate) async fn projection_sync_impl(
     }
     let remaining_pending = backlog.pending_events;
     let remaining_failed = backlog.failed_events;
+    let drain_state =
+        projection_drain_state(&backlog, tokio::time::Instant::now() >= drain_deadline);
+
+    if drain_state != ProjectionDrainState::Drained {
+        tracing::warn!(run_id = %input.run_id, step_name = %input.step_name,
+            target_system = %input.target_system,
+            pending = remaining_pending, failed = remaining_failed,
+            uncertain = backlog.uncertain_events,
+            status = drain_state.as_status(),
+            "projection awaiting Outbox Worker acknowledgement");
+    }
 
     Ok(ProjectionSyncOutput {
         run_id: input.run_id.clone(),
         target_system: input.target_system.clone(),
-        processed_events,
-        retried_events,
-        failed_events,
+        // These three counters describe this Activity's delivery actions.
+        // Status-only observation cannot claim to have dispatched an event.
+        processed_events: 0,
+        retried_events: 0,
+        failed_events: 0,
         remaining_pending,
         remaining_failed,
-        status: if remaining_pending == 0 && remaining_failed == 0 && retried_events == 0 {
-            "done".to_string()
-        } else if failed_events > 0 || retried_events > 0 {
-            "blocked".to_string()
-        } else {
-            "partial".to_string()
-        },
+        status: drain_state.as_status().to_string(),
     })
 }
 
@@ -795,8 +777,74 @@ pub(crate) async fn seo_preflight_impl(
 mod canonical_production_contract_tests {
     use super::{
         graph_projection_due_at_gate, missing_required_contract_flags,
-        optional_projection_valid_empty,
+        optional_projection_valid_empty, projection_drain_state, ProjectionDrainState,
     };
+    use infrastructure::adapters::sqlx_seo_adapter::ProjectionBacklogCounts;
+
+    fn counts(pending: i64, failed: i64, uncertain: i64) -> ProjectionBacklogCounts {
+        ProjectionBacklogCounts {
+            pending_events: pending,
+            failed_events: failed,
+            uncertain_events: uncertain,
+        }
+    }
+
+    #[test]
+    fn outbox_gate_does_not_claim_an_outstanding_lease_is_done() {
+        assert_eq!(
+            projection_drain_state(&counts(0, 0, 0), false),
+            ProjectionDrainState::Drained
+        );
+        assert_eq!(
+            projection_drain_state(&counts(1, 0, 0), false),
+            ProjectionDrainState::AwaitingOwner
+        );
+        assert_eq!(
+            projection_drain_state(&counts(1, 0, 0), true),
+            ProjectionDrainState::Stalled
+        );
+    }
+
+    #[test]
+    fn verified_rule_pre_rpc_fence_is_transient_until_worker_ack_or_timeout() {
+        // Qdrant RPC is in flight: Worker has committed `failed` as an
+        // uncertainty marker before calling the provider. Returning blocked
+        // immediately would make a healthy successful delivery fail.
+        let effect_in_flight = counts(0, 1, 1);
+        assert_eq!(
+            projection_drain_state(&effect_in_flight, false),
+            ProjectionDrainState::AwaitingOwner
+        );
+        assert_eq!(
+            projection_drain_state(&counts(0, 0, 0), false),
+            ProjectionDrainState::Drained
+        );
+        // If the Worker dies, no path automatically resends this effect.
+        assert_eq!(
+            projection_drain_state(&effect_in_flight, true),
+            ProjectionDrainState::Quarantined
+        );
+    }
+
+    #[test]
+    fn terminal_outbox_failures_block_even_with_other_pending_effects() {
+        assert_eq!(
+            projection_drain_state(&counts(1, 1, 0), false),
+            ProjectionDrainState::Blocked
+        );
+        assert_eq!(
+            projection_drain_state(&counts(1, 2, 1), false),
+            ProjectionDrainState::Blocked
+        );
+        assert_eq!(
+            projection_drain_state(&counts(1, 1, 1), false),
+            ProjectionDrainState::AwaitingOwner
+        );
+        assert_eq!(
+            projection_drain_state(&counts(1, 1, 1), true),
+            ProjectionDrainState::Quarantined
+        );
+    }
 
     #[test]
     fn valid_empty_requires_current_run_producer_evidence() {

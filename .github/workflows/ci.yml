@@ -38,6 +38,7 @@ jobs:
       cargo_scope: ${{ steps.decide.outputs.cargo_scope }}
       architecture_e2e_shards: ${{ steps.decide.outputs.architecture_e2e_shards }}
       verify_e2e_shards: ${{ steps.decide.outputs.verify_e2e_shards }}
+      pg_e2e_shards: ${{ steps.decide.outputs.pg_e2e_shards }}
     steps:
       - name: Checkout exact CI source
         uses: actions/checkout@v7
@@ -72,7 +73,7 @@ jobs:
 
           sys.path.insert(0, 'automation')
           from ci_impact import (
-              CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS,
+              CI_PR_OWNERS, E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS,
               SCHEMA_VERSION, e2e_shard_commands_for_report,
           )
 
@@ -95,24 +96,27 @@ jobs:
               raise SystemExit('CI_IMPACT=FAIL source/owner selection mismatch')
           if report['scope'] == 'full':
               shards = e2e_shard_commands_for_report(report)
-              architecture = [name for name in E2E_ARCH_SHARDS if shards[name]]
-              verify = [name for name in E2E_VERIFY_SHARDS if shards[name]]
-              if not architecture or not verify:
+              architecture = [name for name in E2E_ARCH_RUNNER_SHARDS if shards[name]]
+              verify = [name for name in E2E_VERIFY_RUNNER_SHARDS if shards[name]]
+              pg = [name for name in E2E_PG_SHARDS if shards[name]]
+              if not architecture or not verify or not pg:
                   raise SystemExit('CI_IMPACT=FAIL full CI has no mandatory live E2E shards')
           else:
               # A valid singleton keeps GitHub's matrix expression well-typed
               # even when the job-level full-only condition skips the job.
               architecture = ['not_applicable']
               verify = ['not_applicable']
+              pg = ['not_applicable']
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write('selected_ci_jobs=' + json.dumps(selected, separators=(',', ':')) + '\n')
               f.write('source_sha=' + os.environ['CI_HEAD_SHA'] + '\n')
               f.write('cargo_scope=' + report['scope'] + '\n')
               f.write('architecture_e2e_shards=' + json.dumps(architecture, separators=(',', ':')) + '\n')
               f.write('verify_e2e_shards=' + json.dumps(verify, separators=(',', ':')) + '\n')
+              f.write('pg_e2e_shards=' + json.dumps(pg, separators=(',', ':')) + '\n')
           print('CI_IMPACT=PASS selected=' + ','.join(selected))
           print('CI_E2E_SHARDS=PASS architecture=' + ','.join(architecture)
-                + ' verify=' + ','.join(verify))
+                + ' verify=' + ','.join(verify) + ' pg=' + ','.join(pg))
           PY
 
       - name: Preserve selected and not-applicable evidence
@@ -619,8 +623,8 @@ jobs:
   # artifacts and fail-closed content/source checks.
   rust-architecture-e2e:
     name: rust-architecture-e2e (${{ matrix.shard }})
-    needs: [impact, rust-e2e-harness, rust-e2e-pg-harness, rust-e2e-legacy-binaries, rust-e2e-v3-binaries]
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-architecture-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    needs: [impact, rust-e2e-harness, rust-e2e-legacy-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-architecture-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -644,25 +648,14 @@ jobs:
           name: ci-owner-impact
           path: automation/reports
       - uses: actions/download-artifact@v7
-        if: matrix.shard != 'pg_temporal'
         with:
           name: rust-e2e-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/harness
-      - uses: actions/download-artifact@v7
-        if: matrix.shard == 'pg_temporal'
-        with:
-          name: rust-e2e-pg-harness-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
       - uses: actions/download-artifact@v7
         if: matrix.shard == 'temporal_manual' || matrix.shard == 'temporal_blocked' || matrix.shard == 'truth_certification'
         with:
           name: rust-e2e-legacy-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/legacy
-      - uses: actions/download-artifact@v7
-        if: matrix.shard == 'pg_temporal'
-        with:
-          name: rust-e2e-v3-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-ci-bundles/v3
       - name: Report compiler artifact transfer cost
         shell: bash
         run: |
@@ -672,22 +665,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${{ matrix.shard }}" == pg_temporal ]]; then
-            kind=pg_harness
-          else
-            kind=harness
-          fi
           python3 automation/rust_ci_artifacts.py install \
-            --kind "$kind" --source-sha "$GITHUB_SHA" \
-            --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
+            --kind harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/harness"
           if [[ "${{ matrix.shard }}" == temporal_manual || "${{ matrix.shard }}" == temporal_blocked || "${{ matrix.shard }}" == truth_certification ]]; then
             python3 automation/rust_ci_artifacts.py install \
               --kind legacy --source-sha "$GITHUB_SHA" \
               --directory "$RUNNER_TEMP/rust-ci-bundles/legacy"
-          elif [[ "${{ matrix.shard }}" == pg_temporal ]]; then
-            python3 automation/rust_ci_artifacts.py install \
-              --kind v3 --source-sha "$GITHUB_SHA" \
-              --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
           fi
       - name: Run one selected live architecture E2E shard without recompiling
         run: |
@@ -697,8 +681,8 @@ jobs:
 
   rust-verify-e2e:
     name: rust-verify-e2e (${{ matrix.shard }})
-    needs: [impact, rust-e2e-harness, rust-e2e-pg-harness, rust-e2e-v3-binaries]
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-verify-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    needs: [impact, rust-e2e-harness, rust-e2e-legacy-binaries, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-verify-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -723,12 +707,12 @@ jobs:
           name: rust-e2e-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/harness
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'verify_d'
+        if: matrix.shard == 'verify_b'
         with:
-          name: rust-e2e-pg-harness-${{ github.sha }}
-          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
+          name: rust-e2e-legacy-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/legacy
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'verify_d'
+        if: matrix.shard == 'verify_c'
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
@@ -741,20 +725,83 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for kind in harness; do
+          python3 automation/rust_ci_artifacts.py install \
+            --kind harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/harness"
+          if [[ '${{ matrix.shard }}' == verify_b ]]; then
             python3 automation/rust_ci_artifacts.py install \
-              --kind "$kind" --source-sha "$GITHUB_SHA" \
-              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
-          done
-          if [[ "${{ matrix.shard }}" == verify_d ]]; then
-            python3 automation/rust_ci_artifacts.py install \
-              --kind pg_harness --source-sha "$GITHUB_SHA" \
-              --directory "$RUNNER_TEMP/rust-ci-bundles/pg_harness"
+              --kind legacy --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/legacy"
+          elif [[ '${{ matrix.shard }}' == verify_c ]]; then
             python3 automation/rust_ci_artifacts.py install \
               --kind v3 --source-sha "$GITHUB_SHA" \
               --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
           fi
       - name: Run one selected live PostgreSQL/pure Temporal E2E shard
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job verify \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+
+  # PG V3 compilation is physically isolated from the legacy monolith.
+  # Execute both PG-owned live shards when their actual PG and V3 binaries
+  # become ready; no dependency on rust-e2e-harness or legacy Worker builds.
+  # This is a runner partition of the SAME typed suite registry, not a new
+  # business step or a way to skip any selected full-scope test.
+  rust-pg-e2e:
+    name: rust-pg-e2e (${{ matrix.shard }})
+    needs: [impact, rust-e2e-pg-harness, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-pg-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.impact.outputs.pg_e2e_shards) }}
+    env:
+      PLAYWRIGHT_DRIVER_VERSION: "1.65.0"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Start exact-source PG artifact transfer timer
+        shell: bash
+        run: date +%s%3N > "$RUNNER_TEMP/rust-transfer-start-ms"
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - uses: actions/download-artifact@v7
+        with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'pg_temporal'
+        with:
+          name: rust-e2e-v3-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/v3
+      - name: Authenticate two independent source-bound PG and V3 executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          start_ms="$(< "$RUNNER_TEMP/rust-transfer-start-ms")"
+          echo "CI_RUST_ARTIFACT_TRANSFER owner=pg shard=${{ matrix.shard }} elapsed_ms=$(( $(date +%s%3N) - start_ms ))"
+          python3 automation/rust_ci_artifacts.py install \
+            --kind pg_harness --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/pg_harness"
+          if [[ '${{ matrix.shard }}' == pg_temporal ]]; then
+            python3 automation/rust_ci_artifacts.py install \
+              --kind v3 --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+          fi
+      - name: Execute exact selected PG V3 architecture shard
+        if: matrix.shard == 'pg_temporal'
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --suite-job architecture-and-rust \
+            --execute-precompiled-e2e --e2e-shard '${{ matrix.shard }}'
+      - name: Execute exact selected PG V3 effect and pure-DAG shard
+        if: matrix.shard == 'verify_d'
         run: |
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json --suite-job verify \
@@ -1076,6 +1123,7 @@ jobs:
       - rust-e2e-v3-binaries
       - rust-architecture-e2e
       - rust-verify-e2e
+      - rust-pg-e2e
       - product-truth
       - rust-security
       - cloudflare-static-build
@@ -1159,10 +1207,11 @@ jobs:
           # every generated shard green. The exact selected subset is computed
           # and checked by the immutable same-source PR impact/gate scripts.
           sys.path.insert(0, 'automation')
-          from ci_impact import E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS
+          from ci_impact import E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS
           matrix_owners = {
-              "rust-architecture-e2e": set(E2E_ARCH_SHARDS),
-              "rust-verify-e2e": set(E2E_VERIFY_SHARDS),
+              "rust-architecture-e2e": set(E2E_ARCH_RUNNER_SHARDS),
+              "rust-verify-e2e": set(E2E_VERIFY_RUNNER_SHARDS),
+              "rust-pg-e2e": set(E2E_PG_SHARDS),
           }
 
           def fetch(path):

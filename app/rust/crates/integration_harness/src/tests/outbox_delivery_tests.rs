@@ -979,6 +979,7 @@ async fn outbox_a14_verified_rule_uncertain_effect_quarantines_claim_and_new_rev
         claim_outbox_batch_for_run_target, dispatch_verified_rule_with_fence, OutboxEnvelope,
     };
     use infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_many_in_tx;
+    use infrastructure::adapters::sqlx_seo_adapter::projection_backlog_counts;
     use infrastructure::adapters::sqlx_reconcile_adapter::{
         reconcile_target_system, ReconcileOptionsRecord,
     };
@@ -1055,6 +1056,9 @@ async fn outbox_a14_verified_rule_uncertain_effect_quarantines_claim_and_new_rev
     .unwrap();
     assert_eq!(status, "failed", "effect started before durable quarantine");
     assert_eq!(last_error.as_deref(), Some("projection_outcome_uncertain:v1"));
+    let quarantined = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((quarantined.pending_events, quarantined.failed_events), (0, 1),
+        "Temporal drain must not mistake durable unknown external outcome for delivery success");
 
     // An expired lease does not override an unknown external outcome. Two
     // simultaneous replacement workers must both observe zero eligible rows.
@@ -1198,6 +1202,9 @@ async fn outbox_a14_verified_rule_uncertain_effect_quarantines_claim_and_new_rev
     .unwrap();
     assert_eq!(final_status, "failed");
     assert_eq!(final_error.as_deref(), Some("projection_outcome_uncertain:v1"));
+    let blocked = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((blocked.pending_events, blocked.failed_events), (0, 1),
+        "reconciliation must not silently clear uncertain effects or unblock Temporal");
     let number_of_outbox_intents: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM system.sync_outbox WHERE aggregate_type='rule_instance' AND aggregate_key=$1 AND target_system='qdrant'",
     )
@@ -1218,6 +1225,7 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
         claim_outbox_batch_for_run_target, mark_done, mark_retry, LeaseUpdate, OutboxEnvelope,
     };
     use infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_one;
+    use infrastructure::adapters::sqlx_seo_adapter::projection_backlog_counts;
     use prost::Message;
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -1259,12 +1267,34 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
 
     let first = make_event("revision-1", vec![0.01; 1024]);
     let first_id = outbox_emit_one(&pg.pool, &first).await.unwrap();
+    // No Outbox process exists yet. A Temporal status/drain observer must
+    // observe the unfinished Qdrant intent rather than report success.
+    let stalled = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((stalled.pending_events, stalled.failed_events), (1, 0));
+
+    // A different provider's command in the SAME run must remain untouched
+    // by a target-scoped Qdrant worker, even after the worker is restarted.
+    let unrelated = OutboxEnvelope {
+        run_id: run_id.clone(),
+        aggregate_type: "cms".into(),
+        aggregate_key: Uuid::new_v4().to_string(),
+        target_system: "cms".into(),
+        event_type: "seo_page_published".into(),
+        payload_type: "alegria.outbox.cms.v1".into(),
+        schema_version: 1,
+        idempotency_key: Uuid::new_v4().to_string(),
+        payload_bytes: vec![0xff],
+    };
+    let unrelated_id = outbox_emit_one(&pg.pool, &unrelated).await.unwrap();
     let mut claimed = claim_outbox_batch_for_run_target(&pg.pool, "crashed-worker", &run_id, "qdrant", 1, 120)
         .await.unwrap();
     assert_eq!(claimed.len(), 1);
     let first_claim = claimed.pop().unwrap();
     assert_eq!(first_claim.run_id, run_id);
     assert_eq!(first_claim.event_id.to_string(), first_id);
+    let in_flight = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((in_flight.pending_events, in_flight.failed_events), (1, 0),
+        "a claimed processing lease is NOT a delivered projection");
     dispatch_event(
         &first_claim.target_system, &first_claim.event_type, &first_claim.aggregate_key,
         &first_claim.payload_type, &first_claim.payload_bytes,
@@ -1287,27 +1317,77 @@ async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     assert_eq!(new_claim.event_id, first_claim.event_id);
     assert_eq!(mark_done(&pg.pool, &first_claim).await.unwrap(), LeaseUpdate::Lost);
     assert_eq!(mark_retry(&pg.pool, &first_claim, "stale", 5).await.unwrap(), LeaseUpdate::Lost);
-    // Expire this claim, then use the real outbox worker on the retry.
+    // Expire this claim. Until an actual standalone worker is started, a
+    // pending event is not a completed projection, even after an external
+    // effect may already exist because the previous process crashed.
     sqlx::query("UPDATE system.sync_outbox SET locked_until = now() - interval '1 second' WHERE event_id = $1")
         .bind(new_claim.event_id).execute(&pg.pool).await.unwrap();
-    outbox_worker::worker::run_worker_loop(&pg.pool, &pg.database_url, "a14-retry", Some(1))
-        .await.unwrap();
+    let before_restart = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((before_restart.pending_events, before_restart.failed_events), (1, 0));
+
+    // Execute the real separately compiled Outbox binary, never a Temporal
+    // Activity or an in-process call to the delivery function. The worker
+    // handles the retry after the lease generation changes.
+    let worker_env = BTreeMap::from([
+        ("DATABASE_URL".to_string(), pg.database_url.clone()),
+        ("QDRANT_URL".to_string(), qdrant.qdrant_url.clone()),
+        ("QDRANT_REST_URL".to_string(), qdrant.qdrant_rest_url.clone()),
+        ("QDRANT_SKIP_COMPATIBILITY_CHECK".to_string(), "true".to_string()),
+        ("OUTBOX_TARGET_SYSTEM".to_string(), "qdrant".to_string()),
+        ("OUTBOX_MAX_CYCLES".to_string(), "1".to_string()),
+    ]);
+    let mut restarted_worker = spawn_outbox_worker(&worker_env);
+    let exit = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(status) = restarted_worker.child.try_wait().unwrap() {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("standalone Qdrant Outbox worker timed out after crash recovery");
+    assert!(exit.success(), "standalone Qdrant Outbox worker crashed: {exit}");
 
     let status: (String, i32) = sqlx::query_as(
         "SELECT status,retry_count FROM system.sync_outbox WHERE event_id=$1",
     ).bind(first_claim.event_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(status, ("done".to_string(), 0));
+    let completed = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((completed.pending_events, completed.failed_events), (0, 0));
+    let cms_backlog = projection_backlog_counts(&pg.pool, &run_id, "cms").await.unwrap();
+    assert_eq!((cms_backlog.pending_events, cms_backlog.failed_events), (1, 0));
+    let cms_status: String = sqlx::query_scalar(
+        "SELECT status FROM system.sync_outbox WHERE event_id=$1",
+    ).bind(Uuid::parse_str(&unrelated_id).unwrap()).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(cms_status, "pending", "Qdrant worker claimed an unrelated CMS event");
     assert_eq!(outbox_emit_one(&pg.pool, &first).await.unwrap(), first_id);
 
     let second = make_event("revision-2", vec![0.2; 1024]);
     let second_id = outbox_emit_one(&pg.pool, &second).await.unwrap();
     assert_ne!(first_id, second_id);
-    outbox_worker::worker::run_worker_loop(&pg.pool, &pg.database_url, "a14-next-revision", Some(1))
-        .await.unwrap();
+    let before_second_process = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((before_second_process.pending_events, before_second_process.failed_events), (1, 0));
+    let mut next_worker = spawn_outbox_worker(&worker_env);
+    let exit = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Some(status) = next_worker.child.try_wait().unwrap() {
+                break status;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("standalone Qdrant Outbox worker timed out after next revision");
+    assert!(exit.success(), "standalone Qdrant Outbox worker crashed: {exit}");
     let total_done: i64 = sqlx::query_scalar(
         "SELECT count(*)::bigint FROM system.sync_outbox WHERE run_id=$1 AND status='done'",
     ).bind(&run_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(total_done, 2);
+    let final_backlog = projection_backlog_counts(&pg.pool, &run_id, "qdrant").await.unwrap();
+    assert_eq!((final_backlog.pending_events, final_backlog.failed_events), (0, 0));
+    let cms_after_second_worker = projection_backlog_counts(&pg.pool, &run_id, "cms").await.unwrap();
+    assert_eq!((cms_after_second_worker.pending_events, cms_after_second_worker.failed_events), (1, 0));
 
     let points = vector_qdrant::search_dense(
         &qdrant.client, collection, vec![0.2; 1024], 10, None,
@@ -1329,6 +1409,7 @@ async fn outbox_a14_terminal_failure_and_dead_letter_are_atomic() {
         claim_outbox_batch_for_run_target, mark_failed_with_dead_letter, OutboxEnvelope,
     };
     use infrastructure::adapters::sqlx_runtime_outbox_adapter::outbox_emit_one;
+    use infrastructure::adapters::sqlx_seo_adapter::projection_backlog_counts;
     use primitives::errors::ErrorClass;
 
     let pg = PostgresHarness::start().await.unwrap();
@@ -1354,6 +1435,9 @@ async fn outbox_a14_terminal_failure_and_dead_letter_are_atomic() {
          JOIN system.dead_letter_queue d ON d.workflow_id=o.event_id::text WHERE o.event_id=$1",
     ).bind(Uuid::parse_str(&event_id).unwrap()).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(durable, ("failed".into(), run_id.clone(), "contract_violation".into(), None));
+    let dead_lettered = projection_backlog_counts(&pg.pool, &run_id, "cms").await.unwrap();
+    assert_eq!((dead_lettered.pending_events, dead_lettered.failed_events), (0, 1),
+        "a terminal provider failure must block its run/target projection gate");
 
     let mut second_event = event.clone();
     second_event.aggregate_key = Uuid::new_v4().to_string();
@@ -1373,6 +1457,9 @@ async fn outbox_a14_terminal_failure_and_dead_letter_are_atomic() {
     let status: String = sqlx::query_scalar("SELECT status FROM system.sync_outbox WHERE event_id=$1")
         .bind(second_claim.event_id).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(status, "processing", "no terminal failure without durable dead letter");
+    let after_rollback = projection_backlog_counts(&pg.pool, &run_id, "cms").await.unwrap();
+    assert_eq!((after_rollback.pending_events, after_rollback.failed_events), (1, 1),
+        "rolled-back terminal transition remains in-flight; the original dead letter stays failed");
 }
 
 /// PostgreSQL itself rejects a verified_rules_4 registry change unless the

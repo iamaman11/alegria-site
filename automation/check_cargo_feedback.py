@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from cargo_feedback import run_cargo, workspace_artifact
 from ci_impact import (
-    SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE,
+    SCHEMA_VERSION, SUITE_OWNERS, WORKER_E2E_PREPARE, OUTBOX_E2E_PREPARE,
     suite_commands_by_ci_job, suite_commands_for_report,
 )
 from run_scoped_cargo_feedback import (
@@ -295,16 +295,19 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         ]
         executions, output, evidence = self.run_plan(suites, suite_job="verify")
         assigned = suite_commands_by_ci_job(self.report(suites))["verify"]
-        self.assertEqual([command for command, _ in executions], [command for _, command in assigned])
+        self.assertEqual([command for command, _ in executions], [
+            list(OUTBOX_E2E_PREPARE), *(command for _, command in assigned),
+        ])
         self.assertEqual({name for name, _ in assigned}, {
             "cms_review_revision", "draft_qa_scenario", "knowledge_a13", "outbox_a14",
             "planning_atomicity", "publishing_a17", "truth_adjudication_integrity",
         })
-        self.assertNotIn("CI_SUITE_PREPARE=", output)
+        self.assertIn("CI_SUITE_PREPARE=outbox_a14", output)
+        self.assertIn("CI_SUITE_PREBUILT=outbox_a14 INTEGRATION_OUTBOX_WORKER_BIN=", output)
         self.assertNotIn("CI_WORKSPACE_UNIT_TESTS=", output)
         self.assertEqual(evidence["suite_job"], "verify")
         self.assertEqual(evidence["selected_suites"], [name for name, _ in assigned])
-        self.assertEqual(len(evidence["measurements"]), len(assigned))
+        self.assertEqual(len(evidence["measurements"]), len(assigned) + 1)
 
     def test_delegation_rejects_ungated_verify_and_noncanonical_full_command(self) -> None:
         report = self.report([])
@@ -555,9 +558,9 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         pure_command = list(SUITE_OWNERS["pure_dag_v3"]["command"])
         temporal_command = list(SUITE_OWNERS["pg_temporal_v3"]["command"])
         shards = {
-            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 2),
-                         ("pure_dag_v3", pure_command, "pure_v3_", 1)],
+            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 2)],
             "pg_temporal": [("pg_temporal_v3", temporal_command, "temporal_effect_v3_", 1)],
+            "verify_c": [("pure_dag_v3", pure_command, "pure_v3_", 1)],
         }
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "app/rust"
@@ -565,9 +568,10 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
             debug.mkdir(parents=True)
             harness = debug / "integration_harness-ci-exact"
             pg = debug / "integration_pg_v3_e2e-ci-exact"
-            for path in (harness, pg):
-                path.write_bytes(b"exact-source verified artifact")
-                path.chmod(0o755)
+            # Critically the PG-only job installs no monolithic test binary.
+            # Both PG shards must pass before such an artifact even exists.
+            pg.write_bytes(b"exact-source verified artifact")
+            pg.chmod(0o755)
             actual: list[tuple[str, Path, str, int]] = []
 
             def execute(name: str, _command: list[str], executable: Path,
@@ -591,12 +595,20 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     report, "verify_d", suite_job="verify", prebuilt_executable=harness,
                     prebuilt_pg_executable=pg,
                 )
-                self.assertEqual(sum(row["matched_tests"] for row in verify), 3)
+                self.assertEqual(sum(row["matched_tests"] for row in verify), 2)
                 architecture = run_exact_precompiled_e2e_shard(
                     report, "pg_temporal", suite_job="architecture-and-rust",
                     prebuilt_executable=harness, prebuilt_pg_executable=pg,
                 )
                 self.assertEqual(sum(row["matched_tests"] for row in architecture), 1)
+                self.assertFalse(harness.exists(), "PG owner must not consume broad harness")
+                harness.write_bytes(b"exact-source verified artifact")
+                harness.chmod(0o755)
+                pure = run_exact_precompiled_e2e_shard(
+                    report, "verify_c", suite_job="verify", prebuilt_executable=harness,
+                    prebuilt_pg_executable=pg,
+                )
+                self.assertEqual(sum(row["matched_tests"] for row in pure), 1)
                 with self.assertRaisesRegex(ValueError, "verified integration_pg_v3_e2e"):
                     run_exact_precompiled_e2e_shard(
                         report, "pg_temporal", suite_job="architecture-and-rust",
@@ -608,8 +620,8 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     )
             self.assertEqual(actual, [
                 ("pg_effect_v3", pg, "pg_v3_", 2),
-                ("pure_dag_v3", harness, "pure_v3_", 1),
                 ("pg_temporal_v3", pg, "temporal_effect_v3_", 1),
+                ("pure_dag_v3", harness, "pure_v3_", 1),
             ])
 
     def test_parallel_verify_compiles_once_and_runs_every_suite_in_two_processes(self) -> None:
