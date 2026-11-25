@@ -34,6 +34,7 @@ RUST = ROOT / "app" / "rust"
 MONOLITH = "temporal_worker"
 ORCHESTRATOR = "temporal_orchestrator"
 PG_EFFECT_OWNER = "temporal_pg_effects"
+QDRANT_EFFECT_OWNER = "temporal_qdrant_effects"
 # This is a DESIGN hypothesis only. Once a candidate Cargo package exists,
 # its *actual* manifest replaces this proposed set in all measurements.
 PROPOSED_ORCHESTRATOR_DEPS = frozenset({
@@ -45,6 +46,7 @@ PROVIDER_OWNERS = frozenset({
     "infrastructure",
 })
 PG_ALLOWED_PROVIDER_OWNERS = frozenset({"postgres_store"})
+QDRANT_ALLOWED_PROVIDER_OWNERS = frozenset({"vector_qdrant"})
 # Cargo workspace names alone are insufficient: a new standalone binary could
 # bypass a local provider crate by taking a vendor SDK directly. Match package
 # names from the resolved locked Cargo graph (never substring-match arbitrary
@@ -200,6 +202,11 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
     illegal_pg = sorted((pg_closure & PROVIDER_OWNERS) - PG_ALLOWED_PROVIDER_OWNERS)
     if illegal_pg:
         raise EvidenceError(f"PG Activity owner transitively links forbidden providers: {illegal_pg}")
+    qdrant_exists = QDRANT_EFFECT_OWNER in graph
+    qdrant_closure = closure(graph, {QDRANT_EFFECT_OWNER}) if qdrant_exists else set()
+    illegal_qdrant = sorted((qdrant_closure & PROVIDER_OWNERS) - QDRANT_ALLOWED_PROVIDER_OWNERS)
+    if illegal_qdrant:
+        raise EvidenceError(f"Qdrant Activity owner transitively links forbidden providers: {illegal_qdrant}")
     if not monolith_providers:
         raise EvidenceError("baseline unexpectedly has no provider edges; assumptions changed")
     if candidate_providers:
@@ -255,6 +262,14 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
             "workspace_dependency_count": len(pg_closure) - (1 if pg_exists else 0),
             "provider_dependencies": sorted(pg_closure & PROVIDER_OWNERS),
             "allowed_provider_dependencies": sorted(PG_ALLOWED_PROVIDER_OWNERS),
+        },
+        "D_qdrant_activity_owner": {
+            "package": QDRANT_EFFECT_OWNER,
+            "exists": qdrant_exists,
+            "workspace_closure_excluding_self": sorted(qdrant_closure - {QDRANT_EFFECT_OWNER}),
+            "workspace_dependency_count": len(qdrant_closure) - (1 if qdrant_exists else 0),
+            "provider_dependencies": sorted(qdrant_closure & PROVIDER_OWNERS),
+            "allowed_provider_dependencies": sorted(QDRANT_ALLOWED_PROVIDER_OWNERS),
         },
         "provider_edits_reverse_closure": {
             owner: sorted(reverse_closure(graph, owner)) for owner in SOURCE_OWNERS

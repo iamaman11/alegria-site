@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 operation_protocol = { path = "../../crates/operation_protocol" }
 qdrant_contracts = { path = "../../crates/qdrant_contracts" }
+projection_contracts = { path = "../../crates/projection_contracts" }
 qdrant_effects_core = { path = "../../crates/qdrant_effects_core" }
 temporal_gateway = { path = "../../crates/temporal_gateway" }
 temporalio-sdk = { workspace = true }

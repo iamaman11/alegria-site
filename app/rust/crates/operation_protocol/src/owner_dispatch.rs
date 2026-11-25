@@ -195,6 +195,8 @@ pub enum RouteCatalogError {
     UnsupportedRunSchema(u16),
     #[error("owner invocation has mismatched exact operation, scope or bytes")]
     InvalidInvocation,
+    #[error("Produced input does not match the independently observed completed producer")]
+    InvalidProducedCompletion,
     #[error("owner result has invalid dispatch, schema, scope or provenance")]
     InvalidOwnerResult,
     #[error("owner invocation or output JSON serialization failed: {0}")]
@@ -266,6 +268,86 @@ impl OwnerInvocationV1 {
                 != self.checked_dispatch.execution_key
         {
             return Err(RouteCatalogError::InvalidInvocation);
+        }
+        Ok(())
+    }
+
+    /// Compare a consumed `Produced` port with the *actual* preceding child
+    /// invocation and typed result observed in Temporal server History.
+    ///
+    /// IMPORTANT: the caller MUST obtain these arguments independently from
+    /// server parent/child Histories and confirm the producer's durable receipt
+    /// with its own authorized operator. Reading an invocation supplied by the
+    /// DAG author, or merely checking self-consistent hashes, is not admission.
+    /// This helper contains no provider-specific DTO, SDK or service access.
+    pub fn verify_produced_input_from_observed_completion(
+        &self,
+        input_port: &PortId,
+        producer_invocation: &OwnerInvocationV1,
+        producer_result: &OwnerResultV1,
+    ) -> Result<(), RouteCatalogError> {
+        let invalid = || RouteCatalogError::InvalidProducedCompletion;
+        let bound = self.bound_inputs.get(input_port).ok_or_else(invalid)?;
+        let (producer, producer_port, artifact_id) = match &bound.source {
+            ArtifactBinding::Produced {
+                producer,
+                port,
+                artifact,
+            } => (producer, port, artifact),
+            ArtifactBinding::External { .. } => return Err(invalid()),
+        };
+        let proof = bound.produced_evidence.as_ref().ok_or_else(invalid)?;
+        let upstream = &producer_invocation.checked_dispatch;
+        if self.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
+            || producer_invocation.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
+            || self.parent.workflow_id
+                != operation_dag_parent_workflow_id(&self.checked_dispatch.scope.run_id)
+            || self.parent.run_id.trim().is_empty()
+            || self.parent != producer_invocation.parent
+            || producer_invocation.command_bytes.is_empty()
+            || upstream.scope != self.checked_dispatch.scope
+            || upstream.plan_hash != self.checked_dispatch.plan_hash
+            || upstream.instance != *producer
+            || upstream.instance == self.checked_dispatch.instance
+            || producer_result.dispatch_execution_key != upstream.execution_key
+            || producer_result.receipt_bytes.is_empty()
+            || proof.producer != *producer
+            || proof.port != *producer_port
+            || proof.artifact_id != *artifact_id
+            || bound.artifact_id != *artifact_id
+            || proof.dispatch_execution_key != upstream.execution_key
+            || proof.child_workflow_id != owner_child_workflow_id(&upstream.execution_key)
+        {
+            return Err(invalid());
+        }
+
+        // A completed child start input must have the same checked dispatch
+        // identity as the one recorded in parent History. Hash the real wire
+        // bytes, not an upstream claim stored in Produced evidence.
+        let upstream_input = canonical_owner_dispatch_input_bytes(
+            &producer_invocation.bound_inputs,
+            &producer_invocation.command_bytes,
+        )?;
+        let upstream_input_hash = owner_content_hash(&upstream_input);
+        if upstream.input_hash != upstream_input_hash
+            || checked_execution_key(upstream, &upstream_input_hash)
+                .map_err(|_| invalid())?
+                != upstream.execution_key
+        {
+            return Err(invalid());
+        }
+        let actual_artifact = producer_result
+            .outputs
+            .get(producer_port)
+            .ok_or_else(invalid)?;
+        if actual_artifact != &bound.artifact
+            || actual_artifact.scope != self.checked_dispatch.scope
+            || actual_artifact.provenance.trim().is_empty()
+            || proof.payload_hash != owner_content_hash(&actual_artifact.payload)
+            || proof.receipt_hash != owner_content_hash(&producer_result.receipt_bytes)
+            || proof.result_hash != canonical_owner_result_hash(producer_result)?
+        {
+            return Err(invalid());
         }
         Ok(())
     }
@@ -399,5 +481,173 @@ impl TrustedRouteCatalog {
                     .ok_or_else(|| RouteCatalogError::Unregistered(operation.clone()))
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod produced_completion_tests {
+    use super::*;
+    use crate::{ArtifactTypeId, EffectId, IdempotencyPolicy, OperationId, PlanHash};
+
+    fn dispatch(instance: &str, owner: &str) -> CheckedDispatch {
+        CheckedDispatch {
+            plan_hash: PlanHash("immutable-plan-hash".into()),
+            scope: RunScope {
+                tenant_id: "tenant-1".into(),
+                run_id: "business-run-1".into(),
+            },
+            instance: instance.into(),
+            operation: OperationRef {
+                id: OperationId(format!("{owner}.operation")),
+                revision: 1,
+            },
+            owner: owner.into(),
+            effects: BTreeSet::from([EffectId(format!("{owner}.write"))]),
+            idempotency: IdempotencyPolicy::Idempotent,
+            input_hash: String::new(),
+            execution_key: String::new(),
+        }
+    }
+
+    fn seal(invocation: &mut OwnerInvocationV1) {
+        let input = canonical_owner_dispatch_input_bytes(
+            &invocation.bound_inputs,
+            &invocation.command_bytes,
+        )
+        .unwrap();
+        let hash = owner_content_hash(&input);
+        invocation.checked_dispatch.input_hash = hash.clone();
+        invocation.checked_dispatch.execution_key =
+            checked_execution_key(&invocation.checked_dispatch, &hash).unwrap();
+    }
+
+    fn fixture() -> (OwnerInvocationV1, OwnerResultV1, OwnerInvocationV1) {
+        let parent = TemporalExecutionIdentityV4 {
+            workflow_id: operation_dag_parent_workflow_id("business-run-1"),
+            run_id: "actual-temporal-server-parent-run-id".into(),
+        };
+        let mut upstream = OwnerInvocationV1 {
+            schema_revision: OWNER_INVOCATION_SCHEMA_REVISION,
+            parent: parent.clone(),
+            checked_dispatch: dispatch("pg-producer", "pg"),
+            command_bytes: b"real-postgres-owner-input".to_vec(),
+            bound_inputs: BTreeMap::new(),
+        };
+        seal(&mut upstream);
+        let output = AdmittedArtifactV1 {
+            schema: ArtifactSchema {
+                id: ArtifactTypeId::from("projection.vector_projection"),
+                revision: 1,
+            },
+            scope: upstream.checked_dispatch.scope.clone(),
+            provenance: "verified-pg-revision/immutable-receipt".into(),
+            payload: b"real-upstream-projection-bytes".to_vec(),
+        };
+        let upstream_result = OwnerResultV1 {
+            dispatch_execution_key: upstream.checked_dispatch.execution_key.clone(),
+            outputs: BTreeMap::from([(PortId::from("vector_projection"), output.clone())]),
+            receipt_bytes: b"real-postgres-durable-receipt".to_vec(),
+        };
+        let proof = ProducedArtifactEvidenceV1 {
+            producer: upstream.checked_dispatch.instance.clone(),
+            port: PortId::from("vector_projection"),
+            artifact_id: ArtifactId::from("pg-projection-1"),
+            dispatch_execution_key: upstream.checked_dispatch.execution_key.clone(),
+            child_workflow_id: owner_child_workflow_id(
+                &upstream.checked_dispatch.execution_key,
+            ),
+            result_hash: canonical_owner_result_hash(&upstream_result).unwrap(),
+            receipt_hash: owner_content_hash(&upstream_result.receipt_bytes),
+            payload_hash: owner_content_hash(&output.payload),
+        };
+        let mut downstream = OwnerInvocationV1 {
+            schema_revision: OWNER_INVOCATION_SCHEMA_REVISION,
+            parent,
+            checked_dispatch: dispatch("qdrant-consumer", "qdrant"),
+            command_bytes: b"real-qdrant-owner-input".to_vec(),
+            bound_inputs: BTreeMap::from([(
+                PortId::from("vector_projection"),
+                BoundArtifactV1 {
+                    artifact_id: ArtifactId::from("pg-projection-1"),
+                    source: ArtifactBinding::Produced {
+                        producer: upstream.checked_dispatch.instance.clone(),
+                        port: PortId::from("vector_projection"),
+                        artifact: ArtifactId::from("pg-projection-1"),
+                    },
+                    artifact: output,
+                    produced_evidence: Some(proof),
+                },
+            )]),
+        };
+        seal(&mut downstream);
+        (upstream, upstream_result, downstream)
+    }
+
+    fn verify(
+        upstream: &OwnerInvocationV1,
+        result: &OwnerResultV1,
+        downstream: &OwnerInvocationV1,
+    ) -> Result<(), RouteCatalogError> {
+        downstream.verify_produced_input_from_observed_completion(
+            &PortId::from("vector_projection"),
+            upstream,
+            result,
+        )
+    }
+
+    #[test]
+    fn produced_binding_matches_actual_server_observed_producer_bytes_and_receipt() {
+        let (upstream, result, downstream) = fixture();
+        verify(&upstream, &result, &downstream).unwrap();
+    }
+
+    #[test]
+    fn produced_binding_rejects_self_consistent_forged_or_cross_scope_history() {
+        let (upstream, result, downstream) = fixture();
+
+        let mut forged_result = result.clone();
+        forged_result.receipt_bytes = b"different-receipt".to_vec();
+        assert!(verify(&upstream, &forged_result, &downstream).is_err());
+
+        let mut forged_result = result.clone();
+        forged_result
+            .outputs
+            .get_mut(&PortId::from("vector_projection"))
+            .unwrap()
+            .payload = b"different-upstream-payload".to_vec();
+        assert!(verify(&upstream, &forged_result, &downstream).is_err());
+
+        let mut forged_upstream = upstream.clone();
+        forged_upstream.command_bytes = b"different-observed-start-input".to_vec();
+        assert!(verify(&forged_upstream, &result, &downstream).is_err());
+
+        let mut forged_upstream = upstream.clone();
+        forged_upstream.parent.run_id = "other-temporal-parent-run-id".into();
+        assert!(verify(&forged_upstream, &result, &downstream).is_err());
+
+        let mut forged_upstream = upstream.clone();
+        forged_upstream.checked_dispatch.scope.tenant_id = "other-tenant".into();
+        assert!(verify(&forged_upstream, &result, &downstream).is_err());
+
+        let mut forged_downstream = downstream.clone();
+        forged_downstream
+            .bound_inputs
+            .get_mut(&PortId::from("vector_projection"))
+            .unwrap()
+            .source = ArtifactBinding::External {
+                artifact: ArtifactId::from("pg-projection-1"),
+            };
+        assert!(verify(&upstream, &result, &forged_downstream).is_err());
+
+        let mut forged_downstream = downstream;
+        forged_downstream
+            .bound_inputs
+            .get_mut(&PortId::from("vector_projection"))
+            .unwrap()
+            .produced_evidence
+            .as_mut()
+            .unwrap()
+            .child_workflow_id = "other-child-workflow".into();
+        assert!(verify(&upstream, &result, &forged_downstream).is_err());
     }
 }

@@ -10,11 +10,13 @@ use operation_protocol::owner_dispatch::{
     OwnerInvocationV1, OwnerResultV1, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use qdrant_contracts::{
-    confirmed_qdrant_owner_result, verify_external_qdrant_owner_invocation, QdrantChildOutcomeV1,
+    confirmed_qdrant_owner_result, verify_qdrant_owner_invocation, QdrantChildOutcomeV1,
+    QdrantProducedVectorProjectionContractV1,
     QDRANT_GENERIC_ACTIVITY_QUEUE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
 };
 use qdrant_effects_core::{execute_admitted_qdrant_projection_v3, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
+use operation_protocol::Operation;
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -63,7 +65,7 @@ impl AlegriaOwnerOperationV1Workflow {
     #[run]
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerResultV1> {
         let invocation = ctx.state(|s| s.immutable_invocation.clone());
-        verify_external_qdrant_owner_invocation(&invocation).map_err(|error| {
+        verify_qdrant_owner_invocation(&invocation).map_err(|error| {
             WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
                 std::io::Error::other(format!(
                     "Qdrant owner rejected foreign/Produced input: {error}"
@@ -138,7 +140,7 @@ impl QdrantGenericActivities {
                 "generic Qdrant effect has no independently History-attested SQL admission",
             ));
         }
-        let command = verify_external_qdrant_owner_invocation(&invocation)
+        let command = verify_qdrant_owner_invocation(&invocation)
             .map_err(terminal_activity_error)?;
         let outcome = execute_admitted_qdrant_projection_v3(
             &self.pool,
@@ -168,7 +170,7 @@ impl QdrantGenericActivities {
         ctx: &ActivityContext,
         invocation: &OwnerInvocationV1,
     ) -> std::result::Result<bool, AdmissionProbeError> {
-        let command = verify_external_qdrant_owner_invocation(invocation)
+        let command = verify_qdrant_owner_invocation(invocation)
             .map_err(|error| AdmissionProbeError::Denied(anyhow::anyhow!(error)))?;
         let info = ctx.info();
         let (id, run_id) = (|| -> Result<(&str, &str)> {
@@ -206,6 +208,15 @@ impl QdrantGenericActivities {
         let Some(row) = row else {
             return Ok(false);
         };
+        let pinned_effect_bytes = if invocation.checked_dispatch.operation
+            == QdrantProducedVectorProjectionContractV1::contract().reference
+        {
+            serde_json::to_vec(&command).map_err(|error| {
+                AdmissionProbeError::Denied(anyhow::Error::from(error))
+            })?
+        } else {
+            invocation.command_bytes.clone()
+        };
         (|| -> Result<()> {
             ensure!(
                 row.try_get::<String, _>("child_workflow_id")? == id
@@ -225,7 +236,8 @@ impl QdrantGenericActivities {
                         == invocation.checked_dispatch.plan_hash.as_str()
                     && row.try_get::<String, _>("dispatch_execution_key")?
                         == invocation.checked_dispatch.execution_key
-                    && row.try_get::<Vec<u8>, _>("command_bytes")? == invocation.command_bytes,
+                    && row.try_get::<Vec<u8>, _>("command_bytes")?
+                        == pinned_effect_bytes,
                 "V3 SQL admission does not pin exact typed command, parent, child and checked DAG"
             );
             Ok(())
@@ -276,6 +288,10 @@ async fn assert_generic_worker_role(pool: &PgPool) -> Result<()> {
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','INSERT') AS v1_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v2_admissions','SELECT') AS v2_read,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','SELECT') AS v1_read,
+                has_table_privilege(session_user,'pipeline.vector_projection_sources_v1','SELECT') AS producer_source_read,
+                has_table_privilege(session_user,'pipeline.operation_artifact_receipts_v1','SELECT') AS cross_owner_receipt_read,
+                has_function_privilege(session_user,
+                    'pipeline.operation_artifact_receipt_matches_v1(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE') AS cross_owner_cert_verify,
                 has_function_privilege(session_user,
                     'pipeline.begin_qdrant_projection_v3(uuid,bytea,text)','EXECUTE') AS begin_allowed,
                 has_function_privilege(session_user,
@@ -299,6 +315,9 @@ async fn assert_generic_worker_role(pool: &PgPool) -> Result<()> {
             && !row.try_get::<bool, _>("v1_insert")?
             && !row.try_get::<bool, _>("v2_read")?
             && !row.try_get::<bool, _>("v1_read")?
+            && !row.try_get::<bool, _>("producer_source_read")?
+            && !row.try_get::<bool, _>("cross_owner_receipt_read")?
+            && !row.try_get::<bool, _>("cross_owner_cert_verify")?
             && !row.try_get::<bool, _>("v2_begin")?
             && !row.try_get::<bool, _>("v2_confirm")?
             && !row.try_get::<bool, _>("v1_begin")?

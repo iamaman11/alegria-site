@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = { workspace = true }
 blake3 = { workspace = true }
 operation_protocol = { path = "../operation_protocol" }
+projection_contracts = { path = "../projection_contracts" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 primitives = { path = "../primitives" }

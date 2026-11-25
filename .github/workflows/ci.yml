@@ -253,6 +253,7 @@ jobs:
           python3 automation/check_rust_ci_artifacts.py
           python3 automation/check_dev_rust_feedback.py
           python3 automation/check_owner_rebuild.py
+          python3 automation/test_native_dag_owner_isolation.py
           python3 automation/check_physical_build_options.py
           python3 automation/check_temporal_activity_owner_inventory.py
           python3 automation/test_temporal_activity_owner_inventory.py

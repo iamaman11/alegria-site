@@ -17,6 +17,7 @@ use crate::{
     QdrantChildOutcomeV1, QdrantKeywordChildResultV2, QdrantKeywordProjectionCommandV1,
     QdrantKeywordProjectionContractV2, QDRANT_CHILD_SCHEMA_REVISION_V2,
     QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_EFFECT_OUTPUT_PORT_V2,
+    QdrantProducedVectorProjectionContractV1, verify_produced_qdrant_owner_invocation,
 };
 
 pub const QDRANT_GENERIC_OWNER_QUEUE_V1: &str = "alegria-qdrant-owner-v1";
@@ -84,6 +85,25 @@ pub fn verify_external_qdrant_owner_invocation(
     Ok(command)
 }
 
+/// Provider-owned dispatch covers the historical External command and the
+/// new typed Produced artifact. Both are one local Qdrant owner implementation;
+/// neither can invoke or import the upstream owner.
+pub fn verify_qdrant_owner_invocation(
+    invocation: &OwnerInvocationV1,
+) -> Result<QdrantKeywordProjectionCommandV1, GenericQdrantContractError> {
+    if invocation.checked_dispatch.operation
+        == QdrantKeywordProjectionContractV2::contract().reference
+    {
+        verify_external_qdrant_owner_invocation(invocation)
+    } else if invocation.checked_dispatch.operation
+        == QdrantProducedVectorProjectionContractV1::contract().reference
+    {
+        verify_produced_qdrant_owner_invocation(invocation)
+    } else {
+        Err(GenericQdrantContractError::ForeignOrInvalidDispatch)
+    }
+}
+
 /// A committed Qdrant receipt is returned as one declared typed output port.
 pub fn confirmed_qdrant_owner_result(
     invocation: &OwnerInvocationV1,
@@ -97,7 +117,13 @@ pub fn confirmed_qdrant_owner_result(
         outcome,
     };
     let receipt_bytes = serde_json::to_vec(&receipt)?;
-    let contract = QdrantKeywordProjectionContractV2::contract();
+    let contract = if invocation.checked_dispatch.operation
+        == QdrantProducedVectorProjectionContractV1::contract().reference
+    {
+        QdrantProducedVectorProjectionContractV1::contract()
+    } else {
+        QdrantKeywordProjectionContractV2::contract()
+    };
     let port = PortId::from(QDRANT_EFFECT_OUTPUT_PORT_V2);
     let schema = contract.outputs[&port].clone();
     Ok(OwnerResultV1 {

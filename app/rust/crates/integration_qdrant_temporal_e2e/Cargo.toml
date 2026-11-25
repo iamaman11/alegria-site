@@ -14,7 +14,7 @@ e2e = [
   "dep:temporal_gateway", "dep:temporalio-client", "dep:temporalio-common",
   "dep:temporalio-sdk-core", "dep:testcontainers", "dep:tokio",
   "dep:uuid", "dep:vector_qdrant", "dep:truth_domain", "dep:seo_application",
-  "dep:qdrant_contracts",
+  "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
 ]
 
 [dependencies]
@@ -34,5 +34,7 @@ uuid = { workspace = true, optional = true }
 vector_qdrant = { path = "../vector_qdrant", optional = true }
 truth_domain = { path = "../truth_domain", optional = true }
 qdrant_contracts = { path = "../qdrant_contracts", optional = true }
+postgres_store = { path = "../postgres_store", optional = true }
+projection_contracts = { path = "../projection_contracts", optional = true }
 seo_application = { path = "../seo_application", optional = true }
 serde_json = { workspace = true }

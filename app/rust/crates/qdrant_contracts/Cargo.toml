@@ -7,6 +7,7 @@ edition = "2021"
 # transport SDK, Temporal Worker or unrelated provider crates.
 [dependencies]
 operation_protocol = { path = "../operation_protocol" }
+projection_contracts = { path = "../projection_contracts" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

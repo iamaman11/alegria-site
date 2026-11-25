@@ -73,8 +73,9 @@ pub struct OperationDagReceiptV1 {
     pub owner_results: BTreeMap<OperationInstanceId, OwnerResultV1>,
 }
 
-/// Serial-by-default durable runner. Parallel groups can only be enabled
-/// after proving actual owner independence, admission and compensation.
+/// Deterministic durable runner. A ready wave may start independent children
+/// concurrently, but each child still has its own History, operator admission
+/// and receipt. A failed sibling never implies a rollback of another owner.
 pub struct OperationDagMachine {
     run: OperationDagRunV6,
     routes: TrustedRouteCatalog,
@@ -184,10 +185,10 @@ impl OperationDagMachine {
         self.validated.execution_order().get(self.cursor)
     }
 
-    fn checked_input(
+    fn checked_input_for(
         &self,
+        instance: &OperationInstanceId,
     ) -> Result<(CheckedDispatch, BTreeMap<PortId, BoundArtifactV1>), GenericDagError> {
-        let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
         let node = self
             .run
             .plan
@@ -275,17 +276,24 @@ impl OperationDagMachine {
         Ok((dispatch, bound))
     }
 
-    pub fn next_owner_invocation(
+    fn checked_input(
         &self,
+    ) -> Result<(CheckedDispatch, BTreeMap<PortId, BoundArtifactV1>), GenericDagError> {
+        let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
+        self.checked_input_for(instance)
+    }
+
+    fn invocation_for(
+        &self,
+        instance: &OperationInstanceId,
         parent: TemporalExecutionIdentityV4,
     ) -> Result<(PinnedOwnerRouteV1, OwnerInvocationV1), GenericDagError> {
-        let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
         let command = self
             .run
             .owner_commands
             .get(instance)
             .expect("preflight owner command");
-        let (checked, bound_inputs) = self.checked_input()?;
+        let (checked, bound_inputs) = self.checked_input_for(instance)?;
         let route = self.routes.route_for_dispatch(&checked)?.clone();
         let invocation = OwnerInvocationV1 {
             schema_revision: OWNER_INVOCATION_SCHEMA_REVISION,
@@ -296,6 +304,72 @@ impl OperationDagMachine {
         };
         invocation.verify_integrity(&self.routes)?;
         Ok((route, invocation))
+    }
+
+    pub fn next_owner_invocation(
+        &self,
+        parent: TemporalExecutionIdentityV4,
+    ) -> Result<(PinnedOwnerRouteV1, OwnerInvocationV1), GenericDagError> {
+        let instance = self.next_instance().ok_or(GenericDagError::Incomplete)?;
+        self.invocation_for(instance, parent)
+    }
+
+    /// Build the maximal contiguous ready wave in canonical topological order.
+    /// Every edge is determined by the sealed DAG (explicit `after` or typed
+    /// Produced binding); overlapping declared effect classes are serialized.
+    /// No child starts before all commands in this wave pass preflight.
+    ///
+    /// The prefix restriction keeps final receipt ordering and replay stable
+    /// even when a newly-ready dependent sorts before an unrelated node.
+    pub fn next_independent_owner_invocations(
+        &self,
+        parent: TemporalExecutionIdentityV4,
+    ) -> Result<Vec<(PinnedOwnerRouteV1, OwnerInvocationV1)>, GenericDagError> {
+        const MAX_IN_FLIGHT_OWNER_CHILDREN: usize = 8;
+
+        let mut wave = Vec::new();
+        let mut wave_ids = BTreeSet::new();
+        let mut wave_effects = BTreeSet::new();
+        let mut wave_invalidates = BTreeSet::new();
+        for instance in self.validated.execution_order().iter().skip(self.cursor) {
+            let node = self
+                .run
+                .plan
+                .nodes
+                .iter()
+                .find(|node| &node.instance == instance)
+                .expect("validated DAG node");
+            let contract = self
+                .routes
+                .catalog()
+                .contract(&node.operation)
+                .expect("validated owner contract");
+            let depends_on_in_flight = node.after.iter().any(|id| wave_ids.contains(id))
+                || node.inputs.values().any(|binding| match binding {
+                    ArtifactBinding::Produced { producer, .. } => wave_ids.contains(producer),
+                    ArtifactBinding::External { .. } => false,
+                });
+            let conflicts = contract
+                .effects
+                .iter()
+                .any(|effect| wave_effects.contains(effect))
+                || contract
+                    .invalidates
+                    .iter()
+                    .any(|artifact_type| wave_invalidates.contains(artifact_type));
+            if !wave.is_empty() && (depends_on_in_flight || conflicts) {
+                break;
+            }
+            let invocation = self.invocation_for(instance, parent.clone())?;
+            wave.push(invocation);
+            wave_ids.insert(instance.clone());
+            wave_effects.extend(contract.effects.iter().cloned());
+            wave_invalidates.extend(contract.invalidates.iter().cloned());
+            if wave.len() == MAX_IN_FLIGHT_OWNER_CHILDREN {
+                break;
+            }
+        }
+        Ok(wave)
     }
 
     /// The result is genuinely returned by the selected Temporal child.
@@ -510,6 +584,109 @@ mod tests {
             workflow_id: PARENT_WORKFLOW_ID.into(),
             run_id: "temporal-server-run".into(),
         }
+    }
+
+    fn setup_with_independent_node() -> (OperationDagRunV6, TrustedRouteCatalog) {
+        let (mut run, mut routes) = setup();
+        let extra = contract("a-independent", false);
+        let hash = extra.fingerprint().unwrap();
+        routes
+            .register(
+                extra.clone(),
+                PinnedOwnerRouteV1 {
+                    operation: extra.reference.clone(),
+                    owner: extra.owner.clone(),
+                    contract_hash: hash.clone(),
+                    workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+                    task_queue: "third-independent-owner-queue".into(),
+                    build_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                },
+            )
+            .unwrap();
+        run.owner_commands.insert(
+            "a-independent".into(),
+            OwnerCommandWireV1 {
+                operation: extra.reference.clone(),
+                owner: extra.owner,
+                contract_hash: hash,
+                command_bytes: b"third-owner-command".to_vec(),
+            },
+        );
+        run.plan.nodes.push(OperationNode {
+            instance: "a-independent".into(),
+            operation: extra.reference,
+            inputs: BTreeMap::new(),
+            outputs: BTreeMap::from([("document".into(), "artifact-independent".into())]),
+            after: BTreeSet::new(),
+            permitted_effects: BTreeSet::new(),
+        });
+        run.plan = run.plan.seal(routes.catalog()).unwrap();
+        run.pinned_routes = routes
+            .trusted_snapshot_for(run.owner_commands.values().map(|command| &command.operation))
+            .unwrap();
+        (run, routes)
+    }
+
+    #[test]
+    fn independent_owner_children_form_a_ready_wave_but_produced_consumer_waits() {
+        let (run, routes) = setup_with_independent_node();
+        let mut machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes).unwrap();
+        let first_wave = machine.next_independent_owner_invocations(parent()).unwrap();
+        assert_eq!(first_wave.len(), 2);
+        assert_eq!(
+            first_wave[0].1.checked_dispatch.instance,
+            OperationInstanceId::from("a-independent")
+        );
+        assert_eq!(
+            first_wave[1].1.checked_dispatch.instance,
+            OperationInstanceId::from("producer")
+        );
+        assert!(first_wave
+            .iter()
+            .all(|(_, invocation)| invocation.bound_inputs.is_empty()));
+
+        for (_, invocation) in first_wave {
+            machine
+                .advance_owner_result(result(&invocation, b"genuine-first-wave-output"))
+                .unwrap();
+        }
+        let second_wave = machine
+            .next_independent_owner_invocations(parent())
+            .unwrap();
+        assert_eq!(second_wave.len(), 1);
+        let consumer = &second_wave[0].1;
+        assert_eq!(
+            consumer.checked_dispatch.instance,
+            OperationInstanceId::from("consumer")
+        );
+        assert_eq!(
+            consumer.bound_inputs[&PortId::from("source")].artifact.payload,
+            b"genuine-first-wave-output"
+        );
+        machine
+            .advance_owner_result(result(consumer, b"consumer-output"))
+            .unwrap();
+        assert_eq!(machine.finish().unwrap().order.len(), 3);
+    }
+
+    #[test]
+    fn explicit_after_dependency_prevents_parallel_owner_dispatch() {
+        let (mut run, routes) = setup_with_independent_node();
+        run.plan
+            .nodes
+            .iter_mut()
+            .find(|node| node.instance == OperationInstanceId::from("a-independent"))
+            .unwrap()
+            .after
+            .insert("producer".into());
+        run.plan = run.plan.seal(routes.catalog()).unwrap();
+        let machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes).unwrap();
+        let wave = machine.next_independent_owner_invocations(parent()).unwrap();
+        assert_eq!(wave.len(), 1);
+        assert_eq!(
+            wave[0].1.checked_dispatch.instance,
+            OperationInstanceId::from("producer")
+        );
     }
 
     #[test]

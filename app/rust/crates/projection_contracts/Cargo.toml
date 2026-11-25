@@ -1,0 +1,10 @@
+[package]
+name = "projection_contracts"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+operation_protocol = { path = "../operation_protocol" }
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

@@ -42,6 +42,29 @@ TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
 TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
+TEMPORAL_QDRANT_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_qdrant_effects" / "src"
+OPERATION_PROTOCOL_MANIFEST = RUST_ROOT / "crates" / "operation_protocol" / "Cargo.toml"
+PG_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_pg_effects" / "Cargo.toml"
+QDRANT_OWNER_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
+ORCHESTRATOR_MANIFEST = RUST_ROOT / "services" / "temporal_orchestrator" / "Cargo.toml"
+# This check is deliberately narrower than a global ban on provider names:
+# the old Qdrant V1 parent is shipped in the orchestrator binary and cannot be
+# removed or reinterpreted without separately versioned History migration.
+# The native generic owner route and the two new owner entrypoints, however,
+# must never start importing one another's provider or effect contracts.
+DAG_PROVIDER_CRATES = frozenset({
+    "postgres_store", "graph_neo4j", "vector_qdrant", "qdrant_contracts",
+    "qdrant_effects_core", "pg_runtime_ports", "runtime_composition", "infrastructure",
+})
+DAG_GENERIC_NEUTRAL_SOURCE = (
+    TEMPORAL_ORCHESTRATOR_SRC / "owner_catalog.rs",
+)
+DAG_PG_OWNED_SOURCE = (
+    TEMPORAL_PG_EFFECTS_SRC / "operator_owner_v1.rs",
+)
+DAG_QDRANT_OWNED_SOURCE = (
+    TEMPORAL_QDRANT_EFFECTS_SRC / "owner_generic_v1.rs",
+)
 QDRANT_EFFECTS_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
 QDRANT_EFFECTS_SRC = QDRANT_EFFECTS_MANIFEST.parent / "src"
 QDRANT_EFFECTS_RUNTIME_SDKS = frozenset({
@@ -308,6 +331,49 @@ def provider_delivery_closure_failures(
     return failures
 
 
+def native_dag_owner_closure_failures(
+    protocol: set[str], pg: set[str], qdrant: set[str],
+) -> list[str]:
+    """Enforce manifest-level independence of the new native owner binaries.
+
+    Checks use full local path closure including build/dev/target dependencies;
+    a direct-manifest-only test would silently miss an added transitive SDK.
+    The legacy Qdrant parent in temporal_orchestrator is a known physical
+    isolation blocker and is intentionally NOT claimed solved by this check.
+    """
+    failures = []
+    for dependency in sorted(protocol & DAG_PROVIDER_CRATES):
+        failures.append(f"operation_protocol links provider `{dependency}`")
+    for dependency in sorted(pg & {
+        "graph_neo4j", "vector_qdrant", "qdrant_contracts", "qdrant_effects_core",
+        "runtime_composition", "infrastructure",
+    }):
+        failures.append(f"native PostgreSQL effect owner links unrelated `{dependency}`")
+    for dependency in sorted(qdrant & {
+        "postgres_store", "pg_runtime_ports", "graph_neo4j",
+        "runtime_composition", "infrastructure",
+    }):
+        failures.append(f"native Qdrant effect owner links unrelated `{dependency}`")
+    return failures
+
+
+def generic_dag_source_failures(source: Path, forbidden_crates: set[str]) -> list[str]:
+    """Require all provider-specific Rust paths to stay in their owner source.
+
+    A quoted business string (e.g. `owner_id=postgres_store`) is data rather
+    than a Rust dependency and is purposefully not forbidden here.
+    """
+    label = source.relative_to(ROOT) if source.is_relative_to(ROOT) else source
+    if not source.is_file():
+        return [f"missing native DAG boundary module: {label}"]
+    text = source.read_text(encoding="utf-8")
+    return [
+        f"{label} imports unrelated provider `{crate}`"
+        for crate in sorted(forbidden_crates)
+        if re.search(rf"\b{re.escape(crate)}\s*::", text)
+    ]
+
+
 def exact_temporal_sdk_source_allowed(
     file_path: Path, pattern: re.Pattern[str],
     *, sdk_set: frozenset[str], source_root: Path | None = None,
@@ -474,6 +540,22 @@ def main() -> int:
     # Enforce the architectural dependency direction, not just source path or
     # direct SDK imports: infra/PG must never compile graph/vector providers.
     try:
+        protocol_closure, _ = workspace_dependency_closure(OPERATION_PROTOCOL_MANIFEST)
+        pg_owner_closure, _ = workspace_dependency_closure(PG_OWNER_MANIFEST)
+        qdrant_owner_closure, _ = workspace_dependency_closure(QDRANT_OWNER_MANIFEST)
+        violations.extend(native_dag_owner_closure_failures(
+            protocol_closure, pg_owner_closure, qdrant_owner_closure,
+        ))
+        for source in DAG_GENERIC_NEUTRAL_SOURCE:
+            violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
+        for source in DAG_PG_OWNED_SOURCE:
+            violations.extend(generic_dag_source_failures(source, {
+                "graph_neo4j", "vector_qdrant", "qdrant_contracts", "qdrant_effects_core",
+            }))
+        for source in DAG_QDRANT_OWNED_SOURCE:
+            violations.extend(generic_dag_source_failures(source, {
+                "postgres_store", "pg_runtime_ports", "graph_neo4j",
+            }))
         infra_closure, infra_direct = workspace_dependency_closure(INFRA_MANIFEST)
         composition_closure, composition_direct = workspace_dependency_closure(COMPOSITION_MANIFEST)
         pg_runtime_closure, pg_runtime_direct = workspace_dependency_closure(PG_RUNTIME_MANIFEST)
@@ -529,7 +611,16 @@ def main() -> int:
             print(f"- {v}")
         return 1
 
+    # Do not mislabel the generic parent binary as physically provider-free:
+    # a frozen Qdrant V1 Workflow still imports its legacy DTO in this process.
+    # Removing that dependency needs a separately versioned Worker/replay
+    # migration and real rustc A/B measurements, not a source-only assertion.
+    orchestrator_closure, _ = workspace_dependency_closure(ORCHESTRATOR_MANIFEST)
+    legacy_provider_crates = sorted(orchestrator_closure & DAG_PROVIDER_CRATES)
     print("RUST_ADAPTER_BOUNDARY: OK")
+    if legacy_provider_crates:
+        print("DAG_GENERIC_PARENT_PHYSICAL_ISOLATION=NOT_PROVEN "
+              f"legacy_closure={','.join(legacy_provider_crates)}")
     return 0
 
 

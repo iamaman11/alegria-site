@@ -182,6 +182,158 @@ fn mixed_v6_fixture_for(
     )
 }
 
+/// A TRUE typed Produced edge: the PostgreSQL owner returns the bytes of a
+/// durable precomputed projection under `projection.vector_projection@1`.
+/// The Qdrant owner receives those exact output bytes via Temporal's child
+/// result -> parent -> next child chain. Its command contains an admission ID
+/// only; no duplicate/external vector can silently replace PG's data.
+#[cfg(feature = "e2e")]
+fn mixed_produced_fixture_for(
+    run_id: Uuid,
+    tenant: &str,
+    context: &str,
+    keyword: &str,
+    pg_admission: Uuid,
+    qdrant_admission: Uuid,
+    build_id: &str,
+) -> (
+    operation_protocol::OperationDagRunV6,
+    operation_protocol::TrustedRouteCatalog,
+) {
+    use operation_protocol::{
+        AdmittedArtifactV1, ArtifactBinding, ContractCatalog, ExecutionPlan, ExternalArtifact,
+        Operation, OperationDagRunV6, OperationNode, OwnerCommandWireV1, PinnedOwnerRouteV1,
+        PlanHash, RunScope, TrustedRouteCatalog, OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+        OWNER_OPERATION_CHILD_TYPE_V1, PLAN_SCHEMA_REVISION,
+    };
+    use postgres_store::vector_projection_owner_v1::{
+        PgReadVectorProjectionV1, PgVectorProjectionCommandV1,
+    };
+    use projection_contracts::VectorProjectionLookupV1;
+    use qdrant_contracts::{
+        QdrantProducedVectorCommandV1, QdrantProducedVectorProjectionContractV1,
+        QDRANT_GENERIC_OWNER_QUEUE_V1,
+    };
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let scope = RunScope { tenant_id: tenant.to_owned(), run_id: run_id.to_string() };
+    let pg_contract = PgReadVectorProjectionV1::contract();
+    let qdrant_contract = QdrantProducedVectorProjectionContractV1::contract();
+    let mut contracts = ContractCatalog::default();
+    contracts.register::<PgReadVectorProjectionV1>().unwrap();
+    contracts.register::<QdrantProducedVectorProjectionContractV1>().unwrap();
+    let lookup_bytes = serde_json::to_vec(&VectorProjectionLookupV1 {
+        context_key: context.to_owned(), keyword_key: keyword.to_owned(),
+    }).unwrap();
+    let plan = ExecutionPlan {
+        schema_revision: PLAN_SCHEMA_REVISION,
+        scope: scope.clone(),
+        allowed_effects: pg_contract.effects.union(&qdrant_contract.effects).cloned().collect(),
+        external_artifacts: BTreeMap::from([(
+            "source_lookup".into(),
+            ExternalArtifact {
+                schema: pg_contract.inputs[&"projection_lookup".into()].clone(),
+                scope: scope.clone(),
+                provenance: "ci-native-pg-durable-vector-lookup".into(),
+            },
+        )]),
+        pinned_contracts: Vec::new(),
+        nodes: vec![
+            OperationNode {
+                instance: "pg_vector_read".into(),
+                operation: pg_contract.reference.clone(),
+                inputs: BTreeMap::from([(
+                    "projection_lookup".into(),
+                    ArtifactBinding::External { artifact: "source_lookup".into() },
+                )]),
+                outputs: BTreeMap::from([(
+                    "vector_projection".into(), "pg_vector_produced".into(),
+                )]),
+                after: BTreeSet::new(),
+                permitted_effects: pg_contract.effects.clone(),
+            },
+            OperationNode {
+                instance: "qdrant_vector_upsert".into(),
+                operation: qdrant_contract.reference.clone(),
+                inputs: BTreeMap::from([(
+                    "vector_projection".into(),
+                    ArtifactBinding::Produced {
+                        producer: "pg_vector_read".into(),
+                        port: "vector_projection".into(),
+                        artifact: "pg_vector_produced".into(),
+                    },
+                )]),
+                outputs: BTreeMap::from([(
+                    "projection_receipt".into(), "qdrant_projection_receipt".into(),
+                )]),
+                after: BTreeSet::from(["pg_vector_read".into()]),
+                permitted_effects: qdrant_contract.effects.clone(),
+            },
+        ],
+        hash: PlanHash(String::new()),
+    }.seal(&contracts).expect("semantic PG projection output matches Qdrant input schema");
+
+    let pg_command = PgVectorProjectionCommandV1 {
+        admission_id: pg_admission,
+        run_id,
+        scope: scope.clone(),
+        context_key: context.to_owned(),
+        keyword_key: keyword.to_owned(),
+        operation_instance: "pg_vector_read".into(),
+        plan_hash: plan.hash.as_str().into(),
+    };
+    let qdrant_command = QdrantProducedVectorCommandV1 {
+        schema_revision: 1,
+        admission_id: qdrant_admission,
+    };
+    let mut routes = TrustedRouteCatalog::default();
+    for (contract, task_queue) in [
+        (pg_contract.clone(), "alegria-pg-owner-v1"),
+        (qdrant_contract.clone(), QDRANT_GENERIC_OWNER_QUEUE_V1),
+    ] {
+        routes.register(contract.clone(), PinnedOwnerRouteV1 {
+            operation: contract.reference.clone(),
+            owner: contract.owner.clone(),
+            contract_hash: contract.fingerprint().unwrap(),
+            workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+            task_queue: task_queue.to_owned(),
+            build_id: build_id.to_owned(),
+        }).unwrap();
+    }
+    let owner_commands = BTreeMap::from([
+        ("pg_vector_read".into(), OwnerCommandWireV1 {
+            operation: pg_contract.reference.clone(),
+            owner: pg_contract.owner.clone(),
+            contract_hash: pg_contract.fingerprint().unwrap(),
+            command_bytes: serde_json::to_vec(&pg_command).unwrap(),
+        }),
+        ("qdrant_vector_upsert".into(), OwnerCommandWireV1 {
+            operation: qdrant_contract.reference.clone(),
+            owner: qdrant_contract.owner.clone(),
+            contract_hash: qdrant_contract.fingerprint().unwrap(),
+            command_bytes: serde_json::to_vec(&qdrant_command).unwrap(),
+        }),
+    ]);
+    let admitted = BTreeMap::from([(
+        "source_lookup".into(), AdmittedArtifactV1 {
+            schema: pg_contract.inputs[&"projection_lookup".into()].clone(),
+            scope,
+            provenance: "ci-native-pg-durable-vector-lookup".into(),
+            payload: lookup_bytes,
+        },
+    )]);
+    let pinned_routes = routes.trusted_snapshot_for([
+        &pg_contract.reference, &qdrant_contract.reference,
+    ]).unwrap();
+    (OperationDagRunV6 {
+        schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+        plan,
+        admitted,
+        owner_commands,
+        pinned_routes,
+    }, routes)
+}
+
 /// Install exactly the owner routes used by this test under the SAME
 /// production trust policy as a deployed provider-free DAG parent. Only the
 /// disposable GitHub Actions runner may authorize this operation; there is no
@@ -220,6 +372,7 @@ async fn mixed_v6_install_native_admissions(pool: &sqlx::PgPool) {
         ("PG generic owner", include_str!("../../../../../db/migrations/20261125_0018_pg_generic_owner_v1.sql")),
         ("Qdrant generic owner", include_str!("../../../../../db/migrations/20261125_0019_qdrant_generic_owner_v3.sql")),
         ("independent DAG run governance", include_str!("../../../../../db/migrations/20261125_0020_operation_dag_run_governance_v1.sql")),
+        ("PG-produced typed projection", include_str!("../../../../../db/migrations/20261125_0021_pg_vector_projection_v1.sql")),
     ] {
         sqlx::raw_sql(statement).execute(pool).await
             .unwrap_or_else(|error| panic!("disposable native {label} migration failed: {error}"));
@@ -281,7 +434,41 @@ async fn mixed_v6_seed_canonical_truth_source(
 }
 
 #[cfg(feature = "e2e")]
+async fn mixed_v7_seed_pg_vector_projection_source(
+    pool: &sqlx::PgPool,
+    run_id: Uuid,
+    tenant: &str,
+    context: &str,
+    keyword: &str,
+    vector: &[f32],
+) {
+    let projection = projection_contracts::VectorProjectionV1 {
+        tenant_id: tenant.to_owned(),
+        context_key: context.to_owned(),
+        keyword_key: keyword.to_owned(),
+        vector: vector.to_vec(),
+    };
+    projection.validate().expect("disposable PG vector source must be a semantic 1024-vector");
+    sqlx::query(
+        "INSERT INTO pipeline.vector_projection_sources_v1
+           (run_id,tenant_id,context_key,keyword_key,vector)
+         VALUES ($1,$2,$3,$4,$5::jsonb)",
+    ).bind(run_id).bind(tenant).bind(context).bind(keyword)
+        .bind(sqlx::types::Json(&projection.vector))
+        .execute(pool).await.expect("persist projection bytes in independent PG owner source");
+    let stored: sqlx::types::Json<Vec<f32>> = sqlx::query_scalar(
+        "SELECT vector FROM pipeline.vector_projection_sources_v1
+         WHERE run_id=$1 AND tenant_id=$2 AND context_key=$3 AND keyword_key=$4",
+    ).bind(run_id).bind(tenant).bind(context).bind(keyword)
+        .fetch_one(pool).await.expect("read back actual PG-owned projection row");
+    assert_eq!(stored.0, vector, "only PG-stored semantic vectors may become Produced data");
+}
+
+#[cfg(feature = "e2e")]
 struct MixedV6NativeRoles {
+    pg_worker_role: String,
+    pg_operator_role: String,
+    qdrant_operator_role: String,
     pg_worker_url: String,
     pg_operator_url: String,
     qdrant_worker_secret: PathBuf,
@@ -353,12 +540,42 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
         pg.database_url.replacen(prefix, &format!("postgres://{role}:{PASSWORD}@"), 1)
     };
     MixedV6NativeRoles {
+        pg_worker_role: pg_worker.clone(),
+        pg_operator_role: pg_operator.clone(),
+        qdrant_operator_role: qdrant_operator.clone(),
         pg_worker_url: restricted_url(&pg_worker),
         pg_operator_url: restricted_url(&pg_operator),
         qdrant_worker_secret: secret("mixed-qdrant-worker", &restricted_url(&qdrant_worker)),
         qdrant_operator_secret: secret("mixed-qdrant-operator", &restricted_url(&qdrant_operator)),
         governance_operator_url: restricted_url(&governance_operator),
     }
+}
+
+/// The source reader and its operator receive only exact PG projection
+/// privileges. Qdrant's operator receives one receipt verifier, never SELECT
+/// on the source table nor any PostgreSQL owner's raw projection rows.
+#[cfg(feature = "e2e")]
+async fn mixed_v7_grant_pg_vector_owner_privileges(
+    pool: &sqlx::PgPool,
+    roles: &MixedV6NativeRoles,
+) {
+    // Role identifiers are generated from fixed safe ASCII prefixes + UUID
+    // hex by mixed_v6_native_owner_roles; the database is disposable CI only.
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT SELECT ON pipeline.vector_projection_sources_v1
+             TO {pg_worker}, {pg_operator};
+         GRANT SELECT,INSERT ON pipeline.pg_vector_projection_admissions_v1
+             TO {pg_operator};
+         GRANT EXECUTE ON FUNCTION pipeline.consume_pg_vector_projection_owner_v1(
+             UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BYTEA)
+             TO {pg_worker};
+         GRANT EXECUTE ON FUNCTION pipeline.operation_artifact_receipt_matches_v1(
+             UUID,TEXT,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,JSONB)
+             TO {qdrant_operator};",
+        pg_worker = roles.pg_worker_role,
+        pg_operator = roles.pg_operator_role,
+        qdrant_operator = roles.qdrant_operator_role,
+    ))).execute(pool).await.expect("grant only exact PG projection owner capabilities");
 }
 
 #[cfg(feature = "e2e")]
@@ -805,4 +1022,334 @@ fn mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflo
         OperationDagMachine::new(&workflow_id, forged_route, routes),
         Err(GenericDagError::Route(RouteCatalogError::UntrustedRouteSnapshot))
     ));
+}
+
+/// A valid business DAG may select Qdrant before PostgreSQL. The registered
+/// owner contracts and Task Queues do not encode a provider order: changing
+/// the versioned plan, not either owner binary, changes the execution order.
+/// This contract-level test does NOT claim parallel execution or native
+/// History evidence for the reversed plan; native History tests separately
+/// attest actual owner scheduling and effects.
+#[test]
+fn mixed_v6_owner_order_is_plan_defined_not_pg_qdrant_hardcoded() {
+    use seo_application::operation_adapter::OperationDagMachine;
+    use truth_domain::review_effect_contract::ReconcileTruthReviewsInput;
+
+    let (mut run, routes) = mixed_v6_fixture();
+    let pg_node = run.plan.nodes.iter_mut()
+        .find(|node| node.instance.as_str() == "pg_review").unwrap();
+    pg_node.after.insert("qdrant_projection".into());
+    let qdrant_node = run.plan.nodes.iter_mut()
+        .find(|node| node.instance.as_str() == "qdrant_projection").unwrap();
+    qdrant_node.after.clear();
+    run.plan = run.plan.seal(routes.catalog()).expect("reversed owner DAG must be valid");
+
+    // PG's owner-local command binds the plan hash, so the new plan is
+    // admitted only when that command independently pins the new hash.
+    let pg_wire = run.owner_commands.get_mut(&"pg_review".into()).unwrap();
+    let mut pg_command: ReconcileTruthReviewsInput =
+        serde_json::from_slice(&pg_wire.command_bytes).unwrap();
+    pg_command.plan_hash = run.plan.hash.as_str().to_owned();
+    pg_wire.command_bytes = serde_json::to_vec(&pg_command).unwrap();
+
+    run.plan.validate(routes.catalog()).expect("Qdrant then PG is a legal DAG");
+    let workflow_id = operation_protocol::operation_dag_parent_workflow_id(&run.plan.scope.run_id);
+    let machine = OperationDagMachine::new(&workflow_id, run, routes)
+        .expect("the generic parent must not bake in PG before Qdrant");
+    assert_eq!(machine.next_instance().unwrap().as_str(), "qdrant_projection");
+}
+
+#[test]
+fn mixed_v7_real_vector_produced_contract_is_typed_before_effects() {
+    use operation_protocol::{ArtifactBinding, PlanError};
+    use seo_application::operation_adapter::{GenericDagError, OperationDagMachine};
+
+    let run_id = Uuid::new_v4();
+    let (run, routes) = mixed_produced_fixture_for(
+        run_id, "ci-produced-tenant", "ci-produced-context", "ci-vector-keyword",
+        Uuid::new_v4(), Uuid::new_v4(),
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+    assert_eq!(run.plan.external_artifacts.len(), 1,
+        "Qdrant may not have a separately supplied vector command artifact");
+    let consumer = run.plan.nodes.iter()
+        .find(|node| node.instance.as_str() == "qdrant_vector_upsert").unwrap();
+    assert!(matches!(consumer.inputs[&"vector_projection".into()],
+        ArtifactBinding::Produced { ref producer, ref port, ref artifact }
+        if producer.as_str() == "pg_vector_read"
+        && port.as_str() == "vector_projection"
+        && artifact.as_str() == "pg_vector_produced"));
+    run.plan.validate(routes.catalog()).expect("matched semantically typed owner contracts");
+    let workflow_id = operation_protocol::operation_dag_parent_workflow_id(&run_id.to_string());
+    let machine = OperationDagMachine::new(&workflow_id, run.clone(), routes.clone())
+        .expect("valid Provenance Production plan must preflight before owner effects");
+    assert_eq!(machine.next_instance().unwrap().as_str(), "pg_vector_read");
+
+    // The one admitted External is a lookup, not a Qdrant-ready vector. A
+    // malicious client cannot swap it onto the consumer's Produced port.
+    let mut malformed = run.plan.clone();
+    malformed.nodes.iter_mut().find(|node|
+        node.instance.as_str() == "qdrant_vector_upsert").unwrap()
+        .inputs.insert("vector_projection".into(),
+            ArtifactBinding::External { artifact: "source_lookup".into() });
+    let malformed = malformed.seal(routes.catalog()).unwrap();
+    assert!(matches!(malformed.validate(routes.catalog()),
+        Err(PlanError::ArtifactSchemaMismatch { instance, port, artifact })
+        if instance.as_str() == "qdrant_vector_upsert"
+        && port.as_str() == "vector_projection"
+        && artifact.as_str() == "source_lookup"));
+    let mut false_external = run.clone();
+    false_external.plan = malformed;
+    assert!(matches!(OperationDagMachine::new(&workflow_id, false_external, routes.clone()),
+        Err(GenericDagError::Plan(PlanError::ArtifactSchemaMismatch { .. }))));
+
+    let mut foreign_lookup = run;
+    foreign_lookup.admitted.get_mut(&"source_lookup".into()).unwrap()
+        .scope.tenant_id = "foreign-tenant".into();
+    assert!(matches!(OperationDagMachine::new(&workflow_id, foreign_lookup, routes),
+        Err(GenericDagError::InvalidArtifact(id)) if id.as_str() == "source_lookup"));
+}
+
+/// Fully native positive Produced path with independent SQL/History authority:
+/// PG owns the source bytes, Temporal receives them as a typed owner result,
+/// and only Temporal delivers them as a Produced input to Qdrant's owner.
+/// Neither owner has the other owner's provider credentials or SDK/command.
+#[tokio::test]
+#[serial]
+async fn mixed_v7_native_temporal_produced_pg_vector_to_qdrant_readback() {
+    use operation_protocol::{operation_dag_parent_workflow_id, OPERATION_DAG_PARENT_QUEUE,
+        OPERATION_DAG_PARENT_TYPE};
+    use projection_contracts::VectorProjectionV1;
+    use seo_application::operation_adapter::OperationDagReceiptV1;
+    use temporalio_common::protos::temporal::api::history::v1::history_event::Attributes;
+
+    let pg = PostgresHarness::start().await.expect("disposable PG artifact source");
+    mixed_v6_install_native_admissions(&pg.pool).await;
+    let qdrant = QdrantHarness::start().await.expect("real Qdrant provider");
+    let _provider_env = ScopedEnvironment::apply(&[
+        ("QDRANT_URL", qdrant.qdrant_url.as_str()),
+        ("QDRANT_REST_URL", qdrant.qdrant_rest_url.as_str()),
+    ]);
+    let temporal = TemporalHarness::start().await.expect("real Temporal History server");
+    let parent_bin = binary("INTEGRATION_EFFECT_DAG_WORKER_BIN");
+    let pg_bin = binary("INTEGRATION_PG_EFFECT_WORKER_BIN");
+    let qdrant_bin = binary("INTEGRATION_QDRANT_EFFECT_WORKER_BIN");
+    let build_id = env::var("GITHUB_SHA").expect("CI exact-source owner build ID");
+    assert_eq!(build_id.len(), 40);
+
+    let run_id = Uuid::new_v4();
+    let pg_admission = Uuid::new_v4();
+    let qdrant_admission = Uuid::new_v4();
+    let tenant = "ci-produced-vector-tenant";
+    let context = format!("ci-produced-vector-{run_id}");
+    let keyword = format!("pg-produced-keyword-{qdrant_admission}");
+    let vector = (0..1024).map(|index| 0.125 + index as f32 / 16384.0)
+        .collect::<Vec<_>>();
+    let source_run_id = Uuid::new_v4().to_string();
+    mixed_v6_seed_canonical_truth_source(&pg.pool, run_id, tenant, &context, &source_run_id).await;
+    mixed_v7_seed_pg_vector_projection_source(
+        &pg.pool, run_id, tenant, &context, &keyword, &vector,
+    ).await;
+    let (run, routes) = mixed_produced_fixture_for(
+        run_id, tenant, &context, &keyword, pg_admission, qdrant_admission, &build_id,
+    );
+    let parent_id = operation_dag_parent_workflow_id(&run_id.to_string());
+    routes.validate_run_routes(&run).expect("exact route registry for both owners");
+    assert_eq!(run.plan.external_artifacts.len(), 1,
+        "Qdrant vector must come from PG owner result, never from External data");
+    let catalog = mixed_v6_install_ci_trusted_catalog(&run, &routes);
+    let issuer_catalog = mixed_v6_governance_issuer_catalog(&run, &routes);
+    let roles = mixed_v6_native_owner_roles(&pg, tenant).await;
+    mixed_v7_grant_pg_vector_owner_privileges(&pg.pool, &roles).await;
+
+    let parent_process = Command::new(&parent_bin)
+        .env("ALLOW_OPERATION_DAG_V1", "true")
+        .env("ALLOW_PURE_DAG_ORCHESTRATOR", "false")
+        .env("ALLOW_EFFECT_DAG_ORCHESTRATOR_V4", "false")
+        .env("ALLOW_EFFECT_DAG_ORCHESTRATOR_V5", "false")
+        .env("ALLOW_QDRANT_DAG_ORCHESTRATOR_V1", "false")
+        .env("TEMPORAL_ORCHESTRATOR_TASK_QUEUE", OPERATION_DAG_PARENT_QUEUE)
+        .env("TEMPORAL_OPERATION_DAG_CATALOG_PATH", &catalog)
+        .env("WORKER_BUILD_ID", &build_id)
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("start provider-free Temporal DAG coordinator");
+    let _parent_guard = ChildGuard(Some(parent_process));
+    let pg_process = Command::new(&pg_bin)
+        .env("ALEGRIA_ENABLE_PG_EFFECT_V3", "true")
+        .env("ALEGRIA_ENABLE_PG_OWNER_V1", "true")
+        .env("ALEGRIA_ENABLE_PG_PROJECTION_OWNER_V1", "true")
+        .env("PG_EFFECT_WORKER_DATABASE_URL", &roles.pg_worker_url)
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("PG-only source owner worker");
+    let _pg_guard = ChildGuard(Some(pg_process));
+    let qdrant_process = Command::new(&qdrant_bin)
+        .env("ALEGRIA_ENABLE_QDRANT_GENERIC_OWNER_V1", "true")
+        .env("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3", "1")
+        .env("QDRANT_GENERIC_OWNER_DATABASE_URL_FILE", &roles.qdrant_worker_secret)
+        .env("QDRANT_GENERIC_OWNER_TENANT_ID", tenant)
+        .env("QDRANT_URL", &qdrant.qdrant_url)
+        .env("QDRANT_REST_URL", &qdrant.qdrant_rest_url)
+        .env("QDRANT_SKIP_COMPATIBILITY_CHECK", "true")
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("independent Qdrant Produced consumer worker");
+    let _qdrant_guard = ChildGuard(Some(qdrant_process));
+
+    let client = temporal_gateway::connect_client(
+        &temporal.temporal_url,
+        format!("ci-native-produced-{}", Uuid::new_v4()),
+        &temporal.namespace,
+    ).await.expect("connect to real Temporal");
+    let parent = client.start_workflow(
+        UntypedWorkflow::new(OPERATION_DAG_PARENT_TYPE),
+        RawValue::from_value(&run, &PayloadConverter::serde_json()),
+        WorkflowStartOptions::new(OPERATION_DAG_PARENT_QUEUE, parent_id.clone()).build(),
+    ).await.expect("start typed Produced DAG parent");
+    let parent_run = parent.info().run_id.clone().expect("server parent Run ID");
+    let governance_request = secret("ci-produced-governance", &serde_json::json!({
+        "canonical_run_id": run_id,
+        "context_key": context,
+        "parent_workflow_id": parent_id,
+        "parent_workflow_run_id": parent_run,
+        "expires_in_seconds": 600,
+    }).to_string());
+    let issued_governance = Command::new(&pg_bin)
+        .arg("--operator-admit-dag-run-v1").arg(&governance_request)
+        .env("ALEGRIA_ENABLE_OPERATION_DAG_GOVERNANCE_OPERATOR_V1", "true")
+        .env("OPERATION_DAG_GOVERNANCE_OPERATOR_DATABASE_URL", &roles.governance_operator_url)
+        .env("OPERATION_DAG_GOVERNANCE_TENANT_ID", tenant)
+        .env("OPERATION_DAG_GOVERNANCE_TEMPORAL_URL", &temporal.temporal_url)
+        .env("OPERATION_DAG_GOVERNANCE_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env("OPERATION_DAG_GOVERNANCE_TRUSTED_CATALOG_FILE", &issuer_catalog)
+        .env_remove("DATABASE_URL").output().unwrap();
+    assert!(issued_governance.status.success(),
+        "independent DAG governance: {}", String::from_utf8_lossy(&issued_governance.stderr));
+
+    let (pg_child_id, pg_child_run) = timeout(Duration::from_secs(60), async {
+        loop {
+            let history = parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events().await.expect("server parent History");
+            if let Some(child) = history.iter().find_map(|event| {
+                let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) =
+                    &event.attributes else { return None; };
+                attrs.workflow_execution.as_ref().map(|execution|
+                    (execution.workflow_id.clone(), execution.run_id.clone()))
+            }) { break child; }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.expect("PG produced-source Child Workflow never started");
+    let pg_request = secret("ci-produced-pg-admission", &serde_json::json!({
+        "admission_id": pg_admission,
+        "canonical_run_id": run_id,
+        "parent_workflow_id": parent_id,
+        "parent_workflow_run_id": parent_run,
+        "child_workflow_id": pg_child_id,
+        "child_workflow_run_id": pg_child_run,
+        "expires_in_seconds": 300,
+    }).to_string());
+    let admitted_pg = Command::new(&pg_bin)
+        .arg("--operator-issue-pg-projection-v1").arg(&pg_request)
+        .env("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1", "true")
+        .env("PG_EFFECT_OPERATOR_DATABASE_URL", &roles.pg_operator_url)
+        .env("PG_EFFECT_OPERATOR_TENANT_ID", tenant)
+        .env("PG_OWNER_EXPECTED_BUILD_ID", &build_id)
+        .env("PG_EFFECT_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
+        .env("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL").output().unwrap();
+    assert!(admitted_pg.status.success(),
+        "PG source owner admission: stdout={} stderr={}",
+        String::from_utf8_lossy(&admitted_pg.stdout),
+        String::from_utf8_lossy(&admitted_pg.stderr));
+
+    let (q_child_id, q_child_run) = timeout(Duration::from_secs(80), async {
+        loop {
+            let history = parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events().await.expect("server parent History");
+            let started = history.iter().filter_map(|event| {
+                let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) =
+                    &event.attributes else { return None; };
+                attrs.workflow_execution.as_ref().map(|execution|
+                    (execution.workflow_id.clone(), execution.run_id.clone()))
+            }).collect::<Vec<_>>();
+            if started.len() == 2 { break started[1].clone(); }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.expect("Qdrant consumer did not wait for PG Produced result");
+    let qdrant_request = secret("ci-produced-qdrant-admission", &serde_json::json!({
+        "admission_id": qdrant_admission,
+        "canonical_run_id": run_id,
+        "parent_workflow_id": parent_id,
+        "parent_workflow_run_id": parent_run,
+        "child_workflow_id": q_child_id,
+        "child_workflow_run_id": q_child_run,
+        "expires_in_seconds": 300,
+    }).to_string());
+    let qdrant_issuer = |request: &PathBuf, operator_tenant: &str| Command::new(&qdrant_bin)
+        .arg("--operator-issue-v3").arg(request)
+        .env("ALEGRIA_ENABLE_QDRANT_GENERIC_OPERATOR_V1", "true")
+        .env("QDRANT_GENERIC_OPERATOR_DATABASE_URL_FILE", &roles.qdrant_operator_secret)
+        .env("QDRANT_GENERIC_OPERATOR_TENANT_ID", operator_tenant)
+        .env("QDRANT_GENERIC_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
+        .env("QDRANT_GENERIC_OPERATOR_TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env("QDRANT_GENERIC_OPERATOR_TRUSTED_BUILD_ID", &build_id)
+        .env_remove("DATABASE_URL").output().unwrap();
+    assert!(!qdrant_issuer(&qdrant_request, "foreign-tenant").status.success(),
+        "foreign tenant must not admit PG-produced projection into Qdrant");
+    let admitted_qdrant = qdrant_issuer(&qdrant_request, tenant);
+    assert!(admitted_qdrant.status.success(),
+        "independent Qdrant Produced admission: stdout={} stderr={}",
+        String::from_utf8_lossy(&admitted_qdrant.stdout),
+        String::from_utf8_lossy(&admitted_qdrant.stderr));
+
+    let completion = timeout(Duration::from_secs(80),
+        parent.get_result(WorkflowGetResultOptions::default()))
+        .await.expect("Produced DAG never completed")
+        .expect("typed Produced Workflow returned failure");
+    let receipt: OperationDagReceiptV1 = completion.to_value(&PayloadConverter::serde_json());
+    assert_eq!(receipt.order.len(), 2);
+    assert_eq!(receipt.order[0].as_str(), "pg_vector_read");
+    assert_eq!(receipt.order[1].as_str(), "qdrant_vector_upsert");
+    let produced = receipt.artifacts.get(&"pg_vector_produced".into())
+        .expect("Temporal parent must publish PG-produced typed artifact");
+    let actual_projection: VectorProjectionV1 = serde_json::from_slice(&produced.payload)
+        .expect("PG owner must return exact typed projection bytes");
+    assert_eq!(actual_projection.vector, vector);
+    assert_eq!(actual_projection.tenant_id, tenant);
+    assert_eq!(actual_projection.context_key, context);
+    assert_eq!(actual_projection.keyword_key, keyword);
+    assert!(receipt.produced_evidence.contains_key(&"pg_vector_produced".into()));
+    let history = parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .into_events().await.expect("completed real Temporal parent History");
+    let completed_pg = history.iter().find(|event| matches!(
+        event.attributes.as_ref(),
+        Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(_))
+    )).expect("PG ChildCompleted event missing").event_id;
+    let started_qdrant = history.iter().filter(|event| matches!(
+        event.attributes.as_ref(),
+        Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(_))
+    )).nth(1).expect("Qdrant ChildStarted event missing").event_id;
+    assert!(completed_pg < started_qdrant,
+        "Temporal History must show PG produced output before Qdrant consumer start");
+    let admitted_vector_sha: String = sqlx::query_scalar(
+        "SELECT command_sha256 FROM pipeline.qdrant_projection_v3_admissions WHERE admission_id=$1",
+    ).bind(qdrant_admission).fetch_one(&pg.pool).await.unwrap();
+    assert!(vector_qdrant::projection_commands::projection_readback_exact(
+        "seo_keyword_clusters_4", &qdrant_admission.to_string(), "keyword_cluster",
+        &format!("tenant/{tenant}/context/{context}/keyword/{keyword}"),
+        &vector, &serde_json::json!({
+            "tenant_id": tenant, "context_key": context, "keyword_key": keyword,
+            "operator_admission_id": qdrant_admission.to_string(),
+            "approved_command_sha256": admitted_vector_sha,
+        }),
+    ).await.expect("read exact PG-owned vector through Qdrant REST provider"));
+    let qdrant_effect_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.qdrant_projection_v3_attempts WHERE admission_id=$1",
+    ).bind(qdrant_admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(qdrant_effect_count, 1, "Produced replay cannot duplicate Qdrant write");
+    eprintln!("CI_MIXED_V7_NATIVE_TRUE_PRODUCED_PG_TEMPORAL_QDRANT=PASS");
 }

@@ -132,6 +132,20 @@ NATIVE_OWNER_V6_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_qdrant_effects/src/operator_v3.rs",
 })
 
+# V7 Produced uses exact, audited serialization boundaries; domain crates,
+# protocol internals and unrelated owner modules remain deny-by-default.
+NATIVE_OWNER_V7_JSON_BOUNDARIES = frozenset({
+    # PostgreSQL-owned adapter decodes its own trusted typed lookup and the
+    # JSONB vector returned by the immutable SQL source admission function.
+    "app/rust/crates/postgres_store/src/vector_projection_owner_v1.rs",
+    # Qdrant contract adapter validates typed bytes received exclusively from
+    # the Temporal Child Produced binding; no arbitrary domain JSON entrypoint.
+    "app/rust/crates/qdrant_contracts/src/qdrant_produced_vector_v1.rs",
+    # Separately privileged PG issuer verifies real Temporal server Histories
+    # and its exact typed operator locator before publishing source authority.
+    "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v1.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -146,7 +160,7 @@ def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
                | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
-               | NATIVE_OWNER_V6_JSON_BOUNDARIES):
+               | NATIVE_OWNER_V6_JSON_BOUNDARIES | NATIVE_OWNER_V7_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

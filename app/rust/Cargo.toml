@@ -17,6 +17,7 @@ members = [
   "crates/integration_temporal_e2e",
   "crates/integration_pg_v3_e2e",
   "crates/projection_delivery",
+  "crates/projection_contracts",
   "crates/qdrant_contracts",
   "crates/qdrant_effects_core",
   "crates/voyage_api",

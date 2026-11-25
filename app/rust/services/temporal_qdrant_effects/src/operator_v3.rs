@@ -10,16 +10,19 @@ use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
     operation_dag_parent_workflow_id,
     owner_dispatch::{
-        OperationDagRunV6, OwnerInvocationV1, OPERATION_DAG_PARENT_QUEUE,
+        OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
+        OPERATION_DAG_PARENT_QUEUE,
         OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
     },
     ArtifactBinding, Operation, PortId,
 };
 use qdrant_contracts::{
-    verify_external_qdrant_owner_invocation, QdrantKeywordProjectionCommandV1,
-    QdrantKeywordProjectionContractV2, QDRANT_EFFECT_INPUT_PORT_V2,
+    verify_qdrant_owner_invocation, QdrantKeywordProjectionCommandV1,
+    QdrantKeywordProjectionContractV2, QdrantProducedVectorProjectionContractV1,
+    QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1,
     QDRANT_GENERIC_ADMISSION_SIGNAL_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
 };
+use projection_contracts::VectorProjectionSourceReceiptV1;
 use serde::Deserialize;
 use sqlx::{PgPool, Row};
 use temporalio_client::{
@@ -48,6 +51,178 @@ struct AttestedV3 {
     parent_bytes: Vec<u8>,
     child_bytes: Vec<u8>,
     parent_child_started_event_id: i64,
+    parent_child_initiated_event_id: i64,
+    /// Independently fetched parent/producer server History plus durable
+    /// PG-issued neutral certificate, never caller-provided dispatch data.
+    produced_source: Option<ProducedSourceProofV1>,
+}
+
+/// Producer proof captured from two *server-observed* Temporal Histories.
+/// This is still insufficient without the independently issued durable
+/// artifact certificate checked against the operator's neutral trust ledger.
+struct ProducedSourceProofV1 {
+    receipt_id: Uuid,
+    source_hash: String,
+    projection: serde_json::Value,
+    operation_instance: String,
+    producer_child_workflow_id: String,
+    producer_child_workflow_run_id: String,
+    producer_execution_key: String,
+}
+
+fn exactly_one_payload<'a>(
+    payloads: Option<&'a temporalio_common::protos::temporal::api::common::v1::Payloads>,
+    label: &str,
+) -> Result<&'a [u8]> {
+    let payloads = payloads.context(format!("{label} omitted result payloads"))?;
+    ensure!(payloads.payloads.len() == 1, "{label} is not exactly one typed payload");
+    Ok(payloads.payloads[0].data.as_slice())
+}
+
+async fn attest_produced_source_v1(
+    client: &temporalio_client::Client,
+    namespace: &str,
+    parent: &History,
+    request: &IssueRequestV3,
+    proof: &AttestedV3,
+) -> Result<Option<ProducedSourceProofV1>> {
+    let contract = QdrantProducedVectorProjectionContractV1::contract();
+    if proof.invocation.checked_dispatch.operation != contract.reference {
+        return Ok(None);
+    }
+    let input_port = PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1);
+    let bound = proof.invocation.bound_inputs.get(&input_port)
+        .context("Produced Qdrant child has no exact vector projection input")?;
+    let evidence = bound.produced_evidence.as_ref()
+        .context("Produced Qdrant child lacks completed source evidence")?;
+    let (producer_instance, producer_port) = match &bound.source {
+        ArtifactBinding::Produced { producer, port, artifact }
+            if *artifact == bound.artifact_id && producer == &evidence.producer && port == &evidence.port =>
+            (producer, port),
+        _ => bail!("Produced Qdrant input is not an exact producer-port binding"),
+    };
+    let run: OperationDagRunV6 = serde_json::from_slice(&proof.parent_bytes)?;
+    let producer_node = run.plan.nodes.iter()
+        .find(|node| &node.instance == producer_instance)
+        .context("Produced Qdrant source operation missing from original parent plan")?;
+    ensure!(producer_node.outputs.get(producer_port) == Some(&bound.artifact_id),
+        "source operation does not produce the exact referenced artifact ID");
+    let producer_route = run.pinned_routes.iter()
+        .filter(|route| route.operation == producer_node.operation)
+        .collect::<Vec<_>>();
+    ensure!(producer_route.len() == 1
+        && producer_route[0].workflow_type == OWNER_OPERATION_CHILD_TYPE_V1
+        && !producer_route[0].task_queue.trim().is_empty()
+        && !producer_route[0].build_id.trim().is_empty(),
+        "Produced source has no unique pinned independent owner route");
+
+    // Reciprocal producer identity is discovered only from server parent
+    // ChildStarted, never from a caller-provided upstream run_id.
+    let started = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) = &event.attributes {
+            if attrs.workflow_execution.as_ref().map(|id| id.workflow_id.as_str())
+                == Some(evidence.child_workflow_id.as_str()) {
+                return Some((event.event_id, attrs));
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(started.len() == 1, "Produced source has no unique actual parent ChildStarted event");
+    let (producer_started_event_id, producer_started) = started[0];
+    let producer_identity = producer_started.workflow_execution.as_ref()
+        .context("Produced parent ChildStarted event omitted execution identity")?;
+    ensure!(!producer_identity.run_id.is_empty()
+        && producer_identity.workflow_id == evidence.child_workflow_id,
+        "Produced child has no server-selected Run ID");
+    let completed = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::ChildWorkflowExecutionCompletedEventAttributes(attrs)) = &event.attributes {
+            if attrs.initiated_event_id == producer_started.initiated_event_id {
+                return Some((event.event_id, attrs));
+            }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(completed.len() == 1 && completed[0].0 < proof.parent_child_initiated_event_id
+        && producer_started_event_id < completed[0].0,
+        "Produced source must complete before Qdrant child is even initiated in server History");
+    let (_, producer_completed) = completed[0];
+    ensure!(producer_completed.workflow_execution.as_ref()
+        .is_some_and(|id| id.workflow_id == producer_identity.workflow_id
+            && id.run_id == producer_identity.run_id),
+        "Produced source parent completion has an alien child execution identity");
+
+    let source_history = exact_history(client, namespace,
+        &producer_identity.workflow_id, &producer_identity.run_id).await?;
+    let source_start_bytes = start_payload(&source_history, OWNER_OPERATION_CHILD_TYPE_V1,
+        &producer_route[0].task_queue)?;
+    let source_invocation: OwnerInvocationV1 = serde_json::from_slice(&source_start_bytes)
+        .context("Produced source did not start with common typed OwnerInvocationV1")?;
+    ensure!(source_invocation.parent == proof.invocation.parent
+        && source_invocation.checked_dispatch.instance == *producer_instance
+        && source_invocation.checked_dispatch.operation == producer_node.operation
+        && source_invocation.checked_dispatch.owner == producer_route[0].owner,
+        "Produced source child is not owned by its pinned DAG operation");
+    let initiated = parent.events.iter().filter_map(|event| {
+        if let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(attrs)) = &event.attributes {
+            if event.event_id == producer_started.initiated_event_id { return Some(attrs); }
+        }
+        None
+    }).collect::<Vec<_>>();
+    ensure!(initiated.len() == 1
+        && initiated[0].workflow_id == producer_identity.workflow_id
+        && initiated[0].task_queue.as_ref().map(|queue| queue.name.as_str())
+            == Some(producer_route[0].task_queue.as_str()),
+        "Produced source initiation is not from its pinned owner route");
+    ensure!(exactly_one_payload(initiated[0].input.as_ref(), "Produced source initiation")?
+        == source_start_bytes.as_slice(),
+        "Produced source parent initiation and child start inputs differ");
+    let source_started = source_history.events.first()
+        .context("Produced source child server History empty")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(source_started_attrs)) = &source_started.attributes else {
+        bail!("Produced source child did not begin with server WorkflowExecutionStarted");
+    };
+    ensure!(source_started_attrs.parent_workflow_execution.as_ref()
+        .is_some_and(|id| id.workflow_id == request.parent_workflow_id
+            && id.run_id == request.parent_workflow_run_id)
+        && source_started_attrs.parent_initiated_event_id == producer_started.initiated_event_id,
+        "Produced child server History is not reciprocal to the generic DAG parent");
+    let source_finish = source_history.events.last()
+        .context("Produced child lacks terminal server event")?;
+    let Some(Attributes::WorkflowExecutionCompletedEventAttributes(attrs)) = &source_finish.attributes else {
+        bail!("Produced source child has no authoritative completed server result");
+    };
+    let source_result_bytes = exactly_one_payload(attrs.result.as_ref(), "Produced child result")?;
+    let parent_result_bytes = exactly_one_payload(producer_completed.result.as_ref(),
+        "Produced parent ChildCompleted result")?;
+    ensure!(source_result_bytes == parent_result_bytes,
+        "Produced source result differs between parent and child server Histories");
+    let source_result: OwnerResultV1 = serde_json::from_slice(source_result_bytes)
+        .context("Produced source returned non-typed child result")?;
+    proof.invocation.verify_produced_input_from_observed_completion(
+        &input_port, &source_invocation, &source_result)
+        .context("Produced Qdrant input disagrees with independently observed source completion")?;
+
+    let receipt: VectorProjectionSourceReceiptV1 =
+        serde_json::from_slice(&source_result.receipt_bytes)
+            .context("Produced source durable receipt is not the versioned projection certificate")?;
+    ensure!(receipt.child_workflow_run_id == producer_identity.run_id
+        && receipt.execution_key == source_invocation.checked_dispatch.execution_key
+        && !receipt.source_hash.trim().is_empty(),
+        "Produced source reported a receipt for a different owner execution");
+    let projection = serde_json::from_slice::<serde_json::Value>(
+        &source_result.outputs.get(producer_port)
+            .context("Produced source result omitted declared vector projection")?.payload)
+            .context("Produced source returned malformed portable projection JSON")?;
+
+    Ok(Some(ProducedSourceProofV1 {
+        receipt_id: receipt.receipt_id,
+        source_hash: receipt.source_hash,
+        projection,
+        operation_instance: source_invocation.checked_dispatch.instance.as_str().to_owned(),
+        producer_child_workflow_id: producer_identity.workflow_id.clone(),
+        producer_child_workflow_run_id: producer_identity.run_id.clone(),
+        producer_execution_key: source_invocation.checked_dispatch.execution_key,
+    }))
 }
 
 fn verify_trusted_temporal_url(candidate: &str) -> Result<()> {
@@ -96,9 +271,15 @@ fn attest_pair_v3(
     );
     let invocation: OwnerInvocationV1 = serde_json::from_slice(&child_bytes)
         .context("generic Qdrant child server History has an invalid owner invocation")?;
-    let command = verify_external_qdrant_owner_invocation(&invocation)
+    let command = verify_qdrant_owner_invocation(&invocation)
         .context("generic Qdrant child command is foreign, malformed, or Produced without proof")?;
-    let contract = QdrantKeywordProjectionContractV2::contract();
+    let contract = if invocation.checked_dispatch.operation
+        == QdrantProducedVectorProjectionContractV1::contract().reference
+    {
+        QdrantProducedVectorProjectionContractV1::contract()
+    } else {
+        QdrantKeywordProjectionContractV2::contract()
+    };
     ensure!(
         command.admission_id == request.admission_id
             && invocation.parent.workflow_id == request.parent_workflow_id
@@ -163,33 +344,43 @@ fn attest_pair_v3(
             && wire.command_bytes == invocation.command_bytes,
         "child command bytes do not match pinned parent Qdrant command"
     );
-    let input_port = PortId::from(QDRANT_EFFECT_INPUT_PORT_V2);
+    let input_port = if contract.reference == QdrantProducedVectorProjectionContractV1::contract().reference {
+        PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)
+    } else {
+        PortId::from(QDRANT_EFFECT_INPUT_PORT_V2)
+    };
     let source = node
         .inputs
         .get(&input_port)
         .context("Qdrant DAG input port is missing")?;
     let input_id = match source {
-        ArtifactBinding::External { artifact } => artifact,
-        ArtifactBinding::Produced { .. } => bail!(
-            "Produced Qdrant artifact requires independent upstream child History/receipt proof"
-        ),
+        ArtifactBinding::External { artifact } if contract.reference == QdrantKeywordProjectionContractV2::contract().reference => artifact,
+        ArtifactBinding::Produced { artifact, .. } if contract.reference == QdrantProducedVectorProjectionContractV1::contract().reference => artifact,
+        _ => bail!("Qdrant operator rejects a source incompatible with the exact pinned contract"),
     };
     let bound = invocation
         .bound_inputs
         .get(&input_port)
         .context("Qdrant child omitted the declared typed command input")?;
-    let admitted = run
-        .admitted
-        .get(input_id)
-        .context("Qdrant external input is absent from immutable parent admission")?;
-    ensure!(
-        bound.artifact_id == *input_id
-            && bound.source == *source
-            && bound.produced_evidence.is_none()
-            && bound.artifact == *admitted
-            && bound.artifact.payload == invocation.command_bytes,
-        "Qdrant input artifact ID, scope, provenance or bytes differ from parent History"
-    );
+    ensure!(bound.artifact_id == *input_id && bound.source == *source,
+        "Qdrant exact Produced/External artifact ID or source differs from original DAG");
+    match source {
+        ArtifactBinding::External { .. } => {
+            let admitted = run.admitted.get(input_id)
+                .context("Qdrant external input is absent from immutable parent admission")?;
+            ensure!(bound.produced_evidence.is_none()
+                && bound.artifact == *admitted
+                && bound.artifact.payload == invocation.command_bytes,
+                "Qdrant External input differs from immutable parent admission");
+        }
+        ArtifactBinding::Produced { .. } => {
+            ensure!(bound.produced_evidence.is_some()
+                && !run.admitted.contains_key(input_id),
+                "Qdrant Produced input cannot be smuggled into External admission");
+            // Actual producer server Histories and immutable SQL receipt are
+            // fetched independently in attested_request before DB admission.
+        }
+    }
     ensure!(
         serde_json::to_vec(&invocation)? == child_bytes,
         "child start History differs from canonical generic owner invocation bytes"
@@ -212,6 +403,7 @@ fn attest_pair_v3(
         "child server History parent identity is foreign"
     );
     let mut matching_started = None;
+    let mut matching_initiated = None;
     for initiated in &parent.events {
         let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(init)) =
             &initiated.attributes
@@ -228,6 +420,8 @@ fn attest_pair_v3(
                     == Some(QDRANT_GENERIC_OWNER_QUEUE_V1),
             "parent initiated an untrusted Qdrant child type or queue"
         );
+        ensure!(matching_initiated.replace(initiated.event_id).is_none(),
+            "multiple Qdrant ChildInitiated events cannot authorize one effect");
         let payloads = &init
             .input
             .as_ref()
@@ -271,6 +465,9 @@ fn attest_pair_v3(
         child_bytes,
         parent_child_started_event_id: matching_started
             .context("no reciprocal Qdrant child server ChildStarted event")?,
+        parent_child_initiated_event_id: matching_initiated
+            .context("no unique Qdrant child server ChildInitiated event")?,
+        produced_source: None,
     })
 }
 
@@ -314,6 +511,10 @@ async fn operator_pool_v3() -> Result<PgPool> {
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','INSERT') AS v1_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v2_admissions','SELECT') AS v2_read,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','SELECT') AS v1_read,
+                has_table_privilege(session_user,'pipeline.vector_projection_sources_v1','SELECT') AS producer_source_read,
+                has_table_privilege(session_user,'pipeline.operation_artifact_receipts_v1','SELECT') AS cross_owner_receipt_read,
+                has_function_privilege(session_user,
+                    'pipeline.operation_artifact_receipt_matches_v1(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE') AS cross_owner_cert_verify,
                 has_table_privilege(session_user,'pipeline.operation_dag_run_governance_v1','INSERT') AS governance_issue,
                 has_function_privilege(session_user,
                     'pipeline.operation_dag_governance_matches_v1(uuid,text,text,text,text,text,text,boolean)','EXECUTE') AS governed,
@@ -341,6 +542,9 @@ async fn operator_pool_v3() -> Result<PgPool> {
             && !role.try_get::<bool, _>("v1_insert")?
             && !role.try_get::<bool, _>("v2_read")?
             && !role.try_get::<bool, _>("v1_read")?
+            && !role.try_get::<bool, _>("producer_source_read")?
+            && !role.try_get::<bool, _>("cross_owner_receipt_read")?
+            && role.try_get::<bool, _>("cross_owner_cert_verify")?
             && !role.try_get::<bool, _>("governance_issue")?
             && role.try_get::<bool, _>("governed")?
             && role.try_get::<bool, _>("resignal_allowed")?
@@ -411,12 +615,47 @@ async fn attested_request(
         &request.child_workflow_run_id,
     )
     .await?;
-    let attested = attest_pair_v3(&parent, &child, &request, &trusted_build_id)?;
+    let mut attested = attest_pair_v3(&parent, &child, &request, &trusted_build_id)?;
+    // The deterministic DAG parent only carries an *assertion* of Produced
+    // provenance. A separate Qdrant operator fetches both upstream server
+    // Histories and checks the PG-issued, immutable neutral certificate before
+    // it may commit its own effect admission. No Qdrant Worker invokes PG.
+    let produced = attest_produced_source_v1(
+        &client, &namespace, &parent, &request, &attested,
+    ).await?;
     ensure!(
         attested.command.tenant_id == env::var("QDRANT_GENERIC_OPERATOR_TENANT_ID")?,
         "generic Qdrant operator is not the admitted command tenant"
     );
     let pool = operator_pool_v3().await?;
+    if let Some(source) = &produced {
+        let verified: bool = sqlx::query_scalar(
+            "SELECT pipeline.operation_artifact_receipt_matches_v1(\
+                $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
+                $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
+                $13::text,$14::jsonb)",
+        )
+        .bind(source.receipt_id)
+        .bind(&attested.command.tenant_id)
+        .bind(request.canonical_run_id)
+        .bind(&attested.command.context_key)
+        .bind(&attested.command.keyword_key)
+        .bind(attested.invocation.checked_dispatch.plan_hash.as_str())
+        .bind(&source.operation_instance)
+        .bind(&source.producer_execution_key)
+        .bind(&request.parent_workflow_id)
+        .bind(&request.parent_workflow_run_id)
+        .bind(&source.producer_child_workflow_id)
+        .bind(&source.producer_child_workflow_run_id)
+        .bind(&source.source_hash)
+        .bind(sqlx::types::Json(&source.projection))
+        .fetch_one(&pool)
+        .await
+        .context("independent Qdrant operator cannot verify immutable upstream artifact certificate")?;
+        ensure!(verified,
+            "Produced Qdrant admission denied: exact upstream artifact receipt is missing, revoked, or foreign");
+    }
+    attested.produced_source = produced;
     Ok((request, namespace, client, attested, pool))
 }
 
@@ -444,6 +683,13 @@ async fn signal_after_commit(
 pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     let (request, namespace, client, proof, pool) = attested_request(path).await?;
     let command = &proof.command;
+    let effect_command_bytes = if proof.invocation.checked_dispatch.operation
+        == QdrantProducedVectorProjectionContractV1::contract().reference
+    {
+        serde_json::to_vec(command)?
+    } else {
+        proof.invocation.command_bytes.clone()
+    };
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '5s'")
         .execute(&mut *tx)
@@ -503,6 +749,37 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
         governed,
         "Qdrant V3 cannot issue admission without immutable generic DAG governance"
     );
+    if let Some(source) = &proof.produced_source {
+        // Recheck the immutable source receipt *under the same governance
+        // transaction and advisory locks* that commits Qdrant admission. The
+        // earlier check in attested_request is necessary for resignal but is
+        // not by itself a sufficient effect-admission TOCTOU fence.
+        let verified: bool = sqlx::query_scalar(
+            "SELECT pipeline.operation_artifact_receipt_matches_v1(\
+                $1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::text,\
+                $7::text,$8::text,$9::text,$10::text,$11::text,$12::text,\
+                $13::text,$14::jsonb)",
+        )
+        .bind(source.receipt_id)
+        .bind(&command.tenant_id)
+        .bind(request.canonical_run_id)
+        .bind(&command.context_key)
+        .bind(&command.keyword_key)
+        .bind(proof.invocation.checked_dispatch.plan_hash.as_str())
+        .bind(&source.operation_instance)
+        .bind(&source.producer_execution_key)
+        .bind(&request.parent_workflow_id)
+        .bind(&request.parent_workflow_run_id)
+        .bind(&source.producer_child_workflow_id)
+        .bind(&source.producer_child_workflow_run_id)
+        .bind(&source.source_hash)
+        .bind(sqlx::types::Json(&source.projection))
+        .fetch_one(&mut *tx)
+        .await
+        .context("Produced source receipt disappeared during Qdrant admission transaction")?;
+        ensure!(verified,
+            "Produced source receipt revoked or mismatched before Qdrant effect admission");
+    }
     let inserted = sqlx::query(
         "INSERT INTO pipeline.qdrant_projection_v3_admissions
            (admission_id,run_id,tenant_id,context_key,keyword_key,
@@ -537,7 +814,7 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     .bind(&proof.invocation.checked_dispatch.execution_key)
     .bind(&proof.parent_bytes)
     .bind(&proof.child_bytes)
-    .bind(&proof.invocation.command_bytes)
+    .bind(&effect_command_bytes)
     .bind(request.expires_in_seconds as i32)
     .execute(&mut *tx)
     .await
@@ -555,6 +832,13 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
 pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
     let (request, namespace, client, proof, pool) = attested_request(path).await?;
     let command = &proof.command;
+    let effect_command_bytes = if proof.invocation.checked_dispatch.operation
+        == QdrantProducedVectorProjectionContractV1::contract().reference
+    {
+        serde_json::to_vec(command)?
+    } else {
+        proof.invocation.command_bytes.clone()
+    };
     let matched: bool = sqlx::query_scalar(
         "SELECT pipeline.verify_qdrant_operator_resignal_v3(
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
@@ -571,7 +855,7 @@ pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
     .bind(proof.parent_child_started_event_id)
     .bind(&proof.parent_bytes)
     .bind(&proof.child_bytes)
-    .bind(&proof.invocation.command_bytes)
+    .bind(&effect_command_bytes)
     .bind(&proof.invocation.checked_dispatch.execution_key)
     .fetch_one(&pool)
     .await

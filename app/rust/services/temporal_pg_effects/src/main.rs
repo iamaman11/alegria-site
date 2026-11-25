@@ -25,6 +25,12 @@ use postgres_store::truth_review_effect_v3::{
     RetryClass, PG_EFFECT_TASK_QUEUE, PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4,
     PG_EFFECT_WORKFLOW_TYPE_V5, PG_OWNER_TASK_QUEUE_V1,
 };
+use postgres_store::vector_projection_owner_v1::{
+    confirmed_pg_vector_projection_owner_result, execute_pg_vector_projection_owner_v1,
+    validate_pg_vector_projection_invocation_v1,
+    PgVectorProjectionReceiptV1, OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
+};
+use projection_contracts::VectorProjectionV1;
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
@@ -39,6 +45,7 @@ use temporalio_sdk::{
 mod operator;
 mod operator_dag_governance;
 mod operator_owner_v1;
+mod operator_vector_projection_v1;
 mod operator_v4;
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
@@ -98,6 +105,38 @@ struct PgTruthReviewActivities {
 
 #[activities]
 impl PgTruthReviewActivities {
+    /// The vector is read from an immutable PG-owned source row under a
+    /// separately admitted SQL transaction, never received from the DAG
+    /// command or from any downstream provider.
+    #[activity]
+    pub(crate) async fn read_vector_projection_owner_v1(
+        self: Arc<Self>,
+        ctx: ActivityContext,
+        invocation: OwnerInvocationV1,
+    ) -> Result<(VectorProjectionV1, PgVectorProjectionReceiptV1), ActivityError> {
+        let info = ctx.info();
+        let workflow_id = info
+            .workflow_id
+            .as_deref()
+            .ok_or_else(|| activity_terminal("vector producer lacks actual child Workflow ID"))?;
+        let run_id = info
+            .workflow_run_id
+            .as_deref()
+            .ok_or_else(|| activity_terminal("vector producer lacks actual child Run ID"))?;
+        if info.workflow_type.as_deref() != Some(OWNER_OPERATION_CHILD_TYPE_V1)
+            || info.task_queue != PG_EFFECT_TASK_QUEUE
+        {
+            return Err(activity_terminal("vector producer invoked outside PG owner Workflow/Activity queue"));
+        }
+        execute_pg_vector_projection_owner_v1(&self.pool, workflow_id, run_id, &invocation)
+            .await
+            .map_err(|error| match error {
+                postgres_store::vector_projection_owner_v1::PgVectorProjectionError::Sql(_) =>
+                    ActivityError::application(ApplicationFailure::new(std::io::Error::other(error.to_string()))),
+                _ => activity_terminal(&error.to_string()),
+            })
+    }
+
     /// A generic DAG cannot schedule PostgreSQL writes by itself: the
     /// independent operator must attest the actual generic child History
     /// and issue revision 5 admission before this Activity may consume it.
@@ -275,6 +314,36 @@ impl AlegriaOwnerOperationV1Workflow {
     #[run]
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerResultV1> {
         let invocation = ctx.state(|state| state.immutable_invocation.clone());
+        if invocation.checked_dispatch.operation.id.as_str()
+            == PG_VECTOR_PROJECTION_OPERATION_ID
+        {
+            validate_pg_vector_projection_invocation_v1(&invocation).map_err(|error| {
+                temporalio_sdk::WorkflowTermination::failed_application(
+                    ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+                )
+            })?;
+            ctx.wait_condition(|state| state.admission_signal_received)
+                .await?;
+            let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+            options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
+            let (projection, receipt): (VectorProjectionV1, PgVectorProjectionReceiptV1) = ctx
+                .start_activity(
+                    PgTruthReviewActivities::read_vector_projection_owner_v1,
+                    invocation.clone(),
+                    options,
+                )
+                .await?;
+            return confirmed_pg_vector_projection_owner_result(
+                &invocation,
+                projection,
+                receipt,
+            )
+            .map_err(|error| {
+                temporalio_sdk::WorkflowTermination::failed_application(
+                    ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+                )
+            });
+        }
         validate_pg_owner_invocation_v1(&invocation).map_err(|error| {
             temporalio_sdk::WorkflowTermination::failed_application(
                 ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
@@ -547,6 +616,12 @@ async fn main() -> Result<()> {
                 "unexpected PG owner operator arguments"
             );
             operator_owner_v1::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-issue-pg-projection-v1") {
+            let path = args.next().context("--operator-issue-pg-projection-v1 requires strict JSON locator")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected vector producer operator arguments");
+            operator_vector_projection_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-admit-dag-run-v1") {
