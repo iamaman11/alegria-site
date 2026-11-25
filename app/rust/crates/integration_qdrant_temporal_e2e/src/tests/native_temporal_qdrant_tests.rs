@@ -233,9 +233,38 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
         Some("55P03"));
     status_lock.rollback().await.unwrap();
 
-    // Simulate the process/liveness gap at SQL admission by pausing the
-    // independent provider worker. Both Signals enter real server History;
-    // neither can initiate a provider attempt while the worker is down.
+    // Force a real Worker crash with a read-only admission Activity STARTED.
+    // A schedule-to-close-only 300s timeout used to strand the child after
+    // restart, despite committed admission and repeated correct Signals.
+    // The short start-to-close bound on this *read-only* Activity must ensure
+    // Temporal retries it; the provider Activity keeps its distinct fence.
+    child_handle.signal(
+        UntypedSignal::<UntypedWorkflow>::new("operator_admission_ready_qdrant_v1"),
+        RawValue::default(), WorkflowSignalOptions::default(),
+    ).await.expect("trigger an in-flight pre-admission read-only probe");
+    timeout(Duration::from_secs(12),async {
+        loop {
+            let events = child_handle
+                .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events().await.expect("inspect real pre-crash child History");
+            let last_started = events.iter().filter_map(|event| matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::ActivityTaskStartedEventAttributes(_))
+            ).then_some(event.event_id)).last().unwrap_or(0);
+            let last_terminal = events.iter().filter_map(|event| matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::ActivityTaskCompletedEventAttributes(_))
+                    | Some(Attributes::ActivityTaskFailedEventAttributes(_))
+                    | Some(Attributes::ActivityTaskTimedOutEventAttributes(_))
+                    | Some(Attributes::ActivityTaskCanceledEventAttributes(_))
+            ).then_some(event.event_id)).last().unwrap_or(0);
+            if last_started > last_terminal { break; }
+            sleep(Duration::from_millis(50)).await;
+        }
+    }).await.expect("no in-flight read-only Activity before forced Worker crash");
+
+    // Both real admission Signals enter server History while this worker is
+    // down. Neither may initiate any provider RPC before recovery.
     let mut stopped = child_guard.0.take().expect("running Qdrant worker process");
     stopped.kill().expect("stop isolated Qdrant child worker");
     stopped.wait().expect("drain stopped Qdrant child worker");
@@ -338,15 +367,50 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
         .spawn().expect("restart Qdrant child after committed admission and duplicate wakeups");
     let _restarted_child_guard = ChildGuard(Some(restarted_child));
 
-    let completion = timeout(Duration::from_secs(80),
-        handle.get_result(WorkflowGetResultOptions::default()))
-        .await.expect("native Qdrant parent did not complete after operator admission")
-        .expect("native Qdrant parent workflow failed");
+    let completion = match timeout(Duration::from_secs(80),
+        handle.get_result(WorkflowGetResultOptions::default())).await {
+        Ok(result) => result.expect("native Qdrant parent workflow failed"),
+        Err(_) => {
+            let history = timeout(Duration::from_secs(5),
+                child_handle.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                    .into_events()).await.ok().and_then(Result::ok);
+            let history_counts = history.map(|events| {
+                let scheduled = events.iter().filter(|event| matches!(
+                    event.attributes.as_ref(),
+                    Some(Attributes::ActivityTaskScheduledEventAttributes(_))
+                )).count();
+                let started = events.iter().filter(|event| matches!(
+                    event.attributes.as_ref(),
+                    Some(Attributes::ActivityTaskStartedEventAttributes(_))
+                )).count();
+                let timed_out = events.iter().filter(|event| matches!(
+                    event.attributes.as_ref(),
+                    Some(Attributes::ActivityTaskTimedOutEventAttributes(_))
+                )).count();
+                format!("scheduled={scheduled},started={started},timed_out={timed_out}")
+            }).unwrap_or_else(||"History unavailable".to_owned());
+            let attempts = sqlx::query_scalar::<_,i64>(
+                "SELECT count(*) FROM pipeline.qdrant_projection_v1_attempts WHERE admission_id=$1"
+            ).bind(admission).fetch_one(&pg.pool).await;
+            let receipts = sqlx::query_scalar::<_,i64>(
+                "SELECT count(*) FROM pipeline.qdrant_projection_v1_receipts WHERE admission_id=$1"
+            ).bind(admission).fetch_one(&pg.pool).await;
+            panic!("native Qdrant parent did not complete after real operator admission and Worker restart: child_history={history_counts}; SQL attempts={attempts:?}, receipts={receipts:?}");
+        }
+    };
     let json: String = completion.to_value(&PayloadConverter::serde_json());
     let results: Vec<operation_protocol::QdrantKeywordChildResultV1> =
         serde_json::from_str(&json).unwrap();
     assert_eq!(results.len(),1);
     assert_eq!(results[0].admission_id,admission);
+
+    let completed_child_history = child_handle
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .into_events().await.expect("inspect restarted native child History");
+    assert!(completed_child_history.iter().any(|event| matches!(
+        event.attributes.as_ref(),
+        Some(Attributes::ActivityTaskTimedOutEventAttributes(_))
+    )), "crashed in-flight admission Activity did not cross the start-to-close retry fence");
 
     // Replay the ORIGINAL server-issued parent and child Histories using
     // independent native SDK replay binaries. Synthetic parser fixtures

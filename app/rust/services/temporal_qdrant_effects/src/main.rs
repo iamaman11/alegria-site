@@ -17,8 +17,8 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::runtime::RuntimeOptions;
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 use temporalio_sdk::{
-    ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext, Worker, WorkerOptions,
-    WorkflowContext, WorkflowContextView, WorkflowResult,
+    ActivityCloseTimeouts, ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext,
+    Worker, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
 };
 
 use futures_util as _;
@@ -28,6 +28,22 @@ mod operator;
 
 fn qdrant_activity_options() -> ActivityOptions {
     let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+    options.task_queue = Some(QDRANT_OWNER_ACTIVITY_QUEUE_V1.to_string());
+    options
+}
+
+fn qdrant_admission_probe_options() -> ActivityOptions {
+    // Admission is a strictly read-only check: after a Worker crash it may
+    // safely be retried. A STARTED Activity without start-to-close timeout
+    // otherwise strands the Workflow for the full 300s schedule-to-close
+    // timeout, even if the operator sends a valid wakeup after SQL COMMIT.
+    // The provider Activity deliberately does NOT use this timeout: its RPC
+    // may have an unknown outcome and may never be blindly duplicated.
+    let mut options = ActivityOptions::start_to_close_timeout(Duration::from_secs(15));
+    options.close_timeouts = ActivityCloseTimeouts::ScheduleAndStartToClose {
+        schedule_to_close: Duration::from_secs(300),
+        start_to_close: Duration::from_secs(15),
+    };
     options.task_queue = Some(QDRANT_OWNER_ACTIVITY_QUEUE_V1.to_string());
     options
 }
@@ -73,7 +89,7 @@ impl QdrantKeywordProjectionV1Workflow {
                 .start_activity(
                     QdrantProjectionActivities::check_operator_admission_v1,
                     invocation.clone(),
-                    qdrant_activity_options(),
+                    qdrant_admission_probe_options(),
                 )
                 .await?;
             if admitted {
