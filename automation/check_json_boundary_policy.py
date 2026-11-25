@@ -152,7 +152,7 @@ NATIVE_OWNER_V7_JSON_BOUNDARIES = frozenset({
 # generic DAG workflow, domain, or future sibling exemption is permitted.
 NATIVE_OWNER_V2_JSON_BOUNDARIES = frozenset({
     # Separate least-privilege business-root issuer parses a private typed
-    # operator intent and signs only its own tenant-scoped authority.
+    # operator intent and issues only its own tenant-scoped authority.
     "app/rust/services/temporal_pg_effects/src/operator_business_run_v1.rs",
     "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
     "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v2.rs",

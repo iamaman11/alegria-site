@@ -8,6 +8,7 @@ import unittest
 from check_json_boundary_policy import (
     EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
+    NATIVE_OWNER_V2_JSON_BOUNDARIES,
     NATIVE_OWNER_V6_JSON_BOUNDARIES,
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     PG_V3_OPERATOR_JSON_BOUNDARIES,
@@ -45,10 +46,27 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/services/temporal_orchestrator/src/owner_catalog_v2.rs",
             "app/rust/services/temporal_pg_effects/src/main.rs",
             "app/rust/services/temporal_pg_effects/src/owner_v2.rs",
-            "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
             "app/rust/services/temporal_qdrant_effects/src/owner_v2.rs",
             "app/rust/services/temporal_qdrant_effects/src/operator_v4.rs",
             "app/rust/services/temporal_qdrant_effects/src/nested/operator_v3.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
+    def test_native_v2_json_exceptions_are_exact_owner_transport_adapters(self) -> None:
+        self.assertEqual(NATIVE_OWNER_V2_JSON_BOUNDARIES, {
+            "app/rust/services/temporal_pg_effects/src/operator_business_run_v1.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v2.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v2.rs",
+            "app/rust/services/temporal_qdrant_effects/src/owner_generic_v1.rs",
+        })
+        for relative in NATIVE_OWNER_V2_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+        for relative in (
+            "app/rust/services/temporal_pg_effects/src/operator_dag_governance_v3.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_vector_projection_v3.rs",
+            "app/rust/services/temporal_qdrant_effects/src/owner_generic_v2.rs",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))

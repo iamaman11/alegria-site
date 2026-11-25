@@ -97,6 +97,11 @@ def package(kind: str, source_sha: str, output: Path, *, harness: Path | None = 
             raise ValueError(f"missing real executable for {name}: {source}")
         destination = output / name
         shutil.copyfile(source, destination)
+        # The bundle is also executed in the producer CI job to prove the
+        # provider-free and legacy feature modes. copyfile does not preserve
+        # executable mode; the exact-source binary must remain executable
+        # before any later install step (which also grants 0755).
+        destination.chmod(0o755)
         sha256, size = digest(destination)
         if not size:
             raise ValueError(f"empty compiled executable {name}")

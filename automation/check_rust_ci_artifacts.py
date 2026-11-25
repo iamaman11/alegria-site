@@ -39,6 +39,7 @@ class RustArtifactTests(unittest.TestCase):
         bundle = self.root / "bundle"
         manifest = artifacts.package("harness", SHA, bundle, harness=source)
         self.assertEqual(set(manifest["files"]), {"integration_harness_test"})
+        self.assertTrue((bundle / "integration_harness_test").stat().st_mode & 0o111)
         destination = self.root / "installed" / "debug"
         artifacts.install("harness", SHA, bundle, target=destination)
         installed = destination / "deps" / "integration_harness-ci-exact"
@@ -153,6 +154,7 @@ class RustArtifactTests(unittest.TestCase):
             legacy_bundle = self.root / "legacy_qdrant"
             packaged = artifacts.package("legacy_qdrant_parent", SHA, legacy_bundle)
             self.assertEqual(set(packaged["files"]), {"temporal_orchestrator_legacy_qdrant_v1"})
+            self.assertTrue((legacy_bundle / "temporal_orchestrator_legacy_qdrant_v1").stat().st_mode & 0o111)
             # Bundle bytes are frozen when the default-feature Cargo build is
             # packaged earlier; later legacy Cargo linking cannot overwrite it.
             installed = self.root / "installed"
