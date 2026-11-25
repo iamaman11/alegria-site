@@ -63,14 +63,30 @@ GRANT SELECT, INSERT, UPDATE ON site.seo_hitl_tasks TO alegria_pg_effect_worker;
 -- writes; no system.sync_outbox, no CMS human decisions.
 ```
 
-The worker fails startup if the *effective* role has admission table or
-column-level INSERT/UPDATE, DELETE or TRUNCATE rights; it also refuses write
-access to canonical `verified.rule_instances`, `extracted.rule_candidates`,
-`system.sync_outbox`, and `site.cms_approval_decisions`. `REVOKE FROM PUBLIC`
-in the schema does not revoke owner privileges or inherited membership; a
-separate unprivileged user is mandatory.
-The `verified` and `system` schema grants provide name resolution solely for
-these negative privilege checks; they grant no table read or write rights.
+The Worker performs a **fail-closed effective-permission audit before polling
+Temporal and again inside every effect invocation**, including inherited roles
+and `PUBLIC` privileges. Its entire
+allowed application write surface is `INSERT/UPDATE site.seo_hitl_tasks` and
+`INSERT pipeline.pg_effect_v3_receipts`. Even on those tables `DELETE` and
+`TRUNCATE` are forbidden; receipt `UPDATE` is forbidden. The audit inspects
+**all** application relations, including future migration-added tables and
+column-level grants; it also rejects write access to application sequences,
+`CREATE` on application schemas, role administration and RLS-bypass rights.
+The forbidden set therefore includes, but is not limited to,
+`pipeline.pg_effect_v3_admissions`, `pipeline.execution_runs`, raw evidence,
+canonical Truth, CMS approval, and `system.sync_outbox`.
+
+The real PostgreSQL negative E2E
+`pg_v3_rejects_new_app_writer_and_schema_ddl_privileges` grants and revokes
+seven distinct excess capabilities (including column-level UPDATE, operator
+admission INSERT, allowed-table DELETE/receipt UPDATE, sequence USAGE and
+schema CREATE), requiring startup rejection for each, then recovery after
+revocation. This adds defence-in-depth, **not** authority to deploy V3: live
+production role provisioning, row-level restriction of shared HITL tasks,
+historical cutover and general effectful DAG admission are still open.
+`REVOKE FROM PUBLIC` in the schema does not revoke owner privileges or
+inherited membership; a separate unprivileged user is mandatory. The
+`verified` and `system` schema grants are read-free name resolution only.
 
 An authorized operator issues each admission through their own audited SQL
 process, **not** an Activity, Workflow, or DAG input. Validate canonical

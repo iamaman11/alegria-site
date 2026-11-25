@@ -6,9 +6,9 @@ use std::collections::BTreeMap;
 pub mod containers;
 pub mod env_overrides;
 pub mod stub_servers;
-pub mod truth_test_payloads;
 #[cfg(any(feature = "e2e", test))]
 mod temporal_multiset;
+pub mod truth_test_payloads;
 #[cfg(any(feature = "e2e", test))]
 pub use temporal_multiset::temporal_step_multiset;
 

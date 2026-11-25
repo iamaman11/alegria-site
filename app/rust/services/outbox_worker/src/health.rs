@@ -19,6 +19,39 @@ pub fn configured_file() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Owns the readiness marker for exactly one worker run. Its destructor
+/// revokes readiness even when a PostgreSQL claim/ACK returns early with an
+/// error (the previous explicit shutdown-only cleanup missed those paths).
+pub struct ReadinessLease {
+    file: Option<PathBuf>,
+}
+
+impl ReadinessLease {
+    pub fn acquire(file: Option<PathBuf>) -> Result<Self> {
+        if let Some(path) = file.as_deref() {
+            clear(path)?;
+        }
+        Ok(Self { file })
+    }
+
+    pub fn publish(&self) -> Result<()> {
+        if let Some(path) = self.file.as_deref() {
+            publish(path)?;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ReadinessLease {
+    fn drop(&mut self) {
+        if let Some(path) = self.file.as_deref() {
+            if let Err(error) = clear(path) {
+                tracing::warn!(%error, path = ?path, "failed to revoke Outbox readiness");
+            }
+        }
+    }
+}
+
 pub fn clear(file: &Path) -> Result<()> {
     match fs::remove_file(file) {
         Ok(()) => Ok(()),
@@ -58,7 +91,7 @@ pub fn ready(file: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{clear, fresh, publish, ready, MAX_HEARTBEAT_AGE};
+    use super::{clear, fresh, publish, ready, ReadinessLease, MAX_HEARTBEAT_AGE};
     use std::fs;
     use std::time::Duration;
 
@@ -92,5 +125,32 @@ mod tests {
             now
         ));
         assert!(!fresh(now + 1, now));
+    }
+
+    #[test]
+    fn readiness_is_revoked_on_early_error_and_reacquired_on_restart() {
+        let path = std::env::temp_dir().join(format!(
+            "alegria-outbox-early-return-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        // A predecessor's marker cannot make the next process initially ready.
+        publish(&path).unwrap();
+        let worker_attempt = || -> anyhow::Result<()> {
+            let lease = ReadinessLease::acquire(Some(path.clone()))?;
+            assert!(!ready(&path));
+            lease.publish()?;
+            assert!(ready(&path));
+            anyhow::bail!("simulated PostgreSQL ACK error");
+        };
+        assert!(worker_attempt().is_err());
+        assert!(!ready(&path), "early error must revoke readiness immediately");
+
+        let lease = ReadinessLease::acquire(Some(path.clone())).unwrap();
+        assert!(!ready(&path));
+        lease.publish().unwrap();
+        assert!(ready(&path));
+        drop(lease);
+        assert!(!ready(&path), "normal shutdown must also revoke readiness");
     }
 }

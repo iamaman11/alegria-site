@@ -80,8 +80,8 @@ pub enum ReconcileTruthReviewsError {
         "candidate source snapshot changed since PG admission; operator re-admission required"
     )]
     CandidateSetChanged,
-    #[error("PG effect worker must use a DB role without admission write privileges")]
-    PrivilegedWorkerRole,
+    #[error("PG effect worker has an unauthorized PostgreSQL privilege: {target}")]
+    PrivilegedWorkerRole { target: String },
     #[error("PG Truth review operation failed: {0}")]
     Reconcile(#[from] primitives::errors::DomainError),
     #[error("PG effect SQL failed: {0}")]
@@ -150,48 +150,101 @@ pub fn contract_fingerprint() -> Result<String, ReconcileTruthReviewsError> {
     .to_string())
 }
 
-/// Reject privileged DB role before polling Temporal. Table owners and roles
-/// with inherited grants are forbidden, not merely roles with explicit GRANT.
-/// The operator provisioning must grant SELECT on admissions and SELECT/INSERT
-/// on receipts, plus the necessary scoped Truth/HITL read/write tables.
+/// Reject a DB role with *any* application write authority outside the two
+/// exact relations needed by this effect. A short list of protected tables is
+/// insufficient: the same database also holds run journals, raw evidence,
+/// CMS revisions, and future tables that must fail closed automatically.
+/// Check effective privileges (including ownership, PUBLIC and inherited
+/// roles), schema DDL and sequence mutation before polling Temporal.
+/// PostgreSQL cannot enforce a row-type restriction through table GRANTs;
+/// this guard is a required outer boundary, not a replacement for the scoped
+/// statement predicates and operator admission inside the transaction.
 pub async fn assert_unprivileged_pg_effect_role(
     pool: &PgPool,
 ) -> Result<(), ReconcileTruthReviewsError> {
-    let (insert, update, column_insert, column_update, delete, truncate):
-        (bool, bool, bool, bool, bool, bool) = sqlx::query_as(
-        "SELECT has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'INSERT'),
-                has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'UPDATE'),
-                has_any_column_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'INSERT'),
-                has_any_column_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'UPDATE'),
-                has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'DELETE'),
-                has_table_privilege(current_user, 'pipeline.pg_effect_v3_admissions', 'TRUNCATE')",
+    // A user with role-management, BYPASSRLS or replication authority is not
+    // an Activity identity regardless of its current individual table GRANTs.
+    let privileged_role: bool = sqlx::query_scalar(
+        "SELECT rolsuper OR rolcreaterole OR rolcreatedb OR rolreplication OR rolbypassrls
+         FROM pg_catalog.pg_roles WHERE rolname = current_user",
     )
     .fetch_one(pool)
     .await?;
-    if insert || update || column_insert || column_update || delete || truncate {
-        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole);
+    if privileged_role {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
+            target: "role administration / RLS bypass".to_string(),
+        });
     }
-    // The sole permitted write surface is the review task and its own receipt.
-    // This independent worker must never be able to promote canonical Truth,
-    // alter evidence, or dispatch another owner's Outbox effects.
-    for protected_table in [
-        "verified.rule_instances",
-        "extracted.rule_candidates",
-        "system.sync_outbox",
-        "site.cms_approval_decisions",
-    ] {
-        let privileged: bool = sqlx::query_scalar(
-            "SELECT has_any_column_privilege(current_user, $1::text, 'INSERT')
-                  OR has_any_column_privilege(current_user, $1::text, 'UPDATE')
-                  OR has_table_privilege(current_user, $1::text, 'DELETE')
-                  OR has_table_privilege(current_user, $1::text, 'TRUNCATE')",
-        )
-        .bind(protected_table)
-        .fetch_one(pool)
-        .await?;
-        if privileged {
-            return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole);
-        }
+
+    // Permission checks use OIDs, not user-supplied identifiers or string
+    // interpolation. Include tables, views, materialized/foreign tables and
+    // partitions across ALL application schemas: a newly migrated writer
+    // must not accidentally turn this narrowly scoped Worker into an admin.
+    let unexpected_relation: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class AS c
+         JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+         WHERE n.nspname <> 'information_schema'
+           AND n.nspname !~ '^pg_'
+           AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+           AND (
+             (has_any_column_privilege(current_user, c.oid, 'INSERT') AND NOT (
+               (n.nspname = 'site' AND c.relname = 'seo_hitl_tasks') OR
+               (n.nspname = 'pipeline' AND c.relname = 'pg_effect_v3_receipts')
+             )) OR
+             (has_any_column_privilege(current_user, c.oid, 'UPDATE') AND NOT (
+               n.nspname = 'site' AND c.relname = 'seo_hitl_tasks'
+             )) OR
+             has_table_privilege(current_user, c.oid, 'DELETE') OR
+             has_table_privilege(current_user, c.oid, 'TRUNCATE')
+           )
+         ORDER BY n.nspname, c.relname
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(target) = unexpected_relation {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { target });
+    }
+
+    // USAGE/UPDATE on another owner's sequence is itself a write authority
+    // (`nextval` / `setval`). The two allowed tables have UUID/text keys and
+    // need no sequence mutation, so any application sequence grant is excess.
+    let unexpected_sequence: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class AS c
+         JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+         WHERE n.nspname <> 'information_schema'
+           AND n.nspname !~ '^pg_'
+           AND c.relkind = 'S'
+           AND (
+             has_sequence_privilege(current_user, c.oid, 'USAGE') OR
+             has_sequence_privilege(current_user, c.oid, 'UPDATE')
+           )
+         ORDER BY n.nspname, c.relname
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(target) = unexpected_sequence {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { target });
+    }
+
+    let writable_schema: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname
+         FROM pg_catalog.pg_namespace AS n
+         WHERE n.nspname <> 'information_schema'
+           AND n.nspname !~ '^pg_'
+           AND has_schema_privilege(current_user, n.oid, 'CREATE')
+         ORDER BY n.nspname
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(target) = writable_schema {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
+            target: format!("CREATE ON SCHEMA {target}"),
+        });
     }
     Ok(())
 }
@@ -266,6 +319,10 @@ pub async fn execute_admitted_reconcile(
     input: &ReconcileTruthReviewsInput,
 ) -> Result<ReconcileTruthReviewsReceipt, ReconcileTruthReviewsError> {
     let key = execution_key(workflow_id, workflow_run_id, input)?;
+    // Never rely solely on a caller's startup check. A direct invocation with
+    // admin credentials (or a role whose grants changed after startup) must
+    // not be able to exercise this deliberately narrow Activity API.
+    assert_unprivileged_pg_effect_role(pool).await?;
     let fingerprint = contract_fingerprint()?;
     let mut tx = pool.begin().await?;
     // This is the SAME context-wide advisory lock acquired before every

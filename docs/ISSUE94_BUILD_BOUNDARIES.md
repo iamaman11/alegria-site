@@ -143,3 +143,39 @@ PostgreSQL revisions before
 running a single Activity. No V1/V2 replay history is changed by this protocol
 cut; no publication or Qdrant write is enabled by it. Only after real replay,
 DB admission and durable effect-fence E2E may one effectful owner be opted in.
+
+## 25 November 2026 — exact-source CI #518 critical path
+
+[PR #95 run #518](https://github.com/iamaman11/alegria-site/actions/runs/45532475736)
+was executed against Draft head `479b2d60dad2640ca475717948ea7bfad7c511fc`.
+GitHub recorded **02:22:29–02:27:57 UTC, 328 seconds** from event to completed
+run. Its `CI` gate finished at 02:27:57 after an `architecture-and-rust`
+failure. This is **not** a green gate or evidence for the ≤180-second SLA.
+The single observed formatting defect was misplaced
+`pub mod truth_test_payloads;` in `integration_harness/src/lib.rs`;
+the full Rust workspace tests and the executed owner-specific PostgreSQL,
+Temporal, Graph, Qdrant and Outbox E2E jobs nonetheless succeeded.
+
+| Measured critical-path job (same run; concurrent jobs are not additive) | UTC interval | Wall time |
+| --- | --- | ---: |
+| `impact` | 02:22:31–02:22:40 | 9 s |
+| `rust-e2e-temporal-harness`, first full-infrastructure Temporal test binary | 02:22:43–02:26:28 | 225 s |
+| `rust-temporal-legacy-e2e (temporal_manual)`, waits for that binary | 02:26:30–02:27:49 | 79 s |
+| `verify`, independent full workspace Rust tests | 02:22:42–02:26:08 | 206 s |
+| `CI`, failed aggregate gate | 02:27:51–02:27:57 | 6 s |
+
+Inside `temporal_manual`, the **real Worker restart / manual editorial resume**
+took **65.503 seconds**; the accompanying protobuf History wire-shape check
+took **0.005 seconds**. Splitting those two commands into more GitHub matrix
+jobs cannot materially shorten this critical path. Earlier successful
+[#511](https://github.com/iamaman11/alegria-site/actions/runs/45523245706)
+needed **288 seconds event-to-green gate** and 304 seconds to completion,
+so #518 does not establish a regression relative to a comparable green run.
+
+**Decision:** retain the exact-source test/artifact provenance and real
+live-restart coverage. Do not add cosmetic runner shards or remove mandatory
+checks to simulate the target. Further progress requires an actual, measured
+reduction in the `integration_temporal_e2e` dependency/compiler closure and
+the 206-second full-workspace path; only then remeasure ≥3 comparable full PR
+runs for the ≤180-second criterion. `main` remains untouched and #94/#43
+remain open.

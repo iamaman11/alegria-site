@@ -974,7 +974,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
     ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    "verify_d": (("pg_effect_v3", "pg_v3_", 2),),
+    "verify_d": (("pg_effect_v3", "pg_v3_", 3),),
 }
 
 

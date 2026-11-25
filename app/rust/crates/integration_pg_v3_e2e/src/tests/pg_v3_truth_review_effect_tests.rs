@@ -209,6 +209,109 @@ async fn pg_v3_unprivileged_effect_pool(postgres: &PostgresHarness) -> sqlx::PgP
     pg_v3_unprivileged_effect_identity(postgres).await.0
 }
 
+/// A schema migration or an inherited grant may add a writer permission to a
+/// table that was not on a hand-maintained protected-table list. The activity
+/// role must fail startup before any Temporal command can consume admission.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn pg_v3_rejects_new_app_writer_and_schema_ddl_privileges() {
+    use postgres_store::truth_review_effect_v3::{
+        assert_unprivileged_pg_effect_role, ReconcileTruthReviewsError,
+    };
+
+    let postgres = PostgresHarness::start()
+        .await
+        .expect("disposable PostgreSQL for effective-permission boundary");
+    let effect_pool = pg_v3_unprivileged_effect_pool(&postgres).await;
+    let worker_role: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&effect_pool)
+        .await
+        .expect("worker role name");
+    assert!(worker_role.starts_with("ci_pg_v3_worker_"));
+
+    // The owner operation is also callable directly by Rust consumers. Its
+    // own runtime check must reject admin credentials, even when a valid
+    // operator admission exists (bypassing startup is not a privilege grant).
+    let privileged_call = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &privileged_call).await;
+    assert!(matches!(
+        postgres_store::truth_review_effect_v3::execute_admitted_reconcile(
+            &postgres.pool,
+            &privileged_call.workflow_id,
+            &privileged_call.workflow_run_id,
+            &privileged_call.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { .. })
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &privileged_call).await;
+
+    // A column-level UPDATE is intentionally distinct from a table-level
+    // grant. Also cover raw evidence, the operator admission, sequences and
+    // schema DDL, all outside the exact two allowed effect write relations.
+    let cases = [
+        (
+            format!("GRANT UPDATE (status) ON pipeline.execution_runs TO {worker_role}"),
+            format!("REVOKE UPDATE (status) ON pipeline.execution_runs FROM {worker_role}"),
+            "pipeline.execution_runs",
+        ),
+        (
+            format!("GRANT UPDATE ON raw.sections TO {worker_role}"),
+            format!("REVOKE UPDATE ON raw.sections FROM {worker_role}"),
+            "raw.sections",
+        ),
+        (
+            format!("GRANT INSERT ON pipeline.pg_effect_v3_admissions TO {worker_role}"),
+            format!("REVOKE INSERT ON pipeline.pg_effect_v3_admissions FROM {worker_role}"),
+            "pipeline.pg_effect_v3_admissions",
+        ),
+        (
+            format!("GRANT UPDATE ON pipeline.pg_effect_v3_receipts TO {worker_role}"),
+            format!("REVOKE UPDATE ON pipeline.pg_effect_v3_receipts FROM {worker_role}"),
+            "pipeline.pg_effect_v3_receipts",
+        ),
+        (
+            format!("GRANT DELETE ON site.seo_hitl_tasks TO {worker_role}"),
+            format!("REVOKE DELETE ON site.seo_hitl_tasks FROM {worker_role}"),
+            "site.seo_hitl_tasks",
+        ),
+        (
+            format!("GRANT USAGE ON SEQUENCE raw.pages_id_seq TO {worker_role}"),
+            format!("REVOKE USAGE ON SEQUENCE raw.pages_id_seq FROM {worker_role}"),
+            "raw.pages_id_seq",
+        ),
+        (
+            format!("GRANT CREATE ON SCHEMA raw TO {worker_role}"),
+            format!("REVOKE CREATE ON SCHEMA raw FROM {worker_role}"),
+            "CREATE ON SCHEMA raw",
+        ),
+    ];
+
+    for (grant, revoke, expected_object) in cases {
+        // Only identifiers derived from a UUID-backed disposable fixture and
+        // static SQL clauses; SQLx 0.9's raw SQL assertion remains test-only.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(grant))
+            .execute(&postgres.pool)
+            .await
+            .expect("grant extra permission as disposable admin");
+        match assert_unprivileged_pg_effect_role(&effect_pool).await {
+            Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { target }) => {
+                assert_eq!(target, expected_object);
+            }
+            other => panic!("unexpected PG writer privilege accepted: {other:?}"),
+        }
+        sqlx::raw_sql(sqlx::AssertSqlSafe(revoke))
+            .execute(&postgres.pool)
+            .await
+            .expect("revoke excess permission in disposable test");
+        assert_unprivileged_pg_effect_role(&effect_pool)
+            .await
+            .expect("minimal permissions accepted after removing excess authority");
+    }
+    eprintln!("CI_PG_V3_GLOBAL_WRITE_PRIVILEGE_FENCE=PASS");
+}
+
 #[cfg(feature = "e2e")]
 async fn pg_v3_assert_no_effect(pool: &sqlx::PgPool, fixture: &PgV3ReviewFixture) {
     let receipts: i64 = sqlx::query_scalar(

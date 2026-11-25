@@ -14,6 +14,13 @@ fn parse_max_cycles(value: Option<&str>) -> Result<Option<u32>> {
         .transpose()
 }
 
+fn require_database_url(value: Option<&str>) -> Result<&str> {
+    match value {
+        Some(url) if !url.trim().is_empty() => Ok(url),
+        _ => anyhow::bail!("DATABASE_URL must be set to a nonempty PostgreSQL DSN"),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     if env::args().skip(1).any(|arg| arg == "--healthcheck") {
@@ -26,9 +33,10 @@ async fn main() -> Result<()> {
     }
     tracing_subscriber::fmt().json().init();
 
-    let database_url = env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgresql://postgres:postgres_password@localhost:5433/alegria".to_string()
-    });
+    // A missing DSN is a deployment/configuration failure, never authority to
+    // connect to the old local development database with hard-coded credentials.
+    let database_url = env::var("DATABASE_URL").context("DATABASE_URL must be set")?;
+    require_database_url(Some(&database_url))?;
     let worker_id = env::var("OUTBOX_WORKER_ID")
         .unwrap_or_else(|_| format!("outbox-worker-{}", std::process::id()));
     let max_cycles = match env::var("OUTBOX_MAX_CYCLES") {
@@ -39,6 +47,12 @@ async fn main() -> Result<()> {
 
     info!(worker_id, "starting outbox worker");
 
+    // A failed PostgreSQL connection must not leave the predecessor's marker
+    // looking healthy during startup. The worker loop subsequently owns the
+    // marker through its RAII lease for all claim/dispatch/ACK paths.
+    if let Some(file) = health::configured_file() {
+        health::clear(&file)?;
+    }
     let pool = connect_pg(&database_url).await?;
     worker::run_worker_loop(&pool, &database_url, &worker_id, max_cycles).await?;
     Ok(())
@@ -46,7 +60,7 @@ async fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_max_cycles;
+    use super::{parse_max_cycles, require_database_url};
 
     #[test]
     fn invalid_cycle_limit_cannot_run_forever() {
@@ -56,5 +70,16 @@ mod tests {
         for invalid in ["", "-1", "oops", "4294967296"] {
             assert!(parse_max_cycles(Some(invalid)).is_err());
         }
+    }
+
+    #[test]
+    fn missing_or_empty_database_url_does_not_fall_back_to_local_credentials() {
+        for value in [None, Some(""), Some("   ")] {
+            assert!(require_database_url(value).is_err());
+        }
+        assert_eq!(
+            require_database_url(Some("postgres://user:secret@host/db")).unwrap(),
+            "postgres://user:secret@host/db"
+        );
     }
 }

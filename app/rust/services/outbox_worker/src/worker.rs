@@ -111,12 +111,9 @@ pub async fn run_worker_loop(
     worker_id: &str,
     max_cycles: Option<u32>,
 ) -> Result<()> {
-    let readiness = health::configured_file();
-    if let Some(file) = readiness.as_deref() {
-        // A restart may re-use the same ephemeral container filesystem.
-        // Never expose the previous process's health before a real PG poll.
-        health::clear(file)?;
-    }
+    // Kept for the full async call lifetime: every `?` and cancellation path
+    // revokes readiness, not only the normal max_cycles shutdown path.
+    let readiness = health::ReadinessLease::acquire(health::configured_file())?;
     let target_system = configured_target_system()?;
     info!(
         worker_id,
@@ -182,9 +179,7 @@ pub async fn run_worker_loop(
                 .await?
             }
         };
-        if let Some(file) = readiness.as_deref() {
-            health::publish(file)?;
-        }
+        readiness.publish()?;
         if batch.is_empty() {
             emit_heartbeat(worker_id, cycle, 0);
             if let Some(l) = listener.as_mut() {
@@ -317,10 +312,6 @@ pub async fn run_worker_loop(
             }
         }
         emit_sync_status(pool).await;
-    }
-
-    if let Some(file) = readiness.as_deref() {
-        health::clear(file)?;
     }
 
     Ok(())

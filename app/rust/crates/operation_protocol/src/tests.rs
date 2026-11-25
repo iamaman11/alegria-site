@@ -13,6 +13,7 @@ struct Output {
 struct Source;
 struct Score;
 struct Publish;
+struct AtMostOncePublish;
 struct ChangedScoreSchema;
 struct ChangedScoreOwner;
 struct ChangedScoreInvalidation;
@@ -88,6 +89,19 @@ impl Operation for Publish {
             effects: BTreeSet::from([EffectId::from("release.write")]),
             idempotency: IdempotencyPolicy::Idempotent,
         }
+    }
+}
+
+impl Operation for AtMostOncePublish {
+    type Input = Input;
+    type Output = Output;
+    type Failure = std::io::Error;
+
+    fn contract() -> OperationContract {
+        let mut contract = Publish::contract();
+        contract.reference = reference("release.commit.at-most-once");
+        contract.idempotency = IdempotencyPolicy::AtMostOnce;
+        contract
     }
 }
 
@@ -236,6 +250,7 @@ fn catalog() -> ContractCatalog {
     catalog.register::<Source>().unwrap();
     catalog.register::<Score>().unwrap();
     catalog.register::<Publish>().unwrap();
+    catalog.register::<AtMostOncePublish>().unwrap();
     catalog.register::<InvalidateEvidence>().unwrap();
     catalog.register::<RefreshEvidence>().unwrap();
     catalog.register::<DraftFromEvidence>().unwrap();
@@ -662,6 +677,92 @@ fn produced_artifact_binding_forms_a_real_multi_operation_dag() {
             OperationInstanceId::from("publish")
         ]
     );
+
+    // The effect owner receives a typed, deterministic dispatch identity;
+    // the manifest is not itself a PostgreSQL/operator authorization.
+    let first = checked
+        .checked_dispatch(&"publish".into(), br#"{"score":1}"#, DispatchAttempt::First)
+        .unwrap();
+    assert_eq!(first.operation, reference("release.commit"));
+    assert_eq!(first.owner, OperationOwnerId::from("publication_owner"));
+    assert_eq!(
+        first.effects,
+        BTreeSet::from([EffectId::from("release.write")])
+    );
+    assert_eq!(first.scope, scope());
+    assert_eq!(first.plan_hash, checked.hash().clone());
+    assert_eq!(first.idempotency, IdempotencyPolicy::Idempotent);
+    assert_eq!(
+        first.input_hash,
+        blake3::hash(br#"{"score":1}"#).to_hex().to_string()
+    );
+    let history_record = serde_json::to_vec(&first).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<CheckedDispatch>(&history_record).unwrap(),
+        first,
+        "dispatch facts must roundtrip as an immutable typed Temporal History payload"
+    );
+    assert_eq!(
+        first.execution_key,
+        checked
+            .checked_dispatch(
+                &"publish".into(),
+                br#"{"score":1}"#,
+                DispatchAttempt::RetryAfterUnknownOutcome
+            )
+            .unwrap()
+            .execution_key,
+        "idempotent retry must bind to exactly the original execution key"
+    );
+    assert_ne!(
+        first.execution_key,
+        checked
+            .checked_dispatch(&"publish".into(), br#"{"score":2}"#, DispatchAttempt::First)
+            .unwrap()
+            .execution_key,
+        "changed actual bytes must never share an effect receipt key"
+    );
+    assert!(matches!(
+        checked.checked_dispatch(&"unknown".into(), b"", DispatchAttempt::First),
+        Err(PlanError::UnknownInstance(_))
+    ));
+}
+
+#[test]
+fn at_most_once_effect_refuses_ambiguous_retry_before_any_provider_call() {
+    let mut commit = OperationNode {
+        instance: "commit".into(),
+        operation: reference("release.commit.at-most-once"),
+        inputs: BTreeMap::from([("score".into(), produced("score", "score", "result"))]),
+        outputs: BTreeMap::from([("release".into(), "committed".into())]),
+        after: BTreeSet::new(),
+        permitted_effects: BTreeSet::from(["release.write".into()]),
+    };
+    let checked = plan(vec![score_node("score", "result"), commit.clone()])
+        .validate(&catalog())
+        .unwrap();
+    assert_eq!(
+        checked
+            .checked_dispatch(&"commit".into(), b"verified-input", DispatchAttempt::First)
+            .unwrap()
+            .idempotency,
+        IdempotencyPolicy::AtMostOnce
+    );
+    assert_eq!(
+        checked.checked_dispatch(
+            &"commit".into(),
+            b"verified-input",
+            DispatchAttempt::RetryAfterUnknownOutcome,
+        ),
+        Err(PlanError::AmbiguousEffectRetry("commit".into()))
+    );
+    // An effect policy cannot be upgraded by editing the manifest after seal.
+    commit.permitted_effects.clear();
+    let unchecked = plan(vec![score_node("score", "result"), commit]);
+    assert!(matches!(
+        unchecked.validate(&catalog()),
+        Err(PlanError::MissingEffect { .. })
+    ));
 }
 
 #[test]

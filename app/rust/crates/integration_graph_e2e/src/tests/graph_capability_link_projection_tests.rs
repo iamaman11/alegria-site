@@ -4,8 +4,8 @@
 #[tokio::test]
 async fn graph_capability_link_projection_rejects_cross_scope_and_missing_endpoints() {
     use graph_neo4j::projection::{
-        upsert_link_recommendation, upsert_page_node, LinkRecommendationProjection,
-        PageNodeProjection,
+        upsert_content_gap, upsert_link_recommendation, upsert_page_node, ContentGapProjection,
+        LinkRecommendationProjection, PageNodeProjection,
     };
 
     async fn count_links(graph: &graph_neo4j::Graph, key: &str) -> i64 {
@@ -127,6 +127,98 @@ async fn graph_capability_link_projection_rejects_cross_scope_and_missing_endpoi
     assert_eq!(planned.len(), 1);
     assert_eq!(planned[0].source_page_key, source_key);
     assert_eq!(planned[0].score, 0.8);
+
+    // Provider replays are snapshots, not append-only graph events. Changing
+    // or removing optional owners must remove their previous relationships.
+    // Each snapshot is now written in one Neo4j statement.
+    let snapshot_page_key = format!("snapshot-page-{marker}");
+    let mut snapshot = PageNodeProjection {
+        page_node_key: snapshot_page_key.clone(),
+        scope_signature: source_scope.clone(),
+        keyword_cluster_key: Some(format!("cluster-a-{marker}")),
+        blueprint_key: Some(format!("blueprint-a-{marker}")),
+        page_type_key: "country_hub_page".into(),
+        dominant_intent: "informational".into(),
+        canonical_slug: snapshot_page_key.clone(),
+        canonical_url_path: format!("/{snapshot_page_key}/"),
+        lifecycle_state: "approved".into(),
+    };
+    async fn attached_keys(graph: &graph_neo4j::Graph, key: &str) -> (Vec<String>, Vec<String>) {
+        let mut rows = graph
+            .execute(
+                graph_neo4j::query(
+                    "MATCH (p:PageNode {page_node_key: $key}) \
+                     OPTIONAL MATCH (cluster:KeywordCluster)-[:PROPOSES_PAGE]->(p) \
+                     WITH p, collect(cluster.cluster_key) AS clusters \
+                     OPTIONAL MATCH (p)-[:USES_BLUEPRINT]->(bp:PageBlueprint) \
+                     RETURN clusters, collect(bp.blueprint_key) AS blueprints",
+                )
+                .param("key", key.to_string()),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        (row.get("clusters").unwrap(), row.get("blueprints").unwrap())
+    }
+    upsert_page_node(&graph, snapshot.clone()).await.unwrap();
+    assert_eq!(
+        attached_keys(&graph, &snapshot_page_key).await,
+        (
+            vec![format!("cluster-a-{marker}")],
+            vec![format!("blueprint-a-{marker}")],
+        )
+    );
+    snapshot.keyword_cluster_key = Some(format!("cluster-b-{marker}"));
+    snapshot.blueprint_key = Some(format!("blueprint-b-{marker}"));
+    upsert_page_node(&graph, snapshot.clone()).await.unwrap();
+    upsert_page_node(&graph, snapshot.clone()).await.unwrap();
+    assert_eq!(
+        attached_keys(&graph, &snapshot_page_key).await,
+        (
+            vec![format!("cluster-b-{marker}")],
+            vec![format!("blueprint-b-{marker}")],
+        )
+    );
+    snapshot.keyword_cluster_key = None;
+    snapshot.blueprint_key = None;
+    upsert_page_node(&graph, snapshot).await.unwrap();
+    assert_eq!(
+        attached_keys(&graph, &snapshot_page_key).await,
+        (vec![], vec![])
+    );
+
+    let content_gap_key = format!("snapshot-gap-{marker}");
+    let mut gap = ContentGapProjection {
+        content_gap_key: content_gap_key.clone(),
+        scope_signature: source_scope.clone(),
+        page_node_key: Some(snapshot_page_key.clone()),
+        missing_topic: "missing evidence".into(),
+        severity: "medium".into(),
+        status: "open".into(),
+    };
+    async fn gap_page_count(graph: &graph_neo4j::Graph, key: &str) -> i64 {
+        let mut rows = graph
+            .execute(
+                graph_neo4j::query(
+                    "MATCH (:PageNode)-[r:HAS_CONTENT_GAP]->(gap:ContentGap {content_gap_key: $key}) \
+                     RETURN count(r) AS attached_pages",
+                )
+                .param("key", key.to_string()),
+            )
+            .await
+            .unwrap();
+        rows.next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get("attached_pages")
+            .unwrap()
+    }
+    upsert_content_gap(&graph, gap.clone()).await.unwrap();
+    assert_eq!(gap_page_count(&graph, &content_gap_key).await, 1);
+    gap.page_node_key = None;
+    upsert_content_gap(&graph, gap).await.unwrap();
+    assert_eq!(gap_page_count(&graph, &content_gap_key).await, 0);
 
     // The real Temporal Activity and a separate Outbox Worker may MERGE the
     // same graph identities concurrently. Neo4j MERGE by itself does not

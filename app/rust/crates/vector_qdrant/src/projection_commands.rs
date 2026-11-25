@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use super::{
     connect_qdrant, delete_point_ids, ensure_dense_collection, normalize_payload, parse_distance,
-    upsert_dense_point,
+    upsert_dense_point, validate_dense_vector,
 };
 
 const DEFAULT_QDRANT_URL: &str = "http://localhost:6334";
@@ -109,11 +109,8 @@ impl ProjectionUpsert {
                 "QdrantUpsertCommand.point_id is empty".into(),
             ));
         }
-        if vector.is_empty() {
-            return Err(ProjectionError::Contract(
-                "QdrantUpsertCommand.vector is empty".into(),
-            ));
-        }
+        validate_dense_vector(&vector)
+            .map_err(|error| ProjectionError::Contract(error.to_string()))?;
         let vector_size = if declared_vector_size == 0 {
             vector.len() as u64
         } else {
@@ -261,6 +258,12 @@ mod tests {
             make(vec![0.1, 0.2], 2, "unsupported"),
             Err(ProjectionError::Contract(_))
         ));
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(matches!(
+                make(vec![0.1, bad], 2, "cosine"),
+                Err(ProjectionError::Contract(_))
+            ));
+        }
         assert!(make(vec![0.1, 0.2], 0, "").is_ok());
     }
 

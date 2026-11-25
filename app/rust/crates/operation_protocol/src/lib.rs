@@ -200,6 +200,42 @@ pub struct ValidatedPlan {
     execution_order: Vec<OperationInstanceId>,
     scope: RunScope,
     operations: BTreeMap<OperationInstanceId, OperationRef>,
+    dispatch_contracts: BTreeMap<OperationInstanceId, DispatchContract>,
+}
+
+/// A retry after an unknown external outcome is fundamentally different from
+/// scheduling the first attempt. Temporal may retry only when an owner has
+/// declared an idempotent operation and can enforce its durable receipt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchAttempt {
+    First,
+    RetryAfterUnknownOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DispatchContract {
+    owner: OperationOwnerId,
+    effects: BTreeSet<EffectId>,
+    idempotency: IdempotencyPolicy,
+}
+
+/// Immutable plan-derived facts for one checked node. This is NOT an operator
+/// admission, storage lease or permission to execute an arbitrary RPC: an
+/// effect owner must independently authorize the external side effect and
+/// atomically bind the returned receipt to this exact execution key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckedDispatch {
+    pub plan_hash: PlanHash,
+    pub scope: RunScope,
+    pub instance: OperationInstanceId,
+    pub operation: OperationRef,
+    pub owner: OperationOwnerId,
+    pub effects: BTreeSet<EffectId>,
+    pub idempotency: IdempotencyPolicy,
+    pub input_hash: String,
+    pub execution_key: String,
 }
 
 impl ValidatedPlan {
@@ -209,6 +245,48 @@ impl ValidatedPlan {
 
     pub fn execution_order(&self) -> &[OperationInstanceId] {
         &self.execution_order
+    }
+
+    /// Bind the exact input bytes to an individual versioned node before the
+    /// runner schedules it. A caller-provided *label* or claimed input digest
+    /// is insufficient for effectful dispatch. This only checks the manifest;
+    /// external authorization, actual activity provenance and receipt fencing
+    /// remain the effect owner's responsibility.
+    pub fn checked_dispatch(
+        &self,
+        instance: &OperationInstanceId,
+        actual_input_bytes: &[u8],
+        attempt: DispatchAttempt,
+    ) -> Result<CheckedDispatch, PlanError> {
+        let operation = self
+            .operations
+            .get(instance)
+            .ok_or_else(|| PlanError::UnknownInstance(instance.clone()))?;
+        let contract = self
+            .dispatch_contracts
+            .get(instance)
+            .ok_or_else(|| PlanError::UnknownInstance(instance.clone()))?;
+        if attempt == DispatchAttempt::RetryAfterUnknownOutcome
+            && contract.idempotency == IdempotencyPolicy::AtMostOnce
+        {
+            return Err(PlanError::AmbiguousEffectRetry(instance.clone()));
+        }
+        // Hash actual bytes, not a digest supplied by an untrusted operator.
+        // This identity is stable across retries and distinct across intentional
+        // operation instances, plan revisions and different payloads.
+        let digest = blake3::hash(actual_input_bytes).to_hex().to_string();
+        let execution_key = self.execution_key(instance, &digest)?;
+        Ok(CheckedDispatch {
+            plan_hash: self.hash.clone(),
+            scope: self.scope.clone(),
+            instance: instance.clone(),
+            operation: operation.clone(),
+            owner: contract.owner.clone(),
+            effects: contract.effects.clone(),
+            idempotency: contract.idempotency,
+            input_hash: digest,
+            execution_key,
+        })
     }
 
     /// Retries of the same node with the same input produce an identical key;
@@ -296,6 +374,8 @@ pub enum PlanError {
         instance: OperationInstanceId,
         effect: EffectId,
     },
+    #[error("ambiguous outcome at at-most-once operation {0:?}: retry requires operator reconciliation")]
+    AmbiguousEffectRetry(OperationInstanceId),
     #[error("reader {consumer:?} of artifact type {artifact_type:?} is unordered relative to invalidator {invalidator:?}")]
     UnorderedArtifactHazard {
         invalidator: OperationInstanceId,
@@ -651,8 +731,24 @@ impl ExecutionPlan {
             execution_order: order,
             scope: self.scope.clone(),
             operations: by_id
+                .iter()
+                .map(|(id, node)| (id.clone(), node.operation.clone()))
+                .collect(),
+            dispatch_contracts: by_id
                 .into_iter()
-                .map(|(id, node)| (id, node.operation.clone()))
+                .map(|(id, node)| {
+                    let contract = catalog
+                        .contract(&node.operation)
+                        .expect("already validated all registered operation contracts");
+                    (
+                        id,
+                        DispatchContract {
+                            owner: contract.owner.clone(),
+                            effects: contract.effects.clone(),
+                            idempotency: contract.idempotency,
+                        },
+                    )
+                })
                 .collect(),
         })
     }

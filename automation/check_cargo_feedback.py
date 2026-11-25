@@ -654,7 +654,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         pure_command = list(SUITE_OWNERS["pure_dag_v3"]["command"])
         temporal_command = list(SUITE_OWNERS["pg_temporal_v3"]["command"])
         shards = {
-            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 2)],
+            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 3)],
             "pg_temporal": [("pg_temporal_v3", temporal_command, "temporal_effect_v3_", 1)],
             "temporal_pure": [("pure_dag_v3", pure_command, "pure_v3_", 1)],
         }
@@ -692,7 +692,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     report, "verify_d", suite_job="verify", prebuilt_executable=harness,
                     prebuilt_pg_executable=pg,
                 )
-                self.assertEqual(sum(row["matched_tests"] for row in verify), 2)
+                self.assertEqual(sum(row["matched_tests"] for row in verify), 3)
                 architecture = run_exact_precompiled_e2e_shard(
                     report, "pg_temporal", suite_job="architecture-and-rust",
                     prebuilt_executable=harness, prebuilt_pg_executable=pg,
@@ -717,7 +717,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                         report, suite_commands_by_ci_job(report)["verify"], suite_job="verify",
                     )
             self.assertEqual(actual, [
-                ("pg_effect_v3", pg, "pg_v3_", 2),
+                ("pg_effect_v3", pg, "pg_v3_", 3),
                 ("pg_temporal_v3", pg, "temporal_effect_v3_", 1),
                 ("pure_dag_v3", temporal, "pure_v3_", 1),
             ])

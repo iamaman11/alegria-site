@@ -50,6 +50,19 @@ pub fn parse_distance(distance: &str) -> Result<Distance> {
     }
 }
 
+/// Every dense-vector entrypoint uses one provider-free preflight. In
+/// particular, serde_json encodes non-finite floats as `null`; sending such
+/// an embedding over REST could corrupt the attempted projection payload.
+pub(crate) fn validate_dense_vector(vector: &[f32]) -> Result<()> {
+    if vector.is_empty() {
+        bail!("dense vector is empty");
+    }
+    if let Some(index) = vector.iter().position(|value| !value.is_finite()) {
+        bail!("dense vector contains a non-finite component at index {index}");
+    }
+    Ok(())
+}
+
 pub fn normalize_payload(
     entity_type: &str,
     entity_key: &str,
@@ -162,9 +175,7 @@ pub async fn upsert_dense_point(
     vector: Vec<f32>,
     payload_value: Value,
 ) -> Result<()> {
-    if vector.is_empty() {
-        bail!("vector is empty");
-    }
+    validate_dense_vector(&vector)?;
     let rest_url = qdrant_rest_url_from_env();
     let endpoint = format!(
         "{}/collections/{}/points?wait=true",
@@ -275,6 +286,7 @@ pub async fn upsert_batch(
     let pts: Result<Vec<PointStruct>> = points
         .into_iter()
         .map(|(id, vec, payload)| {
+            validate_dense_vector(&vec)?;
             let p: Payload = payload.try_into().context("failed to convert payload")?;
             Ok(PointStruct::new(id, vec, p))
         })
@@ -297,6 +309,7 @@ pub async fn upsert_batch_map(
     let pts: Result<Vec<PointStruct>> = points
         .into_iter()
         .map(|(id, vec, payload_map)| {
+            validate_dense_vector(&vec)?;
             let payload_value = serde_json::to_value(payload_map)
                 .context("failed to serialize payload_map into json")?;
             let p: Payload = payload_value
@@ -403,9 +416,7 @@ pub async fn search_dense(
     limit: u64,
     filter: Option<Filter>,
 ) -> Result<Vec<ScoredPoint>> {
-    if vector.is_empty() {
-        bail!("search vector is empty");
-    }
+    validate_dense_vector(&vector)?;
     // Callers consume entity_key/retrieval_text to map neighbors and rerank;
     // Qdrant omits point payloads unless they are explicitly requested.
     let mut builder = SearchPointsBuilder::new(collection, vector, limit).with_payload(true);
@@ -417,6 +428,24 @@ pub async fn search_dense(
         .await
         .with_context(|| format!("qdrant search failed for collection={collection}"))?;
     Ok(resp.result)
+}
+
+#[cfg(test)]
+mod dense_vector_contract_tests {
+    use super::validate_dense_vector;
+
+    #[test]
+    fn every_dense_vector_must_have_only_finite_components() {
+        assert!(validate_dense_vector(&[0.0, -1.25, 3.4]).is_ok());
+        for invalid in [
+            vec![],
+            vec![f32::NAN],
+            vec![f32::INFINITY],
+            vec![-1.0, f32::NEG_INFINITY],
+        ] {
+            assert!(validate_dense_vector(&invalid).is_err());
+        }
+    }
 }
 
 /// Expected immutable source evidence for one physical Qdrant point.
