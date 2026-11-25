@@ -190,7 +190,8 @@ fn cosine_vector_matches(expected: &[f32], actual: &[Value]) -> bool {
         && actual.len() == expected.len()
         && actual.iter().zip(expected.iter()).all(|(got, want)| {
             let normalized = *want as f64 / norm;
-            got.as_f64().map(|value| (value - normalized).abs() <= 0.00001)
+            got.as_f64()
+                .map(|value| (value - normalized).abs() <= 0.00001)
                 == Some(true)
         })
 }
@@ -205,7 +206,9 @@ pub async fn projection_readback_exact(
 ) -> Result<bool, ProjectionError> {
     let base = env::var("QDRANT_REST_URL")
         .or_else(|_| env::var("QDRANT_URL").map(|url| url.replace(":6334", ":6333")))
-        .map_err(|_| ProjectionError::Contract("QDRANT_REST_URL is required for exact readback".into()))?;
+        .map_err(|_| {
+            ProjectionError::Contract("QDRANT_REST_URL is required for exact readback".into())
+        })?;
     let url = format!(
         "{}/collections/{collection}/points",
         base.trim_end_matches('/')
@@ -232,9 +235,11 @@ pub async fn projection_readback_exact(
     let points = body
         .get("result")
         .and_then(Value::as_array)
-        .ok_or_else(|| ProjectionError::Provider(anyhow::anyhow!(
-            "Qdrant exact readback omitted result array"
-        )))?;
+        .ok_or_else(|| {
+            ProjectionError::Provider(anyhow::anyhow!(
+                "Qdrant exact readback omitted result array"
+            ))
+        })?;
     if points.len() != 1 || points[0].get("id").and_then(Value::as_str) != Some(point_id) {
         return Ok(false);
     }
@@ -293,18 +298,22 @@ mod tests {
     #[test]
     fn cosine_readback_checks_every_normalized_coordinate() {
         let submitted = [3.0_f32, 4.0_f32];
-        assert!(cosine_vector_matches(&submitted, &[
-            serde_json::json!(0.6), serde_json::json!(0.8)
-        ]));
-        assert!(!cosine_vector_matches(&submitted, &[
-            serde_json::json!(0.6), serde_json::json!(0.79)
-        ]));
-        assert!(!cosine_vector_matches(&submitted, &[
-            serde_json::json!(0.6)
-        ]));
-        assert!(!cosine_vector_matches(&[0.0, 0.0], &[
-            serde_json::json!(0.0), serde_json::json!(0.0)
-        ]));
+        assert!(cosine_vector_matches(
+            &submitted,
+            &[serde_json::json!(0.6), serde_json::json!(0.8)]
+        ));
+        assert!(!cosine_vector_matches(
+            &submitted,
+            &[serde_json::json!(0.6), serde_json::json!(0.79)]
+        ));
+        assert!(!cosine_vector_matches(
+            &submitted,
+            &[serde_json::json!(0.6)]
+        ));
+        assert!(!cosine_vector_matches(
+            &[0.0, 0.0],
+            &[serde_json::json!(0.0), serde_json::json!(0.0)]
+        ));
     }
 
     fn identity() -> ProjectionIdentity {

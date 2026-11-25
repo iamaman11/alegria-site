@@ -17,6 +17,9 @@ case "${1:-}" in
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py
     python3 infra/temporal/check_v3_evaluation_topology.py
+    # Mandatory offline replay/cutover inventory regression: historical
+    # migrations and staged operator evidence must not bypass required PR CI.
+    python3 automation/test_temporal_history_transition.py
     python3 automation/check_rust_adapter_boundaries.py
     python3 automation/check_rust_adapter_boundaries_tests.py
     python3 automation/check_rust_layer_isolation.py

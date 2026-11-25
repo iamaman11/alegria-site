@@ -127,8 +127,15 @@ exactly that one Workflow in the corresponding type, with all other recognized
 type totals zero. Exports must be under one directory (no symlink or `..`
 traversal), unique by Workflow/Run ID and file hash. Missing, duplicated,
 cross-Queue, unsupported or hash-mismatched histories fail **before** calling
-any replayer. No external effects or Temporal/PG connections are made by the
-native replay-only entry points.
+any replayer. After verification, the script writes each SHA-identified History
+into a private `0700` temporary directory as a read-only `0400` file and
+passes **only that protected copy** to the native SDK. It never reopens the
+mutable export path for replay, and destroys every temporary copy on both
+success and error. This closes the export-file replacement race between hash
+verification and SDK consumption. The native child environment inherits only
+a short allowlist of non-credential runtime variables, not PostgreSQL,
+Temporal or provider secrets. No external effects or Temporal/PG connections
+are made by the native replay-only entry points.
 
 ## Stage 3: native offline SDK replay, then state comparison
 
@@ -155,11 +162,16 @@ python3 automation/temporal_history_transition.py compare \
 
 Every replay must exit successfully **and** emit the exact registered SDK
 marker. Missing binaries or markers fail closed. The report enumerates count
-by Type and the sorted SHA-256 of every replayed file. `compare` checks both
+by Type, the sorted SHA-256 of every replayed file, and an individual
+`replayed_runs` record containing Workflow Type, Task Queue, Workflow ID,
+Run ID and SHA-256. `compare` rejects duplicate run identities or hashes,
+unsupported Type/Queue combinations and a per-run multiset that disagrees with
+the captured namespace census. `compare` checks both
 inventory snapshots independently, rejects any new PG/tenant/open-Workflow
 blocker, verifies that historical totals did not change, and binds the replay
 report to the same source/environment/namespace/counts. It does **not** trust
-the report as proof of server origin.
+the report as proof of server origin; independent Temporal Server attestations
+must match each `replayed_runs` record before a production change review.
 
 ## Allowed diagnostic states (none authorizes cutover)
 

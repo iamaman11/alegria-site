@@ -35,6 +35,9 @@ def check() -> None:
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
     v3_topology_guard = "python3 infra/temporal/check_v3_evaluation_topology.py"
     assert fast.count(v3_topology_guard) == 1
+    history_transition_gate = "python3 automation/test_temporal_history_transition.py"
+    assert fast.count(history_transition_gate) == 1
+    assert fast.index(history_transition_gate) < fast.index("  product)")
     assert fast.index(v3_topology_guard) < fast.index("  product)")
     # All acceptance/seed CI jobs live in one workflow: no competing CI runs.
     assert not (ROOT / ".github/workflows/ci-deep.yml").exists()

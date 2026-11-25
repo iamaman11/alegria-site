@@ -376,10 +376,11 @@ def history_type_and_queue(raw: bytes) -> tuple[str, str]:
     return workflow_type, task_queue
 
 
-def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
-                 history_root: Path, binaries: dict[str, Path],
-                 clock: datetime | None = None) -> dict[str, Any]:
-    """Replay exact exported histories offline with the registered native SDK.
+def _replay_audit_verified(snapshot: dict[str, Any], manifest: dict[str, Any], *,
+                           history_root: Path, binaries: dict[str, Path],
+                           protected_copy_root: Path,
+                           clock: datetime | None = None) -> dict[str, Any]:
+    """Replay only verified protected copies with the registered native SDK.
 
     Returns only candidate evidence; user-supplied exports cannot prove their
     own live server provenance, signature, or completeness. Production remains
@@ -420,7 +421,7 @@ def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
     observed = {name: 0 for name in WORKFLOW_TYPES}
     seen_runs: set[tuple[str, str]] = set()
     seen_bytes: set[str] = set()
-    prepared: list[tuple[str, str, str, Path, str]] = []
+    prepared: list[tuple[str, str, str, Path, dict[str, str]]] = []
     try:
         root = history_root.resolve(strict=True)
     except OSError as error:
@@ -460,13 +461,28 @@ def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
             raw = path.read_bytes()
         except OSError as error:
             raise EvidenceError("History file cannot be read safely") from error
+        # Reject a file that grew between stat and read. The SDK must never
+        # reopen the mutable export path after SHA/type checks (TOCTOU).
+        if len(raw) > MAX_HISTORY_BYTES:
+            raise EvidenceError("History grew beyond offline replay size limit")
         if hashlib.sha256(raw).hexdigest() != entry["sha256"]:
             raise EvidenceError("exported History SHA-256 differs from manifest")
         if history_type_and_queue(raw) != (workflow_type, task_queue):
             raise EvidenceError("exported History conflicts with claimed Type/Queue")
+        replay_copy = protected_copy_root / f"{entry['sha256']}.json"
+        # TemporaryDirectory is 0700. Create a fresh read-only 0400 file,
+        # never a symlink, and use only this exact verified copy for replay.
+        with replay_copy.open("xb") as destination:
+            os.fchmod(destination.fileno(), 0o600)
+            destination.write(raw)
+        replay_copy.chmod(0o400)
         owner, command, marker = REPLAY_ROUTES[(workflow_type, task_queue)]
         observed[workflow_type] += 1
-        prepared.append((owner, command, marker, path, entry["sha256"]))
+        prepared.append((owner, command, marker, replay_copy, {
+            "workflow_type": workflow_type, "task_queue": task_queue,
+            "workflow_id": entry["workflow_id"], "run_id": entry["run_id"],
+            "sha256": entry["sha256"],
+        }))
     if observed != expected:
         raise EvidenceError("exported History set does not cover every counted Workflow Type")
     # First check the complete manifest, THEN run any offline replay. An
@@ -489,6 +505,10 @@ def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
         "environment": snapshot["environment"], "source": source,
         "temporal_namespace": temporal["namespace"],
         "replayed_by_type": observed, "replayed_sha256": sorted(seen_bytes),
+        "replayed_runs": sorted(
+            (item[4] for item in prepared),
+            key=lambda run: (run["workflow_type"], run["workflow_id"], run["run_id"]),
+        ),
         "replay_count": len(prepared), "cutover_authorized": False,
         "unverified_external_gates": [
             "independent_server_history_export_identity_and_completeness",
@@ -497,6 +517,17 @@ def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
             "production_mTLS_and_explicit_cutover_authorization",
         ],
     }
+
+
+def replay_audit(snapshot: dict[str, Any], manifest: dict[str, Any], *,
+                 history_root: Path, binaries: dict[str, Path],
+                 clock: datetime | None = None) -> dict[str, Any]:
+    """Offline SDK replay; secure copies auto-delete on success *or* failure."""
+    with tempfile.TemporaryDirectory(prefix="alegria-temporal-replay-") as folder:
+        return _replay_audit_verified(
+            snapshot, manifest, history_root=history_root, binaries=binaries,
+            protected_copy_root=Path(folder), clock=clock,
+        )
 
 
 def capture(*, environment: str, address: str, namespace: str,
@@ -616,6 +647,32 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
                     or type(replay_count) is not int or replay_count != sum(expected.values())
                     or len(replay_hashes) != replay_count):
                 errors.append("SDK replay run identities or hashes are incomplete")
+            replayed_runs = replay_evidence.get("replayed_runs")
+            reported_by_type = {name: 0 for name in expected}
+            reported_identity: set[tuple[str, str]] = set()
+            reported_hashes: set[str] = set()
+            runs_valid = isinstance(replayed_runs, list) and len(replayed_runs) == replay_count
+            if runs_valid:
+                for run in replayed_runs:
+                    if (not isinstance(run, dict) or set(run) != {
+                        "workflow_type", "task_queue", "workflow_id", "run_id", "sha256",
+                    } or not all(isinstance(value, str) and value for value in run.values())
+                            or run["workflow_type"] not in expected
+                            or (run["workflow_type"], run["task_queue"]) not in REPLAY_ROUTES
+                            or not HISTORY_SHA_RE.fullmatch(run["sha256"])):
+                        runs_valid = False
+                        break
+                    identity = (run["workflow_id"], run["run_id"])
+                    if identity in reported_identity or run["sha256"] in reported_hashes:
+                        runs_valid = False
+                        break
+                    reported_identity.add(identity)
+                    reported_hashes.add(run["sha256"])
+                    reported_by_type[run["workflow_type"]] += 1
+            if (not runs_valid or reported_by_type != expected
+                    or not isinstance(replay_hashes, list)
+                    or reported_hashes != set(replay_hashes)):
+                errors.append("SDK replay per-run Type/Queue/Workflow ID/Run ID/SHA mapping is inconsistent")
     return {
         "status": "BLOCKED" if errors else (
             "HISTORY_REPLAY_PRECONDITIONS_CAPTURED" if replay_evidence is not None

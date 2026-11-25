@@ -3640,8 +3640,10 @@ dependencies = [
  "postgres_store",
  "primitives",
  "prost",
+ "serde",
  "serde_json",
  "sqlx",
+ "uuid",
  "vector_qdrant",
  "voyage_api",
 ]

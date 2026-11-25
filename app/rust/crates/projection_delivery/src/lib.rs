@@ -5,6 +5,6 @@
 //! Deliberately independent of `runtime_composition`, `infrastructure`,
 //! Temporal, Playwright and the broader SEO application graph.
 
+pub mod admitted_qdrant_projection_v1;
 pub mod neo4j_materialization_adapter;
 pub mod projection_materialize_adapter;
-pub mod admitted_qdrant_projection_v1;

@@ -504,6 +504,7 @@ SUITE_OWNERS = {
         "paths": {
             "app/db/schema.sql",
             "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
+            "app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
             "app/rust/crates/integration_qdrant_e2e/src/lib.rs",
             "app/rust/crates/integration_qdrant_e2e/src/tests/admitted_qdrant_projection_tests.rs",
         },

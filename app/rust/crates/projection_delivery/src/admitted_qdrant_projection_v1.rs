@@ -36,20 +36,38 @@ pub struct QdrantKeywordProjectionCommandV1 {
 
 impl QdrantKeywordProjectionCommandV1 {
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema_revision == 1, "unsupported Qdrant owner command revision");
+        ensure!(
+            self.schema_revision == 1,
+            "unsupported Qdrant owner command revision"
+        );
         for value in [&self.tenant_id, &self.context_key, &self.keyword_key] {
-            ensure!(!value.is_empty() && value.trim() == value, "noncanonical Qdrant owner identity");
+            ensure!(
+                !value.is_empty() && value.trim() == value,
+                "noncanonical Qdrant owner identity"
+            );
         }
-        ensure!(self.vector.len() == VECTOR_DIMENSIONS, "Qdrant keyword embedding dimension mismatch");
-        ensure!(self.vector.iter().all(|x| x.is_finite()), "Qdrant embedding contains NaN/Infinity");
-        ensure!(self.vector.iter().any(|x| *x != 0.0), "Qdrant embedding cannot be the zero vector");
+        ensure!(
+            self.vector.len() == VECTOR_DIMENSIONS,
+            "Qdrant keyword embedding dimension mismatch"
+        );
+        ensure!(
+            self.vector.iter().all(|x| x.is_finite()),
+            "Qdrant embedding contains NaN/Infinity"
+        );
+        ensure!(
+            self.vector.iter().any(|x| *x != 0.0),
+            "Qdrant embedding cannot be the zero vector"
+        );
         Ok(())
     }
 
     fn entity_key(&self) -> String {
         // One-shot PostgreSQL uniqueness and a UUID point ID prevent another
         // admission from overwriting this exact business-key projection.
-        format!("tenant/{}/context/{}/keyword/{}", self.tenant_id, self.context_key, self.keyword_key)
+        format!(
+            "tenant/{}/context/{}/keyword/{}",
+            self.tenant_id, self.context_key, self.keyword_key
+        )
     }
 
     fn metadata(&self, sha256: &str) -> serde_json::Value {
@@ -148,15 +166,24 @@ pub async fn execute_admitted_qdrant_projection_v1(
     )
     .await
     .context("Qdrant exact readback unavailable: effect remains uncertain")?;
-    ensure!(exact, "unknown or drifted external Qdrant outcome; manual reconciliation required");
+    ensure!(
+        exact,
+        "unknown or drifted external Qdrant outcome; manual reconciliation required"
+    );
 
-    let confirmed: bool = sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v1($1, $2)")
-        .bind(admission_id)
-        .bind(&bytes)
-        .fetch_one(pool)
-        .await
-        .context("provider readback succeeded but durable SQL receipt failed; reconcile only")?;
-    ensure!(confirmed, "PostgreSQL Qdrant receipt refused provider readback");
+    let confirmed: bool =
+        sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v1($1, $2)")
+            .bind(admission_id)
+            .bind(&bytes)
+            .fetch_one(pool)
+            .await
+            .context(
+                "provider readback succeeded but durable SQL receipt failed; reconcile only",
+            )?;
+    ensure!(
+        confirmed,
+        "PostgreSQL Qdrant receipt refused provider readback"
+    );
     Ok(match state.as_str() {
         "started" => QdrantProjectionOutcomeV1::Applied,
         "uncertain" => QdrantProjectionOutcomeV1::Reconciled,
@@ -189,6 +216,7 @@ mod tests {
         assert!(command.validate().is_err());
         assert!(serde_json::from_str::<QdrantKeywordProjectionCommandV1>(
             r#"{"schema_revision":1,"unsupported_owner_url":"http://untrusted"}"#
-        ).is_err());
+        )
+        .is_err());
     }
 }

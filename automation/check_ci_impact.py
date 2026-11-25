@@ -273,6 +273,21 @@ class ImpactFixtures(unittest.TestCase):
         ))
         self.assertIn("app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
                       SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        self.assertIn("app/db/migrations/20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+                      SUITE_OWNERS["vector_admitted_projection"]["paths"])
+        for migration in (
+            "20261125_0010_qdrant_projection_operator_ledger.sql",
+            "20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql",
+        ):
+            with self.subTest(migration=migration):
+                report = self.impact("app/db/migrations/" + migration)
+                self.assertEqual(report["scope"], "full")
+                self.assertIn("vector_admitted_projection", report["selected_suites"])
+                self.assertIn(
+                    ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
+                    [(suite, filter_, count) for suite, _, filter_, count in
+                     e2e_shard_commands_for_report(report)["vector"]],
+                )
         self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
                       E2E_SHARD_RUNS["pg_app_delivery"])
 

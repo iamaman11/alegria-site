@@ -321,11 +321,58 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
         self.assertIn("independent_server_history_export_identity_and_completeness",
                       result["unverified_external_gates"])
         args, kwargs = command.call_args
-        self.assertEqual(args[0], [
-            str(self.binary), "--replay-v5-effect-history", str(self.root / "history.json"),
-        ])
+        self.assertEqual(args[0][:2], [str(self.binary), "--replay-v5-effect-history"])
+        self.assertNotEqual(args[0][2], str(self.root / "history.json"),
+                            "SDK must only see a protected copy, not mutable export path")
+        self.assertFalse(Path(args[0][2]).exists(), "protected replay copy must be removed")
         self.assertEqual(set(kwargs), {"env"})
         self.assertTrue(set(kwargs["env"]) <= set(transition.REPLAY_ENV_ALLOW))
+        self.assertEqual(result["replayed_runs"], [{
+            "workflow_type": "AlegriaAdmittedEffectDagV3Workflow",
+            "task_queue": "alegria-effect-dag-v5", "workflow_id": "workflow-1",
+            "run_id": "run-1", "sha256": hashlib.sha256(self.history).hexdigest(),
+        }])
+
+    def test_history_swap_after_hash_cannot_change_sdk_replayed_bytes(self):
+        observed = {}
+
+        def swap_mutable_export(argv, *, env):
+            immutable_path = Path(argv[2])
+            observed["copied_path"] = immutable_path
+            observed["before"] = immutable_path.read_bytes()
+            observed["copy_mode"] = immutable_path.stat().st_mode & 0o777
+            (self.root / "history.json").write_bytes(b"malicious replacement after hash check")
+            observed["after"] = immutable_path.read_bytes()
+            return "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"
+
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", side_effect=swap_mutable_export):
+            result = transition.replay_audit(
+                self.capture, self.manifest, history_root=self.root,
+                binaries=self.binaries, clock=NOW,
+            )
+        self.assertEqual(observed["before"], self.history)
+        self.assertEqual(observed["after"], self.history)
+        self.assertEqual(observed["copy_mode"], 0o400)
+        self.assertNotEqual(observed["copied_path"], self.root / "history.json")
+        self.assertFalse(observed["copied_path"].exists(), "copy cleaned even after mutable export swap")
+        self.assertEqual(result["replayed_runs"][0]["sha256"], hashlib.sha256(self.history).hexdigest())
+
+    def test_protected_copy_is_cleaned_after_native_replay_failure(self):
+        seen = []
+
+        def replay_fail(argv, *, env):
+            seen.append(Path(argv[2]))
+            self.assertTrue(seen[-1].exists())
+            return "not a native replay PASS marker"
+
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", side_effect=replay_fail), \
+             self.assertRaisesRegex(transition.EvidenceError, "did not attest PASS"):
+            transition.replay_audit(self.capture, self.manifest, history_root=self.root,
+                                    binaries=self.binaries, clock=NOW)
+        self.assertEqual(len(seen), 1)
+        self.assertFalse(seen[0].exists())
 
     def test_native_sdk_process_never_inherits_temporal_pg_or_provider_credentials(self):
         with patch.dict(os.environ, {
@@ -481,6 +528,7 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
             lambda: evidence.update({"replay_count": 2}),
             lambda: evidence.update({"replayed_by_type": {}}),
             lambda: evidence.update({"source": {"sha": "d" * 40, "tree": TREE}}),
+            lambda: evidence.update({"replayed_runs": []}),
         ):
             with self.subTest(mutate=mutate):
                 tested = dict(evidence)
@@ -491,6 +539,41 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
                     "BLOCKED",
                 )
                 evidence = tested
+
+    def test_historical_pair_rejects_forged_duplicate_run_mapping(self):
+        self.capture, self.manifest, self.history = replay_fixture(history_count=2)
+        (self.root / "history.json").write_bytes(self.history)
+        second_history = json.dumps({"events": [{
+            "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+            "workflowExecutionStartedEventAttributes": {
+                "workflowType": {"name": "AlegriaAdmittedEffectDagV3Workflow"},
+                "taskQueue": {"name": "alegria-effect-dag-v5"},
+            },
+            "eventId": 2,
+        }]}).encode("utf-8")
+        (self.root / "history-2.json").write_bytes(second_history)
+        second = dict(self.manifest["histories"][0])
+        second.update({
+            "workflow_id": "workflow-2", "run_id": "run-2", "file": "history-2.json",
+            "sha256": hashlib.sha256(second_history).hexdigest(),
+        })
+        self.manifest["histories"].append(second)
+        evidence, _ = self.audit()
+        self.assertEqual(evidence["replay_count"], 2)
+        earlier = snap(captured_at=NOW - timedelta(seconds=75),
+                       temporal_data=self.capture["temporal"])
+        self.assertEqual(transition.check_pair(
+            earlier, self.capture, replay_evidence=evidence, clock=NOW,
+        )["status"], "HISTORY_REPLAY_PRECONDITIONS_CAPTURED")
+        forged = dict(evidence)
+        forged["replayed_runs"] = [dict(evidence["replayed_runs"][0]),
+                                   dict(evidence["replayed_runs"][1])]
+        forged["replayed_runs"][1]["workflow_id"] = forged["replayed_runs"][0]["workflow_id"]
+        forged["replayed_runs"][1]["run_id"] = forged["replayed_runs"][0]["run_id"]
+        result = transition.check_pair(earlier, self.capture,
+                                       replay_evidence=forged, clock=NOW)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertTrue(any("per-run" in reason for reason in result["errors"]))
 
     def test_historical_pair_rechecks_blockers_before_ignoring_replay_only(self):
         evidence, _ = self.audit()

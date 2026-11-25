@@ -6,9 +6,11 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
 
 ## Precisely what is implemented
 
-- `20261125_0010_qdrant_projection_operator_ledger.sql` and the matching
-  fresh-install `schema.sql` define three PostgreSQL relations: immutable
-  operator admissions, durable RPC-attempt uncertainty barriers, and receipts.
+- `20261125_0010_qdrant_projection_operator_ledger.sql` plus forward-only
+  `20261125_0012_qdrant_projection_immutable_receipts_and_revocation.sql`
+  and the matching fresh-install `schema.sql` define three PostgreSQL
+  relations: immutable operator command authority, durable RPC-attempt
+  uncertainty barriers, and append-only receipts.
 - Each admission binds exact serialized command bytes (SHA-256), a real run,
   immutable tenant/context ownership, keyword, parent/child *expected* Temporal
   identities and operation instance. It can only be inserted by a PostgreSQL
@@ -21,6 +23,22 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
   `uncertain` attempt. The Qdrant point UUID equals the immutable admission
   UUID. The `(tenant, context, keyword)` key admits **one** immutable effect,
   preventing later revisions from silently overwriting earlier effects.
+- An attempt remains permanently `uncertain`: SQL no longer mutates its state
+  to `confirmed`. Confirmation is **derived from an independently persisted,
+  append-only receipt**. This applies to newly written attempts without
+  rewriting or discarding historical V6 `confirmed` rows. Even an
+  accidentally overgranted worker cannot `UPDATE` or `DELETE` attempts or
+  receipts to reopen a provider RPC or hide its previous outcome.
+- Before the first attempt, the *same authenticated, tenant-bound issuer LOGIN*
+  may revoke an admission exactly once. The database enforces a monotonic
+  NULL-to-server-timestamp `revoked_at` transition and rejects all other
+  authority-field changes, wrong issuer, and repeated revocations. An
+  operator must receive specifically audited `SELECT` and `UPDATE` rights
+  to revoke; the migration grants neither production role automatically.
+  Admission-row locking serializes revocation against `begin`: a revocation
+  that wins prevents the RPC, but **revocation after `begin` cannot cancel an
+  already-started provider effect**. Such an effect must still be reconciled
+  with an immutable receipt after exact provider readback.
 - After the real provider upsert, a separate Qdrant REST retrieval compares
   **all 1024 cosine-normalized float coordinates** within documented Qdrant
   f32 arithmetic tolerance (absolute `1e-5`) and the **exact provider
@@ -33,8 +51,10 @@ Workflow Histories and the canonical Outbox dispatcher remain unchanged.
 - A container-backed PG + Qdrant E2E exercises SQL receipt failure *after*
   real Qdrant success, independently checks the Qdrant REST point and gRPC
   vector search, repairs the SQL receipt without replay, rejects cross-tenant
-  access, and proves an `uncertain` write with a missing remote point is never
-  retried automatically.
+  access, rejects direct wrong-tenant/same-issuer SECURITY DEFINER calls,
+  tests revoke-before-begin, and checks an intentionally overgranted worker
+  cannot erase or rewrite the receipt/attempt ledger. An `uncertain` write
+  with a missing remote point is never retried automatically.
 
 ## Explicit production blockers
 
