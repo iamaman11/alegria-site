@@ -13,10 +13,9 @@ use contracts::generated::alegria::temporal::v1::{
     FinalizePublishInputPayload, FinalizePublishOutputPayload, GlobalSiteReconcileInputPayload,
     GlobalSiteReconcileOutputPayload, IaBuildInputPayload, IaBuildOutputPayload,
     LinkRecommendInputPayload, LinkRecommendOutputPayload, OpportunityBuildInputPayload,
-    OpportunityBuildOutputPayload, PublishMaterializeInputPayload,
-    PublishMaterializeOutputPayload, SeoSiteBuildInputPayload, SeoVerifiedFactSupportState,
-    SerpIngestInputPayload, SerpIngestOutputPayload, SerpNormalizeInputPayload,
-    SerpNormalizeOutputPayload,
+    OpportunityBuildOutputPayload, PublishMaterializeInputPayload, PublishMaterializeOutputPayload,
+    SeoSiteBuildInputPayload, SeoVerifiedFactSupportState, SerpIngestInputPayload,
+    SerpIngestOutputPayload, SerpNormalizeInputPayload, SerpNormalizeOutputPayload,
 };
 use infrastructure::adapters::{
     dataforseo_serp_adapter, sqlx_adapter::AlegriaPgPool, sqlx_context_bundle_adapter,
@@ -30,10 +29,9 @@ use seo_ports::{
     CmsApproval, CmsReviewDecisionOutcome, CmsReviewDecisionPort, CmsReviewDecisionRequest,
     CmsReviewPort, DraftRepository, OrganicSerpResponse, PlanningRepository,
     ProjectionBarrierStatus, ProjectionStatusRepository, PublishArtifactRepository,
-    SectionTemplate, SectionTemplateRepository,
-    SeoBuildInputRepository, SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest,
-    SerpIngestRepository, VerifiedRulesReader, VerifiedSupportBundleRequest,
-    VerifiedSupportRepository,
+    SectionTemplate, SectionTemplateRepository, SeoBuildInputRepository,
+    SeoBuildRegistrationRepository, SeoSiteBuildRegistrationRequest, SerpIngestRepository,
+    VerifiedRulesReader, VerifiedSupportBundleRequest, VerifiedSupportRepository,
 };
 use sqlx::Row;
 use uuid::Uuid;

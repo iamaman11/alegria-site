@@ -4,6 +4,7 @@
 #[cfg(all(test, feature = "e2e"))]
 #[allow(unused, warnings)]
 mod tests {
+    use contracts::generated::alegria::temporal::v1::LinkRecommendationState;
     use infrastructure::adapters::raw_crawl_adapter;
     use integration_data_fixtures::{
         seed_raw_page_with_section, seed_truth_context_and_concept, PostgresHarness,

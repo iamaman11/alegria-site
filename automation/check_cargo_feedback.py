@@ -11,7 +11,6 @@ import sys
 import tempfile
 import threading
 import unittest
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 

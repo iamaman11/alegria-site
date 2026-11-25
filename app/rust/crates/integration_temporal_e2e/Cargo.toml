@@ -14,6 +14,8 @@ e2e = [
   "dep:contracts",
   "dep:graph_neo4j",
   "dep:infrastructure",
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/pg",
   "dep:integration_harness",
   "integration_harness/e2e",
   "dep:operation_protocol",
@@ -44,6 +46,7 @@ async-trait = { version = "0.1", optional = true }
 contracts = { path = "../contracts", optional = true }
 graph_neo4j = { path = "../graph_neo4j", optional = true }
 infrastructure = { path = "../infrastructure", optional = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
 integration_harness = { path = "../integration_harness", default-features = false, optional = true }
 operation_protocol = { path = "../operation_protocol", optional = true }
 postgres_store = { path = "../postgres_store", optional = true }

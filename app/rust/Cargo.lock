@@ -2313,6 +2313,7 @@ dependencies = [
  "contracts",
  "graph_neo4j",
  "infrastructure",
+ "integration_data_fixtures",
  "integration_harness",
  "operation_protocol",
  "postgres_store",
