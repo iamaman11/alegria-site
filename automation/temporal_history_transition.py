@@ -56,6 +56,11 @@ WORKFLOW_TYPES = (
     "PgTruthReviewReconcileV5Workflow",
     "QdrantKeywordProjectionV2Workflow",
     "AlegriaOperationDagV1Workflow",
+    # Parallel ready-wave execution is a new, fail-closed pure-only parent,
+    # never a reinterpretation of any frozen V1 Effect/Operation DAG History.
+    # It is inventoried for future drain/replay; production replay acceptance
+    # still requires a captured server History and independent operator gate.
+    "AlegriaOperationDagV2Workflow",
 )
 # Historical name retained for compatibility with the local safety tests.
 LEGACY_TYPES = WORKFLOW_TYPES
