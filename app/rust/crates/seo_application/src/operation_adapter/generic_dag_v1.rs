@@ -22,12 +22,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use operation_protocol::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
     operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2, owner_child_workflow_id,
-    owner_child_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding, ArtifactId,
-    BoundArtifactV1,
-    CheckedDispatch, DispatchAttempt, OperationDagRunV6, OperationInstanceId, OwnerInvocationV1,
-    OwnerResultV1, PinnedOwnerRouteV1, PlanError, PlanHash, PortId, ProducedArtifactEvidenceV1,
-    RouteCatalogError, TemporalExecutionIdentityV4, TrustedRouteCatalog, ValidatedPlan,
-    OwnerValidationRequestV1, OwnerValidationResultV1, OWNER_INVOCATION_SCHEMA_REVISION,
+    owner_child_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
+    ArtifactId, BoundArtifactV1, CheckedDispatch, DispatchAttempt, OperationDagRunV6,
+    OperationInstanceId, OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1,
+    OwnerValidationResultV1, PinnedOwnerRouteV1, PlanError, PlanHash, PortId,
+    ProducedArtifactEvidenceV1, RouteCatalogError, TemporalExecutionIdentityV4,
+    TrustedRouteCatalog, ValidatedPlan, OWNER_INVOCATION_SCHEMA_REVISION,
     OWNER_VALIDATION_SCHEMA_REVISION_V1,
 };
 use serde::{Deserialize, Serialize};
@@ -293,7 +293,11 @@ impl OperationDagMachine {
                     ArtifactBinding::External { artifact } => {
                         external_inputs.insert(
                             port.clone(),
-                            self.run.admitted.get(artifact).expect("validated External").clone(),
+                            self.run
+                                .admitted
+                                .get(artifact)
+                                .expect("validated External")
+                                .clone(),
                         );
                     }
                     ArtifactBinding::Produced { .. } => {

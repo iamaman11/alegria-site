@@ -6,11 +6,10 @@
 //! This process cannot execute Activities, access provider SDKs or publish.
 
 use operation_protocol::{
-    owner_child_workflow_id, owner_child_workflow_id_v2,
-    owner_validation_child_workflow_id_v1, EffectChildInvocationV4, OperationDagRunV6,
-    OwnerInvocationV1, OwnerResultV1, OwnerValidationRequestV1, OwnerValidationResultV1,
-    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
-    OWNER_VALIDATION_CHILD_TYPE_V1,
+    owner_child_workflow_id, owner_child_workflow_id_v2, owner_validation_child_workflow_id_v1,
+    EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
+    OwnerValidationRequestV1, OwnerValidationResultV1, TemporalExecutionIdentityV4,
+    TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1, OWNER_VALIDATION_CHILD_TYPE_V1,
 };
 #[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
@@ -263,12 +262,9 @@ impl AlegriaOperationDagV2Workflow {
         // Whole-plan structural preflight occurs BEFORE any child. The exact
         // versioned owner-local business DTO validation below is a further
         // required gate before the first potentially irreversible owner.
-        let mut machine = OperationDagMachine::new_v2_with_owner_validation(
-            &workflow_id,
-            run,
-            trusted_routes,
-        )
-        .map_err(workflow_failure)?;
+        let mut machine =
+            OperationDagMachine::new_v2_with_owner_validation(&workflow_id, run, trusted_routes)
+                .map_err(workflow_failure)?;
         let validations = machine
             .v2_owner_validation_requests(parent.clone())
             .map_err(workflow_failure)?;
@@ -293,8 +289,7 @@ impl AlegriaOperationDagV2Workflow {
         }
         let mut validation_results = Vec::with_capacity(pending_validation_children.len());
         for child in pending_validation_children {
-            let result: OwnerValidationResultV1 =
-                child.result().await.map_err(workflow_failure)?;
+            let result: OwnerValidationResultV1 = child.result().await.map_err(workflow_failure)?;
             validation_results.push(result);
         }
         // Never schedule a single effect Child until every owner has returned

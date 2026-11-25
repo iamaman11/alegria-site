@@ -88,7 +88,10 @@ fn validation_result_cannot_be_reused_with_different_input_or_owner() {
 fn validation_request_rejects_cross_version_parent_and_cross_tenant_artifact() {
     let mut request = validated_request();
     request.parent.workflow_id = operation_dag_parent_workflow_id(&request.scope.run_id);
-    assert!(request.validate_shape().is_err(), "V1 parent cannot mint V2 ValidateOnly evidence");
+    assert!(
+        request.validate_shape().is_err(),
+        "V1 parent cannot mint V2 ValidateOnly evidence"
+    );
 
     let mut request = validated_request();
     request
@@ -101,11 +104,17 @@ fn validation_request_rejects_cross_version_parent_and_cross_tenant_artifact() {
 
     let mut request = validated_request();
     request.schema_revision += 1;
-    assert!(request.validate_shape().is_err(), "future wire revision must be explicit");
+    assert!(
+        request.validate_shape().is_err(),
+        "future wire revision must be explicit"
+    );
 
     let mut request = validated_request();
     request.produced_input_ports.insert(PortId::from("source"));
-    assert!(request.validate_shape().is_err(), "port cannot be both External and Produced");
+    assert!(
+        request.validate_shape().is_err(),
+        "port cannot be both External and Produced"
+    );
 }
 
 #[test]
@@ -129,20 +138,27 @@ fn validation_child_identity_is_scoped_to_actual_temporal_parent_run() {
     let first = validated_request();
     let mut restarted = first.clone();
     restarted.parent.run_id = "new-server-issued-temporal-parent-run".into();
-    let first_id = owner_validation_child_workflow_id_v1(
-        &first.parent, &first.plan_hash, &first.instance,
-    );
+    let first_id =
+        owner_validation_child_workflow_id_v1(&first.parent, &first.plan_hash, &first.instance);
     let restarted_id = owner_validation_child_workflow_id_v1(
-        &restarted.parent, &restarted.plan_hash, &restarted.instance,
+        &restarted.parent,
+        &restarted.plan_hash,
+        &restarted.instance,
     );
-    assert_ne!(first_id, restarted_id,
-        "ValidateOnly child history must not be reused across parent Run IDs");
+    assert_ne!(
+        first_id, restarted_id,
+        "ValidateOnly child history must not be reused across parent Run IDs"
+    );
 
     let mut foreign_operation = first.clone();
     foreign_operation.instance = OperationInstanceId::from("another-operation");
     let foreign_id = owner_validation_child_workflow_id_v1(
-        &foreign_operation.parent, &foreign_operation.plan_hash, &foreign_operation.instance,
+        &foreign_operation.parent,
+        &foreign_operation.plan_hash,
+        &foreign_operation.instance,
     );
-    assert_ne!(first_id, foreign_id,
-        "distinct DAG nodes must have distinct immutable ValidateOnly child identities");
+    assert_ne!(
+        first_id, foreign_id,
+        "distinct DAG nodes must have distinct immutable ValidateOnly child identities"
+    );
 }

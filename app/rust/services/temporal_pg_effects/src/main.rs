@@ -29,8 +29,7 @@ use postgres_store::truth_review_effect_v3::{
 use postgres_store::vector_projection_owner_v1::{
     confirmed_pg_vector_projection_owner_result, execute_pg_vector_projection_owner_v1,
     validate_pg_owner_v2_preflight, validate_pg_vector_projection_invocation_v1,
-    PgVectorProjectionReceiptV1,
-    OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
+    PgVectorProjectionReceiptV1, OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
 };
 use projection_contracts::VectorProjectionV1;
 use sqlx::PgPool;
@@ -323,7 +322,9 @@ struct AlegriaOwnerValidateV1Workflow {
 impl AlegriaOwnerValidateV1Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, request: OwnerValidationRequestV1) -> Self {
-        Self { immutable_request: request }
+        Self {
+            immutable_request: request,
+        }
     }
 
     #[run]
@@ -660,8 +661,13 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-pg-projection-v2") {
-            let path = args.next().context("--operator-issue-pg-projection-v2 requires strict JSON child locator")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected V2 PG owner operator arguments");
+            let path = args
+                .next()
+                .context("--operator-issue-pg-projection-v2 requires strict JSON child locator")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected V2 PG owner operator arguments"
+            );
             operator_vector_projection_v2::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
@@ -677,14 +683,21 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-admit-dag-run-v2") {
-            let path = args.next().context("--operator-admit-dag-run-v2 requires strict JSON parent locator")?;
+            let path = args
+                .next()
+                .context("--operator-admit-dag-run-v2 requires strict JSON parent locator")?;
             anyhow::ensure!(args.next().is_none(), "unexpected V2 governance arguments");
             operator_dag_governance_v2::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-business-run-v1") {
-            let path = args.next().context("--operator-issue-business-run-v1 requires a private JSON business intent")?;
-            anyhow::ensure!(args.next().is_none(),"unexpected business-run root issuer arguments");
+            let path = args.next().context(
+                "--operator-issue-business-run-v1 requires a private JSON business intent",
+            )?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected business-run root issuer arguments"
+            );
             operator_business_run_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }

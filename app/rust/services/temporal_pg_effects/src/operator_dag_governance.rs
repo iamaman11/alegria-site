@@ -133,8 +133,13 @@ async fn prove_real_generic_parent(
     catalog: &TrustedRouteCatalog,
 ) -> Result<Vec<u8>> {
     prove_real_generic_parent_for_type(
-        request, tenant, catalog, OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_QUEUE
-    ).await
+        request,
+        tenant,
+        catalog,
+        OPERATION_DAG_PARENT_TYPE,
+        OPERATION_DAG_PARENT_QUEUE,
+    )
+    .await
 }
 
 pub(super) async fn prove_real_generic_parent_for_type(
@@ -167,11 +172,7 @@ pub(super) async fn prove_real_generic_parent_for_type(
         &request.parent_workflow_run_id,
     )
     .await?;
-    let bytes = first_started_payload(
-        &history,
-        workflow_type,
-        task_queue,
-    )?;
+    let bytes = first_started_payload(&history, workflow_type, task_queue)?;
     let run: OperationDagRunV6 = serde_json::from_slice(&bytes)
         .context("real Temporal parent History lacks typed OperationDagRunV6")?;
     ensure!(

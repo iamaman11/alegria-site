@@ -7,20 +7,19 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{ensure, Context, Result};
 use operation_protocol::owner_dispatch::{
-    owner_child_workflow_id, owner_child_workflow_id_v2,
-    OwnerInvocationV1, OwnerResultV1, OWNER_OPERATION_CHILD_TYPE_V1,
+    owner_child_workflow_id, owner_child_workflow_id_v2, OwnerInvocationV1, OwnerResultV1,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use operation_protocol::{
-    operation_dag_parent_workflow_id_v2, Operation, PortId,
-    OwnerValidationRequestV1, OwnerValidationResultV1,
+    operation_dag_parent_workflow_id_v2, Operation, OwnerValidationRequestV1,
+    OwnerValidationResultV1, PortId,
 };
 use qdrant_contracts::{
     confirmed_qdrant_owner_result, verify_qdrant_owner_invocation, QdrantChildOutcomeV1,
-    QdrantKeywordProjectionContractV2, QdrantKeywordProjectionCommandV1,
+    QdrantKeywordProjectionCommandV1, QdrantKeywordProjectionContractV2,
     QdrantProducedVectorCommandV1, QdrantProducedVectorProjectionContractV1,
-    QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1,
-    QDRANT_GENERIC_ACTIVITY_QUEUE_V1,
-    QDRANT_GENERIC_OWNER_QUEUE_V1,
+    QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_GENERIC_ACTIVITY_QUEUE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
+    QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1,
 };
 use qdrant_effects_core::{
     execute_admitted_qdrant_projection_v3, execute_admitted_qdrant_projection_v4,
@@ -115,7 +114,9 @@ impl AlegriaOwnerOperationV1Workflow {
     }
 }
 
-pub(super) fn validate_qdrant_owner_pre_effect_v1(request: &OwnerValidationRequestV1) -> Result<()> {
+pub(super) fn validate_qdrant_owner_pre_effect_v1(
+    request: &OwnerValidationRequestV1,
+) -> Result<()> {
     request.validate_shape()?;
     let external_contract = QdrantKeywordProjectionContractV2::contract();
     let produced_contract = QdrantProducedVectorProjectionContractV1::contract();
@@ -126,33 +127,48 @@ pub(super) fn validate_qdrant_owner_pre_effect_v1(request: &OwnerValidationReque
     } else {
         anyhow::bail!("Qdrant ValidateChild refuses foreign operation");
     };
-    ensure!(request.owner == contract.owner
-        && request.contract_hash == contract.fingerprint()?
-        && request.input_schemas == contract.inputs,
-        "Qdrant ValidateChild contract/owner/input schema differs from deployed code");
+    ensure!(
+        request.owner == contract.owner
+            && request.contract_hash == contract.fingerprint()?
+            && request.input_schemas == contract.inputs,
+        "Qdrant ValidateChild contract/owner/input schema differs from deployed code"
+    );
     if request.operation == QdrantKeywordProjectionContractV2::contract().reference {
         let port = PortId::from(QDRANT_EFFECT_INPUT_PORT_V2);
-        ensure!(request.produced_input_ports.is_empty()
-            && request.external_inputs.len() == 1,
-            "Qdrant External ValidateChild cannot contain Produced or hidden inputs");
-        let input = request.external_inputs.get(&port)
+        ensure!(
+            request.produced_input_ports.is_empty() && request.external_inputs.len() == 1,
+            "Qdrant External ValidateChild cannot contain Produced or hidden inputs"
+        );
+        let input = request
+            .external_inputs
+            .get(&port)
             .context("Qdrant ValidateChild missing immutable External input")?;
-        ensure!(input.payload == request.command_bytes,
-            "Qdrant ValidateChild command differs from exact admitted External bytes");
+        ensure!(
+            input.payload == request.command_bytes,
+            "Qdrant ValidateChild command differs from exact admitted External bytes"
+        );
         let command: QdrantKeywordProjectionCommandV1 =
             serde_json::from_slice(&request.command_bytes)?;
         command.validate().map_err(anyhow::Error::msg)?;
-        ensure!(command.tenant_id == request.scope.tenant_id,
-            "Qdrant ValidateChild command belongs to foreign tenant");
+        ensure!(
+            command.tenant_id == request.scope.tenant_id,
+            "Qdrant ValidateChild command belongs to foreign tenant"
+        );
     } else {
-        ensure!(request.external_inputs.is_empty()
-            && request.produced_input_ports.len() == 1
-            && request.produced_input_ports.contains(&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)),
-            "Qdrant Produced ValidateChild must reference one future typed vector");
+        ensure!(
+            request.external_inputs.is_empty()
+                && request.produced_input_ports.len() == 1
+                && request
+                    .produced_input_ports
+                    .contains(&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)),
+            "Qdrant Produced ValidateChild must reference one future typed vector"
+        );
         let command: QdrantProducedVectorCommandV1 =
             serde_json::from_slice(&request.command_bytes)?;
-        ensure!(command.schema_revision == 1 && !command.admission_id.is_nil(),
-            "Qdrant Produced ValidateChild rejects invalid static admission command");
+        ensure!(
+            command.schema_revision == 1 && !command.admission_id.is_nil(),
+            "Qdrant Produced ValidateChild rejects invalid static admission command"
+        );
     }
     Ok(())
 }
@@ -227,12 +243,18 @@ impl QdrantGenericActivities {
             == operation_dag_parent_workflow_id_v2(&invocation.checked_dispatch.scope.run_id);
         let outcome = if run_v2 {
             execute_admitted_qdrant_projection_v4(
-                &self.pool, command.admission_id, &invocation.checked_dispatch.execution_key,
-            ).await
+                &self.pool,
+                command.admission_id,
+                &invocation.checked_dispatch.execution_key,
+            )
+            .await
         } else {
             execute_admitted_qdrant_projection_v3(
-                &self.pool, command.admission_id, &invocation.checked_dispatch.execution_key,
-            ).await
+                &self.pool,
+                command.admission_id,
+                &invocation.checked_dispatch.execution_key,
+            )
+            .await
         }
         .map_err(terminal_activity_error)?;
         confirmed_qdrant_owner_result(
@@ -273,7 +295,9 @@ impl QdrantGenericActivities {
                     && info.task_queue == QDRANT_GENERIC_ACTIVITY_QUEUE_V1
                     && id
                         == if invocation.parent.workflow_id
-                            == operation_dag_parent_workflow_id_v2(&invocation.checked_dispatch.scope.run_id)
+                            == operation_dag_parent_workflow_id_v2(
+                                &invocation.checked_dispatch.scope.run_id
+                            )
                         {
                             owner_child_workflow_id_v2(&invocation.checked_dispatch.execution_key)
                         } else {
@@ -298,10 +322,10 @@ impl QdrantGenericActivities {
                FROM pipeline.qdrant_projection_v3_admissions WHERE admission_id=$1"
         };
         let row = sqlx::query(read_sql)
-        .bind(command.admission_id)
-        .fetch_optional(&*self.pool)
-        .await
-        .map_err(super::classify_admission_sql_error)?;
+            .bind(command.admission_id)
+            .fetch_optional(&*self.pool)
+            .await
+            .map_err(super::classify_admission_sql_error)?;
         let Some(row) = row else {
             return Ok(false);
         };
@@ -374,8 +398,10 @@ fn database_url_from_file() -> Result<String> {
 }
 
 async fn assert_generic_worker_role(pool: &PgPool) -> Result<()> {
-    let v3_enabled = std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3").as_deref() == Ok("1");
-    let v4_enabled = std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4").as_deref() == Ok("1");
+    let v3_enabled =
+        std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3").as_deref() == Ok("1");
+    let v4_enabled =
+        std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4").as_deref() == Ok("1");
     let row = sqlx::query(
         "SELECT r.rolsuper,r.rolbypassrls,
                 pipeline.current_session_tenant_v1() AS tenant,
@@ -435,10 +461,12 @@ async fn assert_generic_worker_role(pool: &PgPool) -> Result<()> {
             && !row.try_get::<bool, _>("v2_confirm")?
             && !row.try_get::<bool, _>("v1_begin")?
             && !row.try_get::<bool, _>("v1_confirm")?
-            && (!v3_enabled || (row.try_get::<bool, _>("begin_allowed")?
-                && row.try_get::<bool, _>("confirm_allowed")?))
-            && (!v4_enabled || (row.try_get::<bool, _>("v4_begin")?
-                && row.try_get::<bool, _>("v4_confirm")?))
+            && (!v3_enabled
+                || (row.try_get::<bool, _>("begin_allowed")?
+                    && row.try_get::<bool, _>("confirm_allowed")?))
+            && (!v4_enabled
+                || (row.try_get::<bool, _>("v4_begin")?
+                    && row.try_get::<bool, _>("v4_confirm")?))
             && row.try_get::<Option<String>, _>("tenant")?.as_deref()
                 == Some(std::env::var("QDRANT_GENERIC_OWNER_TENANT_ID")?.as_str()),
         "generic Qdrant Activity must have tenant-bound read/execute, no admission authority"
@@ -450,7 +478,8 @@ pub(crate) async fn run_worker() -> Result<()> {
     ensure!(
         std::env::var("ALEGRIA_ENABLE_QDRANT_GENERIC_OWNER_V1").as_deref() == Ok("true")
             && (std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3").as_deref() == Ok("1")
-                || std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4").as_deref() == Ok("1")),
+                || std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4").as_deref()
+                    == Ok("1")),
         "generic Qdrant owner requires two explicit independent opt-ins"
     );
     ensure!(
@@ -541,12 +570,13 @@ mod owner_validate_tests {
             command_bytes: serde_json::to_vec(&QdrantProducedVectorCommandV1 {
                 schema_revision: 1,
                 admission_id: Uuid::new_v4(),
-            }).unwrap(),
+            })
+            .unwrap(),
             input_schemas: contract.inputs,
             external_inputs: BTreeMap::new(),
-            produced_input_ports: BTreeSet::from([
-                PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1),
-            ]),
+            produced_input_ports: BTreeSet::from([PortId::from(
+                QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1,
+            )]),
         }
     }
 

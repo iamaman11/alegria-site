@@ -42,11 +42,9 @@ fn dispatch(name: &str) -> CheckedDispatch {
 }
 
 fn seal(invocation: &mut OwnerInvocationV1) {
-    let bytes = canonical_owner_dispatch_input_bytes(
-        &invocation.bound_inputs,
-        &invocation.command_bytes,
-    )
-    .expect("canonical checked owner input");
+    let bytes =
+        canonical_owner_dispatch_input_bytes(&invocation.bound_inputs, &invocation.command_bytes)
+            .expect("canonical checked owner input");
     let hash = owner_content_hash(&bytes);
     invocation.checked_dispatch.input_hash = hash.clone();
     invocation.checked_dispatch.execution_key =

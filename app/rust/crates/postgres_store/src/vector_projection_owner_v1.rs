@@ -9,12 +9,14 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
+    operation_dag_parent_workflow_id_v2,
     owner_dispatch::{
         AdmittedArtifactV1, OwnerInvocationV1, OwnerResultV1, PinnedOwnerRouteV1,
         TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
     },
-    operation_dag_parent_workflow_id_v2, ArtifactBinding, EffectId, IdempotencyPolicy, Operation, OperationContract, OperationId,
-    OperationOwnerId, OperationRef, OwnerValidationRequestV1, OwnerValidationResultV1, PortId, RunScope,
+    ArtifactBinding, EffectId, IdempotencyPolicy, Operation, OperationContract, OperationId,
+    OperationOwnerId, OperationRef, OwnerValidationRequestV1, OwnerValidationResultV1, PortId,
+    RunScope,
 };
 use projection_contracts::{
     vector_lookup_schema, vector_projection_schema, VectorProjectionLookupV1,
@@ -166,8 +168,7 @@ pub fn validate_pg_owner_v2_preflight(
                 && request.produced_input_ports.is_empty(),
             "PG vector preflight rejected unknown operation/contract/Produced source"
         );
-        let command: PgVectorProjectionCommandV1 =
-            serde_json::from_slice(&request.command_bytes)?;
+        let command: PgVectorProjectionCommandV1 = serde_json::from_slice(&request.command_bytes)?;
         anyhow::ensure!(
             serde_json::to_vec(&command)? == request.command_bytes
                 && command.run_id.to_string() == request.scope.run_id
@@ -177,7 +178,9 @@ pub fn validate_pg_owner_v2_preflight(
                 && !command.admission_id.is_nil(),
             "PG vector preflight command is not bound to immutable DAG"
         );
-        let bound = request.external_inputs.get(&PortId::from(INPUT_PORT))
+        let bound = request
+            .external_inputs
+            .get(&PortId::from(INPUT_PORT))
             .ok_or_else(|| anyhow::anyhow!("PG vector preflight lacks typed lookup"))?;
         let lookup: VectorProjectionLookupV1 = serde_json::from_slice(&bound.payload)?;
         lookup.validate()?;
@@ -187,9 +190,7 @@ pub fn validate_pg_owner_v2_preflight(
                 && serde_json::to_vec(&lookup)? == bound.payload,
             "PG vector preflight lookup bytes differ from own typed command"
         );
-    } else if request.operation.id.as_str()
-        == truth_domain::review_effect_contract::OPERATION_ID
-    {
+    } else if request.operation.id.as_str() == truth_domain::review_effect_contract::OPERATION_ID {
         let contract = truth_domain::review_effect_contract::operation_contract();
         anyhow::ensure!(
             request.operation == contract.reference
@@ -199,8 +200,7 @@ pub fn validate_pg_owner_v2_preflight(
                 && request.produced_input_ports.is_empty(),
             "PG Truth preflight rejected unknown contract/Produced input"
         );
-        let command: ReconcileTruthReviewsInput =
-            serde_json::from_slice(&request.command_bytes)?;
+        let command: ReconcileTruthReviewsInput = serde_json::from_slice(&request.command_bytes)?;
         anyhow::ensure!(
             serde_json::to_vec(&command)? == request.command_bytes
                 && command.run_id.to_string() == request.scope.run_id
@@ -209,9 +209,12 @@ pub fn validate_pg_owner_v2_preflight(
                 && command.plan_hash == request.plan_hash.as_str(),
             "PG Truth preflight command is not scope/plan bound"
         );
-        let bound = request.external_inputs.get(&PortId::from(
-            truth_domain::review_effect_contract::INPUT_PORT,
-        )).ok_or_else(|| anyhow::anyhow!("PG Truth typed scope artifact missing"))?;
+        let bound = request
+            .external_inputs
+            .get(&PortId::from(
+                truth_domain::review_effect_contract::INPUT_PORT,
+            ))
+            .ok_or_else(|| anyhow::anyhow!("PG Truth typed scope artifact missing"))?;
         let scope: truth_domain::review_effect_contract::TruthReviewScopeArtifactV1 =
             serde_json::from_slice(&bound.payload)?;
         anyhow::ensure!(
@@ -266,22 +269,22 @@ pub async fn execute_pg_vector_projection_owner_v1(
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"
     };
     let row = sqlx::query(sql)
-    .bind(command.admission_id)
-    .bind(command.run_id)
-    .bind(&command.scope.tenant_id)
-    .bind(&command.context_key)
-    .bind(&command.keyword_key)
-    .bind(actual_child_workflow_id)
-    .bind(actual_child_workflow_run_id)
-    .bind(&command.operation_instance)
-    .bind(&command.plan_hash)
-    .bind(fingerprint.as_str())
-    .bind(&invocation.checked_dispatch.execution_key)
-    .bind(&invocation.parent.workflow_id)
-    .bind(&invocation.parent.run_id)
-    .bind(invocation_bytes)
-    .fetch_one(pool)
-    .await?;
+        .bind(command.admission_id)
+        .bind(command.run_id)
+        .bind(&command.scope.tenant_id)
+        .bind(&command.context_key)
+        .bind(&command.keyword_key)
+        .bind(actual_child_workflow_id)
+        .bind(actual_child_workflow_run_id)
+        .bind(&command.operation_instance)
+        .bind(&command.plan_hash)
+        .bind(fingerprint.as_str())
+        .bind(&invocation.checked_dispatch.execution_key)
+        .bind(&invocation.parent.workflow_id)
+        .bind(&invocation.parent.run_id)
+        .bind(invocation_bytes)
+        .fetch_one(pool)
+        .await?;
     let vector: Vec<f32> = serde_json::from_value(row.try_get("vector")?)?;
     let projection = VectorProjectionV1 {
         tenant_id: command.scope.tenant_id.clone(),
@@ -338,48 +341,57 @@ pub fn confirmed_pg_vector_projection_owner_result(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use projection_contracts::VECTOR_DIMENSIONS_V1;
     use operation_protocol::{
         operation_dag_parent_workflow_id_v2, OperationInstanceId, PlanHash,
         TemporalExecutionIdentityV4, OWNER_VALIDATION_SCHEMA_REVISION_V1,
     };
+    use projection_contracts::VECTOR_DIMENSIONS_V1;
 
     fn vector_validation_request() -> OwnerValidationRequestV1 {
-        let run_id=Uuid::from_u128(0xabc);
-        let scope=RunScope { tenant_id:"tenant-a".into(),run_id:run_id.to_string() };
-        let contract=PgReadVectorProjectionV1::contract();
-        let fingerprint=contract.fingerprint().unwrap();
-        let lookup=VectorProjectionLookupV1 {
-            context_key:"ES:tourist:BY".into(),keyword_key:"visa-fee".into(),
+        let run_id = Uuid::from_u128(0xabc);
+        let scope = RunScope {
+            tenant_id: "tenant-a".into(),
+            run_id: run_id.to_string(),
         };
-        let command=PgVectorProjectionCommandV1 {
-            admission_id:Uuid::from_u128(0xdef),run_id,scope:scope.clone(),
-            context_key:lookup.context_key.clone(),
-            keyword_key:lookup.keyword_key.clone(),
-            operation_instance:"pg-produce".into(),plan_hash:"a".repeat(64),
+        let contract = PgReadVectorProjectionV1::contract();
+        let fingerprint = contract.fingerprint().unwrap();
+        let lookup = VectorProjectionLookupV1 {
+            context_key: "ES:tourist:BY".into(),
+            keyword_key: "visa-fee".into(),
+        };
+        let command = PgVectorProjectionCommandV1 {
+            admission_id: Uuid::from_u128(0xdef),
+            run_id,
+            scope: scope.clone(),
+            context_key: lookup.context_key.clone(),
+            keyword_key: lookup.keyword_key.clone(),
+            operation_instance: "pg-produce".into(),
+            plan_hash: "a".repeat(64),
         };
         OwnerValidationRequestV1 {
-            schema_revision:OWNER_VALIDATION_SCHEMA_REVISION_V1,
-            parent:TemporalExecutionIdentityV4 {
-                workflow_id:operation_dag_parent_workflow_id_v2(&run_id.to_string()),
-                run_id:Uuid::from_u128(0x999).to_string(),
+            schema_revision: OWNER_VALIDATION_SCHEMA_REVISION_V1,
+            parent: TemporalExecutionIdentityV4 {
+                workflow_id: operation_dag_parent_workflow_id_v2(&run_id.to_string()),
+                run_id: Uuid::from_u128(0x999).to_string(),
             },
-            plan_hash:PlanHash("a".repeat(64)),
-            scope:scope.clone(),
-            instance:OperationInstanceId::from("pg-produce"),
-            operation:contract.reference,
-            owner:contract.owner,
-            contract_hash:fingerprint,
-            command_bytes:serde_json::to_vec(&command).unwrap(),
-            input_schemas:contract.inputs.clone(),
-            external_inputs:BTreeMap::from([(
-                PortId::from(INPUT_PORT),AdmittedArtifactV1 {
-                    schema:vector_lookup_schema(),scope,
-                    provenance:"operator-admitted-lookup".into(),
-                    payload:serde_json::to_vec(&lookup).unwrap(),
+            plan_hash: PlanHash("a".repeat(64)),
+            scope: scope.clone(),
+            instance: OperationInstanceId::from("pg-produce"),
+            operation: contract.reference,
+            owner: contract.owner,
+            contract_hash: fingerprint,
+            command_bytes: serde_json::to_vec(&command).unwrap(),
+            input_schemas: contract.inputs.clone(),
+            external_inputs: BTreeMap::from([(
+                PortId::from(INPUT_PORT),
+                AdmittedArtifactV1 {
+                    schema: vector_lookup_schema(),
+                    scope,
+                    provenance: "operator-admitted-lookup".into(),
+                    payload: serde_json::to_vec(&lookup).unwrap(),
                 },
             )]),
-            produced_input_ports:BTreeSet::new(),
+            produced_input_ports: BTreeSet::new(),
         }
     }
 
@@ -412,17 +424,17 @@ mod tests {
 
     #[test]
     fn v2_pg_validation_decodes_actual_concrete_own_input_before_effects() {
-        let request=vector_validation_request();
-        let result=validate_pg_owner_v2_preflight(&request).unwrap();
+        let request = vector_validation_request();
+        let result = validate_pg_owner_v2_preflight(&request).unwrap();
         result.verify_success(&request).unwrap();
-        let mut malformed=request.clone();
-        malformed.command_bytes=b"{\"arbitrary\":true}".to_vec();
+        let mut malformed = request.clone();
+        malformed.command_bytes = b"{\"arbitrary\":true}".to_vec();
         assert!(validate_pg_owner_v2_preflight(&malformed).is_err());
-        let mut wrong_scope=request.clone();
-        wrong_scope.scope.tenant_id="another-tenant".into();
+        let mut wrong_scope = request.clone();
+        wrong_scope.scope.tenant_id = "another-tenant".into();
         assert!(validate_pg_owner_v2_preflight(&wrong_scope).is_err());
-        let mut foreign=request;
-        foreign.operation.id="other-owner-command".into();
+        let mut foreign = request;
+        foreign.operation.id = "other-owner-command".into();
         assert!(validate_pg_owner_v2_preflight(&foreign).is_err());
     }
 }

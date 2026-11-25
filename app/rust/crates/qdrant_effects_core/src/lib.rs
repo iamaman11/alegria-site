@@ -279,13 +279,18 @@ async fn execute_admitted_qdrant_projection_generic(
     dispatch_execution_key: &str,
     ledger_revision: u8,
 ) -> Result<QdrantProjectionOutcomeV1> {
-    ensure!(matches!(ledger_revision, 3 | 4), "unsupported generic Qdrant effect ledger");
+    ensure!(
+        matches!(ledger_revision, 3 | 4),
+        "unsupported generic Qdrant effect ledger"
+    );
     ensure!(
         std::env::var(if ledger_revision == 3 {
             "ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3"
         } else {
             "ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V4"
-        }).as_deref() == Ok("1"),
+        })
+        .as_deref()
+            == Ok("1"),
         "generic Qdrant provider effect ledger is disabled without explicit opt-in"
     );
     ensure!(
@@ -303,10 +308,10 @@ async fn execute_admitted_qdrant_projection_generic(
            FROM pipeline.qdrant_projection_v4_admissions WHERE admission_id=$1"
     };
     let row = sqlx::query(read_sql)
-    .bind(admission_id)
-    .fetch_one(pool)
-    .await
-    .context("generic Qdrant V3 admission absent or inaccessible to owner Activity")?;
+        .bind(admission_id)
+        .fetch_one(pool)
+        .await
+        .context("generic Qdrant V3 admission absent or inaccessible to owner Activity")?;
     let bytes: Vec<u8> = row.try_get("command_bytes")?;
     let sha256: String = row.try_get("command_sha256")?;
     let command: QdrantKeywordProjectionCommandV1 = serde_json::from_slice(&bytes)
@@ -373,14 +378,13 @@ async fn execute_admitted_qdrant_projection_generic(
     } else {
         "SELECT pipeline.confirm_qdrant_projection_v4($1,$2,$3)"
     };
-    let confirmed: bool =
-        sqlx::query_scalar(confirm_sql)
-            .bind(admission_id)
-            .bind(&bytes)
-            .bind(dispatch_execution_key)
-            .fetch_one(pool)
-            .await
-            .context("generic Qdrant V3 provider readback succeeded but durable receipt failed")?;
+    let confirmed: bool = sqlx::query_scalar(confirm_sql)
+        .bind(admission_id)
+        .bind(&bytes)
+        .bind(dispatch_execution_key)
+        .fetch_one(pool)
+        .await
+        .context("generic Qdrant V3 provider readback succeeded but durable receipt failed")?;
     ensure!(confirmed, "V3 PostgreSQL refused exact provider receipt");
     Ok(match state.as_str() {
         "started" => QdrantProjectionOutcomeV1::Applied,

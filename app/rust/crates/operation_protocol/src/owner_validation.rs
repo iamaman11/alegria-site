@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactSchema, ContractHash, OperationInstanceId,
-    OperationOwnerId, OperationRef, PlanHash, PortId, RunScope, TemporalExecutionIdentityV4,
+    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactSchema,
+    ContractHash, OperationInstanceId, OperationOwnerId, OperationRef, PlanHash, PortId, RunScope,
+    TemporalExecutionIdentityV4,
 };
 
 pub const OWNER_VALIDATION_CHILD_TYPE_V1: &str = "AlegriaOwnerValidateV1Workflow";
@@ -99,7 +100,10 @@ impl OwnerValidationRequestV1 {
             || self.owner.as_str().is_empty()
             || self.contract_hash.as_str().is_empty()
             || self.command_bytes.is_empty()
-            || self.external_inputs.keys().any(|key| self.produced_input_ports.contains(key))
+            || self
+                .external_inputs
+                .keys()
+                .any(|key| self.produced_input_ports.contains(key))
             || self.input_schemas.len()
                 != self.external_inputs.len() + self.produced_input_ports.len()
             || self.external_inputs.iter().any(|(port, value)| {
