@@ -462,10 +462,15 @@ async fn projection_issuer_pool() -> Result<PgPool> {
         "PG_DAG_GOVERNANCE_OPERATOR_DATABASE_URL",
     ] {
         if let Ok(other) = env::var(key) {
-            ensure!(url != other, "PG vector operator must not reuse {key} credentials");
+            ensure!(
+                url != other,
+                "PG vector operator must not reuse {key} credentials"
+            );
         }
     }
-    let pool = PgPool::connect(&url).await.context("connect isolated PG vector operator")?;
+    let pool = PgPool::connect(&url)
+        .await
+        .context("connect isolated PG vector operator")?;
     let identity = sqlx::query(
         "SELECT current_user::text AS role_name,
                 session_user::text AS login_role,
@@ -475,7 +480,9 @@ async fn projection_issuer_pool() -> Result<PgPool> {
                 EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
                         WHERE m.member = r.oid) AS has_memberships
          FROM pg_catalog.pg_roles r WHERE r.rolname = current_user",
-    ).fetch_one(&pool).await?;
+    )
+    .fetch_one(&pool)
+    .await?;
     ensure!(
         identity.get::<String, _>("role_name") == identity.get::<String, _>("login_role")
             && identity.get::<bool, _>("can_login")
@@ -511,7 +518,9 @@ async fn projection_issuer_pool() -> Result<PgPool> {
              OR has_table_privilege(current_user,c.oid,'TRUNCATE')
            )
          ORDER BY n.nspname,c.relname LIMIT 1",
-    ).fetch_optional(&pool).await?;
+    )
+    .fetch_optional(&pool)
+    .await?;
     ensure!(
         excess_table.is_none(),
         "PG vector operator has forbidden foreign write authority: {excess_table:?}"
@@ -525,7 +534,9 @@ async fn projection_issuer_pool() -> Result<PgPool> {
            AND (has_sequence_privilege(current_user,c.oid,'USAGE')
              OR has_sequence_privilege(current_user,c.oid,'UPDATE'))
          ORDER BY n.nspname,c.relname LIMIT 1",
-    ).fetch_optional(&pool).await?;
+    )
+    .fetch_optional(&pool)
+    .await?;
     ensure!(
         excess_sequence.is_none(),
         "PG vector operator has forbidden sequence mutation authority: {excess_sequence:?}"
@@ -535,7 +546,9 @@ async fn projection_issuer_pool() -> Result<PgPool> {
          WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
            AND has_schema_privilege(current_user,n.oid,'CREATE')
          ORDER BY n.nspname LIMIT 1",
-    ).fetch_optional(&pool).await?;
+    )
+    .fetch_optional(&pool)
+    .await?;
     ensure!(
         excess_schema.is_none(),
         "PG vector operator has forbidden schema CREATE authority: {excess_schema:?}"
