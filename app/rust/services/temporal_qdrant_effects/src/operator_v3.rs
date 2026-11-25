@@ -251,16 +251,20 @@ async fn attest_v2_validation_barrier(
         let matching_routes = run
             .pinned_routes
             .iter()
-            .filter(|route| {
-                route.operation == node.operation && route.owner == owner_command.owner
-            })
+            .filter(|route| route.operation == node.operation && route.owner == owner_command.owner)
             .collect::<Vec<_>>();
         ensure!(
             matching_routes.len() == 1
                 && matching_routes[0].contract_hash == owner_command.contract_hash
-                && initiated.workflow_type.as_ref().map(|workflow| workflow.name.as_str())
+                && initiated
+                    .workflow_type
+                    .as_ref()
+                    .map(|workflow| workflow.name.as_str())
                     == Some(OWNER_VALIDATION_CHILD_TYPE_V1)
-                && initiated.task_queue.as_ref().map(|queue| queue.name.as_str())
+                && initiated
+                    .task_queue
+                    .as_ref()
+                    .map(|queue| queue.name.as_str())
                     == Some(matching_routes[0].task_queue.as_str()),
             "V2 foreign ValidateOnly Child used an untrusted route or Task Queue"
         );
@@ -328,10 +332,14 @@ async fn attest_v2_validation_barrier(
             child_identity.workflow_id == initiated.workflow_id
                 && !child_identity.run_id.is_empty()
                 && completed[0].1.started_event_id == started[0].0
-                && completed[0].1.workflow_execution.as_ref().is_some_and(|execution| {
-                    execution.workflow_id == child_identity.workflow_id
-                        && execution.run_id == child_identity.run_id
-                }),
+                && completed[0]
+                    .1
+                    .workflow_execution
+                    .as_ref()
+                    .is_some_and(|execution| {
+                        execution.workflow_id == child_identity.workflow_id
+                            && execution.run_id == child_identity.run_id
+                    }),
             "V2 foreign ValidateOnly ChildStarted/Completed identities disagree"
         );
         let child_history = exact_history(
@@ -350,20 +358,23 @@ async fn attest_v2_validation_barrier(
             child_input.as_slice() == initiated_bytes,
             "V2 foreign ValidateOnly parent/child server start bytes differ"
         );
-        let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) =
-            &child_history
-                .events
-                .first()
-                .context("V2 foreign ValidateOnly Child has no server start")?
-                .attributes
+        let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) = &child_history
+            .events
+            .first()
+            .context("V2 foreign ValidateOnly Child has no server start")?
+            .attributes
         else {
             bail!("V2 foreign ValidateOnly Child lacks server WorkflowStarted");
         };
         ensure!(
-            child_start.parent_workflow_execution.as_ref().is_some_and(|parent| {
-                parent.workflow_id == request.parent_workflow_id
-                    && parent.run_id == request.parent_workflow_run_id
-            }) && child_start.parent_initiated_event_id == *id,
+            child_start
+                .parent_workflow_execution
+                .as_ref()
+                .is_some_and(|parent| {
+                    parent.workflow_id == request.parent_workflow_id
+                        && parent.run_id == request.parent_workflow_run_id
+                })
+                && child_start.parent_initiated_event_id == *id,
             "V2 foreign ValidateOnly child is not reciprocally parent-attested"
         );
         let Some(Attributes::WorkflowExecutionCompletedEventAttributes(child_done)) =
@@ -380,9 +391,11 @@ async fn attest_v2_validation_barrier(
             "foreign parent ValidateOnly result",
         )?;
         ensure!(
-            result_bytes == exactly_one_payload(
-                child_done.result.as_ref(), "foreign child ValidateOnly result",
-            )?,
+            result_bytes
+                == exactly_one_payload(
+                    child_done.result.as_ref(),
+                    "foreign child ValidateOnly result",
+                )?,
             "V2 foreign ValidateOnly parent/child server results differ"
         );
         verify_validation_result_wire(&validated, result_bytes)?;
@@ -1607,27 +1620,24 @@ mod tests {
             produced_input_ports: Default::default(),
         };
         let accepted = OwnerValidationResultV1::accepted(&request).unwrap();
-        assert!(verify_validation_result_wire(
-            &request,
-            &serde_json::to_vec(&accepted).unwrap(),
-        )
-        .is_ok());
+        assert!(
+            verify_validation_result_wire(&request, &serde_json::to_vec(&accepted).unwrap(),)
+                .is_ok()
+        );
 
         let mut refused = accepted.clone();
         refused.accepted = false;
-        assert!(verify_validation_result_wire(
-            &request,
-            &serde_json::to_vec(&refused).unwrap(),
-        )
-        .is_err());
+        assert!(
+            verify_validation_result_wire(&request, &serde_json::to_vec(&refused).unwrap(),)
+                .is_err()
+        );
 
         let mut forged = accepted;
         forged.request_hash = "different-validation-request".into();
-        assert!(verify_validation_result_wire(
-            &request,
-            &serde_json::to_vec(&forged).unwrap(),
-        )
-        .is_err());
+        assert!(
+            verify_validation_result_wire(&request, &serde_json::to_vec(&forged).unwrap(),)
+                .is_err()
+        );
     }
 
     #[test]

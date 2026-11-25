@@ -1178,9 +1178,16 @@ fn every_serialization_of_fan_out_fan_in_and_independent_work_is_one_dag() {
         let validated = actual.validate(&catalog()).unwrap();
         assert_eq!(validated.execution_order(), expected_order.as_slice());
         let merge = validated
-            .checked_dispatch(&"a-join".into(), b"two-checked-scores", DispatchAttempt::First)
+            .checked_dispatch(
+                &"a-join".into(),
+                b"two-checked-scores",
+                DispatchAttempt::First,
+            )
             .unwrap();
-        assert_eq!(merge.owner, OperationOwnerId::from("independent_merge_owner"));
+        assert_eq!(
+            merge.owner,
+            OperationOwnerId::from("independent_merge_owner")
+        );
         assert_eq!(merge.idempotency, IdempotencyPolicy::Pure);
         checked_permutations += 1;
     });
@@ -1194,10 +1201,8 @@ fn fan_in_rejects_wrong_typed_edge_and_back_edge_before_effect_dispatch() {
         .iter_mut()
         .find(|node| node.instance.as_str() == "a-join")
         .unwrap();
-    join.inputs.insert(
-        "left".into(),
-        produced("seed", "evidence", "seed-evidence"),
-    );
+    join.inputs
+        .insert("left".into(), produced("seed", "evidence", "seed-evidence"));
     assert!(matches!(
         plan(wrong_schema).validate(&catalog()),
         Err(PlanError::ArtifactSchemaMismatch { instance, port, artifact })
@@ -1239,7 +1244,9 @@ fn registering_a_new_owner_extends_the_graph_without_engine_changes() {
 
     // This is the same owner-neutral registration path available to future
     // separately built adapters; there is no core enum or provider switch.
-    trusted.register_contract(ExtensionReport::contract()).unwrap();
+    trusted
+        .register_contract(ExtensionReport::contract())
+        .unwrap();
     let sealed = extended.seal(&trusted).unwrap();
     let validated = sealed.validate(&trusted).unwrap();
     assert_eq!(
@@ -1247,9 +1254,16 @@ fn registering_a_new_owner_extends_the_graph_without_engine_changes() {
         Some(&OperationInstanceId::from("extension"))
     );
     let dispatch = validated
-        .checked_dispatch(&"extension".into(), b"merged-result-bytes", DispatchAttempt::First)
+        .checked_dispatch(
+            &"extension".into(),
+            b"merged-result-bytes",
+            DispatchAttempt::First,
+        )
         .unwrap();
-    assert_eq!(dispatch.owner, OperationOwnerId::from("newly_registered_owner"));
+    assert_eq!(
+        dispatch.owner,
+        OperationOwnerId::from("newly_registered_owner")
+    );
     assert_eq!(dispatch.operation, reference("extension.report"));
     assert_ne!(sealed.hash, base.hash);
 
