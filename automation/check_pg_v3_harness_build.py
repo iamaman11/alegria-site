@@ -317,10 +317,39 @@ class PhysicalCargoEvidenceTests(unittest.TestCase):
             with patch.object(ab.shutil, "which", side_effect=lambda exe: f"/usr/bin/{exe}"), \
                  patch.object(ab.subprocess, "Popen", side_effect=fake_popen), \
                  patch.object(ab.subprocess, "run", return_value=subprocess.CompletedProcess(
-                     ["time", "--version"], 0, stdout="GNU time 1.9", stderr="")):
+                     ["time", "--version"], 0, stdout="time (GNU Time) 1.9\n", stderr="")):
                 report = ab.measured_cargo_run(tmp, target, "integration_harness",
                                                {"pkg-a": "integration_harness"}, True)
             self.assertEqual(report["process_tree_resources"]["peak_resident_kib"], 20500)
+
+    def test_gnu_time_version_requires_real_vendor_banner(self):
+        for banner in (
+            "time (GNU Time) 1.9\nCopyright (C) Free Software Foundation",
+            "time (GNU time) 1.9\n",
+            "GNU time 1.9",
+        ):
+            with self.subTest(valid=banner):
+                self.assertTrue(ab.is_gnu_time_version(banner))
+        for banner in (
+            "", "time version 1.9", "time (BSD) 1.9",
+            "BSD time 1.9; compatible with GNU Time",
+            "not GNU Time 1.9", "GNU Time invalid", "GNU time 1.9 garbage",
+        ):
+            with self.subTest(invalid=banner):
+                self.assertFalse(ab.is_gnu_time_version(banner))
+
+    def test_resource_probe_fails_before_compile_on_bsd_time(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            with patch.object(ab.shutil, "which", return_value="/usr/bin/time"), \
+                 patch.object(ab.subprocess, "run", return_value=subprocess.CompletedProcess(
+                     ["time", "--version"], 0, stdout="time (BSD) 1.9", stderr="")), \
+                 patch.object(ab.subprocess, "Popen") as compile_process:
+                with self.assertRaisesRegex(ab.EvidenceError, "requires GNU time"):
+                    ab.measured_cargo_run(
+                        Path(dirname), Path(dirname) / "empty-target",
+                        "integration_harness", {}, True,
+                    )
+                compile_process.assert_not_called()
 
     def test_failure_does_not_leave_stale_success_report(self):
         with tempfile.TemporaryDirectory() as dirname:
