@@ -13,6 +13,14 @@ INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
 POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
+# This is an opt-in, test-only binary owner. It needs the native Temporal
+# client to validate actual History/Signal replay, but it is not a production
+# adapter or a back door for unrelated provider SDKs.
+PG_E2E_DIR = RUST_ROOT / "crates" / "integration_pg_v3_e2e"
+PG_E2E_SRC = PG_E2E_DIR / "src"
+PG_E2E_TEMPORAL_SDKS = frozenset({
+    "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+})
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
@@ -74,6 +82,7 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-common",
         "temporalio-sdk-core",
     },
+    (PG_E2E_DIR / "Cargo.toml").resolve(): PG_E2E_TEMPORAL_SDKS,
 }
 
 ENFORCED_DEP_KEYS = [
@@ -202,6 +211,20 @@ def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
     return packages, direct
 
 
+def pg_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    """Except precisely three native Temporal SDKs in the isolated E2E src.
+
+    Unlike the older all-provider integration harness, this owner must still
+    fail if Graph/Qdrant, reqwest or an additional Temporal SDK appears.
+    """
+    if PG_E2E_SRC not in file_path.parents:
+        return False
+    return any(
+        f"{dependency.replace('-', '_')}::" in pattern.pattern
+        for dependency in PG_E2E_TEMPORAL_SDKS
+    )
+
+
 def main() -> int:
     violations: list[str] = []
 
@@ -224,6 +247,8 @@ def main() -> int:
             continue
         text = file_path.read_text(encoding="utf-8")
         for pat in FORBIDDEN_DIRECT_IN_USE_CASES:
+            if pg_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
             # Temporal's Workflow/Activity SDK belongs to its runtime, and
             # client-only SDKs belong to the independent Temporal gateway.
             # Other external SDKs remain forbidden in those owner modules.
@@ -261,6 +286,24 @@ def main() -> int:
             violations.append(f"missing PostgreSQL owner module: {POSTGRES_STORE_SRC / required}")
 
     dep_patterns = {k: re.compile(rf"^\s*{re.escape(k)}\s*=", re.MULTILINE) for k in ENFORCED_DEP_KEYS}
+
+    # SDK exceptions here are *only* test feature dependencies. Otherwise a
+    # default workspace build could silently turn the E2E package into an
+    # extra Temporal runtime owner with unconditional SDK linkage.
+    try:
+        pg_doc = tomllib.loads((PG_E2E_DIR / "Cargo.toml").read_text(encoding="utf-8"))
+        pg_deps = pg_doc["dependencies"]
+        pg_e2e_features = set(pg_doc["features"]["e2e"])
+        for sdk in sorted(PG_E2E_TEMPORAL_SDKS):
+            declared = pg_deps.get(sdk)
+            if (not isinstance(declared, dict) or declared.get("optional") is not True
+                    or f"dep:{sdk}" not in pg_e2e_features):
+                violations.append(
+                    f"integration_pg_v3_e2e must gate native test-only SDK `{sdk}` behind `e2e`"
+                )
+    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
+        violations.append(f"cannot verify isolated PG E2E SDK feature boundary: {error}")
+
     for manifest in sorted(RUST_ROOT.rglob("Cargo.toml")):
         manifest = manifest.resolve()
         if manifest in ALLOWED_DIRECT_SDK_MANIFESTS:
