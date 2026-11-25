@@ -25,9 +25,7 @@ use sqlx::{PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::truth_review_effect_v3::{
-    assert_unprivileged_pg_effect_role, PG_OWNER_TASK_QUEUE_V1,
-};
+use crate::truth_review_effect_v3::{assert_unprivileged_pg_effect_role, PG_OWNER_TASK_QUEUE_V1};
 
 pub const OPERATION_ID: &str = "pg.vector_projection.read";
 pub const OPERATION_REVISION: u32 = 1;
@@ -163,7 +161,9 @@ pub async fn execute_pg_vector_projection_owner_v1(
     if actual_child_workflow_id.trim().is_empty()
         || Uuid::parse_str(actual_child_workflow_run_id).is_err()
     {
-        return Err(PgVectorProjectionError::InvalidCommand("actual_temporal_child"));
+        return Err(PgVectorProjectionError::InvalidCommand(
+            "actual_temporal_child",
+        ));
     }
     assert_unprivileged_pg_effect_role(pool)
         .await
@@ -255,8 +255,14 @@ mod tests {
         let contract = PgReadVectorProjectionV1::contract();
         assert_eq!(contract.reference.id.as_str(), OPERATION_ID);
         assert_eq!(contract.owner.as_str(), OWNER_ID);
-        assert_eq!(contract.outputs[&PortId(OUTPUT_PORT.into())], vector_projection_schema());
-        assert_eq!(contract.inputs[&PortId(INPUT_PORT.into())], vector_lookup_schema());
+        assert_eq!(
+            contract.outputs[&PortId(OUTPUT_PORT.into())],
+            vector_projection_schema()
+        );
+        assert_eq!(
+            contract.inputs[&PortId(INPUT_PORT.into())],
+            vector_lookup_schema()
+        );
         let projection = VectorProjectionV1 {
             tenant_id: "tenant-a".into(),
             context_key: "ES:tourist:BY".into(),
@@ -264,6 +270,10 @@ mod tests {
             vector: vec![0.25; VECTOR_DIMENSIONS_V1],
         };
         projection.validate().unwrap();
-        assert_eq!(serde_json::from_slice::<VectorProjectionV1>(&serde_json::to_vec(&projection).unwrap()).unwrap(), projection);
+        assert_eq!(
+            serde_json::from_slice::<VectorProjectionV1>(&serde_json::to_vec(&projection).unwrap())
+                .unwrap(),
+            projection
+        );
     }
 }

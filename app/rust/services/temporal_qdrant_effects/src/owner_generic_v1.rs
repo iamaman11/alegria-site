@@ -9,14 +9,14 @@ use anyhow::{ensure, Context, Result};
 use operation_protocol::owner_dispatch::{
     OwnerInvocationV1, OwnerResultV1, OWNER_OPERATION_CHILD_TYPE_V1,
 };
+use operation_protocol::Operation;
 use qdrant_contracts::{
     confirmed_qdrant_owner_result, verify_qdrant_owner_invocation, QdrantChildOutcomeV1,
-    QdrantProducedVectorProjectionContractV1,
-    QDRANT_GENERIC_ACTIVITY_QUEUE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
+    QdrantProducedVectorProjectionContractV1, QDRANT_GENERIC_ACTIVITY_QUEUE_V1,
+    QDRANT_GENERIC_OWNER_QUEUE_V1,
 };
 use qdrant_effects_core::{execute_admitted_qdrant_projection_v3, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
-use operation_protocol::Operation;
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
@@ -140,8 +140,8 @@ impl QdrantGenericActivities {
                 "generic Qdrant effect has no independently History-attested SQL admission",
             ));
         }
-        let command = verify_qdrant_owner_invocation(&invocation)
-            .map_err(terminal_activity_error)?;
+        let command =
+            verify_qdrant_owner_invocation(&invocation).map_err(terminal_activity_error)?;
         let outcome = execute_admitted_qdrant_projection_v3(
             &self.pool,
             command.admission_id,
@@ -211,9 +211,8 @@ impl QdrantGenericActivities {
         let pinned_effect_bytes = if invocation.checked_dispatch.operation
             == QdrantProducedVectorProjectionContractV1::contract().reference
         {
-            serde_json::to_vec(&command).map_err(|error| {
-                AdmissionProbeError::Denied(anyhow::Error::from(error))
-            })?
+            serde_json::to_vec(&command)
+                .map_err(|error| AdmissionProbeError::Denied(anyhow::Error::from(error)))?
         } else {
             invocation.command_bytes.clone()
         };
@@ -236,8 +235,7 @@ impl QdrantGenericActivities {
                         == invocation.checked_dispatch.plan_hash.as_str()
                     && row.try_get::<String, _>("dispatch_execution_key")?
                         == invocation.checked_dispatch.execution_key
-                    && row.try_get::<Vec<u8>, _>("command_bytes")?
-                        == pinned_effect_bytes,
+                    && row.try_get::<Vec<u8>, _>("command_bytes")? == pinned_effect_bytes,
                 "V3 SQL admission does not pin exact typed command, parent, child and checked DAG"
             );
             Ok(())

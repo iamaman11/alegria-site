@@ -74,9 +74,13 @@ pub enum VectorProjectionValidationError {
 
 impl VectorProjectionV1 {
     pub fn validate(&self) -> Result<(), VectorProjectionValidationError> {
-        if [self.tenant_id.as_str(), self.context_key.as_str(), self.keyword_key.as_str()]
-            .iter()
-            .any(|s| s.is_empty() || s.trim() != *s || s.contains('\0'))
+        if [
+            self.tenant_id.as_str(),
+            self.context_key.as_str(),
+            self.keyword_key.as_str(),
+        ]
+        .iter()
+        .any(|s| s.is_empty() || s.trim() != *s || s.contains('\0'))
         {
             return Err(VectorProjectionValidationError::MissingIdentity);
         }
@@ -113,9 +117,15 @@ mod tests {
         };
         assert!(projection.validate().is_ok());
         projection.vector[0] = f32::NAN;
-        assert_eq!(projection.validate(), Err(VectorProjectionValidationError::InvalidVector));
+        assert_eq!(
+            projection.validate(),
+            Err(VectorProjectionValidationError::InvalidVector)
+        );
         projection.vector[0] = 0.5;
         projection.tenant_id = " ".to_owned();
-        assert_eq!(projection.validate(), Err(VectorProjectionValidationError::MissingIdentity));
+        assert_eq!(
+            projection.validate(),
+            Err(VectorProjectionValidationError::MissingIdentity)
+        );
     }
 }

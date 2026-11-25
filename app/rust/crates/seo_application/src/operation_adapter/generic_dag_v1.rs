@@ -622,7 +622,11 @@ mod tests {
         });
         run.plan = run.plan.seal(routes.catalog()).unwrap();
         run.pinned_routes = routes
-            .trusted_snapshot_for(run.owner_commands.values().map(|command| &command.operation))
+            .trusted_snapshot_for(
+                run.owner_commands
+                    .values()
+                    .map(|command| &command.operation),
+            )
             .unwrap();
         (run, routes)
     }
@@ -631,7 +635,9 @@ mod tests {
     fn independent_owner_children_form_a_ready_wave_but_produced_consumer_waits() {
         let (run, routes) = setup_with_independent_node();
         let mut machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes).unwrap();
-        let first_wave = machine.next_independent_owner_invocations(parent()).unwrap();
+        let first_wave = machine
+            .next_independent_owner_invocations(parent())
+            .unwrap();
         assert_eq!(first_wave.len(), 2);
         assert_eq!(
             first_wave[0].1.checked_dispatch.instance,
@@ -660,7 +666,9 @@ mod tests {
             OperationInstanceId::from("consumer")
         );
         assert_eq!(
-            consumer.bound_inputs[&PortId::from("source")].artifact.payload,
+            consumer.bound_inputs[&PortId::from("source")]
+                .artifact
+                .payload,
             b"genuine-first-wave-output"
         );
         machine
@@ -681,7 +689,9 @@ mod tests {
             .insert("producer".into());
         run.plan = run.plan.seal(routes.catalog()).unwrap();
         let machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes).unwrap();
-        let wave = machine.next_independent_owner_invocations(parent()).unwrap();
+        let wave = machine
+            .next_independent_owner_invocations(parent())
+            .unwrap();
         assert_eq!(wave.len(), 1);
         assert_eq!(
             wave[0].1.checked_dispatch.instance,

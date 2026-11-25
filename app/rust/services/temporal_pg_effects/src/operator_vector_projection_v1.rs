@@ -55,11 +55,8 @@ fn verify_history_bytes(
         OPERATION_DAG_PARENT_TYPE,
         OPERATION_DAG_PARENT_QUEUE,
     )?;
-    let child_start_bytes = first_started_payload(
-        child,
-        OWNER_OPERATION_CHILD_TYPE_V1,
-        PG_OWNER_TASK_QUEUE_V1,
-    )?;
+    let child_start_bytes =
+        first_started_payload(child, OWNER_OPERATION_CHILD_TYPE_V1, PG_OWNER_TASK_QUEUE_V1)?;
     let invocation: OwnerInvocationV1 = serde_json::from_slice(&child_start_bytes)
         .context("PG projection child start is not a typed OwnerInvocationV1")?;
     ensure!(
@@ -75,12 +72,14 @@ fn verify_history_bytes(
     let command = validate_pg_vector_projection_invocation_v1(&invocation)
         .context("PG projection typed owner command does not match checked dispatch")?;
     ensure!(
-        command.admission_id == request.admission_id
-            && command.run_id == request.canonical_run_id,
+        command.admission_id == request.admission_id && command.run_id == request.canonical_run_id,
         "PG projection admission/canonical run not bound to typed command"
     );
 
-    let child_started = child.events.first().context("empty PG vector child History")?;
+    let child_started = child
+        .events
+        .first()
+        .context("empty PG vector child History")?;
     let Some(Attributes::WorkflowExecutionStartedEventAttributes(child_start)) =
         &child_started.attributes
     else {
@@ -138,7 +137,10 @@ fn verify_history_bytes(
             reciprocal += 1;
         }
     }
-    ensure!(reciprocal == 1, "PG projection needs one reciprocal native ChildStarted");
+    ensure!(
+        reciprocal == 1,
+        "PG projection needs one reciprocal native ChildStarted"
+    );
 
     let run: OperationDagRunV6 = serde_json::from_slice(&parent_start_bytes)?;
     ensure!(
@@ -161,11 +163,15 @@ fn verify_history_bytes(
         "PG producer command is not immutable parent plan dispatch"
     );
     ensure!(
-        run.plan.pinned_contracts.iter().any(|p| p.reference == contract.reference
-            && p.fingerprint == contract_hash),
+        run.plan
+            .pinned_contracts
+            .iter()
+            .any(|p| p.reference == contract.reference && p.fingerprint == contract_hash),
         "PG producer exact contract fingerprint absent in parent History"
     );
-    let owner_wire = run.owner_commands.get(&checked.instance)
+    let owner_wire = run
+        .owner_commands
+        .get(&checked.instance)
         .context("PG vector command not present in parent start")?;
     ensure!(
         owner_wire.operation == checked.operation
@@ -174,36 +180,50 @@ fn verify_history_bytes(
             && owner_wire.command_bytes == invocation.command_bytes,
         "PG vector owner command differs from immutable parent start"
     );
-    let node = run.plan.nodes.iter().find(|n| n.instance == checked.instance)
+    let node = run
+        .plan
+        .nodes
+        .iter()
+        .find(|n| n.instance == checked.instance)
         .context("PG vector operation instance missing from parent DAG")?;
     ensure!(
         node.operation == checked.operation
             && node.permitted_effects == checked.effects
             && run.plan.allowed_effects.is_superset(&checked.effects)
             && node.inputs.len() == invocation.bound_inputs.len()
-            && node.inputs.iter().all(|(port, binding)| invocation.bound_inputs
-                .get(port).is_some_and(|bound| &bound.source == binding)),
+            && node.inputs.iter().all(|(port, binding)| invocation
+                .bound_inputs
+                .get(port)
+                .is_some_and(|bound| &bound.source == binding)),
         "PG vector source binding/effect violates immutable parent plan"
     );
-    let bound = invocation.bound_inputs.get(&PortId(INPUT_PORT.into()))
+    let bound = invocation
+        .bound_inputs
+        .get(&PortId(INPUT_PORT.into()))
         .context("PG vector external lookup not bound")?;
     let ArtifactBinding::External { artifact } = &bound.source else {
         anyhow::bail!("PG vector producer cannot consume unproven Produced data")
     };
     ensure!(
-        artifact == &bound.artifact_id
-            && run.admitted.get(artifact) == Some(&bound.artifact),
+        artifact == &bound.artifact_id && run.admitted.get(artifact) == Some(&bound.artifact),
         "PG vector bound lookup bytes differ from immutable parent input"
     );
-    let route = run.pinned_routes.iter().find(|r|
-        r.operation == checked.operation && r.owner == checked.owner)
+    let route = run
+        .pinned_routes
+        .iter()
+        .find(|r| r.operation == checked.operation && r.owner == checked.owner)
         .context("parent did not pin PG vector producer route")?;
     ensure!(
         route.contract_hash == contract_hash
             && route.workflow_type == OWNER_OPERATION_CHILD_TYPE_V1
             && route.task_queue == PG_OWNER_TASK_QUEUE_V1
             && route.build_id == trusted_build_id
-            && run.pinned_routes.iter().filter(|r| r.operation == checked.operation).count() == 1,
+            && run
+                .pinned_routes
+                .iter()
+                .filter(|r| r.operation == checked.operation)
+                .count()
+                == 1,
         "PG vector route is not trusted worker Build ID/type/queue"
     );
     Ok(VerifiedHistory {
@@ -220,16 +240,30 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<Ve
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")
         .context("PG projection operator must configure exact namespace")?;
     super::operator_dag_governance::validate_local_temporal_endpoint(&url)?;
-    ensure!(!namespace.is_empty() && namespace.trim() == namespace, "invalid Temporal namespace");
+    ensure!(
+        !namespace.is_empty() && namespace.trim() == namespace,
+        "invalid Temporal namespace"
+    );
     let client = temporal_gateway::connect_client(
         &url,
         format!("alegria-pg-projection-issuer-{}", std::process::id()),
         &namespace,
-    ).await?;
-    let parent = fetch_exact_history(&client, &namespace,
-        &request.parent_workflow_id, &request.parent_workflow_run_id).await?;
-    let child = fetch_exact_history(&client, &namespace,
-        &request.child_workflow_id, &request.child_workflow_run_id).await?;
+    )
+    .await?;
+    let parent = fetch_exact_history(
+        &client,
+        &namespace,
+        &request.parent_workflow_id,
+        &request.parent_workflow_run_id,
+    )
+    .await?;
+    let child = fetch_exact_history(
+        &client,
+        &namespace,
+        &request.child_workflow_id,
+        &request.child_workflow_run_id,
+    )
+    .await?;
     verify_history_bytes(&parent, &child, request, build_id)
 }
 
@@ -245,23 +279,37 @@ async fn insert_admission(
         "PG vector source tenant does not match authenticated operator LOGIN"
     );
     let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout = '5s'").execute(&mut *tx).await?;
-    sqlx::query("SET LOCAL statement_timeout = '30s'").execute(&mut *tx).await?;
+    sqlx::query("SET LOCAL lock_timeout = '5s'")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL statement_timeout = '30s'")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
         .bind(format!("truth-run-status|{}", request.canonical_run_id))
-        .execute(&mut *tx).await?;
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-        .bind(format!("operation-dag-canonical|{}", request.canonical_run_id))
-        .execute(&mut *tx).await?;
+        .bind(format!(
+            "operation-dag-canonical|{}",
+            request.canonical_run_id
+        ))
+        .execute(&mut *tx)
+        .await?;
     let run = sqlx::query(
         "SELECT context_key,workflow_type,status FROM pipeline.execution_runs WHERE run_id=$1",
-    ).bind(request.canonical_run_id)
-        .fetch_optional(&mut *tx).await?
-        .context("PG vector producer canonical Truth source run missing")?;
+    )
+    .bind(request.canonical_run_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .context("PG vector producer canonical Truth source run missing")?;
     ensure!(
         run.get::<String, _>("context_key") == attested.command.context_key
             && run.get::<String, _>("workflow_type") == "seo_site_build"
-            && matches!(run.get::<String, _>("status").as_str(), "verifying" | "pending_hitl"),
+            && matches!(
+                run.get::<String, _>("status").as_str(),
+                "verifying" | "pending_hitl"
+            ),
         "PG source is not an authorized active canonical business run"
     );
     let parent_sha = sha256_pg(&mut tx, &attested.parent_start_bytes).await?;
@@ -276,8 +324,12 @@ async fn insert_admission(
     .bind(&request.parent_workflow_run_id)
     .bind(&attested.invocation.checked_dispatch.plan_hash.0)
     .bind(&parent_sha)
-    .fetch_one(&mut *tx).await?;
-    ensure!(governed, "PG projection generic parent governance missing/expired");
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        governed,
+        "PG projection generic parent governance missing/expired"
+    );
     let source = sqlx::query(
         "SELECT vector FROM pipeline.vector_projection_sources_v1
          WHERE run_id=$1 AND tenant_id=$2 AND context_key=$3 AND keyword_key=$4
@@ -287,7 +339,8 @@ async fn insert_admission(
     .bind(tenant)
     .bind(&attested.command.context_key)
     .bind(&attested.command.keyword_key)
-    .fetch_optional(&mut *tx).await?
+    .fetch_optional(&mut *tx)
+    .await?
     .context("PG vector precomputed authoritative source row missing")?;
     let vector: serde_json::Value = source.try_get("vector")?;
     let source_hash: String = sqlx::query_scalar(
@@ -300,7 +353,8 @@ async fn insert_admission(
     .bind(&attested.command.context_key)
     .bind(&attested.command.keyword_key)
     .bind(vector)
-    .fetch_one(&mut *tx).await?;
+    .fetch_one(&mut *tx)
+    .await?;
     let invocation_sha = sha256_pg(&mut tx, &attested.child_start_bytes).await?;
     let checked = &attested.invocation.checked_dispatch;
     let fingerprint = PgReadVectorProjectionV1::contract().fingerprint()?;
@@ -333,8 +387,12 @@ async fn insert_admission(
     .bind(parent_sha)
     .bind(source_hash)
     .bind(request.expires_in_seconds as i32)
-    .fetch_one(&mut *tx).await?;
-    ensure!(inserted == request.admission_id, "PG vector source admission ID drift");
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        inserted == request.admission_id,
+        "PG vector source admission ID drift"
+    );
     tx.commit().await?;
     println!(
         "{}",
@@ -357,7 +415,8 @@ async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
         &url,
         format!("alegria-pg-vector-signal-{}", std::process::id()),
         &namespace,
-    ).await?;
+    )
+    .await?;
     WorkflowExecutionInfo::builder()
         .namespace(namespace)
         .workflow_id(request.child_workflow_id.clone())
@@ -386,7 +445,9 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
             && Uuid::parse_str(&request.child_workflow_run_id).is_ok()
             && request.parent_workflow_id
                 == operation_dag_parent_workflow_id(&request.canonical_run_id.to_string())
-            && request.child_workflow_id.starts_with("alegria-owner-operation-v1-"),
+            && request
+                .child_workflow_id
+                .starts_with("alegria-owner-operation-v1-"),
         "invalid PG projection operator locator/expiry"
     );
     let build_id = env::var("PG_OWNER_EXPECTED_BUILD_ID")
@@ -398,9 +459,9 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
     let attested = attest_from_server(&request, &build_id).await?;
     let tenant = env::var("PG_EFFECT_OPERATOR_TENANT_ID")
         .context("PG projection operator must pin authenticated tenant")?;
-    let (pool, _) = super::operator::operator_pool_with_enable_flag(
-        "ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1",
-    ).await?;
+    let (pool, _) =
+        super::operator::operator_pool_with_enable_flag("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1")
+            .await?;
     insert_admission(&pool, &request, &attested, &tenant).await?;
     signal_after_commit(&request).await
 }

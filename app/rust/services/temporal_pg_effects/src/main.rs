@@ -27,8 +27,8 @@ use postgres_store::truth_review_effect_v3::{
 };
 use postgres_store::vector_projection_owner_v1::{
     confirmed_pg_vector_projection_owner_result, execute_pg_vector_projection_owner_v1,
-    validate_pg_vector_projection_invocation_v1,
-    PgVectorProjectionReceiptV1, OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
+    validate_pg_vector_projection_invocation_v1, PgVectorProjectionReceiptV1,
+    OPERATION_ID as PG_VECTOR_PROJECTION_OPERATION_ID,
 };
 use projection_contracts::VectorProjectionV1;
 use sqlx::PgPool;
@@ -45,8 +45,8 @@ use temporalio_sdk::{
 mod operator;
 mod operator_dag_governance;
 mod operator_owner_v1;
-mod operator_vector_projection_v1;
 mod operator_v4;
+mod operator_vector_projection_v1;
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
@@ -126,13 +126,18 @@ impl PgTruthReviewActivities {
         if info.workflow_type.as_deref() != Some(OWNER_OPERATION_CHILD_TYPE_V1)
             || info.task_queue != PG_EFFECT_TASK_QUEUE
         {
-            return Err(activity_terminal("vector producer invoked outside PG owner Workflow/Activity queue"));
+            return Err(activity_terminal(
+                "vector producer invoked outside PG owner Workflow/Activity queue",
+            ));
         }
         execute_pg_vector_projection_owner_v1(&self.pool, workflow_id, run_id, &invocation)
             .await
             .map_err(|error| match error {
-                postgres_store::vector_projection_owner_v1::PgVectorProjectionError::Sql(_) =>
-                    ActivityError::application(ApplicationFailure::new(std::io::Error::other(error.to_string()))),
+                postgres_store::vector_projection_owner_v1::PgVectorProjectionError::Sql(_) => {
+                    ActivityError::application(ApplicationFailure::new(std::io::Error::other(
+                        error.to_string(),
+                    )))
+                }
                 _ => activity_terminal(&error.to_string()),
             })
     }
@@ -314,9 +319,7 @@ impl AlegriaOwnerOperationV1Workflow {
     #[run]
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerResultV1> {
         let invocation = ctx.state(|state| state.immutable_invocation.clone());
-        if invocation.checked_dispatch.operation.id.as_str()
-            == PG_VECTOR_PROJECTION_OPERATION_ID
-        {
+        if invocation.checked_dispatch.operation.id.as_str() == PG_VECTOR_PROJECTION_OPERATION_ID {
             validate_pg_vector_projection_invocation_v1(&invocation).map_err(|error| {
                 temporalio_sdk::WorkflowTermination::failed_application(
                     ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
@@ -333,16 +336,12 @@ impl AlegriaOwnerOperationV1Workflow {
                     options,
                 )
                 .await?;
-            return confirmed_pg_vector_projection_owner_result(
-                &invocation,
-                projection,
-                receipt,
-            )
-            .map_err(|error| {
-                temporalio_sdk::WorkflowTermination::failed_application(
-                    ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
-                )
-            });
+            return confirmed_pg_vector_projection_owner_result(&invocation, projection, receipt)
+                .map_err(|error| {
+                    temporalio_sdk::WorkflowTermination::failed_application(
+                        ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+                    )
+                });
         }
         validate_pg_owner_invocation_v1(&invocation).map_err(|error| {
             temporalio_sdk::WorkflowTermination::failed_application(
@@ -619,8 +618,13 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-issue-pg-projection-v1") {
-            let path = args.next().context("--operator-issue-pg-projection-v1 requires strict JSON locator")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected vector producer operator arguments");
+            let path = args
+                .next()
+                .context("--operator-issue-pg-projection-v1 requires strict JSON locator")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected vector producer operator arguments"
+            );
             operator_vector_projection_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }

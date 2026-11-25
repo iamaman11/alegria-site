@@ -14,10 +14,10 @@ use operation_protocol::{
 use thiserror::Error;
 
 use crate::{
-    QdrantChildOutcomeV1, QdrantKeywordChildResultV2, QdrantKeywordProjectionCommandV1,
-    QdrantKeywordProjectionContractV2, QDRANT_CHILD_SCHEMA_REVISION_V2,
+    verify_produced_qdrant_owner_invocation, QdrantChildOutcomeV1, QdrantKeywordChildResultV2,
+    QdrantKeywordProjectionCommandV1, QdrantKeywordProjectionContractV2,
+    QdrantProducedVectorProjectionContractV1, QDRANT_CHILD_SCHEMA_REVISION_V2,
     QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_EFFECT_OUTPUT_PORT_V2,
-    QdrantProducedVectorProjectionContractV1, verify_produced_qdrant_owner_invocation,
 };
 
 pub const QDRANT_GENERIC_OWNER_QUEUE_V1: &str = "alegria-qdrant-owner-v1";

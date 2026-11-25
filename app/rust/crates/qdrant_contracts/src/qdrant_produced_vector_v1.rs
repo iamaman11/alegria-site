@@ -5,7 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    owner_dispatch::{OwnerInvocationV1, PinnedOwnerRouteV1, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1},
+    owner_dispatch::{
+        OwnerInvocationV1, PinnedOwnerRouteV1, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    },
     ArtifactBinding, ArtifactSchema, ArtifactTypeId, EffectId, IdempotencyPolicy, Operation,
     OperationContract, OperationId, OperationOwnerId, OperationRef, PortId,
 };
@@ -15,8 +17,8 @@ use uuid::Uuid;
 
 use crate::{
     qdrant_owner_generic_v1::{GenericQdrantContractError, QDRANT_GENERIC_OWNER_QUEUE_V1},
-    QdrantKeywordChildResultV2, QdrantKeywordProjectionCommandV1,
-    QDRANT_EFFECT_OPERATION_ID_V2, QDRANT_EFFECT_OUTPUT_PORT_V2, QDRANT_EFFECT_OWNER_ID_V2,
+    QdrantKeywordChildResultV2, QdrantKeywordProjectionCommandV1, QDRANT_EFFECT_OPERATION_ID_V2,
+    QDRANT_EFFECT_OUTPUT_PORT_V2, QDRANT_EFFECT_OWNER_ID_V2,
 };
 
 pub const QDRANT_PRODUCED_VECTOR_OPERATION_ID_V1: &str = "qdrant.vector_projection.upsert_produced";
@@ -95,8 +97,7 @@ pub fn verify_produced_qdrant_owner_invocation(
         .verify_integrity(&catalog)
         .map_err(|_| GenericQdrantContractError::ForeignOrInvalidDispatch)?;
 
-    let wire: QdrantProducedVectorCommandV1 =
-        serde_json::from_slice(&invocation.command_bytes)?;
+    let wire: QdrantProducedVectorCommandV1 = serde_json::from_slice(&invocation.command_bytes)?;
     if wire.schema_revision != 1 || wire.admission_id.is_nil() {
         return Err(GenericQdrantContractError::InvalidInput);
     }
@@ -110,8 +111,7 @@ pub fn verify_produced_qdrant_owner_invocation(
     {
         return Err(GenericQdrantContractError::UnprovenProducedArtifact);
     }
-    let projection: VectorProjectionV1 =
-        serde_json::from_slice(&bound.artifact.payload)?;
+    let projection: VectorProjectionV1 = serde_json::from_slice(&bound.artifact.payload)?;
     // A receipt cannot be reinterpreted as a vector. The consumer checks a
     // real, bounded, finite vector and exact admitted tenant before any I/O.
     if projection.tenant_id != invocation.checked_dispatch.scope.tenant_id
@@ -119,7 +119,10 @@ pub fn verify_produced_qdrant_owner_invocation(
         || projection.context_key.trim().is_empty()
         || projection.keyword_key.trim().is_empty()
         || projection.vector.len() != 1024
-        || !projection.vector.iter().all(|component| component.is_finite())
+        || !projection
+            .vector
+            .iter()
+            .all(|component| component.is_finite())
     {
         return Err(GenericQdrantContractError::InvalidInput);
     }
@@ -174,7 +177,8 @@ mod tests {
                     port: PortId::from("vector_projection"),
                 },
                 artifact: AdmittedArtifactV1 {
-                    schema: contract.inputs[&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)].clone(),
+                    schema: contract.inputs[&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)]
+                        .clone(),
                     scope: scope.clone(),
                     provenance: "postgres:durable-vector-source".into(),
                     payload: serde_json::to_vec(&projection).unwrap(),
@@ -184,10 +188,14 @@ mod tests {
                     port: PortId::from("vector_projection"),
                     artifact_id: artifact_id.clone(),
                     dispatch_execution_key: producer_key.clone(),
-                    child_workflow_id: operation_protocol::owner_dispatch::owner_child_workflow_id(&producer_key),
+                    child_workflow_id: operation_protocol::owner_dispatch::owner_child_workflow_id(
+                        &producer_key,
+                    ),
                     result_hash: "b".repeat(64),
                     receipt_hash: "c".repeat(64),
-                    payload_hash: blake3::hash(&serde_json::to_vec(&projection).unwrap()).to_hex().to_string(),
+                    payload_hash: blake3::hash(&serde_json::to_vec(&projection).unwrap())
+                        .to_hex()
+                        .to_string(),
                 }),
             },
         )]);
@@ -208,7 +216,8 @@ mod tests {
             execution_key: String::new(),
         };
         let hash = blake3::hash(&canonical_owner_dispatch_input_bytes(&binding, &bytes).unwrap())
-            .to_hex().to_string();
+            .to_hex()
+            .to_string();
         dispatch.input_hash = hash.clone();
         dispatch.execution_key = checked_execution_key(&dispatch, &hash).unwrap();
         OwnerInvocationV1 {
@@ -227,11 +236,21 @@ mod tests {
     fn produced_qdrant_contract_cannot_cast_receipt_into_vector() {
         let contract = QdrantProducedVectorProjectionContractV1::contract();
         assert_eq!(contract.inputs.len(), 1);
-        assert_eq!(contract.inputs[&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)].id.0,
-                   "projection.vector_projection");
+        assert_eq!(
+            contract.inputs[&PortId::from(QDRANT_PRODUCED_VECTOR_INPUT_PORT_V1)]
+                .id
+                .0,
+            "projection.vector_projection"
+        );
         assert_ne!(contract.reference.id.0, QDRANT_EFFECT_OPERATION_ID_V2);
-        assert_eq!(contract.effects.iter().next().unwrap().0, QDRANT_EFFECT_OPERATION_ID_V2);
-        assert!(serde_json::from_slice::<VectorProjectionV1>(b"{\"admission_id\":\"00000000-0000-0000-0000-000000000000\"}").is_err());
+        assert_eq!(
+            contract.effects.iter().next().unwrap().0,
+            QDRANT_EFFECT_OPERATION_ID_V2
+        );
+        assert!(serde_json::from_slice::<VectorProjectionV1>(
+            b"{\"admission_id\":\"00000000-0000-0000-0000-000000000000\"}"
+        )
+        .is_err());
     }
 
     #[test]
@@ -242,14 +261,19 @@ mod tests {
         let wire: QdrantProducedVectorCommandV1 =
             serde_json::from_slice(&invocation.command_bytes).unwrap();
         assert_eq!(wire.admission_id, command.admission_id);
-        assert!(!invocation.command_bytes.windows(4).any(|chunk| chunk == b"0.25"));
+        assert!(!invocation
+            .command_bytes
+            .windows(4)
+            .any(|chunk| chunk == b"0.25"));
     }
 
     #[test]
     fn qdrant_rejects_external_or_receipt_as_produced_vector() {
         let mut external = sample_invocation();
         let input = external.bound_inputs.values_mut().next().unwrap();
-        input.source = ArtifactBinding::External { artifact: input.artifact_id.clone() };
+        input.source = ArtifactBinding::External {
+            artifact: input.artifact_id.clone(),
+        };
         input.produced_evidence = None;
         assert!(verify_produced_qdrant_owner_invocation(&external).is_err());
 

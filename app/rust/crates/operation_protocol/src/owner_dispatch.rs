@@ -330,8 +330,7 @@ impl OwnerInvocationV1 {
         )?;
         let upstream_input_hash = owner_content_hash(&upstream_input);
         if upstream.input_hash != upstream_input_hash
-            || checked_execution_key(upstream, &upstream_input_hash)
-                .map_err(|_| invalid())?
+            || checked_execution_key(upstream, &upstream_input_hash).map_err(|_| invalid())?
                 != upstream.execution_key
         {
             return Err(invalid());
@@ -553,9 +552,7 @@ mod produced_completion_tests {
             port: PortId::from("vector_projection"),
             artifact_id: ArtifactId::from("pg-projection-1"),
             dispatch_execution_key: upstream.checked_dispatch.execution_key.clone(),
-            child_workflow_id: owner_child_workflow_id(
-                &upstream.checked_dispatch.execution_key,
-            ),
+            child_workflow_id: owner_child_workflow_id(&upstream.checked_dispatch.execution_key),
             result_hash: canonical_owner_result_hash(&upstream_result).unwrap(),
             receipt_hash: owner_content_hash(&upstream_result.receipt_bytes),
             payload_hash: owner_content_hash(&output.payload),
@@ -635,8 +632,8 @@ mod produced_completion_tests {
             .get_mut(&PortId::from("vector_projection"))
             .unwrap()
             .source = ArtifactBinding::External {
-                artifact: ArtifactId::from("pg-projection-1"),
-            };
+            artifact: ArtifactId::from("pg-projection-1"),
+        };
         assert!(verify(&upstream, &result, &forged_downstream).is_err());
 
         let mut forged_downstream = downstream;
