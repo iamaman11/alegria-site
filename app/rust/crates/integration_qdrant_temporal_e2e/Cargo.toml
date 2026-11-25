@@ -12,7 +12,8 @@ e2e = [
   "dep:operation_protocol", "dep:serial_test", "dep:sqlx",
   "dep:temporal_gateway", "dep:temporalio-client", "dep:temporalio-common",
   "dep:temporalio-sdk-core", "dep:testcontainers", "dep:tokio",
-  "dep:uuid", "dep:vector_qdrant",
+  "dep:uuid", "dep:vector_qdrant", "dep:truth_domain", "dep:seo_application",
+  "dep:qdrant_contracts",
 ]
 
 [dependencies]
@@ -29,4 +30,7 @@ testcontainers = { version = "0.28.0", optional = true }
 tokio = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
 vector_qdrant = { path = "../vector_qdrant", optional = true }
+truth_domain = { path = "../truth_domain", optional = true }
+qdrant_contracts = { path = "../qdrant_contracts", optional = true }
+seo_application = { path = "../seo_application", optional = true }
 serde_json = { workspace = true }

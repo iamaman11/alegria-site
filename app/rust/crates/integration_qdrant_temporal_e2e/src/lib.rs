@@ -9,7 +9,7 @@ mod temporal_containers;
 mod tests {
     use super::temporal_containers::TemporalHarness;
     use integration_data_fixtures::{PostgresHarness, QdrantHarness};
-    use operation_protocol::{
+    use qdrant_contracts::{
         QdrantKeywordProjectionCommandV1, QdrantProjectionRunV1, QDRANT_DAG_PARENT_QUEUE_V1,
         QDRANT_DAG_PARENT_TYPE_V1,
     };
@@ -86,4 +86,5 @@ mod tests {
     }
 
     include!("tests/native_temporal_qdrant_tests.rs");
+    include!("tests/native_temporal_mixed_owner_tests.rs");
 }

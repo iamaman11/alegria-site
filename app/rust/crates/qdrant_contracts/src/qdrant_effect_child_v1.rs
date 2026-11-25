@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::TemporalExecutionIdentityV4;
+use operation_protocol::TemporalExecutionIdentityV4;
 
 pub const QDRANT_KEYWORD_PROJECTION_COMMAND_REVISION: u16 = 1;
 pub const QDRANT_OWNER_CHILD_TYPE_V1: &str = "QdrantKeywordProjectionV1Workflow";

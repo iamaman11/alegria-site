@@ -1,0 +1,14 @@
+[package]
+name = "qdrant_contracts"
+version = "0.1.0"
+edition = "2021"
+
+# One narrow, provider-free owner contract boundary. No sqlx, qdrant-client,
+# transport SDK, Temporal Worker or unrelated provider crates.
+[dependencies]
+operation_protocol = { path = "../operation_protocol" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+blake3 = { workspace = true }
+thiserror = { workspace = true }

@@ -1,4 +1,4 @@
-# Provider-free Temporal checked DAG orchestrator (V3/V4/V5 evaluation)
+# Provider-free Temporal checked DAG orchestrator (legacy + generic pilot)
 
 This **standalone Cargo package/binary** is an opt-in physical alternative to
 the existing `temporal_worker`. It registers
@@ -22,6 +22,52 @@ Owner operation implementations stay in
 `seo_application`/domain crates; this package has no Activities, SQLx,
 Neo4j, Qdrant or runtime_composition dependencies.
 
+## Stable generic operation DAG — separately gated pilot
+
+`AlegriaOperationDagV1Workflow` on `alegria-operation-dag-v1` accepts one
+`OperationDagRunV6` with an immutable `ExecutionPlan`, admitted external
+artifacts, versioned generic owner commands, and a pinned route snapshot.
+**No** PostgreSQL/Qdrant/Neo4j DTO, SDK, queue, Workflow Type, owner-specific
+switch or built-in pure-operation registry participates in this new parent.
+The DAG alone defines the operations, checked inputs, Produced bindings and
+execution order. This initial implementation is deliberately serial: disjoint
+parallel fanout is reserved until owner isolation is independently tested.
+
+Every owner — including an owner of a pure transformation — registers the
+**same** native Temporal child Workflow Type
+`AlegriaOwnerOperationV1Workflow` with the strongly typed SDK boundary
+`OwnerInvocationV1 → OwnerResultV1`, but on its **own Task Queue** with its
+own credentials, typed Rust decoder, Activities and operator admission for
+effects. The generic parent learns the child Task Queue only from a trusted
+deployment catalog, never from a caller's manifest. Owner output artifact
+port/schema/scope/provenance and checked dispatch identity are validated
+before the actual Produced payload becomes input to the next node; each
+downstream owner must decode its own concrete Rust input before effects.
+
+`TEMPORAL_OPERATION_DAG_CATALOG_PATH` must name a root-owned, non-group/world
+writable, symlink-free **regular file under `/etc/alegria/`**, with root-owned
+non-group/world-writable ancestor directories, at most 1 MiB. An operator
+installs the versioned JSON file (schema_revision 1, entries of `contract`
+and `route`) at deployment time. Its routes are loaded once per process and
+every Start History's `pinned_routes` must **exactly** match the registered
+catalog subset. A missing, forged or changed route fails closed; no dynamic
+unvalidated workflow routing is available. The catalog's asserted `build_id`
+does **not** itself instruct Temporal to target a matching Worker Deployment
+version; real owner Worker Versioning/routing evidence remains a separate
+production requirement.
+
+This is a nonproduction pilot. Even a valid DAG has **no** independent
+permission to execute external effects: each owner operator must attest
+the actual parent/child Temporal Histories, dispatch, scopes and durable
+receipt before enabling Activity execution. Owners lacking that new generic
+bridge/operator proof must remain **unregistered**, not fall back to older
+provider-specific Workflows. V4/V5/Qdrant V1 Histories are frozen.
+
+The generic pilot is disabled without `ALLOW_OPERATION_DAG_V1=true`, an exact
+source `WORKER_BUILD_ID`, and the `alegria-operation-dag-v1` queue. Offline
+replay uses `--replay-operation-dag-v1-history /path/to/history.json` with
+the same trusted catalog file configured. Neither mode authorizes cutover.
+
 ## Safety and routing
 
 - Pure Task Queue: `alegria-pure-dag-v3`; V4/V5 admitted effect parent Task
@@ -30,7 +76,9 @@ Neo4j, Qdrant or runtime_composition dependencies.
 - Exactly one start gate must be true:
   `ALLOW_PURE_DAG_ORCHESTRATOR=true` for legacy pure and preflight-only V1,
   `ALLOW_EFFECT_DAG_ORCHESTRATOR_V4=true` for the effectful V2 parent,
-  or `ALLOW_EFFECT_DAG_ORCHESTRATOR_V5=true` for the ordered V3 parent.
+  `ALLOW_EFFECT_DAG_ORCHESTRATOR_V5=true` for the ordered V3 parent,
+  `ALLOW_QDRANT_DAG_ORCHESTRATOR_V1=true` for the isolated Qdrant V1 parent,
+  or `ALLOW_OPERATION_DAG_V1=true` for the new generic parent.
   Multiple enabled or none enabled fails before a connection is made.
 - `WORKER_BUILD_ID` is mandatory and must be exactly a nonzero 40-hex source
   commit SHA, including in the unversioned local E2E mode.
@@ -114,6 +162,7 @@ Offline native History replay (one queue per version):
 target/debug/temporal_orchestrator --replay-history /path/to/actual-temporal-history.json
 target/debug/temporal_orchestrator --replay-effect-history /path/to/v4-parent-history.json
 target/debug/temporal_orchestrator --replay-v5-effect-history /path/to/v5-parent-history.json
+target/debug/temporal_orchestrator --replay-operation-dag-v1-history /path/to/generic-parent-history.json
 ```
 
 Successful replay emits `CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS`. Malformed,

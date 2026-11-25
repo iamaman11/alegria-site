@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 48)
+                             for _, _, _, count in rows), 49)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -175,7 +175,7 @@ class ImpactFixtures(unittest.TestCase):
             "integration_harness": {"truth_certification"},
             "integration_graph_e2e": {"graph_query"},
             "integration_qdrant_e2e": {"knowledge_a13", "vector_projection", "vector_admitted_projection"},
-            "integration_qdrant_temporal_e2e": {"temporal_qdrant_v8"},
+            "integration_qdrant_temporal_e2e": {"temporal_qdrant_v8", "temporal_mixed_v6_contract"},
             "integration_temporal_e2e": {"temporal_restart", "pure_dag_v3", "draft_qa_scenario"},
             "integration_pg_app_e2e": {"draft_qa_pg_persistence", "publishing_a17",
                                        "truth_adjudication_integrity", "cms_review_revision", "planning_atomicity"},
@@ -282,6 +282,7 @@ class ImpactFixtures(unittest.TestCase):
         ))
         self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
             ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+            ("temporal_mixed_v6_contract", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow", 1),
         ))
         self.assertEqual(SUITE_OWNERS["temporal_qdrant_v8"]["runtime_binaries"], {
             "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
@@ -369,11 +370,14 @@ class ImpactFixtures(unittest.TestCase):
                       "TemporalHarness::start()", "INTEGRATION_QDRANT_EFFECT_WORKER_BIN",
                       "INTEGRATION_EFFECT_DAG_WORKER_BIN"):
             self.assertIn(proof, test_source)
-        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (("temporal_qdrant_v8", name, 1),))
+        self.assertEqual(E2E_SHARD_RUNS["temporal_qdrant"], (
+            ("temporal_qdrant_v8", name, 1),
+            ("temporal_mixed_v6_contract", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow", 1),
+        ))
         self.assertNotIn("temporal_qdrant", E2E_QDRANT_SHARDS)
         self.assertEqual(E2E_RUNNER_PARTITIONS["rust-qdrant-temporal-e2e"], ("temporal_qdrant",))
 
-    def test_full_real_e2e_shards_cover_all_49_including_optional_certification(self) -> None:
+    def test_full_real_e2e_shards_cover_all_50_including_optional_certification(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -392,8 +396,8 @@ class ImpactFixtures(unittest.TestCase):
             sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 39
         )
         self.assertEqual(
-            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 10
-        )  # Nine ordinary architecture regressions + optional Truth cert.
+            sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 11
+        )  # Ten architecture regressions incl. mixed preflight + optional Truth cert.
         self.assertEqual(
             [(name, test_filter) for rows in shards.values()
              for name, _, test_filter, _ in rows if name == "temporal_restart"],

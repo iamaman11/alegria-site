@@ -2293,6 +2293,8 @@ dependencies = [
  "anyhow",
  "integration_data_fixtures",
  "operation_protocol",
+ "qdrant_contracts",
+ "seo_application",
  "serde_json",
  "serial_test",
  "sqlx",
@@ -2302,6 +2304,7 @@ dependencies = [
  "temporalio-sdk-core",
  "testcontainers",
  "tokio",
+ "truth_domain",
  "uuid",
  "vector_qdrant",
 ]
@@ -3681,11 +3684,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "qdrant_contracts"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "operation_protocol",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "uuid",
+]
+
+[[package]]
 name = "qdrant_effects_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "operation_protocol",
+ "qdrant_contracts",
  "serde_json",
  "sqlx",
  "uuid",
@@ -5360,7 +5375,9 @@ dependencies = [
  "anyhow",
  "futures-util",
  "operation_protocol",
+ "qdrant_contracts",
  "seo_application",
+ "serde",
  "serde_json",
  "temporal_gateway",
  "temporalio-client",
@@ -5407,6 +5424,7 @@ dependencies = [
  "futures",
  "futures-util",
  "operation_protocol",
+ "qdrant_contracts",
  "qdrant_effects_core",
  "serde",
  "serde_json",

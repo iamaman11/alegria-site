@@ -5,7 +5,7 @@
 use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
-use operation_protocol::{
+use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantProjectionRunV1, QDRANT_DAG_PARENT_QUEUE_V1,
     QDRANT_DAG_PARENT_TYPE_V1, QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
@@ -37,7 +37,7 @@ struct Attested {
     parent_child_started_event_id: i64,
 }
 
-fn start_payload(history: &History, workflow_type: &str, queue: &str) -> Result<Vec<u8>> {
+pub(super) fn start_payload(history: &History, workflow_type: &str, queue: &str) -> Result<Vec<u8>> {
     let first = history
         .events
         .first()
@@ -187,7 +187,7 @@ fn attest_pair(parent: &History, child: &History, request: &IssueRequest) -> Res
     })
 }
 
-async fn exact_history(
+pub(super) async fn exact_history(
     client: &temporalio_client::Client,
     namespace: &str,
     workflow_id: &str,
@@ -217,7 +217,7 @@ async fn exact_history(
     Ok(History::from(events))
 }
 
-async fn operator_pool() -> Result<PgPool> {
+pub(super) async fn operator_pool() -> Result<PgPool> {
     ensure!(
         env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1").as_deref() == Ok("true"),
         "Qdrant independent operator admission requires explicit opt-in"

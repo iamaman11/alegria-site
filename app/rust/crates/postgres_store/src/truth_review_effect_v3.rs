@@ -31,6 +31,10 @@ pub const EFFECT_ID: &str = truth_domain::review_effect_contract::EFFECT_ID;
 pub const PG_EFFECT_TASK_QUEUE: &str = "alegria-pg-effects-v3";
 pub const PG_EFFECT_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV3Workflow";
 pub const PG_EFFECT_WORKFLOW_TYPE_V4: &str = "PgTruthReviewReconcileV4Workflow";
+pub const PG_EFFECT_WORKFLOW_TYPE_V5: &str = "PgTruthReviewReconcileV5Workflow";
+/// Shared native Temporal Workflow type, independently hosted on the PG queue.
+/// The owner command remains exclusively PostgreSQL-typed.
+pub const PG_OWNER_TASK_QUEUE_V1: &str = "alegria-pg-owner-v1";
 
 /// Immutable operator-observed Temporal server provenance, independent of
 /// child invocation fields that an untrusted DAG could self-assert. Hash
@@ -441,6 +445,136 @@ pub async fn execute_admitted_reconcile_v4(
     .bind(invocation_bytes)
     .bind(bound_input_bytes)
     .bind(&invocation.owner_command_bytes)
+    .fetch_one(pool)
+    .await
+    .map_err(map_owner_sql_error)?;
+    Ok(receipt_from_row(&row))
+}
+
+/// Validate an independently owned PostgreSQL command at the universal native
+/// Temporal child boundary. The generic DAG does not decode this command.
+/// This is self-consistency only: the privileged issuer STILL needs reciprocal
+/// server Histories plus authoritative PostgreSQL source and tenant checks.
+/// Produced inputs are intentionally rejected pending a durable, independently
+/// attested upstream-owner receipt (no parent-payload-only provenance).
+pub fn validate_pg_owner_invocation_v1(
+    invocation: &operation_protocol::OwnerInvocationV1,
+) -> Result<ReconcileTruthReviewsInput, ReconcileTruthReviewsError> {
+    use operation_protocol::{
+        ArtifactBinding, PinnedOwnerRouteV1, PortId, TrustedRouteCatalog,
+        OWNER_OPERATION_CHILD_TYPE_V1,
+    };
+    use truth_domain::review_effect_contract::{TruthReviewScopeArtifactV1, INPUT_PORT};
+
+    let contract = ReconcileTruthReviewsOperation::contract();
+    let mut catalog = TrustedRouteCatalog::default();
+    catalog
+        .register(
+            contract.clone(),
+            PinnedOwnerRouteV1 {
+                operation: contract.reference.clone(),
+                owner: contract.owner.clone(),
+                contract_hash: contract
+                    .fingerprint()
+                    .map_err(|_| ReconcileTruthReviewsError::InvalidCommand("v5.contract"))?,
+                workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.to_owned(),
+                task_queue: PG_OWNER_TASK_QUEUE_V1.to_owned(),
+                // The independently trusted deployment Build ID is checked
+                // against the actual parent's pinned route by the operator.
+                build_id: "pg-truth-review-v1-owner-code".to_owned(),
+            },
+        )
+        .map_err(|_| ReconcileTruthReviewsError::InvalidCommand("v5.route_catalog"))?;
+    invocation
+        .verify_integrity(&catalog)
+        .map_err(|_| ReconcileTruthReviewsError::InvalidCommand("v5.checked_dispatch"))?;
+    let input: ReconcileTruthReviewsInput = serde_json::from_slice(&invocation.command_bytes)?;
+    validate(&input)?;
+    if serde_json::to_vec(&input)? != invocation.command_bytes {
+        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.canonical_command"));
+    }
+    let checked = &invocation.checked_dispatch;
+    let port = PortId::from(INPUT_PORT);
+    let bound = invocation
+        .bound_inputs
+        .get(&port)
+        .ok_or(ReconcileTruthReviewsError::InvalidCommand("v5.input_port"))?;
+    if !matches!(&bound.source,
+        ArtifactBinding::External { artifact } if artifact == &bound.artifact_id)
+    {
+        return Err(ReconcileTruthReviewsError::InvalidCommand(
+            "v5.unattested_produced_artifact",
+        ));
+    }
+    let artifact: TruthReviewScopeArtifactV1 =
+        serde_json::from_slice(&bound.artifact.payload)?;
+    if serde_json::to_vec(&artifact)? != bound.artifact.payload
+        || artifact.run_id != input.run_id
+        || artifact.context_key != input.context_key
+        || bound.artifact.scope != input.scope
+        || checked.scope != input.scope
+        || checked.plan_hash.as_str() != input.plan_hash
+        || checked.instance.as_str() != input.operation_instance
+        || checked.operation != contract.reference
+        || checked.owner != contract.owner
+        || checked.effects != contract.effects
+        || checked.idempotency != contract.idempotency
+        || contract.inputs.get(&port) != Some(&bound.artifact.schema)
+        || Uuid::parse_str(&invocation.parent.run_id).is_err()
+    {
+        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.owner_binding"));
+    }
+    Ok(input)
+}
+
+/// SQL owner capability for the generic OwnerInvocationV1 ABI, distinct from
+/// the legacy V4 ABI and its SHA256 attestation. Admission revision 5 uses its
+/// OWN SQL SECURITY DEFINER function; V4 stays revision 4 forever.
+pub async fn execute_admitted_reconcile_owner_v1(
+    pool: &PgPool,
+    child_workflow_id: &str,
+    child_workflow_run_id: &str,
+    invocation: &operation_protocol::OwnerInvocationV1,
+) -> Result<ReconcileTruthReviewsReceipt, ReconcileTruthReviewsError> {
+    use operation_protocol::PortId;
+    use truth_domain::review_effect_contract::INPUT_PORT;
+
+    let input = validate_pg_owner_invocation_v1(invocation)?;
+    if child_workflow_id.trim().is_empty()
+        || Uuid::parse_str(child_workflow_run_id).is_err()
+    {
+        return Err(ReconcileTruthReviewsError::InvalidCommand("v5.actual_child"));
+    }
+    assert_unprivileged_pg_effect_role(pool).await?;
+    let fingerprint = contract_fingerprint()?;
+    let invocation_bytes = serde_json::to_vec(invocation)?;
+    let bound_input_bytes = serde_json::to_vec(
+        invocation
+            .bound_inputs
+            .get(&PortId::from(INPUT_PORT))
+            .ok_or(ReconcileTruthReviewsError::InvalidCommand("v5.input_port"))?,
+    )?;
+    let row = sqlx::query(
+        "SELECT * FROM pipeline.consume_pg_truth_review_owner_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+    )
+    .bind(input.admission_id)
+    .bind(input.run_id)
+    .bind(&input.scope.tenant_id)
+    .bind(&input.context_key)
+    .bind(child_workflow_id)
+    .bind(child_workflow_run_id)
+    .bind(&input.operation_instance)
+    .bind(&input.plan_hash)
+    .bind(&fingerprint)
+    .bind(&invocation.checked_dispatch.execution_key)
+    .bind(5_i16)
+    .bind(&invocation.parent.workflow_id)
+    .bind(&invocation.parent.run_id)
+    .bind(&invocation.checked_dispatch.input_hash)
+    .bind(invocation_bytes)
+    .bind(bound_input_bytes)
+    .bind(&invocation.command_bytes)
     .fetch_one(pool)
     .await
     .map_err(map_owner_sql_error)?;

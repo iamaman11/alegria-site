@@ -14,7 +14,7 @@ use std::{
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
     ArtifactBinding, ArtifactId, ArtifactSchema, EffectChildInvocationV4, ExecutionPlan,
-    OperationInstanceId, RunScope,
+    OperationDagRunV6, OperationInstanceId, RunScope,
 };
 use postgres_store::truth_review_effect_v3::{
     contract_fingerprint, ReconcileTruthReviewsInput, V4TemporalAttestation, CANDIDATE_SET_HASH_SQL,
@@ -36,8 +36,18 @@ const PARENT_TYPE: &str = "AlegriaAdmittedEffectDagV2Workflow";
 const PARENT_QUEUE: &str = "alegria-effect-dag-v4";
 const PARENT_TYPE_V5: &str = "AlegriaAdmittedEffectDagV3Workflow";
 const PARENT_QUEUE_V5: &str = "alegria-effect-dag-v5";
+const PARENT_TYPE_V6: &str = "AlegriaOperationDagV1Workflow";
+const PARENT_QUEUE_V6: &str = "alegria-operation-dag-v1";
 const CHILD_TYPE: &str = "PgTruthReviewReconcileV4Workflow";
 const CHILD_QUEUE: &str = "alegria-pg-command-v3";
+const CHILD_TYPE_V5: &str = "PgTruthReviewReconcileV5Workflow";
+const CHILD_QUEUE_V5: &str = "alegria-pg-command-v5";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParentHistorySchema {
+    LegacyV4V5,
+    MixedV6,
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,7 +98,7 @@ struct ServerAttestedChild {
     command: ReconcileTruthReviewsInput,
 }
 
-fn first_started_payload(
+pub(super) fn first_started_payload(
     history: &History,
     expected_type: &str,
     expected_queue: &str,
@@ -124,7 +134,7 @@ fn first_started_payload(
     Ok(inputs[0].data.to_vec())
 }
 
-fn first_parent_started_payload(parent: &History) -> Result<Vec<u8>> {
+fn first_parent_started_payload(parent: &History) -> Result<(Vec<u8>, ParentHistorySchema)> {
     let first = parent
         .events
         .first()
@@ -137,24 +147,85 @@ fn first_parent_started_payload(parent: &History) -> Result<Vec<u8>> {
         .as_ref()
         .map(|value| value.name.as_str());
     let parent_queue = start.task_queue.as_ref().map(|value| value.name.as_str());
-    let valid_pair = match (parent_type, parent_queue) {
-        (Some(PARENT_TYPE), Some(PARENT_QUEUE)) => (PARENT_TYPE, PARENT_QUEUE),
-        (Some(PARENT_TYPE_V5), Some(PARENT_QUEUE_V5)) => (PARENT_TYPE_V5, PARENT_QUEUE_V5),
+    let (valid_pair, schema) = match (parent_type, parent_queue) {
+        (Some(PARENT_TYPE), Some(PARENT_QUEUE)) =>
+            ((PARENT_TYPE, PARENT_QUEUE), ParentHistorySchema::LegacyV4V5),
+        (Some(PARENT_TYPE_V5), Some(PARENT_QUEUE_V5)) =>
+            ((PARENT_TYPE_V5, PARENT_QUEUE_V5), ParentHistorySchema::LegacyV4V5),
+        (Some(PARENT_TYPE_V6), Some(PARENT_QUEUE_V6)) =>
+            ((PARENT_TYPE_V6, PARENT_QUEUE_V6), ParentHistorySchema::MixedV6),
         _ => bail!("Temporal parent did not start on an exact allowed native parent type/queue"),
     };
-    first_started_payload(parent, valid_pair.0, valid_pair.1)
+    Ok((first_started_payload(parent, valid_pair.0, valid_pair.1)?, schema))
 }
 
 fn prove_parent_plan_and_command(
     parent_bytes: &[u8],
+    schema: ParentHistorySchema,
     invocation: &EffectChildInvocationV4,
     expected_canonical_run: Uuid,
 ) -> Result<ReconcileTruthReviewsInput> {
     invocation
         .verify_integrity()
         .context("child actual input/dispatch hash was forged")?;
-    let parent: ParentRunInputV4 = serde_json::from_slice(parent_bytes)
-        .context("parent did not start with typed EffectDagRunV1")?;
+    let checked = &invocation.checked_dispatch;
+    let contract = operation_contract();
+    let expected_fingerprint = contract.fingerprint()?;
+    let parent: ParentRunInputV4 = match schema {
+        ParentHistorySchema::LegacyV4V5 => serde_json::from_slice(parent_bytes)
+            .context("parent did not start with typed EffectDagRunV1")?,
+        ParentHistorySchema::MixedV6 => {
+            let mixed: OperationDagRunV6 = serde_json::from_slice(parent_bytes)
+                .context("parent did not start with typed OperationDagRunV6")?;
+            ensure!(mixed.schema_revision == 6, "invalid immutable operation DAG schema");
+            ensure!(
+                serde_json::to_vec(&mixed)? == parent_bytes,
+                "parent History did not contain canonical typed operation DAG bytes"
+            );
+            let owner_wire = mixed
+                .owner_commands
+                .get(&checked.instance)
+                .context("parent V6 History omitted this PG owner command")?;
+            ensure!(
+                owner_wire.operation == checked.operation
+                    && owner_wire.owner == checked.owner
+                    && owner_wire.contract_hash == expected_fingerprint
+                    && owner_wire.command_bytes == invocation.owner_command_bytes,
+                "parent V6 History PG owner command/contract bytes differ from exact child"
+            );
+            // The operator must decode only the PG-owned domain command.
+            // Adding Qdrant/Neo4j/future owners never changes this binary.
+            let typed_pg: ReconcileTruthReviewsInput =
+                serde_json::from_slice(&owner_wire.command_bytes)
+                    .context("parent V6 PG owner command is not typed Truth review input")?;
+            ensure!(
+                serde_json::to_vec(&typed_pg)? == owner_wire.command_bytes,
+                "parent V6 PG command has noncanonical bytes"
+            );
+            ParentRunInputV4 {
+                plan: mixed.plan,
+                admitted: mixed
+                    .admitted
+                    .into_iter()
+                    .map(|(artifact, value)| {
+                        (
+                            artifact,
+                            ParentArtifactValue {
+                                schema: value.schema,
+                                scope: value.scope,
+                                provenance: value.provenance,
+                                payload: value.payload,
+                            },
+                        )
+                    })
+                    .collect(),
+                owner_commands: BTreeMap::from([(
+                    checked.instance.clone(),
+                    ParentOwnerCommand::PgTruthReviewReconcileV1(typed_pg),
+                )]),
+            }
+        }
+    };
     ensure!(
         parent.plan.hash == parent.plan.canonical_hash()?,
         "parent sealed DAG hash is invalid"
@@ -165,9 +236,6 @@ fn prove_parent_plan_and_command(
             && parent.plan.scope.run_id == expected_canonical_run.to_string(),
         "child checked dispatch does not belong to canonical parent plan"
     );
-    let contract = operation_contract();
-    let checked = &invocation.checked_dispatch;
-    let expected_fingerprint = contract.fingerprint()?;
     ensure!(
         checked.operation == contract.reference
             && checked.owner == contract.owner
@@ -246,18 +314,19 @@ fn prove_reciprocal_temporal_histories(
     child: &History,
     request: &V4IssueRequest,
 ) -> Result<ServerAttestedChild> {
-    let parent_input = first_parent_started_payload(parent)?;
-    let child_input = first_started_payload(child, CHILD_TYPE, CHILD_QUEUE)?;
+    let (parent_input, schema) = first_parent_started_payload(parent)?;
+    let (child_type, child_queue, child_id_prefix) = match schema {
+        ParentHistorySchema::LegacyV4V5 => (CHILD_TYPE, CHILD_QUEUE, "alegria-pg-effect-v4-"),
+        ParentHistorySchema::MixedV6 => (CHILD_TYPE_V5, CHILD_QUEUE_V5, "alegria-pg-effect-v5-"),
+    };
+    let child_input = first_started_payload(child, child_type, child_queue)?;
     let invocation: EffectChildInvocationV4 = serde_json::from_slice(&child_input)
         .context("child Workflow History contains invalid V4 invocation bytes")?;
     ensure!(serde_json::to_vec(&invocation)? == child_input,
         "V4 child History payload is not canonical typed JSON; SQL executor would hash different bytes");
     ensure!(
         request.child_workflow_id
-            == format!(
-                "alegria-pg-effect-v4-{}",
-                invocation.checked_dispatch.execution_key,
-            ),
+            == format!("{child_id_prefix}{}", invocation.checked_dispatch.execution_key),
         "V4 child Workflow ID does not follow the deterministic checked execution key identity"
     );
     ensure!(
@@ -291,8 +360,8 @@ fn prove_reciprocal_temporal_histories(
             continue;
         }
         ensure!(
-            attrs.workflow_type.as_ref().map(|t| t.name.as_str()) == Some(CHILD_TYPE)
-                && attrs.task_queue.as_ref().map(|q| q.name.as_str()) == Some(CHILD_QUEUE),
+            attrs.workflow_type.as_ref().map(|t| t.name.as_str()) == Some(child_type)
+                && attrs.task_queue.as_ref().map(|q| q.name.as_str()) == Some(child_queue),
             "parent initiated wrong child Workflow Type or Queue"
         );
         let payloads = &attrs
@@ -324,7 +393,7 @@ fn prove_reciprocal_temporal_histories(
                         .workflow_type
                         .as_ref()
                         .map(|t| t.name.as_str())
-                        == Some(CHILD_TYPE),
+                        == Some(child_type),
                 "parent ChildStarted was a different server child execution"
             );
             ensure!(
@@ -341,8 +410,12 @@ fn prove_reciprocal_temporal_histories(
     }
     let (parent_initiated_event_id, parent_child_started_event_id) = unique_match
         .context("no reciprocal server-generated parent ChildStarted/child Started event pair")?;
-    let command =
-        prove_parent_plan_and_command(&parent_input, &invocation, request.canonical_run_id)?;
+    let command = prove_parent_plan_and_command(
+        &parent_input,
+        schema,
+        &invocation,
+        request.canonical_run_id,
+    )?;
     ensure!(
         command.admission_id == request.admission_id,
         "operator admission UUID differs from actual child History's typed command"
@@ -356,7 +429,7 @@ fn prove_reciprocal_temporal_histories(
     })
 }
 
-async fn fetch_exact_history(
+pub(super) async fn fetch_exact_history(
     client: &temporalio_client::Client,
     namespace: &str,
     workflow_id: &str,
@@ -455,7 +528,7 @@ async fn signal_after_commit(request: &V4IssueRequest) -> Result<()> {
         .context("send V4 child admission wake-up AFTER committed PostgreSQL record")
 }
 
-async fn locked_source_hash(
+pub(super) async fn locked_source_hash(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     context_key: &str,
 ) -> Result<String> {
@@ -516,7 +589,7 @@ async fn locked_source_hash(
         .context("compute authoritative PostgreSQL Truth source fingerprint")
 }
 
-async fn sha256_pg(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, bytes: &[u8]) -> Result<String> {
+pub(super) async fn sha256_pg(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, bytes: &[u8]) -> Result<String> {
     sqlx::query_scalar("SELECT encode(digest($1::bytea, 'sha256'), 'hex')")
         .bind(bytes)
         .fetch_one(&mut **tx)
@@ -852,6 +925,23 @@ mod tests {
             first_started_payload(&valid, "PgTruthReviewReconcileV3Workflow", CHILD_QUEUE).is_err()
         );
         assert!(first_started_payload(&valid, CHILD_TYPE, "alegria-pipeline").is_err());
+    }
+
+    #[test]
+    fn new_operation_dag_parent_requires_exact_versioned_temporal_identity() {
+        let valid = synthetic_temporal_start(PARENT_TYPE_V6, PARENT_QUEUE_V6);
+        let (bytes, schema) = first_parent_started_payload(&valid).unwrap();
+        assert_eq!(bytes, b"verified-server-history-input");
+        assert_eq!(schema, ParentHistorySchema::MixedV6);
+        assert!(first_parent_started_payload(
+            &synthetic_temporal_start(PARENT_TYPE_V6, PARENT_QUEUE_V5)
+        ).is_err());
+        assert!(first_parent_started_payload(
+            &synthetic_temporal_start(PARENT_TYPE_V5, PARENT_QUEUE_V6)
+        ).is_err());
+        assert!(first_parent_started_payload(
+            &synthetic_temporal_start("ArbitraryCallerWorkflow", PARENT_QUEUE_V6)
+        ).is_err());
     }
 
     #[test]

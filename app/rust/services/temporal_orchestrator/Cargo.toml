@@ -13,6 +13,8 @@ temporalio-workflow = { workspace = true }
 temporal_gateway = { path = "../../crates/temporal_gateway" }
 seo_application = { path = "../../crates/seo_application" }
 operation_protocol = { path = "../../crates/operation_protocol" }
+qdrant_contracts = { path = "../../crates/qdrant_contracts" } # frozen Qdrant V1 parent only
+serde = { workspace = true }
 futures-util = "0.3"
 anyhow = { workspace = true }
 serde_json = { workspace = true }

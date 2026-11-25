@@ -460,7 +460,7 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
         }
     };
     let json: String = completion.to_value(&PayloadConverter::serde_json());
-    let results: Vec<operation_protocol::QdrantKeywordChildResultV1> =
+    let results: Vec<qdrant_contracts::QdrantKeywordChildResultV1> =
         serde_json::from_str(&json).unwrap();
     assert_eq!(results.len(),1);
     assert_eq!(results[0].admission_id,admission);

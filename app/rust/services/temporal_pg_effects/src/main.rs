@@ -9,16 +9,21 @@
 //! immutable PostgreSQL admission, canonical run, full candidate fingerprint,
 //! stale-run fence and committed receipt before reporting success.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use operation_protocol::{EffectChildInvocationV4, EffectChildResultV4};
+use operation_protocol::{
+    AdmittedArtifactV1, EffectChildInvocationV4, EffectChildResultV4, OwnerInvocationV1,
+    OwnerResultV1, PortId, OWNER_OPERATION_CHILD_TYPE_V1,
+};
 #[cfg(test)]
 use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
 use postgres_store::truth_review_effect_v3::{
     assert_unprivileged_pg_effect_role, execute_admitted_reconcile, execute_admitted_reconcile_v4,
+    execute_admitted_reconcile_owner_v1, validate_pg_owner_invocation_v1,
     ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
-    PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4,
+    PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4, PG_EFFECT_WORKFLOW_TYPE_V5,
+    PG_OWNER_TASK_QUEUE_V1,
 };
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
@@ -33,6 +38,7 @@ use temporalio_sdk::{
 
 mod operator;
 mod operator_v4;
+mod operator_owner_v1;
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
@@ -81,6 +87,9 @@ use futures_util as _;
 use temporalio_common as _;
 
 const COMMAND_TASK_QUEUE: &str = "alegria-pg-command-v3";
+// New typed-result owner child is isolated from the frozen V3/V4 History
+// contracts and their existing Task Queue.
+const V5_CHILD_COMMAND_TASK_QUEUE: &str = "alegria-pg-command-v5";
 
 struct PgTruthReviewActivities {
     pool: Arc<PgPool>,
@@ -88,6 +97,42 @@ struct PgTruthReviewActivities {
 
 #[activities]
 impl PgTruthReviewActivities {
+    /// A generic DAG cannot schedule PostgreSQL writes by itself: the
+    /// independent operator must attest the actual generic child History
+    /// and issue revision 5 admission before this Activity may consume it.
+    #[activity]
+    pub(crate) async fn reconcile_truth_owner_v1(
+        self: Arc<Self>,
+        ctx: ActivityContext,
+        invocation: OwnerInvocationV1,
+    ) -> Result<ReconcileTruthReviewsReceipt, ActivityError> {
+        let info = ctx.info();
+        let workflow_id = info.workflow_id.as_deref().ok_or_else(|| {
+            activity_terminal("PG owner needs server child Workflow ID")
+        })?;
+        let run_id = info.workflow_run_id.as_deref().ok_or_else(|| {
+            activity_terminal("PG owner needs server child Workflow Run ID")
+        })?;
+        if info.workflow_type.as_deref() != Some(OWNER_OPERATION_CHILD_TYPE_V1)
+            || info.task_queue != PG_EFFECT_TASK_QUEUE
+        {
+            return Err(activity_terminal(
+                "PG generic Activity invoked outside exact owner Workflow/Activity queue",
+            ));
+        }
+        execute_admitted_reconcile_owner_v1(&self.pool, workflow_id, run_id, &invocation)
+            .await
+            .map_err(|err| {
+                let failure = match err.retry_class() {
+                    RetryClass::Never =>
+                        ApplicationFailure::non_retryable(std::io::Error::other(err.to_string())),
+                    RetryClass::RetryWithSameAdmission =>
+                        ApplicationFailure::new(std::io::Error::other(err.to_string())),
+                };
+                ActivityError::application(failure)
+            })
+    }
+
     /// Reconcile actual canonical source candidates, with one atomic PG
     /// transaction + receipt. An arbitrary direct Activity RPC is rejected:
     /// it has no admitted Workflow provenance or exact operation admission.
@@ -150,11 +195,13 @@ impl PgTruthReviewActivities {
         let run_id = info.workflow_run_id.as_deref().ok_or_else(|| {
             activity_terminal("V4 effect requires server-attested child Workflow Run ID")
         })?;
-        if info.workflow_type.as_deref() != Some(PG_EFFECT_WORKFLOW_TYPE_V4)
-            || info.task_queue != PG_EFFECT_TASK_QUEUE
+        if !info.workflow_type.as_deref().is_some_and(|workflow_type| {
+            workflow_type == PG_EFFECT_WORKFLOW_TYPE_V4
+                || workflow_type == PG_EFFECT_WORKFLOW_TYPE_V5
+        }) || info.task_queue != PG_EFFECT_TASK_QUEUE
         {
             return Err(activity_terminal(
-                "V4 Activity invoked outside exact registered PG child Workflow/Queue",
+                "V4/V5 Activity invoked outside exact registered PG child Workflow/Queue",
             ));
         }
         execute_admitted_reconcile_v4(&self.pool, workflow_id, run_id, &invocation)
@@ -191,6 +238,132 @@ struct PgTruthReviewReconcileV3Workflow {
 struct PgTruthReviewReconcileV4Workflow {
     immutable_invocation: EffectChildInvocationV4,
     admission_signal_received: bool,
+}
+
+/// Dedicated typed child for the mixed-owner V6 parent. An old V4 History
+/// must never be silently reinterpreted as an SDK-typed result.
+#[workflow]
+struct PgTruthReviewReconcileV5Workflow {
+    immutable_invocation: EffectChildInvocationV4,
+    admission_signal_received: bool,
+}
+
+/// ONE Temporal Workflow Type for all independent owners, with a distinct
+/// PostgreSQL Task Queue. Only this PG Worker decodes the typed Truth command.
+/// It is not a generic SQL execution service.
+#[workflow]
+struct AlegriaOwnerOperationV1Workflow {
+    immutable_invocation: OwnerInvocationV1,
+    admission_signal_received: bool,
+}
+
+#[workflow_methods]
+impl AlegriaOwnerOperationV1Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, invocation: OwnerInvocationV1) -> Self {
+        Self {
+            immutable_invocation: invocation,
+            admission_signal_received: false,
+        }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OwnerResultV1> {
+        let invocation = ctx.state(|state| state.immutable_invocation.clone());
+        validate_pg_owner_invocation_v1(&invocation).map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })?;
+        // Signal is deliberately NOT a capability. SQL independently checks
+        // exact operator-issued rev5 admission and candidate snapshot.
+        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+        options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
+        let receipt: ReconcileTruthReviewsReceipt = ctx
+            .start_activity(
+                PgTruthReviewActivities::reconcile_truth_owner_v1,
+                invocation.clone(),
+                options,
+            )
+            .await?;
+        let receipt_bytes = serde_json::to_vec(&receipt).map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })?;
+        let output_contract = truth_domain::review_effect_contract::operation_contract();
+        let output_port = PortId::from(truth_domain::review_effect_contract::OUTPUT_PORT);
+        let output_schema = output_contract.outputs.get(&output_port).cloned().ok_or_else(|| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other("missing PG output schema")),
+            )
+        })?;
+        Ok(OwnerResultV1 {
+            dispatch_execution_key: invocation.checked_dispatch.execution_key,
+            outputs: BTreeMap::from([(
+                output_port,
+                AdmittedArtifactV1 {
+                    schema: output_schema,
+                    scope: invocation.checked_dispatch.scope,
+                    provenance: format!("pg.truth_review.receipt_v1:{}", receipt.receipt_id),
+                    payload: receipt_bytes.clone(),
+                },
+            )]),
+            receipt_bytes,
+        })
+    }
+
+    #[signal(name = "operator_admission_ready_v5")]
+    fn operator_admission_ready_v5(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        self.admission_signal_received = true;
+    }
+}
+
+#[workflow_methods]
+impl PgTruthReviewReconcileV5Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, invocation: EffectChildInvocationV4) -> Self {
+        Self {
+            immutable_invocation: invocation,
+            admission_signal_received: false,
+        }
+    }
+
+    #[run]
+    async fn run(
+        ctx: &mut WorkflowContext<Self>,
+    ) -> WorkflowResult<EffectChildResultV4<ReconcileTruthReviewsReceipt>> {
+        let invocation = ctx.state(|state| state.immutable_invocation.clone());
+        invocation.verify_integrity().map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })?;
+        ctx.wait_condition(|state| state.admission_signal_received)
+            .await?;
+        let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+        options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
+        let receipt: ReconcileTruthReviewsReceipt = ctx
+            .start_activity(
+                PgTruthReviewActivities::reconcile_truth_candidate_reviews_v4,
+                invocation.clone(),
+                options,
+            )
+            .await?;
+        Ok(EffectChildResultV4 {
+            schema_revision: 4,
+            dispatch_execution_key: invocation.checked_dispatch.execution_key,
+            pg_receipt: receipt,
+        })
+    }
+
+    #[signal(name = "operator_admission_ready_v4")]
+    fn operator_admission_ready_v4(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        // Signal wakes the Workflow. Independent PostgreSQL admission and
+        // server-provenance checks still authorize the actual effect.
+        self.admission_signal_received = true;
+    }
 }
 
 #[workflow_methods]
@@ -309,6 +482,8 @@ async fn replay_history(path: &std::path::Path) -> Result<()> {
         .build();
     options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
     options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
+    options.register_workflow::<PgTruthReviewReconcileV5Workflow>()?;
+    options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct PG V3 Temporal replayer: {error}"))?
         .replay_workflow(history)
@@ -349,6 +524,13 @@ async fn main() -> Result<()> {
                 "unexpected V4 operator issue arguments"
             );
             operator_v4::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-issue-owner-v1") {
+            let path = args.next()
+                .context("--operator-issue-owner-v1 requires one strict JSON locator file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected PG owner operator arguments");
+            operator_owner_v1::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-revoke") {
@@ -410,6 +592,23 @@ async fn main() -> Result<()> {
     command_options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
     let mut command_worker = Worker::new(&runtime, client.clone(), command_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut v5_options = WorkerOptions::new(V5_CHILD_COMMAND_TASK_QUEUE).build();
+    v5_options.register_workflow::<PgTruthReviewReconcileV5Workflow>()?;
+    let mut v5_command_worker = Worker::new(&runtime, client.clone(), v5_options)
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    // The generic queue is independently opt-in; a versioned deployment
+    // whose operator/migration is absent cannot accidentally poll generic
+    // commands through a legacy owner queue.
+    let generic_enabled =
+        std::env::var("ALEGRIA_ENABLE_PG_OWNER_V1").ok().as_deref() == Some("true");
+    let mut generic_worker = if generic_enabled {
+        let mut owner_options = WorkerOptions::new(PG_OWNER_TASK_QUEUE_V1).build();
+        owner_options.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
+        Some(Worker::new(&runtime, client.clone(), owner_options)
+            .map_err(|error| anyhow::anyhow!("{error}"))?)
+    } else {
+        None
+    };
     let activity_options = WorkerOptions::new(PG_EFFECT_TASK_QUEUE)
         .register_activities(PgTruthReviewActivities {
             pool: Arc::new(pool),
@@ -422,7 +621,14 @@ async fn main() -> Result<()> {
         activity_queue = PG_EFFECT_TASK_QUEUE,
         "experimental PostgreSQL Truth review owner polling opt-in queues"
     );
-    tokio::try_join!(command_worker.run(), activity_worker.run())
+    let generic_run = async {
+        if let Some(worker) = &mut generic_worker {
+            worker.run().await
+        } else {
+            std::future::pending().await
+        }
+    };
+    tokio::try_join!(command_worker.run(), v5_command_worker.run(), activity_worker.run(), generic_run)
         .context("PG effect owner stopped")?;
     Ok(())
 }
@@ -436,6 +642,10 @@ mod tests {
         assert_ne!(COMMAND_TASK_QUEUE, PG_EFFECT_TASK_QUEUE);
         assert_ne!(COMMAND_TASK_QUEUE, "alegria-pipeline");
         assert_ne!(PG_EFFECT_TASK_QUEUE, "alegria-pure-dag-v3");
+        assert_ne!(V5_CHILD_COMMAND_TASK_QUEUE, COMMAND_TASK_QUEUE);
+        assert_ne!(V5_CHILD_COMMAND_TASK_QUEUE, PG_EFFECT_TASK_QUEUE);
+        assert_ne!(PG_OWNER_TASK_QUEUE_V1, COMMAND_TASK_QUEUE);
+        assert_ne!(PG_OWNER_TASK_QUEUE_V1, V5_CHILD_COMMAND_TASK_QUEUE);
     }
 
     #[test]

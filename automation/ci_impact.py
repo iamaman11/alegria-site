@@ -550,15 +550,42 @@ SUITE_OWNERS = {
             "app/rust/crates/projection_delivery/",
             "app/rust/crates/vector_qdrant/",
             "app/rust/crates/operation_protocol/",
+            "app/rust/crates/qdrant_contracts/",
         ),
         "lock_crates": {"temporal_orchestrator", "temporal_qdrant_effects",
-                        "projection_delivery", "vector_qdrant", "operation_protocol"},
+                        "projection_delivery", "vector_qdrant", "operation_protocol",
+                        "qdrant_contracts"},
         "on_unknown_global_input": True,
         "prepare": QDRANT_V7_PARENT_CHILD_PREPARE,
         "runtime_binaries": QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
             "--lib", "qdrant_v8_native_temporal_history_operator_real_effect",
+            "--locked", "--", "--nocapture",
+        ),
+    },
+    # The proposed cross-owner wiring must fail at the typed DAG boundary
+    # when a PG receipt is passed as an unrelated Qdrant command. The same
+    # existing real Temporal/Qdrant shard runs this exact preflight test;
+    # they do NOT replace the independent native provider E2E above.
+    "temporal_mixed_v6_contract": {
+        "paths": {
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
+            "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+        },
+        "prefixes": (
+            "app/rust/crates/integration_qdrant_temporal_e2e/",
+            "app/rust/crates/operation_protocol/",
+            "app/rust/crates/qdrant_contracts/",
+            "app/rust/crates/truth_domain/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+        ),
+        "lock_crates": {"operation_protocol", "qdrant_contracts", "truth_domain",
+                        "seo_application"},
+        "on_unknown_global_input": True,
+        "command": (
+            "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
+            "--lib", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -1074,6 +1101,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_qdrant": (
         ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
+        ("temporal_mixed_v6_contract", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

@@ -7,7 +7,8 @@
 //! partial Activity sets on the legacy task queue or change V1/V2 histories.
 
 use anyhow::{Context, Result};
-use operation_protocol::QDRANT_DAG_PARENT_QUEUE_V1;
+use operation_protocol::OPERATION_DAG_PARENT_QUEUE;
+use qdrant_contracts::QDRANT_DAG_PARENT_QUEUE_V1;
 use std::env;
 use temporal_gateway::{
     connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
@@ -24,6 +25,7 @@ use futures_util as _;
 use temporalio_common as _;
 
 mod qdrant_child_wire_json;
+mod owner_catalog;
 mod replay;
 mod workflow;
 
@@ -31,6 +33,7 @@ const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
 const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
 const V5_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V5";
 const QDRANT_V1_LIVE_OPT_IN: &str = "ALLOW_QDRANT_DAG_ORCHESTRATOR_V1";
+const OPERATION_V1_LIVE_OPT_IN: &str = "ALLOW_OPERATION_DAG_V1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OrchestratorMode {
@@ -38,6 +41,7 @@ enum OrchestratorMode {
     AdmittedEffectV4,
     AdmittedEffectV5,
     QdrantV1,
+    OperationDagV1,
 }
 
 impl OrchestratorMode {
@@ -47,6 +51,7 @@ impl OrchestratorMode {
             Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
             Self::AdmittedEffectV5 => EFFECT_DAG_ORCHESTRATOR_V5_QUEUE,
             Self::QdrantV1 => QDRANT_DAG_PARENT_QUEUE_V1,
+            Self::OperationDagV1 => OPERATION_DAG_PARENT_QUEUE,
         }
     }
 }
@@ -71,11 +76,13 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
     let effect_opt_in = read(V4_LIVE_OPT_IN);
     let v5_effect_opt_in = read(V5_LIVE_OPT_IN);
     let qdrant_opt_in = read(QDRANT_V1_LIVE_OPT_IN);
+    let operation_v1_opt_in = read(OPERATION_V1_LIVE_OPT_IN);
     for (label, setting) in [
         (LIVE_OPT_IN, &pure_opt_in),
         (V4_LIVE_OPT_IN, &effect_opt_in),
         (V5_LIVE_OPT_IN, &v5_effect_opt_in),
         (QDRANT_V1_LIVE_OPT_IN, &qdrant_opt_in),
+        (OPERATION_V1_LIVE_OPT_IN, &operation_v1_opt_in),
     ] {
         anyhow::ensure!(
             matches!(setting.as_deref(), None | Some("true") | Some("false")),
@@ -87,12 +94,14 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
         effect_opt_in.as_deref() == Some("true"),
         v5_effect_opt_in.as_deref() == Some("true"),
         qdrant_opt_in.as_deref() == Some("true"),
+        operation_v1_opt_in.as_deref() == Some("true"),
     ) {
-        (true, false, false, false) => OrchestratorMode::PureV3,
-        (false, true, false, false) => OrchestratorMode::AdmittedEffectV4,
-        (false, false, true, false) => OrchestratorMode::AdmittedEffectV5,
-        (false, false, false, true) => OrchestratorMode::QdrantV1,
-        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}=true"),
+        (true, false, false, false, false) => OrchestratorMode::PureV3,
+        (false, true, false, false, false) => OrchestratorMode::AdmittedEffectV4,
+        (false, false, true, false, false) => OrchestratorMode::AdmittedEffectV5,
+        (false, false, false, true, false) => OrchestratorMode::QdrantV1,
+        (false, false, false, false, true) => OrchestratorMode::OperationDagV1,
+        _ => anyhow::bail!("select exactly one of {LIVE_OPT_IN}, {V4_LIVE_OPT_IN}, {V5_LIVE_OPT_IN}, {QDRANT_V1_LIVE_OPT_IN}, {OPERATION_V1_LIVE_OPT_IN}=true"),
     };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
@@ -155,6 +164,7 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
         OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
         OrchestratorMode::AdmittedEffectV5 => workflow::register_v5(&mut options)?,
         OrchestratorMode::QdrantV1 => workflow::register_qdrant_v1(&mut options)?,
+        OrchestratorMode::OperationDagV1 => workflow::register_operation_dag_v1(&mut options)?,
     }
     Ok(options)
 }
@@ -169,8 +179,11 @@ async fn main() -> Result<()> {
             || argument == std::ffi::OsStr::new("--replay-effect-history")
             || argument == std::ffi::OsStr::new("--replay-v5-effect-history")
             || argument == std::ffi::OsStr::new("--replay-qdrant-effect-history")
+            || argument == std::ffi::OsStr::new("--replay-operation-dag-v1-history")
         {
-            let queue = if argument == std::ffi::OsStr::new("--replay-qdrant-effect-history") {
+            let queue = if argument == std::ffi::OsStr::new("--replay-operation-dag-v1-history") {
+                OPERATION_DAG_PARENT_QUEUE
+            } else if argument == std::ffi::OsStr::new("--replay-qdrant-effect-history") {
                 QDRANT_DAG_PARENT_QUEUE_V1
             } else if argument == std::ffi::OsStr::new("--replay-v5-effect-history") {
                 EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
@@ -190,6 +203,15 @@ async fn main() -> Result<()> {
         anyhow::bail!("unexpected temporal_orchestrator argument: {argument:?}");
     }
     let config = checked_live_config(|name| env::var(name).ok())?;
+    if config.mode == OrchestratorMode::OperationDagV1 {
+        // A caller-controlled DAG never chooses a Workflow Type or queue.
+        // Only an operator-provisioned, process-local immutable catalog can
+        // register owner contracts; a missing catalog is a startup failure.
+        let path = env::var("TEMPORAL_OPERATION_DAG_CATALOG_PATH")
+            .context("generic DAG requires an operator-owned trusted route catalog path")?;
+        let catalog = owner_catalog::load_trusted_owner_catalog(std::path::Path::new(&path))?;
+        workflow::install_owner_catalog(catalog)?;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
@@ -331,6 +353,32 @@ mod tests {
         );
         assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
         settings.insert(V5_LIVE_OPT_IN.into(), "1".into());
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+    }
+
+    #[test]
+    fn generic_operation_parent_has_its_own_strictly_opt_in_queue() {
+        let mut settings = valid_env();
+        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(OPERATION_V1_LIVE_OPT_IN.into(), "true".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            OPERATION_DAG_PARENT_QUEUE.into(),
+        );
+        let cfg = checked_live_config(|name| settings.get(name).cloned()).unwrap();
+        assert_eq!(cfg.mode, OrchestratorMode::OperationDagV1);
+        build_worker_options(&cfg).unwrap();
+        let mut pinned = cfg;
+        pinned.versioning = true;
+        build_worker_options(&pinned).unwrap();
+
+        settings.insert(QDRANT_V1_LIVE_OPT_IN.into(), "true".into());
+        assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
+        settings.insert(QDRANT_V1_LIVE_OPT_IN.into(), "false".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            QDRANT_DAG_PARENT_QUEUE_V1.into(),
+        );
         assert!(checked_live_config(|name| settings.get(name).cloned()).is_err());
     }
 }

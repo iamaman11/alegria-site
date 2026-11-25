@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
-use operation_protocol::{
+use qdrant_contracts::{
     QdrantChildOutcomeV1, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
     QDRANT_OWNER_ACTIVITY_QUEUE_V1, QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
@@ -25,6 +25,8 @@ use futures_util as _;
 use temporalio_common as _;
 
 mod operator;
+mod operator_v2;
+mod owner_v2;
 
 fn qdrant_activity_options() -> ActivityOptions {
     let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
@@ -406,6 +408,13 @@ async fn main() -> Result<()> {
             println!("CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS");
             return Ok(());
         }
+        if arg == std::ffi::OsStr::new("--replay-history-v2") {
+            let file = args.next().context("--replay-history-v2 requires real History JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
+            owner_v2::replay_history(std::path::Path::new(&file)).await?;
+            println!("CI_TEMPORAL_QDRANT_EFFECT_V2_REPLAY=PASS");
+            return Ok(());
+        }
         if arg == std::ffi::OsStr::new("--operator-issue") {
             let file = args
                 .next()
@@ -419,6 +428,16 @@ async fn main() -> Result<()> {
                 .context("--operator-resignal requires original locator JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected operator arguments");
             return operator::resignal_from_file(std::path::Path::new(&file)).await;
+        }
+        if arg == std::ffi::OsStr::new("--operator-issue-v2") {
+            let file = args.next().context("--operator-issue-v2 requires exact-run locator JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V2 operator arguments");
+            return operator_v2::issue_from_file(std::path::Path::new(&file)).await;
+        }
+        if arg == std::ffi::OsStr::new("--operator-resignal-v2") {
+            let file = args.next().context("--operator-resignal-v2 requires exact-run locator JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V2 operator arguments");
+            return operator_v2::resignal_from_file(std::path::Path::new(&file)).await;
         }
         anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");
     }
@@ -458,12 +477,41 @@ async fn main() -> Result<()> {
         Worker::new(&runtime, client.clone(), command).map_err(|e| anyhow::anyhow!("{e}"))?;
     let activities = WorkerOptions::new(QDRANT_OWNER_ACTIVITY_QUEUE_V1)
         .register_activities(QdrantProjectionActivities {
-            pool: Arc::new(pool),
+            pool: Arc::new(pool.clone()),
         })
         .build();
     let mut activity_worker =
-        Worker::new(&runtime, client, activities).map_err(|e| anyhow::anyhow!("{e}"))?;
-    tokio::try_join!(command_worker.run(), activity_worker.run())?;
+        Worker::new(&runtime, client.clone(), activities).map_err(|e| anyhow::anyhow!("{e}"))?;
+    if std::env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_V2").as_deref() == Ok("true") {
+        let can_admit_v2: bool = sqlx::query_scalar(
+            "SELECT has_table_privilege(session_user,
+                'pipeline.qdrant_projection_v2_admissions','INSERT')",
+        )
+        .fetch_one(&pool)
+        .await
+        .context("V2 SQL schema and least-privileged Activity LOGIN must be ready")?;
+        anyhow::ensure!(!can_admit_v2, "Qdrant V2 Activity cannot hold operator INSERT privilege");
+        let mut command_opts =
+            WorkerOptions::new(qdrant_contracts::QDRANT_OWNER_COMMAND_QUEUE_V2).build();
+        owner_v2::register_command(&mut command_opts)?;
+        let mut command_worker_v2 = Worker::new(&runtime, client.clone(), command_opts)
+            .map_err(|err| anyhow::anyhow!("Qdrant V2 command Worker: {err}"))?;
+        let activities_v2 = WorkerOptions::new(qdrant_contracts::QDRANT_OWNER_ACTIVITY_QUEUE_V2)
+            .register_activities(owner_v2::QdrantV2Activities {
+                pool: Arc::new(pool),
+            })
+            .build();
+        let mut activity_worker_v2 = Worker::new(&runtime, client, activities_v2)
+            .map_err(|err| anyhow::anyhow!("Qdrant V2 Activity Worker: {err}"))?;
+        tokio::try_join!(
+            command_worker.run(),
+            activity_worker.run(),
+            command_worker_v2.run(),
+            activity_worker_v2.run(),
+        )?;
+    } else {
+        tokio::try_join!(command_worker.run(), activity_worker.run())?;
+    }
     Ok(())
 }
 

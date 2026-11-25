@@ -6,14 +6,19 @@
 //! This process cannot execute Activities, access provider SDKs or publish.
 
 use operation_protocol::{
-    EffectChildInvocationV4, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
-    QdrantProjectionRunV1, TemporalExecutionIdentityV4, QDRANT_OWNER_CHILD_TYPE_V1,
-    QDRANT_OWNER_COMMAND_QUEUE_V1,
+    EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
+    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+};
+use qdrant_contracts::{
+    QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,
+    QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
-    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, PreparedDagStepV1, PureDagRun,
+    MixedDagMachineV4, MixedDagMachineV5, NativeEffectRouteV5, OperationDagMachine,
+    OperationDagReceiptV1, PreparedDagStepV1, PureDagRun,
 };
+use std::sync::OnceLock;
 use temporalio_common::WorkflowDefinition;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
@@ -24,6 +29,13 @@ use temporalio_sdk::{
 
 pub(crate) const PG_V4_CHILD_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV4Workflow";
 pub(crate) const PG_V4_CHILD_COMMAND_QUEUE: &str = "alegria-pg-command-v3";
+static TRUSTED_OWNER_CATALOG: OnceLock<TrustedRouteCatalog> = OnceLock::new();
+
+pub(crate) fn install_owner_catalog(catalog: TrustedRouteCatalog) -> anyhow::Result<()> {
+    TRUSTED_OWNER_CATALOG
+        .set(catalog)
+        .map_err(|_| anyhow::anyhow!("trusted owner route catalog already installed"))
+}
 
 /// A typed client-side Workflow *definition*, not a handler/Activity. Only
 /// the separate PG owner service registers and implements this Workflow.
@@ -52,6 +64,21 @@ impl WorkflowDefinition for QdrantKeywordProjectionV1Definition {
 
     fn name(&self) -> &str {
         QDRANT_OWNER_CHILD_TYPE_V1
+    }
+}
+
+/// ONE shared, statically typed native SDK boundary for all independent owner
+/// workers. Their Task Queues and trust domains remain separate; each owner
+/// validates its concrete Rust input before a local Activity may have effects.
+#[derive(Clone, Copy)]
+struct OwnerOperationV1Definition;
+
+impl WorkflowDefinition for OwnerOperationV1Definition {
+    type Input = OwnerInvocationV1;
+    type Output = OwnerResultV1;
+
+    fn name(&self) -> &str {
+        OWNER_OPERATION_CHILD_TYPE_V1
     }
 }
 
@@ -103,6 +130,15 @@ struct AlegriaQdrantProjectionDagV1Workflow {
     immutable_input: QdrantProjectionRunV1,
 }
 
+/// Stable generic History-visible DAG parent. No provider-specific operation,
+/// queue, SDK, command DTO or special case can be added to this Workflow.
+/// Only the configured trusted catalog may select a statically typed owner
+/// Child Workflow on its separately credentialed Task Queue.
+#[workflow]
+struct AlegriaOperationDagV1Workflow {
+    immutable_input: OperationDagRunV6,
+}
+
 pub(crate) fn register(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaPureOperationDagV1Workflow>()?;
     opts.register_workflow::<AlegriaCheckedEffectDagV1Workflow>()?;
@@ -145,6 +181,77 @@ pub(crate) fn register_for_replay_qdrant_v1(
 ) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaQdrantProjectionDagV1Workflow>()?;
     Ok(())
+}
+
+pub(crate) fn register_operation_dag_v1(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaOperationDagV1Workflow>()?;
+    Ok(())
+}
+
+pub(crate) fn register_for_replay_operation_dag_v1(
+    opts: &mut WorkflowReplayerOptions,
+) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaOperationDagV1Workflow>()?;
+    Ok(())
+}
+
+#[workflow_methods]
+impl AlegriaOperationDagV1Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, immutable_input: OperationDagRunV6) -> Self {
+        Self { immutable_input }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OperationDagReceiptV1> {
+        // The runner trusts only its operator-installed snapshot, never the
+        // `pinned_routes` claimed by a caller. A different snapshot during
+        // replay fails before emitting any new Temporal commands.
+        let trusted_routes = TRUSTED_OWNER_CATALOG
+            .get()
+            .ok_or_else(|| workflow_failure("missing trusted owner route catalog"))?
+            .clone();
+        let run = ctx.state(|state| state.immutable_input.clone());
+        let workflow_id = ctx.info().workflow_id().to_string();
+        let parent = TemporalExecutionIdentityV4 {
+            workflow_id: workflow_id.clone(),
+            run_id: ctx.run_id().to_string(),
+        };
+        // Complete static plan/contract/route/command preflight before the
+        // first child. Later Produced data is bound from actual child output,
+        // never guessed from static manifest claims.
+        let mut machine = OperationDagMachine::new(&workflow_id, run, trusted_routes)
+            .map_err(workflow_failure)?;
+        while machine.next_instance().is_some() {
+            let (route, invocation) = machine
+                .next_owner_invocation(parent.clone())
+                .map_err(workflow_failure)?;
+            if route.workflow_type != OWNER_OPERATION_CHILD_TYPE_V1 {
+                return Err(workflow_failure("untrusted dynamic owner Workflow Type"));
+            }
+            // Each owner independently registers the SAME typed Workflow Type
+            // on its own queue. The checked dispatch key fences retries across
+            // parent/child Histories and must be independently verified by the
+            // owner operator before any side-effectful Activity runs.
+            let child_id = format!(
+                "alegria-owner-operation-v1-{}",
+                invocation.checked_dispatch.execution_key
+            );
+            let options = ChildWorkflowOptions::builder()
+                .workflow_id(child_id)
+                .task_queue(route.task_queue)
+                .build();
+            let started = ctx
+                .start_child_workflow(OwnerOperationV1Definition, invocation, options)
+                .await
+                .map_err(workflow_failure)?;
+            // Native Temporal SDK Input/Output are typed owner-neutral
+            // envelopes; the owner separately decodes concrete Rust DTOs.
+            let result: OwnerResultV1 = started.result().await.map_err(workflow_failure)?;
+            machine.advance_owner_result(result).map_err(workflow_failure)?;
+        }
+        machine.finish().map_err(workflow_failure)
+    }
 }
 
 #[workflow_methods]

@@ -4,7 +4,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use operation_protocol::QDRANT_DAG_PARENT_QUEUE_V1;
+use operation_protocol::OPERATION_DAG_PARENT_QUEUE;
+use qdrant_contracts::QDRANT_DAG_PARENT_QUEUE_V1;
 use temporal_gateway::{
     EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
 };
@@ -20,18 +21,29 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
         queue == PURE_DAG_ORCHESTRATOR_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
-            || queue == QDRANT_DAG_PARENT_QUEUE_V1,
+            || queue == QDRANT_DAG_PARENT_QUEUE_V1
+            || queue == OPERATION_DAG_PARENT_QUEUE,
         "unknown replay Task Queue"
     );
     let bytes = std::fs::read(path)
         .with_context(|| format!("read actual Temporal history {}", path.display()))?;
     let history = WorkflowHistory::from_json(&bytes)
         .map_err(|error| anyhow::anyhow!("decode Temporal history: {error}"))?;
+    if queue == OPERATION_DAG_PARENT_QUEUE {
+        // Replay must use the same trusted snapshot as execution. A different
+        // process catalog is a *failure*, never authority to reroute effects.
+        let path = std::env::var("TEMPORAL_OPERATION_DAG_CATALOG_PATH")
+            .context("generic DAG replay requires a trusted route catalog path")?;
+        let catalog = super::owner_catalog::load_trusted_owner_catalog(Path::new(&path))?;
+        super::workflow::install_owner_catalog(catalog)?;
+    }
     let mut options = WorkflowReplayerOptions::new()
         .namespace("default".to_string())
         .task_queue(queue.to_string())
         .build();
-    if queue == QDRANT_DAG_PARENT_QUEUE_V1 {
+    if queue == OPERATION_DAG_PARENT_QUEUE {
+        super::workflow::register_for_replay_operation_dag_v1(&mut options)?;
+    } else if queue == QDRANT_DAG_PARENT_QUEUE_V1 {
         super::workflow::register_for_replay_qdrant_v1(&mut options)?;
     } else if queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE {
         super::workflow::register_for_replay_v5(&mut options)?;

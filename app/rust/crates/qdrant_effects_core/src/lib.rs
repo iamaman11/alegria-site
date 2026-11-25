@@ -1,7 +1,7 @@
-//! Experimental, opt-in second *real* provider effect (SEO keyword Qdrant
-//! projection) with an independently persisted PostgreSQL unknown-outcome
-//! barrier. NOT a production Temporal owner: its parent/child Workflow IDs
-//! are only expected values until server-History attestation is implemented.
+//! Experimental, opt-in Qdrant keyword projection with an independently
+//! persisted PostgreSQL unknown-outcome barrier. The separate Temporal
+//! operator authenticates exact parent/child server Histories before issuing
+//! a versioned admission; neither V1 nor V2 has production enablement.
 //!
 //! Every initial RPC has a durable uncertain attempt committed BEFORE any
 //! Qdrant I/O. Re-entry reconciles by an exact remote readback and NEVER
@@ -11,7 +11,7 @@ use anyhow::{bail, ensure, Context, Result};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-pub use operation_protocol::QdrantKeywordProjectionCommandV1;
+pub use qdrant_contracts::QdrantKeywordProjectionCommandV1;
 
 use vector_qdrant::projection_commands::{
     projection_readback_exact, upsert_projection, ProjectionIdentity, ProjectionUpsert,
@@ -144,6 +144,106 @@ pub async fn execute_admitted_qdrant_projection_v1(
         confirmed,
         "PostgreSQL Qdrant receipt refused provider readback"
     );
+    Ok(match state.as_str() {
+        "started" => QdrantProjectionOutcomeV1::Applied,
+        "uncertain" => QdrantProjectionOutcomeV1::Reconciled,
+        _ => QdrantProjectionOutcomeV1::AlreadyConfirmed,
+    })
+}
+
+/// A distinct V2, immutable mixed-DAG admission.  The extra execution key is
+/// pinned to a checked DAG node and independently re-verified by PostgreSQL.
+/// Never fall back to V1 admission, even when the provider command is equal.
+pub async fn execute_admitted_qdrant_projection_v2(
+    pool: &PgPool,
+    admission_id: Uuid,
+    dispatch_execution_key: &str,
+) -> Result<QdrantProjectionOutcomeV1> {
+    ensure!(
+        std::env::var(EXPERIMENTAL_ENV).as_deref() == Ok("1"),
+        "Qdrant V2 mixed-owner effect remains opt-in; production disabled"
+    );
+    ensure!(
+        !dispatch_execution_key.trim().is_empty()
+            && dispatch_execution_key.trim() == dispatch_execution_key,
+        "missing or malformed checked DAG dispatch execution key"
+    );
+
+    let row = sqlx::query(
+        "SELECT tenant_id,context_key,keyword_key,command_bytes,command_sha256,dispatch_execution_key
+           FROM pipeline.qdrant_projection_v2_admissions WHERE admission_id=$1",
+    )
+    .bind(admission_id)
+    .fetch_one(pool)
+    .await
+    .context("V2 admission absent or not readable by tenant-bound effect login")?;
+    let bytes: Vec<u8> = row.try_get("command_bytes")?;
+    let sha256: String = row.try_get("command_sha256")?;
+    let command: QdrantKeywordProjectionCommandV1 = serde_json::from_slice(&bytes)
+        .context("operator-approved V2 Qdrant command is malformed")?;
+    command.validate().map_err(anyhow::Error::msg)?;
+    ensure!(
+        row.try_get::<String, _>("dispatch_execution_key")? == dispatch_execution_key
+            && command.admission_id == admission_id
+            && command.tenant_id == row.try_get::<String, _>("tenant_id")?
+            && command.context_key == row.try_get::<String, _>("context_key")?
+            && command.keyword_key == row.try_get::<String, _>("keyword_key")?,
+        "V2 immutable provider command differs from exact operator-approved DAG node"
+    );
+
+    let state: String = sqlx::query_scalar(
+        "SELECT pipeline.begin_qdrant_projection_v2($1,$2,$3)",
+    )
+    .bind(admission_id)
+    .bind(&bytes)
+    .bind(dispatch_execution_key)
+    .fetch_one(pool)
+    .await
+    .context("PostgreSQL denied V2 checked DAG Qdrant effect before provider I/O")?;
+
+    let entity_key = entity_key(&command);
+    let metadata = metadata(&command, &sha256);
+    if state == "started" {
+        // Durable unknown-outcome barrier is committed in SQL BEFORE this
+        // first network request; a later retry may reconcile, never re-upsert.
+        let identity = ProjectionIdentity::new(COLLECTION, ENTITY_TYPE, &entity_key)?;
+        let upsert = ProjectionUpsert::new(
+            identity,
+            admission_id.to_string(),
+            command.vector.clone(),
+            VECTOR_DIMENSIONS as u64,
+            "cosine",
+            metadata.clone(),
+        )?;
+        upsert_projection(upsert)
+            .await
+            .context("unknown Qdrant V2 RPC outcome: retain uncertain barrier; no retry")?;
+    } else if state != "uncertain" && state != "confirmed" {
+        bail!("unsupported Qdrant V2 attempt state: {state}");
+    }
+
+    let exact = projection_readback_exact(
+        COLLECTION,
+        &admission_id.to_string(),
+        ENTITY_TYPE,
+        &entity_key,
+        &command.vector,
+        &metadata,
+    )
+    .await
+    .context("Qdrant V2 exact readback unavailable: effect remains uncertain")?;
+    ensure!(exact, "unknown or drifted Qdrant V2 remote effect; reconcile manually");
+
+    let confirmed: bool = sqlx::query_scalar(
+        "SELECT pipeline.confirm_qdrant_projection_v2($1,$2,$3)",
+    )
+    .bind(admission_id)
+    .bind(&bytes)
+    .bind(dispatch_execution_key)
+    .fetch_one(pool)
+    .await
+    .context("Qdrant V2 provider readback passed but SQL receipt failed; reconcile only")?;
+    ensure!(confirmed, "PostgreSQL refused V2 provider receipt");
     Ok(match state.as_str() {
         "started" => QdrantProjectionOutcomeV1::Applied,
         "uncertain" => QdrantProjectionOutcomeV1::Reconciled,

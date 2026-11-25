@@ -7,7 +7,7 @@ edition = "2021"
 # No graph_neo4j, voyage_api, projection_delivery or legacy runtime.
 [dependencies]
 anyhow = { workspace = true }
-operation_protocol = { path = "../operation_protocol" }
+qdrant_contracts = { path = "../qdrant_contracts" }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
 uuid = { workspace = true }

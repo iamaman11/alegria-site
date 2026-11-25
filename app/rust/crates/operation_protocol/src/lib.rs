@@ -12,16 +12,18 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub mod effect_child_v4;
-pub mod qdrant_effect_child_v1;
-pub use effect_child_v4::{
-    canonical_effect_dispatch_input_bytes, BoundEffectInputV4, EffectChildInvocationV4,
-    EffectChildResultV4, TemporalExecutionIdentityV4, EFFECT_CHILD_SCHEMA_REVISION,
+pub mod owner_dispatch;
+pub use owner_dispatch::{
+    canonical_owner_dispatch_input_bytes, AdmittedArtifactV1, BoundArtifactV1, OperationDagRunV6,
+    OwnerCommandWireV1, OwnerInvocationV1, OwnerResultV1,
+    PinnedOwnerRouteV1, RouteCatalogError, TrustedRouteCatalog,
+    OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_TYPE,
+    OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_INVOCATION_SCHEMA_REVISION,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
-pub use qdrant_effect_child_v1::{
-    QdrantChildOutcomeV1, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
-    QdrantKeywordProjectionCommandV1, QdrantProjectionRunV1, QDRANT_DAG_PARENT_QUEUE_V1,
-    QDRANT_DAG_PARENT_TYPE_V1, QDRANT_OWNER_ACTIVITY_QUEUE_V1, QDRANT_OWNER_CHILD_TYPE_V1,
-    QDRANT_OWNER_COMMAND_QUEUE_V1,
+pub use effect_child_v4::{
+    canonical_effect_dispatch_input_bytes, checked_execution_key, BoundEffectInputV4, EffectChildInvocationV4,
+    EffectChildProtocolError, EffectChildResultV4, TemporalExecutionIdentityV4, EFFECT_CHILD_SCHEMA_REVISION,
 };
 
 /// Strongly typed identities prevent accidentally exchanging a node, port,
@@ -85,7 +87,8 @@ pub enum IdempotencyPolicy {
     AtMostOnce,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OperationContract {
     pub reference: OperationRef,
     pub owner: OperationOwnerId,
@@ -128,7 +131,14 @@ pub struct ContractCatalog {
 
 impl ContractCatalog {
     pub fn register<O: Operation>(&mut self) -> Result<(), PlanError> {
-        let contract = O::contract();
+        self.register_contract(O::contract())
+    }
+
+    /// Install a trusted, owner-declared contract without linking the
+    /// provider-specific Rust crate into the generic DAG runtime. The caller
+    /// is responsible for obtaining this from a trusted registration source;
+    /// an arbitrary manifest must never be treated as a trusted catalog.
+    pub fn register_contract(&mut self, contract: OperationContract) -> Result<(), PlanError> {
         verify_contract(&contract)?;
         if self.contracts.contains_key(&contract.reference) {
             return Err(PlanError::DuplicateContract(contract.reference));
@@ -139,6 +149,10 @@ impl ContractCatalog {
 
     pub fn contract(&self, reference: &OperationRef) -> Option<&OperationContract> {
         self.contracts.get(reference)
+    }
+
+    pub fn contracts(&self) -> impl Iterator<Item = &OperationContract> {
+        self.contracts.values()
     }
 }
 
