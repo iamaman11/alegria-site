@@ -8,7 +8,10 @@ from pathlib import Path
 import ast
 import re
 import textwrap
-from ci_impact import NON_WORKER_DELIVERY_INPUTS, SCHEMA_VERSION, main_cache_prime_required, worker_release_decision
+from ci_impact import (
+    E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS, NON_WORKER_DELIVERY_INPUTS,
+    SCHEMA_VERSION, main_cache_prime_required, worker_release_decision,
+)
 from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,6 +167,8 @@ def check() -> None:
     assert "runner.temp" not in architecture
     assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in architecture
     assert "cargo_scope: ${{ steps.decide.outputs.cargo_scope }}" in workflow
+    assert "architecture_e2e_shards: ${{ steps.decide.outputs.architecture_e2e_shards }}" in workflow
+    assert "verify_e2e_shards: ${{ steps.decide.outputs.verify_e2e_shards }}" in workflow
     assert "report.get('scope') not in {'none', 'scoped', 'full'}" in workflow
     assert "not {'architecture-and-rust', 'verify'}.issubset(selected)" in workflow
     assert "f.write('cargo_scope=' + report['scope'] + '\\n')" in workflow
@@ -191,7 +196,24 @@ def check() -> None:
     assert postgres.count("--execute-precompiled-e2e") == 1
     assert "--suite-job architecture-and-rust" in graph
     assert "--suite-job verify" in postgres
-    assert "--parallel-verify-e2e" in postgres
+    assert "--parallel-verify-e2e" not in postgres
+    assert "--e2e-shard '${{ matrix.shard }}'" in graph
+    assert "--e2e-shard '${{ matrix.shard }}'" in postgres
+    assert "strategy:\n      fail-fast: false" in postgres
+    assert "fail-fast: false" in graph
+    assert "matrix:\n        shard: ${{ fromJSON(needs.impact.outputs.architecture_e2e_shards) }}" in graph
+    assert "matrix:\n        shard: ${{ fromJSON(needs.impact.outputs.verify_e2e_shards) }}" in postgres
+    assert "name: rust-architecture-e2e (${{ matrix.shard }})" in graph
+    assert "name: rust-verify-e2e (${{ matrix.shard }})" in postgres
+    assert "if: matrix.shard == 'pg_temporal'" in graph
+    assert "if: matrix.shard == 'verify_d'" in postgres
+    assert 'architecture_e2e_shards=' in workflow
+    assert 'verify_e2e_shards=' in workflow
+    assert "architecture = [name for name in E2E_ARCH_SHARDS if shards[name]]" in workflow
+    assert "verify = [name for name in E2E_VERIFY_SHARDS if shards[name]]" in workflow
+    assert len(E2E_ARCH_SHARDS) == 6 and len(E2E_VERIFY_SHARDS) == 4
+    assert "if not architecture or not verify:" in workflow
+    assert "raise SystemExit('CI_IMPACT=FAIL full CI has no mandatory live E2E shards')" in workflow
     assert "rust_ci_artifacts.py install" in graph and "rust_ci_artifacts.py install" in postgres
     assert "rust-e2e-harness-${{ github.sha }}" in graph
     assert "rust-e2e-legacy-${{ github.sha }}" in graph
@@ -202,7 +224,15 @@ def check() -> None:
     assert "CI_RUST_ARTIFACT_TRANSFER owner=verify" in postgres
     assert "needs.rust-e2e-harness.result == 'success'" in graph
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in postgres
-    assert '"rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e"' in gate
+    assert '"rust-e2e-v3-binaries",' in gate
+    assert '"rust-architecture-e2e": set(E2E_ARCH_SHARDS)' in gate
+    assert '"rust-verify-e2e": set(E2E_VERIFY_SHARDS)' in gate
+    assert "did not pass all selected E2E shards" in gate
+    assert "from ci_impact import E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS" in gate
+    assert "      - name: Checkout exact CI plan owner registry\n" in gate
+    checkout = gate.split("      - name: Checkout exact CI plan owner registry\n", 1)[1].split("      - name:", 1)[0]
+    assert "uses: actions/checkout@v7" in checkout and "ref: ${{ github.sha }}" in checkout
+    assert "if: github.event_name == 'pull_request'" not in checkout
     assert "--execute-precompiled-e2e" not in architecture
     assert "--execute-precompiled-e2e" not in verify
     # Architecture's real Temporal and graph container suites must not compete
