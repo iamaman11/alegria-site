@@ -882,9 +882,7 @@ mod tests {
         let machine = OperationDagMachine::new_v2(&id, run.clone(), routes).unwrap();
         let mut actual_parent = parent();
         actual_parent.workflow_id = id;
-        let requests = machine
-            .v2_owner_validation_requests(actual_parent)
-            .unwrap();
+        let requests = machine.v2_owner_validation_requests(actual_parent).unwrap();
         assert_eq!(requests.len(), 2);
         for (_, request) in &requests {
             request.verify_against_run(&run).unwrap();
@@ -942,7 +940,9 @@ mod tests {
         );
         run.plan.nodes[1].inputs.insert(
             "source".into(),
-            ArtifactBinding::External { artifact: ext.clone() },
+            ArtifactBinding::External {
+                artifact: ext.clone(),
+            },
         );
         run.plan = run.plan.seal(routes.catalog()).unwrap();
         run.admitted.insert(
@@ -958,9 +958,7 @@ mod tests {
         let machine = OperationDagMachine::new_v2(&id, run.clone(), routes).unwrap();
         let mut actual_parent = parent();
         actual_parent.workflow_id = id;
-        let requests = machine
-            .v2_owner_validation_requests(actual_parent)
-            .unwrap();
+        let requests = machine.v2_owner_validation_requests(actual_parent).unwrap();
         let original = requests
             .iter()
             .find(|(_, request)| request.instance.as_str() == "consumer")

@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactSchema,
-    ArtifactBinding, ContractHash, OperationDagRunV6, OperationInstanceId, OperationOwnerId,
+    operation_dag_parent_workflow_id_v2, owner_content_hash, AdmittedArtifactV1, ArtifactBinding,
+    ArtifactSchema, ContractHash, OperationDagRunV6, OperationInstanceId, OperationOwnerId,
     OperationRef, PlanHash, PortId, RunScope, TemporalExecutionIdentityV4,
     OPERATION_DAG_RUN_SCHEMA_REVISION_V6, OWNER_OPERATION_CHILD_TYPE_V1,
 };
