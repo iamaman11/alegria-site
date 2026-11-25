@@ -50,6 +50,12 @@ WORKFLOW_TYPES = (
     "PgTruthReviewReconcileV4Workflow",
     "AlegriaQdrantProjectionDagV1Workflow",
     "QdrantKeywordProjectionV1Workflow",
+    # New identities; old V1-V5 histories must never be reinterpreted under
+    # these Types. No replay route is authorized until its owner proves one.
+    "AlegriaOwnerOperationV1Workflow",
+    "PgTruthReviewReconcileV5Workflow",
+    "QdrantKeywordProjectionV2Workflow",
+    "AlegriaOperationDagV1Workflow",
 )
 # Historical name retained for compatibility with the local safety tests.
 LEGACY_TYPES = WORKFLOW_TYPES

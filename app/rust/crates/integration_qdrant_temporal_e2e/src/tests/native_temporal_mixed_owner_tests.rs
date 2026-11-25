@@ -1,6 +1,6 @@
-//! Contract-only mixed-owner preflight. This does NOT claim a live PG->Qdrant
-//! producer/consumer E2E: their real artifact schemas are incompatible today.
-//! The existing native Qdrant Temporal E2E continues to cover real provider I/O.
+// Contract-only mixed-owner preflight. This does NOT claim a live PG->Qdrant
+// producer/consumer E2E: their real artifact schemas are incompatible today.
+// The existing native Qdrant Temporal E2E continues to cover real provider I/O.
 
 fn mixed_v6_fixture() -> (
     operation_protocol::OperationDagRunV6,
@@ -99,7 +99,7 @@ fn mixed_v6_fixture() -> (
         keyword_key: format!("ci-mixed-keyword-{run_id}"),
         vector: vec![0.123; 1024],
     };
-    let payloads = BTreeMap::from([
+    let payloads: BTreeMap<operation_protocol::ArtifactId, Vec<u8>> = BTreeMap::from([
         ("pg_scope".into(), serde_json::to_vec(&TruthReviewScopeArtifactV1 {
             run_id, context_key: context,
         }).unwrap()),

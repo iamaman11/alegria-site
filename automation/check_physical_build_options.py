@@ -24,11 +24,12 @@ class ManifestEvidenceTests(unittest.TestCase):
     def test_current_native_worker_cannot_isolate_providers_inside_same_package(self) -> None:
         report = ab.manifest_report(self.graph, self.paths)
         # Delivery/Voyage, SQL-only ports, Graph capability and the new
-        # Qdrant effect core extend the physical dependency graph. Native
-        # Temporal still reaches provider owners via its composition wrapper;
+        # Qdrant effect core and standalone qdrant_contracts extend the graph.
+        # Native Temporal still reaches provider owners via its composition wrapper;
         # a module refactor is not owner isolation.
-        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 24)
-        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 24)
+        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 25)
+        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 25)
+        self.assertIn("qdrant_contracts", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertIn("projection_delivery", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertIn("voyage_api", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertIn("pg_runtime_ports", report["A_native_monolith"]["workspace_closure_excluding_self"])
@@ -40,9 +41,10 @@ class ManifestEvidenceTests(unittest.TestCase):
         exists = ab.ORCHESTRATOR in self.graph
         self.assertEqual(report["B_separate_orchestrator"]["exists"], exists)
         self.assertEqual(report["B_separate_orchestrator"]["hypothetical"], not exists)
-        # The owner now depends directly on provider-free truth_domain; this
-        # is a real tenth workspace dependency, not a compiler measurement.
-        self.assertEqual(report["B_separate_orchestrator"]["workspace_dependency_count"], 10)
+        # Owner contract extraction adds an SDK-free Qdrant contract edge;
+        # this is an eleventh workspace dependency, not compiler evidence.
+        self.assertEqual(report["B_separate_orchestrator"]["workspace_dependency_count"], 11)
+        self.assertIn("qdrant_contracts", report["B_separate_orchestrator"]["workspace_closure_excluding_self"])
         self.assertIn("truth_domain", report["B_separate_orchestrator"]["workspace_closure_excluding_self"])
         self.assertEqual(report["B_separate_orchestrator"]["provider_dependencies"], [])
         self.assertFalse(report["actual_rustc_evidence"])
