@@ -375,7 +375,7 @@ async fn insert_admission(
     .bind(&attested.command.keyword_key)
     .bind(&attested.command.operation_instance)
     .bind(&attested.command.plan_hash)
-    .bind(fingerprint)
+    .bind(fingerprint.as_str())
     .bind(&checked.execution_key)
     .bind(&request.parent_workflow_id)
     .bind(&request.parent_workflow_run_id)

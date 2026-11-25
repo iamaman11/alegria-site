@@ -601,7 +601,7 @@ fn attest_pair_v3(
     })
 }
 
-async fn operator_pool_v3() -> Result<PgPool> {
+async fn operator_pool_v3(requires_produced_certificate: bool) -> Result<PgPool> {
     ensure!(
         env::var("ALEGRIA_ENABLE_QDRANT_GENERIC_OPERATOR_V1").as_deref() == Ok("true"),
         "generic Qdrant operator requires distinct explicit opt-in"
@@ -641,10 +641,13 @@ async fn operator_pool_v3() -> Result<PgPool> {
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','INSERT') AS v1_insert,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v2_admissions','SELECT') AS v2_read,
                 has_table_privilege(session_user,'pipeline.qdrant_projection_v1_admissions','SELECT') AS v1_read,
-                has_table_privilege(session_user,'pipeline.vector_projection_sources_v1','SELECT') AS producer_source_read,
-                has_table_privilege(session_user,'pipeline.operation_artifact_receipts_v1','SELECT') AS cross_owner_receipt_read,
-                has_function_privilege(session_user,
-                    'pipeline.operation_artifact_receipt_matches_v1(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE') AS cross_owner_cert_verify,
+                COALESCE(has_table_privilege(session_user,
+                    to_regclass('pipeline.vector_projection_sources_v1'),'SELECT'),FALSE) AS producer_source_read,
+                COALESCE(has_table_privilege(session_user,
+                    to_regclass('pipeline.operation_artifact_receipts_v1'),'SELECT'),FALSE) AS cross_owner_receipt_read,
+                COALESCE(has_function_privilege(session_user,
+                    to_regprocedure('pipeline.operation_artifact_receipt_matches_v1(uuid,text,uuid,text,text,text,text,text,text,text,text,text,text,jsonb)'),
+                    'EXECUTE'),FALSE) AS cross_owner_cert_verify,
                 has_table_privilege(session_user,'pipeline.operation_dag_run_governance_v1','INSERT') AS governance_issue,
                 has_function_privilege(session_user,
                     'pipeline.operation_dag_governance_matches_v1(uuid,text,text,text,text,text,text,boolean)','EXECUTE') AS governed,
@@ -674,7 +677,8 @@ async fn operator_pool_v3() -> Result<PgPool> {
             && !role.try_get::<bool, _>("v1_read")?
             && !role.try_get::<bool, _>("producer_source_read")?
             && !role.try_get::<bool, _>("cross_owner_receipt_read")?
-            && role.try_get::<bool, _>("cross_owner_cert_verify")?
+            && (!requires_produced_certificate
+                || role.try_get::<bool, _>("cross_owner_cert_verify")?)
             && !role.try_get::<bool, _>("governance_issue")?
             && role.try_get::<bool, _>("governed")?
             && role.try_get::<bool, _>("resignal_allowed")?
@@ -756,7 +760,9 @@ async fn attested_request(
         attested.command.tenant_id == env::var("QDRANT_GENERIC_OPERATOR_TENANT_ID")?,
         "generic Qdrant operator is not the admitted command tenant"
     );
-    let pool = operator_pool_v3().await?;
+    // Legacy External-only routes must not acquire a new cross-owner
+    // certificate capability. Require it exclusively for Produced dataflow.
+    let pool = operator_pool_v3(produced.is_some()).await?;
     if let Some(source) = &produced {
         let verified: bool = sqlx::query_scalar(
             "SELECT pipeline.operation_artifact_receipt_matches_v1(\
