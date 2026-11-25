@@ -283,16 +283,23 @@ def collect_cargo_timings(target_dir: Path) -> list[dict[str, Any]]:
 def is_gnu_time_version(output: str) -> bool:
     """Match GNU time's actual version banner, not BSD time or incidental text.
 
-    GNU time prints `time (GNU Time) 1.9` on Linux; older fixtures may
-    print `GNU time 1.9`. The product name is case-insensitive but must
-    occupy the beginning of the first line and include a numeric version.
+    GNU time prints `time (GNU Time) 1.9` or `time (GNU Time) UNKNOWN`
+    on Linux; older fixtures may print `GNU time 1.9`. The vendor name
+    must occupy the beginning of the first line; BSD/BusyBox cannot pass.
     """
     first_line = output.splitlines()[0].strip() if output else ""
     return re.fullmatch(
-        r"(?:time\s*\(\s*GNU\s+Time\s*\)|GNU\s+Time)\s+\d+(?:\.\d+)*",
+        r"(?:time\s*\(\s*GNU\s+Time\s*\)|GNU\s+Time)\s+(?:\d+(?:\.\d+)*|UNKNOWN)",
         first_line,
         flags=re.IGNORECASE,
     ) is not None
+
+
+def safe_time_version_banner(stdout: str, stderr: str) -> str:
+    """Bound diagnostic data to an inert printable vendor-banner fragment."""
+    lines = stdout.splitlines() or stderr.splitlines()
+    candidate = lines[0].strip() if lines else "<empty>"
+    return re.sub(r"[^A-Za-z0-9 ()._-]", "?", candidate[:90])
 
 
 def measured_cargo_run(workspace: Path, target_dir: Path, package: str,
@@ -306,7 +313,11 @@ def measured_cargo_run(workspace: Path, target_dir: Path, package: str,
             raise EvidenceError("GNU time not found; cannot claim CPU/RAM measurement")
         version = subprocess.run([timing, "--version"], capture_output=True, text=True)
         if version.returncode or not is_gnu_time_version(version.stdout):
-            raise EvidenceError("--measure-resources requires GNU time")
+            raise EvidenceError(
+                "--measure-resources requires GNU time "
+                f"(exit={version.returncode}, banner="
+                f"{safe_time_version_banner(version.stdout, version.stderr)!r})"
+            )
         invocation = [timing, "-f", "PHYSICAL_AB_RESOURCE\t%e\t%U\t%S\t%M\t%x",
                       "-o", str(resource_path), *command]
     else:

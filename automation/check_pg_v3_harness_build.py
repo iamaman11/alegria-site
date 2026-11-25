@@ -326,7 +326,10 @@ class PhysicalCargoEvidenceTests(unittest.TestCase):
         for banner in (
             "time (GNU Time) 1.9\nCopyright (C) Free Software Foundation",
             "time (GNU time) 1.9\n",
+            "time (GNU Time) UNKNOWN\nCopyright (C) Free Software Foundation",
+            "time (GNU time) unknown",
             "GNU time 1.9",
+            "GNU TIME UNKNOWN",
         ):
             with self.subTest(valid=banner):
                 self.assertTrue(ab.is_gnu_time_version(banner))
@@ -334,6 +337,7 @@ class PhysicalCargoEvidenceTests(unittest.TestCase):
             "", "time version 1.9", "time (BSD) 1.9",
             "BSD time 1.9; compatible with GNU Time",
             "not GNU Time 1.9", "GNU Time invalid", "GNU time 1.9 garbage",
+            "time (BSD) UNKNOWN", "time (GNU Time) UNKNOWN trailing tokens",
         ):
             with self.subTest(invalid=banner):
                 self.assertFalse(ab.is_gnu_time_version(banner))
@@ -349,6 +353,26 @@ class PhysicalCargoEvidenceTests(unittest.TestCase):
                         Path(dirname), Path(dirname) / "empty-target",
                         "integration_harness", {}, True,
                     )
+                compile_process.assert_not_called()
+
+    def test_rejected_time_banner_diagnostic_is_bounded_and_inert(self):
+        banner = "BusyBox time --version;\nBearer NOT_A_REAL_TOKEN"
+        self.assertEqual(
+            ab.safe_time_version_banner(banner, ""),
+            "BusyBox time --version?",
+        )
+        self.assertLessEqual(len(ab.safe_time_version_banner("a" * 1000, "")), 90)
+        with tempfile.TemporaryDirectory() as dirname:
+            with patch.object(ab.shutil, "which", return_value="/usr/bin/time"), \
+                 patch.object(ab.subprocess, "run", return_value=subprocess.CompletedProcess(
+                     ["time", "--version"], 0, stdout=banner, stderr="")), \
+                 patch.object(ab.subprocess, "Popen") as compile_process:
+                with self.assertRaisesRegex(ab.EvidenceError, r"banner='BusyBox") as caught:
+                    ab.measured_cargo_run(
+                        Path(dirname), Path(dirname) / "empty-target",
+                        "integration_harness", {}, True,
+                    )
+                self.assertNotIn("Bearer", str(caught.exception))
                 compile_process.assert_not_called()
 
     def test_failure_does_not_leave_stale_success_report(self):

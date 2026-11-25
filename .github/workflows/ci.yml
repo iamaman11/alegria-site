@@ -481,6 +481,11 @@ jobs:
           fetch-depth: 0
       - run: bash automation/install_ci_native_tools.sh protoc
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install and identify GNU time for physical CPU and RSS evidence
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y time
+          /usr/bin/time --version
       - uses: actions/cache/restore@v4
         with:
           path: |
