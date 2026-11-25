@@ -663,9 +663,7 @@ async fn mixed_v6_native_pg_then_qdrant_independent_operator_effects() {
         parent.get_result(WorkflowGetResultOptions::default()))
         .await.expect("native mixed DAG never completed")
         .expect("native mixed owner DAG Workflow failed");
-    let receipt_json: String = completion.to_value(&PayloadConverter::serde_json());
-    let receipt: OperationDagReceiptV1 = serde_json::from_str(&receipt_json)
-        .expect("native Temporal parent must return typed DAG receipt");
+    let receipt: OperationDagReceiptV1 = completion.to_value(&PayloadConverter::serde_json());
     assert_eq!(receipt.plan_hash, run.plan.hash);
     assert_eq!(receipt.order.len(), 2);
     assert_eq!(receipt.order[0].as_str(), "pg_review");
