@@ -14,8 +14,8 @@ use temporalio_common::WorkflowDefinition;
 use temporalio_macros::{workflow, workflow_methods};
 use temporalio_sdk::workflow_replayer::WorkflowReplayerOptions;
 use temporalio_sdk::{
-    ApplicationFailure, ChildWorkflowOptions, WorkerOptions, WorkflowContext,
-    WorkflowContextView, WorkflowResult, WorkflowTermination,
+    ApplicationFailure, ChildWorkflowOptions, WorkerOptions, WorkflowContext, WorkflowContextView,
+    WorkflowResult, WorkflowTermination,
 };
 
 pub(crate) const PG_V4_CHILD_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV4Workflow";

@@ -13,13 +13,13 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use operation_protocol::{EffectChildInvocationV4, EffectChildResultV4};
+#[cfg(test)]
+use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
 use postgres_store::truth_review_effect_v3::{
     assert_unprivileged_pg_effect_role, execute_admitted_reconcile, execute_admitted_reconcile_v4,
     ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
     PG_EFFECT_WORKFLOW_TYPE, PG_EFFECT_WORKFLOW_TYPE_V4,
 };
-#[cfg(test)]
-use postgres_store::truth_review_effect_v3::ReconcileTruthReviewsError;
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
