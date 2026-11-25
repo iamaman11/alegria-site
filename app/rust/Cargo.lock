@@ -5341,6 +5341,7 @@ dependencies = [
  "anyhow",
  "futures",
  "futures-util",
+ "operation_protocol",
  "postgres_store",
  "serde",
  "serde_json",

@@ -7,6 +7,7 @@ edition = "2021"
 # Exactly one PG business effect and the Temporal transport. Never pull
 # runtime_composition, infrastructure, graph_neo4j, vector_qdrant or providers.
 postgres_store = { path = "../../crates/postgres_store" }
+operation_protocol = { path = "../../crates/operation_protocol" }
 temporal_gateway = { path = "../../crates/temporal_gateway" }
 temporalio-sdk = { workspace = true }
 temporalio-sdk-core = { workspace = true }
