@@ -1,4 +1,4 @@
-//! Independent true native Temporal child -> PG admission -> Qdrant E2E.
+//! Native Temporal child -> PG admission -> Qdrant E2E, including retry History proof.
 
 #[cfg(all(test, feature = "e2e"))]
 #[path = "../../integration_pg_v3_e2e/src/containers.rs"]
