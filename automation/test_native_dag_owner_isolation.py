@@ -22,6 +22,48 @@ from check_rust_adapter_boundaries import (
 )
 
 
+def missing_workspace_lock_dependencies(rust_root: Path) -> list[str]:
+    """Detect missing lock entries for *every* local Cargo path dependency.
+
+    Unlike a `projection_contracts`-only assertion, this also catches an
+    optional `postgres_store` edge added to an integration executable. Include
+    dev/build/target-specific dependencies; Cargo resolves these into the
+    workspace lock, even when a particular CI feature does not build them.
+    """
+    workspace = tomllib.loads((rust_root / "Cargo.toml").read_text())
+    lock = tomllib.loads((rust_root / "Cargo.lock").read_text())
+    locked_packages = {
+        (package["name"], package["version"]): package
+        for package in lock["package"]
+        if "source" not in package
+    }
+    missing: list[str] = []
+    for relative in workspace["workspace"]["members"]:
+        owner_path = rust_root / relative / "Cargo.toml"
+        manifest = tomllib.loads(owner_path.read_text())
+        package = manifest["package"]
+        key = (package["name"], package["version"])
+        locked_owner = locked_packages.get(key)
+        if locked_owner is None:
+            missing.append(f"{package['name']}: package missing from Cargo.lock")
+            continue
+        resolved = set(locked_owner.get("dependencies", []))
+        blocks = [manifest, *(target for target in manifest.get("target", {}).values()
+                               if isinstance(target, dict))]
+        for block in blocks:
+            for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+                for alias, config in block.get(section, {}).items():
+                    if not isinstance(config, dict) or "path" not in config:
+                        continue
+                    target_path = (owner_path.parent / config["path"] / "Cargo.toml").resolve()
+                    target = tomllib.loads(target_path.read_text())["package"]["name"]
+                    if target not in resolved:
+                        missing.append(
+                            f"{package['name']}: local `{alias}` -> `{target}` missing from Cargo.lock"
+                        )
+    return missing
+
+
 class NativeDagIsolationTests(unittest.TestCase):
     def test_new_projection_contract_package_and_consumers_have_exact_lock_entries(self) -> None:
         """Missing `cargo` locally must not silently leave a stale --locked build.
@@ -46,11 +88,26 @@ class NativeDagIsolationTests(unittest.TestCase):
             set(manifest["dependencies"]),
         )
         self.assertEqual(locked["version"], manifest["package"]["version"])
-        for relative in workspace["workspace"]["members"]:
-            owner_manifest = tomllib.loads((RUST_ROOT / relative / "Cargo.toml").read_text())
-            deps = owner_manifest.get("dependencies", {})
-            if "projection_contracts" in deps:
-                self.assertIn("projection_contracts", packages[owner_manifest["package"]["name"]]["dependencies"])
+        self.assertEqual(missing_workspace_lock_dependencies(RUST_ROOT), [])
+
+    def test_optional_new_owner_dependency_missing_from_lock_is_caught(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rust = Path(tmp)
+            (rust / "Cargo.toml").write_text('[workspace]\nmembers = ["a", "b"]\n')
+            for name in ("a", "b"):
+                (rust / name).mkdir()
+            (rust / "a/Cargo.toml").write_text(
+                '[package]\nname="a"\nversion="0.1.0"\n'
+                '[dependencies]\nb = { path="../b", optional=true }\n'
+            )
+            (rust / "b/Cargo.toml").write_text('[package]\nname="b"\nversion="0.1.0"\n')
+            (rust / "Cargo.lock").write_text(
+                'version=4\n[[package]]\nname="a"\nversion="0.1.0"\n'
+                '[[package]]\nname="b"\nversion="0.1.0"\n'
+            )
+            self.assertEqual(missing_workspace_lock_dependencies(rust), [
+                'a: local `b` -> `b` missing from Cargo.lock',
+            ])
 
     def test_current_native_owners_are_independent_in_cargo_closure(self) -> None:
         from check_rust_adapter_boundaries import (

@@ -2293,6 +2293,7 @@ dependencies = [
  "anyhow",
  "integration_data_fixtures",
  "operation_protocol",
+ "postgres_store",
  "projection_contracts",
  "qdrant_contracts",
  "seo_application",

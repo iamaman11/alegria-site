@@ -332,8 +332,7 @@ async fn insert_admission(
     );
     let source = sqlx::query(
         "SELECT vector FROM pipeline.vector_projection_sources_v1
-         WHERE run_id=$1 AND tenant_id=$2 AND context_key=$3 AND keyword_key=$4
-         FOR SHARE",
+         WHERE run_id=$1 AND tenant_id=$2 AND context_key=$3 AND keyword_key=$4",
     )
     .bind(request.canonical_run_id)
     .bind(tenant)
@@ -358,7 +357,7 @@ async fn insert_admission(
     let invocation_sha = sha256_pg(&mut tx, &attested.child_start_bytes).await?;
     let checked = &attested.invocation.checked_dispatch;
     let fingerprint = PgReadVectorProjectionV1::contract().fingerprint()?;
-    let inserted: Uuid = sqlx::query_scalar(
+    let inserted = sqlx::query(
         "INSERT INTO pipeline.pg_vector_projection_admissions_v1
             (admission_id,run_id,tenant_id,context_key,keyword_key,operation_instance,
              plan_hash,contract_fingerprint,dispatch_execution_key,
@@ -367,8 +366,7 @@ async fn insert_admission(
              source_hash,issued_by,expires_at)
          SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,
                 current_user,clock_timestamp()+($17::integer*interval '1 second')
-         WHERE pipeline.operation_dag_governance_matches_v1($2,$3,$4,$10,$11,$7,$15,TRUE)
-         RETURNING admission_id",
+         WHERE pipeline.operation_dag_governance_matches_v1($2,$3,$4,$10,$11,$7,$15,TRUE)",
     )
     .bind(request.admission_id)
     .bind(request.canonical_run_id)
@@ -387,18 +385,18 @@ async fn insert_admission(
     .bind(parent_sha)
     .bind(source_hash)
     .bind(request.expires_in_seconds as i32)
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
     ensure!(
-        inserted == request.admission_id,
-        "PG vector source admission ID drift"
+        inserted.rows_affected() == 1,
+        "PG vector source admission must insert exactly one row"
     );
     tx.commit().await?;
     println!(
         "{}",
         serde_json::json!({
             "operation": "issue_pg_vector_projection_v1",
-            "admission_id": inserted,
+            "admission_id": request.admission_id,
             "status": "issued",
             "checked_execution_key": checked.execution_key,
             "child_workflow_run_id": request.child_workflow_run_id,
@@ -432,6 +430,119 @@ async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
         .context("PG vector source admission committed but signal failed; reconcile manually")
 }
 
+/// The projection issuer has a different SQL authority than the historical
+/// Truth V3 issuer. Never reuse the latter's role validator: it permits the
+/// V3 admission table and necessarily rejects this separate owner admission.
+/// This role may INSERT only its own immutable projection admission and read
+/// only the PG source + canonical governance required to issue that admission.
+async fn projection_issuer_pool() -> Result<PgPool> {
+    ensure!(
+        env::var("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1").as_deref() == Ok("true"),
+        "PG vector source operator requires explicit owner-only enable flag"
+    );
+    let url = env::var("PG_EFFECT_OPERATOR_DATABASE_URL")
+        .context("PG vector operator requires separately provisioned operator DSN")?;
+    ensure!(
+        !url.is_empty() && url.trim() == url,
+        "PG vector operator DSN is empty or has surrounding whitespace"
+    );
+    let parsed = url::Url::parse(&url).context("PG vector operator DSN is malformed")?;
+    ensure!(
+        matches!(parsed.scheme(), "postgres" | "postgresql")
+            && !parsed.username().is_empty()
+            && parsed.host_str().is_some()
+            && !parsed.path().is_empty()
+            && parsed.path() != "/"
+            && parsed.fragment().is_none(),
+        "PG vector operator DSN must identify one explicit PostgreSQL login and database"
+    );
+    for key in [
+        "PG_EFFECT_WORKER_DATABASE_URL",
+        "OPERATION_DAG_GOVERNANCE_DATABASE_URL",
+        "PG_DAG_GOVERNANCE_OPERATOR_DATABASE_URL",
+    ] {
+        if let Ok(other) = env::var(key) {
+            ensure!(url != other, "PG vector operator must not reuse {key} credentials");
+        }
+    }
+    let pool = PgPool::connect(&url).await.context("connect isolated PG vector operator")?;
+    let identity = sqlx::query(
+        "SELECT current_user::text AS role_name,
+                session_user::text AS login_role,
+                r.rolcanlogin AS can_login,
+                (r.rolsuper OR r.rolcreaterole OR r.rolcreatedb
+                 OR r.rolreplication OR r.rolbypassrls) AS elevated,
+                EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                        WHERE m.member = r.oid) AS has_memberships
+         FROM pg_catalog.pg_roles r WHERE r.rolname = current_user",
+    ).fetch_one(&pool).await?;
+    ensure!(
+        identity.get::<String, _>("role_name") == identity.get::<String, _>("login_role")
+            && identity.get::<bool, _>("can_login")
+            && !identity.get::<bool, _>("elevated")
+            && !identity.get::<bool, _>("has_memberships"),
+        "PG vector operator requires a restricted standalone LOGIN with no SET ROLE memberships"
+    );
+    let can_issue: bool = sqlx::query_scalar(
+        "SELECT has_schema_privilege(current_user,'pipeline','USAGE')
+           AND has_table_privilege(current_user,'pipeline.pg_vector_projection_admissions_v1','INSERT')
+           AND has_table_privilege(current_user,'pipeline.vector_projection_sources_v1','SELECT')
+           AND has_table_privilege(current_user,'pipeline.execution_runs','SELECT')
+           AND has_function_privilege(current_user,
+                'pipeline.operation_dag_governance_matches_v1(uuid,text,text,text,text,text,text,boolean)',
+                'EXECUTE')",
+    ).fetch_one(&pool).await?;
+    ensure!(
+        can_issue,
+        "PG vector operator lacks exact source-read, governance and own-admission capabilities"
+    );
+    let excess_table: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+           AND c.relkind IN ('r','p','v','m','f')
+           AND (
+             (has_any_column_privilege(current_user,c.oid,'INSERT')
+              AND NOT (n.nspname = 'pipeline'
+                       AND c.relname = 'pg_vector_projection_admissions_v1'))
+             OR has_any_column_privilege(current_user,c.oid,'UPDATE')
+             OR has_table_privilege(current_user,c.oid,'DELETE')
+             OR has_table_privilege(current_user,c.oid,'TRUNCATE')
+           )
+         ORDER BY n.nspname,c.relname LIMIT 1",
+    ).fetch_optional(&pool).await?;
+    ensure!(
+        excess_table.is_none(),
+        "PG vector operator has forbidden foreign write authority: {excess_table:?}"
+    );
+    let excess_sequence: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname || '.' || c.relname
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+           AND c.relkind = 'S'
+           AND (has_sequence_privilege(current_user,c.oid,'USAGE')
+             OR has_sequence_privilege(current_user,c.oid,'UPDATE'))
+         ORDER BY n.nspname,c.relname LIMIT 1",
+    ).fetch_optional(&pool).await?;
+    ensure!(
+        excess_sequence.is_none(),
+        "PG vector operator has forbidden sequence mutation authority: {excess_sequence:?}"
+    );
+    let excess_schema: Option<String> = sqlx::query_scalar(
+        "SELECT n.nspname FROM pg_catalog.pg_namespace n
+         WHERE n.nspname <> 'information_schema' AND n.nspname !~ '^pg_'
+           AND has_schema_privilege(current_user,n.oid,'CREATE')
+         ORDER BY n.nspname LIMIT 1",
+    ).fetch_optional(&pool).await?;
+    ensure!(
+        excess_schema.is_none(),
+        "PG vector operator has forbidden schema CREATE authority: {excess_schema:?}"
+    );
+    Ok(pool)
+}
+
 pub async fn issue_from_file(path: &Path) -> Result<()> {
     let bytes = fs::read(path)
         .with_context(|| format!("read PG vector projection locator {}", path.display()))?;
@@ -459,9 +570,7 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
     let attested = attest_from_server(&request, &build_id).await?;
     let tenant = env::var("PG_EFFECT_OPERATOR_TENANT_ID")
         .context("PG projection operator must pin authenticated tenant")?;
-    let (pool, _) =
-        super::operator::operator_pool_with_enable_flag("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1")
-            .await?;
+    let pool = projection_issuer_pool().await?;
     insert_admission(&pool, &request, &attested, &tenant).await?;
     signal_after_commit(&request).await
 }

@@ -467,10 +467,11 @@ async fn mixed_v7_seed_pg_vector_projection_source(
 #[cfg(feature = "e2e")]
 struct MixedV6NativeRoles {
     pg_worker_role: String,
-    pg_operator_role: String,
+    pg_projection_operator_role: String,
     qdrant_operator_role: String,
     pg_worker_url: String,
     pg_operator_url: String,
+    pg_projection_operator_url: String,
     qdrant_worker_secret: PathBuf,
     qdrant_operator_secret: PathBuf,
     governance_operator_url: String,
@@ -485,6 +486,7 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
     let nonce = Uuid::new_v4().simple().to_string();
     let pg_worker = format!("mixed_pg_worker_{nonce}");
     let pg_operator = format!("mixed_pg_operator_{nonce}");
+    let pg_projection_operator = format!("mixed_pg_projection_operator_{nonce}");
     let qdrant_worker = format!("mixed_qdrant_worker_{nonce}");
     let qdrant_operator = format!("mixed_qdrant_operator_{nonce}");
     let governance_operator = format!("mixed_dag_issuer_{nonce}");
@@ -494,12 +496,14 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "CREATE ROLE {pg_worker} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {pg_operator} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         CREATE ROLE {pg_projection_operator} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {qdrant_worker} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {qdrant_operator} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
          CREATE ROLE {governance_operator} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
-         GRANT CONNECT ON DATABASE alegria TO {pg_worker},{pg_operator},{qdrant_worker},{qdrant_operator},{governance_operator};
+         GRANT CONNECT ON DATABASE alegria TO {pg_worker},{pg_operator},{pg_projection_operator},{qdrant_worker},{qdrant_operator},{governance_operator};
          GRANT USAGE ON SCHEMA pipeline,extracted,raw,site TO {pg_worker};
          GRANT USAGE ON SCHEMA pipeline,extracted,raw,kb TO {pg_operator};
+         GRANT USAGE ON SCHEMA pipeline TO {pg_projection_operator};
          GRANT USAGE ON SCHEMA pipeline TO {qdrant_worker},{qdrant_operator};
          GRANT USAGE ON SCHEMA pipeline TO {governance_operator};
          GRANT SELECT ON pipeline.execution_runs,pipeline.step_executions,
@@ -509,6 +513,7 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
          GRANT SELECT ON kb.sources,pipeline.execution_runs,
              extracted.rule_candidates,raw.sections,raw.pages
            TO {pg_operator};
+         GRANT SELECT ON pipeline.execution_runs TO {pg_projection_operator};
          GRANT SELECT,INSERT,UPDATE ON pipeline.pg_effect_v3_admissions TO {pg_operator};
          GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID)
            TO {pg_operator};
@@ -525,12 +530,13 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
            TO {qdrant_operator};
          GRANT EXECUTE ON FUNCTION pipeline.operation_dag_governance_matches_v1(
              UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BOOLEAN)
-           TO {pg_worker},{pg_operator},{qdrant_worker},{qdrant_operator};
+           TO {pg_worker},{pg_operator},{pg_projection_operator},{qdrant_worker},{qdrant_operator};
          GRANT INSERT ON pipeline.operation_dag_run_governance_v1 TO {governance_operator};
          GRANT EXECUTE ON FUNCTION pipeline.operation_dag_canonical_source_run_id_v1(UUID,TEXT,TEXT)
            TO {governance_operator};"
     ))) .execute(&pg.pool).await.expect("DBA provisions five isolated operator/Activity identities");
-    for role in [&pg_worker, &pg_operator, &qdrant_worker, &qdrant_operator, &governance_operator] {
+    for role in [&pg_worker, &pg_operator, &pg_projection_operator,
+        &qdrant_worker, &qdrant_operator, &governance_operator] {
         sqlx::query("INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id) VALUES ($1::name,$2)")
             .bind(role).bind(tenant).execute(&pg.pool).await.unwrap();
     }
@@ -541,10 +547,11 @@ async fn mixed_v6_native_owner_roles(pg: &PostgresHarness, tenant: &str) -> Mixe
     };
     MixedV6NativeRoles {
         pg_worker_role: pg_worker.clone(),
-        pg_operator_role: pg_operator.clone(),
+        pg_projection_operator_role: pg_projection_operator.clone(),
         qdrant_operator_role: qdrant_operator.clone(),
         pg_worker_url: restricted_url(&pg_worker),
         pg_operator_url: restricted_url(&pg_operator),
+        pg_projection_operator_url: restricted_url(&pg_projection_operator),
         qdrant_worker_secret: secret("mixed-qdrant-worker", &restricted_url(&qdrant_worker)),
         qdrant_operator_secret: secret("mixed-qdrant-operator", &restricted_url(&qdrant_operator)),
         governance_operator_url: restricted_url(&governance_operator),
@@ -563,9 +570,9 @@ async fn mixed_v7_grant_pg_vector_owner_privileges(
     // hex by mixed_v6_native_owner_roles; the database is disposable CI only.
     sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "GRANT SELECT ON pipeline.vector_projection_sources_v1
-             TO {pg_worker}, {pg_operator};
-         GRANT SELECT,INSERT ON pipeline.pg_vector_projection_admissions_v1
-             TO {pg_operator};
+             TO {pg_worker}, {pg_projection_operator};
+         GRANT INSERT ON pipeline.pg_vector_projection_admissions_v1
+             TO {pg_projection_operator};
          GRANT EXECUTE ON FUNCTION pipeline.consume_pg_vector_projection_owner_v1(
              UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BYTEA)
              TO {pg_worker};
@@ -573,7 +580,7 @@ async fn mixed_v7_grant_pg_vector_owner_privileges(
              UUID,TEXT,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,JSONB)
              TO {qdrant_operator};",
         pg_worker = roles.pg_worker_role,
-        pg_operator = roles.pg_operator_role,
+        pg_projection_operator = roles.pg_projection_operator_role,
         qdrant_operator = roles.qdrant_operator_role,
     ))).execute(pool).await.expect("grant only exact PG projection owner capabilities");
 }
@@ -1255,7 +1262,7 @@ async fn mixed_v7_native_temporal_produced_pg_vector_to_qdrant_readback() {
     let admitted_pg = Command::new(&pg_bin)
         .arg("--operator-issue-pg-projection-v1").arg(&pg_request)
         .env("ALEGRIA_ENABLE_PG_OWNER_OPERATOR_V1", "true")
-        .env("PG_EFFECT_OPERATOR_DATABASE_URL", &roles.pg_operator_url)
+        .env("PG_EFFECT_OPERATOR_DATABASE_URL", &roles.pg_projection_operator_url)
         .env("PG_EFFECT_OPERATOR_TENANT_ID", tenant)
         .env("PG_OWNER_EXPECTED_BUILD_ID", &build_id)
         .env("PG_EFFECT_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
