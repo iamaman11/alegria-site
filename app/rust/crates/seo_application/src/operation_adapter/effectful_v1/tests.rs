@@ -618,9 +618,15 @@ fn v4_interpreter_completes_only_after_exact_typed_receipt_for_each_effect() {
 fn v5_unordered_same_context_effects_fail_before_any_child_invocation() {
     let manifest = run(vec![review_node("review_a"), review_node("review_b")]);
     let denied = super::super::MixedDagMachineV5::new(&scope().run_id, manifest);
+    // The canonical plan validator already detects unordered invalidations
+    // of `truth.review_queue_snapshot`, before the V5 owner-scope fence.
+    // Keep this stronger first-line fail-closed rejection as the expected
+    // outcome; the V5 fence additionally guards future non-invalidation
+    // owners that share a canonical PostgreSQL write scope.
     assert!(matches!(
         denied,
-        Err(EffectDagError::ConflictingOwnerWriteScope { .. })
+        Err(EffectDagError::Plan(PlanError::UnorderedInvalidations { .. }))
+            | Err(EffectDagError::ConflictingOwnerWriteScope { .. })
     ));
 }
 
