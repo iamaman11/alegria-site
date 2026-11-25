@@ -146,9 +146,7 @@ pub(crate) fn load_trusted_owner_catalog(path: &Path) -> Result<TrustedRouteCata
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operation_protocol::{
-        IdempotencyPolicy, OperationId, OperationOwnerId, OperationRef,
-    };
+    use operation_protocol::{IdempotencyPolicy, OperationId, OperationOwnerId, OperationRef};
     use std::collections::{BTreeMap, BTreeSet};
 
     fn registered_test_owner() -> TrustedRegistrationV1 {
@@ -182,8 +180,8 @@ mod tests {
         assert!(load_trusted_owner_catalog(Path::new("/etc/alegria")).is_err());
         #[cfg(unix)]
         {
-            let traversal = validate_config_file_trust(Path::new("/etc/alegria/../bad.json"))
-                .unwrap_err();
+            let traversal =
+                validate_config_file_trust(Path::new("/etc/alegria/../bad.json")).unwrap_err();
             assert!(traversal.to_string().contains("parent traversal"));
         }
     }
@@ -195,21 +193,19 @@ mod tests {
 
         let mut arbitrary_type = registered_test_owner();
         arbitrary_type.route.workflow_type = "CallerSelectedWorkflow".to_string();
-        assert!(register_trusted_entry(
-            &mut TrustedRouteCatalog::default(), arbitrary_type
-        ).is_err());
+        assert!(
+            register_trusted_entry(&mut TrustedRouteCatalog::default(), arbitrary_type).is_err()
+        );
 
         let mut parent_queue = registered_test_owner();
         parent_queue.route.task_queue = OPERATION_DAG_PARENT_QUEUE.to_string();
-        assert!(register_trusted_entry(
-            &mut TrustedRouteCatalog::default(), parent_queue
-        ).is_err());
+        assert!(register_trusted_entry(&mut TrustedRouteCatalog::default(), parent_queue).is_err());
 
         let mut ephemeral_build = registered_test_owner();
         ephemeral_build.route.build_id = "development".to_string();
-        assert!(register_trusted_entry(
-            &mut TrustedRouteCatalog::default(), ephemeral_build
-        ).is_err());
+        assert!(
+            register_trusted_entry(&mut TrustedRouteCatalog::default(), ephemeral_build).is_err()
+        );
     }
 
     #[cfg(unix)]

@@ -11,8 +11,8 @@ use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
-    operation_dag_parent_workflow_id, ArtifactBinding, OperationDagRunV6, OwnerInvocationV1, PortId, OPERATION_DAG_PARENT_QUEUE,
-    OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
+    operation_dag_parent_workflow_id, ArtifactBinding, OperationDagRunV6, OwnerInvocationV1,
+    PortId, OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use postgres_store::truth_review_effect_v3::{
     contract_fingerprint, validate_pg_owner_invocation_v1, ReconcileTruthReviewsInput,
@@ -287,8 +287,10 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<At
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")
         .context("PG owner requires exact Temporal namespace")?;
     super::operator_dag_governance::validate_local_temporal_endpoint(&url)?;
-    ensure!(!namespace.trim().is_empty() && namespace == namespace.trim(),
-        "PG owner issuer requires nonempty exact Temporal namespace");
+    ensure!(
+        !namespace.trim().is_empty() && namespace == namespace.trim(),
+        "PG owner issuer requires nonempty exact Temporal namespace"
+    );
     let client = temporal_gateway::connect_client(
         &url,
         format!("alegria-pg-native-operator-{}", std::process::id()),
@@ -339,7 +341,10 @@ async fn insert_admission(
         .execute(&mut *tx)
         .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-        .bind(format!("operation-dag-canonical|{}", request.canonical_run_id))
+        .bind(format!(
+            "operation-dag-canonical|{}",
+            request.canonical_run_id
+        ))
         .execute(&mut *tx)
         .await?;
     // The canonical SEO Truth source is a DIFFERENT Temporal execution from
@@ -395,17 +400,21 @@ async fn insert_admission(
     let parent_start_sha256 = sha256_pg(&mut tx, &attested.parent_start_bytes).await?;
     let governed: bool = sqlx::query_scalar(
         "SELECT pipeline.operation_dag_governance_matches_v1(
-            $1,$2,$3,$4,$5,$6,$7,TRUE)")
-        .bind(request.canonical_run_id)
-        .bind(tenant)
-        .bind(&attested.command.context_key)
-        .bind(&request.parent_workflow_id)
-        .bind(&request.parent_workflow_run_id)
-        .bind(checked.plan_hash.as_str())
-        .bind(&parent_start_sha256)
-        .fetch_one(&mut *tx).await?;
-    ensure!(governed,
-        "independently issued native DAG run governance absent/expired/mismatched");
+            $1,$2,$3,$4,$5,$6,$7,TRUE)",
+    )
+    .bind(request.canonical_run_id)
+    .bind(tenant)
+    .bind(&attested.command.context_key)
+    .bind(&request.parent_workflow_id)
+    .bind(&request.parent_workflow_run_id)
+    .bind(checked.plan_hash.as_str())
+    .bind(&parent_start_sha256)
+    .fetch_one(&mut *tx)
+    .await?;
+    ensure!(
+        governed,
+        "independently issued native DAG run governance absent/expired/mismatched"
+    );
     let inserted: Uuid = sqlx::query_scalar(
         "INSERT INTO pipeline.pg_effect_v3_admissions
            (admission_id,run_id,tenant_id,context_key,workflow_id,

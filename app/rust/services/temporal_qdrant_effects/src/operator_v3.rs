@@ -8,11 +8,12 @@ use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
+    operation_dag_parent_workflow_id,
     owner_dispatch::{
         OperationDagRunV6, OwnerInvocationV1, OPERATION_DAG_PARENT_QUEUE,
         OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
     },
-    operation_dag_parent_workflow_id, ArtifactBinding, Operation, PortId,
+    ArtifactBinding, Operation, PortId,
 };
 use qdrant_contracts::{
     verify_external_qdrant_owner_invocation, QdrantKeywordProjectionCommandV1,
@@ -53,8 +54,8 @@ fn verify_trusted_temporal_url(candidate: &str) -> Result<()> {
     // A prefix test is insufficient: `http://127.0.0.1:pw@remote.example`
     // has a remote host despite its loopback-looking prefix. Parse the URL
     // and reject credentials, alternate paths and every non-loopback host.
-    let parsed = url::Url::parse(candidate)
-        .context("generic Qdrant operator Temporal URL is malformed")?;
+    let parsed =
+        url::Url::parse(candidate).context("generic Qdrant operator Temporal URL is malformed")?;
     ensure!(
         parsed.scheme() == "http"
             && matches!(parsed.host_str(), Some("127.0.0.1" | "localhost"))
@@ -75,8 +76,16 @@ fn attest_pair_v3(
     request: &IssueRequestV3,
     trusted_build_id: &str,
 ) -> Result<AttestedV3> {
-    let parent_bytes = start_payload(parent, OPERATION_DAG_PARENT_TYPE, OPERATION_DAG_PARENT_QUEUE)?;
-    let child_bytes = start_payload(child, OWNER_OPERATION_CHILD_TYPE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1)?;
+    let parent_bytes = start_payload(
+        parent,
+        OPERATION_DAG_PARENT_TYPE,
+        OPERATION_DAG_PARENT_QUEUE,
+    )?;
+    let child_bytes = start_payload(
+        child,
+        OWNER_OPERATION_CHILD_TYPE_V1,
+        QDRANT_GENERIC_OWNER_QUEUE_V1,
+    )?;
     let run: OperationDagRunV6 = serde_json::from_slice(&parent_bytes)
         .context("generic DAG parent server History contains an invalid typed run")?;
     ensure!(
@@ -99,22 +108,32 @@ fn attest_pair_v3(
             && invocation.checked_dispatch.operation == contract.reference
             && invocation.checked_dispatch.owner == contract.owner
             && invocation.checked_dispatch.effects == contract.effects
-            && request.child_workflow_id == format!(
-                "alegria-owner-operation-v1-{}", invocation.checked_dispatch.execution_key
-            ),
+            && request.child_workflow_id
+                == format!(
+                    "alegria-owner-operation-v1-{}",
+                    invocation.checked_dispatch.execution_key
+                ),
         "Qdrant child is not bound to exact checked run, owner and immutable parent"
     );
     let contract_hash = contract.fingerprint()?;
     ensure!(
-        run.plan.pinned_contracts.iter().filter(|p| {
-            p.reference == contract.reference && p.fingerprint == contract_hash
-        }).count() == 1,
+        run.plan
+            .pinned_contracts
+            .iter()
+            .filter(|p| { p.reference == contract.reference && p.fingerprint == contract_hash })
+            .count()
+            == 1,
         "concrete Qdrant operation contract/fingerprint is not pinned in parent plan"
     );
-    let routes = run.pinned_routes.iter().filter(|route| {
-        route.operation == contract.reference && route.owner == contract.owner
-    }).collect::<Vec<_>>();
-    ensure!(routes.len() == 1, "exactly one Qdrant route must be pinned in parent History");
+    let routes = run
+        .pinned_routes
+        .iter()
+        .filter(|route| route.operation == contract.reference && route.owner == contract.owner)
+        .collect::<Vec<_>>();
+    ensure!(
+        routes.len() == 1,
+        "exactly one Qdrant route must be pinned in parent History"
+    );
     let route = routes[0];
     ensure!(
         route.contract_hash == contract_hash
@@ -123,14 +142,19 @@ fn attest_pair_v3(
             && route.build_id == trusted_build_id,
         "Qdrant route does not match independently approved owner build, type and queue"
     );
-    let node = run.plan.nodes.iter().find(|node| {
-        node.instance == invocation.checked_dispatch.instance
-    }).context("checked Qdrant operation instance missing from original DAG")?;
+    let node = run
+        .plan
+        .nodes
+        .iter()
+        .find(|node| node.instance == invocation.checked_dispatch.instance)
+        .context("checked Qdrant operation instance missing from original DAG")?;
     ensure!(
         node.operation == contract.reference && node.permitted_effects == contract.effects,
         "DAG node does not authorize exact Qdrant operation/effect"
     );
-    let wire = run.owner_commands.get(&node.instance)
+    let wire = run
+        .owner_commands
+        .get(&node.instance)
         .context("parent History has no own typed Qdrant command bytes")?;
     ensure!(
         wire.operation == contract.reference
@@ -140,7 +164,9 @@ fn attest_pair_v3(
         "child command bytes do not match pinned parent Qdrant command"
     );
     let input_port = PortId::from(QDRANT_EFFECT_INPUT_PORT_V2);
-    let source = node.inputs.get(&input_port)
+    let source = node
+        .inputs
+        .get(&input_port)
         .context("Qdrant DAG input port is missing")?;
     let input_id = match source {
         ArtifactBinding::External { artifact } => artifact,
@@ -148,9 +174,13 @@ fn attest_pair_v3(
             "Produced Qdrant artifact requires independent upstream child History/receipt proof"
         ),
     };
-    let bound = invocation.bound_inputs.get(&input_port)
+    let bound = invocation
+        .bound_inputs
+        .get(&input_port)
         .context("Qdrant child omitted the declared typed command input")?;
-    let admitted = run.admitted.get(input_id)
+    let admitted = run
+        .admitted
+        .get(input_id)
         .context("Qdrant external input is absent from immutable parent admission")?;
     ensure!(
         bound.artifact_id == *input_id
@@ -164,11 +194,17 @@ fn attest_pair_v3(
         serde_json::to_vec(&invocation)? == child_bytes,
         "child start History differs from canonical generic owner invocation bytes"
     );
-    let child_start = child.events.first().context("Qdrant child server History empty")?;
-    let Some(Attributes::WorkflowExecutionStartedEventAttributes(attrs)) = &child_start.attributes else {
+    let child_start = child
+        .events
+        .first()
+        .context("Qdrant child server History empty")?;
+    let Some(Attributes::WorkflowExecutionStartedEventAttributes(attrs)) = &child_start.attributes
+    else {
         bail!("Qdrant child first event was not server WorkflowExecutionStarted");
     };
-    let recorded_parent = attrs.parent_workflow_execution.as_ref()
+    let recorded_parent = attrs
+        .parent_workflow_execution
+        .as_ref()
         .context("Qdrant child server History has no parent identity")?;
     ensure!(
         recorded_parent.workflow_id == request.parent_workflow_id
@@ -177,37 +213,55 @@ fn attest_pair_v3(
     );
     let mut matching_started = None;
     for initiated in &parent.events {
-        let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(init)) = &initiated.attributes else {
+        let Some(Attributes::StartChildWorkflowExecutionInitiatedEventAttributes(init)) =
+            &initiated.attributes
+        else {
             continue;
         };
-        if init.workflow_id != request.child_workflow_id { continue; }
+        if init.workflow_id != request.child_workflow_id {
+            continue;
+        }
         ensure!(
-            init.workflow_type.as_ref().map(|v| v.name.as_str()) == Some(OWNER_OPERATION_CHILD_TYPE_V1)
-                && init.task_queue.as_ref().map(|v| v.name.as_str()) == Some(QDRANT_GENERIC_OWNER_QUEUE_V1),
+            init.workflow_type.as_ref().map(|v| v.name.as_str())
+                == Some(OWNER_OPERATION_CHILD_TYPE_V1)
+                && init.task_queue.as_ref().map(|v| v.name.as_str())
+                    == Some(QDRANT_GENERIC_OWNER_QUEUE_V1),
             "parent initiated an untrusted Qdrant child type or queue"
         );
-        let payloads = &init.input.as_ref()
-            .context("parent child initiation omitted typed input")?.payloads;
+        let payloads = &init
+            .input
+            .as_ref()
+            .context("parent child initiation omitted typed input")?
+            .payloads;
         ensure!(
             payloads.len() == 1 && payloads[0].data.as_slice() == child_bytes.as_slice(),
             "parent child initiation bytes differ from child server History"
         );
         for started in &parent.events {
-            let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(actual)) = &started.attributes else {
+            let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(actual)) =
+                &started.attributes
+            else {
                 continue;
             };
-            if actual.initiated_event_id != initiated.event_id { continue; }
-            let actual_child = actual.workflow_execution.as_ref()
+            if actual.initiated_event_id != initiated.event_id {
+                continue;
+            }
+            let actual_child = actual
+                .workflow_execution
+                .as_ref()
                 .context("parent ChildStarted omitted child execution")?;
             ensure!(
                 actual_child.workflow_id == request.child_workflow_id
                     && actual_child.run_id == request.child_workflow_run_id
-                    && actual.workflow_type.as_ref().map(|v| v.name.as_str()) == Some(OWNER_OPERATION_CHILD_TYPE_V1)
+                    && actual.workflow_type.as_ref().map(|v| v.name.as_str())
+                        == Some(OWNER_OPERATION_CHILD_TYPE_V1)
                     && attrs.parent_initiated_event_id == initiated.event_id,
                 "reciprocal generic Qdrant child server History identity mismatch"
             );
-            ensure!(matching_started.replace(started.event_id).is_none(),
-                "multiple ChildStarted events cannot authorize one Qdrant side effect");
+            ensure!(
+                matching_started.replace(started.event_id).is_none(),
+                "multiple ChildStarted events cannot authorize one Qdrant side effect"
+            );
         }
     }
     Ok(AttestedV3 {
@@ -228,18 +282,30 @@ async fn operator_pool_v3() -> Result<PgPool> {
     let filename = env::var("QDRANT_GENERIC_OPERATOR_DATABASE_URL_FILE")
         .context("generic Qdrant operator requires an independent DSN secret file")?;
     let path = Path::new(&filename);
-    ensure!(path.is_absolute(), "generic Qdrant operator secret path must be absolute");
+    ensure!(
+        path.is_absolute(),
+        "generic Qdrant operator secret path must be absolute"
+    );
     let metadata = fs::symlink_metadata(path)?;
-    ensure!(metadata.file_type().is_file(), "generic Qdrant operator secret must not be a symlink");
+    ensure!(
+        metadata.file_type().is_file(),
+        "generic Qdrant operator secret must not be a symlink"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        ensure!(metadata.permissions().mode() & 0o077 == 0,
-            "generic Qdrant operator secret requires 0600/0400 permissions");
+        ensure!(
+            metadata.permissions().mode() & 0o077 == 0,
+            "generic Qdrant operator secret requires 0600/0400 permissions"
+        );
     }
     let url = fs::read_to_string(path)?
-        .trim_end_matches(|ch| ch == '\r' || ch == '\n').to_owned();
-    ensure!(!url.is_empty() && url.trim() == url, "malformed generic Qdrant operator DSN");
+        .trim_end_matches(|ch| ch == '\r' || ch == '\n')
+        .to_owned();
+    ensure!(
+        !url.is_empty() && url.trim() == url,
+        "malformed generic Qdrant operator DSN"
+    );
     let pool = PgPool::connect(&url).await?;
     let role = sqlx::query(
         "SELECT r.rolsuper,r.rolbypassrls,pipeline.current_session_tenant_v1() AS tenant,
@@ -293,7 +359,13 @@ async fn operator_pool_v3() -> Result<PgPool> {
 
 async fn attested_request(
     file: &Path,
-) -> Result<(IssueRequestV3, String, temporalio_client::Client, AttestedV3, PgPool)> {
+) -> Result<(
+    IssueRequestV3,
+    String,
+    temporalio_client::Client,
+    AttestedV3,
+    PgPool,
+)> {
     let request: IssueRequestV3 = serde_json::from_slice(&fs::read(file)?)
         .context("V3 operator request must contain only strict server run locators")?;
     ensure!(
@@ -309,21 +381,36 @@ async fn attested_request(
     let temporal_url = env::var("QDRANT_GENERIC_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("QDRANT_GENERIC_OPERATOR_TEMPORAL_NAMESPACE")?;
     verify_trusted_temporal_url(&temporal_url)?;
-    ensure!(!namespace.trim().is_empty() && namespace.trim() == namespace,
-        "invalid generic Qdrant Temporal namespace");
+    ensure!(
+        !namespace.trim().is_empty() && namespace.trim() == namespace,
+        "invalid generic Qdrant Temporal namespace"
+    );
     let trusted_build_id = env::var("QDRANT_GENERIC_OPERATOR_TRUSTED_BUILD_ID")
         .context("generic Qdrant operator requires exact trusted deployed owner build ID")?;
-    ensure!(!trusted_build_id.trim().is_empty() && trusted_build_id.trim() == trusted_build_id,
-        "invalid trusted Qdrant owner build ID");
+    ensure!(
+        !trusted_build_id.trim().is_empty() && trusted_build_id.trim() == trusted_build_id,
+        "invalid trusted Qdrant owner build ID"
+    );
     let client = temporal_gateway::connect_client(
         &temporal_url,
         format!("alegria-qdrant-generic-operator:{}", std::process::id()),
         &namespace,
-    ).await?;
-    let parent = exact_history(&client, &namespace,
-        &request.parent_workflow_id, &request.parent_workflow_run_id).await?;
-    let child = exact_history(&client, &namespace,
-        &request.child_workflow_id, &request.child_workflow_run_id).await?;
+    )
+    .await?;
+    let parent = exact_history(
+        &client,
+        &namespace,
+        &request.parent_workflow_id,
+        &request.parent_workflow_run_id,
+    )
+    .await?;
+    let child = exact_history(
+        &client,
+        &namespace,
+        &request.child_workflow_id,
+        &request.child_workflow_run_id,
+    )
+    .await?;
     let attested = attest_pair_v3(&parent, &child, &request, &trusted_build_id)?;
     ensure!(
         attested.command.tenant_id == env::var("QDRANT_GENERIC_OPERATOR_TENANT_ID")?,
@@ -344,35 +431,51 @@ async fn signal_after_commit(
         .workflow_id(request.child_workflow_id.clone())
         .run_id(request.child_workflow_run_id.clone())
         .build();
-    info.bind_untyped(client).signal(
-        UntypedSignal::<UntypedWorkflow>::new(QDRANT_GENERIC_ADMISSION_SIGNAL_V1),
-        RawValue::default(),
-        WorkflowSignalOptions::default(),
-    ).await.context("signal exact generic Qdrant child after committed SQL admission")
+    info.bind_untyped(client)
+        .signal(
+            UntypedSignal::<UntypedWorkflow>::new(QDRANT_GENERIC_ADMISSION_SIGNAL_V1),
+            RawValue::default(),
+            WorkflowSignalOptions::default(),
+        )
+        .await
+        .context("signal exact generic Qdrant child after committed SQL admission")
 }
 
 pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     let (request, namespace, client, proof, pool) = attested_request(path).await?;
     let command = &proof.command;
     let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL lock_timeout = '5s'").execute(&mut *tx).await?;
+    sqlx::query("SET LOCAL lock_timeout = '5s'")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
         .bind(format!("truth-run-status|{}", request.canonical_run_id))
-        .execute(&mut *tx).await?;
+        .execute(&mut *tx)
+        .await?;
     // Lock in the same order as the governance issuer/revoker and the V3
     // first-start SQL function. Revocation must not race between the active
     // governance predicate and commitment of a new Qdrant admission.
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
-        .bind(format!("operation-dag-canonical|{}", request.canonical_run_id))
-        .execute(&mut *tx).await?;
+        .bind(format!(
+            "operation-dag-canonical|{}",
+            request.canonical_run_id
+        ))
+        .execute(&mut *tx)
+        .await?;
     let canonical = sqlx::query(
         "SELECT workflow_type,status,context_key,tenant_id
            FROM pipeline.execution_runs WHERE run_id=$1",
-    ).bind(request.canonical_run_id).fetch_one(&mut *tx).await
-        .context("generic Qdrant canonical execution run disappeared before admission")?;
+    )
+    .bind(request.canonical_run_id)
+    .fetch_one(&mut *tx)
+    .await
+    .context("generic Qdrant canonical execution run disappeared before admission")?;
     ensure!(
         canonical.try_get::<String, _>("workflow_type")? == "seo_site_build"
-            && matches!(canonical.try_get::<String, _>("status")?.as_str(), "verifying" | "pending_hitl")
+            && matches!(
+                canonical.try_get::<String, _>("status")?.as_str(),
+                "verifying" | "pending_hitl"
+            )
             && canonical.try_get::<String, _>("tenant_id")? == command.tenant_id
             && canonical.try_get::<String, _>("context_key")? == command.context_key,
         "generic Qdrant canonical source run terminal or foreign"
@@ -393,9 +496,13 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     .bind(&request.parent_workflow_run_id)
     .bind(proof.invocation.checked_dispatch.plan_hash.as_str())
     .bind(&proof.parent_bytes)
-    .fetch_one(&mut *tx).await
+    .fetch_one(&mut *tx)
+    .await
     .context("generic Qdrant operator requires separately attested active DAG governance")?;
-    ensure!(governed, "Qdrant V3 cannot issue admission without immutable generic DAG governance");
+    ensure!(
+        governed,
+        "Qdrant V3 cannot issue admission without immutable generic DAG governance"
+    );
     let inserted = sqlx::query(
         "INSERT INTO pipeline.qdrant_projection_v3_admissions
            (admission_id,run_id,tenant_id,context_key,keyword_key,
@@ -432,11 +539,16 @@ pub(crate) async fn issue_from_file(path: &Path) -> Result<()> {
     .bind(&proof.child_bytes)
     .bind(&proof.invocation.command_bytes)
     .bind(request.expires_in_seconds as i32)
-    .execute(&mut *tx).await
+    .execute(&mut *tx)
+    .await
     .context("generic Qdrant V3 admission insert denied by tenant/run/History fence")?;
-    ensure!(inserted.rows_affected() == 1, "V3 Qdrant must insert exactly one operator admission");
+    ensure!(
+        inserted.rows_affected() == 1,
+        "V3 Qdrant must insert exactly one operator admission"
+    );
     tx.commit().await?;
-    signal_after_commit(client, &namespace, &request).await
+    signal_after_commit(client, &namespace, &request)
+        .await
         .context("generic Qdrant SQL admission committed, signal failed; use exact resignal")
 }
 
@@ -461,9 +573,13 @@ pub(crate) async fn resignal_from_file(path: &Path) -> Result<()> {
     .bind(&proof.child_bytes)
     .bind(&proof.invocation.command_bytes)
     .bind(&proof.invocation.checked_dispatch.execution_key)
-    .fetch_one(&pool).await
+    .fetch_one(&pool)
+    .await
     .context("generic Qdrant V3 SQL rejected absent/expired/foreign/changed admission")?;
-    ensure!(matched, "generic Qdrant V3 immutable SQL History admission mismatch");
+    ensure!(
+        matched,
+        "generic Qdrant V3 immutable SQL History admission mismatch"
+    );
     signal_after_commit(client, &namespace, &request).await
 }
 
@@ -485,8 +601,10 @@ mod tests {
             "http://0.0.0.0:7233",
             "http://127.0.0.1",
         ] {
-            assert!(verify_trusted_temporal_url(forged).is_err(),
-                "untrusted Temporal URL incorrectly accepted: {forged}");
+            assert!(
+                verify_trusted_temporal_url(forged).is_err(),
+                "untrusted Temporal URL incorrectly accepted: {forged}"
+            );
         }
     }
 }

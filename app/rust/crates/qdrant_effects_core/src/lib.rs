@@ -266,7 +266,9 @@ pub async fn execute_admitted_qdrant_projection_v3(
     );
     ensure!(
         dispatch_execution_key.len() == 64
-            && dispatch_execution_key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            && dispatch_execution_key
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()),
         "invalid checked generic Qdrant dispatch key"
     );
     let row = sqlx::query(
@@ -312,9 +314,9 @@ pub async fn execute_admitted_qdrant_projection_v3(
                 "cosine",
                 meta.clone(),
             )?;
-            upsert_projection(upsert)
-                .await
-                .context("unknown generic Qdrant V3 RPC outcome; retain SQL attempt and do not retry")?;
+            upsert_projection(upsert).await.context(
+                "unknown generic Qdrant V3 RPC outcome; retain SQL attempt and do not retry",
+            )?;
         }
         "uncertain" | "confirmed" => {}
         other => bail!("unsupported Qdrant V3 durable attempt state: {other}"),
@@ -329,14 +331,18 @@ pub async fn execute_admitted_qdrant_projection_v3(
     )
     .await
     .context("generic Qdrant V3 readback unavailable; outcome uncertain")?;
-    ensure!(exact, "generic Qdrant V3 provider state drifted or not yet confirmed");
-    let confirmed: bool = sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v3($1,$2,$3)")
-        .bind(admission_id)
-        .bind(&bytes)
-        .bind(dispatch_execution_key)
-        .fetch_one(pool)
-        .await
-        .context("generic Qdrant V3 provider readback succeeded but durable receipt failed")?;
+    ensure!(
+        exact,
+        "generic Qdrant V3 provider state drifted or not yet confirmed"
+    );
+    let confirmed: bool =
+        sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v3($1,$2,$3)")
+            .bind(admission_id)
+            .bind(&bytes)
+            .bind(dispatch_execution_key)
+            .fetch_one(pool)
+            .await
+            .context("generic Qdrant V3 provider readback succeeded but durable receipt failed")?;
     ensure!(confirmed, "V3 PostgreSQL refused exact provider receipt");
     Ok(match state.as_str() {
         "started" => QdrantProjectionOutcomeV1::Applied,

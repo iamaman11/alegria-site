@@ -7,8 +7,7 @@
 
 use operation_protocol::{
     owner_child_workflow_id, EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1,
-    OwnerResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog,
-    OWNER_OPERATION_CHILD_TYPE_V1,
+    OwnerResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,

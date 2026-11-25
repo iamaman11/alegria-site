@@ -27,7 +27,9 @@ pub const QDRANT_GENERIC_ADMISSION_SIGNAL_V1: &str = "operator_admission_ready_q
 pub enum GenericQdrantContractError {
     #[error("Qdrant owner invocation contains a foreign operation or inconsistent dispatch")]
     ForeignOrInvalidDispatch,
-    #[error("Qdrant Produced artifact requires independently proven prior owner History and receipt")]
+    #[error(
+        "Qdrant Produced artifact requires independently proven prior owner History and receipt"
+    )]
     UnprovenProducedArtifact,
     #[error("Qdrant input bytes or type mismatch")]
     InvalidInput,
@@ -120,12 +122,13 @@ pub fn confirmed_qdrant_owner_result(
 mod tests {
     use super::*;
     use operation_protocol::{
+        checked_execution_key, operation_dag_parent_workflow_id,
         owner_dispatch::{
             canonical_owner_dispatch_input_bytes, AdmittedArtifactV1, BoundArtifactV1,
             OWNER_INVOCATION_SCHEMA_REVISION,
         },
-        checked_execution_key, ArtifactId, CheckedDispatch, OperationInstanceId, PlanHash,
-        RunScope, TemporalExecutionIdentityV4, operation_dag_parent_workflow_id,
+        ArtifactId, CheckedDispatch, OperationInstanceId, PlanHash, RunScope,
+        TemporalExecutionIdentityV4,
     };
     use uuid::Uuid;
 
@@ -172,9 +175,10 @@ mod tests {
             input_hash: String::new(),
             execution_key: String::new(),
         };
-        checked.input_hash = blake3::hash(
-            &canonical_owner_dispatch_input_bytes(&bound, &bytes).unwrap(),
-        ).to_hex().to_string();
+        checked.input_hash =
+            blake3::hash(&canonical_owner_dispatch_input_bytes(&bound, &bytes).unwrap())
+                .to_hex()
+                .to_string();
         checked.execution_key = checked_execution_key(&checked, &checked.input_hash).unwrap();
         OwnerInvocationV1 {
             schema_revision: OWNER_INVOCATION_SCHEMA_REVISION,
@@ -190,23 +194,29 @@ mod tests {
 
     fn rehash(invocation: &mut OwnerInvocationV1) {
         let bytes = canonical_owner_dispatch_input_bytes(
-            &invocation.bound_inputs, &invocation.command_bytes,
-        ).unwrap();
+            &invocation.bound_inputs,
+            &invocation.command_bytes,
+        )
+        .unwrap();
         invocation.checked_dispatch.input_hash = blake3::hash(&bytes).to_hex().to_string();
         invocation.checked_dispatch.execution_key = checked_execution_key(
             &invocation.checked_dispatch,
             &invocation.checked_dispatch.input_hash,
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     #[test]
     fn external_owner_command_decodes_concrete_type_and_emits_typed_receipt() {
         let invocation = valid_external_invocation();
         let command = verify_external_qdrant_owner_invocation(&invocation).unwrap();
-        let result = confirmed_qdrant_owner_result(
-            &invocation, &command, QdrantChildOutcomeV1::Applied,
-        ).unwrap();
-        assert_eq!(result.dispatch_execution_key, invocation.checked_dispatch.execution_key);
+        let result =
+            confirmed_qdrant_owner_result(&invocation, &command, QdrantChildOutcomeV1::Applied)
+                .unwrap();
+        assert_eq!(
+            result.dispatch_execution_key,
+            invocation.checked_dispatch.execution_key
+        );
         let receipt: QdrantKeywordChildResultV2 =
             serde_json::from_slice(&result.receipt_bytes).unwrap();
         assert_eq!(receipt.admission_id, command.admission_id);
@@ -216,7 +226,9 @@ mod tests {
     #[test]
     fn produced_input_is_rejected_even_when_checked_hash_is_self_consistent() {
         let mut invocation = valid_external_invocation();
-        let input = invocation.bound_inputs.get_mut(&PortId::from(QDRANT_EFFECT_INPUT_PORT_V2))
+        let input = invocation
+            .bound_inputs
+            .get_mut(&PortId::from(QDRANT_EFFECT_INPUT_PORT_V2))
             .unwrap();
         input.source = ArtifactBinding::Produced {
             artifact: input.artifact_id.clone(),
@@ -233,8 +245,13 @@ mod tests {
         invocation.checked_dispatch.owner = "foreign-owner".into();
         assert!(verify_external_qdrant_owner_invocation(&invocation).is_err());
         let mut invocation = valid_external_invocation();
-        invocation.bound_inputs.get_mut(&PortId::from(QDRANT_EFFECT_INPUT_PORT_V2))
-            .unwrap().artifact.payload.push(0);
+        invocation
+            .bound_inputs
+            .get_mut(&PortId::from(QDRANT_EFFECT_INPUT_PORT_V2))
+            .unwrap()
+            .artifact
+            .payload
+            .push(0);
         assert!(verify_external_qdrant_owner_invocation(&invocation).is_err());
     }
 }

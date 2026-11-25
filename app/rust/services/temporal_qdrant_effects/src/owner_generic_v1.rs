@@ -10,9 +10,8 @@ use operation_protocol::owner_dispatch::{
     OwnerInvocationV1, OwnerResultV1, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use qdrant_contracts::{
-    confirmed_qdrant_owner_result, verify_external_qdrant_owner_invocation,
-    QdrantChildOutcomeV1, QDRANT_GENERIC_ACTIVITY_QUEUE_V1,
-    QDRANT_GENERIC_OWNER_QUEUE_V1,
+    confirmed_qdrant_owner_result, verify_external_qdrant_owner_invocation, QdrantChildOutcomeV1,
+    QDRANT_GENERIC_ACTIVITY_QUEUE_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
 };
 use qdrant_effects_core::{execute_admitted_qdrant_projection_v3, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
@@ -55,7 +54,10 @@ struct AlegriaOwnerOperationV1Workflow {
 impl AlegriaOwnerOperationV1Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, invocation: OwnerInvocationV1) -> Self {
-        Self { immutable_invocation: invocation, wakeup_count: 0 }
+        Self {
+            immutable_invocation: invocation,
+            wakeup_count: 0,
+        }
     }
 
     #[run]
@@ -63,26 +65,35 @@ impl AlegriaOwnerOperationV1Workflow {
         let invocation = ctx.state(|s| s.immutable_invocation.clone());
         verify_external_qdrant_owner_invocation(&invocation).map_err(|error| {
             WorkflowTermination::failed_application(ApplicationFailure::non_retryable(
-                std::io::Error::other(format!("Qdrant owner rejected foreign/Produced input: {error}")),
+                std::io::Error::other(format!(
+                    "Qdrant owner rejected foreign/Produced input: {error}"
+                )),
             ))
         })?;
         let mut observed = 0;
         loop {
             let previous = observed;
-            ctx.wait_condition(move |s| s.wakeup_count > previous).await?;
+            ctx.wait_condition(move |s| s.wakeup_count > previous)
+                .await?;
             observed = ctx.state(|s| s.wakeup_count);
-            let admitted: bool = ctx.start_activity(
-                QdrantGenericActivities::check_operator_admission_generic_v1,
-                invocation.clone(),
-                probe_options(),
-            ).await?;
-            if admitted { break; }
+            let admitted: bool = ctx
+                .start_activity(
+                    QdrantGenericActivities::check_operator_admission_generic_v1,
+                    invocation.clone(),
+                    probe_options(),
+                )
+                .await?;
+            if admitted {
+                break;
+            }
         }
-        let receipt: OwnerResultV1 = ctx.start_activity(
-            QdrantGenericActivities::materialize_admitted_qdrant_generic_v1,
-            invocation,
-            effect_options(),
-        ).await?;
+        let receipt: OwnerResultV1 = ctx
+            .start_activity(
+                QdrantGenericActivities::materialize_admitted_qdrant_generic_v1,
+                invocation,
+                effect_options(),
+            )
+            .await?;
         Ok(receipt)
     }
 
@@ -108,7 +119,8 @@ impl QdrantGenericActivities {
         // read-only DB admission probe can retry after transient outages.
         tokio::time::sleep(Duration::from_secs(1)).await;
         self.matches_admission(&ctx, &invocation)
-            .await.map_err(admission_probe_activity_error)
+            .await
+            .map_err(admission_probe_activity_error)
     }
 
     #[activity]
@@ -117,8 +129,10 @@ impl QdrantGenericActivities {
         ctx: ActivityContext,
         invocation: OwnerInvocationV1,
     ) -> Result<OwnerResultV1, ActivityError> {
-        if !self.matches_admission(&ctx, &invocation)
-            .await.map_err(admission_probe_activity_error)?
+        if !self
+            .matches_admission(&ctx, &invocation)
+            .await
+            .map_err(admission_probe_activity_error)?
         {
             return Err(terminal_activity_error(
                 "generic Qdrant effect has no independently History-attested SQL admission",
@@ -130,16 +144,21 @@ impl QdrantGenericActivities {
             &self.pool,
             command.admission_id,
             &invocation.checked_dispatch.execution_key,
-        ).await.map_err(terminal_activity_error)?;
+        )
+        .await
+        .map_err(terminal_activity_error)?;
         confirmed_qdrant_owner_result(
             &invocation,
             &command,
             match outcome {
                 QdrantProjectionOutcomeV1::Applied => QdrantChildOutcomeV1::Applied,
                 QdrantProjectionOutcomeV1::Reconciled => QdrantChildOutcomeV1::Reconciled,
-                QdrantProjectionOutcomeV1::AlreadyConfirmed => QdrantChildOutcomeV1::AlreadyConfirmed,
+                QdrantProjectionOutcomeV1::AlreadyConfirmed => {
+                    QdrantChildOutcomeV1::AlreadyConfirmed
+                }
             },
-        ).map_err(terminal_activity_error)
+        )
+        .map_err(terminal_activity_error)
     }
 }
 
@@ -153,16 +172,27 @@ impl QdrantGenericActivities {
             .map_err(|error| AdmissionProbeError::Denied(anyhow::anyhow!(error)))?;
         let info = ctx.info();
         let (id, run_id) = (|| -> Result<(&str, &str)> {
-            let id = info.workflow_id.as_deref().context("missing generic Qdrant child ID")?;
-            let run_id = info.workflow_run_id.as_deref().context("missing generic Qdrant child Run ID")?;
+            let id = info
+                .workflow_id
+                .as_deref()
+                .context("missing generic Qdrant child ID")?;
+            let run_id = info
+                .workflow_run_id
+                .as_deref()
+                .context("missing generic Qdrant child Run ID")?;
             ensure!(
                 info.workflow_type.as_deref() == Some(OWNER_OPERATION_CHILD_TYPE_V1)
                     && info.task_queue == QDRANT_GENERIC_ACTIVITY_QUEUE_V1
-                    && id == format!("alegria-owner-operation-v1-{}", invocation.checked_dispatch.execution_key),
+                    && id
+                        == format!(
+                            "alegria-owner-operation-v1-{}",
+                            invocation.checked_dispatch.execution_key
+                        ),
                 "Activity is not executing for its fixed Qdrant generic child"
             );
             Ok((id, run_id))
-        })().map_err(AdmissionProbeError::Denied)?;
+        })()
+        .map_err(AdmissionProbeError::Denied)?;
         let row = sqlx::query(
             "SELECT child_workflow_id,child_workflow_run_id,parent_workflow_id,
                     parent_workflow_run_id,run_id,tenant_id,context_key,keyword_key,
@@ -173,13 +203,17 @@ impl QdrantGenericActivities {
         .fetch_optional(&*self.pool)
         .await
         .map_err(super::classify_admission_sql_error)?;
-        let Some(row) = row else { return Ok(false); };
+        let Some(row) = row else {
+            return Ok(false);
+        };
         (|| -> Result<()> {
             ensure!(
                 row.try_get::<String, _>("child_workflow_id")? == id
                     && row.try_get::<String, _>("child_workflow_run_id")? == run_id
-                    && row.try_get::<String, _>("parent_workflow_id")? == invocation.parent.workflow_id
-                    && row.try_get::<String, _>("parent_workflow_run_id")? == invocation.parent.run_id
+                    && row.try_get::<String, _>("parent_workflow_id")?
+                        == invocation.parent.workflow_id
+                    && row.try_get::<String, _>("parent_workflow_run_id")?
+                        == invocation.parent.run_id
                     && row.try_get::<String, _>("tenant_id")? == command.tenant_id
                     && row.try_get::<String, _>("context_key")? == command.context_key
                     && row.try_get::<String, _>("keyword_key")? == command.keyword_key
@@ -195,7 +229,8 @@ impl QdrantGenericActivities {
                 "V3 SQL admission does not pin exact typed command, parent, child and checked DAG"
             );
             Ok(())
-        })().map_err(AdmissionProbeError::Denied)?;
+        })()
+        .map_err(AdmissionProbeError::Denied)?;
         Ok(true)
     }
 }
@@ -204,17 +239,30 @@ fn database_url_from_file() -> Result<String> {
     let filename = std::env::var("QDRANT_GENERIC_OWNER_DATABASE_URL_FILE")
         .context("generic Qdrant owner requires separate dedicated DB secret")?;
     let path = Path::new(&filename);
-    ensure!(path.is_absolute(), "generic Qdrant DB secret path must be absolute");
+    ensure!(
+        path.is_absolute(),
+        "generic Qdrant DB secret path must be absolute"
+    );
     let meta = std::fs::symlink_metadata(path)?;
-    ensure!(meta.file_type().is_file(), "generic Qdrant DB secret must not be symlink");
+    ensure!(
+        meta.file_type().is_file(),
+        "generic Qdrant DB secret must not be symlink"
+    );
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        ensure!(meta.permissions().mode() & 0o077 == 0, "generic Qdrant secret requires 0600/0400");
+        ensure!(
+            meta.permissions().mode() & 0o077 == 0,
+            "generic Qdrant secret requires 0600/0400"
+        );
     }
     let value = std::fs::read_to_string(path)?
-        .trim_end_matches(|ch| ch == '\r' || ch == '\n').to_owned();
-    ensure!(!value.is_empty() && value.trim() == value, "malformed generic Qdrant DSN");
+        .trim_end_matches(|ch| ch == '\r' || ch == '\n')
+        .to_owned();
+    ensure!(
+        !value.is_empty() && value.trim() == value,
+        "malformed generic Qdrant DSN"
+    );
     Ok(value)
 }
 
@@ -257,8 +305,8 @@ async fn assert_generic_worker_role(pool: &PgPool) -> Result<()> {
             && !row.try_get::<bool, _>("v1_confirm")?
             && row.try_get::<bool, _>("begin_allowed")?
             && row.try_get::<bool, _>("confirm_allowed")?
-            && row.try_get::<Option<String>, _>("tenant")?
-                .as_deref() == Some(std::env::var("QDRANT_GENERIC_OWNER_TENANT_ID")?.as_str()),
+            && row.try_get::<Option<String>, _>("tenant")?.as_deref()
+                == Some(std::env::var("QDRANT_GENERIC_OWNER_TENANT_ID")?.as_str()),
         "generic Qdrant Activity must have tenant-bound read/execute, no admission authority"
     );
     Ok(())
@@ -278,25 +326,33 @@ pub(crate) async fn run_worker() -> Result<()> {
     let pool = PgPool::connect(&database_url_from_file()?).await?;
     assert_generic_worker_role(&pool).await?;
     let runtime = Runtime::from_current_tokio(
-        RuntimeOptions::builder().build().map_err(|error| anyhow::anyhow!("{error}"))?,
+        RuntimeOptions::builder()
+            .build()
+            .map_err(|error| anyhow::anyhow!("{error}"))?,
     )?;
     let url = std::env::var("TEMPORAL_URL")?;
     let namespace = std::env::var("TEMPORAL_NAMESPACE")?;
-    ensure!(!url.trim().is_empty() && !namespace.trim().is_empty(), "explicit Temporal endpoint required");
+    ensure!(
+        !url.trim().is_empty() && !namespace.trim().is_empty(),
+        "explicit Temporal endpoint required"
+    );
     let client = temporal_gateway::connect_client(
         &url,
         format!("alegria-qdrant-generic-owner:{}", std::process::id()),
         &namespace,
-    ).await?;
+    )
+    .await?;
     let mut command = WorkerOptions::new(QDRANT_GENERIC_OWNER_QUEUE_V1).build();
     command.register_workflow::<AlegriaOwnerOperationV1Workflow>()?;
     let mut command_worker = Worker::new(&runtime, client.clone(), command)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let activities = WorkerOptions::new(QDRANT_GENERIC_ACTIVITY_QUEUE_V1)
-        .register_activities(QdrantGenericActivities { pool: Arc::new(pool) })
+        .register_activities(QdrantGenericActivities {
+            pool: Arc::new(pool),
+        })
         .build();
-    let mut activity_worker = Worker::new(&runtime, client, activities)
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
+    let mut activity_worker =
+        Worker::new(&runtime, client, activities).map_err(|error| anyhow::anyhow!("{error}"))?;
     tokio::try_join!(command_worker.run(), activity_worker.run())?;
     Ok(())
 }

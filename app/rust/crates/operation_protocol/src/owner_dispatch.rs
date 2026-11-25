@@ -93,8 +93,10 @@ pub fn owner_child_workflow_id(dispatch_execution_key: &str) -> String {
 }
 
 fn is_canonical_blake3_hash(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte|
-        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Snapshot from a trusted route catalog, recorded in Temporal start History
@@ -226,17 +228,26 @@ impl OwnerInvocationV1 {
         for (port, bound) in &self.bound_inputs {
             let source_artifact = match (&bound.source, &bound.produced_evidence) {
                 (ArtifactBinding::External { artifact }, None) => artifact,
-                (ArtifactBinding::Produced { producer, port: producer_port, artifact },
-                    Some(proof)) if proof.producer == *producer
-                        && proof.port == *producer_port
-                        && proof.artifact_id == *artifact
-                        && is_canonical_blake3_hash(&proof.dispatch_execution_key)
-                        && proof.child_workflow_id == owner_child_workflow_id(
-                            &proof.dispatch_execution_key)
-                        && is_canonical_blake3_hash(&proof.result_hash)
-                        && is_canonical_blake3_hash(&proof.receipt_hash)
-                        && proof.payload_hash ==
-                            blake3::hash(&bound.artifact.payload).to_hex().to_string() => artifact,
+                (
+                    ArtifactBinding::Produced {
+                        producer,
+                        port: producer_port,
+                        artifact,
+                    },
+                    Some(proof),
+                ) if proof.producer == *producer
+                    && proof.port == *producer_port
+                    && proof.artifact_id == *artifact
+                    && is_canonical_blake3_hash(&proof.dispatch_execution_key)
+                    && proof.child_workflow_id
+                        == owner_child_workflow_id(&proof.dispatch_execution_key)
+                    && is_canonical_blake3_hash(&proof.result_hash)
+                    && is_canonical_blake3_hash(&proof.receipt_hash)
+                    && proof.payload_hash
+                        == blake3::hash(&bound.artifact.payload).to_hex().to_string() =>
+                {
+                    artifact
+                }
                 _ => return Err(RouteCatalogError::InvalidInvocation),
             };
             if source_artifact != &bound.artifact_id

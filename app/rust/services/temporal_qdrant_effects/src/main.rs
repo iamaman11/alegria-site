@@ -420,7 +420,9 @@ async fn main() -> Result<()> {
             return Ok(());
         }
         if arg == std::ffi::OsStr::new("--replay-history-generic-v1") {
-            let file = args.next().context("--replay-history-generic-v1 requires real History JSON")?;
+            let file = args
+                .next()
+                .context("--replay-history-generic-v1 requires real History JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected generic replay arguments");
             owner_generic_v1::replay_history(std::path::Path::new(&file)).await?;
             println!("CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS");
@@ -455,13 +457,23 @@ async fn main() -> Result<()> {
             return operator_v2::resignal_from_file(std::path::Path::new(&file)).await;
         }
         if arg == std::ffi::OsStr::new("--operator-issue-v3") {
-            let file = args.next().context("--operator-issue-v3 requires exact-run locator JSON")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected generic operator arguments");
+            let file = args
+                .next()
+                .context("--operator-issue-v3 requires exact-run locator JSON")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected generic operator arguments"
+            );
             return operator_v3::issue_from_file(std::path::Path::new(&file)).await;
         }
         if arg == std::ffi::OsStr::new("--operator-resignal-v3") {
-            let file = args.next().context("--operator-resignal-v3 requires exact-run locator JSON")?;
-            anyhow::ensure!(args.next().is_none(), "unexpected generic resignal arguments");
+            let file = args
+                .next()
+                .context("--operator-resignal-v3 requires exact-run locator JSON")?;
+            anyhow::ensure!(
+                args.next().is_none(),
+                "unexpected generic resignal arguments"
+            );
             return operator_v3::resignal_from_file(std::path::Path::new(&file)).await;
         }
         anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");

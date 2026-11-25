@@ -21,12 +21,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
-    owner_child_workflow_id, owner_content_hash, operation_dag_parent_workflow_id,
-    AdmittedArtifactV1, ArtifactBinding, ArtifactId,
-    BoundArtifactV1, CheckedDispatch, DispatchAttempt, OperationDagRunV6, OperationInstanceId,
-    OwnerInvocationV1, OwnerResultV1, PinnedOwnerRouteV1, PlanError, PlanHash, PortId,
-    ProducedArtifactEvidenceV1, RouteCatalogError, TemporalExecutionIdentityV4,
-    TrustedRouteCatalog, ValidatedPlan,
+    operation_dag_parent_workflow_id, owner_child_workflow_id, owner_content_hash,
+    AdmittedArtifactV1, ArtifactBinding, ArtifactId, BoundArtifactV1, CheckedDispatch,
+    DispatchAttempt, OperationDagRunV6, OperationInstanceId, OwnerInvocationV1, OwnerResultV1,
+    PinnedOwnerRouteV1, PlanError, PlanHash, PortId, ProducedArtifactEvidenceV1, RouteCatalogError,
+    TemporalExecutionIdentityV4, TrustedRouteCatalog, ValidatedPlan,
     OWNER_INVOCATION_SCHEMA_REVISION,
 };
 use serde::{Deserialize, Serialize};
@@ -224,19 +223,29 @@ impl OperationDagMachine {
             }
             let produced_evidence = match source {
                 ArtifactBinding::External { .. } => None,
-                ArtifactBinding::Produced { producer, port: producer_port, artifact } => {
-                    let proof = self.produced_evidence.get(id)
+                ArtifactBinding::Produced {
+                    producer,
+                    port: producer_port,
+                    artifact,
+                } => {
+                    let proof = self
+                        .produced_evidence
+                        .get(id)
                         .ok_or_else(|| GenericDagError::MissingProducedArtifact(id.clone()))?;
-                    let earlier = self.owner_results.get(producer)
+                    let earlier = self
+                        .owner_results
+                        .get(producer)
                         .ok_or_else(|| GenericDagError::MissingProducedArtifact(id.clone()))?;
-                    let actual_result_hash = canonical_owner_result_hash(earlier)
-                        .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+                    let actual_result_hash =
+                        canonical_owner_result_hash(earlier).map_err(|error| {
+                            OperationRunError::EnvelopeSerialization(error.to_string())
+                        })?;
                     if proof.producer != *producer
                         || proof.port != *producer_port
                         || proof.artifact_id != *artifact
                         || proof.dispatch_execution_key != earlier.dispatch_execution_key
-                        || proof.child_workflow_id != owner_child_workflow_id(
-                            &proof.dispatch_execution_key)
+                        || proof.child_workflow_id
+                            != owner_child_workflow_id(&proof.dispatch_execution_key)
                         || proof.result_hash != actual_result_hash
                         || proof.receipt_hash != owner_content_hash(&earlier.receipt_bytes)
                         || proof.payload_hash != owner_content_hash(&actual.payload)
@@ -320,16 +329,19 @@ impl OperationDagMachine {
             if next_artifacts.contains_key(id) {
                 return Err(GenericDagError::InvalidArtifact(id.clone()));
             }
-            next_evidence.insert(id.clone(), ProducedArtifactEvidenceV1 {
-                producer: instance.clone(),
-                port: port.clone(),
-                artifact_id: id.clone(),
-                dispatch_execution_key: checked.execution_key.clone(),
-                child_workflow_id: owner_child_workflow_id(&checked.execution_key),
-                result_hash: result_hash.clone(),
-                receipt_hash: receipt_hash.clone(),
-                payload_hash: owner_content_hash(&value.payload),
-            });
+            next_evidence.insert(
+                id.clone(),
+                ProducedArtifactEvidenceV1 {
+                    producer: instance.clone(),
+                    port: port.clone(),
+                    artifact_id: id.clone(),
+                    dispatch_execution_key: checked.execution_key.clone(),
+                    child_workflow_id: owner_child_workflow_id(&checked.execution_key),
+                    result_hash: result_hash.clone(),
+                    receipt_hash: receipt_hash.clone(),
+                    payload_hash: owner_content_hash(&value.payload),
+                },
+            );
             next_artifacts.insert(id.clone(), value.clone());
         }
         let mut next_results = self.owner_results.clone();
@@ -502,22 +514,34 @@ mod tests {
 
     #[test]
     fn generic_parent_identity_is_distinct_from_business_truth_workflow_and_server_run() {
-        assert_eq!(operation_dag_parent_workflow_id("run-a"), PARENT_WORKFLOW_ID);
+        assert_eq!(
+            operation_dag_parent_workflow_id("run-a"),
+            PARENT_WORKFLOW_ID
+        );
         let (run, routes) = setup();
-        assert!(matches!(OperationDagMachine::new("run-a", run, routes),
-            Err(GenericDagError::TemporalRunIdMismatch)));
+        assert!(matches!(
+            OperationDagMachine::new("run-a", run, routes),
+            Err(GenericDagError::TemporalRunIdMismatch)
+        ));
 
         let (run, routes) = setup();
         let machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes.clone()).unwrap();
         let (_, mut invocation) = machine.next_owner_invocation(parent()).unwrap();
-        assert_ne!(invocation.parent.workflow_id, invocation.checked_dispatch.scope.run_id);
+        assert_ne!(
+            invocation.parent.workflow_id,
+            invocation.checked_dispatch.scope.run_id
+        );
         assert_ne!(invocation.parent.run_id, invocation.parent.workflow_id);
         invocation.parent.workflow_id = "run-a".into();
-        assert!(matches!(invocation.verify_integrity(&routes),
-            Err(RouteCatalogError::InvalidInvocation)));
+        assert!(matches!(
+            invocation.verify_integrity(&routes),
+            Err(RouteCatalogError::InvalidInvocation)
+        ));
         invocation.parent.workflow_id = "untrusted-generic-parent".into();
-        assert!(matches!(invocation.verify_integrity(&routes),
-            Err(RouteCatalogError::InvalidInvocation)));
+        assert!(matches!(
+            invocation.verify_integrity(&routes),
+            Err(RouteCatalogError::InvalidInvocation)
+        ));
     }
 
     fn result(invocation: &OwnerInvocationV1, payload: &[u8]) -> OwnerResultV1 {
@@ -544,24 +568,36 @@ mod tests {
         assert!(producer.bound_inputs.is_empty());
         let producer_result = result(&producer, b"real-owner-payload");
         let expected_result_hash = canonical_owner_result_hash(&producer_result).unwrap();
-        machine
-            .advance_owner_result(producer_result)
-            .unwrap();
+        machine.advance_owner_result(producer_result).unwrap();
 
         let (_, consumer) = machine.next_owner_invocation(parent()).unwrap();
         let binding = consumer.bound_inputs.get(&PortId::from("source")).unwrap();
         assert_eq!(binding.artifact_id, ArtifactId::from("artifact-a"));
         assert_eq!(binding.artifact.payload, b"real-owner-payload");
-        let evidence = binding.produced_evidence.as_ref().expect("required Produced proof");
+        let evidence = binding
+            .produced_evidence
+            .as_ref()
+            .expect("required Produced proof");
         assert_eq!(evidence.producer, OperationInstanceId::from("producer"));
         assert_eq!(evidence.port, PortId::from("document"));
         assert_eq!(evidence.artifact_id, ArtifactId::from("artifact-a"));
-        assert_eq!(evidence.dispatch_execution_key, producer.checked_dispatch.execution_key);
-        assert_eq!(evidence.child_workflow_id,
-            owner_child_workflow_id(&producer.checked_dispatch.execution_key));
+        assert_eq!(
+            evidence.dispatch_execution_key,
+            producer.checked_dispatch.execution_key
+        );
+        assert_eq!(
+            evidence.child_workflow_id,
+            owner_child_workflow_id(&producer.checked_dispatch.execution_key)
+        );
         assert_eq!(evidence.result_hash, expected_result_hash);
-        assert_eq!(evidence.receipt_hash, owner_content_hash(b"independent-operator-receipt"));
-        assert_eq!(evidence.payload_hash, owner_content_hash(b"real-owner-payload"));
+        assert_eq!(
+            evidence.receipt_hash,
+            owner_content_hash(b"independent-operator-receipt")
+        );
+        assert_eq!(
+            evidence.payload_hash,
+            owner_content_hash(b"real-owner-payload")
+        );
         assert_eq!(
             binding.source,
             ArtifactBinding::Produced {
@@ -582,55 +618,87 @@ mod tests {
             completed.artifacts[&ArtifactId::from("artifact-b")].payload,
             b"second-owner-output"
         );
-        assert_eq!(&completed.produced_evidence[&ArtifactId::from("artifact-a")],
-            evidence);
+        assert_eq!(
+            &completed.produced_evidence[&ArtifactId::from("artifact-a")],
+            evidence
+        );
     }
 
     #[test]
     fn forged_produced_proof_receipt_hash_and_source_are_rejected_before_dispatch() {
         let (run, routes) = setup();
-        let mut machine = OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes.clone()).unwrap();
+        let mut machine =
+            OperationDagMachine::new(PARENT_WORKFLOW_ID, run, routes.clone()).unwrap();
         let (_, producer) = machine.next_owner_invocation(parent()).unwrap();
-        machine.advance_owner_result(result(&producer, b"original")).unwrap();
+        machine
+            .advance_owner_result(result(&producer, b"original"))
+            .unwrap();
         let (_, consumer) = machine.next_owner_invocation(parent()).unwrap();
         consumer.verify_integrity(&routes).unwrap();
 
         // Even a structurally valid hash cannot replace the actual previous
         // child receipt: machine compares against the stored OwnerResult.
-        machine.produced_evidence.get_mut(&ArtifactId::from("artifact-a"))
-            .unwrap().receipt_hash = "a".repeat(64);
-        assert!(matches!(machine.next_owner_invocation(parent()),
-            Err(GenericDagError::InvalidArtifact(_))));
+        machine
+            .produced_evidence
+            .get_mut(&ArtifactId::from("artifact-a"))
+            .unwrap()
+            .receipt_hash = "a".repeat(64);
+        assert!(matches!(
+            machine.next_owner_invocation(parent()),
+            Err(GenericDagError::InvalidArtifact(_))
+        ));
 
         let mut forged = consumer.clone();
-        forged.bound_inputs.get_mut(&PortId::from("source")).unwrap()
-            .produced_evidence.as_mut().unwrap().child_workflow_id = "forged-child".into();
+        forged
+            .bound_inputs
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .produced_evidence
+            .as_mut()
+            .unwrap()
+            .child_workflow_id = "forged-child".into();
         rehash_invocation(&mut forged);
-        assert!(matches!(forged.verify_integrity(&routes),
-            Err(RouteCatalogError::InvalidInvocation)));
+        assert!(matches!(
+            forged.verify_integrity(&routes),
+            Err(RouteCatalogError::InvalidInvocation)
+        ));
 
         let mut forged = consumer.clone();
-        forged.bound_inputs.get_mut(&PortId::from("source")).unwrap().source =
-            ArtifactBinding::Produced {
-                producer: "other-owner".into(), port: "document".into(),
-                artifact: "artifact-a".into(),
-            };
+        forged
+            .bound_inputs
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .source = ArtifactBinding::Produced {
+            producer: "other-owner".into(),
+            port: "document".into(),
+            artifact: "artifact-a".into(),
+        };
         rehash_invocation(&mut forged);
-        assert!(matches!(forged.verify_integrity(&routes),
-            Err(RouteCatalogError::InvalidInvocation)));
+        assert!(matches!(
+            forged.verify_integrity(&routes),
+            Err(RouteCatalogError::InvalidInvocation)
+        ));
 
         let mut forged = consumer;
-        forged.bound_inputs.get_mut(&PortId::from("source")).unwrap()
-            .artifact.payload = b"forged-owner-payload".to_vec();
+        forged
+            .bound_inputs
+            .get_mut(&PortId::from("source"))
+            .unwrap()
+            .artifact
+            .payload = b"forged-owner-payload".to_vec();
         rehash_invocation(&mut forged);
-        assert!(matches!(forged.verify_integrity(&routes),
-            Err(RouteCatalogError::InvalidInvocation)));
+        assert!(matches!(
+            forged.verify_integrity(&routes),
+            Err(RouteCatalogError::InvalidInvocation)
+        ));
     }
 
     fn rehash_invocation(invocation: &mut OwnerInvocationV1) {
         let bytes = canonical_owner_dispatch_input_bytes(
-            &invocation.bound_inputs, &invocation.command_bytes,
-        ).unwrap();
+            &invocation.bound_inputs,
+            &invocation.command_bytes,
+        )
+        .unwrap();
         let hash = owner_content_hash(&bytes);
         invocation.checked_dispatch.input_hash = hash.clone();
         invocation.checked_dispatch.execution_key =
@@ -692,7 +760,10 @@ mod tests {
         assert!(machine.advance_owner_result(forged).is_err());
 
         let mut forged = result(&producer, b"real-owner-payload");
-        forged.outputs.get_mut(&PortId::from("document")).unwrap()
+        forged
+            .outputs
+            .get_mut(&PortId::from("document"))
+            .unwrap()
             .provenance = "".into();
         assert!(machine.advance_owner_result(forged).is_err());
 
