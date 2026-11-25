@@ -118,6 +118,8 @@ mod tests {
         let absent_v2 = replay_history_for_queue(&missing, OPERATION_DAG_PARENT_QUEUE_V2)
             .await
             .unwrap_err();
-        assert!(absent_v2.to_string().contains("read actual Temporal history"));
+        assert!(absent_v2
+            .to_string()
+            .contains("read actual Temporal history"));
     }
 }
