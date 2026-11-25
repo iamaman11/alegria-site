@@ -82,12 +82,13 @@ impl QdrantKeywordProjectionV2Workflow {
                 break;
             }
         }
-        let result: QdrantKeywordChildResultV2 = ctx.start_activity(
-            QdrantV2Activities::materialize_admitted_keyword_v2,
-            invocation,
-            materialize_options(),
-        )
-        .await?;
+        let result: QdrantKeywordChildResultV2 = ctx
+            .start_activity(
+                QdrantV2Activities::materialize_admitted_keyword_v2,
+                invocation,
+                materialize_options(),
+            )
+            .await?;
         Ok(result)
     }
 
