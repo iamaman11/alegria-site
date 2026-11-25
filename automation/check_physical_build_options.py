@@ -23,8 +23,13 @@ class ManifestEvidenceTests(unittest.TestCase):
 
     def test_current_native_worker_cannot_isolate_providers_inside_same_package(self) -> None:
         report = ab.manifest_report(self.graph, self.paths)
-        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 19)
-        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 19)
+        # Extracting delivery and its Voyage transport creates two real Cargo
+        # package nodes. The native Temporal binary still reaches both and
+        # therefore still cannot claim a physically isolated provider owner.
+        self.assertEqual(report["A_native_monolith"]["workspace_dependency_count"], 21)
+        self.assertEqual(report["A_modular_monolith"]["workspace_dependency_count"], 21)
+        self.assertIn("projection_delivery", report["A_native_monolith"]["workspace_closure_excluding_self"])
+        self.assertIn("voyage_api", report["A_native_monolith"]["workspace_closure_excluding_self"])
         self.assertEqual(report["A_native_monolith"]["provider_dependencies"], sorted(ab.PROVIDER_OWNERS))
 
     def test_real_or_hypothetical_orchestrator_never_implies_rustc_evidence(self) -> None:
@@ -44,20 +49,23 @@ class ManifestEvidenceTests(unittest.TestCase):
         report = ab.manifest_report(self.graph, self.paths)
         actual = report["provider_edits_reverse_closure"]
         self.assertEqual(set(actual["graph_neo4j"]), {
-            "graph_neo4j", "analytics_svc", "integration_harness", "outbox_worker",
-            "runtime_composition", "temporal_worker",
+            "graph_neo4j", "analytics_svc", "integration_harness", "integration_outbox_e2e",
+            "outbox_worker", "projection_delivery", "runtime_composition", "temporal_worker",
         })
         self.assertEqual(set(actual["vector_qdrant"]), {
-            "vector_qdrant", "integration_harness", "outbox_worker",
+            "vector_qdrant", "integration_data_fixtures", "integration_harness",
+            "integration_outbox_e2e", "outbox_worker", "projection_delivery",
             "runtime_composition", "temporal_worker",
         })
         self.assertEqual(set(actual["postgres_store"]), {
             "postgres_store", "cli_tools", "infrastructure", "integration_harness",
-            "outbox_worker", "reconcile", "runtime_composition", "temporal_worker",
+            "integration_outbox_e2e", "outbox_worker", "projection_delivery",
+            "reconcile", "runtime_composition", "temporal_worker",
         } | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set())
           | ({"integration_pg_v3_e2e"} if "integration_pg_v3_e2e" in self.graph else set()))
         self.assertEqual(set(actual["temporal_gateway"]), {
-            "temporal_gateway", "cli_tools", "integration_harness", "reconcile", "temporal_worker",
+            "temporal_gateway", "cli_tools", "integration_harness", "integration_outbox_e2e",
+            "reconcile", "temporal_worker",
         } | ({ab.ORCHESTRATOR} if ab.ORCHESTRATOR in self.graph else set())
           | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set()))
 

@@ -57,6 +57,7 @@ async fn reset_truth_certification_state(pool: &sqlx::PgPool, context_key: &str)
         .unwrap();
 }
 
+#[cfg(feature = "e2e")]
 async fn seed_truth_certification_support_bundle(
     pool: &sqlx::PgPool,
     context_key: &str,
