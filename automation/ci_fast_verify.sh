@@ -12,6 +12,10 @@ case "${1:-}" in
     python3 -m compileall -q automation infra/analytics_lab/src
     python3 -m ruff check --select E4,E7,E9,F automation infra/analytics_lab/src
     python3 automation/check_ci_workflow_contract.py
+    # Opt-in physical A/B helpers are intentionally excluded from real E2E
+    # impact only because their contracts are checked in this mandatory gate.
+    python3 automation/check_owner_rebuild.py
+    python3 automation/test_measure_generic_temporal_rebuild.py
     python3 automation/test_report_ci_critical_path.py
     python3 automation/check_owner_build_evidence_summary.py
     python3 automation/check_legacy_worker_split.py

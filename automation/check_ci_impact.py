@@ -1324,6 +1324,8 @@ class ImpactFixtures(unittest.TestCase):
             "automation/check_ci_workflow_contract.py",
             "automation/check_expert_core_activation_contract.py",
             "automation/report_sccache_failures.py",
+            "automation/measure_owner_rebuild.py",
+            "automation/check_owner_rebuild.py",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)
@@ -1333,6 +1335,34 @@ class ImpactFixtures(unittest.TestCase):
                 self.assertEqual(result["selected_images"], [])
                 self.assertEqual(result["selected_ci_jobs"], ["verify"])
                 self.assertIn("known CI-only", result["classified_inputs"][path])
+
+    def test_physical_study_only_pair_skips_worker_release_but_never_runtime_checks(self) -> None:
+        study_files = [
+            "automation/measure_owner_rebuild.py",
+            "automation/check_owner_rebuild.py",
+        ]
+        study = self.impact(*study_files)
+        self.assertEqual(study["scope"], "none")
+        self.assertEqual(study["selected_ci_jobs"], ["verify"])
+        self.assertFalse(worker_release_decision(study, study_files, manual=False)["worker_required"])
+
+        runtime_path = "app/rust/services/temporal/src/workflows/seo_site_build_canonical_cutover.rs"
+        runtime = self.impact(*study_files, runtime_path)
+        self.assertEqual(runtime["scope"], "scoped")
+        self.assertIn("temporal_restart", runtime["selected_suites"])
+        self.assertIn("architecture-and-rust", runtime["selected_ci_jobs"])
+        self.assertIn("verify", runtime["selected_ci_jobs"])
+        self.assertTrue(worker_release_decision(
+            runtime, [*study_files, runtime_path], manual=False,
+        )["worker_required"])
+
+        unknown_path = "automation/unreviewed_physical_override.py"
+        unknown = self.impact(*study_files, unknown_path)
+        self.assertEqual(unknown["scope"], "full")
+        self.assertEqual(set(unknown["selected_ci_jobs"]), NONTRUTH_FULL_CI_OWNERS)
+        self.assertTrue(worker_release_decision(
+            unknown, [*study_files, unknown_path], manual=False,
+        )["worker_required"])
 
     def test_unknown_ci_and_impact_control_files_still_fail_closed(self) -> None:
         for path in (

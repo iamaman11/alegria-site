@@ -111,11 +111,20 @@ WORKER_NONDELIVERY_FILES = frozenset({
 # the mandatory `verify` owner. Keep ci.yml, the impact planner itself, unknown
 # workflows and arbitrary automation scripts fail-closed: they can change what
 # the required gate actually executes.
+# These two files run only in explicitly dispatched, opt-in physical studies.
+# They do not change the mandatory PR job plan, Cargo source, or Worker image.
+# Keep this an exact allowlist: unknown automation and CI selection changes
+# must still take the full fail-closed path.
+PHYSICAL_STUDY_ONLY_FILES = frozenset({
+    "automation/measure_owner_rebuild.py",
+    "automation/check_owner_rebuild.py",
+})
+
 CI_ONLY_VERIFY_FILES = {
     "automation/check_ci_workflow_contract.py",
     "automation/check_expert_core_activation_contract.py",
     "automation/report_sccache_failures.py",
-}
+} | PHYSICAL_STUDY_ONLY_FILES
 
 # Release packaging has a narrower input graph than PR verification. These
 # reviewed maintenance files do not enter the shipped Worker Docker context;
@@ -146,7 +155,7 @@ NON_WORKER_DELIVERY_INPUTS = frozenset({
     "infra/local/windows_staging.ps1",
     "docs/ci-fast-path.md",
     "docs/ARCHITECTURE_BOUNDARIES.md",
-}) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS
+}) | WORKER_NONDELIVERY_FILES | AUTOMATION_SOURCE_DOCUMENTS | PHYSICAL_STUDY_ONLY_FILES
 
 TRUTH_FIXTURE_PREFIX = "app/rust/crates/integration_harness/fixtures/visa_truth_certification/"
 TRUTH_FIXTURE_ID = re.compile(r"[a-z][a-z0-9_]*\Z")
