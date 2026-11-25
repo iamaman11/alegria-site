@@ -486,7 +486,9 @@ mod tests {
         ] {
             assert!(sqlstate_allows_admission_probe_retry(sqlstate));
         }
-        for sqlstate in ["AV001", "42501", "42P01", "42703", "23505", "22001", "XX000"] {
+        for sqlstate in [
+            "AV001", "42501", "42P01", "42703", "23505", "22001", "XX000",
+        ] {
             assert!(
                 !sqlstate_allows_admission_probe_retry(sqlstate),
                 "permanent SQLSTATE {sqlstate} must not be retried"

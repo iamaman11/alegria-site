@@ -469,7 +469,10 @@ pub async fn resignal_from_file(path: &Path) -> Result<()> {
     .fetch_one(&mut *tx)
     .await
     .context("operator re-signal denied: absent, expired, revoked, terminal or mismatched immutable SQL admission")?;
-    ensure!(matched, "operator re-signal SQL exact-row proof returned false");
+    ensure!(
+        matched,
+        "operator re-signal SQL exact-row proof returned false"
+    );
     tx.commit().await?;
     signal_after_commit(client, &namespace, &request)
         .await
@@ -491,7 +494,12 @@ mod tests {
         start.task_queue = Some(Default::default());
         start.task_queue.as_mut().unwrap().name = QDRANT_OWNER_COMMAND_QUEUE_V1.to_owned();
         start.input = Some(Default::default());
-        start.input.as_mut().unwrap().payloads.push(Default::default());
+        start
+            .input
+            .as_mut()
+            .unwrap()
+            .payloads
+            .push(Default::default());
         start.input.as_mut().unwrap().payloads[0].data = b"{}".to_vec();
 
         let first = HistoryEvent {
@@ -503,8 +511,12 @@ mod tests {
         };
         history.events[0] = first;
         assert_eq!(
-            start_payload(&history, QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1)
-                .expect("Signal tail must not be an artificial History admission denial"),
+            start_payload(
+                &history,
+                QDRANT_OWNER_CHILD_TYPE_V1,
+                QDRANT_OWNER_COMMAND_QUEUE_V1
+            )
+            .expect("Signal tail must not be an artificial History admission denial"),
             b"{}".to_vec()
         );
         {
@@ -517,8 +529,12 @@ mod tests {
             start.task_queue.as_mut().unwrap().name = QDRANT_DAG_PARENT_QUEUE_V1.to_owned();
         }
         assert_eq!(
-            start_payload(&history, QDRANT_DAG_PARENT_TYPE_V1, QDRANT_DAG_PARENT_QUEUE_V1)
-                .expect("parent Signal tail must not be an artificial History denial"),
+            start_payload(
+                &history,
+                QDRANT_DAG_PARENT_TYPE_V1,
+                QDRANT_DAG_PARENT_QUEUE_V1
+            )
+            .expect("parent Signal tail must not be an artificial History denial"),
             b"{}".to_vec()
         );
         let Some(Attributes::WorkflowExecutionStartedEventAttributes(start)) =
@@ -528,8 +544,12 @@ mod tests {
         };
         start.input.as_mut().unwrap().payloads[0].data = vec![b'x'; 2 * 1024 * 1024 + 1];
         assert!(
-            start_payload(&history, QDRANT_DAG_PARENT_TYPE_V1, QDRANT_DAG_PARENT_QUEUE_V1)
-                .is_err(),
+            start_payload(
+                &history,
+                QDRANT_DAG_PARENT_TYPE_V1,
+                QDRANT_DAG_PARENT_QUEUE_V1
+            )
+            .is_err(),
             "unbounded typed Workflow input is still denied"
         );
     }
