@@ -357,3 +357,492 @@ async fn pg_v3_admission_expiry_and_revocation_serialize_with_effect_commit() {
     );
     eprintln!("CI_PG_V3_ADMISSION_IMMUTABLE=PASS");
 }
+
+/// Two actual database connections prove that direct raw source writers and
+/// an admitted Activity cannot race between source-hash validation and the
+/// final HITL + receipt COMMIT. The Activity keeps SELECT-only raw rights.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn pg_v3_raw_source_concurrent_update_is_fenced() {
+    use postgres_store::truth_review_effect_v3::{
+        execute_admitted_reconcile, ReconcileTruthReviewsError,
+    };
+
+    let postgres = PostgresHarness::start()
+        .await
+        .expect("disposable PostgreSQL raw writer race");
+    let (effect_pool, _) = pg_v3_unprivileged_effect_identity(&postgres).await;
+    let role: String = sqlx::query_scalar("SELECT current_user")
+        .fetch_one(&effect_pool)
+        .await
+        .expect("effect role");
+
+    // Writer commits before the effect can acquire its source row key.
+    // The Activity waits, hashes the new committed bytes, and refuses the
+    // earlier operator admission without creating a task or receipt.
+    let stale = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &stale).await;
+    let section: i64 = sqlx::query_scalar(
+        "SELECT raw_section_id FROM extracted.rule_candidates WHERE rule_candidate_id = $1",
+    )
+    .bind(&stale.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("section id");
+    let mut writer = postgres.pool.begin().await.expect("raw editor tx");
+    sqlx::query(
+        "UPDATE raw.sections SET content_md = 'source changed during admission' WHERE id = $1",
+    )
+    .bind(section)
+    .execute(&mut *writer)
+    .await
+    .expect("writer locks source first");
+    let pending = pg_v3_spawn_effect(&effect_pool, &stale);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "advisory").await;
+    writer.commit().await.expect("writer commits first");
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), pending)
+            .await
+            .expect("Activity unlocks")
+            .expect("Activity did not panic"),
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &stale).await;
+    eprintln!("CI_PG_V3_RAW_SOURCE_WRITER_FIRST=PASS");
+
+    // The page bytes are also included in the operator's snapshot, not only
+    // the candidate and section data. A pre-effect page rewrite is stale.
+    let page_stale = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &page_stale).await;
+    let page: i64 = sqlx::query_scalar(
+        "SELECT s.page_id FROM raw.sections s
+         JOIN extracted.rule_candidates c ON c.raw_section_id = s.id
+         WHERE c.rule_candidate_id = $1",
+    )
+    .bind(&page_stale.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("page id");
+    sqlx::query("UPDATE raw.pages SET raw_html = '<p>changed</p>' WHERE id = $1")
+        .bind(page)
+        .execute(&postgres.pool)
+        .await
+        .expect("direct raw page writer");
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &page_stale.workflow_id,
+            &page_stale.workflow_run_id,
+            &page_stale.command
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &page_stale).await;
+    eprintln!("CI_PG_V3_RAW_PAGE_FINGERPRINT=PASS");
+
+    // Structured crawler content and source observation are independent of
+    // raw_html; mutations of either must invalidate the operator's hash.
+    for (source_update, case_name) in [
+        (
+            "UPDATE raw.pages SET content = '{\"markdown\":\"changed without HTML rewrite\"}'::jsonb WHERE id = $1",
+            "structured page content",
+        ),
+        (
+            "UPDATE raw.pages SET source_observation = '{\"robots\":\"changed\"}'::jsonb WHERE id = $1",
+            "source observation",
+        ),
+        (
+            "UPDATE raw.pages SET final_url = 'https://example.org/other-final' WHERE id = $1",
+            "final source URL",
+        ),
+    ] {
+        let changed = pg_v3_seed_review_fixture(&postgres.pool).await;
+        pg_v3_issue_operator_admission(&postgres.pool, &changed).await;
+        let page_id: i64 = sqlx::query_scalar(
+            "SELECT s.page_id FROM raw.sections s
+             JOIN extracted.rule_candidates c ON c.raw_section_id = s.id
+             WHERE c.rule_candidate_id = $1",
+        )
+        .bind(&changed.candidate_id)
+        .fetch_one(&postgres.pool)
+        .await
+        .expect("find separate original source page");
+        sqlx::query(source_update)
+            .bind(page_id)
+            .execute(&postgres.pool)
+            .await
+            .expect("writer changes only one provenance field");
+        assert!(
+            matches!(
+                execute_admitted_reconcile(
+                    &effect_pool,
+                    &changed.workflow_id,
+                    &changed.workflow_run_id,
+                    &changed.command,
+                )
+                .await,
+                Err(ReconcileTruthReviewsError::CandidateSetChanged)
+            ),
+            "{case_name} was omitted from admitted source fingerprint"
+        );
+        pg_v3_assert_no_effect(&postgres.pool, &changed).await;
+    }
+    eprintln!("CI_PG_V3_JSONB_OBSERVATION_FINAL_URL_PINNED=PASS");
+
+    // A distinct `evidence_section_id` can legitimately point to a section
+    // other than `raw_section_id`. Both sections and their parent pages must
+    // be pinned; changing evidence-only markdown is a stale admission.
+    let evidence_only = pg_v3_seed_review_fixture(&postgres.pool).await;
+    let separate_page: i64 = sqlx::query_scalar(
+        "SELECT s.page_id FROM raw.sections s
+         JOIN extracted.rule_candidates c ON c.raw_section_id = s.id
+         WHERE c.rule_candidate_id = $1",
+    )
+    .bind(&evidence_only.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("original evidence page");
+    let separate_evidence_id: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.sections (page_id, content_md, content_hash)
+         VALUES ($1, 'separate evidence', 'evidence-original') RETURNING id",
+    )
+    .bind(separate_page)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("persist independent evidence section");
+    sqlx::query(
+        "UPDATE extracted.rule_candidates SET evidence_section_id = $1
+         WHERE rule_candidate_id = $2",
+    )
+    .bind(separate_evidence_id)
+    .bind(&evidence_only.candidate_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("bind separate evidence before admission");
+    pg_v3_issue_operator_admission(&postgres.pool, &evidence_only).await;
+    sqlx::query("UPDATE raw.sections SET content_md = 'forged evidence' WHERE id = $1")
+        .bind(separate_evidence_id)
+        .execute(&postgres.pool)
+        .await
+        .expect("modify only evidence section after admission");
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &evidence_only.workflow_id,
+            &evidence_only.workflow_run_id,
+            &evidence_only.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &evidence_only).await;
+    eprintln!("CI_PG_V3_INDEPENDENT_EVIDENCE_SECTION_PINNED=PASS");
+
+    // Two real connections expose the READ COMMITTED parent-relink race:
+    // while V3 reads (section, old_page) and waits on old_page's writer key,
+    // the writer commits section.page_id -> new_page. V3 must *not* hash the
+    // unlocked new page and create a review task based on stale admission.
+    let reparent = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &reparent).await;
+    let (reparent_section, original_page): (i64, i64) = sqlx::query_as(
+        "SELECT s.id, s.page_id FROM raw.sections s
+         JOIN extracted.rule_candidates c ON c.raw_section_id = s.id
+         WHERE c.rule_candidate_id = $1",
+    )
+    .bind(&reparent.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("original section parent");
+    let new_page: i64 = sqlx::query_scalar(
+        "INSERT INTO raw.pages (url, domain, dtype, content)
+         VALUES ('https://example.org/reparent', 'example.org', 'html', '{}'::jsonb)
+         RETURNING id",
+    )
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("new page has a distinct source key");
+    let mut reparent_writer = postgres.pool.begin().await.expect("reparent writer tx");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!("raw-evidence|pages|{original_page}"))
+        .execute(&mut *reparent_writer)
+        .await
+        .expect("hold initial parent key while racing V3 snapshot");
+    sqlx::query("UPDATE raw.sections SET page_id = $1 WHERE id = $2")
+        .bind(new_page)
+        .bind(reparent_section)
+        .execute(&mut *reparent_writer)
+        .await
+        .expect("uncommitted reparent invisible to V3 initial SELECT");
+    let reparent_effect = pg_v3_spawn_effect(&effect_pool, &reparent);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "advisory").await;
+    reparent_writer
+        .commit()
+        .await
+        .expect("commit reparent while V3 waits on old page");
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), reparent_effect)
+            .await
+            .expect("V3 handles reparent unlock")
+            .expect("V3 reparent task did not panic"),
+        Err(ReconcileTruthReviewsError::CandidateSetChanged)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &reparent).await;
+    eprintln!("CI_PG_V3_CONCURRENT_SECTION_REPARENT=PASS");
+
+    // Admission does not exist *yet*. The terminal writer has already
+    // acquired its execution_runs row lock and the truth-run-status key.
+    // Operator issuance takes the SAME key before reading canonical status;
+    // it must wait for the committed terminal state instead of approving the
+    // stale pre-update value under READ COMMITTED.
+    let pre_admission = pg_v3_seed_review_fixture(&postgres.pool).await;
+    let mut early_writer = postgres.pool.begin().await.expect("early status writer tx");
+    sqlx::query("UPDATE pipeline.execution_runs SET status = 'failed' WHERE run_id = $1")
+        .bind(pre_admission.command.run_id)
+        .execute(&mut *early_writer)
+        .await
+        .expect("status writer acquires run-key without an existing admission");
+    let early_operator_pool = postgres.pool.clone();
+    let early_context = pre_admission.command.context_key.clone();
+    let early_run_id = pre_admission.command.run_id;
+    let waiting_operator = tokio::spawn(async move {
+        let mut tx = early_operator_pool.begin().await.expect("operator issue tx");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("truth-context|{early_context}"))
+            .execute(&mut *tx)
+            .await
+            .expect("operator takes context first");
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("truth-run-status|{early_run_id}"))
+            .execute(&mut *tx)
+            .await
+            .expect("operator waits on exactly the status-writer run-key");
+        let status: String = sqlx::query_scalar(
+            "SELECT status FROM pipeline.execution_runs WHERE run_id = $1",
+        )
+        .bind(early_run_id)
+        .fetch_one(&mut *tx)
+        .await
+        .expect("authoritative status read AFTER run-key lock");
+        tx.commit().await.expect("release admission preflight locks");
+        status
+    });
+    pg_v3_wait_for_lock(&postgres.pool, "postgres", "advisory").await;
+    early_writer
+        .commit()
+        .await
+        .expect("terminal writer commits before operator status preflight");
+    let issue_status = tokio::time::timeout(
+        std::time::Duration::from_secs(10), waiting_operator,
+    )
+    .await
+    .expect("operator preflight resumes")
+    .expect("operator issue task did not panic");
+    assert_eq!(issue_status, "failed", "operator must deny stale terminal run");
+    pg_v3_assert_no_effect(&postgres.pool, &pre_admission).await;
+    eprintln!("CI_PG_V3_PRE_ADMISSION_TERMINAL_WRITER_FIRST=PASS");
+
+    // Operator wins that same admission preflight key first. Even without a
+    // committed admission row, a terminal update must fail fast and release
+    // its row lock (otherwise the subsequent operator FK could deadlock).
+    let pre_admission_operator_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    let mut issuing = postgres.pool.begin().await.expect("operator-first issue tx");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!(
+            "truth-context|{}",
+            pre_admission_operator_first.command.context_key
+        ))
+        .execute(&mut *issuing)
+        .await
+        .expect("hold operator's Truth context lock");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+        .bind(format!(
+            "truth-run-status|{}",
+            pre_admission_operator_first.command.run_id
+        ))
+        .execute(&mut *issuing)
+        .await
+        .expect("hold operator's exact run-key");
+    let rejected_before_admission = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE pipeline.execution_runs SET status = 'failed' WHERE run_id = $1")
+            .bind(pre_admission_operator_first.command.run_id)
+            .execute(&postgres.pool),
+    )
+    .await
+    .expect("status update waited on operator-first run-key")
+    .expect_err("status writer bypassed uncommitted issuance run-key");
+    assert_eq!(
+        rejected_before_admission
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    issuing.commit().await.expect("release operator-first preflight");
+    pg_v3_assert_no_effect(&postgres.pool, &pre_admission_operator_first).await;
+    eprintln!("CI_PG_V3_PRE_ADMISSION_OPERATOR_FIRST=PASS");
+
+    // Canonical run status is authoritative admission state. A terminal
+    // writer that acquires truth-context first must make the waiting effect
+    // reject, even when the unchanged candidate snapshot still matches.
+    let terminal_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &terminal_first).await;
+    let mut terminal_writer = postgres.pool.begin().await.expect("terminal writer tx");
+    sqlx::query("UPDATE pipeline.execution_runs SET status = 'failed' WHERE run_id = $1")
+        .bind(terminal_first.command.run_id)
+        .execute(&mut *terminal_writer)
+        .await
+        .expect("terminal transition holds Truth context key");
+    let terminal_denied = pg_v3_spawn_effect(&effect_pool, &terminal_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "advisory").await;
+    terminal_writer
+        .commit()
+        .await
+        .expect("terminal state commits before Activity readback");
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), terminal_denied)
+            .await
+            .expect("Activity wakes after terminal transition")
+            .expect("Activity terminal-race task did not panic"),
+        Err(ReconcileTruthReviewsError::StaleTruthRun)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &terminal_first).await;
+    eprintln!("CI_PG_V3_TERMINAL_STATUS_WRITER_FIRST=PASS");
+
+    // In the opposite order, an admitted Activity holds truth-context while
+    // its real HITL write is blocked. A conflicting terminal update has an
+    // execution_runs row lock before its BEFORE UPDATE trigger, so the DB
+    // must fail fast with 55P03 rather than risk receipt-FK deadlock.
+    let terminal_effect_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &terminal_effect_first).await;
+    let mut terminal_hitl_blocker = postgres.pool.begin().await.expect("terminal HITL blocker");
+    sqlx::query("LOCK TABLE site.seo_hitl_tasks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *terminal_hitl_blocker)
+        .await
+        .expect("block terminal race Activity after status check");
+    let terminal_allowed = pg_v3_spawn_effect(&effect_pool, &terminal_effect_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "relation").await;
+    let refused_terminal = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE pipeline.execution_runs SET status = 'done' WHERE run_id = $1")
+            .bind(terminal_effect_first.command.run_id)
+            .execute(&postgres.pool),
+    )
+    .await
+    .expect("terminal status writer hung on an in-flight admitted effect")
+    .expect_err("terminal writer bypassed admitted Truth run-status lock");
+    assert_eq!(
+        refused_terminal
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    // Operational timestamp updates carry no business state changes and
+    // should not be blocked by the narrow execution-run status fence.
+    let timestamp_progress = sqlx::query(
+        "UPDATE pipeline.execution_runs SET updated_at = clock_timestamp() WHERE run_id = $1",
+    )
+    .bind(terminal_effect_first.command.run_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("non-identity timestamp progress stays legal");
+    assert_eq!(timestamp_progress.rows_affected(), 1);
+    terminal_hitl_blocker
+        .commit()
+        .await
+        .expect("release terminal race HITL blocker");
+    let terminal_receipt = tokio::time::timeout(
+        std::time::Duration::from_secs(10), terminal_allowed,
+    )
+    .await
+    .expect("Activity completes after rejected terminal mutation")
+    .expect("Activity terminal-race task did not panic")
+    .expect("admitted Truth effect commits with stable canonical run");
+    assert_eq!(terminal_receipt.run_id, terminal_effect_first.command.run_id);
+    let terminal_status: String = sqlx::query_scalar(
+        "SELECT status FROM pipeline.execution_runs WHERE run_id = $1",
+    )
+    .bind(terminal_effect_first.command.run_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("status remained nonterminal through receipt");
+    assert_eq!(terminal_status, "verifying");
+    eprintln!("CI_PG_V3_TERMINAL_STATUS_EFFECT_FIRST=PASS");
+
+    // Activity commits first: pause only the actual HITL table so its source
+    // locks are known to be held, then attempt a conflicting raw page update
+    // from another connection. The trigger must fail fast with 55P03.
+    let accepted = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &accepted).await;
+    let accepted_page: i64 = sqlx::query_scalar(
+        "SELECT s.page_id FROM raw.sections s
+         JOIN extracted.rule_candidates c ON c.raw_section_id = s.id
+         WHERE c.rule_candidate_id = $1",
+    )
+    .bind(&accepted.candidate_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("accepted page id");
+    let mut blocker = postgres.pool.begin().await.expect("HITL blocker");
+    sqlx::query("LOCK TABLE site.seo_hitl_tasks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *blocker)
+        .await
+        .expect("block real HITL write after source validation");
+    let allowed = pg_v3_spawn_effect(&effect_pool, &accepted);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "relation").await;
+    // Crawler bookkeeping is intentionally not Truth source evidence. A
+    // processed-only UPDATE must remain available during source admission.
+    let operational_progress = sqlx::query(
+        "UPDATE raw.pages SET processed = true WHERE id = $1",
+    )
+    .bind(accepted_page)
+    .execute(&postgres.pool)
+    .await
+    .expect("processed-only page progress is not source mutation");
+    assert_eq!(operational_progress.rows_affected(), 1);
+    let rejected = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE raw.pages SET raw_html = '<p>forged</p>' WHERE id = $1")
+            .bind(accepted_page)
+            .execute(&postgres.pool),
+    )
+    .await
+    .expect("raw update blocked rather than immediate failure")
+    .expect_err("raw source rewrite slipped past admitted Activity");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    let rejected_delete = sqlx::query("DELETE FROM raw.sections WHERE page_id = $1")
+        .bind(accepted_page)
+        .execute(&postgres.pool)
+        .await
+        .expect_err("raw evidence section deleted during admitted Activity");
+    assert_eq!(
+        rejected_delete
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    blocker.commit().await.expect("release HITL blocker");
+    tokio::time::timeout(std::time::Duration::from_secs(10), allowed)
+        .await
+        .expect("Activity completes")
+        .expect("Activity did not panic")
+        .expect("admitted effect commits once");
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT raw_html FROM raw.pages WHERE id = $1")
+            .bind(accepted_page)
+            .fetch_one(&postgres.pool)
+            .await
+            .expect("read source bytes after receipt");
+    assert!(stored.is_none(), "forged HTML did not remain uncommitted");
+    eprintln!("CI_PG_V3_ADMITTED_SOURCE_IMMUTABLE=PASS");
+}

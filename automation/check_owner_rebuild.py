@@ -29,13 +29,15 @@ def example_artifact(source: str, *, fresh: bool = False) -> dict:
 class OwnerRebuildTests(unittest.TestCase):
     def test_four_distinct_real_owner_sources(self) -> None:
         self.assertEqual(set(OWNER_SOURCES), {
-            "postgres_store", "graph_neo4j", "vector_qdrant", "temporal_gateway",
+            "postgres_store", "graph_neo4j", "vector_qdrant", "temporal_orchestrator",
         })
         for path in OWNER_SOURCES.values():
             self.assertTrue((ROOT / path).is_file(), path)
 
     def test_locked_runtime_binary_build_without_release_profile(self) -> None:
         self.assertEqual(BUILD_COMMAND[:5], ("cargo", "build", "--locked", "--bins", "--timings"))
+        self.assertTrue({"temporal_worker", "temporal_orchestrator", "temporal_pg_effects"}
+                        <= set(EXECUTABLE_PACKAGES))
         for package in EXECUTABLE_PACKAGES:
             self.assertIn(("-p", package), tuple(zip(BUILD_COMMAND, BUILD_COMMAND[1:])))
         self.assertNotIn("--release", BUILD_COMMAND)

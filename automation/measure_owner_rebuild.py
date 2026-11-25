@@ -32,10 +32,13 @@ OWNER_SOURCES = {
     "postgres_store": "app/rust/crates/postgres_store/src/lib.rs",
     "graph_neo4j": "app/rust/crates/graph_neo4j/src/lib.rs",
     "vector_qdrant": "app/rust/crates/vector_qdrant/src/lib.rs",
-    "temporal_gateway": "app/rust/crates/temporal_gateway/src/lib.rs",
+    # Measure the actual provider-free orchestration process, not the shared
+    # Temporal client helper used by legacy/provider-linked consumers.
+    "temporal_orchestrator": "app/rust/services/temporal_orchestrator/src/main.rs",
 }
 EXECUTABLE_PACKAGES = (
-    "temporal_worker", "outbox_worker", "cli_tools", "analytics_svc", "reconcile",
+    "temporal_worker", "temporal_orchestrator", "temporal_pg_effects",
+    "outbox_worker", "cli_tools", "analytics_svc", "reconcile",
 )
 BUILD_COMMAND = (
     "cargo", "build", "--locked", "--bins", "--timings",

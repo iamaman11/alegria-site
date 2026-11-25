@@ -19,6 +19,23 @@ PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
     "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
 })
 
+# The V3 operator's separately credentialed CLI decodes a strictly typed
+# request file and writes a typed JSON receipt. Its opt-in real-PG E2E reads
+# the CLI stdout and mutates a disposable request fixture. Permit only these
+# two exact wire/test files; no broad grant to PG effect Activity code.
+PG_V3_OPERATOR_JSON_BOUNDARIES = frozenset({
+    "app/rust/services/temporal_pg_effects/src/operator.rs",
+    "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
+})
+
+# A checked owner-effect DAG decodes an admitted typed artifact only in its
+# application adapter. The versioned Truth contract's JSON negative test is
+# physically separate, so its *production* domain declaration stays denied.
+V3_TYPED_EFFECT_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/seo_application/src/operation_adapter/effectful_v1.rs",
+    "app/rust/crates/truth_domain/src/review_effect_contract/tests.rs",
+})
+
 # The A14 Outbox integration tests were physically moved out of the broad
 # harness; their fixture JSON remains confined to this exact opt-in test file.
 # The other two files are production provider wire adapters, moved verbatim
@@ -63,7 +80,8 @@ FORBIDDEN_PATTERNS = {
 
 def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
-    if rel in PG_V3_E2E_HISTORY_TEST_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES:
+    if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
+               | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

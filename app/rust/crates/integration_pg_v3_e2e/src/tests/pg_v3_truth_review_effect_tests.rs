@@ -167,7 +167,7 @@ async fn pg_v3_unprivileged_effect_identity(postgres: &PostgresHarness) -> (sqlx
          GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
                          pipeline.pg_effect_v3_admissions TO {role};
          GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO {role};
-         GRANT SELECT ON extracted.rule_candidates, raw.sections TO {role};
+         GRANT SELECT ON extracted.rule_candidates, raw.sections, raw.pages TO {role};
          GRANT SELECT, INSERT, UPDATE ON site.seo_hitl_tasks TO {role};"
     );
     // Identifiers are composed solely of a fixed prefix and generated UUID
@@ -229,6 +229,33 @@ async fn pg_v3_rejects_new_app_writer_and_schema_ddl_privileges() {
         .await
         .expect("worker role name");
     assert!(worker_role.starts_with("ci_pg_v3_worker_"));
+
+    // A privileged LOGIN could impersonate this exact restricted role via
+    // SET ROLE, pass checks against current_user, then RESET ROLE to regain
+    // superuser access on the same physical connection. This must be denied
+    // even though its effective table grants look identical to the worker.
+    let impersonating_pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&postgres.database_url)
+        .await
+        .expect("privileged LOGIN identity for role-impersonation regression");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("SET ROLE {worker_role}")))
+        .execute(&impersonating_pool)
+        .await
+        .expect("privileged LOGIN impersonates restricted effective role");
+    let (impersonated_current, privileged_session): (String, String) =
+        sqlx::query_as("SELECT current_user::text, session_user::text")
+            .fetch_one(&impersonating_pool)
+            .await
+            .expect("observe both real PG backend role identities");
+    assert_eq!(impersonated_current, worker_role);
+    assert_ne!(privileged_session, impersonated_current);
+    assert!(matches!(
+        assert_unprivileged_pg_effect_role(&impersonating_pool).await,
+        Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { .. })
+    ));
+    impersonating_pool.close().await;
+    eprintln!("CI_PG_V3_REJECT_SET_ROLE_IMPERSONATION=PASS");
 
     // The owner operation is also callable directly by Rust consumers. Its
     // own runtime check must reject admin credentials, even when a valid
@@ -309,6 +336,36 @@ async fn pg_v3_rejects_new_app_writer_and_schema_ddl_privileges() {
             .await
             .expect("minimal permissions accepted after removing excess authority");
     }
+    // A PostgreSQL 18 NOINHERIT/SET membership is not visible as the
+    // current user's table privilege, but SET ROLE would elevate this
+    // connection after startup. The effect identity must reject it.
+    let hidden_role = format!("ci_pg_v3_hidden_writer_{}", Uuid::new_v4().simple());
+    let create_hidden = format!(
+        "CREATE ROLE {hidden_role} NOLOGIN;
+         GRANT UPDATE ON raw.sections TO {hidden_role};
+         GRANT {hidden_role} TO {worker_role} WITH INHERIT FALSE, SET TRUE;"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(create_hidden))
+        .execute(&postgres.pool)
+        .await
+        .expect("create disposable non-inherited SET ROLE escalation");
+    assert!(matches!(
+        assert_unprivileged_pg_effect_role(&effect_pool).await,
+        Err(ReconcileTruthReviewsError::PrivilegedWorkerRole { target })
+            if target == format!("SET ROLE {hidden_role}")
+    ));
+    let remove_hidden = format!(
+        "REVOKE {hidden_role} FROM {worker_role};
+         REVOKE UPDATE ON raw.sections FROM {hidden_role};
+         DROP ROLE {hidden_role};"
+    );
+    sqlx::raw_sql(sqlx::AssertSqlSafe(remove_hidden))
+        .execute(&postgres.pool)
+        .await
+        .expect("drop disposable SET ROLE escalation");
+    assert_unprivileged_pg_effect_role(&effect_pool)
+        .await
+        .expect("effect identity is safe after revoking hidden role");
     eprintln!("CI_PG_V3_GLOBAL_WRITE_PRIVILEGE_FENCE=PASS");
 }
 

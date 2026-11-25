@@ -8,9 +8,10 @@ verified or publishes. Legacy verified Truth writes continue to invoke the
 same function inside their one original canonical transaction.
 
 **Status: experiment / NO-GO for production.** There is no general
-`ExecutionPlan`→PG effect scheduling, no delegated operator-admission issuer,
-no automatic caller of this Workflow, no production credential provisioning,
-and no deployed cross-queue acceptance yet. Do not start on a production
+`ExecutionPlan`→PG effect scheduling or automatic production caller.
+The isolated native operator command below can issue/revoke admissions, but
+there is no production credential provisioning, independent tenant authority,
+or deployed cross-queue acceptance yet. Do not start on a production
 namespace or grant its worker broad application DB credentials.
 
 ## Native Temporal contract
@@ -57,7 +58,8 @@ GRANT USAGE ON SCHEMA pipeline, extracted, raw, site, verified, system
 GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
     pipeline.pg_effect_v3_admissions TO alegria_pg_effect_worker;
 GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO alegria_pg_effect_worker;
-GRANT SELECT ON extracted.rule_candidates, raw.sections TO alegria_pg_effect_worker;
+GRANT SELECT ON extracted.rule_candidates, raw.sections, raw.pages
+    TO alegria_pg_effect_worker;
 GRANT SELECT, INSERT, UPDATE ON site.seo_hitl_tasks TO alegria_pg_effect_worker;
 -- No admission INSERT/UPDATE/DELETE/TRUNCATE; no candidate/verified Truth
 -- writes; no system.sync_outbox, no CMS human decisions.
@@ -89,7 +91,8 @@ inherited membership; a separate unprivileged user is mandatory. The
 `verified` and `system` schema grants are read-free name resolution only.
 
 An authorized operator issues each admission through their own audited SQL
-process, **not** an Activity, Workflow, or DAG input. Validate canonical
+process or explicit native operator CLI below, **not** an Activity, Workflow,
+HTTP request or DAG input. Validate canonical
 `pipeline.execution_runs` context/workflow/state first. Derive the exact
 SHA-256 source fingerprint from `CANDIDATE_SET_HASH_SQL` in
 `postgres_store/src/truth_review_effect_v3.rs`: this covers every scoped
@@ -127,6 +130,107 @@ check that the UPDATE affected exactly one row, retry only `55P03` with a
 bounded backoff and escalate repeated BUSY; do not silently treat BUSY as a
 completed revocation. Operators must not bypass triggers, disable them or use
 table-owner DDL as an ordinary revoke path.
+
+### Isolated native operator commands (opt-in; not production admission)
+
+Create a dedicated PostgreSQL operator LOGIN with **no role memberships,
+SUPERUSER, BYPASSRLS, CREATEDB, CREATEROLE, schema CREATE, sequence mutation
+or application writer grants**. Its only allowed application mutation is
+`INSERT/UPDATE pipeline.pg_effect_v3_admissions`; it needs SELECT on that
+table, `pipeline.execution_runs`, `pipeline.pg_effect_v3_receipts`,
+`extracted.rule_candidates`, `raw.sections`, `raw.pages`, and schema USAGE for
+those reads. The operator runtime validates effective privileges before
+every command, requires `session_user = current_user`, and rejects a
+privileged LOGIN using `SET ROLE` to impersonate the restricted operator (it
+could otherwise `RESET ROLE` to regain privilege). The role must not be the
+Activity Worker or the schema owner.
+
+First start the exact V3 Workflow and obtain the server-issued Temporal
+execution Run ID. Keep the Workflow waiting for `operator_admission_ready`.
+Prepare a UTF-8 JSON file with only the fields below (example UUIDs/digest):
+
+```json
+{
+  "command": {
+    "admission_id": "11111111-1111-4111-8111-111111111111",
+    "run_id": "22222222-2222-4222-8222-222222222222",
+    "scope": {
+      "tenant_id": "operator-tenant",
+      "run_id": "22222222-2222-4222-8222-222222222222"
+    },
+    "context_key": "approved-truth-context",
+    "operation_instance": "review-reconcile",
+    "plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "workflow_id": "pg-review-workflow-id",
+  "workflow_run_id": "33333333-3333-4333-8333-333333333333",
+  "expires_in_seconds": 120
+}
+```
+
+```bash
+ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3=true \
+  PG_EFFECT_OPERATOR_DATABASE_URL='postgres://<dedicated-operator-role>' \
+  PG_EFFECT_OPERATOR_TENANT_ID='operator-tenant' \
+  ./target/debug/temporal_pg_effects --operator-issue /path/to/request.json
+
+ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3=true \
+  PG_EFFECT_OPERATOR_DATABASE_URL='postgres://<dedicated-operator-role>' \
+  PG_EFFECT_OPERATOR_TENANT_ID='operator-tenant' \
+  ./target/debug/temporal_pg_effects --operator-revoke 11111111-1111-4111-8111-111111111111
+```
+
+These commands do not start a Worker, poll a Task Queue or send a Temporal
+Signal. On issue, a PostgreSQL transaction takes the canonical context lock,
+requires a live matching `pipeline.execution_runs` record, pins the exact
+source and operation fingerprints, uses database `current_user` as
+`issued_by`, and limits expiry to 1–300 seconds. No caller-supplied
+`candidate_set_hash`, fingerprint, issuer or expiry date is accepted.
+The operator must independently confirm the Workflow Type/Run ID from
+Temporal and send the Signal after successful issue; the CLI checks the
+canonical PostgreSQL `workflow_run_id` but does **not** attest Temporal
+server identity itself. This is an explicit remaining cutover gate.
+The issuer and Activity both lock the full raw source snapshot (extraction and
+evidence sections plus both parent pages) in stable key order, then verify
+that page/section associations did not move while those locks were acquired.
+
+Revocation is tenant-policy scoped, monotonic and idempotent. It acquires the
+same per-admission transaction lock as the Activity **before** checking for
+an already committed receipt, and rechecks absence of a receipt in the
+conditional UPDATE. The PostgreSQL trigger also serializes
+against the effect, retries **only** SQLSTATE `55P03` at most three times
+with short bounded backoff, and returns nonzero if admission was missing,
+effect already committed, or revocation remained BUSY. The JSON result
+reports the actual operator DB role and outcome, never secrets.
+
+The mandatory `integration_pg_v3_e2e --features e2e` shard runs the **actual
+native operator binary** against a disposable, migrated PostgreSQL container.
+It provisions a distinct restricted LOGIN, checks GRANT denials, wrong
+tenant/run/Temporal Run ID, valid issue/revoke/idempotent re-revoke and
+the after-commit revocation veto. A separate privileged-session `SET ROLE`
+impersonation negative is available in the extra isolated service test.
+The mandatory test's synthetic receipt is inserted solely by disposable
+fixture-admin rights; it proves the revocation guard, not that an effect ran.
+To run the optional deeper service-only test, use a **disposable migrated
+database** with explicit CREATE ROLE-capable credentials (append-only
+admissions prevent fixture deletion):
+
+```bash
+PG_EFFECT_OPERATOR_E2E_ADMIN_DATABASE_URL='postgres://<ephemeral-pg-admin>' \
+  cargo test -p temporal_pg_effects --bin temporal_pg_effects \
+  live_pg_operator_role_issuance_revocation_and_denials -- --ignored
+```
+
+The service-only test is ignored by default. The mandatory container test
+does not independently attest a live Temporal Workflow: cross-queue E2E
+and historical replay are separate acceptance requirements.
+
+**Tenant limitation:** `PG_EFFECT_OPERATOR_TENANT_ID` is a fail-closed
+operator configuration guard, **not row-level security**. Existing
+`pipeline.execution_runs`, `raw.sections`, and `site.seo_hitl_tasks` have
+no independently authoritative tenant ownership. The #94 architecture must
+first decide single-tenant versus multi-tenant data and bind the canonical
+run/source/HITL rows to that identity before implementing database RLS.
 
 The canonical PostgreSQL `truth-context|{context_key}` advisory transaction
 lock is acquired **before** reading admission or source rows. Under ordinary
@@ -184,8 +288,14 @@ sharing that Task Queue with any worker lacking the exact registered Type.
   could change original bytes between separate READ COMMITTED statements.
   Independent concurrent raw-mutation E2E and a shared lock/trigger policy
   across all evidence writers are required for a complete source fence.
-- Operator issuance/revocation governance, tenant isolation/RLS, execution
-  admission provenance, role grants, audit and rate limits require review.
+- Opt-in local native issuance/revocation commands are available with a
+  mandatory disposable PostgreSQL CLI E2E, but production role provisioning,
+  Temporal server Describe
+  verification, tenant ownership/RLS, audit and rate limits require review.
+  One canonical `pipeline.execution_runs` stores only one Temporal execution
+  Run ID. Multiple independent effect child Workflows require a new per-node
+  parent/child provenance and admission schema, **not** repeated overwrite of
+  that single field or a broadening of the existing V3 Activity queue.
 - Existing `TruthHitlReconcile` CLI can still invoke canonical PG review
   reconciliation directly under its legacy privilege model. This remains a
   migration consideration, not an alternate V3 effect authorization path.

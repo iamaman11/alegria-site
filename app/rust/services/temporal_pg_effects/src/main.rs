@@ -29,6 +29,8 @@ use temporalio_sdk::{
     WorkflowContext, WorkflowContextView, WorkflowResult,
 };
 
+mod operator;
+
 // Required by Temporal proc-macro expansions.
 use futures_util as _;
 use temporalio_common as _;
@@ -185,6 +187,18 @@ async fn main() -> Result<()> {
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
             replay_history(std::path::Path::new(&path)).await?;
             println!("CI_TEMPORAL_PG_EFFECT_REPLAY=PASS");
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-issue") {
+            let path = args.next().context("--operator-issue requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected operator issue arguments");
+            operator::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-revoke") {
+            let id = args.next().context("--operator-revoke requires one UUID")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected operator revoke arguments");
+            operator::revoke_by_id(&id.to_string_lossy()).await?;
             return Ok(());
         }
         anyhow::bail!("unexpected temporal_pg_effects argument: {argument:?}");

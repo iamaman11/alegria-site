@@ -39,7 +39,10 @@ class ManifestEvidenceTests(unittest.TestCase):
         exists = ab.ORCHESTRATOR in self.graph
         self.assertEqual(report["B_separate_orchestrator"]["exists"], exists)
         self.assertEqual(report["B_separate_orchestrator"]["hypothetical"], not exists)
-        self.assertEqual(report["B_separate_orchestrator"]["workspace_dependency_count"], 9)
+        # The owner now depends directly on provider-free truth_domain; this
+        # is a real tenth workspace dependency, not a compiler measurement.
+        self.assertEqual(report["B_separate_orchestrator"]["workspace_dependency_count"], 10)
+        self.assertIn("truth_domain", report["B_separate_orchestrator"]["workspace_closure_excluding_self"])
         self.assertEqual(report["B_separate_orchestrator"]["provider_dependencies"], [])
         self.assertFalse(report["actual_rustc_evidence"])
         self.assertEqual(report["status"], (
@@ -69,12 +72,20 @@ class ManifestEvidenceTests(unittest.TestCase):
             "projection_delivery", "reconcile", "runtime_composition", "temporal_worker",
         } | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set())
           | ({"integration_pg_v3_e2e"} if "integration_pg_v3_e2e" in self.graph else set()))
-        self.assertEqual(set(actual["temporal_gateway"]), {
-            "temporal_gateway", "cli_tools", "integration_harness", "integration_outbox_e2e",
-            "integration_pg_app_e2e", "integration_qdrant_e2e", "integration_temporal_e2e",
-            "reconcile", "temporal_worker",
-        } | ({ab.ORCHESTRATOR} if ab.ORCHESTRATOR in self.graph else set())
-          | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set()))
+        self.assertEqual(set(actual["temporal_orchestrator"]), {ab.ORCHESTRATOR})
+        self.assertEqual(ab.OWNER_SOURCE_PATHS["temporal_orchestrator"],
+                         "app/rust/services/temporal_orchestrator/src/main.rs")
+
+    def test_direct_binary_owner_edit_always_requires_relink_even_when_closure_excludes_self(self) -> None:
+        self.assertTrue(ab.owner_must_relink_binary(
+            "temporal_orchestrator", ab.ORCHESTRATOR, set()
+        ))
+        self.assertTrue(ab.owner_must_relink_binary(
+            "postgres_store", ab.PG_EFFECT_OWNER, {"postgres_store"}
+        ))
+        self.assertFalse(ab.owner_must_relink_binary(
+            "graph_neo4j", ab.ORCHESTRATOR, {"seo_application"}
+        ))
 
     def test_candidate_with_direct_or_transitive_provider_rejected(self) -> None:
         unsafe = {package: dependencies.copy() for package, dependencies in self.graph.items()}
@@ -198,14 +209,39 @@ class CompilerEvidenceTests(unittest.TestCase):
             self.assertNotIn("RUSTC_WRAPPER", observed[0][1]["env"])
 
     def test_exact_head_export_is_isolated_from_current_worktree(self) -> None:
+        # CI runs against a clean exact-source checkout; the collaborative
+        # local worktree may have concurrent Rust edits. Simulate only the
+        # cleanliness precondition, keeping the real Git HEAD archive/export
+        # and its filesystem isolation under test.
+        actual_run = subprocess.run
+
+        def pristine_status(command, *args, **kwargs):
+            if command[:2] == ["git", "status"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return actual_run(command, *args, **kwargs)
+
         with tempfile.TemporaryDirectory() as folder:
             exported = Path(folder)
-            sha = ab.isolated_source_tree(exported)
+            with patch.object(ab.subprocess, "run", side_effect=pristine_status):
+                sha = ab.isolated_source_tree(exported)
             self.assertEqual(len(sha), 40)
             self.assertTrue((exported / "app/rust/Cargo.toml").is_file())
             self.assertFalse((exported / ".git").exists())
             # A source-only export must not be mistaken for a compiler result.
             self.assertFalse((exported / "app/rust/target").exists())
+
+    def test_dirty_rust_sources_block_exact_head_export_before_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            with (
+                patch.object(ab.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    ["git", "status"], 0, " M app/rust/services/temporal_orchestrator/src/main.rs\n", "",
+                )) as git_status,
+                patch.object(ab.subprocess, "Popen") as archive,
+                self.assertRaisesRegex(ab.EvidenceError, "tracked Rust sources are dirty"),
+            ):
+                ab.isolated_source_tree(Path(folder))
+            git_status.assert_called_once()
+            archive.assert_not_called()
 
     def test_synthetic_pr_merge_uses_exact_canonical_head_tree_not_commit_identity(self) -> None:
         # GitHub PR checks out a synthetic merge commit. Different commit IDs

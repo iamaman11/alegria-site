@@ -15,6 +15,7 @@ case "${1:-}" in
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py
+    python3 infra/temporal/check_v3_evaluation_topology.py
     python3 automation/check_rust_adapter_boundaries.py
     python3 automation/check_rust_adapter_boundaries_tests.py
     python3 automation/check_rust_layer_isolation.py

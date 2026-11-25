@@ -558,12 +558,15 @@ SUITE_OWNERS = {
         "paths": {
             "app/db/schema.sql",
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+            "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
+            "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
         },
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
@@ -574,9 +577,12 @@ SUITE_OWNERS = {
         # The PostgreSQL-only fenced Activity owner must remain tested even
         # when a global schema/CI input cannot be safely narrowed.
         "on_unknown_global_input": True,
-        # SQL admission/replay/idempotence is exercised directly against a
-        # disposable real PostgreSQL service. No Temporal Docker service and
-        # no PG Worker binary are needed; do not add either as preparation.
+        # SQL admission/replay/idempotence runs against disposable PG without
+        # a Temporal server. Its native operator CLI regression also launches
+        # the separately credentialed PG V3 executable, so consume the same
+        # exact-source binary owner as pg_temporal_v3 (never the monolith).
+        "prepare": PG_V3_TEMPORAL_PREPARE,
+        "runtime_binaries": PG_V3_TEMPORAL_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
             "--lib", "pg_v3_", "--locked", "--", "--nocapture",
@@ -590,6 +596,8 @@ SUITE_OWNERS = {
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/db/schema.sql",
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
+            "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
+            "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
         },
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
@@ -974,7 +982,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
     ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    "verify_d": (("pg_effect_v3", "pg_v3_", 3),),
+    "verify_d": (("pg_effect_v3", "pg_v3_", 5),),
 }
 
 

@@ -19,6 +19,12 @@ use seo_domain::extraction::operations::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+mod effectful_v1;
+pub use effectful_v1::{
+    execute_checked_dag_v1, preflight_effect_dag_v1, CheckedDagOutcomeV1, EffectDagError,
+    EffectDagRunV1, OwnerCommandV1, PreparedDagStepV1, PreparedDagV1,
+};
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactValue {

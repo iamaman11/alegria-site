@@ -1,0 +1,36 @@
+# Two existing native Rust binaries, two independent final images. Neither
+# image contains the legacy provider-linked temporal_worker executable.
+# This is an opt-in runtime topology experiment, not a production cutover.
+FROM rust:1.100.0-slim-bookworm AS build-base
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    protobuf-compiler libprotobuf-dev libssl-dev pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY app ./app
+ENV SQLX_OFFLINE=true \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=0 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 \
+    CARGO_PROFILE_RELEASE_STRIP=symbols
+
+FROM build-base AS pure-builder
+RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+    -p temporal_orchestrator --bin temporal_orchestrator
+
+FROM build-base AS pg-builder
+RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+    -p temporal_pg_effects --bin temporal_pg_effects
+
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+USER 65532:65532
+
+FROM runtime AS pure
+COPY --from=pure-builder /app/app/rust/target/release/temporal_orchestrator /usr/local/bin/temporal_orchestrator
+ENTRYPOINT ["/usr/local/bin/temporal_orchestrator"]
+
+FROM runtime AS pg
+COPY --from=pg-builder /app/app/rust/target/release/temporal_pg_effects /usr/local/bin/temporal_pg_effects
+ENTRYPOINT ["/usr/local/bin/temporal_pg_effects"]

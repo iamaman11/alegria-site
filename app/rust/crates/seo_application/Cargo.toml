@@ -8,6 +8,7 @@ contracts = { path = "../contracts" }
 operation_protocol = { path = "../operation_protocol" }
 primitives = { path = "../primitives" }
 seo_domain = { path = "../seo_domain" }
+truth_domain = { path = "../truth_domain" }
 seo_ports = { path = "../seo_ports" }
 seo_steps = { path = "../seo_steps" }
 runtime_models = { path = "../runtime_models" }
@@ -16,3 +17,6 @@ serde = { workspace = true }
 tokio = { workspace = true }
 async-trait = "0.1"
 thiserror = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

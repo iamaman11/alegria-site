@@ -11,6 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 primitives = { path = "../primitives" }
 runtime_models = { path = "../runtime_models" }
+truth_domain = { path = "../truth_domain" }
 sqlx = { workspace = true }
 thiserror = { workspace = true }
 uuid = { workspace = true }

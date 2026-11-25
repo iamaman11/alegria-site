@@ -1604,6 +1604,101 @@ CREATE INDEX IF NOT EXISTS idx_extracted_rule_candidates_section
 CREATE INDEX IF NOT EXISTS idx_extracted_rule_candidates_source
     ON extracted.rule_candidates(source_key, created_at DESC);
 
+-- Raw evidence writers are independent of Truth's context lock. PostgreSQL
+-- enforces the narrow cross-owner boundary even for direct SQL writers:
+-- V3 acquires matching read-only advisory keys before hashing and holds them
+-- through the atomic HITL + receipt commit. No raw UPDATE grant is needed.
+CREATE OR REPLACE FUNCTION raw.guard_evidence_writer_lock()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+        RAISE EXCEPTION 'raw evidence snapshots cannot be truncated'
+            USING ERRCODE = '23514';
+    END IF;
+    -- `processed` is a crawler progress bit, explicitly excluded from V3's
+    -- immutable source-identity fingerprint. Allow this one field to advance
+    -- without aborting an admitted Truth effect; all other old/new fields,
+    -- including future columns, remain protected by the writer advisory key.
+    IF TG_TABLE_NAME = 'pages' AND TG_OP = 'UPDATE'
+       AND (to_jsonb(NEW) - 'processed') IS NOT DISTINCT FROM
+           (to_jsonb(OLD) - 'processed') THEN
+        RETURN NEW;
+    END IF;
+    IF NOT pg_try_advisory_xact_lock(
+        hashtextextended('raw-evidence|' || TG_TABLE_NAME || '|' || OLD.id::text, 0)
+    ) THEN
+        RAISE EXCEPTION 'raw evidence snapshot is locked by admitted Truth effect'
+            USING ERRCODE = '55P03';
+    END IF;
+    IF TG_OP = 'UPDATE' THEN
+        RETURN NEW;
+    END IF;
+    RETURN OLD;
+END;
+$$;
+DROP TRIGGER IF EXISTS guard_raw_page_writer_lock ON raw.pages;
+CREATE TRIGGER guard_raw_page_writer_lock
+BEFORE UPDATE OR DELETE ON raw.pages
+FOR EACH ROW EXECUTE FUNCTION raw.guard_evidence_writer_lock();
+DROP TRIGGER IF EXISTS guard_raw_section_writer_lock ON raw.sections;
+CREATE TRIGGER guard_raw_section_writer_lock
+BEFORE UPDATE OR DELETE ON raw.sections
+FOR EACH ROW EXECUTE FUNCTION raw.guard_evidence_writer_lock();
+DROP TRIGGER IF EXISTS guard_raw_page_truncate ON raw.pages;
+CREATE TRIGGER guard_raw_page_truncate
+BEFORE TRUNCATE ON raw.pages
+FOR EACH STATEMENT EXECUTE FUNCTION raw.guard_evidence_writer_lock();
+DROP TRIGGER IF EXISTS guard_raw_section_truncate ON raw.sections;
+CREATE TRIGGER guard_raw_section_truncate
+BEFORE TRUNCATE ON raw.sections
+FOR EACH STATEMENT EXECUTE FUNCTION raw.guard_evidence_writer_lock();
+
+-- Direct candidate INSERT/UPDATE/DELETE must obey the same context lock as
+-- canonical Truth writes, preventing phantoms during V3's source snapshot.
+CREATE OR REPLACE FUNCTION extracted.lock_candidate_truth_context()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    old_context text;
+    new_context text;
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('truth-context|' || NEW.context_key, 0)
+        );
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('truth-context|' || OLD.context_key, 0)
+        );
+        RETURN OLD;
+    END IF;
+    old_context := OLD.context_key;
+    new_context := NEW.context_key;
+    IF old_context <= new_context THEN
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('truth-context|' || old_context, 0)
+        );
+        IF old_context <> new_context THEN
+            PERFORM pg_advisory_xact_lock(
+                hashtextextended('truth-context|' || new_context, 0)
+            );
+        END IF;
+    ELSE
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('truth-context|' || new_context, 0)
+        );
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('truth-context|' || old_context, 0)
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS lock_candidate_truth_context ON extracted.rule_candidates;
+CREATE TRIGGER lock_candidate_truth_context
+BEFORE INSERT OR UPDATE OR DELETE ON extracted.rule_candidates
+FOR EACH ROW EXECUTE FUNCTION extracted.lock_candidate_truth_context();
+
 ALTER TABLE verified.rule_instances
     DROP CONSTRAINT IF EXISTS verified_rule_instances_rule_candidate_fk;
 ALTER TABLE verified.rule_instances
@@ -1871,6 +1966,100 @@ CREATE INDEX IF NOT EXISTS idx_execution_runs_created
     ON pipeline.execution_runs(created_at DESC)
     WHERE status NOT IN ('done','failed');
 
+-- The admitted V3 Truth operation reads execution_runs.status under the
+-- truth-context advisory lock and must keep that status valid through its
+-- atomic HITL + receipt commit. Ordinary status writers do not otherwise
+-- participate in that lock. Refuse a concurrent status/context/identity
+-- rewrite with 55P03 instead of holding a row lock that could deadlock with
+-- the receipt FK. This applies ONLY to runs carrying a V3 admission; legacy
+-- runs and bookkeeping-only updated_at changes remain unblocked.
+CREATE OR REPLACE FUNCTION pipeline.guard_execution_run_truth_context()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog AS $$
+DECLARE
+    old_context text;
+    new_context text;
+    canonical_run boolean;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.run_id, NEW.workflow_run_id, NEW.workflow_type,
+            NEW.context_key, NEW.status)
+           IS NOT DISTINCT FROM
+           (OLD.run_id, OLD.workflow_run_id, OLD.workflow_type,
+            OLD.context_key, OLD.status) THEN
+            RETURN NEW;
+        END IF;
+    END IF;
+    -- The operator uses this exact run key before reading a run and issuing
+    -- its first admission. Acquire it even if no admission exists yet: an
+    -- uncommitted status writer must not let the operator authorize an old
+    -- status and then commit terminal during the resulting Activity.
+    IF TG_OP = 'DELETE' THEN
+        canonical_run := OLD.workflow_type = 'seo_site_build';
+    ELSE
+        canonical_run := OLD.workflow_type = 'seo_site_build'
+                         OR NEW.workflow_type = 'seo_site_build';
+    END IF;
+    IF canonical_run AND NOT pg_try_advisory_xact_lock(
+        hashtextextended('truth-run-status|' || OLD.run_id::text, 0)
+    ) THEN
+        RAISE EXCEPTION 'canonical Truth run status is locked by operator issuance'
+            USING ERRCODE = '55P03';
+    END IF;
+    -- Never impose V3's fail-fast semantics on unrelated legacy runs. Keep
+    -- historical (also expired/revoked) admissions in scope: an Activity that
+    -- passed admission earlier may still be finishing under this lock.
+    -- SECURITY DEFINER permits ordinary run-status writers to check this
+    -- immutable authority table without granting them SELECT or INSERT.
+    IF NOT EXISTS (
+        SELECT 1 FROM pipeline.pg_effect_v3_admissions a
+        WHERE a.run_id = OLD.run_id
+    ) THEN
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    END IF;
+    old_context := OLD.context_key;
+    IF TG_OP = 'DELETE' THEN
+        new_context := old_context;
+    ELSE
+        new_context := NEW.context_key;
+    END IF;
+    IF old_context <= new_context THEN
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || old_context, 0)) THEN
+            RAISE EXCEPTION 'Truth execution-run context is locked by admitted effect'
+                USING ERRCODE = '55P03';
+        END IF;
+        IF old_context <> new_context AND NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || new_context, 0)) THEN
+            RAISE EXCEPTION 'Truth execution-run destination context is locked'
+                USING ERRCODE = '55P03';
+        END IF;
+    ELSE
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || new_context, 0)) THEN
+            RAISE EXCEPTION 'Truth execution-run destination context is locked'
+                USING ERRCODE = '55P03';
+        END IF;
+        IF NOT pg_try_advisory_xact_lock(
+            hashtextextended('truth-context|' || old_context, 0)) THEN
+            RAISE EXCEPTION 'Truth execution-run context is locked by admitted effect'
+                USING ERRCODE = '55P03';
+        END IF;
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DROP TRIGGER IF EXISTS guard_execution_run_truth_context ON pipeline.execution_runs;
+CREATE TRIGGER guard_execution_run_truth_context
+BEFORE UPDATE OR DELETE ON pipeline.execution_runs
+FOR EACH ROW EXECUTE FUNCTION pipeline.guard_execution_run_truth_context();
+
 -- Experimental V3 PG effect admission is issued ONLY by a privileged operator
 -- through SQL, never by a Workflow, an Activity, or an untrusted DAG manifest.
 -- Deploy the PG effect worker with a distinct unprivileged DB role. Its start
@@ -1890,8 +2079,9 @@ CREATE TABLE IF NOT EXISTS pipeline.pg_effect_v3_admissions (
     contract_fingerprint   TEXT NOT NULL CHECK (length(contract_fingerprint) = 64),
     authorized_effect      TEXT NOT NULL DEFAULT 'pg.truth.review_queue.reconcile'
         CHECK (authorized_effect = 'pg.truth.review_queue.reconcile'),
-    -- SHA-256 of scoped extracted.rule_candidates + exact raw.sections bytes,
-    -- ordered by candidate ID (see postgres_store::truth_review_effect_v3).
+    -- SHA-256 of scoped candidates, both source/evidence sections and parent
+    -- page source identity/bytes, ordered by candidate ID (see postgres_store
+    -- truth_review_effect_v3::CANDIDATE_SET_HASH_SQL).
     candidate_set_hash     TEXT NOT NULL CHECK (length(candidate_set_hash) = 64),
     issued_by              TEXT NOT NULL CHECK (length(trim(issued_by)) > 0 AND issued_by <> 'seo_system'),
     issued_at              TIMESTAMPTZ NOT NULL DEFAULT now(),

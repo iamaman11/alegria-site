@@ -179,3 +179,58 @@ reduction in the `integration_temporal_e2e` dependency/compiler closure and
 the 206-second full-workspace path; only then remeasure ≥3 comparable full PR
 runs for the ≤180-second criterion. `main` remains untouched and #94/#43
 remain open.
+
+## 25 November 2026 — corrected four-owner production rebuild probe
+
+Draft [PR #95 CI #520](https://github.com/iamaman11/alegria-site/actions/runs/45534881831)
+completed **SUCCESS** on exact head `d8b598d478bed07fe483710c72c1362895b08810`
+after a retry of the failed RustSec download (HTTP 503). All 39 mandatory
+real E2E checks, the complete Rust workspace, security, Windows, Cloudflare,
+and the gate succeeded. This is **not** a ≤180-second or production cutover
+acceptance, and was not a four-owner compiler experiment.
+
+The previous optional owner rebuild probes used a `temporal_gateway` library
+marker to represent the Temporal owner. That measured a shared client adapter,
+not the provider-free Temporal **process**. The corrected fourth source probe
+is now `temporal_orchestrator/src/main.rs` alongside `postgres_store`,
+`graph_neo4j`, and `vector_qdrant` source changes. The in-place Cargo probe
+builds both new V3 runtime binaries (`temporal_orchestrator` and
+`temporal_pg_effects`) **and** the legacy Worker, Outbox, CLI, analytics, and
+reconcile processes, so actual binary relinks can be attributed to the
+changed owner rather than silently omitting V3 from the experiment.
+
+These probe changes alter only explicit opt-in diagnostics, not mandatory CI
+jobs or release selection. The in-place sccache-enabled probe reports Cargo
+`fresh:false` units and binary writes; a cache hit does **not** prove actual
+rustc CPU compilation. The separate `physical-ab-probe` uses an immutable
+exact-SHA source export, isolated Cargo target, disabled compiler wrappers,
+and actual rustc/bin measurements. Until a real probe runs on an accepted
+candidate and records cold/warm CPU/RAM for all four owners, physical
+independence remains **UNVERIFIED**. More matrix jobs or moving the unchanged
+Temporal 65-second live restart test cannot establish the 180-second SLA.
+In particular, if Graph, Vector or PostgreSQL edits continue to relink the
+**active legacy** `temporal_worker`, a clean V3 orchestrator binary is not yet
+production isolation. The legacy runtime requires a separately accepted
+history/drain cutover; its Dockerfile still copies the broad `app` build
+context, so a narrow Cargo result alone does not prove narrow image rebuilds.
+
+The November candidate also adds a narrowly opt-in V3 Docker/Compose evaluation
+topology. Both mandatory fast CI `contracts` and opt-in comprehensive `contracts`
+now run `infra/temporal/check_v3_evaluation_topology.py`, an offline negative-
+self-tested check that V3 services remain profile-gated, provider environment
+variables stay out of the pure orchestrator, and V3 final images build only
+their own binary. This guards source-level topology regressions; it does not
+start containers or establish independent production Docker rebuild timing.
+
+The new real-PG `pg_v3_raw_source_concurrent_update_is_fenced` regression is
+assigned to the existing `verify_d` exact precompiled PG-only E2E binary. Its
+mandatory `pg_v3_` filter now requires **five** tests, including the separate
+native least-privilege operator issue/revoke CLI regression. Source inventory
+checks both new test names and all six tests across both PG E2E filters.
+The corresponding writer-fence and execution-run Truth context migrations
+explicitly select both V3 PG acceptance suites. There are now **41** mandatory
+real E2E checks (**42**
+including the separately conditional Truth certification fixture) in the
+candidate's declared plan; neither a newly sharded job nor a reduced test
+filter is a legitimate timing optimization. These source-level CI assertions
+still require an actual accepted GitHub run to prove live E2E execution.

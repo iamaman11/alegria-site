@@ -56,12 +56,12 @@ PROVIDER_TRANSPORT_PREFIXES = (
 GRAPH_VECTOR_TRANSPORT_PREFIXES = (
     "neo4rs", "neo4j", "bolt-client", "qdrant",
 )
-SOURCE_OWNERS = ("postgres_store", "graph_neo4j", "vector_qdrant", "temporal_gateway")
+SOURCE_OWNERS = ("postgres_store", "graph_neo4j", "vector_qdrant", "temporal_orchestrator")
 OWNER_SOURCE_PATHS = {
     "postgres_store": "app/rust/crates/postgres_store/src/lib.rs",
     "graph_neo4j": "app/rust/crates/graph_neo4j/src/lib.rs",
     "vector_qdrant": "app/rust/crates/vector_qdrant/src/lib.rs",
-    "temporal_gateway": "app/rust/crates/temporal_gateway/src/lib.rs",
+    "temporal_orchestrator": "app/rust/services/temporal_orchestrator/src/main.rs",
 }
 # A Cargo compiler-artifact with `fresh: false` is not proof that rustc ran
 # while a compiler cache wrapper is enabled. Both environment and Cargo's
@@ -169,6 +169,16 @@ def reverse_closure(graph: dict[str, set[str]], owner: str) -> set[str]:
         for dependency in dependencies:
             reverse[dependency].add(package)
     return closure({name: reverse[name] for name in graph}, {owner})
+
+
+def owner_must_relink_binary(owner: str, binary_package: str, dependencies: set[str]) -> bool:
+    """The binary owner itself also rebuilds, not only its dependency crates.
+
+    Manifest reports intentionally exclude the package itself from their
+    dependency lists. Forgetting this case made a direct orchestrator edit
+    look like an illegal relink in the opt-in physical experiment.
+    """
+    return owner == binary_package or owner in dependencies
 
 
 def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[str, Any]:
@@ -660,7 +670,8 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
             relinked = sorted({
                 unit["target_name"] for unit in rebuilt if "bin" in unit["kind"]
             } & set(packages))
-            if (MONOLITH in relinked) != (owner in a_closure):
+            expected_a_relink = owner_must_relink_binary(owner, MONOLITH, a_closure)
+            if (MONOLITH in relinked) != expected_a_relink:
                 raise EvidenceError(f"{owner}: monolith relink inconsistent with Cargo closure")
             touched = sorted(
                 name for name, image in build["binaries"].items()
@@ -670,17 +681,18 @@ def owner_rebuild_probe(report: dict[str, Any]) -> dict[str, Any]:
                 name for name, image in build["binaries"].items()
                 if image["sha256"] != baseline_binaries[name]["sha256"]
             )
-            if (MONOLITH in touched) != (owner in a_closure):
+            if (MONOLITH in touched) != expected_a_relink:
                 raise EvidenceError(f"{owner}: monolith executable write inconsistent with Cargo closure")
-            # A shared temporal_gateway is today's positive control that
-            # detects a false-positive 'always fresh B' test harness.
-            expected_b_relink = owner in b_closure
+            # A direct orchestrator implementation edit must recompile and
+            # relink the orchestrator even though its dependency *closure*
+            # intentionally excludes the binary package itself.
+            expected_b_relink = owner_must_relink_binary(owner, ORCHESTRATOR, b_closure)
             if (ORCHESTRATOR in relinked) != expected_b_relink:
                 raise EvidenceError(f"{owner}: orchestrator binary relink unexpectedly {relinked}")
             if (ORCHESTRATOR in touched) != expected_b_relink:
                 raise EvidenceError(f"{owner}: orchestrator executable write inconsistent with Cargo closure")
             if pg_exists:
-                expected_c_relink = owner in c_closure
+                expected_c_relink = owner_must_relink_binary(owner, PG_EFFECT_OWNER, c_closure)
                 if (PG_EFFECT_OWNER in relinked) != expected_c_relink:
                     raise EvidenceError(f"{owner}: PG Activity worker relink unexpectedly {relinked}")
                 if (PG_EFFECT_OWNER in touched) != expected_c_relink:

@@ -286,6 +286,48 @@ services:
     ports:
       - "127.0.0.1:9464:9464"
 
+  # V3 experiment: isolated, provider-free Temporal Workflow owner.
+  # This opt-in profile does NOT replace the legacy Worker or admit production
+  # traffic. An exact source SHA and an explicit enable flag are required.
+  temporal-orchestrator-v3:
+    profiles: ["v3-evaluation"]
+    build:
+      context: .
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-pure-dag-v3
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: ${ALLOW_PURE_DAG_ORCHESTRATOR:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+
+  # V3 experiment: a distinct PostgreSQL owner with a strictly limited role.
+  # Never pass the legacy admin DATABASE_URL to this runtime.
+  temporal-pg-effects-v3:
+    profiles: ["v3-evaluation"]
+    build:
+      context: .
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pg
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      PG_EFFECT_WORKER_DATABASE_URL: ${PG_EFFECT_WORKER_DATABASE_URL:-}
+      ALEGRIA_ENABLE_PG_EFFECT_V3: ${ALEGRIA_ENABLE_PG_EFFECT_V3:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
   # 10. Runtime outbox materializer (PostgreSQL -> Neo4j/Qdrant projections)
   outbox-worker:
     build:

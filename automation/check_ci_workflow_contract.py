@@ -33,6 +33,9 @@ assert set(OWNERS) == set(CI_PR_OWNERS) and len(OWNERS) == len(CI_PR_OWNERS)
 def check() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     fast = (ROOT / "automation/ci_fast_verify.sh").read_text(encoding="utf-8")
+    v3_topology_guard = "python3 infra/temporal/check_v3_evaluation_topology.py"
+    assert fast.count(v3_topology_guard) == 1
+    assert fast.index(v3_topology_guard) < fast.index("  product)")
     # All acceptance/seed CI jobs live in one workflow: no competing CI runs.
     assert not (ROOT / ".github/workflows/ci-deep.yml").exists()
     assert not (ROOT / ".github/workflows/rust-cache-prime.yml").exists()
@@ -42,6 +45,7 @@ def check() -> None:
     release = workflow.split("  select-image:\n", 1)[1].split("  dependency-refresh:\n", 1)[0]
     refresh = workflow.split("  dependency-refresh:\n", 1)[1]
     legacy = (ROOT / "automation/ci_verify.sh").read_text(encoding="utf-8")
+    assert legacy.count(v3_topology_guard) == 1
     assert workflow.startswith("name: ci\n")
     assert "  pull_request:\n" in workflow
     assert "  push:\n    branches: [main]\n" in workflow
@@ -296,6 +300,14 @@ def check() -> None:
     assert '--kind v3 --source-sha "$GITHUB_SHA"' in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'pg_temporal'" in runner_blocks["rust-pg-e2e"]
     assert "if: matrix.shard == 'verify_d'" in runner_blocks["rust-pg-e2e"]
+    # verify_d now executes a real native operator CLI: both PG shards must
+    # authenticate and install the independently compiled PG V3 binary, never
+    # silently run with only the test executable or rebuild on the runner.
+    pg_runner = runner_blocks["rust-pg-e2e"]
+    assert pg_runner.count("name: rust-e2e-v3-${{ github.sha }}") == 1
+    assert pg_runner.count('--kind v3 --source-sha "$GITHUB_SHA"') == 1
+    assert pg_runner.count("python3 automation/rust_ci_artifacts.py install") == 2
+    assert "if: matrix.shard == 'pg_temporal'\n        with:\n          name: rust-e2e-v3-" not in pg_runner
     assert "E2E_RUNNER_PARTITIONS" in workflow
     for name in ("graph", "qdrant", "pg_app", "temporal_legacy", "temporal_v3", "pg", "outbox", "truth"):
         assert f"{name}_e2e_shards" in workflow

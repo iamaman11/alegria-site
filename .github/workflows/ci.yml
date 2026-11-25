@@ -1185,7 +1185,6 @@ jobs:
           name: rust-e2e-pg-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
       - uses: actions/download-artifact@v7
-        if: matrix.shard == 'pg_temporal'
         with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
@@ -1198,11 +1197,9 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind pg_harness --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/pg_harness"
-          if [[ '${{ matrix.shard }}' == pg_temporal ]]; then
-            python3 automation/rust_ci_artifacts.py install \
-              --kind v3 --source-sha "$GITHUB_SHA" \
-              --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
-          fi
+          python3 automation/rust_ci_artifacts.py install \
+            --kind v3 --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
       - name: Execute exact selected PG V3 architecture shard
         if: matrix.shard == 'pg_temporal'
         run: |

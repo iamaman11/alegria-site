@@ -1,10 +1,11 @@
-# Provider-free Temporal pure DAG orchestrator (V3 experiment)
+# Provider-free Temporal checked DAG orchestrator (V3/V1 experiment)
 
 This **standalone Cargo package/binary** is an opt-in physical alternative to
-the existing `temporal_worker`. It registers only
-`AlegriaPureOperationDagV1Workflow`, accepts the typed
-`seo_application::operation_adapter::PureDagRun` start argument, and returns
-the JSON-encoded `PureDagReceipt`. Owner operation implementations stay in
+the existing `temporal_worker`. It registers
+`AlegriaPureOperationDagV1Workflow` (typed `PureDagRun` → JSON
+`PureDagReceipt`) and `AlegriaCheckedEffectDagV1Workflow` (typed
+`EffectDagRunV1` → non-retryable failure for every effectful plan).
+Owner operation implementations stay in
 `seo_application`/domain crates; this package has no Activities, SQLx,
 Neo4j, Qdrant or runtime_composition dependencies.
 
@@ -24,10 +25,26 @@ Neo4j, Qdrant or runtime_composition dependencies.
 - `TEMPORAL_ORCHESTRATOR_TASK_QUEUE`, if provided, must equal the fixed queue.
   `TEMPORAL_URL` defaults to `http://localhost:7233`; namespace defaults to
   `default` unless `TEMPORAL_NAMESPACE` is set.
-- The input carries immutable plan hash, versioned contracts and admitted
-  artifacts, not trusted provenance. Effectful operations and
-  `allowed_effects` are rejected by the reused pure application adapter.
-  Do not schedule stateful owner Activities from this workflow.
+- Both inputs carry immutable plan hash, versioned contracts and admitted
+  artifact envelopes. These declarations are **not authenticated producer
+  provenance** or operator consent. The original pure Workflow still rejects
+  all effects. The checked-effect Workflow validates the entire heterogeneous
+  graph, canonical Truth reconciliation contract, typed owner command,
+  declared input bytes, scope and checked dispatch identity **before**
+  non-retryably failing every effectful request. It never schedules an
+  Activity or child Workflow and cannot return a counterfeit PG receipt.
+
+The effectful graph intentionally remains **NO-GO for execution**. The
+existing PostgreSQL V3 owner admission binds one canonical
+`pipeline.execution_runs.workflow_run_id` to the actual server-issued
+Temporal Run ID. A mixed parent Workflow and multiple child effect
+Workflows necessarily have distinct server Run IDs. Reusing the parent
+row, overwriting its Run ID or accepting a manifest hash as authorization
+would break PG provenance. Production support needs a **new versioned,
+operator-issued per-operation-instance admission** that independently
+binds parent/child Run IDs, immutable scope/command/input digest, canonical
+producer snapshot and durable owner receipt, plus real server-start/replay
+and adversarial concurrency tests. This is not provided by the V1 preflight.
 
 Run from `app/rust`:
 

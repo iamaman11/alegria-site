@@ -1,4 +1,6 @@
-//! Opt-in native Temporal orchestrator for checked, side-effect-free DAGs.
+//! Opt-in native Temporal orchestrator for checked, provider-free DAGs.
+//! Effectful manifest versions are preflight-only until independently
+//! authorized owner execution has a durable per-instance admission bridge.
 //!
 //! This executable is a real package boundary, not another binary in the
 //! provider-linked legacy `temporal_worker` Cargo package. Do not register
@@ -92,8 +94,9 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
     let mut options = WorkerOptions::new(PURE_DAG_ORCHESTRATOR_QUEUE)
         .maybe_deployment_options(deployment_options)
         .build();
-    // The ONLY registered type is the pure DAG: there are zero Activity
-    // handlers or gateway/projection/persistence adapters in this process.
+    // Pure execution and effectful PRE-FLIGHT Workflows only. Both are
+    // provider-free; zero Activities, child Workflows or persistence adapters
+    // are registered. A prepared effect MUST fail non-retryably before I/O.
     workflow::register(&mut options)?;
     Ok(options)
 }

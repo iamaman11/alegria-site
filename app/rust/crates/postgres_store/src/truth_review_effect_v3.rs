@@ -12,53 +12,23 @@
 //! only consume that admission. One PG transaction performs the reconciliation
 //! AND writes its uniquely keyed durable receipt.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
-use operation_protocol::{
-    ArtifactSchema, ArtifactTypeId, EffectId, IdempotencyPolicy, Operation, OperationContract,
-    OperationId, OperationOwnerId, OperationRef, PortId, RunScope,
-};
-use serde::{Deserialize, Serialize};
+use operation_protocol::{Operation, OperationContract};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
 
 use crate::sqlx_hitl_adapter;
+pub use truth_domain::review_effect_contract::{
+    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt,
+};
 
-pub const OPERATION_ID: &str = "pg.truth.reconcile_candidate_reviews";
-pub const OPERATION_REVISION: u32 = 1;
-pub const EFFECT_ID: &str = "pg.truth.review_queue.reconcile";
+pub const OPERATION_ID: &str = truth_domain::review_effect_contract::OPERATION_ID;
+pub const OPERATION_REVISION: u32 = truth_domain::review_effect_contract::OPERATION_REVISION;
+pub const EFFECT_ID: &str = truth_domain::review_effect_contract::EFFECT_ID;
 pub const PG_EFFECT_TASK_QUEUE: &str = "alegria-pg-effects-v3";
 pub const PG_EFFECT_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV3Workflow";
-
-/// The command is immutable in Temporal History. No field is authorization;
-/// every identity is cross-checked against the operator-issued PG admission.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReconcileTruthReviewsInput {
-    pub admission_id: Uuid,
-    pub run_id: Uuid,
-    pub scope: RunScope,
-    pub context_key: String,
-    pub operation_instance: String,
-    pub plan_hash: String,
-}
-
-/// A PostgreSQL receipt for the exact admitted effect; no provider outcome is
-/// implied. `created_review_tasks` is the existing reconciler's INSERT count,
-/// not a combined changed/reopened/superseded count.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ReconcileTruthReviewsReceipt {
-    pub receipt_id: Uuid,
-    pub admission_id: Uuid,
-    pub execution_key: String,
-    pub run_id: Uuid,
-    pub context_key: String,
-    pub candidate_set_hash: String,
-    pub created_review_tasks: i64,
-    pub open_review_tasks: i64,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryClass {
@@ -110,32 +80,7 @@ impl Operation for ReconcileTruthReviewsOperation {
     type Failure = ReconcileTruthReviewsError;
 
     fn contract() -> OperationContract {
-        OperationContract {
-            reference: OperationRef {
-                id: OperationId(OPERATION_ID.to_string()),
-                revision: OPERATION_REVISION,
-            },
-            owner: OperationOwnerId("postgres_store".to_string()),
-            inputs: BTreeMap::from([(
-                PortId("truth_review_scope".to_string()),
-                ArtifactSchema {
-                    id: ArtifactTypeId("truth.candidate_review_scope".to_string()),
-                    revision: 1,
-                },
-            )]),
-            outputs: BTreeMap::from([(
-                PortId("review_queue_receipt".to_string()),
-                ArtifactSchema {
-                    id: ArtifactTypeId("truth.review_queue_receipt".to_string()),
-                    revision: 1,
-                },
-            )]),
-            invalidates: BTreeSet::from([ArtifactTypeId(
-                "truth.review_queue_snapshot".to_string(),
-            )]),
-            effects: BTreeSet::from([EffectId(EFFECT_ID.to_string())]),
-            idempotency: IdempotencyPolicy::Idempotent,
-        }
+        truth_domain::review_effect_contract::operation_contract()
     }
 }
 
@@ -162,6 +107,24 @@ pub fn contract_fingerprint() -> Result<String, ReconcileTruthReviewsError> {
 pub async fn assert_unprivileged_pg_effect_role(
     pool: &PgPool,
 ) -> Result<(), ReconcileTruthReviewsError> {
+    // Auditing `current_user` alone is unsafe: a privileged LOGIN could
+    // `SET ROLE restricted_worker`, pass every effective privilege check,
+    // and `RESET ROLE` back to owner/superuser later on the same connection.
+    // Require a genuine restricted LOGIN as the connection's session identity.
+    let (effective_identity, login_identity, can_login): (String, String, bool) =
+        sqlx::query_as(
+            "SELECT current_user::text, session_user::text, r.rolcanlogin
+             FROM pg_catalog.pg_roles r WHERE r.rolname = current_user",
+        )
+        .fetch_one(pool)
+        .await?;
+    if effective_identity != login_identity || !can_login {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
+            target: format!(
+                "effective/login role mismatch or NOLOGIN: current_user={effective_identity} session_user={login_identity}"
+            ),
+        });
+    }
     // A user with role-management, BYPASSRLS or replication authority is not
     // an Activity identity regardless of its current individual table GRANTs.
     let privileged_role: bool = sqlx::query_scalar(
@@ -173,6 +136,23 @@ pub async fn assert_unprivileged_pg_effect_role(
     if privileged_role {
         return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
             target: "role administration / RLS bypass".to_string(),
+        });
+    }
+    // PostgreSQL 16+ supports non-inherited SET ROLE grants. Such a worker
+    // may currently appear SELECT-only while retaining the ability to switch
+    // to an owner/writer identity mid-request. Reject that authority too.
+    let switchable_role: Option<String> = sqlx::query_scalar(
+        "SELECT r.rolname
+         FROM pg_catalog.pg_roles r
+         WHERE r.rolname <> current_user
+           AND pg_has_role(current_user, r.oid, 'SET')
+         ORDER BY r.rolname LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(target) = switchable_role {
+        return Err(ReconcileTruthReviewsError::PrivilegedWorkerRole {
+            target: format!("SET ROLE {target}"),
         });
     }
 
@@ -252,13 +232,62 @@ pub async fn assert_unprivileged_pg_effect_role(
 /// Exact SHA-256 candidate snapshot hash for privileged manual issuance. The SQL must
 /// be executed by the operator in the SAME snapshot that selects its canonical
 /// run/context; never accept a caller-supplied hash without PG recomputation.
-pub const CANDIDATE_SET_HASH_SQL: &str = "SELECT encode(digest(COALESCE(jsonb_agg( \
-       jsonb_build_object('candidate', to_jsonb(c), 'raw_section_hash', s.content_hash, \
-         'raw_section_content', s.content_md) ORDER BY c.rule_candidate_id)::text, '[]'), \
-       'sha256'), 'hex') \
-     FROM extracted.rule_candidates AS c \
-     LEFT JOIN raw.sections AS s ON s.id = c.raw_section_id \
-     WHERE c.context_key = $1";
+// Frozen V3 source-identity contract: the full candidate row, both extraction
+// and evidence sections (including heading/ordering/markdown/hash/parent), and
+// both parent pages' acquisition identity, redirects, HTTP/robots observation,
+// canonical metadata, structured content and HTML bytes. Only `processed` is
+// excluded: it is a mutable crawler bookkeeping flag, not source evidence.
+// HTML/JSONB payloads are hashed separately to avoid materializing megabyte
+// JSONB values in the candidate aggregation. A NULL section/page is included
+// as a NULL fingerprint, not silently treated as valid evidence.
+// `raw.page_content_aliases` is deliberately outside this V3 contract: the
+// reconciler reads direct section->page identity and never resolves aliases.
+// Any future alias-aware Truth operation needs a new admitted revision and
+// corresponding alias writer locks/fingerprint, not an implicit V3 expansion.
+pub const CANDIDATE_SET_HASH_SQL: &str = r#"
+    SELECT encode(digest(COALESCE(jsonb_agg(
+        jsonb_build_object(
+            'candidate', to_jsonb(c),
+            'raw_section', to_jsonb(s),
+            'evidence_section', to_jsonb(es),
+            'raw_page', CASE WHEN p.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'id', p.id, 'url', p.url, 'domain', p.domain, 'dtype', p.dtype,
+                'status_code', p.status_code, 'content_type', p.content_type,
+                'snapshot_at', p.snapshot_at, 'crawled_at', p.crawled_at,
+                'final_url', p.final_url, 'title', p.title,
+                'meta_desc', p.meta_desc, 'canonical', p.canonical,
+                'word_count', p.word_count, 'content_hash', p.content_hash,
+                'raw_html_bytes', p.raw_html_bytes,
+                'content_sha256', CASE WHEN p.content IS NULL THEN NULL
+                    ELSE encode(digest(p.content::text, 'sha256'), 'hex') END,
+                'raw_html_sha256', CASE WHEN p.raw_html IS NULL THEN NULL
+                    ELSE encode(digest(p.raw_html, 'sha256'), 'hex') END,
+                'redirect_chain', p.redirect_chain, 'robots_trace', p.robots_trace,
+                'source_observation', p.source_observation
+            ) END,
+            'evidence_page', CASE WHEN ep.id IS NULL THEN NULL ELSE jsonb_build_object(
+                'id', ep.id, 'url', ep.url, 'domain', ep.domain, 'dtype', ep.dtype,
+                'status_code', ep.status_code, 'content_type', ep.content_type,
+                'snapshot_at', ep.snapshot_at, 'crawled_at', ep.crawled_at,
+                'final_url', ep.final_url, 'title', ep.title,
+                'meta_desc', ep.meta_desc, 'canonical', ep.canonical,
+                'word_count', ep.word_count, 'content_hash', ep.content_hash,
+                'raw_html_bytes', ep.raw_html_bytes,
+                'content_sha256', CASE WHEN ep.content IS NULL THEN NULL
+                    ELSE encode(digest(ep.content::text, 'sha256'), 'hex') END,
+                'raw_html_sha256', CASE WHEN ep.raw_html IS NULL THEN NULL
+                    ELSE encode(digest(ep.raw_html, 'sha256'), 'hex') END,
+                'redirect_chain', ep.redirect_chain, 'robots_trace', ep.robots_trace,
+                'source_observation', ep.source_observation
+            ) END
+        ) ORDER BY c.rule_candidate_id)::text, '[]'), 'sha256'), 'hex')
+    FROM extracted.rule_candidates AS c
+    LEFT JOIN raw.sections AS s ON s.id = c.raw_section_id
+    LEFT JOIN raw.sections AS es ON es.id = c.evidence_section_id
+    LEFT JOIN raw.pages AS p ON p.id = s.page_id
+    LEFT JOIN raw.pages AS ep ON ep.id = es.page_id
+    WHERE c.context_key = $1
+"#;
 
 fn validate(input: &ReconcileTruthReviewsInput) -> Result<(), ReconcileTruthReviewsError> {
     if input.scope.tenant_id.is_empty() || input.scope.tenant_id.trim() != input.scope.tenant_id {
@@ -354,7 +383,9 @@ pub async fn execute_admitted_reconcile(
            AND a.operation_instance = $7 AND a.plan_hash = $8
            AND a.operation_id = $9 AND a.operation_revision = $10
            AND a.authorized_effect = $11 AND a.contract_fingerprint = $12
-           AND er.context_key = a.context_key AND er.workflow_type = 'seo_site_build'
+           AND er.context_key = a.context_key
+           AND er.workflow_run_id = a.workflow_execution_run_id
+           AND er.workflow_type = 'seo_site_build'
         ",
     )
     .bind(input.admission_id)
@@ -419,6 +450,63 @@ pub async fn execute_admitted_reconcile(
     .await?;
     if newer_truth_done {
         return Err(ReconcileTruthReviewsError::StaleTruthRun);
+    }
+    // The canonical Truth context lock protects candidate IDs because a
+    // PostgreSQL trigger now makes every direct candidate INSERT/UPDATE/DELETE
+    // use the same lock. Raw page/section writers have independent lifecycles.
+    // Acquire their source-ID keys in a stable order before hashing. The
+    // database-side writer trigger acquires the SAME keys before UPDATE/DELETE,
+    // rejecting concurrent mutation with SQLSTATE 55P03. An Activity needs
+    // SELECT only, never UPDATE/FOR SHARE rights on raw evidence.
+    const SOURCE_REFS_SQL: &str =
+        "SELECT DISTINCT s.id AS section_id, s.page_id
+         FROM extracted.rule_candidates AS c
+         JOIN raw.sections AS s
+           ON s.id IN (c.raw_section_id, c.evidence_section_id)
+         WHERE c.context_key = $1 ORDER BY s.id, s.page_id";
+    let evidence_refs = sqlx::query(SOURCE_REFS_SQL)
+    .bind(&input.context_key)
+    .fetch_all(&mut *tx)
+    .await?;
+    let mut initial_refs = BTreeSet::new();
+    let mut page_ids = BTreeSet::new();
+    let mut section_ids = BTreeSet::new();
+    for row in evidence_refs {
+        let section_id = row.get::<i64, _>("section_id");
+        let page_id = row.get::<i64, _>("page_id");
+        initial_refs.insert((section_id, page_id));
+        page_ids.insert(page_id);
+        section_ids.insert(section_id);
+    }
+    for page_id in page_ids {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("raw-evidence|pages|{page_id}"))
+            .execute(&mut *tx)
+            .await?;
+    }
+    for section_id in section_ids {
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+            .bind(format!("raw-evidence|sections|{section_id}"))
+            .execute(&mut *tx)
+            .await?;
+    }
+    // The initial SELECT precedes the source-ID advisory locks. Under READ
+    // COMMITTED a writer may reparent a section while V3 waits for those
+    // locks, leaving a newly referenced page unlocked. Re-read *all* pairs
+    // after acquiring both sets and fail closed if any association drifted.
+    // After this checkpoint the candidate context trigger and raw source
+    // triggers make these exact pairs stable until the receipt transaction
+    // commits. Never hash a page obtained from an unlocked parent reference.
+    let post_lock_refs = sqlx::query(SOURCE_REFS_SQL)
+        .bind(&input.context_key)
+        .fetch_all(&mut *tx)
+        .await?;
+    let locked_refs: BTreeSet<(i64, i64)> = post_lock_refs
+        .into_iter()
+        .map(|row| (row.get::<i64, _>("section_id"), row.get::<i64, _>("page_id")))
+        .collect();
+    if locked_refs != initial_refs {
+        return Err(ReconcileTruthReviewsError::CandidateSetChanged);
     }
     let expected_hash: String = sqlx::query_scalar(
         "SELECT candidate_set_hash FROM pipeline.pg_effect_v3_admissions WHERE admission_id = $1",
@@ -490,7 +578,10 @@ fn receipt_from_row(row: &sqlx::postgres::PgRow) -> ReconcileTruthReviewsReceipt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use operation_protocol::{ContractCatalog, ExecutionPlan, PlanHash, PLAN_SCHEMA_REVISION};
+    use operation_protocol::{
+        ContractCatalog, EffectId, ExecutionPlan, IdempotencyPolicy, PlanHash,
+        RunScope, PLAN_SCHEMA_REVISION,
+    };
 
     fn input() -> ReconcileTruthReviewsInput {
         let run = Uuid::from_u128(17);

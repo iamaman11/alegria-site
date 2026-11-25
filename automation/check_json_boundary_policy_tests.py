@@ -9,6 +9,8 @@ from check_json_boundary_policy import (
     EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
+    PG_V3_OPERATOR_JSON_BOUNDARIES,
+    V3_TYPED_EFFECT_JSON_BOUNDARIES,
     ROOT,
     is_allowed_json_boundary,
 )
@@ -66,6 +68,38 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             "app/rust/crates/integration_pg_v3_e2e/src/new_operation.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/bin/production.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/unknown_json_test.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
+    def test_operator_json_is_confined_to_one_cli_adapter_and_one_e2e_fixture(self) -> None:
+        self.assertEqual(PG_V3_OPERATOR_JSON_BOUNDARIES, {
+            "app/rust/services/temporal_pg_effects/src/operator.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
+        })
+        for relative in PG_V3_OPERATOR_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+        for relative in (
+            "app/rust/services/temporal_pg_effects/src/main.rs",
+            "app/rust/services/temporal_pg_effects/src/new_operator_boundary.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/new_operator_json_test.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
+    def test_typed_effect_json_is_adapter_or_explicit_unit_test_only(self) -> None:
+        self.assertEqual(V3_TYPED_EFFECT_JSON_BOUNDARIES, {
+            "app/rust/crates/seo_application/src/operation_adapter/effectful_v1.rs",
+            "app/rust/crates/truth_domain/src/review_effect_contract/tests.rs",
+        })
+        for relative in V3_TYPED_EFFECT_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+        for relative in (
+            "app/rust/crates/seo_application/src/operation_adapter/effectful_new.rs",
+            "app/rust/crates/truth_domain/src/review_effect_contract.rs",
+            "app/rust/crates/truth_domain/src/review_effect_contract/new_json.rs",
         ):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))

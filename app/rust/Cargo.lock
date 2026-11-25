@@ -3625,6 +3625,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "thiserror 2.0.21",
+ "truth_domain",
  "uuid",
 ]
 
@@ -4604,6 +4605,8 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "truth_domain",
+ "uuid",
 ]
 
 [[package]]
@@ -6137,9 +6140,11 @@ dependencies = [
 name = "truth_domain"
 version = "0.1.0"
 dependencies = [
+ "operation_protocol",
  "regex",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
