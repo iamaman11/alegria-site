@@ -43,6 +43,9 @@ QDRANT_TEMPORAL_E2E_SDKS = frozenset({
 MIXED_E2E_FORBIDDEN_LOCAL_OWNERS = frozenset({
     "seo_application", "seo_ports", "temporal_gateway",
 })
+NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME = frozenset({
+    "seo_application", "seo_domain", "seo_ports", "temporal_gateway",
+})
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
@@ -359,6 +362,9 @@ def native_dag_owner_closure_failures(
         "runtime_composition", "infrastructure",
     }):
         failures.append(f"native Qdrant effect owner links unrelated `{dependency}`")
+    for owner, closure in (("PostgreSQL", pg), ("Qdrant", qdrant)):
+        for dependency in sorted(closure & NATIVE_EFFECT_FORBIDDEN_SITE_RUNTIME):
+            failures.append(f"native {owner} effect owner links SEO runtime `{dependency}`")
     return failures
 
 

@@ -291,7 +291,7 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<At
         !namespace.trim().is_empty() && namespace == namespace.trim(),
         "PG owner issuer requires nonempty exact Temporal namespace"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-pg-native-operator-{}", std::process::id()),
         &namespace,
@@ -480,7 +480,7 @@ async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
     use temporalio_common::data_converters::RawValue;
     let url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")?;
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-pg-owner-signal-{}", std::process::id()),
         &namespace,

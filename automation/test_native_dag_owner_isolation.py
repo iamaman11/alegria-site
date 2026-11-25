@@ -141,6 +141,10 @@ class NativeDagIsolationTests(unittest.TestCase):
              {"temporal_qdrant_effects"}, "native PostgreSQL effect owner"),
             ({"operation_protocol"}, {"temporal_pg_effects"},
              {"temporal_qdrant_effects", "postgres_store"}, "native Qdrant effect owner"),
+            ({"operation_protocol"}, {"temporal_pg_effects", "temporal_gateway"},
+             {"temporal_qdrant_effects"}, "native PostgreSQL effect owner links SEO runtime"),
+            ({"operation_protocol"}, {"temporal_pg_effects"},
+             {"temporal_qdrant_effects", "seo_ports"}, "native Qdrant effect owner links SEO runtime"),
         )
         for protocol, pg, qdrant, expected in cases:
             with self.subTest(expected=expected):

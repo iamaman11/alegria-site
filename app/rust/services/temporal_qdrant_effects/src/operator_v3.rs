@@ -1064,7 +1064,7 @@ async fn attested_request(
         !trusted_build_id.trim().is_empty() && trusted_build_id.trim() == trusted_build_id,
         "invalid trusted Qdrant owner build ID"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &temporal_url,
         format!("alegria-qdrant-generic-operator:{}", std::process::id()),
         &namespace,

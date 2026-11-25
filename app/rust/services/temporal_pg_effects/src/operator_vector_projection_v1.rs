@@ -438,7 +438,7 @@ async fn attest_from_server_with_version(
         !namespace.is_empty() && namespace.trim() == namespace,
         "invalid Temporal namespace"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-pg-projection-issuer-{}", std::process::id()),
         &namespace,
@@ -762,7 +762,7 @@ pub(super) async fn signal_after_commit(request: &IssueRequest) -> Result<()> {
     use temporalio_common::data_converters::RawValue;
     let url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")?;
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-pg-vector-signal-{}", std::process::id()),
         &namespace,

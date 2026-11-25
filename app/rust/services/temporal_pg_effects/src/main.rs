@@ -33,7 +33,7 @@ use postgres_store::vector_projection_owner_v1::{
 };
 use projection_contracts::VectorProjectionV1;
 use sqlx::PgPool;
-use temporalio_client::WorkflowHistory;
+use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::runtime::RuntimeOptions;
@@ -42,6 +42,7 @@ use temporalio_sdk::{
     ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext, Worker, WorkerOptions,
     WorkflowContext, WorkflowContextView, WorkflowResult,
 };
+use url::Url;
 
 mod operator;
 mod operator_business_run_v1;
@@ -51,6 +52,17 @@ mod operator_owner_v1;
 mod operator_v4;
 mod operator_vector_projection_v1;
 mod operator_vector_projection_v2;
+
+// Operator and worker connect directly through the already-linked Temporal SDK.
+// Keep the independently compiled PG owner outside the SEO gateway closure.
+async fn connect_client(temporal_url: &str, identity: String, namespace: &str) -> Result<Client> {
+    let options = ConnectionOptions::new(Url::parse(temporal_url)?)
+        .identity(identity)
+        .build();
+    let connection = Connection::connect(options).await?;
+    Client::new(connection, ClientOptions::new(namespace).build())
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
 
 /// Production can mount a Docker/Orchestrator secret as a private file;
 /// credentials never have to appear in a process environment. Exactly one
@@ -750,7 +762,7 @@ async fn main() -> Result<()> {
     let temporal_url =
         std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".to_string());
     let identity = format!("alegria-pg-effect-v3:{}", std::process::id());
-    let client = temporal_gateway::connect_client(&temporal_url, identity, "default").await?;
+    let client = connect_client(&temporal_url, identity, "default").await?;
 
     // Command and effect queues intentionally have disjoint registrations.
     // Every poller on one queue sees the same registered Types; this does

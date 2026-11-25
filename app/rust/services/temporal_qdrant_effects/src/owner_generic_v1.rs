@@ -500,7 +500,7 @@ pub(crate) async fn run_worker() -> Result<()> {
         !url.trim().is_empty() && !namespace.trim().is_empty(),
         "explicit Temporal endpoint required"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-qdrant-generic-owner:{}", std::process::id()),
         &namespace,

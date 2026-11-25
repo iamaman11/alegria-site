@@ -489,7 +489,7 @@ async fn attest_temporal_child(request: &V4IssueRequest) -> Result<ServerAtteste
     super::operator_dag_governance::validate_local_temporal_endpoint(&temporal_url).context(
         "V4 operator requires exact LOCAL Temporal endpoint; remote auth is not provisioned",
     )?;
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &temporal_url,
         format!("alegria-pg-v4-operator-proof-{}", std::process::id()),
         &namespace,
@@ -518,7 +518,7 @@ async fn signal_after_commit(request: &V4IssueRequest) -> Result<()> {
 
     let temporal_url = env::var("PG_EFFECT_OPERATOR_TEMPORAL_URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")?;
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &temporal_url,
         format!("alegria-pg-v4-operator-signal-{}", std::process::id()),
         &namespace,

@@ -11,7 +11,7 @@ use qdrant_contracts::{
 };
 use qdrant_effects_core::{execute_admitted_qdrant_projection_v1, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
-use temporalio_client::WorkflowHistory;
+use temporalio_client::{Client, ClientOptions, Connection, ConnectionOptions, WorkflowHistory};
 use temporalio_macros::{activities, workflow, workflow_methods};
 use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::runtime::RuntimeOptions;
@@ -20,6 +20,7 @@ use temporalio_sdk::{
     ActivityCloseTimeouts, ActivityOptions, ApplicationFailure, Runtime, SyncWorkflowContext,
     Worker, WorkerOptions, WorkflowContext, WorkflowContextView, WorkflowResult,
 };
+use url::Url;
 
 use futures_util as _;
 use temporalio_common as _;
@@ -29,6 +30,17 @@ mod operator_v2;
 mod operator_v3;
 mod owner_generic_v1;
 mod owner_v2;
+
+// This owner must not acquire the site's SEO gateway just to connect to
+// Temporal. The SDK is already needed for its native Workflow and Activities.
+async fn connect_client(temporal_url: &str, identity: String, namespace: &str) -> Result<Client> {
+    let options = ConnectionOptions::new(Url::parse(temporal_url)?)
+        .identity(identity)
+        .build();
+    let connection = Connection::connect(options).await?;
+    Client::new(connection, ClientOptions::new(namespace).build())
+        .map_err(|error| anyhow::anyhow!("{error}"))
+}
 
 fn qdrant_activity_options() -> ActivityOptions {
     let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
@@ -505,7 +517,7 @@ async fn main() -> Result<()> {
     )?;
     let url = std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".into());
     let namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into());
-    let client = temporal_gateway::connect_client(
+    let client = connect_client(
         &url,
         format!("alegria-qdrant-owner-v1:{}", std::process::id()),
         &namespace,

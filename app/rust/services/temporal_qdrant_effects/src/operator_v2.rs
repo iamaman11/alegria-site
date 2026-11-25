@@ -274,7 +274,7 @@ async fn attested_request(
         !namespace.is_empty() && namespace.trim() == namespace,
         "invalid V2 Temporal namespace"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &temporal_url,
         format!("alegria-qdrant-v2-operator:{}", std::process::id()),
         &namespace,

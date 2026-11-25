@@ -330,7 +330,7 @@ async fn attested_operator_request(
         !namespace.is_empty() && namespace.trim() == namespace,
         "Qdrant Temporal namespace invalid"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &temporal_url,
         format!("alegria-qdrant-operator-v1:{}", std::process::id()),
         &namespace,

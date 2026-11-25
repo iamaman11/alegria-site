@@ -158,7 +158,7 @@ pub(super) async fn prove_real_generic_parent_for_type(
         namespace == namespace.trim() && !namespace.is_empty(),
         "invalid independently configured Temporal governance namespace"
     );
-    let client = temporal_gateway::connect_client(
+    let client = crate::connect_client(
         &url,
         format!("alegria-platform-dag-governance-{}", std::process::id()),
         &namespace,
