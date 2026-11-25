@@ -53,10 +53,11 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
             with self.subTest(relative=relative):
                 self.assertFalse(is_allowed_json_boundary(ROOT / relative))
 
-    def test_only_two_actual_temporal_history_test_files_are_exempt(self) -> None:
+    def test_only_three_actual_temporal_wire_test_files_are_exempt(self) -> None:
         self.assertEqual(PG_V3_E2E_HISTORY_TEST_BOUNDARIES, {
             "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v5_ordered_children_tests.rs",
         })
         for relative in PG_V3_E2E_HISTORY_TEST_BOUNDARIES:
             with self.subTest(relative=relative):

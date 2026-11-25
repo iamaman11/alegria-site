@@ -14,6 +14,20 @@ async fn pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect() {
         .expect("real isolated PostgreSQL tenant RLS database");
     let fixture = pg_v3_seed_review_fixture(&postgres.pool).await;
     pg_v3_issue_operator_admission(&postgres.pool, &fixture).await;
+    // A real task owned by tenant A must remain globally visible to the
+    // TRUNCATE guard even when tenant B's RLS SELECT hides it entirely.
+    let protected_task = format!("ci-cross-tenant-hitl-{}", Uuid::new_v4().simple());
+    sqlx::query(
+        "INSERT INTO site.seo_hitl_tasks
+         (task_key, task_type, queue_state, scope_signature, tenant_id)
+         VALUES ($1, 'truth_candidate_review', 'resolved', $2, $3)",
+    )
+    .bind(&protected_task)
+    .bind(&fixture.command.context_key)
+    .bind(&fixture.command.scope.tenant_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("seed other tenant's protected HITL history");
 
     // A second tenant may legitimately have its own DB login, but can never
     // impersonate a shared natural visa context claimed by the first tenant.
@@ -26,6 +40,7 @@ async fn pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect() {
          GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
                          pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
                          raw.sections, raw.pages, site.seo_hitl_tasks TO {role};
+         GRANT TRUNCATE ON site.seo_hitl_tasks TO {role};
          GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
          GRANT EXECUTE ON FUNCTION pipeline.consume_pg_truth_review_v1(
              UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,SMALLINT,
@@ -63,6 +78,37 @@ async fn pg_v3_tenant_context_rls_blocks_unprovisioned_cross_tenant_effect() {
     .await
     .unwrap();
     assert_eq!(visible, 0, "RLS must hide another tenant's admitted effect");
+    let visible_hitl: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.seo_hitl_tasks WHERE task_key = $1",
+    )
+    .bind(&protected_task)
+    .fetch_one(&restricted)
+    .await
+    .expect("cross-tenant SELECT is RLS-filtered");
+    assert_eq!(visible_hitl, 0, "RLS must hide another tenant's HITL history");
+    // TRUNCATE ignores RLS row filters. An accidentally over-granted role
+    // must still fail closed in the owner-privileged BEFORE TRUNCATE trigger.
+    let denied_truncate = sqlx::query("TRUNCATE site.seo_hitl_tasks")
+        .execute(&restricted)
+        .await
+        .expect_err("RLS-hidden tenant A task was destructively truncated by tenant B");
+    assert_eq!(
+        denied_truncate
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514"),
+        "the TRUNCATE guard must inspect all tenants, not the caller's RLS view"
+    );
+    let retained: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM site.seo_hitl_tasks WHERE task_key = $1",
+    )
+    .bind(&protected_task)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("DBA sees protected task after rejected cross-tenant TRUNCATE");
+    assert_eq!(retained, 1, "other tenant's HITL history must survive");
+    eprintln!("CI_PG_V5_CROSS_TENANT_TRUNCATE_GUARD=PASS");
 
     let duplicate_context = sqlx::query(
         "INSERT INTO pipeline.tenant_context_ownership(context_key,tenant_id)
