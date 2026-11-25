@@ -98,6 +98,24 @@ EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/integration_temporal_e2e/src/tests/scenario_parity_tests.rs",
 })
 
+# Native V6's only new typed JSON ingress points. These are exact, reviewed
+# wire/config adapters, not a grant to the provider-free DAG runner, domain
+# contracts generally, owner Activities, or any future sibling module.
+NATIVE_OWNER_V6_JSON_BOUNDARIES = frozenset({
+    # The Qdrant-owned V2 contract parses the immutable typed command envelope
+    # to verify its exact bytes before a provider Activity can be admitted.
+    "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v2.rs",
+    # The Temporal parent decodes trusted deployment route configuration,
+    # never arbitrary caller-supplied routes or effect implementations.
+    "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
+    # Separately credentialed PG operator decodes strict CLI requests and
+    # server-issued Temporal History when verifying one exact owner child.
+    "app/rust/services/temporal_pg_effects/src/operator_owner_v1.rs",
+    # Separately credentialed Qdrant operator performs the equivalent strict
+    # typed CLI/History decoding for its V2 child and issuer admission.
+    "app/rust/services/temporal_qdrant_effects/src/operator_v2.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -111,7 +129,8 @@ FORBIDDEN_PATTERNS = {
 def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
     if rel in (PG_V3_E2E_HISTORY_TEST_BOUNDARIES | PG_V3_OPERATOR_JSON_BOUNDARIES
-               | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES):
+               | V3_TYPED_EFFECT_JSON_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES
+               | NATIVE_OWNER_V6_JSON_BOUNDARIES):
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

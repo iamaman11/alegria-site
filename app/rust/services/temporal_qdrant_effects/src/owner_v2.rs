@@ -42,7 +42,7 @@ fn materialize_options() -> ActivityOptions {
 }
 
 #[workflow]
-pub(crate) struct QdrantKeywordProjectionV2Workflow {
+struct QdrantKeywordProjectionV2Workflow {
     immutable_invocation: QdrantKeywordChildInvocationV2,
     admission_signals_received: u64,
 }

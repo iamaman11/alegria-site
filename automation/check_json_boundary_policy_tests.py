@@ -8,6 +8,7 @@ import unittest
 from check_json_boundary_policy import (
     EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
+    NATIVE_OWNER_V6_JSON_BOUNDARIES,
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     PG_V3_OPERATOR_JSON_BOUNDARIES,
     V3_TYPED_EFFECT_JSON_BOUNDARIES,
@@ -17,6 +18,33 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
+    def test_native_v6_json_exceptions_are_only_four_typed_wire_boundaries(self) -> None:
+        self.assertEqual(NATIVE_OWNER_V6_JSON_BOUNDARIES, {
+            "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v2.rs",
+            "app/rust/services/temporal_orchestrator/src/owner_catalog.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_owner_v1.rs",
+            "app/rust/services/temporal_qdrant_effects/src/operator_v2.rs",
+        })
+        for relative in NATIVE_OWNER_V6_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+
+        for relative in (
+            "app/rust/crates/qdrant_contracts/src/lib.rs",
+            "app/rust/crates/qdrant_contracts/src/qdrant_effect_child_v1.rs",
+            "app/rust/crates/qdrant_contracts/src/future_json.rs",
+            "app/rust/crates/operation_protocol/src/owner_dispatch.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/generic_dag_v1.rs",
+            "app/rust/services/temporal_orchestrator/src/workflow.rs",
+            "app/rust/services/temporal_orchestrator/src/owner_catalog_v2.rs",
+            "app/rust/services/temporal_pg_effects/src/main.rs",
+            "app/rust/services/temporal_pg_effects/src/owner_v2.rs",
+            "app/rust/services/temporal_qdrant_effects/src/owner_v2.rs",
+            "app/rust/services/temporal_qdrant_effects/src/operator_v3.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
     def test_extracted_owner_json_grants_are_exact_files(self) -> None:
         self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {
             "app/rust/crates/pg_runtime_ports/src/planning_ports.rs",
