@@ -44,7 +44,6 @@ def check(compose: str, dockerfile: str, pure_cargo: str, pg_cargo: str) -> list
         ("temporal-pg-effects-v3", pg, "pg", "temporal_pg_effects", "V3_PG_BUILD_CONTEXT"),
     ]:
         for line in [
-            '    profiles: ["v3-evaluation"]',
             f"      context: ${{{context}:-.}}",
             "      dockerfile: ./infra/temporal/Dockerfile.v3",
             f"      target: {stage}",
@@ -54,6 +53,15 @@ def check(compose: str, dockerfile: str, pure_cargo: str, pg_cargo: str) -> list
         ]:
             if line not in body.splitlines():
                 failures.append(f"{name} missing {line.strip()}")
+        # The one PostgreSQL child binary deliberately serves three opt-in
+        # parents. Require all three explicit profiles; V3 must not disappear
+        # when V4/V5 are added, and no unexpected auto-start profile is safe.
+        expected_profiles = (
+            '    profiles: ["v3-evaluation"]' if stage == "pure" else
+            '    profiles: ["v3-evaluation", "v4-effect-evaluation", "v5-effect-evaluation"]'
+        )
+        if expected_profiles not in body.splitlines():
+            failures.append(f"{name} missing profiles: {expected_profiles}")
         if "    ports:" in body:
             failures.append(f"{name} must not publish a network port")
 
@@ -185,6 +193,10 @@ def main() -> int:
     if not failures:
         for broken in [
             compose.replace('    profiles: ["v3-evaluation"]', "    profiles: []", 1),
+            compose.replace(
+                '    profiles: ["v3-evaluation", "v4-effect-evaluation", "v5-effect-evaluation"]',
+                '    profiles: ["v4-effect-evaluation", "v5-effect-evaluation"]', 1,
+            ),
             compose.replace("      ALLOW_PURE_DAG_ORCHESTRATOR: ${ALLOW_PURE_DAG_ORCHESTRATOR:-false}", ""),
             compose.replace('    profiles: ["v4-effect-evaluation"]', '    profiles: ["v3-evaluation"]'),
             compose.replace("      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v4", "      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-pure-dag-v3"),
@@ -215,7 +227,7 @@ def main() -> int:
         for failure in failures:
             print(f"V3_TOPOLOGY: FAIL {failure}")
         return 1
-    print("V3_TOPOLOGY: PASS (V3/V4 opt-in only; not a production cutover)")
+    print("V3_TOPOLOGY: PASS (V3/V4/V5 opt-in only; not a production cutover)")
     return 0
 
 
