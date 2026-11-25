@@ -208,10 +208,12 @@ async fn exact_history(
         .into_events()
         .await
         .context("Temporal independent exact-run History fetch failed")?;
-    ensure!(
-        events.len() <= 10_000,
-        "Temporal Qdrant admission History exceeds event budget"
-    );
+    // A parent or child can receive many unauthenticated Signals before SQL
+    // admission. Checking event count *after* into_events() limits no memory;
+    // it only lets an attacker permanently veto a genuine operator. We prove
+    // bounded typed start/child-initiation bytes in attest_pair instead.
+    // Temporal server History limits and Signal ingress ACL/rate limits remain
+    // REQUIRED independent production controls, not established by this CLI.
     Ok(History::from(events))
 }
 
@@ -289,7 +291,17 @@ async fn signal_after_commit(
         .context("signal admitted Qdrant child after committed SQL row")
 }
 
-pub async fn issue_from_file(path: &Path) -> Result<()> {
+// Both issuance and recovery must independently fetch reciprocal *server*
+// Histories. A locator-only JSON file never authorizes either path by itself.
+async fn attested_operator_request(
+    path: &Path,
+) -> Result<(
+    IssueRequest,
+    String,
+    temporalio_client::Client,
+    Attested,
+    PgPool,
+)> {
     let bytes = fs::read(path)?;
     let request: IssueRequest = serde_json::from_slice(&bytes)
         .context("operator request must be strict locator-only JSON")?;
@@ -341,6 +353,11 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
         attested.invocation.command.tenant_id == tenant,
         "operator tenant differs from server History's typed command"
     );
+    Ok((request, namespace, client, attested, pool))
+}
+
+pub async fn issue_from_file(path: &Path) -> Result<()> {
+    let (request, namespace, client, attested, pool) = attested_operator_request(path).await?;
     let command = &attested.invocation.command;
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL lock_timeout = '5s'")
@@ -418,5 +435,102 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
     tx.commit().await?;
     signal_after_commit(client, &namespace, &request)
         .await
-        .context("Qdrant admission committed but child wakeup signal failed; manually recover only")
+        .context("Qdrant admission committed but child wakeup signal failed; recover with --operator-resignal and exact server History proof")
+}
+
+/// Re-wakes a child only when a privileged, read-only SECURITY DEFINER
+/// verification proves the *existing* SQL row still exactly matches both
+/// independently re-fetched Temporal Histories. The provider START separately
+/// rechecks terminal status under its own lock. Requires DBA-granted EXECUTE,
+/// never admission SELECT/UPDATE or a second INSERT.
+pub async fn resignal_from_file(path: &Path) -> Result<()> {
+    let (request, namespace, client, attested, pool) = attested_operator_request(path).await?;
+    let command = &attested.invocation.command;
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL lock_timeout = '5s'")
+        .execute(&mut *tx)
+        .await?;
+    let matched: bool = sqlx::query_scalar(
+        "SELECT pipeline.verify_qdrant_operator_resignal_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+    )
+    .bind(request.admission_id)
+    .bind(request.canonical_run_id)
+    .bind(&command.tenant_id)
+    .bind(&command.context_key)
+    .bind(&command.keyword_key)
+    .bind(&request.parent_workflow_id)
+    .bind(&request.parent_workflow_run_id)
+    .bind(&request.child_workflow_id)
+    .bind(&request.child_workflow_run_id)
+    .bind(attested.parent_child_started_event_id)
+    .bind(&attested.parent_input_bytes)
+    .bind(&attested.command_bytes)
+    .fetch_one(&mut *tx)
+    .await
+    .context("operator re-signal denied: absent, expired, revoked, terminal or mismatched immutable SQL admission")?;
+    ensure!(matched, "operator re-signal SQL exact-row proof returned false");
+    tx.commit().await?;
+    signal_after_commit(client, &namespace, &request)
+        .await
+        .context("existing exact Qdrant admission verified but re-signal failed; retry --operator-resignal with fresh Temporal History")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forged_signal_history_tail_does_not_veto_bounded_typed_start() {
+        use temporalio_common::protos::temporal::api::history::v1::{
+            HistoryEvent, WorkflowExecutionStartedEventAttributes,
+        };
+        let mut start = WorkflowExecutionStartedEventAttributes::default();
+        start.workflow_type = Some(Default::default());
+        start.workflow_type.as_mut().unwrap().name = QDRANT_OWNER_CHILD_TYPE_V1.to_owned();
+        start.task_queue = Some(Default::default());
+        start.task_queue.as_mut().unwrap().name = QDRANT_OWNER_COMMAND_QUEUE_V1.to_owned();
+        start.input = Some(Default::default());
+        start.input.as_mut().unwrap().payloads.push(Default::default());
+        start.input.as_mut().unwrap().payloads[0].data = b"{}".to_vec();
+
+        let first = HistoryEvent {
+            attributes: Some(Attributes::WorkflowExecutionStartedEventAttributes(start)),
+            ..Default::default()
+        };
+        let mut history = History {
+            events: vec![HistoryEvent::default(); 10_050],
+        };
+        history.events[0] = first;
+        assert_eq!(
+            start_payload(&history, QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1)
+                .expect("Signal tail must not be an artificial History admission denial"),
+            b"{}".to_vec()
+        );
+        {
+            let Some(Attributes::WorkflowExecutionStartedEventAttributes(start)) =
+                history.events[0].attributes.as_mut()
+            else {
+                panic!("missing typed start fixture");
+            };
+            start.workflow_type.as_mut().unwrap().name = QDRANT_DAG_PARENT_TYPE_V1.to_owned();
+            start.task_queue.as_mut().unwrap().name = QDRANT_DAG_PARENT_QUEUE_V1.to_owned();
+        }
+        assert_eq!(
+            start_payload(&history, QDRANT_DAG_PARENT_TYPE_V1, QDRANT_DAG_PARENT_QUEUE_V1)
+                .expect("parent Signal tail must not be an artificial History denial"),
+            b"{}".to_vec()
+        );
+        let Some(Attributes::WorkflowExecutionStartedEventAttributes(start)) =
+            history.events[0].attributes.as_mut()
+        else {
+            panic!("missing typed start fixture");
+        };
+        start.input.as_mut().unwrap().payloads[0].data = vec![b'x'; 2 * 1024 * 1024 + 1];
+        assert!(
+            start_payload(&history, QDRANT_DAG_PARENT_TYPE_V1, QDRANT_DAG_PARENT_QUEUE_V1)
+                .is_err(),
+            "unbounded typed Workflow input is still denied"
+        );
+    }
 }

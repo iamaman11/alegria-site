@@ -31,6 +31,9 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 
 pub(crate) mod operations;
 mod runtime;
+// Exhaustive logical ownership map for the existing, unchanged legacy queue.
+// This is an inventory, NOT an opt-in Activity routing switch.
+mod owner_inventory;
 
 pub struct AlegriaActivities {
     pub pool: Arc<AlegriaPgPool>,

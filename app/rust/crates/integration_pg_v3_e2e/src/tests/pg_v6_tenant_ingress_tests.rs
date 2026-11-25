@@ -43,6 +43,8 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
          CREATE ROLE {login_unbound} LOGIN NOINHERIT PASSWORD '{restricted_password}';
          GRANT CONNECT ON DATABASE alegria TO {login_a}, {login_b}, {login_unbound};
          GRANT USAGE ON SCHEMA raw, extracted, pipeline TO {login_a}, {login_b}, {login_unbound};
+         GRANT USAGE ON SCHEMA site, kb TO {login_b};
+         GRANT TEMPORARY ON DATABASE alegria TO {login_b};
          GRANT SELECT, INSERT, UPDATE ON raw.pages, raw.sections,
              extracted.rule_candidates, pipeline.execution_runs TO {login_a}, {login_b}, {login_unbound};
          GRANT USAGE ON SEQUENCE raw.pages_id_seq, raw.sections_id_seq TO {login_a}, {login_b}, {login_unbound};
@@ -225,6 +227,156 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
     .await
     .expect("B canonical run is visible with RLS");
     assert_eq!(owned_runs, 1);
+
+    // V8: old 0007 explicitly granted this global SECURITY DEFINER readiness
+    // oracle to PUBLIC. A real unrelated LOGIN could probe B's known keys and
+    // learn a bit about B's otherwise RLS-hidden Truth state. The forward-only
+    // migration must remove that privilege before production cutover.
+    for (intruder, reason) in [
+        (&actor_a, "tenant A cross-tenant readiness probe"),
+        (&actor_b, "tenant B ingress readiness probe"),
+        (&actor_unbound, "unbound readiness probe"),
+    ] {
+        let denied = sqlx::query_scalar::<_, bool>(
+            "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+        )
+        .bind(&tenant_b)
+        .bind(&context_b)
+        .bind(run_b)
+        .fetch_one(intruder)
+        .await
+        .expect_err("unvetted LOGIN cannot query global owner-definer Truth readiness");
+        assert_eq!(
+            denied
+                .as_database_error()
+                .and_then(|database| database.code())
+                .as_deref(),
+            Some("42501"),
+            "{reason} must fail on EXECUTE ACL before disclosing a bit"
+        );
+    }
+
+    // Test the PostgreSQL trigger trampoline, not just its ACL flag. An
+    // attacker may CREATE a temporary relation and has USAGE on the original
+    // trigger-function schema. CREATE TRIGGER must fail with 42501 before the
+    // attacker can choose NEW fields for a privileged SECURITY DEFINER body.
+    let mut temp_probe = actor_b.acquire().await.expect("pin attacker TEMP session");
+    sqlx::query(
+        "CREATE TEMP TABLE ci_v8_trigger_probe
+         (task_type TEXT, scope_signature TEXT, tenant_id TEXT, run_id UUID, context_key TEXT)",
+    )
+    .execute(&mut *temp_probe)
+    .await
+    .expect("real untrusted LOGIN creates its own TEMP table");
+    for (index, trigger_function) in [
+        "pipeline.guard_execution_run_truth_context",
+        "pipeline.guard_verified_truth_step_context",
+        "site.guard_truth_review_hitl_context",
+        "pipeline.enforce_pg_effect_admission_tenant_v1",
+        "site.bind_new_truth_review_tenant_v1",
+        "pipeline.enforce_pg_effect_receipt_tenant_v1",
+        "kb.guard_truth_source_authority_writer_v1",
+        "raw.stamp_ingress_page_tenant_v1",
+        "raw.stamp_ingress_section_tenant_v1",
+        "pipeline.stamp_ingress_run_tenant_v1",
+        "extracted.stamp_ingress_candidate_tenant_v1",
+        "pipeline.guard_qdrant_projection_admission_v1",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let denied = sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "CREATE TRIGGER ci_v8_probe_{index} BEFORE INSERT ON ci_v8_trigger_probe \
+             FOR EACH ROW EXECUTE FUNCTION {trigger_function}()"
+        )))
+        .execute(&mut *temp_probe)
+        .await
+        .expect_err("unvetted LOGIN cannot attach privileged trigger to attacker-created table");
+        assert_eq!(
+            denied
+                .as_database_error()
+                .and_then(|database| database.code())
+                .as_deref(),
+            Some("42501"),
+            "{trigger_function} must refuse CREATE TRIGGER despite attacker USAGE/TEMP"
+        );
+    }
+    drop(temp_probe);
+
+    // A reviewed, separate operator LOGIN is deliberately bound to tenant B
+    // before receiving the narrow function EXECUTE grant. Even with that grant
+    // it must return FALSE for A's otherwise-ready canonical context/run.
+    let operator_login_b = format!("ci_v8_operator_b_{marker}");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {operator_login_b} LOGIN NOINHERIT PASSWORD '{restricted_password}';
+         GRANT CONNECT ON DATABASE alegria TO {operator_login_b};
+         GRANT USAGE ON SCHEMA pipeline TO {operator_login_b};
+         INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
+         VALUES ('{operator_login_b}','{tenant_b}');"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("DBA provisions separate LOGIN with immutable tenant B binding");
+    let vetted: (bool, bool, bool, bool) = sqlx::query_as(
+        "SELECT r.rolcanlogin, r.rolsuper OR r.rolbypassrls OR r.rolcreaterole
+                OR r.rolcreatedb OR r.rolreplication,
+                EXISTS(SELECT 1 FROM pg_catalog.pg_auth_members m WHERE m.member=r.oid),
+                EXISTS(SELECT 1 FROM pipeline.tenant_role_ownership b
+                       WHERE b.role_name=r.rolname AND b.tenant_id=$2)
+         FROM pg_catalog.pg_roles r WHERE r.rolname=$1",
+    )
+    .bind(&operator_login_b)
+    .bind(&tenant_b)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("DBA verifies actual new operator role and exact tenant ledger");
+    assert_eq!(vetted, (true, false, false, true));
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) \
+         TO {operator_login_b}"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("DBA explicitly grants scoped definer helper to vetted operator LOGIN only");
+    let operator_url = postgres.database_url.replace(
+        "postgres:postgres_password@",
+        &format!("{operator_login_b}:{restricted_password}@"),
+    );
+    let operator_b = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(&operator_url)
+        .await
+        .expect("connect as reviewed, separate operator tenant B LOGIN");
+    let own_truth_ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(&tenant_b)
+    .bind(&context_b)
+    .bind(run_b)
+    .fetch_one(&operator_b)
+    .await
+    .expect("granted operator reads its own canonical Truth readiness");
+    assert!(own_truth_ready, "tenant B's actual candidate/run must be ready");
+    let admin_a_ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(&fixture.command.scope.tenant_id)
+    .bind(&fixture.command.context_key)
+    .bind(fixture.command.run_id)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("independent DBA sees canonical tenant A Truth evidence");
+    assert!(admin_a_ready, "negative test requires otherwise-ready tenant A Truth");
+    let other_truth_ready: bool = sqlx::query_scalar(
+        "SELECT pipeline.tenant_truth_scope_ready_v1($1,$2,$3)",
+    )
+    .bind(&fixture.command.scope.tenant_id)
+    .bind(&fixture.command.context_key)
+    .bind(fixture.command.run_id)
+    .fetch_one(&operator_b)
+    .await
+    .expect("vetted operator must get a deterministic cross-tenant FALSE, never leak");
+    assert!(!other_truth_ready, "even an EXECUTE-granted operator cannot probe tenant A");
 
     // RLS does not apply to TRUNCATE. Even an explicitly overgranted native
     // tenant LOGIN must receive a typed statement-trigger denial, including
@@ -603,6 +755,35 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
             .expect_err("unattributed historical evidence must block attested cutover preflight"),
         "historical NULL quarantine preflight",
     );
+    let preflight_denied = sqlx::query_scalar::<_, bool>(
+        "SELECT pipeline.assert_tenant_force_rls_preflight_v1()",
+    )
+    .fetch_one(&actor_b)
+    .await
+    .expect_err("tenant operator/ingress LOGIN cannot invoke DBA-only FORCE RLS preflight");
+    assert_eq!(
+        preflight_denied
+            .as_database_error()
+            .and_then(|database| database.code())
+            .as_deref(),
+        Some("42501"),
+        "ordinary tenant login must not enumerate global FORCE RLS readiness"
+    );
+    pg_v6_expect_provenance_rejection(
+        sqlx::query("SELECT pipeline.assert_tenant_force_rls_preflight_v1()")
+            .execute(&postgres.pool)
+            .await
+            .expect_err("production cutover cannot pass without real FORCE policies/history"),
+        "pre-cutover production FORCE RLS NO-GO",
+    );
+    let forced_in_test: bool = sqlx::query_scalar(
+        "SELECT relforcerowsecurity FROM pg_catalog.pg_class
+         WHERE oid='raw.pages'::regclass",
+    )
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("independently verify read-only preflight did not FORCE RLS");
+    assert!(!forced_in_test, "V8 preflight must not secretly enable FORCE RLS");
     let malformed_label = sqlx::query(
         "INSERT INTO raw.pages(url,domain,dtype,tenant_id)
          VALUES ($1,'ci-malformed.example.gov','government',' ci-pg-v3-tenant ')",
@@ -656,4 +837,5 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
 
     eprintln!("CI_PG_V6_NATIVE_TENANT_INGRESS_AND_RLS_PROVENANCE=PASS");
     eprintln!("CI_PG_V7_TENANT_HISTORICAL_QUARANTINE_AND_ROLE_PREFLIGHT=PASS");
+    eprintln!("CI_PG_V8_TENANT_FORCE_RLS_READINESS_AND_DEFINER_ACL_DENIALS=PASS");
 }

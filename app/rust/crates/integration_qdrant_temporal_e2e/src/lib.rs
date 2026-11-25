@@ -32,11 +32,13 @@ mod tests {
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
-    struct ChildGuard(Child);
+    struct ChildGuard(Option<Child>);
     impl Drop for ChildGuard {
         fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+            if let Some(mut child) = self.0.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
         }
     }
 

@@ -280,6 +280,37 @@ class CompilerEvidenceTests(unittest.TestCase):
         self.assertEqual(provenance["scope"], "canonical_pr_head_tree_verified")
         self.assertTrue(all(command[:3] == ["git", "rev-parse", "--verify"] for command in observed))
 
+    def test_swapped_synthetic_merge_tree_rejected_even_when_pr_trigger_head_matches(self) -> None:
+        """Actions job.head_sha would still equal canonical; never infer merge tree."""
+        canonical = "b" * 40
+        canonical_tree = "c" * 40
+        synthetic_checkout = "a" * 40
+        swapped_merge_tree = "d" * 40
+        # The trigger PR head is unchanged. Only the checkout merge tree has
+        # been swapped, which a job.head_sha==CI_SOURCE_SHA tautology misses.
+        objects = {
+            "HEAD^{commit}": synthetic_checkout,
+            "HEAD^{tree}": swapped_merge_tree,
+            f"{canonical}^{{commit}}": canonical,
+            f"{canonical}^{{tree}}": canonical_tree,
+        }
+
+        def git_run(command, **_kwargs):
+            revision = command[-1]
+            if revision not in objects:
+                raise AssertionError(f"unexpected source provenance lookup {revision}")
+            return subprocess.CompletedProcess(command, 0, objects[revision] + "\n", "")
+
+        with (
+            patch.dict(os.environ, {
+                "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request",
+                "CI_SOURCE_SHA": canonical,
+            }),
+            patch.object(ab.subprocess, "run", side_effect=git_run),
+            self.assertRaisesRegex(ab.EvidenceError, "synthetic PR merge source tree differs"),
+        ):
+            ab.verify_pr_source_provenance()
+
     def test_pr_physical_probe_fails_closed_on_missing_or_mismatched_head_provenance(self) -> None:
         canonical_sha = "b" * 40
         with patch.dict(os.environ, {

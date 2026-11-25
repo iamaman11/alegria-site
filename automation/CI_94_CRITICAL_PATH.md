@@ -190,3 +190,60 @@ The remaining big latency reduction requires removing provider-linked
 implementation from the mandatory legacy runtime's compilation closure
 while keeping identical live behavior under test. No default production
 rollout or migration is implied.
+
+## V8: step-level critical path, locked Worker ownership and green-source integrity
+
+The failed V7 CI [#539](https://github.com/iamaman11/alegria-site/actions/runs/45638645756)
+stopped in the mandatory `impact` Rust formatting preflight before any costly
+compiler or real E2E runner started. This is a correctly red result, **not** a
+data point in the full-green ≤180-second distribution. In particular, there
+is no valid new V7/V8 green compilation time to extrapolate from this run.
+
+Three refinements are now in the **existing** CI/workflow topology:
+
+1. The pre-gate `report_ci_critical_path.py` checks the specific run, attempt,
+   PR source SHA, checked-out CI SHA, upstream success and **exact named Cargo
+   and live E2E steps**. Its new table separates compiler job setup, observed
+   Cargo step, artifact-pack/upload tail, E2E runner download/setup, real E2E
+   step and epilogue. It rejects malformed, inverted and mixed-run records;
+   no skipped/failing step can produce a successful route measurement. These
+   are GitHub Actions wall times, **not** actual individual `rustc` CPU times
+   or full post-gate SLA evidence. The read-only REST step remains in the
+   already required aggregate gate and cannot mask a failed gate.
+2. Optional `legacy-worker-split` now invokes Cargo with its required JSON
+   compiler-artifact format (previously missing), verifies **actual cold
+   non-fresh Worker and Outbox binaries**, SHA-256/mtime snapshots, then times
+   a same-target warm build for each of the three independently isolated
+   variants. It records a separately labeled, host-filtered `cargo metadata
+   --locked` *resolved* normal/build dependency graph including vendor crates,
+   not merely the workspace Cargo.toml overapproximation. Workspace feature
+   unification is explicitly a possible upper bound. sccache and Cargo
+   incremental outputs stay disabled in this optional study; PR READ_ONLY
+   compiler performance must be measured in the actual accepted CI instead.
+3. Before the optional physical study starts, the authorized GitHub API step
+   verifies an earlier successful PR run at the requested **PR trigger HEAD**,
+   including the successful aggregate gate, mandatory real E2E markers and an
+   untruncated Jobs page. This is only `PHYSICAL_STUDY_GREEN_PR_RUN=FOUND`,
+   **not** an assertion that the historical green run checked out the same
+   source tree. GitHub Actions job `head_sha` describes the trigger head and
+   is not an independent witness to the synthetic PR merge Git tree. The
+   physical build itself still checks its own immutable checkout/tree with
+   `verify_pr_source_provenance()` and archives only that source. To equate
+   the *historical green run* with the study, a future implementation must
+   additionally verify a trusted exact-checkout artifact from that run,
+   including run/attempt provenance; until then this equivalence is unproved.
+
+The fast contracts and existing architecture owner additionally run the exact
+**73-Activity legacy SDK owner-inventory** check plus its negative tests. A
+new unowned multi-provider Activity cannot hide inside the preexisting legacy
+Worker registry while architectural decomposition proceeds; this is a static
+gate, not proof of physical provider independence.
+
+To close the 180-second P1 CI criterion without suppressing real E2E, repeat
+full PR CI after the current Rust sources format/compile cleanly. For each of
+three different immutable green SHAs, record the **final** gate end and named
+step durations: V6.2's 278-second path gives a rough improvement requirement
+of 174→≤76 seconds for the legacy binary job if the other legs remain near
+19+79+6 seconds. The independent source-proven physical Worker split study
+must then measure whether a Rust owner-dependency cut reduces that compiler
+job. A successful isolated warm build is not yet a green event→gate result.

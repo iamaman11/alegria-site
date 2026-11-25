@@ -154,6 +154,12 @@ async fn pg_v3_v5_live_ordered_two_child_operator_attestations() {
     .execute(&postgres.pool)
     .await
     .expect("DBA provisions authenticated V5 operator tenant");
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) TO {role}"
+    )))
+    .execute(&postgres.pool)
+    .await
+    .expect("DBA grants sensitive tenant audit helper only to authenticated V5 operator");
     let operator_url = postgres.database_url.replacen(
         "postgres://postgres:postgres_password@",
         &format!("postgres://{role}:{PASSWORD}@"), 1,

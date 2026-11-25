@@ -15,6 +15,8 @@ case "${1:-}" in
     python3 automation/test_report_ci_critical_path.py
     python3 automation/check_owner_build_evidence_summary.py
     python3 automation/check_legacy_worker_split.py
+    python3 automation/check_temporal_activity_owner_inventory.py
+    python3 automation/test_temporal_activity_owner_inventory.py
     python3 automation/check_ci_cargo_cache.py
     python3 automation/check_python_scope.py
     python3 automation/check_compose_loopback_ports.py

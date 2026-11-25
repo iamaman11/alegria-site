@@ -113,6 +113,42 @@ enum AdmissionProbeError {
     Denied(anyhow::Error),
 }
 
+// SQL transport failures should retry an idempotent read. A permanently
+// malformed schema, missing SELECT grant, failed constraint or SQLSTATE AV001
+// must NOT create an endlessly retrying child Activity.
+fn sqlstate_allows_admission_probe_retry(sqlstate: &str) -> bool {
+    sqlstate.starts_with("08") // PostgreSQL connection exception
+        || matches!(
+            sqlstate,
+            "40001" // serialization failure
+                | "40003" // statement completion unknown (read-only probe)
+                | "40P01" // deadlock detected
+                | "55P03" // lock unavailable
+                | "53300" // too many connections
+                | "53400" // configuration limit exceeded
+                | "57P01" // admin shutdown
+                | "57P02" // crash shutdown
+                | "57P03" // cannot connect now
+        )
+}
+
+fn classify_admission_sql_error(error: sqlx::Error) -> AdmissionProbeError {
+    let retryable = match &error {
+        sqlx::Error::Database(db) => db
+            .code()
+            .is_some_and(|code| sqlstate_allows_admission_probe_retry(code.as_ref())),
+        sqlx::Error::Io(_) | sqlx::Error::PoolTimedOut | sqlx::Error::PoolClosed => true,
+        // Decode errors, unknown SQLx variants and programmer/schema errors
+        // are permanent. Never treat every SQL query failure as connectivity.
+        _ => false,
+    };
+    if retryable {
+        AdmissionProbeError::Storage(error)
+    } else {
+        AdmissionProbeError::Denied(error.into())
+    }
+}
+
 impl std::fmt::Display for AdmissionProbeError {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -209,7 +245,7 @@ impl QdrantProjectionActivities {
         .bind(invocation.command.admission_id)
         .fetch_optional(&*self.pool)
         .await
-        .map_err(AdmissionProbeError::Storage)?;
+        .map_err(classify_admission_sql_error)?;
         let Some(row) = row else {
             return Ok(false);
         };
@@ -361,6 +397,13 @@ async fn main() -> Result<()> {
             anyhow::ensure!(args.next().is_none(), "unexpected operator arguments");
             return operator::issue_from_file(std::path::Path::new(&file)).await;
         }
+        if arg == std::ffi::OsStr::new("--operator-resignal") {
+            let file = args
+                .next()
+                .context("--operator-resignal requires original locator JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected operator arguments");
+            return operator::resignal_from_file(std::path::Path::new(&file)).await;
+        }
         anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");
     }
     anyhow::ensure!(
@@ -433,6 +476,44 @@ mod tests {
         match terminal_activity_error("unknown outcome after Qdrant provider RPC") {
             ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
             other => panic!("expected fenced provider ambiguity, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn admission_retry_sqlstates_are_explicitly_bounded() {
+        for sqlstate in [
+            "08006", "08001", "40001", "40003", "40P01", "55P03", "53300", "57P01",
+        ] {
+            assert!(sqlstate_allows_admission_probe_retry(sqlstate));
+        }
+        for sqlstate in ["AV001", "42501", "42P01", "42703", "23505", "22001", "XX000"] {
+            assert!(
+                !sqlstate_allows_admission_probe_retry(sqlstate),
+                "permanent SQLSTATE {sqlstate} must not be retried"
+            );
+        }
+        let no_permission = classify_admission_sql_error(sqlx::Error::RowNotFound);
+        match admission_probe_activity_error(no_permission) {
+            ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+            other => panic!("expected terminal failed read, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn closed_postgres_pool_is_retryable_without_a_provider_attempt() {
+        let pool = PgPool::connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .expect("parse PostgreSQL URL without opening a network connection");
+        pool.close().await;
+        let error = sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .expect_err("closed PostgreSQL pool cannot perform read-only query");
+        match admission_probe_activity_error(classify_admission_sql_error(error)) {
+            ActivityError::Application(failure) => assert!(
+                !failure.is_non_retryable(),
+                "transient PostgreSQL pool shutdown must remain retryable"
+            ),
+            other => panic!("expected retryable PostgreSQL transport error, got {other:?}"),
         }
     }
 }

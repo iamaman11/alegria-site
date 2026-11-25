@@ -892,5 +892,217 @@ class TemporalNonmutatingCutoverRehearsalTests(unittest.TestCase):
             self.assertFalse(report["cutover_authorized"])
 
 
+class TemporalRollbackArtifactRehearsalTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.earlier = snap(captured_at=NOW - timedelta(seconds=75))
+        self.later = snap(captured_at=NOW - timedelta(seconds=10))
+        self.plan = TemporalNonmutatingCutoverRehearsalTests.plan()
+        self.old = self.root / "old-worker"
+        self.new = self.root / "new-worker"
+        self.old.write_bytes(b"#!/bin/sh\nexit 1\n# old test-only worker\n")
+        self.new.write_bytes(b"#!/bin/sh\nexit 1\n# candidate test-only worker\n")
+        self.old.chmod(0o700)
+        self.new.chmod(0o700)
+        self.manifest = self.build_manifest()
+
+    def build_manifest(self):
+        return {
+            "schema_version": 1,
+            "source": self.plan["source"],
+            "environment": self.plan["environment"],
+            "namespace": self.plan["namespace"],
+            "artifacts": [
+                {"owner": "orchestrator", "task_queue": "alegria-effect-dag-v5",
+                 "build_id": build_id, "role": role,
+                 "file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                 "size_bytes": path.stat().st_size}
+                for build_id, role, path in (
+                    ("orchestrator-v5", "rollback", self.old),
+                    ("orchestrator-v6", "candidate", self.new),
+                )
+            ],
+        }
+
+    def rehearse(self):
+        return transition.rehearse_rollback_artifacts(
+            self.earlier, self.later, self.plan, self.manifest,
+            artifact_root=self.root, clock=NOW,
+        )
+
+    def test_local_rollback_artifact_bytes_verified_but_cutover_not_authorized(self):
+        result = self.rehearse()
+        self.assertEqual(result["status"], "ROLLBACK_ARTIFACT_CANDIDATE_ONLY")
+        self.assertFalse(result["cutover_authorized"])
+        self.assertEqual(len(result["artifact_fingerprints"]), 2)
+        self.assertEqual({item["role"] for item in result["artifact_fingerprints"]},
+                         {"candidate", "rollback"})
+        self.assertIn("production_tenant_FORCE_RLS_backfill_mTLS_and_release_authorization",
+                      result["unverified_external_gates"])
+
+    def test_rehearsal_manifest_requires_source_and_complete_exact_worker_coverage(self):
+        for broken in ("source", "missing", "duplicate", "wrong-owner", "wrong-build",
+                       "extra", "boolean-schema"):
+            with self.subTest(broken=broken):
+                self.manifest = self.build_manifest()
+                if broken == "source":
+                    self.manifest["source"] = {"sha": "a" * 40, "tree": TREE}
+                elif broken == "missing":
+                    self.manifest["artifacts"].pop()
+                elif broken == "duplicate":
+                    self.manifest["artifacts"].append(dict(self.manifest["artifacts"][0]))
+                elif broken == "wrong-owner":
+                    self.manifest["artifacts"][0]["owner"] = "pg"
+                elif broken == "wrong-build":
+                    self.manifest["artifacts"][0]["build_id"] = "unknown-v0"
+                elif broken == "extra":
+                    self.manifest["artifacts"].append({**self.manifest["artifacts"][0],
+                                                       "role": "invented"})
+                else:
+                    self.manifest["schema_version"] = True
+                with self.assertRaises(transition.EvidenceError):
+                    self.rehearse()
+
+    def test_rehearsal_never_accepts_forged_bytes_symlinks_or_escaped_paths(self):
+        self.old.write_bytes(b"tampered rollback bytes")
+        with self.assertRaisesRegex(transition.EvidenceError, "SHA-256 or size"):
+            self.rehearse()
+        self.old.write_bytes(b"#!/bin/sh\nexit 1\n# old test-only worker\n")
+        symlink = self.root / "linked-old"
+        symlink.symlink_to(self.old)
+        self.manifest["artifacts"][0]["file"] = symlink.name
+        with self.assertRaisesRegex(transition.EvidenceError, "symlink"):
+            self.rehearse()
+        self.manifest["artifacts"][0]["file"] = "../escaped"
+        with self.assertRaisesRegex(transition.EvidenceError, "escapes"):
+            self.rehearse()
+
+    def test_rehearsal_rejects_same_bytes_and_nonexecutables(self):
+        self.new.write_bytes(self.old.read_bytes())
+        self.manifest = self.build_manifest()
+        with self.assertRaisesRegex(transition.EvidenceError, "reused"):
+            self.rehearse()
+        self.new.write_bytes(b"#!/bin/sh\nexit 1\n# candidate test-only worker\n")
+        self.manifest = self.build_manifest()
+        self.new.chmod(0o600)
+        with self.assertRaisesRegex(transition.EvidenceError, "not a regular executable"):
+            self.rehearse()
+
+    def test_rehearsal_cannot_skip_real_drain_or_history_replay(self):
+        self.earlier["postgres"]["raw_pages_unowned"] = 1
+        result = self.rehearse()
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertFalse(result["cutover_authorized"])
+        self.earlier["postgres"]["raw_pages_unowned"] = 0
+        historical = self.later["temporal"]["legacy_workflow_types"]
+        historical["AlegriaAdmittedEffectDagV3Workflow"]["total"] = 1
+        self.later["temporal"]["total_all_before"] = 1
+        self.later["temporal"]["total_all_after"] = 1
+        result = self.rehearse()
+        self.assertEqual(result["status"], "BLOCKED")
+
+    def test_two_queues_with_same_build_ids_require_distinct_route_attestations(self):
+        self.plan["routes"].append({**self.plan["routes"][0],
+                                   "task_queue": "alegria-pure-dag-v3"})
+        with self.assertRaisesRegex(transition.EvidenceError, "count differs"):
+            self.rehearse()
+        # Four independently named entries must still not silently reuse the
+        # same two binaries to claim four physical Worker instances.
+        second = [{**entry, "task_queue": "alegria-pure-dag-v3"}
+                  for entry in self.manifest["artifacts"]]
+        self.manifest["artifacts"].extend(second)
+        with self.assertRaisesRegex(transition.EvidenceError, "reused"):
+            self.rehearse()
+
+    def test_cross_owner_binary_digest_reuse_is_not_independent_evidence(self):
+        self.plan["routes"].append({
+            "owner": "pg", "task_queue": "alegria-pg-command-v3",
+            "from_build_id": "pg-v3", "to_build_id": "pg-v4",
+            "rollback_build_id": "pg-v3",
+        })
+        for source, role, build_id, name in (
+            (self.old, "rollback", "pg-v3", "pg-old"),
+            (self.new, "candidate", "pg-v4", "pg-new"),
+        ):
+            destination = self.root / name
+            destination.write_bytes(source.read_bytes())
+            destination.chmod(0o700)
+            self.manifest["artifacts"].append({
+                "owner": "pg", "task_queue": "alegria-pg-command-v3",
+                "build_id": build_id, "role": role, "file": name,
+                "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+                "size_bytes": destination.stat().st_size,
+            })
+        with self.assertRaisesRegex(transition.EvidenceError, "reused"):
+            self.rehearse()
+
+    def test_cross_route_hard_link_alias_is_rejected(self):
+        self.plan["routes"].append({
+            "owner": "pg", "task_queue": "alegria-pg-command-v3",
+            "from_build_id": "pg-v3", "to_build_id": "pg-v4",
+            "rollback_build_id": "pg-v3",
+        })
+        linked = self.root / "linked-old"
+        os.link(self.old, linked)
+        independent = self.root / "pg-new"
+        independent.write_bytes(b"#!/bin/sh\nexit 1\n# independent PG candidate\n")
+        independent.chmod(0o700)
+        for role, build_id, path in (
+            ("rollback", "pg-v3", linked),
+            ("candidate", "pg-v4", independent),
+        ):
+            self.manifest["artifacts"].append({
+                "owner": "pg", "task_queue": "alegria-pg-command-v3",
+                "build_id": build_id, "role": role, "file": path.name,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size_bytes": path.stat().st_size,
+            })
+        with self.assertRaisesRegex(transition.EvidenceError, "reused"):
+            self.rehearse()
+
+    def test_rehearsal_requires_owner_executable_and_no_shared_write_permissions(self):
+        self.old.chmod(0o601)  # only world-executable, not owner-executable
+        with self.assertRaisesRegex(transition.EvidenceError, "regular executable"):
+            self.rehearse()
+        self.old.chmod(0o722)  # group/world may write
+        with self.assertRaisesRegex(transition.EvidenceError, "regular executable"):
+            self.rehearse()
+
+    def test_rehearsal_has_strict_route_and_file_work_budgets(self):
+        self.plan["routes"] = [dict(self.plan["routes"][0])
+                               for _ in range(transition.MAX_REHEARSAL_ROUTES + 1)]
+        result = self.rehearse()
+        self.assertEqual(result["status"], "BLOCKED")
+        self.plan = TemporalNonmutatingCutoverRehearsalTests.plan()
+        self.manifest["artifacts"] *= transition.MAX_REHEARSAL_ARTIFACTS
+        with self.assertRaisesRegex(transition.EvidenceError, "manifest"):
+            self.rehearse()
+
+    def test_cli_rehearsal_does_not_run_or_contact_a_worker(self):
+        for name, value in (
+            ("earlier", self.earlier), ("later", self.later),
+            ("plan", self.plan), ("artifacts", self.manifest),
+        ):
+            (self.root / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+        destination = self.root / "v8-read-only-result.json"
+        with patch.object(transition, "now_utc", return_value=NOW), \
+             patch.object(transition, "run_command") as commands:
+            rc = transition.main([
+                "rehearse-artifacts", "--earlier", str(self.root / "earlier.json"),
+                "--later", str(self.root / "later.json"),
+                "--routing-plan", str(self.root / "plan.json"),
+                "--artifact-manifest", str(self.root / "artifacts.json"),
+                "--artifact-root", str(self.root),
+                "--output", str(destination),
+            ])
+        self.assertEqual(rc, 0)
+        commands.assert_not_called()
+        report = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertEqual(report["status"], "ROLLBACK_ARTIFACT_CANDIDATE_ONLY")
+        self.assertFalse(report["cutover_authorized"])
+
+
 if __name__ == "__main__":
     unittest.main()

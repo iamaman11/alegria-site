@@ -534,7 +534,7 @@ SUITE_OWNERS = {
     # One native Temporal parent/child execution over a real PG admission and
     # Qdrant mutation. It is NOT a broadening of the REST-only vector shard:
     # distinct test executable and two exact-source independent Worker owners.
-    "temporal_qdrant_v7": {
+    "temporal_qdrant_v8": {
         "paths": {
             "app/db/schema.sql",
             "app/db/migrations/20261125_0010_qdrant_projection_operator_ledger.sql",
@@ -558,7 +558,7 @@ SUITE_OWNERS = {
         "runtime_binaries": QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
-            "--lib", "qdrant_v7_native_temporal_history_operator_real_effect",
+            "--lib", "qdrant_v8_native_temporal_history_operator_real_effect",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -1073,7 +1073,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("vector_admitted_projection", "admitted_qdrant_keyword_projection_recovers_after_receipt_failure_without_second_rpc", 1),
     ),
     "temporal_qdrant": (
-        ("temporal_qdrant_v7", "qdrant_v7_native_temporal_history_operator_real_effect", 1),
+        ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

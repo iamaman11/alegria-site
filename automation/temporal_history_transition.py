@@ -179,6 +179,8 @@ REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
 }
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
 MAX_REPLAYER_BYTES = 512 * 1024 * 1024
+MAX_REHEARSAL_ROUTES = 16
+MAX_REHEARSAL_ARTIFACTS = MAX_REHEARSAL_ROUTES * 2
 HISTORY_SHA_RE = re.compile(r"[a-f0-9]{64}\Z")
 ROUTING_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # Native replay must not inherit live PG, Temporal, provider, signing, or
@@ -847,7 +849,8 @@ def rehearse_cutover_plan(earlier: dict[str, Any], later: dict[str, Any],
         "schema_version", "source", "environment", "namespace", "routes",
     } or type(plan["schema_version"]) is not int
             or plan["schema_version"] != SCHEMA_VERSION
-            or not isinstance(plan["routes"], list) or not plan["routes"]):
+            or not isinstance(plan["routes"], list) or not plan["routes"]
+            or len(plan["routes"]) > MAX_REHEARSAL_ROUTES):
         errors.append("routing rehearsal plan has an unsupported or empty schema")
         return {"status": "BLOCKED", "errors": errors, "cutover_authorized": False}
     if (plan["source"] != later.get("source")
@@ -912,6 +915,140 @@ def rehearse_cutover_plan(earlier: dict[str, Any], later: dict[str, Any],
     }
 
 
+def _observed_artifact(root: Path, relative: str) -> tuple[dict[str, Any], tuple[int, int]]:
+    """Verify candidate/rollback file bytes without executing an artifact.
+
+    This is deliberately not a CI signature or a claim that the server routes
+    to either binary. No arbitrary command, shell, image or installer runs.
+    """
+    if (not isinstance(relative, str) or not relative or len(relative) > 240
+            or Path(relative).is_absolute()
+            or any(part in ("", ".", "..") for part in Path(relative).parts)):
+        raise EvidenceError("Worker artifact file path is invalid or escapes its root")
+    path = root
+    for segment in Path(relative).parts:
+        path = path / segment
+        if path.is_symlink():
+            raise EvidenceError("Worker artifact contains a symlink")
+    try:
+        resolved = path.resolve(strict=True)
+        if not resolved.is_relative_to(root):
+            raise EvidenceError("Worker artifact resolved outside the verification root")
+        fd = os.open(resolved, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            if (not stat.S_ISREG(metadata.st_mode)
+                    or not (metadata.st_mode & stat.S_IXUSR)
+                    or (metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH))
+                    or not os.access(resolved, os.X_OK)):
+                raise EvidenceError("Worker artifact is not a regular executable")
+            if not 0 < metadata.st_size <= MAX_REPLAYER_BYTES:
+                raise EvidenceError("Worker artifact size exceeds verification bounds")
+            digest = hashlib.sha256()
+            size = 0
+            while block := source.read(1024 * 1024):
+                size += len(block)
+                if size > MAX_REPLAYER_BYTES:
+                    raise EvidenceError("Worker artifact grew beyond verification bounds")
+                digest.update(block)
+            if size != metadata.st_size:
+                raise EvidenceError("Worker artifact size changed during verification")
+    except OSError as error:
+        raise EvidenceError("Worker artifact cannot be read safely") from error
+    return {"sha256": digest.hexdigest(), "size_bytes": size}, (metadata.st_dev, metadata.st_ino)
+
+
+def rehearse_rollback_artifacts(earlier: dict[str, Any], later: dict[str, Any],
+                               plan: dict[str, Any], manifest: dict[str, Any], *,
+                               artifact_root: Path,
+                               replay_evidence: dict[str, Any] | None = None,
+                               clock: datetime | None = None) -> dict[str, Any]:
+    """Read-only V8 binary availability and rollback-byte rehearsal.
+
+    A successful result means only that operator-supplied local artifact bytes
+    matched a complete hypothetical route map. No server is contacted, no
+    provider credentials are read and no deployment authority is conferred.
+    """
+    rehearsal = rehearse_cutover_plan(
+        earlier, later, plan, replay_evidence=replay_evidence, clock=clock,
+    )
+    if rehearsal["status"] != "ROUTING_REHEARSAL_CANDIDATE_ONLY":
+        return rehearsal
+    if (not isinstance(manifest, dict) or set(manifest) != {
+            "schema_version", "source", "environment", "namespace", "artifacts",
+        } or type(manifest["schema_version"]) is not int
+            or manifest["schema_version"] != SCHEMA_VERSION
+            or manifest["source"] != plan["source"]
+            or manifest["environment"] != plan["environment"]
+            or manifest["namespace"] != plan["namespace"]
+            or not isinstance(manifest["artifacts"], list)
+            or len(manifest["artifacts"]) > MAX_REHEARSAL_ARTIFACTS):
+        raise EvidenceError("rollback artifact manifest differs from the audited route identity")
+    try:
+        root = artifact_root.resolve(strict=True)
+    except OSError as error:
+        raise EvidenceError("rollback artifact root is unavailable") from error
+    if not root.is_dir():
+        raise EvidenceError("rollback artifact root must be a directory")
+    expected: dict[tuple[str, str, str, str], None] = {}
+    for route in plan["routes"]:
+        for role, field in (("candidate", "to_build_id"), ("rollback", "rollback_build_id")):
+            expected[(route["owner"], route["task_queue"], route[field], role)] = None
+    if len(manifest["artifacts"]) != len(expected):
+        raise EvidenceError("rollback artifact count differs from routed Worker instances")
+    observed: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    used_digests: set[str] = set()
+    used_inodes: set[tuple[int, int]] = set()
+    used_files: set[str] = set()
+    for item in manifest["artifacts"]:
+        if (not isinstance(item, dict) or set(item) != {
+            "owner", "task_queue", "build_id", "role", "file", "sha256", "size_bytes",
+        } or any(not isinstance(item[key], str) for key in (
+            "owner", "task_queue", "build_id", "role", "file", "sha256",
+        )) or type(item["size_bytes"]) is not int
+                or not 0 < item["size_bytes"] <= MAX_REPLAYER_BYTES
+                or not HISTORY_SHA_RE.fullmatch(item["sha256"])):
+            raise EvidenceError("rollback artifact entry lacks strict binary identity")
+        key = (item["owner"], item["task_queue"], item["build_id"], item["role"])
+        if key not in expected or key in observed:
+            raise EvidenceError("rollback artifact owner/Task Queue/Build ID/role is unexpected or duplicated")
+        actual, inode = _observed_artifact(root, item["file"])
+        if actual != {"sha256": item["sha256"], "size_bytes": item["size_bytes"]}:
+            raise EvidenceError("rollback artifact SHA-256 or size differs from local bytes")
+        if (actual["sha256"] in used_digests or inode in used_inodes
+                or item["file"] in used_files):
+            raise EvidenceError("one Worker executable is reused as independent route evidence")
+        used_digests.add(actual["sha256"])
+        used_inodes.add(inode)
+        used_files.add(item["file"])
+        observed[key] = actual
+    if set(observed) != set(expected):
+        raise EvidenceError("rollback artifact set does not cover every candidate and old Worker")
+    # Global unique digests already reject candidate/rollback identity reuse,
+    # including the case where a single executable is mislabelled as multiple
+    # independent Task Queue / owner artifacts.
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "status": "ROLLBACK_ARTIFACT_CANDIDATE_ONLY",
+        "source": plan["source"], "environment": plan["environment"],
+        "temporal_namespace": plan["namespace"],
+        "artifact_fingerprints": [
+            {"owner": owner, "task_queue": queue, "build_id": build_id,
+             "role": role, **actual}
+            for (owner, queue, build_id, role), actual in sorted(observed.items())
+        ],
+        "routing_changes_reviewed": rehearsal["routing_changes_reviewed"],
+        "cutover_authorized": False,
+        "unverified_external_gates": [
+            "signed_exact_SHA_CI_origin_of_copied_candidate_and_rollback_artifacts",
+            "independent_Temporal_server_history_export_and_replay_attestation",
+            "live_worker_build_id_task_queue_routing_and_no_duplicate_pollers",
+            "operator_authorized_rollback_fleet_recovery_and_drain_drill",
+            "production_tenant_FORCE_RLS_backfill_mTLS_and_release_authorization",
+        ],
+    }
+
+
 def atomic_json(path: Path, evidence: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -959,6 +1096,14 @@ def main(argv: list[str] | None = None) -> int:
     rehearsal.add_argument("--replay-evidence", type=Path)
     rehearsal.add_argument("--routing-plan", type=Path, required=True)
     rehearsal.add_argument("--output", type=Path, required=True)
+    artifacts = sub.add_parser("rehearse-artifacts", help="audit local candidate and rollback binary bytes; no server writes")
+    artifacts.add_argument("--earlier", type=Path, required=True)
+    artifacts.add_argument("--later", type=Path, required=True)
+    artifacts.add_argument("--replay-evidence", type=Path)
+    artifacts.add_argument("--routing-plan", type=Path, required=True)
+    artifacts.add_argument("--artifact-manifest", type=Path, required=True)
+    artifacts.add_argument("--artifact-root", type=Path, required=True)
+    artifacts.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "capture":
@@ -988,11 +1133,23 @@ def main(argv: list[str] | None = None) -> int:
                     "qdrant": args.qdrant_bin,
                 },
             )
-        else:
+        elif args.command == "rehearse":
             outcome = rehearse_cutover_plan(
                 json.loads(args.earlier.read_text(encoding="utf-8")),
                 json.loads(args.later.read_text(encoding="utf-8")),
                 json.loads(args.routing_plan.read_text(encoding="utf-8")),
+                replay_evidence=(
+                    json.loads(args.replay_evidence.read_text(encoding="utf-8"))
+                    if args.replay_evidence is not None else None
+                ),
+            )
+        else:
+            outcome = rehearse_rollback_artifacts(
+                json.loads(args.earlier.read_text(encoding="utf-8")),
+                json.loads(args.later.read_text(encoding="utf-8")),
+                json.loads(args.routing_plan.read_text(encoding="utf-8")),
+                json.loads(args.artifact_manifest.read_text(encoding="utf-8")),
+                artifact_root=args.artifact_root,
                 replay_evidence=(
                     json.loads(args.replay_evidence.read_text(encoding="utf-8"))
                     if args.replay_evidence is not None else None
@@ -1004,6 +1161,7 @@ def main(argv: list[str] | None = None) -> int:
             "DRAIN_CANDIDATE_ONLY", "DRAIN_PRECONDITIONS_CAPTURED",
             "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY", "HISTORY_REPLAY_PRECONDITIONS_CAPTURED",
             "ROUTING_REHEARSAL_CANDIDATE_ONLY",
+            "ROLLBACK_ARTIFACT_CANDIDATE_ONLY",
         } else 1
     except (EvidenceError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
         # The error reason must never include a DSN, URI query, token or stderr.

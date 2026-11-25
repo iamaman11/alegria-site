@@ -14,7 +14,7 @@ from ci_impact import (
     SCHEMA_VERSION, main_cache_prime_required, worker_release_decision,
 )
 from report_sccache_failures import summarize
-from report_ci_critical_path import E2E_PATHS
+from report_ci_critical_path import COMPILER_STEPS, E2E_PATHS, LIVE_E2E_STEPS
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
@@ -80,12 +80,23 @@ def check() -> None:
     assert "Report measured PR compiler-to-E2E critical paths" in gate
     assert "python3 automation/report_ci_critical_path.py" in gate
     assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in gate
+    assert "CI_CHECKOUT_SHA: ${{ github.sha }}" in gate
+    assert "CI_RUN_ATTEMPT: ${{ github.run_attempt }}" in gate
     assert fast.count("python3 automation/test_report_ci_critical_path.py") == 1
     for _, (display_name, prerequisite_jobs) in E2E_PATHS.items():
         owner = display_name.partition(" (")[0]
         section = re.split(r"(?m)^  [a-z][a-z0-9_-]*:$",
                            workflow.split(f"  {owner}:\n", 1)[1], maxsplit=1)[0]
         assert f"    needs: [impact, {', '.join(prerequisite_jobs)}]" in section
+    for owner, compiler_step in COMPILER_STEPS.items():
+        section = re.split(r"(?m)^  [a-z][a-z0-9_-]*:$",
+                           workflow.split(f"  {owner}:\n", 1)[1], maxsplit=1)[0]
+        assert f"- name: {compiler_step}" in section
+    for route, step in LIVE_E2E_STEPS.items():
+        owner = E2E_PATHS[route][0].split(" (")[0]
+        section = re.split(r"(?m)^  [a-z][a-z0-9_-]*:$",
+                           workflow.split(f"  {owner}:\n", 1)[1], maxsplit=1)[0]
+        assert f"- name: {step}" in section
     for owner in OWNERS:
         assert f"  {owner}:\n" in workflow, owner
         assert f"      - {owner}\n" in gate, owner
@@ -95,6 +106,14 @@ def check() -> None:
     # regression, not merely an opt-in comprehensive/deep check.
     architecture = workflow.split("  architecture-and-rust:\n", 1)[1].split("  rust-e2e-graph-harness:\n", 1)[0]
     assert "python3 automation/check_reliability_contracts.py" in architecture
+    for inventory_gate in (
+        "python3 automation/check_temporal_activity_owner_inventory.py",
+        "python3 automation/test_temporal_activity_owner_inventory.py",
+    ):
+        # Both the architecture owner and the existing fast `verify` phase
+        # check the exact legacy SDK registration inventory. No new CI job.
+        assert architecture.count(inventory_gate) == 1
+        assert fast.count(inventory_gate) == 1
     assert "python3 automation/test_causal_revision_contract.py" in architecture
     assert "python3 automation/test_neo4j_schema_contract.py" in architecture
     assert "python3 automation/test_operation_freshness_contract.py" in architecture
@@ -275,7 +294,16 @@ def check() -> None:
     assert "actual !== expected" in optional_pg_ab
     assert "head_sha: expected, event: 'pull_request'" in optional_pg_ab
     assert "fullRunMarkers.every(name => completedJobs.has(name))" in optional_pg_ab
-    assert "PHYSICAL_STUDY_GREEN_SOURCE=PASS" in optional_pg_ab
+    assert "'CI', 'impact', 'verify'" in optional_pg_ab
+    assert "result.total_count !== result.jobs.length" in optional_pg_ab
+    # GH Actions job.head_sha identifies the *trigger* head, not the source
+    # checked out by actions/checkout on a synthetic PR merge. A comparison
+    # to the same expected head commit is a tautology, never provenance proof.
+    assert "impactJobs[0].head_sha" not in optional_pg_ab
+    assert "checkoutCommit.tree.sha" not in optional_pg_ab
+    assert "PHYSICAL_STUDY_GREEN_SOURCE=PASS" not in optional_pg_ab
+    assert "PHYSICAL_STUDY_GREEN_PR_RUN=FOUND" in optional_pg_ab
+    assert "historical_checkout_tree=UNVERIFIED" in optional_pg_ab
     assert "--compiler-owners > automation/reports/physical_owner_ab.json" in optional_pg_ab
     assert "--compiler > automation/reports/physical_coldwarm_ab.json" in optional_pg_ab
     assert "RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py" in optional_pg_ab

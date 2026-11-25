@@ -3,7 +3,7 @@
 // operator CLI must attest server Histories before a genuine provider RPC.
 #[tokio::test]
 #[serial]
-async fn qdrant_v7_native_temporal_history_operator_real_effect() {
+async fn qdrant_v8_native_temporal_history_operator_real_effect() {
     use temporalio_client::WorkflowGetResultOptions;
 
     let pg = PostgresHarness::start().await.expect("real application PostgreSQL");
@@ -51,6 +51,12 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
     sqlx::query(
         "GRANT INSERT ON pipeline.qdrant_projection_v1_admissions TO native_qdrant_operator",
     ).execute(&pg.pool).await.unwrap();
+    // Recovery is an *explicit* DBA grant, never SELECT on the ledger.
+    sqlx::query(
+        "GRANT EXECUTE ON FUNCTION pipeline.verify_qdrant_operator_resignal_v1(
+            UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BIGINT,BYTEA,BYTEA)
+         TO native_qdrant_operator",
+    ).execute(&pg.pool).await.unwrap();
     sqlx::query(
         "GRANT SELECT ON pipeline.qdrant_projection_v1_admissions TO native_qdrant_executor",
     ).execute(&pg.pool).await.unwrap();
@@ -77,7 +83,7 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         .env("TEMPORAL_NAMESPACE",&temporal.namespace)
         .env_remove("DATABASE_URL")
         .spawn().expect("native provider-free Qdrant parent Worker");
-    let _parent_guard = ChildGuard(parent);
+    let _parent_guard = ChildGuard(Some(parent));
     let child = Command::new(&qdrant_bin)
         .env("ALEGRIA_ENABLE_QDRANT_EFFECT_V1","true")
         .env("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1","1")
@@ -89,7 +95,7 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         .env("TEMPORAL_NAMESPACE",&temporal.namespace)
         .env_remove("DATABASE_URL")
         .spawn().expect("separate native Qdrant child+Activity Worker");
-    let _child_guard = ChildGuard(child);
+    let mut child_guard = ChildGuard(Some(child));
 
     let command = QdrantKeywordProjectionCommandV1 {
         schema_revision: 1, admission_id: admission,
@@ -201,6 +207,19 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         "SELECT count(*) FROM pipeline.qdrant_projection_v1_admissions WHERE admission_id=$1",
     ).bind(admission).fetch_one(&pg.pool).await.unwrap(),0);
 
+    // A wakeup without an existing committed row must never become authority,
+    // even with real reciprocal server Histories and a privileged operator.
+    let before_commit_recovery = operator_process().arg("--operator-resignal")
+        .arg(&operator_request)
+        .env("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1","true")
+        .env("QDRANT_EFFECT_OPERATOR_DATABASE_URL_FILE",&operator_secret)
+        .env("QDRANT_EFFECT_OPERATOR_TENANT_ID",tenant)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_URL",&temporal.temporal_url)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_NAMESPACE",&temporal.namespace)
+        .output().expect("reject recovery before an immutable SQL admission exists");
+    assert!(!before_commit_recovery.status.success(),
+        "recovery accepted an absent operator-issued SQL row");
+
     // Concurrency: when the operator holds the canonical run-status advisory
     // key, a terminal run transition must lose with SQLSTATE 55P03; it cannot
     // slip between authority validation and INSERT.
@@ -214,6 +233,13 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         Some("55P03"));
     status_lock.rollback().await.unwrap();
 
+    // Simulate the process/liveness gap at SQL admission by pausing the
+    // independent provider worker. Both Signals enter real server History;
+    // neither can initiate a provider attempt while the worker is down.
+    let mut stopped = child_guard.0.take().expect("running Qdrant worker process");
+    stopped.kill().expect("stop isolated Qdrant child worker");
+    stopped.wait().expect("drain stopped Qdrant child worker");
+
     let issued = operator_process().arg("--operator-issue").arg(&operator_request)
         .env("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1","true")
         .env("QDRANT_EFFECT_OPERATOR_DATABASE_URL_FILE",&operator_secret)
@@ -223,6 +249,94 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         .output().expect("run separately credentialed operator History proof");
     assert!(issued.status.success(),"real Temporal operator denied: {}",
         String::from_utf8_lossy(&issued.stderr));
+
+    // A DBA must *separately* authorize the narrow read-only recovery helper.
+    // INSERT privilege on admissions must not silently grant its EXECUTE.
+    sqlx::query(
+        "REVOKE EXECUTE ON FUNCTION pipeline.verify_qdrant_operator_resignal_v1(
+            UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BIGINT,BYTEA,BYTEA)
+         FROM native_qdrant_operator",
+    ).execute(&pg.pool).await.unwrap();
+    let missing_recovery_grant = operator_process().arg("--operator-resignal")
+        .arg(&operator_request)
+        .env("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1","true")
+        .env("QDRANT_EFFECT_OPERATOR_DATABASE_URL_FILE",&operator_secret)
+        .env("QDRANT_EFFECT_OPERATOR_TENANT_ID",tenant)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_URL",&temporal.temporal_url)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_NAMESPACE",&temporal.namespace)
+        .output().expect("recovery without opt-in EXECUTE grant");
+    assert!(!missing_recovery_grant.status.success(),
+        "operator INSERT login unexpectedly had recovery EXECUTE permission");
+    sqlx::query(
+        "GRANT EXECUTE ON FUNCTION pipeline.verify_qdrant_operator_resignal_v1(
+            UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,BIGINT,BYTEA,BYTEA)
+         TO native_qdrant_operator",
+    ).execute(&pg.pool).await.unwrap();
+
+    let resignal = operator_process().arg("--operator-resignal").arg(&operator_request)
+        .env("ALEGRIA_ENABLE_QDRANT_EFFECT_OPERATOR_V1","true")
+        .env("QDRANT_EFFECT_OPERATOR_DATABASE_URL_FILE",&operator_secret)
+        .env("QDRANT_EFFECT_OPERATOR_TENANT_ID",tenant)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_URL",&temporal.temporal_url)
+        .env("QDRANT_EFFECT_OPERATOR_TEMPORAL_NAMESPACE",&temporal.namespace)
+        .output().expect("re-attest real Histories and exactly committed admission");
+    assert!(resignal.status.success(),"safe recovery of committed row failed: {}",
+        String::from_utf8_lossy(&resignal.stderr));
+    let restricted_operator = sqlx::PgPool::connect(&operator_url).await.unwrap();
+    let can_read_admission: bool = sqlx::query_scalar(
+        "SELECT has_table_privilege(session_user,
+            'pipeline.qdrant_projection_v1_admissions','SELECT')",
+    ).fetch_one(&restricted_operator).await.unwrap();
+    assert!(!can_read_admission,"recoverable operator must not gain admission SELECT");
+    let admitted_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.qdrant_projection_v1_admissions WHERE admission_id=$1",
+    ).bind(admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(admitted_rows,1,"recover path must not insert a second admission");
+    let pre_restart_attempts: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.qdrant_projection_v1_attempts WHERE admission_id=$1",
+    ).bind(admission).fetch_one(&pg.pool).await.unwrap();
+    assert_eq!(pre_restart_attempts,0,"re-signaling must never issue a provider RPC itself");
+
+    // A tampered expected command is rejected by the SQL proof even when
+    // callers know the admission UUID and have EXECUTE on the helper.
+    let parent_history_events = handle
+        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+        .into_events().await.unwrap();
+    let parent_exact_input_bytes = parent_history_events.first().and_then(|event| {
+        let Some(Attributes::WorkflowExecutionStartedEventAttributes(started)) =
+            &event.attributes else { return None; };
+        started.input.as_ref()?.payloads.first().map(|value| value.data.clone())
+    }).expect("exact server-source parent start bytes");
+    let child_started_event_id = parent_history_events.iter().find_map(|event| {
+            let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(started)) =
+                &event.attributes else { return None; };
+            (started.workflow_execution.as_ref().map(|v|v.run_id.as_str())
+                == Some(child_run.as_str())).then_some(event.event_id)
+    }).expect("real parent ChildStarted event ID");
+    let tampered = sqlx::query_scalar::<_,bool>(
+        "SELECT pipeline.verify_qdrant_operator_resignal_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+    ).bind(admission).bind(run_id).bind(tenant).bind(&context).bind(&keyword)
+     .bind(run_id.to_string()).bind(&parent_run).bind(&child_id).bind(&child_run)
+     .bind(child_started_event_id).bind(parent_exact_input_bytes)
+     .bind(b"forged-command-bytes".as_slice())
+     .fetch_one(&restricted_operator).await
+     .expect_err("SQL re-signal helper accepted non-History command bytes");
+    assert_eq!(tampered.as_database_error().and_then(|err|err.code()).as_deref(),
+        Some("AV001"));
+
+    let restarted_child = Command::new(&qdrant_bin)
+        .env("ALEGRIA_ENABLE_QDRANT_EFFECT_V1","true")
+        .env("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1","1")
+        .env("QDRANT_EFFECT_WORKER_DATABASE_URL_FILE",&worker_secret)
+        .env("QDRANT_URL",&qdrant.qdrant_url)
+        .env("QDRANT_REST_URL",&qdrant.qdrant_rest_url)
+        .env("QDRANT_SKIP_COMPATIBILITY_CHECK","true")
+        .env("TEMPORAL_URL",&temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE",&temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("restart Qdrant child after committed admission and duplicate wakeups");
+    let _restarted_child_guard = ChildGuard(Some(restarted_child));
 
     let completion = timeout(Duration::from_secs(80),
         handle.get_result(WorkflowGetResultOptions::default()))
@@ -304,7 +418,6 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         vector:vec![0.21_f32;1024],
     };
     let negative_bytes = serde_json::to_vec(&negative_command).unwrap();
-    let restricted_operator = sqlx::PgPool::connect(&operator_url).await.unwrap();
     sqlx::query(
         "INSERT INTO pipeline.qdrant_projection_v1_admissions
            (admission_id,run_id,tenant_id,context_key,keyword_key,
@@ -348,5 +461,5 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
     for file in [operator_secret,worker_secret,operator_request,wrong_run] {
         fs::remove_file(file).unwrap();
     }
-    eprintln!("CI_QDRANT_V7_NATIVE_TEMPORAL_HISTORY_OPERATOR_REAL_EFFECT=PASS");
+    eprintln!("CI_QDRANT_V8_NATIVE_TEMPORAL_HISTORY_OPERATOR_RECOVERY_REAL_EFFECT=PASS");
 }

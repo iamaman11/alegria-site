@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import re
 import urllib.error
 import urllib.request
 
@@ -37,6 +38,22 @@ E2E_PATHS = {
     ),
 }
 
+# Actual YAML step labels, deliberately not regex-based guesses about whether
+# Cargo ran. These are observable GitHub step durations, NOT per-rustc CPU time.
+COMPILER_STEPS = {
+    "rust-e2e-temporal-harness": "Compile real Temporal/full-infra owner E2E test executable",
+    "rust-e2e-legacy-binaries": "Compile canonical Worker and Outbox runtime binaries",
+    "rust-e2e-qdrant-temporal-harness": "Compile distinct live Temporal/PG/Qdrant E2E test executable",
+    "rust-e2e-qdrant-effects-binaries": "Compile real Qdrant/PG Activity worker without contaminating pure parent",
+    "rust-e2e-v3-binaries": "Compile independent pure and PostgreSQL V3 Worker binaries",
+    "rust-e2e-outbox-harness": "Compile independent exact-source A14 Outbox E2E test executable",
+}
+LIVE_E2E_STEPS = {
+    "manual-temporal": "Execute exact selected temporal legacy real E2E shard",
+    "native-qdrant": "Prove live Temporal history and durable PostgreSQL/Qdrant receipt",
+    "outbox": "Execute nine exact A14 PostgreSQL/Worker E2E checks",
+}
+
 
 def timestamp(value: str | None) -> datetime | None:
     if not value:
@@ -51,10 +68,35 @@ def seconds(start: datetime, end: datetime) -> float:
     return round((end - start).total_seconds(), 3)
 
 
-def analyze(run: dict, jobs: list[dict], observed_at: datetime) -> dict:
+def observed_step(job: dict, step_name: str) -> tuple[datetime, datetime]:
+    """No missing/failed/duplicate Cargo or live E2E step can masquerade as timing."""
+    matches = [step for step in job.get("steps") or [] if step.get("name") == step_name]
+    if len(matches) != 1 or matches[0].get("conclusion") != "success":
+        raise ValueError(f"missing successful source-verified step {step_name} in {job['name']}")
+    step = matches[0]
+    started = timestamp(step.get("started_at"))
+    finished = timestamp(step.get("completed_at"))
+    job_start = timestamp(job.get("started_at"))
+    job_end = timestamp(job.get("completed_at"))
+    if not (started and finished and job_start and job_end
+            and job_start <= started <= finished <= job_end):
+        raise ValueError(f"out-of-job timestamp for {step_name} in {job['name']}")
+    return started, finished
+
+
+def analyze(
+    run: dict, jobs: list[dict], observed_at: datetime,
+    *, checkout_sha: str | None = None, expected_attempt: int | None = None,
+) -> dict:
     """Explain observed elapsed time without treating skips as passing tests."""
     if run.get("event") != "pull_request":
         raise ValueError("PR-only report received a non-PR workflow")
+    if not re.fullmatch(r"[0-9a-f]{40}", run.get("head_sha") or ""):
+        raise ValueError("PR workflow run is missing its exact canonical source SHA")
+    if checkout_sha is not None and not re.fullmatch(r"[0-9a-f]{40}", checkout_sha):
+        raise ValueError("CI checkout requires an exact synthetic-merge source SHA")
+    if expected_attempt is not None and run.get("run_attempt") != expected_attempt:
+        raise ValueError("GitHub run attempt differs from the reporter invocation")
     created = timestamp(run.get("created_at"))
     if created is None or observed_at < created:
         raise ValueError("missing or future GitHub workflow creation timestamp")
@@ -64,6 +106,14 @@ def analyze(run: dict, jobs: list[dict], observed_at: datetime) -> dict:
         name = job.get("name")
         if not isinstance(name, str) or name in by_name:
             raise ValueError("missing or duplicate GitHub job display name")
+        if ("run_id" in job or (checkout_sha is not None and job.get("conclusion") == "success")) \
+                and job.get("run_id") != run.get("id"):
+            raise ValueError(f"job {name} belongs to a different workflow run")
+        if expected_attempt is not None and "run_attempt" in job and job["run_attempt"] != expected_attempt:
+            raise ValueError(f"job {name} belongs to a different workflow run attempt")
+        if ("head_sha" in job or (checkout_sha is not None and job.get("conclusion") == "success")) \
+                and job.get("head_sha") not in {run["head_sha"], checkout_sha}:
+            raise ValueError(f"job {name} is from an unrelated source checkout SHA")
         by_name[name] = job
         started, finished = timestamp(job.get("started_at")), timestamp(job.get("completed_at"))
         if job.get("conclusion") != "success" or not started or not finished:
@@ -98,17 +148,40 @@ def analyze(run: dict, jobs: list[dict], observed_at: datetime) -> dict:
         slowest_dep_name, last_dep_finish = max(upstream, key=lambda item: item[1])
         if runner_started < last_dep_finish:
             raise ValueError(f"{runner_name} started before its source-bound prerequisite")
+        compile_steps = []
+        for upstream_name, finished in upstream:
+            compile_started, compile_finished = observed_step(
+                by_name[upstream_name], COMPILER_STEPS[upstream_name],
+            )
+            compile_steps.append({
+                "owner": upstream_name,
+                "setup_before_compile_seconds": seconds(
+                    timestamp(by_name[upstream_name]["started_at"]), compile_started,
+                ),
+                "cargo_step_seconds": seconds(compile_started, compile_finished),
+                "compile_to_artifact_job_finish_seconds": seconds(compile_finished, finished),
+                "event_to_compile_finish_seconds": seconds(created, compile_finished),
+            })
+        live_started, live_finished = observed_step(runner, LIVE_E2E_STEPS[label])
+        if live_started < last_dep_finish:
+            raise ValueError(f"real {label} E2E step executed before its required compiler completed")
         paths.append({
             "route": label,
             "last_compiler": slowest_dep_name,
             "compiler_ready_seconds": seconds(created, last_dep_finish),
             "runner_gap_seconds": seconds(last_dep_finish, runner_started),
             "e2e_job_seconds": seconds(runner_started, runner_done),
+            "e2e_runner_setup_and_artifact_seconds": seconds(runner_started, live_started),
+            "real_e2e_step_seconds": seconds(live_started, live_finished),
+            "e2e_job_epilogue_seconds": seconds(live_finished, runner_done),
             "event_to_e2e_finish_seconds": seconds(created, runner_done),
+            "compiler_steps": compile_steps,
         })
     return {
         "run_id": run.get("id"),
         "head_sha": run.get("head_sha"),
+        "checkout_sha": checkout_sha,
+        "run_attempt": run.get("run_attempt"),
         "observed_event_to_current_step_seconds": seconds(created, observed_at),
         "finishers": completed[:6],
         "measured_paths": paths,
@@ -121,7 +194,10 @@ def to_summary(report: dict) -> str:
     rows = [
         "### #94: exact PR event-to-gate critical-path observation",
         "",
-        f"Source: PR workflow `{report['run_id']}`, GitHub SHA `{report['head_sha']}`.",
+        f"Source: PR workflow `{report['run_id']}` attempt `{report['run_attempt']}`, "
+        f"canonical PR head `{report['head_sha']}`, "
+        f"actual checkout `{report['checkout_sha'] or 'unavailable'}`. "
+        "These commit IDs may differ; successful required jobs bind their artifacts to the checkout SHA.",
         f"Elapsed at diagnostic step: **{report['observed_event_to_current_step_seconds']:.1f}s**. "
         "The final gate end is measured independently by GitHub Actions; "
         "this observation alone is **not** an accepted ≤180s green result.",
@@ -135,6 +211,19 @@ def to_summary(report: dict) -> str:
             f"{path['compiler_ready_seconds']:.1f}s | {path['runner_gap_seconds']:.1f}s | "
             f"{path['e2e_job_seconds']:.1f}s | {path['event_to_e2e_finish_seconds']:.1f}s |"
         )
+    rows += ["", "Precise runner stages from GitHub's successful steps (seconds):", "",
+             "| Route | Cargo owner (actual step) | Setup | Cargo | Pack/upload | Download/setup | Live E2E |",
+             "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+    for path in report["measured_paths"]:
+        for compiler in path["compiler_steps"]:
+            rows.append(
+                f"| {path['route']} | `{compiler['owner']}` | "
+                f"{compiler['setup_before_compile_seconds']:.1f} | "
+                f"{compiler['cargo_step_seconds']:.1f} | "
+                f"{compiler['compile_to_artifact_job_finish_seconds']:.1f} | "
+                f"{path['e2e_runner_setup_and_artifact_seconds']:.1f} | "
+                f"{path['real_e2e_step_seconds']:.1f} |"
+            )
     rows += ["", "Last successfully finished mandatory jobs (excluding this gate):", ""]
     for job in report["finishers"]:
         rows.append(
@@ -161,8 +250,12 @@ def main() -> int:
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     run_id = os.environ.get("CI_RUN_ID", "")
     source_sha = os.environ.get("CI_SOURCE_SHA", "")
+    checkout_sha = os.environ.get("CI_CHECKOUT_SHA", "")
+    run_attempt = os.environ.get("CI_RUN_ATTEMPT", "")
     if not (token and repository and run_id.isdecimal() and len(source_sha) == 40
-            and all(ch in "0123456789abcdef" for ch in source_sha)):
+            and all(ch in "0123456789abcdef" for ch in source_sha)
+            and re.fullmatch(r"[0-9a-f]{40}", checkout_sha)
+            and run_attempt.isdecimal() and int(run_attempt) > 0):
         print("CI_CRITICAL_PATH=UNAVAILABLE missing GitHub run credentials or identity")
         return 0
     try:
@@ -178,7 +271,8 @@ def main() -> int:
             raise ValueError("workflow has over 500 jobs; incomplete evidence")
         if run.get("id") != int(run_id) or run.get("head_sha") != source_sha:
             raise ValueError("GitHub workflow run does not attest this exact PR source SHA")
-        report = analyze(run, jobs, datetime.now(timezone.utc))
+        report = analyze(run, jobs, datetime.now(timezone.utc),
+                         checkout_sha=checkout_sha, expected_attempt=int(run_attempt))
         print("CI_CRITICAL_PATH=" + json.dumps({
             k: v for k, v in report.items() if k != "finishers"
         }, sort_keys=True))

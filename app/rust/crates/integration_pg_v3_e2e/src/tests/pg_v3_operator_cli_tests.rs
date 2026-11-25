@@ -203,7 +203,9 @@ async fn pg_v3_native_operator_cli_least_privilege_issue_revoke() {
                          raw.sections, raw.pages TO {role};
          GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
          INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
-         VALUES ('{role}', 'ci-pg-v3-tenant');"
+         VALUES ('{role}', 'ci-pg-v3-tenant');
+         -- Disposable, explicitly tenant-bound operator LOGIN only.
+         GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) TO {role};"
     );
     // Identifier = fixed prefix + UUID hex, in disposable testcontainer only.
     sqlx::raw_sql(sqlx::AssertSqlSafe(provision))
@@ -559,7 +561,9 @@ async fn pg_v3_v4_live_parent_child_operator_attestation_effect_receipt() {
                          raw.sections, raw.pages TO {role};
          GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};
          INSERT INTO pipeline.tenant_role_ownership(role_name,tenant_id)
-         VALUES ('{role}', 'ci-pg-v3-tenant');"
+         VALUES ('{role}', 'ci-pg-v3-tenant');
+         -- Disposable, explicitly tenant-bound operator LOGIN only.
+         GRANT EXECUTE ON FUNCTION pipeline.tenant_truth_scope_ready_v1(TEXT,TEXT,UUID) TO {role};"
     ))).execute(&postgres.pool).await.expect("distinct restricted V4 operator role");
     let operator_url = postgres.database_url.replacen(
         "postgres://postgres:postgres_password@",

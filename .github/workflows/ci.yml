@@ -254,6 +254,8 @@ jobs:
           python3 automation/check_dev_rust_feedback.py
           python3 automation/check_owner_rebuild.py
           python3 automation/check_physical_build_options.py
+          python3 automation/check_temporal_activity_owner_inventory.py
+          python3 automation/test_temporal_activity_owner_inventory.py
           python3 automation/check_reliability_contracts.py
           python3 automation/test_causal_revision_contract.py
           python3 automation/test_neo4j_schema_contract.py
@@ -876,7 +878,7 @@ jobs:
               throw new Error('No previously successful PR CI run for exact source SHA');
             }
             const fullRunMarkers = [
-              'verify', 'rust-e2e-temporal-harness',
+              'CI', 'impact', 'verify', 'rust-e2e-temporal-harness',
               'rust-temporal-legacy-e2e (temporal_manual)', 'rust-pg-e2e (verify_d)',
               'rust-qdrant-temporal-e2e (temporal_qdrant)',
             ];
@@ -886,6 +888,9 @@ jobs:
                 owner: context.repo.owner, repo: context.repo.repo,
                 run_id: run.id, per_page: 100,
               });
+              if (result.total_count !== result.jobs.length) {
+                throw new Error('Physical source attestation requires every PR CI job, not page one');
+              }
               const completedJobs = new Set(result.jobs.filter(job =>
                 job.conclusion === 'success').map(job => job.name));
               if (fullRunMarkers.every(name => completedJobs.has(name))) {
@@ -896,7 +901,12 @@ jobs:
             if (!green) {
               throw new Error('Exact SHA has no previously green full-scope PR CI gate and real E2E jobs');
             }
-            core.info(`PHYSICAL_STUDY_GREEN_SOURCE=PASS sha=${expected} run=${green.id}`);
+            // Actions job.head_sha is the trigger's PR head, NOT a trusted
+            // record of the synthetic merge checkout. This proves a prior
+            // green PR run exists, not the equality of its tested Git tree.
+            // Exact current checkout provenance is checked independently by
+            // compare_physical_build_options.verify_pr_source_provenance().
+            core.info(`PHYSICAL_STUDY_GREEN_PR_RUN=FOUND sha=${expected} run=${green.id} historical_checkout_tree=UNVERIFIED`);
       - run: bash automation/install_ci_native_tools.sh protoc
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.11
@@ -1982,7 +1992,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CI_RUN_ID: ${{ github.run_id }}
+          CI_RUN_ATTEMPT: ${{ github.run_attempt }}
           CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_CHECKOUT_SHA: ${{ github.sha }}
         run: python3 automation/report_ci_critical_path.py
 
       - name: Verify main merge comes from a fully successful PR CI
