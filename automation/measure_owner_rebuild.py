@@ -38,7 +38,8 @@ OWNER_SOURCES = {
 }
 EXECUTABLE_PACKAGES = (
     "temporal_worker", "temporal_orchestrator", "temporal_pg_effects",
-    "outbox_worker", "cli_tools", "analytics_svc", "reconcile",
+    "temporal_qdrant_effects", "outbox_worker", "cli_tools", "analytics_svc",
+    "reconcile",
 )
 BUILD_COMMAND = (
     "cargo", "build", "--locked", "--bins", "--timings",

@@ -37,11 +37,20 @@ class OwnerRebuildTests(unittest.TestCase):
 
     def test_locked_runtime_binary_build_without_release_profile(self) -> None:
         self.assertEqual(BUILD_COMMAND[:5], ("cargo", "build", "--locked", "--bins", "--timings"))
-        self.assertTrue({"temporal_worker", "temporal_orchestrator", "temporal_pg_effects"}
+        self.assertTrue({"temporal_worker", "temporal_orchestrator", "temporal_pg_effects",
+                         "temporal_qdrant_effects"}
                         <= set(EXECUTABLE_PACKAGES))
         for package in EXECUTABLE_PACKAGES:
             self.assertIn(("-p", package), tuple(zip(BUILD_COMMAND, BUILD_COMMAND[1:])))
         self.assertNotIn("--release", BUILD_COMMAND)
+
+    def test_all_live_native_temporal_binaries_are_in_the_physical_probe(self) -> None:
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for package in ("temporal_orchestrator", "temporal_pg_effects", "temporal_qdrant_effects"):
+            with self.subTest(package=package):
+                self.assertIn(f"-p {package}", workflow)
+                self.assertIn(package, EXECUTABLE_PACKAGES)
+                self.assertTrue((ROOT / f"app/rust/services/{package}/src/main.rs").is_file())
 
     def test_artifact_keeps_package_profile_kind_fresh_and_owner(self) -> None:
         source = str(ROOT / OWNER_SOURCES["graph_neo4j"])
