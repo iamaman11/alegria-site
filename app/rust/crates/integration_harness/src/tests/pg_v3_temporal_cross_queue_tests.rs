@@ -197,7 +197,7 @@ async fn pg_v3_verify_live_receipt(
         .expect("fetch completed cross-queue Workflow History from real Temporal server");
     assert_eq!(
         scheduled_temporal_activities(&history),
-        vec!["reconcile_truth_candidate_reviews_v3"],
+        vec!["PgTruthReviewActivities::reconcile_truth_candidate_reviews_v3"],
         "Workflow must schedule precisely the narrow PG V3 Activity"
     );
     pg_v3_assert_offline_sdk_replay(&history);
@@ -288,7 +288,7 @@ async fn temporal_effect_v3_cross_queue_signal_admission_replay_and_restart() {
         .expect("fetch denied PG Workflow History from real Temporal server");
     assert_eq!(
         scheduled_temporal_activities(&rejected_history),
-        vec!["reconcile_truth_candidate_reviews_v3"],
+        vec!["PgTruthReviewActivities::reconcile_truth_candidate_reviews_v3"],
         "failed Workflow must reach the real effect Activity's final veto"
     );
     pg_v3_assert_offline_sdk_replay(&rejected_history);
