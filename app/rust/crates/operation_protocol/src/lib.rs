@@ -11,6 +11,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+pub mod effect_child_v4;
+pub use effect_child_v4::{
+    canonical_effect_dispatch_input_bytes, BoundEffectInputV4, EffectChildInvocationV4,
+    EffectChildResultV4, TemporalExecutionIdentityV4, EFFECT_CHILD_SCHEMA_REVISION,
+};
+
 /// Strongly typed identities prevent accidentally exchanging a node, port,
 /// operation or artifact name at a binding boundary.
 macro_rules! identity {
@@ -88,7 +94,10 @@ pub struct OperationContract {
 }
 
 impl OperationContract {
-    fn fingerprint(&self) -> Result<ContractHash, PlanError> {
+    /// Canonical owner-contract fingerprint shared with independently
+    /// credentialed operator proof. Equality pins the declared schema only;
+    /// it is NOT operator admission or authorization to run an Activity.
+    pub fn fingerprint(&self) -> Result<ContractHash, PlanError> {
         let encoded = serde_json::to_vec(self)
             .map_err(|error| PlanError::Serialization(error.to_string()))?;
         Ok(ContractHash(blake3::hash(&encoded).to_hex().to_string()))

@@ -69,13 +69,14 @@ struct OperatorResult {
     operator_role: String,
 }
 
-async fn operator_pool() -> Result<(PgPool, String)> {
+pub(crate) async fn operator_pool() -> Result<(PgPool, String)> {
+    operator_pool_with_enable_flag("ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3").await
+}
+
+pub(crate) async fn operator_pool_with_enable_flag(enable_flag: &str) -> Result<(PgPool, String)> {
     ensure!(
-        env::var("ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3")
-            .ok()
-            .as_deref()
-            == Some("true"),
-        "operator command disabled; set ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V3=true"
+        env::var(enable_flag).ok().as_deref() == Some("true"),
+        "operator command disabled; set {enable_flag}=true"
     );
     let operator_url = env::var("PG_EFFECT_OPERATOR_DATABASE_URL")
         .context("operator command requires its own PG_EFFECT_OPERATOR_DATABASE_URL")?;
@@ -326,8 +327,9 @@ async fn issue_with_pool(
         "INSERT INTO pipeline.pg_effect_v3_admissions
            (admission_id, run_id, tenant_id, context_key, workflow_id,
             workflow_execution_run_id, operation_instance, plan_hash,
-            contract_fingerprint, candidate_set_hash, issued_by, expires_at)
-         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,current_user,
+            contract_fingerprint, candidate_set_hash,
+            v3_expected_execution_key, issued_by, expires_at)
+         SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$12,current_user,
                 clock_timestamp() + ($11::integer * interval '1 second')
          FROM pipeline.execution_runs AS er
          WHERE er.run_id = $2 AND er.context_key = $4
@@ -346,6 +348,7 @@ async fn issue_with_pool(
     .bind(contract_fingerprint()?)
     .bind(source_hash)
     .bind(request.expires_in_seconds as i32)
+    .bind(execution_key(&request.workflow_id, &request.workflow_run_id, &request.command)?)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;

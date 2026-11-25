@@ -4,20 +4,32 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use temporal_gateway::PURE_DAG_ORCHESTRATOR_QUEUE;
+use temporal_gateway::{EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE};
 use temporalio_client::WorkflowHistory;
 use temporalio_sdk::workflow_replayer::{WorkflowReplayer, WorkflowReplayerOptions};
 
 pub(crate) async fn replay_history(path: &Path) -> Result<()> {
+    replay_history_for_queue(path, PURE_DAG_ORCHESTRATOR_QUEUE).await
+}
+
+pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result<()> {
+    anyhow::ensure!(
+        queue == PURE_DAG_ORCHESTRATOR_QUEUE || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+        "unknown replay Task Queue"
+    );
     let bytes = std::fs::read(path)
         .with_context(|| format!("read actual Temporal history {}", path.display()))?;
     let history = WorkflowHistory::from_json(&bytes)
         .map_err(|error| anyhow::anyhow!("decode Temporal history: {error}"))?;
     let mut options = WorkflowReplayerOptions::new()
         .namespace("default".to_string())
-        .task_queue(PURE_DAG_ORCHESTRATOR_QUEUE.to_string())
+        .task_queue(queue.to_string())
         .build();
-    super::workflow::register_for_replay(&mut options)?;
+    if queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE {
+        super::workflow::register_for_replay_v4(&mut options)?;
+    } else {
+        super::workflow::register_for_replay(&mut options)?;
+    }
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct Temporal replayer: {error}"))?
         .replay_workflow(history)

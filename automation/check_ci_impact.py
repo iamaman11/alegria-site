@@ -135,7 +135,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("truth_certification", report["selected_suites"])
         shards = e2e_shard_commands_for_report(report)
         self.assertEqual(sum(count for rows in shards.values()
-                             for _, _, _, count in rows), 41)
+                             for _, _, _, count in rows), 42)
         self.assertTrue(all(shards[shard] for shard in E2E_SHARD_RUNS
                             if shard != "truth_certification"))
 
@@ -188,7 +188,7 @@ class ImpactFixtures(unittest.TestCase):
         })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
 
-    def test_pg_v3_package_is_physically_isolated_from_monolith_and_owns_five_tests_once(self) -> None:
+    def test_pg_v3_package_is_physically_isolated_from_monolith_and_owns_six_tests_once(self) -> None:
         root = Path(__file__).resolve().parents[1]
         owner_root = root / "app/rust/crates/integration_pg_v3_e2e"
         manifest = tomllib.loads((owner_root / "Cargo.toml").read_text(encoding="utf-8"))
@@ -221,20 +221,22 @@ class ImpactFixtures(unittest.TestCase):
                 source = (owner_root / "src/tests" / filename).read_text(encoding="utf-8")
                 self.assertEqual(source.count("#[tokio::test]"),
                                  2 if filename in {"pg_v3_truth_review_effect_tests.rs",
-                                                   "pg_v3_admission_race_tests.rs"} else 1)
+                                                   "pg_v3_admission_race_tests.rs",
+                                                   "pg_v3_operator_cli_tests.rs"} else 1)
                 declared = re.findall(r"#\[tokio::test\]\s+(?:#\[[^\]]+\]\s+)*async fn ([a-z0-9_]+)\s*\(", source)
                 self.assertEqual(len(declared), source.count("#[tokio::test]"))
                 physical_test_names.extend(declared)
                 self.assertFalse((root / "app/rust/crates/integration_harness/src/tests" / filename).exists())
         self.assertIn("pg_v3_raw_source_concurrent_update_is_fenced", physical_test_names)
         self.assertIn("pg_v3_native_operator_cli_least_privilege_issue_revoke", physical_test_names)
-        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 5)
+        self.assertIn("pg_v3_v4_live_parent_child_operator_attestation_effect_receipt", physical_test_names)
+        self.assertEqual(len([name for name in physical_test_names if name.startswith("pg_v3_")]), 6)
         self.assertEqual(len([name for name in physical_test_names if name.startswith("temporal_effect_v3_")]), 1)
-        self.assertEqual(len(physical_test_names), 6, "a new PG E2E must be assigned to a mandatory filter")
+        self.assertEqual(len(physical_test_names), 7, "a new PG E2E must be assigned to a mandatory filter")
         self.assertEqual(set(SUITE_OWNERS["pg_effect_v3"]["paths"]) & {
             "app/rust/crates/integration_harness/src/lib.rs",
         }, set())
-        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 5))
+        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 6))
         self.assertEqual(len(E2E_SHARD_RUNS["verify_d"]), 1)
         self.assertIn(("pure_dag_v3", "pure_v3_", 1), E2E_SHARD_RUNS["temporal_pure"])
         self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
@@ -257,7 +259,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn(("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
                       E2E_SHARD_RUNS["pg_app_delivery"])
 
-    def test_full_real_e2e_shards_cover_all_42_existing_tests_without_duplicate_filters(self) -> None:
+    def test_full_real_e2e_shards_cover_all_43_existing_tests_without_duplicate_filters(self) -> None:
         # Select all known live sources, including the optional canonical
         # certification fixture. Source suite selection and runner shard
         # execution must agree even when exact full-impact cargo scope varies.
@@ -273,7 +275,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(set(shards), set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS))
         self.assertTrue(all(shards[shard] for shard in shards))
         self.assertEqual(
-            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 34
+            sum(count for shard in E2E_VERIFY_SHARDS for *_, count in shards[shard]), 35
         )
         self.assertEqual(
             sum(count for shard in E2E_ARCH_SHARDS for *_, count in shards[shard]), 8
@@ -334,7 +336,7 @@ class ImpactFixtures(unittest.TestCase):
                     assignments["architecture-and-rust"], suite_commands_for_report(report),
                 )
 
-    def test_pure_v3_is_selected_by_real_orchestrator_source_and_never_prepares_old_workers(self) -> None:
+    def test_real_orchestrator_edit_selects_pure_and_v4_parent_child_replay_without_old_workers(self) -> None:
         from ci_impact import PURE_V3_E2E_PREPARE, PURE_V3_E2E_RUNTIME_BINARIES, WORKER_E2E_PREPARE
 
         impact = analyze(
@@ -344,9 +346,9 @@ class ImpactFixtures(unittest.TestCase):
             head="HEAD", base="BASE",
         )
         self.assertEqual(impact["scope"], "scoped")
-        self.assertEqual(impact["selected_suites"], ["pure_dag_v3"])
+        self.assertEqual(impact["selected_suites"], ["pg_effect_v3", "pure_dag_v3"])
         architecture = dict(suite_commands_by_ci_job(impact)["architecture-and-rust"])
-        self.assertEqual(set(architecture), {"pure_dag_v3"})
+        self.assertEqual(set(architecture), {"pure_dag_v3", "pg_effect_v3"})
         self.assertIn("pure_v3_", architecture["pure_dag_v3"])
         self.assertNotEqual(PURE_V3_E2E_PREPARE, WORKER_E2E_PREPARE)
         self.assertEqual(PURE_V3_E2E_RUNTIME_BINARIES, {
@@ -379,7 +381,7 @@ class ImpactFixtures(unittest.TestCase):
         )
         self.assertNotIn("pure_dag_v3", unrelated["selected_suites"])
 
-    def test_pg_v3_sql_and_operator_cli_suite_reuses_isolated_pg_binary_without_temporal_server(self) -> None:
+    def test_pg_v3_and_v4_parent_child_suite_requires_both_isolated_v3_binaries(self) -> None:
         changed = "app/rust/services/temporal_pg_effects/src/main.rs"
         impact = analyze(
             [changed],
@@ -393,10 +395,15 @@ class ImpactFixtures(unittest.TestCase):
         self.assertEqual(architecture["pg_effect_v3"], list(SUITE_OWNERS["pg_effect_v3"]["command"]))
         self.assertEqual(architecture["pg_temporal_v3"], list(SUITE_OWNERS["pg_temporal_v3"]["command"]))
         self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["command"][7], "pg_v3_")
-        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["prepare"],
-                         SUITE_OWNERS["pg_temporal_v3"]["prepare"])
-        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["runtime_binaries"],
-                         SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"])
+        self.assertEqual(SUITE_OWNERS["pg_effect_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+            "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+        })
+        self.assertIn("temporal_orchestrator", SUITE_OWNERS["pg_effect_v3"]["prepare"])
+        self.assertIn("temporal_pg_effects", SUITE_OWNERS["pg_effect_v3"]["prepare"])
+        self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
+            "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
+        })
         self.assertIn("prepare", SUITE_OWNERS["pg_temporal_v3"])
         self.assertIn("runtime_binaries", SUITE_OWNERS["pg_temporal_v3"])
         helper_impact = analyze(

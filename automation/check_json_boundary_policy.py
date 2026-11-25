@@ -25,6 +25,9 @@ PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
 # two exact wire/test files; no broad grant to PG effect Activity code.
 PG_V3_OPERATOR_JSON_BOUNDARIES = frozenset({
     "app/rust/services/temporal_pg_effects/src/operator.rs",
+    # Exact V4 owner adapter reads server-sourced Temporal History plus its
+    # separately credentialed operator CLI wire request/receipt, not domain JSON.
+    "app/rust/services/temporal_pg_effects/src/operator_v4.rs",
     "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
 })
 
@@ -33,7 +36,11 @@ PG_V3_OPERATOR_JSON_BOUNDARIES = frozenset({
 # physically separate, so its *production* domain declaration stays denied.
 V3_TYPED_EFFECT_JSON_BOUNDARIES = frozenset({
     "app/rust/crates/seo_application/src/operation_adapter/effectful_v1.rs",
+    "app/rust/crates/seo_application/src/operation_adapter/effectful_v1/tests.rs",
     "app/rust/crates/truth_domain/src/review_effect_contract/tests.rs",
+    # The actual PostgreSQL owner verifies the V4 child invocation's canonical
+    # typed command and bound input bytes against its durable PG admission.
+    "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
 })
 
 # The A14 Outbox integration tests were physically moved out of the broad

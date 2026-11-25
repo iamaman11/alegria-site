@@ -1,6 +1,6 @@
 //! Opt-in native Temporal orchestrator for checked, provider-free DAGs.
-//! Effectful manifest versions are preflight-only until independently
-//! authorized owner execution has a durable per-instance admission bridge.
+//! The separate V4 opt-in can start owner child Workflows, but no owner
+//! Activity can write before independently attested PG V4 operator admission.
 //!
 //! This executable is a real package boundary, not another binary in the
 //! provider-linked legacy `temporal_worker` Cargo package. Do not register
@@ -8,7 +8,9 @@
 
 use anyhow::{Context, Result};
 use std::env;
-use temporal_gateway::{connect_client, PURE_DAG_ORCHESTRATOR_QUEUE};
+use temporal_gateway::{
+    connect_client, EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
+};
 use temporalio_common::worker::{
     VersioningBehavior, WorkerDeploymentOptions, WorkerDeploymentVersion,
 };
@@ -23,9 +25,26 @@ mod replay;
 mod workflow;
 
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";
+const V4_LIVE_OPT_IN: &str = "ALLOW_EFFECT_DAG_ORCHESTRATOR_V4";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrchestratorMode {
+    PureV3,
+    AdmittedEffectV4,
+}
+
+impl OrchestratorMode {
+    fn task_queue(self) -> &'static str {
+        match self {
+            Self::PureV3 => PURE_DAG_ORCHESTRATOR_QUEUE,
+            Self::AdmittedEffectV4 => EFFECT_DAG_ORCHESTRATOR_V4_QUEUE,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LiveConfig {
+    mode: OrchestratorMode,
     source_sha: String,
     temporal_url: String,
     namespace: String,
@@ -39,14 +58,29 @@ fn immutable_source_sha(value: &str) -> bool {
 }
 
 fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConfig> {
-    anyhow::ensure!(
-        read(LIVE_OPT_IN).as_deref() == Some("true"),
-        "{LIVE_OPT_IN}=true is required; separate orchestrator is not a default deployment"
-    );
+    let pure_opt_in = read(LIVE_OPT_IN);
+    let effect_opt_in = read(V4_LIVE_OPT_IN);
+    for (label, setting) in [(LIVE_OPT_IN, &pure_opt_in), (V4_LIVE_OPT_IN, &effect_opt_in)] {
+        anyhow::ensure!(
+            matches!(setting.as_deref(), None | Some("true") | Some("false")),
+            "{label} must be exactly true or false"
+        );
+    }
+    let mode = match (
+        pure_opt_in.as_deref() == Some("true"),
+        effect_opt_in.as_deref() == Some("true"),
+    ) {
+        (true, false) => OrchestratorMode::PureV3,
+        (false, true) => OrchestratorMode::AdmittedEffectV4,
+        _ => anyhow::bail!(
+            "select exactly one of {LIVE_OPT_IN}=true and {V4_LIVE_OPT_IN}=true"
+        ),
+    };
     if let Some(queue) = read("TEMPORAL_ORCHESTRATOR_TASK_QUEUE") {
         anyhow::ensure!(
-            queue == PURE_DAG_ORCHESTRATOR_QUEUE,
-            "unknown orchestrator Task Queue: expected {PURE_DAG_ORCHESTRATOR_QUEUE}"
+            queue == mode.task_queue(),
+            "unknown orchestrator Task Queue: expected {}",
+            mode.task_queue(),
         );
     }
     let source_sha = read("WORKER_BUILD_ID").context(
@@ -68,6 +102,7 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
         Some(_) => anyhow::bail!("TEMPORAL_WORKER_VERSIONING must be true or false"),
     };
     Ok(LiveConfig {
+        mode,
         source_sha,
         temporal_url,
         namespace,
@@ -76,11 +111,12 @@ fn checked_live_config(read: impl Fn(&str) -> Option<String>) -> Result<LiveConf
 }
 
 fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
+    let task_queue = config.mode.task_queue();
     let deployment_options = if config.versioning {
         Some(
             WorkerDeploymentOptions::new(
                 WorkerDeploymentVersion::builder()
-                    .deployment_name("alegria-pure-dag-v3".to_owned())
+                    .deployment_name(task_queue.to_owned())
                     .build_id(config.source_sha.clone())
                     .build(),
             )
@@ -91,13 +127,15 @@ fn build_worker_options(config: &LiveConfig) -> Result<WorkerOptions> {
     } else {
         None
     };
-    let mut options = WorkerOptions::new(PURE_DAG_ORCHESTRATOR_QUEUE)
+    let mut options = WorkerOptions::new(task_queue)
         .maybe_deployment_options(deployment_options)
         .build();
-    // Pure execution and effectful PRE-FLIGHT Workflows only. Both are
-    // provider-free; zero Activities, child Workflows or persistence adapters
-    // are registered. A prepared effect MUST fail non-retryably before I/O.
-    workflow::register(&mut options)?;
+    // No Activity handlers on either queue. The V4 parent can only start
+    // *typed child Workflows* on the independent PostgreSQL command queue.
+    match config.mode {
+        OrchestratorMode::PureV3 => workflow::register(&mut options)?,
+        OrchestratorMode::AdmittedEffectV4 => workflow::register_v4(&mut options)?,
+    }
     Ok(options)
 }
 
@@ -107,12 +145,19 @@ async fn main() -> Result<()> {
     // A replay-only invocation must not require provider secrets or database.
     let mut args = env::args_os().skip(1);
     if let Some(argument) = args.next() {
-        if argument == std::ffi::OsStr::new("--replay-history") {
+        if argument == std::ffi::OsStr::new("--replay-history")
+            || argument == std::ffi::OsStr::new("--replay-effect-history")
+        {
+            let queue = if argument == std::ffi::OsStr::new("--replay-effect-history") {
+                EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
+            } else {
+                PURE_DAG_ORCHESTRATOR_QUEUE
+            };
             let path = args
                 .next()
-                .context("--replay-history requires one JSON file")?;
+                .context("history replay requires one JSON file")?;
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
-            replay::replay_history(std::path::Path::new(&path)).await?;
+            replay::replay_history_for_queue(std::path::Path::new(&path), queue).await?;
             println!("CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS");
             return Ok(());
         }
@@ -129,7 +174,7 @@ async fn main() -> Result<()> {
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let runtime = Runtime::from_current_tokio(options)?;
     let identity = format!(
-        "alegria-pure-orchestrator@{}:{}:{}",
+        "alegria-checked-orchestrator@{}:{}:{}",
         env::var("HOSTNAME").unwrap_or_else(|_| "unknown-host".to_owned()),
         std::process::id(),
         config.source_sha
@@ -137,10 +182,10 @@ async fn main() -> Result<()> {
     let client = connect_client(&config.temporal_url, identity, &config.namespace).await?;
     let worker_options = build_worker_options(&config)?;
     tracing::info!(
-        task_queue = PURE_DAG_ORCHESTRATOR_QUEUE,
+        task_queue = config.mode.task_queue(),
         source_sha = %config.source_sha,
         versioning = config.versioning,
-        "starting isolated provider-free Temporal pure DAG worker"
+        "starting isolated provider-free Temporal operation orchestrator"
     );
     Worker::new(&runtime, client, worker_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?
@@ -206,5 +251,28 @@ mod tests {
         let mut versioned = config;
         versioned.versioning = true;
         build_worker_options(&versioned).unwrap();
+    }
+
+    #[test]
+    fn v4_effect_parent_requires_distinct_queue_and_exclusive_opt_in() {
+        let mut settings = valid_env();
+        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert(V4_LIVE_OPT_IN.into(), "true".into());
+        settings.insert(
+            "TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(),
+            EFFECT_DAG_ORCHESTRATOR_V4_QUEUE.into(),
+        );
+        let config = checked_live_config(|key| settings.get(key).cloned()).unwrap();
+        assert_eq!(config.mode, OrchestratorMode::AdmittedEffectV4);
+        build_worker_options(&config).unwrap();
+        let mut versioned = config;
+        versioned.versioning = true;
+        build_worker_options(&versioned).unwrap();
+
+        settings.insert(LIVE_OPT_IN.into(), "true".into());
+        assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
+        settings.insert(LIVE_OPT_IN.into(), "false".into());
+        settings.insert("TEMPORAL_ORCHESTRATOR_TASK_QUEUE".into(), PURE_DAG_ORCHESTRATOR_QUEUE.into());
+        assert!(checked_live_config(|key| settings.get(key).cloned()).is_err());
     }
 }

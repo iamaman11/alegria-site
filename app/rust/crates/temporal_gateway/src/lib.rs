@@ -22,6 +22,11 @@ use temporalio_sdk_core::Url;
 /// Changing this name requires a versioned cutover of durable Temporal histories.
 pub const PURE_DAG_ORCHESTRATOR_QUEUE: &str = "alegria-pure-dag-v3";
 
+/// Distinct opt-in parent Task Queue for admitted mixed-operation Workflows.
+/// This owner-free worker starts only versioned PG child Workflows, never
+/// executes their PostgreSQL Activities or bypasses independent admissions.
+pub const EFFECT_DAG_ORCHESTRATOR_V4_QUEUE: &str = "alegria-effect-dag-v4";
+
 pub async fn connect_client(
     temporal_url: &str,
     identity: String,

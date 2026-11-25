@@ -21,6 +21,7 @@ e2e = [
   "dep:temporalio-sdk-core",
   "dep:testcontainers",
   "dep:tokio",
+  "dep:truth_domain",
   "dep:uuid",
 ]
 
@@ -36,4 +37,5 @@ temporalio-common = { workspace = true, optional = true }
 temporalio-sdk-core = { workspace = true, optional = true }
 testcontainers = { version = "0.28.0", optional = true }
 tokio = { workspace = true, optional = true }
+truth_domain = { path = "../truth_domain", optional = true }
 uuid = { workspace = true, optional = true }

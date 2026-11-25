@@ -292,9 +292,11 @@ services:
   temporal-orchestrator-v3:
     profiles: ["v3-evaluation"]
     build:
-      context: .
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
       dockerfile: ./infra/temporal/Dockerfile.v3
       target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
     restart: on-failure:3
     environment:
       TEMPORAL_URL: http://temporal-server:7233
@@ -308,20 +310,56 @@ services:
       temporal-server:
         condition: service_healthy
 
+  # V4 effect DAG parent: a DIFFERENT explicit profile and Task Queue from
+  # the V3 pure orchestrator. Reuses the same provider-free native binary but
+  # starts in mutually exclusive V4 mode. No PG DSN, owner Activity or Outbox
+  # privilege enters this process. This is NOT a production routing cutover.
+  temporal-effect-dag-v4:
+    profiles: ["v4-effect-evaluation"]
+    build:
+      context: ${V3_PURE_BUILD_CONTEXT:-.}
+      dockerfile: ./infra/temporal/Dockerfile.v3
+      target: pure
+      args:
+        OWNER_PACKAGE: temporal_orchestrator
+    restart: on-failure:3
+    environment:
+      TEMPORAL_URL: http://temporal-server:7233
+      TEMPORAL_NAMESPACE: default
+      TEMPORAL_ORCHESTRATOR_TASK_QUEUE: alegria-effect-dag-v4
+      TEMPORAL_WORKER_VERSIONING: ${TEMPORAL_WORKER_VERSIONING:-false}
+      WORKER_BUILD_ID: ${WORKER_BUILD_ID:-}
+      ALLOW_PURE_DAG_ORCHESTRATOR: "false"
+      ALLOW_EFFECT_DAG_ORCHESTRATOR_V4: ${ALLOW_EFFECT_DAG_ORCHESTRATOR_V4:-false}
+      RUST_LOG: info
+    depends_on:
+      temporal-server:
+        condition: service_healthy
+
   # V3 experiment: a distinct PostgreSQL owner with a strictly limited role.
   # Never pass the legacy admin DATABASE_URL to this runtime.
   temporal-pg-effects-v3:
     profiles: ["v3-evaluation"]
     build:
-      context: .
+      context: ${V3_PG_BUILD_CONTEXT:-.}
       dockerfile: ./infra/temporal/Dockerfile.v3
       target: pg
+      args:
+        OWNER_PACKAGE: temporal_pg_effects
     restart: on-failure:3
     environment:
       TEMPORAL_URL: http://temporal-server:7233
-      PG_EFFECT_WORKER_DATABASE_URL: ${PG_EFFECT_WORKER_DATABASE_URL:-}
+      PG_EFFECT_WORKER_DATABASE_URL_FILE: /run/secrets/pg_effect_worker_dsn
       ALEGRIA_ENABLE_PG_EFFECT_V3: ${ALEGRIA_ENABLE_PG_EFFECT_V3:-false}
       RUST_LOG: info
+    secrets:
+      # Rust refuses world-readable secret files. The runtime image runs as
+      # UID 65532; a root-owned 0400 secret would be inaccessible to it.
+      - source: pg_effect_worker_dsn
+        target: pg_effect_worker_dsn
+        uid: "65532"
+        gid: "65532"
+        mode: 0400
     depends_on:
       temporal-server:
         condition: service_healthy
@@ -382,6 +420,13 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+
+# External, operator-provisioned secret. No credential is embedded in Compose,
+# image layers, source control or `docker inspect` service environment.
+# Unused while the V3 profile is disabled; no implicit application-admin DSN.
+secrets:
+  pg_effect_worker_dsn:
+    external: true
 
 volumes:
   # New PG18 volumes are intentionally disjoint from PG16: no implicit

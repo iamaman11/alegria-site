@@ -223,3 +223,214 @@ async fn pg_v3_native_operator_cli_least_privilege_issue_revoke() {
     fs::remove_file(&temp_file).expect("remove exact disposable operator request file");
     eprintln!("CI_PG_V3_NATIVE_OPERATOR_AUTH=PASS");
 }
+
+/// Full disposable V4 chain: native parent -> native child -> independent
+/// server-History operator attestation -> distinct limited PG role -> real
+/// atomic HITL reconciliation/receipt. The canonical run binding here is an
+/// ADMIN TEST FIXTURE after Temporal server Start, NOT a production starter.
+#[cfg(feature = "e2e")]
+#[tokio::test]
+#[serial]
+async fn pg_v3_v4_live_parent_child_operator_attestation_effect_receipt() {
+    use operation_protocol::{
+        ArtifactBinding, ContractCatalog, EffectId, ExecutionPlan, ExternalArtifact,
+        Operation, OperationNode, PlanHash, RunScope, PLAN_SCHEMA_REVISION,
+    };
+    use postgres_store::truth_review_effect_v3::{
+        ReconcileTruthReviewsOperation, ReconcileTruthReviewsReceipt,
+    };
+    use temporalio_client::{UntypedWorkflow, WorkflowGetResultOptions, WorkflowStartOptions};
+    use temporalio_common::data_converters::{PayloadConverter, RawValue};
+    use temporalio_common::protos::temporal::api::history::v1::history_event::Attributes;
+    use tokio::time::{sleep, timeout};
+
+    let postgres = PostgresHarness::start().await.expect("disposable V4 PG schema");
+    let temporal = TemporalHarness::start().await.expect("real Temporal server for V4 child proof");
+    let fixture = pg_v3_seed_review_fixture(&postgres.pool).await;
+    let (effect_pool, worker_url) = pg_v3_unprivileged_effect_identity(&postgres).await;
+    let _pg_worker = spawn_pg_v3_effect_worker(&temporal, &worker_url);
+    let orchestrator_bin = PathBuf::from(
+        env::var_os("INTEGRATION_EFFECT_DAG_WORKER_BIN")
+            .expect("CI must supply exact-source temporal_orchestrator binary for V4 E2E"),
+    );
+    assert!(orchestrator_bin.is_file(), "native V4 parent orchestrator binary missing");
+    let parent_worker = Command::new(orchestrator_bin)
+        .current_dir(workspace_root())
+        .env("ALLOW_EFFECT_DAG_ORCHESTRATOR_V4", "true")
+        .env("ALLOW_PURE_DAG_ORCHESTRATOR", "false")
+        .env("TEMPORAL_ORCHESTRATOR_TASK_QUEUE", "alegria-effect-dag-v4")
+        .env("WORKER_BUILD_ID", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .env("TEMPORAL_URL", &temporal.temporal_url)
+        .env("TEMPORAL_NAMESPACE", &temporal.namespace)
+        .env_remove("DATABASE_URL")
+        .spawn().expect("start exact native admitted V4 parent Worker");
+    let _parent_worker = ChildGuard { child: parent_worker };
+
+    let scope = RunScope {
+        tenant_id: fixture.command.scope.tenant_id.clone(),
+        run_id: fixture.command.run_id.to_string(),
+    };
+    let instance: operation_protocol::OperationInstanceId = "review_native_v4".into();
+    let artifact_id: operation_protocol::ArtifactId = "review_scope_v4".into();
+    let contract = ReconcileTruthReviewsOperation::contract();
+    let input_schema = contract.inputs[&operation_protocol::PortId::from("truth_review_scope")].clone();
+    let artifact_bytes = serde_json::to_vec(
+        &truth_domain::review_effect_contract::TruthReviewScopeArtifactV1 {
+            run_id: fixture.command.run_id,
+            context_key: fixture.command.context_key.clone(),
+        },
+    ).expect("serialize exact canonical typed Truth scope artifact");
+    let provenance = "operator-e2e:independently-verified-source".to_owned();
+    let node = OperationNode {
+        instance: instance.clone(),
+        operation: contract.reference.clone(),
+        inputs: std::collections::BTreeMap::from([(
+            "truth_review_scope".into(),
+            ArtifactBinding::External { artifact: artifact_id.clone() },
+        )]),
+        outputs: std::collections::BTreeMap::from([(
+            "review_queue_receipt".into(), "receipt_v4".into(),
+        )]),
+        after: std::collections::BTreeSet::new(),
+        permitted_effects: contract.effects.clone(),
+    };
+    let mut catalog = ContractCatalog::default();
+    catalog.register::<ReconcileTruthReviewsOperation>()
+        .expect("register real PG Truth owner contract");
+    let plan = ExecutionPlan {
+        schema_revision: PLAN_SCHEMA_REVISION,
+        scope: scope.clone(),
+        allowed_effects: contract.effects.clone(),
+        external_artifacts: std::collections::BTreeMap::from([(
+            artifact_id.clone(),
+            ExternalArtifact { schema: input_schema.clone(), scope: scope.clone(), provenance: provenance.clone() },
+        )]),
+        pinned_contracts: vec![],
+        nodes: vec![node],
+        hash: PlanHash(String::new()),
+    }.seal(&catalog).expect("seal real V4 owner DAG plan");
+    let mut command = fixture.command.clone();
+    command.operation_instance = instance.as_str().to_owned();
+    command.plan_hash = plan.hash.as_str().to_owned();
+    let parent_input = serde_json::json!({
+        "plan": plan,
+        "admitted": {
+            "review_scope_v4": {
+                "schema": input_schema,
+                "scope": scope,
+                "provenance": provenance,
+                "payload": artifact_bytes,
+            }
+        },
+        "owner_commands": {
+            "review_native_v4": {
+                "kind": "pg_truth_review_reconcile_v1",
+                "input": command,
+            }
+        }
+    });
+    let client = connect_client(
+        &temporal.temporal_url, format!("native-v4-operator-{}", Uuid::new_v4()),
+        &temporal.namespace,
+    ).await.expect("Temporal V4 E2E client");
+    let parent = client.start_workflow(
+        UntypedWorkflow::new("AlegriaAdmittedEffectDagV2Workflow"),
+        RawValue::from_value(&parent_input, &PayloadConverter::serde_json()),
+        WorkflowStartOptions::new("alegria-effect-dag-v4", fixture.command.run_id.to_string()).build(),
+    ).await.expect("native V4 parent start");
+    let parent_run_id = parent.info().run_id.clone().expect("server-issued V4 parent Run ID");
+    // Fixture-only trusted registration: never let the restricted operator
+    // mutate an existing SEO site's canonical workflow_run_id in production.
+    sqlx::query("UPDATE pipeline.execution_runs SET workflow_run_id=$1 WHERE run_id=$2")
+        .bind(&parent_run_id).bind(fixture.command.run_id)
+        .execute(&postgres.pool).await.expect("fixture binds newly started V4 parent Run ID");
+    let (child_id, child_run_id) = timeout(Duration::from_secs(45), async {
+        loop {
+            let events = parent.fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events().await.expect("native parent Temporal events");
+            if let Some((id, run_id)) = events.iter().find_map(|event| {
+                let Some(Attributes::ChildWorkflowExecutionStartedEventAttributes(attrs)) =
+                    &event.attributes else { return None; };
+                attrs.workflow_execution.as_ref().map(|execution|
+                    (execution.workflow_id.clone(), execution.run_id.clone()))
+            }) {
+                break (id, run_id);
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.expect("V4 parent did not start native child");
+    let before: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.pg_effect_v3_receipts WHERE admission_id=$1",
+    ).bind(fixture.command.admission_id).fetch_one(&postgres.pool).await.unwrap();
+    assert_eq!(before, 0, "child Signal gate must block PG effect before operator admission");
+
+    let role = format!("ci_pg_v4_operator_{}", Uuid::new_v4().simple());
+    const PASSWORD: &str = "pg_v4_disposable_operator_password";
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+        "CREATE ROLE {role} LOGIN NOINHERIT PASSWORD '{PASSWORD}';
+         GRANT CONNECT ON DATABASE alegria TO {role};
+         GRANT USAGE ON SCHEMA pipeline, extracted, raw TO {role};
+         GRANT SELECT ON pipeline.execution_runs, pipeline.pg_effect_v3_admissions,
+                         pipeline.pg_effect_v3_receipts, extracted.rule_candidates,
+                         raw.sections, raw.pages TO {role};
+         GRANT SELECT, INSERT, UPDATE ON pipeline.pg_effect_v3_admissions TO {role};"
+    ))).execute(&postgres.pool).await.expect("distinct restricted V4 operator role");
+    let operator_url = postgres.database_url.replacen(
+        "postgres://postgres:postgres_password@",
+        &format!("postgres://{role}:{PASSWORD}@"), 1,
+    );
+    let locator = serde_json::json!({
+        "admission_id": fixture.command.admission_id,
+        "canonical_run_id": fixture.command.run_id,
+        "parent_workflow_id": fixture.command.run_id.to_string(),
+        "parent_workflow_run_id": parent_run_id,
+        "child_workflow_id": child_id,
+        "child_workflow_run_id": child_run_id,
+        "expires_in_seconds": 120
+    });
+    let path = env::temp_dir().join(format!("ci-pg-v4-operator-{}.json", Uuid::new_v4()));
+    let execute_locator = |locator: &serde_json::Value| {
+        fs::write(&path, serde_json::to_vec(locator).unwrap()).unwrap();
+        Command::new(pg_v3_effect_worker_binary())
+            .arg("--operator-issue-v4").arg(&path)
+            .env("ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V4", "true")
+            .env("PG_EFFECT_OPERATOR_DATABASE_URL", &operator_url)
+            .env("PG_EFFECT_OPERATOR_TENANT_ID", "ci-pg-v3-tenant")
+            .env("PG_EFFECT_OPERATOR_TEMPORAL_URL", &temporal.temporal_url)
+            .env("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE", &temporal.namespace)
+            .env_remove("DATABASE_URL")
+            .output().expect("execute exact V4 native operator CLI")
+    };
+    let mut forged = locator.clone();
+    forged["child_workflow_run_id"] = serde_json::json!(Uuid::new_v4());
+    let denied = execute_locator(&forged);
+    assert!(!denied.status.success(), "forged child server Run ID admitted");
+    let still_none: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM pipeline.pg_effect_v3_receipts WHERE admission_id=$1",
+    ).bind(fixture.command.admission_id).fetch_one(&postgres.pool).await.unwrap();
+    assert_eq!(still_none, 0, "forged parent-child locator may not execute an effect");
+    let authorized = execute_locator(&locator);
+    assert!(authorized.status.success(),
+        "real server-attested V4 operator issuance failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&authorized.stdout),
+        String::from_utf8_lossy(&authorized.stderr));
+    fs::remove_file(&path).expect("remove V4 disposable operator locator");
+    let parent_result = timeout(Duration::from_secs(45),
+        parent.get_result(WorkflowGetResultOptions::default()))
+        .await.expect("V4 parent failed to complete after admitted PG child")
+        .expect("V4 parent reported native child error");
+    let parent_result_json: String = parent_result.to_value(&PayloadConverter::serde_json());
+    assert!(!parent_result_json.is_empty());
+    let (revision, checked_key): (i16, String) = sqlx::query_as(
+        "SELECT admission_schema_revision, dispatch_execution_key
+         FROM pipeline.pg_effect_v3_admissions WHERE admission_id=$1",
+    ).bind(fixture.command.admission_id).fetch_one(&postgres.pool).await.unwrap();
+    assert_eq!(revision, 4);
+    let receipt_key: String = sqlx::query_scalar(
+        "SELECT execution_key FROM pipeline.pg_effect_v3_receipts WHERE admission_id=$1",
+    ).bind(fixture.command.admission_id).fetch_one(&effect_pool).await
+        .expect("durable PG V4 effect receipt");
+    assert_eq!(receipt_key, checked_key,
+        "durable PG receipt must pin the exact parent checked dispatch key");
+    eprintln!("CI_PG_V4_NATIVE_PARENT_CHILD_OPERATOR_EFFECT=PASS");
+}

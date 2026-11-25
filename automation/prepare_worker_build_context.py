@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Prepare a dependency-scoped Docker context for the accepted Temporal image.
+"""Prepare an exact-SHA dependency-scoped Docker context for a known owner.
 
 Cargo still resolves the original workspace manifests and Cargo.lock. A crate
 outside the actual Worker/CLI dependency closure gets a metadata-only inert
 target, so editing that crate's Rust source cannot invalidate the release
-compilation layer. The owner registry comes exclusively from ci_impact.py.
+compilation layer. The accepted legacy image owner comes from ci_impact.py;
+two additional package names are explicitly allowed only for opt-in V3 image
+evaluation and never become accepted Worker release selectors.
 """
 
 from __future__ import annotations
@@ -24,6 +26,12 @@ from ci_impact import (
 
 
 SKELETON_ROOT = "dependency-skeleton"
+V3_DOCKERFILE = "infra/temporal/Dockerfile.v3"
+IMAGE_CONTEXT_ROOTS = {
+    "temporal-worker": frozenset(IMAGE_OWNERS["temporal-worker"]["crates"]),
+    "temporal-orchestrator-v3": frozenset({"temporal_orchestrator"}),
+    "temporal-pg-effects-v3": frozenset({"temporal_pg_effects"}),
+}
 
 
 def dependency_skeleton_targets(
@@ -110,15 +118,20 @@ def write_dependency_skeleton(
             shutil.copy2(stub, target)
 
 
-def release_closure(owners: dict[str, str], reverse: dict[str, set[str]]) -> set[str]:
+def release_closure(
+    owners: dict[str, str], reverse: dict[str, set[str]], *,
+    image_owner: str = "temporal-worker",
+) -> set[str]:
     """Follow the same verified Cargo graph in the dependency direction."""
+    if image_owner not in IMAGE_CONTEXT_ROOTS:
+        raise ValueError(f"unknown Cargo image context owner: {image_owner}")
     direct_dependencies = {name: set() for name in reverse}
     for dependency, consumers in reverse.items():
         for consumer in consumers:
             direct_dependencies[consumer].add(dependency)
-    roots = set(IMAGE_OWNERS["temporal-worker"]["crates"])
+    roots = set(IMAGE_CONTEXT_ROOTS[image_owner])
     if not roots <= direct_dependencies.keys() or set(owners.values()) != set(reverse):
-        raise ValueError("Temporal image roots or workspace graph are incomplete")
+        raise ValueError(f"{image_owner} image roots or workspace graph are incomplete")
     result: set[str] = set()
     pending = deque(sorted(roots))
     while pending:
@@ -129,8 +142,13 @@ def release_closure(owners: dict[str, str], reverse: dict[str, set[str]]) -> set
     return result
 
 
-def context_files(tracked: set[str], owners: dict[str, str], release: set[str]) -> set[str]:
+def context_files(
+    tracked: set[str], owners: dict[str, str], release: set[str], *,
+    image_owner: str = "temporal-worker",
+) -> set[str]:
     """Whitelist Cargo resolution, compiled sources and delivered assets."""
+    if image_owner not in IMAGE_CONTEXT_ROOTS:
+        raise ValueError(f"unknown Cargo image context owner: {image_owner}")
     mandatory = {"app/rust/Cargo.toml", "app/rust/Cargo.lock"}
     mandatory.update(f"{directory}/Cargo.toml" for directory in owners)
     if not mandatory <= tracked:
@@ -144,7 +162,9 @@ def context_files(tracked: set[str], owners: dict[str, str], release: set[str]) 
             continue
         if path.startswith(("app/rust/.sqlx/", "app/contracts/proto/", "app/analytics_lab/proto/")):
             paths.add(path)
-        if path.startswith("infra/cloudflare/seo-static/") or path in WORKER_PACKAGING_FILES:
+        if image_owner == "temporal-worker" and (
+            path.startswith("infra/cloudflare/seo-static/") or path in WORKER_PACKAGING_FILES
+        ):
             paths.add(path)
         for directory, package in owners.items():
             if package in release and path.startswith(directory + "/"):
@@ -163,6 +183,10 @@ def context_files(tracked: set[str], owners: dict[str, str], release: set[str]) 
     }
     if not required <= paths:
         raise ValueError("missing generated-protobuf input for release compilation")
+    if image_owner != "temporal-worker":
+        if V3_DOCKERFILE not in tracked:
+            raise ValueError("missing tracked V3 Dockerfile for isolated context")
+        paths.add(V3_DOCKERFILE)
     return paths
 
 
@@ -171,7 +195,12 @@ def tracked_files(*, root: Path = ROOT) -> set[str]:
     return {path for path in raw.decode("utf-8").split("\0") if path}
 
 
-def build_context(destination: Path, source_sha: str, *, root: Path = ROOT) -> dict:
+def build_context(
+    destination: Path, source_sha: str, *, root: Path = ROOT,
+    image_owner: str = "temporal-worker",
+) -> dict:
+    if image_owner not in IMAGE_CONTEXT_ROOTS:
+        raise ValueError(f"unknown Cargo image context owner: {image_owner}")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if len(source_sha) != 40 or head != source_sha:
         raise ValueError("release context must use the exact accepted source SHA")
@@ -180,8 +209,8 @@ def build_context(destination: Path, source_sha: str, *, root: Path = ROOT) -> d
 
     metadata = load_cargo_metadata(workspace=root / "app/rust")
     owners, reverse = workspace_graph(metadata, root=root)
-    release = release_closure(owners, reverse)
-    paths = context_files(tracked_files(root=root), owners, release)
+    release = release_closure(owners, reverse, image_owner=image_owner)
+    paths = context_files(tracked_files(root=root), owners, release, image_owner=image_owner)
     if destination.exists():
         raise ValueError("release context destination must not already exist")
     destination.mkdir(parents=True)
@@ -212,6 +241,8 @@ def build_context(destination: Path, source_sha: str, *, root: Path = ROOT) -> d
         "other_workspace_members": sorted(set(owners.values()) - release),
         "tracked_input_count": len(paths),
     }
+    if image_owner != "temporal-worker":
+        result["evaluation_image_owner"] = image_owner
     (destination / "worker-context.json").write_text(
         json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8",
     )
@@ -222,8 +253,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--destination", type=Path, required=True)
+    parser.add_argument("--image-owner", choices=tuple(IMAGE_CONTEXT_ROOTS), default="temporal-worker")
     args = parser.parse_args()
-    result = build_context(args.destination, args.source_sha)
+    result = build_context(args.destination, args.source_sha, image_owner=args.image_owner)
     print("WORKER_RELEASE_CONTEXT=PASS " + json.dumps(result, sort_keys=True))
 
 

@@ -57,20 +57,24 @@ GRANT USAGE ON SCHEMA pipeline, extracted, raw, site, verified, system
     TO alegria_pg_effect_worker;
 GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
     pipeline.pg_effect_v3_admissions TO alegria_pg_effect_worker;
-GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO alegria_pg_effect_worker;
+GRANT SELECT ON pipeline.pg_effect_v3_receipts TO alegria_pg_effect_worker;
 GRANT SELECT ON extracted.rule_candidates, raw.sections, raw.pages
     TO alegria_pg_effect_worker;
-GRANT SELECT, INSERT, UPDATE ON site.seo_hitl_tasks TO alegria_pg_effect_worker;
+GRANT SELECT ON site.seo_hitl_tasks TO alegria_pg_effect_worker;
+GRANT EXECUTE ON FUNCTION pipeline.consume_pg_truth_review_v1(
+    UUID, UUID, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT, TEXT,
+    SMALLINT, TEXT, TEXT, TEXT, BYTEA, BYTEA, BYTEA
+) TO alegria_pg_effect_worker;
 -- No admission INSERT/UPDATE/DELETE/TRUNCATE; no candidate/verified Truth
--- writes; no system.sync_outbox, no CMS human decisions.
+-- writes; no direct HITL/receipt writes; no system.sync_outbox.
 ```
 
 The Worker performs a **fail-closed effective-permission audit before polling
 Temporal and again inside every effect invocation**, including inherited roles
-and `PUBLIC` privileges. Its entire
-allowed application write surface is `INSERT/UPDATE site.seo_hitl_tasks` and
-`INSERT pipeline.pg_effect_v3_receipts`. Even on those tables `DELETE` and
-`TRUNCATE` are forbidden; receipt `UPDATE` is forbidden. The audit inspects
+and `PUBLIC` privileges. It has **zero direct application table write grants**;
+the single audited `SECURITY DEFINER` function validates immutable admissions,
+source revision, exact payloads and durable receipts before writing HITL/receipt
+rows atomically. The audit inspects
 **all** application relations, including future migration-added tables and
 column-level grants; it also rejects write access to application sequences,
 `CREATE` on application schemas, role administration and RLS-bypass rights.
@@ -225,6 +229,58 @@ The service-only test is ignored by default. The mandatory container test
 does not independently attest a live Temporal Workflow: cross-queue E2E
 and historical replay are separate acceptance requirements.
 
+### Versioned parent/child V4 admission (experimental)
+
+V3 admissions retain their fixed single-run semantics; V4 introduces a **new**
+`PgTruthReviewReconcileV4Workflow` child type while the parent is the distinct
+history-visible `AlegriaAdmittedEffectDagV2Workflow`. The V4 operator receives
+only identifiers/TTL in this JSON locator (never a manifest or claimed digest):
+
+```json
+{
+  "admission_id": "11111111-1111-4111-8111-111111111111",
+  "canonical_run_id": "22222222-2222-4222-8222-222222222222",
+  "parent_workflow_id": "22222222-2222-4222-8222-222222222222",
+  "parent_workflow_run_id": "33333333-3333-4333-8333-333333333333",
+  "child_workflow_id": "pg-effect-node-4",
+  "child_workflow_run_id": "44444444-4444-4444-8444-444444444444",
+  "expires_in_seconds": 120
+}
+```
+
+```bash
+ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V4=true \
+  PG_EFFECT_OPERATOR_DATABASE_URL='postgres://<dedicated-operator-role>' \
+  PG_EFFECT_OPERATOR_TENANT_ID='operator-tenant' \
+  PG_EFFECT_OPERATOR_TEMPORAL_URL='http://127.0.0.1:7233' \
+  PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE='default' \
+  ./target/debug/temporal_pg_effects --operator-issue-v4 /path/to/locator.json
+
+ALEGRIA_ENABLE_PG_EFFECT_OPERATOR_V4=true \
+  PG_EFFECT_OPERATOR_DATABASE_URL='postgres://<dedicated-operator-role>' \
+  PG_EFFECT_OPERATOR_TENANT_ID='operator-tenant' \
+  ./target/debug/temporal_pg_effects --operator-revoke-v4 11111111-1111-4111-8111-111111111111
+```
+
+The V4 issuer queries **both exact-run Temporal server Histories** and
+compares reciprocal parent-child initiation/start event IDs, child Workflow
+type/queue/actual Run ID and byte-identical child invocation payload. The
+parent's recorded input must independently agree with the sealed plan hash,
+concrete pinned Truth contract, checked node, admitted artifact, typed owner
+command and V4 BLAKE3 execution key. Only after that proof does a restricted
+PostgreSQL transaction pin the parent and child execution IDs, plan/instance,
+exact SHA256 History/command/artifact fingerprints, source snapshot and issuer.
+It then sends the child `operator_admission_ready_v4` Signal **after commit**.
+The Signal cannot authorize an effect; the Activity's server-provided child
+identity must match the V4 admission inside the SQL SECURITY DEFINER fence.
+V3 and V4 admission revisions cannot consume each other's receipts.
+
+This is an experimental local operator path. It presently **refuses remote
+Temporal endpoints**: authenticated remote TLS/mTLS, operator RBAC, restart
+recovery for a lost post-COMMIT Signal ACK, real cross-version History replay,
+tenant authority/RLS and production cutover require separate acceptance.
+No self-asserted tenant label grants cross-tenant ownership.
+
 **Tenant limitation:** `PG_EFFECT_OPERATOR_TENANT_ID` is a fail-closed
 operator configuration guard, **not row-level security**. Existing
 `pipeline.execution_runs`, `raw.sections`, and `site.seo_hitl_tasks` have
@@ -254,10 +310,18 @@ first and cannot produce a second effect.
 cd app/rust
 cargo build --locked -p temporal_pg_effects --bin temporal_pg_effects
 ALEGRIA_ENABLE_PG_EFFECT_V3=true \
-  PG_EFFECT_WORKER_DATABASE_URL='postgres://<separate-limited-role>' \
+  PG_EFFECT_WORKER_DATABASE_URL_FILE='/run/secrets/pg_effect_worker_dsn' \
   TEMPORAL_URL='http://localhost:7233' \
   ./target/debug/temporal_pg_effects
 ```
+
+`PG_EFFECT_WORKER_DATABASE_URL_FILE` must be an absolute, regular, non-symlink
+UTF-8 secret file readable only by its owner (Unix mode `0400` or `0600`).
+`PG_EFFECT_WORKER_DATABASE_URL` remains available for isolated development,
+but the two settings are mutually exclusive. There is no `DATABASE_URL`
+fallback or implicit admin role. Some file-backed Compose implementations
+ignore a requested secret mode; in that case the Worker intentionally fails
+startup until the file's permission is actually restricted.
 
 For an audited **real server-generated** JSON Workflow History, replay the
 registered V3 Workflow deterministically with the native Temporal SDK:

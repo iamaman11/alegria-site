@@ -233,16 +233,27 @@ def check() -> None:
     optional_pg_ab = job_block("rust-pg-physical-ab", "rust-e2e-legacy-binaries")
     legacy_job = job_block("rust-e2e-legacy-binaries", "rust-e2e-v3-binaries")
     v3_job = job_block("rust-e2e-v3-binaries", "rust-graph-e2e")
-    assert "contains(github.event.pull_request.labels.*.name, 'physical-pg-harness-ab-probe')" in optional_pg_ab
+    assert "github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study'" in optional_pg_ab
     assert "continue-on-error: true" not in optional_pg_ab
-    assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in optional_pg_ab
-    assert "ref: ${{ github.event.pull_request.head.sha }}" in optional_pg_ab
+    assert "CI_SOURCE_SHA: ${{ inputs.expected_source_sha }}" in optional_pg_ab
+    assert "ref: ${{ inputs.expected_source_sha }}" in optional_pg_ab
     assert "fetch-depth: 0" in optional_pg_ab
+    assert "const expected = process.env.EXPECTED_SOURCE_SHA" in optional_pg_ab
+    assert "actual !== expected" in optional_pg_ab
+    assert "head_sha: expected, event: 'pull_request'" in optional_pg_ab
+    assert "fullRunMarkers.every(name => completedJobs.has(name))" in optional_pg_ab
+    assert "PHYSICAL_STUDY_GREEN_SOURCE=PASS" in optional_pg_ab
+    assert "--compiler-owners > automation/reports/physical_owner_ab.json" in optional_pg_ab
+    assert "--compiler > automation/reports/physical_coldwarm_ab.json" in optional_pg_ab
+    assert "RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py" in optional_pg_ab
     assert "--output automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
     assert "--report automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
     assert "if: always()" in optional_pg_ab
     assert "rust-pg-physical-ab" not in gate and "rust-pg-physical-ab" not in OWNERS
-    assert "contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')" in architecture
+    for opt_in_probe in ("physical-ab-probe", "physical-ab-coldwarm", "owner-build-probe"):
+        assert opt_in_probe not in architecture, "physical experiments must not stretch the required PR gate"
+    assert "- physical-study" in workflow
+    assert "expected_source_sha:" in workflow and "physical_study:" in workflow
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3_job
     for block in (truth_compiler, pg_compiler, outbox_compiler, legacy_job, v3_job):

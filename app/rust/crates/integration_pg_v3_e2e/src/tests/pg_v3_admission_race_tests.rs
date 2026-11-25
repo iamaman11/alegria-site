@@ -62,7 +62,7 @@ async fn pg_v3_issue_short_admission(
     ttl: &str,
 ) {
     use postgres_store::truth_review_effect_v3::{
-        contract_fingerprint, CANDIDATE_SET_HASH_SQL,
+        contract_fingerprint, execution_key, CANDIDATE_SET_HASH_SQL,
     };
 
     let candidate_hash: String = sqlx::query_scalar(CANDIDATE_SET_HASH_SQL)
@@ -74,9 +74,10 @@ async fn pg_v3_issue_short_admission(
         "INSERT INTO pipeline.pg_effect_v3_admissions
          (admission_id, run_id, tenant_id, context_key, workflow_id,
           workflow_execution_run_id, operation_instance, plan_hash,
-          contract_fingerprint, candidate_set_hash, issued_by, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-                 'ci_admission_race_operator', clock_timestamp() + $11::interval)",
+          contract_fingerprint, candidate_set_hash, v3_expected_execution_key,
+          issued_by, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+                 'ci_admission_race_operator', clock_timestamp() + $12::interval)",
     )
     .bind(fixture.command.admission_id)
     .bind(fixture.command.run_id)
@@ -88,10 +89,43 @@ async fn pg_v3_issue_short_admission(
     .bind(&fixture.command.plan_hash)
     .bind(contract_fingerprint().expect("pin typed V3 owner contract"))
     .bind(candidate_hash)
+    .bind(execution_key(&fixture.workflow_id, &fixture.workflow_run_id, &fixture.command)
+        .expect("pin canonical V3 execution key"))
     .bind(ttl)
     .execute(pool)
     .await
     .expect("issue short-lived immutable admission from operator connection");
+}
+
+#[cfg(feature = "e2e")]
+async fn pg_v3_seed_newer_verified_truth_step(
+    pool: &sqlx::PgPool,
+    fixture: &PgV3ReviewFixture,
+) -> i64 {
+    let newer_run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pipeline.execution_runs
+         (run_id, workflow_run_id, workflow_type, context_key, status, created_at)
+         VALUES ($1, $2, 'seo_site_build', $3, 'verifying',
+                 clock_timestamp() + interval '1 second')",
+    )
+    .bind(newer_run_id)
+    .bind(Uuid::new_v4().to_string())
+    .bind(&fixture.command.context_key)
+    .execute(pool)
+    .await
+    .expect("seed newer canonical Truth run in same context");
+    sqlx::query_scalar(
+        "INSERT INTO pipeline.step_executions
+         (run_id, step_name, schema_version, input_hash, idempotency_key, status)
+         VALUES ($1, 'verified_truth_write', 1, 'source-pin', $2, 'running')
+         RETURNING step_execution_id",
+    )
+    .bind(newer_run_id)
+    .bind(Uuid::new_v4().to_string())
+    .fetch_one(pool)
+    .await
+    .expect("seed not-yet-done Truth step whose terminal transition will race")
 }
 
 #[cfg(feature = "e2e")]
@@ -771,6 +805,77 @@ async fn pg_v3_raw_source_concurrent_update_is_fenced() {
     .expect("status remained nonterminal through receipt");
     assert_eq!(terminal_status, "verifying");
     eprintln!("CI_PG_V3_TERMINAL_STATUS_EFFECT_FIRST=PASS");
+
+    // Chronology TOCTOU independent of execution_runs.status: a newer run's
+    // `verified_truth_write` may flip from running to done after V3 checked
+    // chronology, unless the STEP writer uses the same truth-context key.
+    let step_writer_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &step_writer_first).await;
+    let newer_step = pg_v3_seed_newer_verified_truth_step(
+        &postgres.pool, &step_writer_first,
+    ).await;
+    let mut step_writer = postgres.pool.begin().await.expect("newer Truth step writer tx");
+    sqlx::query("UPDATE pipeline.step_executions SET status = 'done' WHERE step_execution_id = $1")
+        .bind(newer_step)
+        .execute(&mut *step_writer)
+        .await
+        .expect("newer completed step locks Truth context before effect");
+    let step_denied = pg_v3_spawn_effect(&effect_pool, &step_writer_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "advisory").await;
+    step_writer.commit().await.expect("commit newer verified Truth first");
+    assert!(matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(10), step_denied)
+            .await
+            .expect("Activity wakes after completed newer step")
+            .expect("Activity task did not panic"),
+        Err(ReconcileTruthReviewsError::StaleTruthRun)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &step_writer_first).await;
+    eprintln!("CI_PG_V3_VERIFIED_STEP_WRITER_FIRST=PASS");
+
+    let step_effect_first = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &step_effect_first).await;
+    let competing_step = pg_v3_seed_newer_verified_truth_step(
+        &postgres.pool, &step_effect_first,
+    ).await;
+    let mut step_hitl_blocker = postgres.pool.begin().await.expect("step HITL blocker");
+    sqlx::query("LOCK TABLE site.seo_hitl_tasks IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *step_hitl_blocker)
+        .await
+        .expect("block in-flight effect after verified-step chronology read");
+    let step_admitted = pg_v3_spawn_effect(&effect_pool, &step_effect_first);
+    pg_v3_wait_for_lock(&postgres.pool, &role, "relation").await;
+    let step_mutation_err = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        sqlx::query("UPDATE pipeline.step_executions SET status = 'done' WHERE step_execution_id = $1")
+            .bind(competing_step)
+            .execute(&postgres.pool),
+    )
+    .await
+    .expect("step writer waited instead of fail-fast context denial")
+    .expect_err("newer verified Truth changed while admitted effect was committing");
+    assert_eq!(
+        step_mutation_err
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("55P03")
+    );
+    step_hitl_blocker.commit().await.expect("release step HITL blocker");
+    tokio::time::timeout(std::time::Duration::from_secs(10), step_admitted)
+        .await
+        .expect("effect proceeds with stable newer-step chronology")
+        .expect("effect task did not panic")
+        .expect("effect safely committed before competing verified step");
+    let still_running: String = sqlx::query_scalar(
+        "SELECT status FROM pipeline.step_executions WHERE step_execution_id = $1",
+    )
+    .bind(competing_step)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("rejected newer step remains running");
+    assert_eq!(still_running, "running");
+    eprintln!("CI_PG_V3_VERIFIED_STEP_EFFECT_FIRST=PASS");
 
     // Activity commits first: pause only the actual HITL table so its source
     // locks are known to be held, then attempt a conflicting raw page update

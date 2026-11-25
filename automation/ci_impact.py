@@ -320,6 +320,19 @@ PG_V3_TEMPORAL_RUNTIME_BINARIES = {
     "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
 }
 
+# The mandatory V4 parent->child test consumes *both* independently compiled
+# binaries from the existing content-verified V3 artifact. The scoped path
+# builds them together; the full PR runner merely installs that one artifact.
+PG_V4_PARENT_CHILD_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+)
+PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
+    **PG_V3_TEMPORAL_RUNTIME_BINARIES,
+    "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
+}
+
 # A13 reads only admissible, unscoped verified facts from disposable PostgreSQL
 # through the production SQLx reader and the active SEO generation operation.
 KNOWLEDGE_A13_PATHS = {
@@ -560,6 +573,9 @@ SUITE_OWNERS = {
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
             "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
             "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
+            "app/db/migrations/20261125_0003_pg_effect_parent_child_v4.sql",
+            "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql",
+            "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
@@ -571,18 +587,22 @@ SUITE_OWNERS = {
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
             "app/rust/services/temporal_pg_effects/",
+            "app/rust/services/temporal_orchestrator/",
+            "app/rust/crates/seo_application/src/operation_adapter/",
+            "app/rust/crates/truth_domain/src/review_effect_contract",
             "app/rust/crates/operation_protocol/src/",
         ),
-        "lock_crates": {"temporal_pg_effects", "postgres_store", "operation_protocol"},
+        "lock_crates": {
+            "temporal_pg_effects", "temporal_orchestrator", "seo_application",
+            "truth_domain", "postgres_store", "operation_protocol",
+        },
         # The PostgreSQL-only fenced Activity owner must remain tested even
         # when a global schema/CI input cannot be safely narrowed.
         "on_unknown_global_input": True,
-        # SQL admission/replay/idempotence runs against disposable PG without
-        # a Temporal server. Its native operator CLI regression also launches
-        # the separately credentialed PG V3 executable, so consume the same
-        # exact-source binary owner as pg_temporal_v3 (never the monolith).
-        "prepare": PG_V3_TEMPORAL_PREPARE,
-        "runtime_binaries": PG_V3_TEMPORAL_RUNTIME_BINARIES,
+        # Includes live parent/child V4 Temporal+PG: the two exact-source V3
+        # binary owners are mandatory, with no legacy Worker fallback.
+        "prepare": PG_V4_PARENT_CHILD_PREPARE,
+        "runtime_binaries": PG_V4_PARENT_CHILD_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
             "--lib", "pg_v3_", "--locked", "--", "--nocapture",
@@ -598,6 +618,9 @@ SUITE_OWNERS = {
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
             "app/db/migrations/20261125_0001_raw_truth_source_writer_fence.sql",
             "app/db/migrations/20261125_0002_execution_run_truth_context_fence.sql",
+            "app/db/migrations/20261125_0003_pg_effect_parent_child_v4.sql",
+            "app/db/migrations/20261125_0004_truth_reconcile_owner_capability.sql",
+            "app/db/migrations/20261125_0005_verified_truth_step_context_fence.sql",
         },
         "prefixes": (
             "app/rust/crates/integration_pg_v3_e2e/",
@@ -982,7 +1005,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
         ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
     ),
     "outbox": (("outbox_a14", "outbox_a14_", 9),),
-    "verify_d": (("pg_effect_v3", "pg_v3_", 5),),
+    "verify_d": (("pg_effect_v3", "pg_v3_", 6),),
 }
 
 

@@ -8,6 +8,7 @@ import unittest
 from measure_owner_rebuild import (
     BUILD_COMMAND, EXECUTABLE_PACKAGES, OWNER_SOURCES, ROOT,
     compiler_unit, numeric_stats_delta, owner_of_artifact, probe_marker, sha256,
+    verified_study_source,
 )
 
 
@@ -75,6 +76,23 @@ class OwnerRebuildTests(unittest.TestCase):
         self.assertEqual(numeric_stats_delta(before, after), {
             "counts.cache_hits": 8, "counts.cache_misses": 1,
         })
+
+    def test_owner_probe_requires_explicit_dispatch_and_exact_green_source(self) -> None:
+        sha = "a" * 40
+        allowed = {
+            "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_RUN_ID": "123456", "CI_SOURCE_SHA": sha,
+            "GITHUB_SHA": "b" * 40,  # a branch head must not replace explicit SHA
+        }
+        self.assertEqual(verified_study_source(sha, allowed), sha)
+        for change in (
+            {"GITHUB_EVENT_NAME": "pull_request"},
+            {"GITHUB_RUN_ID": ""},
+            {"CI_SOURCE_SHA": "refs/heads/main"},
+            {"CI_SOURCE_SHA": "b" * 40},
+        ):
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "dispatch|exact selected"):
+                verified_study_source(sha, allowed | change)
 
 
 if __name__ == "__main__":

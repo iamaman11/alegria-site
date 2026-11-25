@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 
 use operation_protocol::{Operation, OperationContract};
+use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row};
 use thiserror::Error;
 use uuid::Uuid;
@@ -29,6 +30,21 @@ pub const OPERATION_REVISION: u32 = truth_domain::review_effect_contract::OPERAT
 pub const EFFECT_ID: &str = truth_domain::review_effect_contract::EFFECT_ID;
 pub const PG_EFFECT_TASK_QUEUE: &str = "alegria-pg-effects-v3";
 pub const PG_EFFECT_WORKFLOW_TYPE: &str = "PgTruthReviewReconcileV3Workflow";
+pub const PG_EFFECT_WORKFLOW_TYPE_V4: &str = "PgTruthReviewReconcileV4Workflow";
+
+/// Immutable operator-observed Temporal server provenance, independent of
+/// child invocation fields that an untrusted DAG could self-assert. Hash
+/// `serde_json::to_vec(&attestation)` as SHA-256, and pin the parent History
+/// `ChildWorkflowExecutionStarted.event_id` as the positive event number.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct V4TemporalAttestation {
+    pub parent_workflow_id: String,
+    pub parent_workflow_run_id: String,
+    pub child_workflow_id: String,
+    pub child_workflow_run_id: String,
+    pub parent_child_started_event_id: i64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetryClass {
@@ -95,8 +111,10 @@ pub fn contract_fingerprint() -> Result<String, ReconcileTruthReviewsError> {
     .to_string())
 }
 
-/// Reject a DB role with *any* application write authority outside the two
-/// exact relations needed by this effect. A short list of protected tables is
+/// Reject a DB role with *any* application table write authority. Only the
+/// narrow, admission-gated SECURITY DEFINER capability may perform effects;
+/// the Activity must never directly update human review decisions or forge
+/// receipts. A short list of protected tables is
 /// insufficient: the same database also holds run journals, raw evidence,
 /// CMS revisions, and future tables that must fail closed automatically.
 /// Check effective privileges (including ownership, PUBLIC and inherited
@@ -167,13 +185,8 @@ pub async fn assert_unprivileged_pg_effect_role(
            AND n.nspname !~ '^pg_'
            AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
            AND (
-             (has_any_column_privilege(current_user, c.oid, 'INSERT') AND NOT (
-               (n.nspname = 'site' AND c.relname = 'seo_hitl_tasks') OR
-               (n.nspname = 'pipeline' AND c.relname = 'pg_effect_v3_receipts')
-             )) OR
-             (has_any_column_privilege(current_user, c.oid, 'UPDATE') AND NOT (
-               n.nspname = 'site' AND c.relname = 'seo_hitl_tasks'
-             )) OR
+             has_any_column_privilege(current_user, c.oid, 'INSERT') OR
+             has_any_column_privilege(current_user, c.oid, 'UPDATE') OR
              has_table_privilege(current_user, c.oid, 'DELETE') OR
              has_table_privilege(current_user, c.oid, 'TRUNCATE')
            )
@@ -243,50 +256,8 @@ pub async fn assert_unprivileged_pg_effect_role(
 // reconciler reads direct section->page identity and never resolves aliases.
 // Any future alias-aware Truth operation needs a new admitted revision and
 // corresponding alias writer locks/fingerprint, not an implicit V3 expansion.
-pub const CANDIDATE_SET_HASH_SQL: &str = r#"
-    SELECT encode(digest(COALESCE(jsonb_agg(
-        jsonb_build_object(
-            'candidate', to_jsonb(c),
-            'raw_section', to_jsonb(s),
-            'evidence_section', to_jsonb(es),
-            'raw_page', CASE WHEN p.id IS NULL THEN NULL ELSE jsonb_build_object(
-                'id', p.id, 'url', p.url, 'domain', p.domain, 'dtype', p.dtype,
-                'status_code', p.status_code, 'content_type', p.content_type,
-                'snapshot_at', p.snapshot_at, 'crawled_at', p.crawled_at,
-                'final_url', p.final_url, 'title', p.title,
-                'meta_desc', p.meta_desc, 'canonical', p.canonical,
-                'word_count', p.word_count, 'content_hash', p.content_hash,
-                'raw_html_bytes', p.raw_html_bytes,
-                'content_sha256', CASE WHEN p.content IS NULL THEN NULL
-                    ELSE encode(digest(p.content::text, 'sha256'), 'hex') END,
-                'raw_html_sha256', CASE WHEN p.raw_html IS NULL THEN NULL
-                    ELSE encode(digest(p.raw_html, 'sha256'), 'hex') END,
-                'redirect_chain', p.redirect_chain, 'robots_trace', p.robots_trace,
-                'source_observation', p.source_observation
-            ) END,
-            'evidence_page', CASE WHEN ep.id IS NULL THEN NULL ELSE jsonb_build_object(
-                'id', ep.id, 'url', ep.url, 'domain', ep.domain, 'dtype', ep.dtype,
-                'status_code', ep.status_code, 'content_type', ep.content_type,
-                'snapshot_at', ep.snapshot_at, 'crawled_at', ep.crawled_at,
-                'final_url', ep.final_url, 'title', ep.title,
-                'meta_desc', ep.meta_desc, 'canonical', ep.canonical,
-                'word_count', ep.word_count, 'content_hash', ep.content_hash,
-                'raw_html_bytes', ep.raw_html_bytes,
-                'content_sha256', CASE WHEN ep.content IS NULL THEN NULL
-                    ELSE encode(digest(ep.content::text, 'sha256'), 'hex') END,
-                'raw_html_sha256', CASE WHEN ep.raw_html IS NULL THEN NULL
-                    ELSE encode(digest(ep.raw_html, 'sha256'), 'hex') END,
-                'redirect_chain', ep.redirect_chain, 'robots_trace', ep.robots_trace,
-                'source_observation', ep.source_observation
-            ) END
-        ) ORDER BY c.rule_candidate_id)::text, '[]'), 'sha256'), 'hex')
-    FROM extracted.rule_candidates AS c
-    LEFT JOIN raw.sections AS s ON s.id = c.raw_section_id
-    LEFT JOIN raw.sections AS es ON es.id = c.evidence_section_id
-    LEFT JOIN raw.pages AS p ON p.id = s.page_id
-    LEFT JOIN raw.pages AS ep ON ep.id = es.page_id
-    WHERE c.context_key = $1
-"#;
+pub const CANDIDATE_SET_HASH_SQL: &str =
+    "SELECT pipeline.pg_truth_candidate_set_hash_v1($1)";
 
 fn validate(input: &ReconcileTruthReviewsInput) -> Result<(), ReconcileTruthReviewsError> {
     if input.scope.tenant_id.is_empty() || input.scope.tenant_id.trim() != input.scope.tenant_id {
@@ -340,6 +311,18 @@ pub fn execution_key(
 
 /// The *only* V3 effect executor: one PG transaction, one consumed immutable
 /// admission, one receipt. No Temporal workflow calls this without admission.
+fn map_owner_sql_error(error: sqlx::Error) -> ReconcileTruthReviewsError {
+    match error.as_database_error().and_then(|db| db.code()).as_deref() {
+        Some("AV001") => ReconcileTruthReviewsError::AdmissionDenied,
+        Some("TR001") => ReconcileTruthReviewsError::StaleTruthRun,
+        Some("CS001") => ReconcileTruthReviewsError::CandidateSetChanged,
+        _ => ReconcileTruthReviewsError::Sql(error),
+    }
+}
+
+/// The V3 legacy command may consume only a revision-3 admission. All raw
+/// source locks, independent revalidation, canonical HITL writes and receipt
+/// happen inside ONE SECURITY DEFINER SQL entrypoint; the login has no DML.
 pub async fn execute_admitted_reconcile(
     pool: &PgPool,
     workflow_id: &str,
@@ -347,45 +330,11 @@ pub async fn execute_admitted_reconcile(
     input: &ReconcileTruthReviewsInput,
 ) -> Result<ReconcileTruthReviewsReceipt, ReconcileTruthReviewsError> {
     let key = execution_key(workflow_id, workflow_run_id, input)?;
-    // Never rely solely on a caller's startup check. A direct invocation with
-    // admin credentials (or a role whose grants changed after startup) must
-    // not be able to exercise this deliberately narrow Activity API.
     assert_unprivileged_pg_effect_role(pool).await?;
     let fingerprint = contract_fingerprint()?;
-    let mut tx = pool.begin().await?;
-    // This is the SAME context-wide advisory lock acquired before every
-    // canonical verified Truth write. Acquire it before reading admission,
-    // run chronology, or source snapshot. READ COMMITTED takes each SELECT's
-    // snapshot AFTER the lock returns; SERIALIZABLE would capture a stale
-    // snapshot while waiting on pg_advisory_xact_lock itself.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(format!("truth-context|{}", input.context_key))
-        .execute(&mut *tx)
-        .await?;
-    // The Activity role has NO UPDATE grant on admissions; an advisory lock
-    // serializes duplicate commands without elevating its SQL privileges.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-        .bind(format!("pg-v3-admission|{}", input.admission_id))
-        .execute(&mut *tx)
-        .await?;
-    // `now()` would reflect transaction start, which may precede minutes of
-    // waiting on the context lock. Authorize at the post-lock wall-clock
-    // checkpoint; a DB trigger serializes operator revocation on this lock.
-    let admission = sqlx::query(
-        "SELECT a.admission_id, er.status AS run_status,
-                (a.revoked_at IS NULL AND a.expires_at > clock_timestamp()) AS admission_active
-         FROM pipeline.pg_effect_v3_admissions a
-         JOIN pipeline.execution_runs er ON er.run_id = a.run_id
-         WHERE a.admission_id = $1 AND a.run_id = $2
-           AND a.tenant_id = $3 AND a.context_key = $4
-           AND a.workflow_id = $5 AND a.workflow_execution_run_id = $6
-           AND a.operation_instance = $7 AND a.plan_hash = $8
-           AND a.operation_id = $9 AND a.operation_revision = $10
-           AND a.authorized_effect = $11 AND a.contract_fingerprint = $12
-           AND er.context_key = a.context_key
-           AND er.workflow_run_id = a.workflow_execution_run_id
-           AND er.workflow_type = 'seo_site_build'
-        ",
+    let row = sqlx::query(
+        "SELECT * FROM pipeline.consume_pg_truth_review_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
     )
     .bind(input.admission_id)
     .bind(input.run_id)
@@ -395,174 +344,95 @@ pub async fn execute_admitted_reconcile(
     .bind(workflow_run_id)
     .bind(&input.operation_instance)
     .bind(&input.plan_hash)
-    .bind(OPERATION_ID)
-    .bind(OPERATION_REVISION as i32)
-    .bind(EFFECT_ID)
     .bind(&fingerprint)
-    .fetch_optional(&mut *tx)
-    .await?
-    .ok_or(ReconcileTruthReviewsError::AdmissionDenied)?;
-
-    // Once committed, a repeated identical command reads the canonical PG
-    // receipt without rechecking current candidate state or issuing effects.
-    if let Some(receipt) = sqlx::query(
-        "SELECT receipt_id, admission_id, execution_key, run_id,
-                context_key, candidate_set_hash, created_review_tasks, open_review_tasks
-         FROM pipeline.pg_effect_v3_receipts WHERE admission_id = $1",
-    )
-    .bind(input.admission_id)
-    .fetch_optional(&mut *tx)
-    .await?
-    {
-        if receipt.get::<String, _>("execution_key") != key {
-            return Err(ReconcileTruthReviewsError::AdmissionDenied);
-        }
-        let output = receipt_from_row(&receipt);
-        tx.commit().await?;
-        return Ok(output);
-    }
-    if !admission.get::<bool, _>("admission_active") {
-        return Err(ReconcileTruthReviewsError::AdmissionDenied);
-    }
-    if !matches!(
-        admission.get::<String, _>("run_status").as_str(),
-        "verifying" | "pending_hitl"
-    ) {
-        return Err(ReconcileTruthReviewsError::StaleTruthRun);
-    }
-    // Preserve legacy Truth chronology: a newly completed Truth write for
-    // this context supersedes the earlier run, even if both run timestamps
-    // tie. No older Activity may then reopen stale source review tasks.
-    let newer_truth_done: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-           SELECT 1 FROM pipeline.execution_runs newer
-           JOIN pipeline.execution_runs this_run ON this_run.run_id = $1
-           JOIN pipeline.step_executions done ON done.run_id = newer.run_id
-            AND done.step_name = 'verified_truth_write' AND done.status = 'done'
-           WHERE newer.context_key = this_run.context_key
-             AND newer.run_id <> this_run.run_id
-             AND newer.created_at >= this_run.created_at
-         )",
-    )
-    .bind(input.run_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if newer_truth_done {
-        return Err(ReconcileTruthReviewsError::StaleTruthRun);
-    }
-    // The canonical Truth context lock protects candidate IDs because a
-    // PostgreSQL trigger now makes every direct candidate INSERT/UPDATE/DELETE
-    // use the same lock. Raw page/section writers have independent lifecycles.
-    // Acquire their source-ID keys in a stable order before hashing. The
-    // database-side writer trigger acquires the SAME keys before UPDATE/DELETE,
-    // rejecting concurrent mutation with SQLSTATE 55P03. An Activity needs
-    // SELECT only, never UPDATE/FOR SHARE rights on raw evidence.
-    const SOURCE_REFS_SQL: &str = "SELECT DISTINCT s.id AS section_id, s.page_id
-         FROM extracted.rule_candidates AS c
-         JOIN raw.sections AS s
-           ON s.id IN (c.raw_section_id, c.evidence_section_id)
-         WHERE c.context_key = $1 ORDER BY s.id, s.page_id";
-    let evidence_refs = sqlx::query(SOURCE_REFS_SQL)
-        .bind(&input.context_key)
-        .fetch_all(&mut *tx)
-        .await?;
-    let mut initial_refs = BTreeSet::new();
-    let mut page_ids = BTreeSet::new();
-    let mut section_ids = BTreeSet::new();
-    for row in evidence_refs {
-        let section_id = row.get::<i64, _>("section_id");
-        let page_id = row.get::<i64, _>("page_id");
-        initial_refs.insert((section_id, page_id));
-        page_ids.insert(page_id);
-        section_ids.insert(section_id);
-    }
-    for page_id in page_ids {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(format!("raw-evidence|pages|{page_id}"))
-            .execute(&mut *tx)
-            .await?;
-    }
-    for section_id in section_ids {
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
-            .bind(format!("raw-evidence|sections|{section_id}"))
-            .execute(&mut *tx)
-            .await?;
-    }
-    // The initial SELECT precedes the source-ID advisory locks. Under READ
-    // COMMITTED a writer may reparent a section while V3 waits for those
-    // locks, leaving a newly referenced page unlocked. Re-read *all* pairs
-    // after acquiring both sets and fail closed if any association drifted.
-    // After this checkpoint the candidate context trigger and raw source
-    // triggers make these exact pairs stable until the receipt transaction
-    // commits. Never hash a page obtained from an unlocked parent reference.
-    let post_lock_refs = sqlx::query(SOURCE_REFS_SQL)
-        .bind(&input.context_key)
-        .fetch_all(&mut *tx)
-        .await?;
-    let locked_refs: BTreeSet<(i64, i64)> = post_lock_refs
-        .into_iter()
-        .map(|row| {
-            (
-                row.get::<i64, _>("section_id"),
-                row.get::<i64, _>("page_id"),
-            )
-        })
-        .collect();
-    if locked_refs != initial_refs {
-        return Err(ReconcileTruthReviewsError::CandidateSetChanged);
-    }
-    let expected_hash: String = sqlx::query_scalar(
-        "SELECT candidate_set_hash FROM pipeline.pg_effect_v3_admissions WHERE admission_id = $1",
-    )
-    .bind(input.admission_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    // Canonical Truth writers hold the same context lock. The full candidate
-    // rowset fingerprint is checked inside that critical section, without
-    // requiring UPDATE permission on the authoritative candidate table.
-    let observed_hash: String = sqlx::query_scalar(CANDIDATE_SET_HASH_SQL)
-        .bind(&input.context_key)
-        .fetch_one(&mut *tx)
-        .await?;
-    if observed_hash != expected_hash {
-        return Err(ReconcileTruthReviewsError::CandidateSetChanged);
-    }
-    let created = sqlx_hitl_adapter::reconcile_truth_candidate_reviews_in_tx(
-        &mut tx,
-        &input.context_key,
-        &input.run_id.to_string(),
-    )
-    .await?;
-    let open: i64 = sqlx::query_scalar(
-        "SELECT count(*)::bigint FROM site.seo_hitl_tasks
-         WHERE scope_signature = $1 AND task_type = 'truth_candidate_review'
-           AND queue_state IN ('open', 'reopened', 'in_review')",
-    )
-    .bind(&input.context_key)
-    .fetch_one(&mut *tx)
-    .await?;
-    let receipt = sqlx::query(
-        "INSERT INTO pipeline.pg_effect_v3_receipts
-           (admission_id, execution_key, operation_id, operation_revision,
-            run_id, context_key, candidate_set_hash, created_review_tasks, open_review_tasks)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         RETURNING receipt_id, admission_id, execution_key, run_id,
-                   context_key, candidate_set_hash, created_review_tasks, open_review_tasks",
-    )
-    .bind(input.admission_id)
     .bind(&key)
-    .bind(OPERATION_ID)
-    .bind(OPERATION_REVISION as i32)
+    .bind(3_i16)
+    .bind(None::<String>)
+    .bind(None::<String>)
+    .bind(None::<String>)
+    .bind(None::<Vec<u8>>)
+    .bind(None::<Vec<u8>>)
+    .bind(None::<Vec<u8>>)
+    .fetch_one(pool)
+    .await
+    .map_err(map_owner_sql_error)?;
+    Ok(receipt_from_row(&row))
+}
+
+/// The V4 child Activity passes its server-provided own child Workflow ID and
+/// Run ID separately from the typed immutable parent declaration. The owner
+/// recomputes CheckedDispatch's BLAKE3 keys from the exact bound bytes and
+/// independently verifies operator-pinned SHA256 payloads INSIDE PostgreSQL.
+/// Neither a self-consistent plan nor the command itself is authorization.
+pub async fn execute_admitted_reconcile_v4(
+    pool: &PgPool,
+    child_workflow_id: &str,
+    child_workflow_run_id: &str,
+    invocation: &operation_protocol::EffectChildInvocationV4,
+) -> Result<ReconcileTruthReviewsReceipt, ReconcileTruthReviewsError> {
+    use operation_protocol::{EffectId, IdempotencyPolicy};
+    use truth_domain::review_effect_contract::TruthReviewScopeArtifactV1;
+
+    invocation
+        .verify_integrity()
+        .map_err(|_| ReconcileTruthReviewsError::InvalidCommand("v4.checked_dispatch"))?;
+    let input: ReconcileTruthReviewsInput =
+        serde_json::from_slice(&invocation.owner_command_bytes)?;
+    validate(&input)?;
+    if serde_json::to_vec(&input)? != invocation.owner_command_bytes {
+        return Err(ReconcileTruthReviewsError::InvalidCommand("v4.canonical_owner_command"));
+    }
+    let artifact: TruthReviewScopeArtifactV1 =
+        serde_json::from_slice(&invocation.bound_input.payload)?;
+    if serde_json::to_vec(&artifact)? != invocation.bound_input.payload
+        || artifact.run_id != input.run_id
+        || artifact.context_key != input.context_key
+        || invocation.bound_input.scope != input.scope
+        || invocation.checked_dispatch.scope != input.scope
+        || invocation.checked_dispatch.plan_hash.as_str() != input.plan_hash
+        || invocation.checked_dispatch.instance.as_str() != input.operation_instance
+        || invocation.checked_dispatch.operation.id.as_str() != OPERATION_ID
+        || invocation.checked_dispatch.operation.revision != OPERATION_REVISION
+        || invocation.checked_dispatch.owner.as_str() != "postgres_store"
+        || invocation.checked_dispatch.effects != BTreeSet::from([EffectId(EFFECT_ID.into())])
+        || invocation.checked_dispatch.idempotency != IdempotencyPolicy::Idempotent
+        || invocation.bound_input.schema.id.as_str() != "truth.candidate_review_scope"
+        || invocation.bound_input.schema.revision != 1
+        || Uuid::parse_str(&invocation.parent.run_id).is_err()
+        || Uuid::parse_str(child_workflow_run_id).is_err()
+        || child_workflow_id.trim().is_empty()
+    {
+        return Err(ReconcileTruthReviewsError::InvalidCommand("v4.owner_contract_binding"));
+    }
+    assert_unprivileged_pg_effect_role(pool).await?;
+    let fingerprint = contract_fingerprint()?;
+    let invocation_bytes = serde_json::to_vec(invocation)?;
+    let bound_input_bytes = serde_json::to_vec(&invocation.bound_input)?;
+    let row = sqlx::query(
+        "SELECT * FROM pipeline.consume_pg_truth_review_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+    )
+    .bind(input.admission_id)
     .bind(input.run_id)
+    .bind(&input.scope.tenant_id)
     .bind(&input.context_key)
-    .bind(&observed_hash)
-    .bind(created as i64)
-    .bind(open)
-    .fetch_one(&mut *tx)
-    .await?;
-    let output = receipt_from_row(&receipt);
-    tx.commit().await?;
-    Ok(output)
+    .bind(child_workflow_id)
+    .bind(child_workflow_run_id)
+    .bind(&input.operation_instance)
+    .bind(&input.plan_hash)
+    .bind(&fingerprint)
+    .bind(&invocation.checked_dispatch.execution_key)
+    .bind(4_i16)
+    .bind(&invocation.parent.workflow_id)
+    .bind(&invocation.parent.run_id)
+    .bind(&invocation.checked_dispatch.input_hash)
+    .bind(invocation_bytes)
+    .bind(bound_input_bytes)
+    .bind(&invocation.owner_command_bytes)
+    .fetch_one(pool)
+    .await
+    .map_err(map_owner_sql_error)?;
+    Ok(receipt_from_row(&row))
 }
 
 fn receipt_from_row(row: &sqlx::postgres::PgRow) -> ReconcileTruthReviewsReceipt {

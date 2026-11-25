@@ -8,19 +8,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY app ./app
 ENV SQLX_OFFLINE=true \
     CARGO_PROFILE_RELEASE_OPT_LEVEL=0 \
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 \
     CARGO_PROFILE_RELEASE_STRIP=symbols
 
+# The build context is produced by the canonical Cargo metadata-based
+# prepare_worker_build_context.py for ONE owner and ONE exact committed SHA.
+# Unrelated workspace sources are absent; unchanged manifests and generated
+# dependency skeleton keep third-party compilation in a reusable Docker layer.
+ARG OWNER_PACKAGE
+COPY dependency-skeleton/app ./app
+RUN case "$OWNER_PACKAGE" in \
+      temporal_orchestrator|temporal_pg_effects) ;; \
+      *) echo "invalid owner package" >&2; exit 1 ;; \
+    esac \
+    && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE"
+
+COPY app ./app
+# Docker COPY can preserve an old source mtime; guarantee fresh owner codegen
+# without invalidating the independent dependency skeleton compilation layer.
+RUN find /app/app/rust -type f -name '*.rs' \
+    \( -path '*/src/*' -o -name 'build.rs' \) -exec touch {} + \
+    && cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
+      -p "$OWNER_PACKAGE" --bin "$OWNER_PACKAGE"
+
 FROM build-base AS pure-builder
-RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-    -p temporal_orchestrator --bin temporal_orchestrator
 
 FROM build-base AS pg-builder
-RUN cargo build --release --locked --manifest-path /app/app/rust/Cargo.toml \
-    -p temporal_pg_effects --bin temporal_pg_effects
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \

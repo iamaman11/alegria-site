@@ -2301,6 +2301,7 @@ dependencies = [
  "temporalio-sdk-core",
  "testcontainers",
  "tokio",
+ "truth_domain",
  "uuid",
 ]
 
@@ -5321,6 +5322,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures-util",
+ "operation_protocol",
  "seo_application",
  "serde_json",
  "temporal_gateway",
@@ -5356,6 +5358,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "truth_domain",
  "uuid",
 ]
 

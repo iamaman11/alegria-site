@@ -75,6 +75,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
     def test_operator_json_is_confined_to_one_cli_adapter_and_one_e2e_fixture(self) -> None:
         self.assertEqual(PG_V3_OPERATOR_JSON_BOUNDARIES, {
             "app/rust/services/temporal_pg_effects/src/operator.rs",
+            "app/rust/services/temporal_pg_effects/src/operator_v4.rs",
             "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_operator_cli_tests.rs",
         })
         for relative in PG_V3_OPERATOR_JSON_BOUNDARIES:
@@ -91,7 +92,9 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
     def test_typed_effect_json_is_adapter_or_explicit_unit_test_only(self) -> None:
         self.assertEqual(V3_TYPED_EFFECT_JSON_BOUNDARIES, {
             "app/rust/crates/seo_application/src/operation_adapter/effectful_v1.rs",
+            "app/rust/crates/seo_application/src/operation_adapter/effectful_v1/tests.rs",
             "app/rust/crates/truth_domain/src/review_effect_contract/tests.rs",
+            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
         })
         for relative in V3_TYPED_EFFECT_JSON_BOUNDARIES:
             with self.subTest(relative=relative):
@@ -106,7 +109,7 @@ class PgHistoryJsonBoundaryTests(unittest.TestCase):
 
     def test_production_owner_code_remains_deny_by_default(self) -> None:
         for relative in (
-            "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
+            "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/operation_protocol/src/lib.rs",
             "app/rust/services/temporal_pg_effects/src/lib.rs",
             "app/rust/crates/seo_domain/src/domain.rs",

@@ -8,13 +8,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
-    ArtifactBinding, ArtifactId, CheckedDispatch, DispatchAttempt, ExecutionPlan,
-    IdempotencyPolicy, Operation, OperationInstanceId, OperationRef, PlanError, PlanHash, PortId,
+    canonical_effect_dispatch_input_bytes, ArtifactBinding, ArtifactId, BoundEffectInputV4,
+    CheckedDispatch, DispatchAttempt, EffectChildResultV4, ExecutionPlan, IdempotencyPolicy, Operation,
+    OperationInstanceId, OperationRef, PlanError, PlanHash, PortId,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use truth_domain::review_effect_contract::{
-    ReconcileTruthReviewsContractV1, ReconcileTruthReviewsInput, TruthReviewScopeArtifactV1,
+    ReconcileTruthReviewsContractV1, ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt,
+    TruthReviewScopeArtifactV1,
     INPUT_PORT,
 };
 
@@ -117,6 +119,68 @@ pub enum EffectDagError {
     },
     #[error("owner execution is unavailable: per-instance parent/child Run ID admission and PG receipt binding have not been implemented; blocked {0:?}")]
     NoDurableOwnerBridge(Vec<OperationInstanceId>),
+    #[error("mixed DAG state machine called with wrong pure/effect step")]
+    WrongStepKind,
+    #[error("mixed DAG child invocation integrity error: {0}")]
+    InvalidInvocation(String),
+    #[error("mixed DAG PG effect receipt mismatches exact dispatch for {0:?}")]
+    InvalidOwnerReceipt(OperationInstanceId),
+    #[error("mixed DAG was completed before all operations finished")]
+    IncompleteDag,
+    #[error("V4 owner input artifact {0:?} is not canonical typed Truth-review scope JSON")]
+    NonCanonicalOwnerInput(ArtifactId),
+}
+
+/// V4-only strong input boundary. The PostgreSQL owner derives canonical
+/// source bytes under its own admission lock; reject an equivalent but
+/// differently encoded JSON envelope BEFORE starting a child Workflow.
+/// Do not move this rule into V1 preflight: existing V1 History semantics
+/// are frozen and V1 itself always fails closed for effectful execution.
+pub(super) fn require_canonical_owner_inputs_v4(
+    run: &EffectDagRunV1,
+    prepared: &PreparedDagV1,
+) -> Result<(), EffectDagError> {
+    for step in &prepared.steps {
+        let PreparedDagStepV1::Owner { bound_input, .. } = step else {
+            continue;
+        };
+        let actual = run
+            .admitted
+            .get(bound_input)
+            .ok_or_else(|| OperationRunError::MissingArtifact(bound_input.clone()))?;
+        let typed: TruthReviewScopeArtifactV1 = serde_json::from_slice(&actual.payload)
+            .map_err(|error| EffectDagError::InvalidReviewScope {
+                artifact: bound_input.clone(),
+                reason: error.to_string(),
+            })?;
+        let canonical = serde_json::to_vec(&typed)
+            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+        if canonical != actual.payload {
+            return Err(EffectDagError::NonCanonicalOwnerInput(bound_input.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Dedicated typed Temporal child-result JSON boundary. Keep the Workflow
+/// implementation free of freeform JSON parsing; only this adapter knows the
+/// exact versioned PG business receipt schema.
+pub fn decode_owner_child_result_v4(
+    wire: &str,
+    expected: &CheckedDispatch,
+) -> Result<ReconcileTruthReviewsReceipt, EffectDagError> {
+    let result: EffectChildResultV4<ReconcileTruthReviewsReceipt> =
+        serde_json::from_str(wire).map_err(|error| {
+            EffectDagError::InvalidInvocation(format!("invalid typed child receipt: {error}"))
+        })?;
+    if result.schema_revision != operation_protocol::EFFECT_CHILD_SCHEMA_REVISION
+        || result.dispatch_execution_key != expected.execution_key
+    {
+        return Err(EffectDagError::InvalidInvocation(
+            "child Workflow returned a mismatched V4 dispatch receipt".into(),
+        ));
+    }
+    Ok(result.pg_receipt)
 }
 
 fn invalid_command(instance: &OperationInstanceId, reason: &'static str) -> EffectDagError {
@@ -258,7 +322,16 @@ pub fn preflight_effect_dag_v1(
         // The hash covers actual bytes and the concrete command, never an
         // operator-supplied precomputed digest. It does NOT authenticate the
         // artifact's producer or grant PG authority; the PG owner must do so.
-        let actual_input_bytes = serde_json::to_vec(&(bound_input, &admitted.payload, command))
+        let bound = BoundEffectInputV4 {
+            artifact_id: bound_input.clone(),
+            schema: admitted.schema.clone(),
+            scope: admitted.scope.clone(),
+            provenance: admitted.provenance.clone(),
+            payload: admitted.payload.clone(),
+        };
+        let owner_command_bytes = serde_json::to_vec(input)
+            .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
+        let actual_input_bytes = canonical_effect_dispatch_input_bytes(&bound, &owner_command_bytes)
             .map_err(|error| OperationRunError::EnvelopeSerialization(error.to_string()))?;
         let dispatch =
             checked_plan.checked_dispatch(instance, &actual_input_bytes, DispatchAttempt::First)?;

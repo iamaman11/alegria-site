@@ -81,162 +81,18 @@ pub async fn reconcile_truth_candidate_reviews_in_tx(
             "truth HITL context_key and run_id are required",
         ));
     }
-    // Close obsolete open reviews only AFTER the canonical candidate's
-    // independent status or exact source snapshot has changed. The audit is
-    // append-only; human approval on its own cannot close a truth gap.
-    sqlx::query(
-        r#"
-        UPDATE site.seo_hitl_tasks AS t
-        SET queue_state = 'superseded',
-            audit_log_payload = t.audit_log_payload || jsonb_build_array(
-                jsonb_build_object('event', 'truth_candidate_rechecked',
-                    'candidate_status', c.epistemic_status,
-                    'run_id', $2::text, 'at', now())),
-            updated_at = now()
-        FROM extracted.rule_candidates AS c
-        WHERE t.task_type = 'truth_candidate_review'
-          AND t.scope_signature = $1
-          AND t.blocking_execution_key = c.rule_candidate_id
-          AND t.queue_state IN ('open', 'in_review', 'reopened')
-          AND (
-              (t.decision_payload->>'source_snapshot_hash')
-                  IS DISTINCT FROM c.source_snapshot_hash
-              OR (c.epistemic_status <> 'needs_hitl'
-                  AND NOT (
-                      c.epistemic_status = 'rejected'
-                      AND t.decision_payload->'review'->>'decision' = 'reject'
-                  ))
-          )
-        "#,
+    // One canonical SQL policy is shared by the existing app writer and the
+    // admission-gated SECURITY DEFINER owner function. The SQL helper is
+    // SECURITY INVOKER: calling it alone never elevates a restricted worker.
+    let created: i64 = sqlx::query_scalar(
+        "SELECT site.reconcile_truth_candidate_reviews_v1($1, $2)",
     )
     .bind(context_key)
     .bind(run_id)
-    .execute(&mut **tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|e| infra_unavailable(e.to_string()))?;
-    // Raw re-extraction may cascade-delete a candidate after a review was
-    // created. Close the now-unreviewable task without deleting its audit;
-    // a new exact source candidate is queued by the ordinary reconciler below.
-    // Never grant approval to an orphaned candidate or assume its former
-    // evidence still exists.
-    sqlx::query(
-        r#"
-        UPDATE site.seo_hitl_tasks AS t
-        SET queue_state = 'superseded',
-            audit_log_payload = t.audit_log_payload || jsonb_build_array(
-                jsonb_build_object('event', 'truth_candidate_source_missing',
-                    'run_id', $2::text, 'at', now())),
-            updated_at = now()
-        WHERE t.task_type = 'truth_candidate_review'
-          AND t.scope_signature = $1
-          AND t.queue_state IN ('open', 'in_review', 'reopened')
-          AND NOT EXISTS (
-              SELECT 1 FROM extracted.rule_candidates AS c
-              WHERE c.rule_candidate_id = t.blocking_execution_key
-                AND c.context_key = $1
-          )
-        "#,
-    )
-    .bind(context_key)
-    .bind(run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
-    // A candidate can become unresolved again after an independent recheck,
-    // or the extraction projection can change while source bytes stay fixed.
-    // Reopen the SAME task; keep the immutable audit, discard the stale review
-    // verdict and refresh the candidate payload. No duplicate queue owner.
-    sqlx::query(
-        r#"
-        UPDATE site.seo_hitl_tasks AS t
-        SET queue_state = 'open',
-            current_owner_role = 'truth_reviewer',
-            decision_payload = (
-                t.decision_payload || jsonb_build_object(
-                    'raw_section_id', c.raw_section_id,
-                    'role', c.role,
-                    'concept', c.concept_canonical_key,
-                    'params', c.params, 'scope', c.scope,
-                    'source_url', c.source_key,
-                    'source_snapshot_hash', c.source_snapshot_hash,
-                    'evidence_quote', c.evidence_quote,
-                    'span_start', c.span_start, 'span_end', c.span_end,
-                    'llm_provider', c.llm_provider, 'llm_model', c.llm_model,
-                    'prompt_version', c.prompt_version,
-                    'epistemic_status', 'needs_hitl', 'recheck_required', true)
-            ) - 'review',
-            audit_log_payload = t.audit_log_payload || jsonb_build_array(
-                jsonb_build_object('event', 'truth_candidate_reopened_for_review',
-                    'run_id', $2::text, 'at', now())),
-            updated_at = now()
-        FROM extracted.rule_candidates AS c
-        WHERE t.task_key = 'truth_candidate_review@1:' ||
-                c.rule_candidate_id || ':' || c.source_snapshot_hash
-          AND t.task_type = 'truth_candidate_review'
-          AND t.scope_signature = $1
-          AND c.context_key = $1
-          AND c.epistemic_status = 'needs_hitl'
-          AND (
-              t.queue_state = 'superseded'
-              OR (t.decision_payload->>'raw_section_id')::bigint
-                  IS DISTINCT FROM c.raw_section_id
-              OR (t.decision_payload->>'role') IS DISTINCT FROM c.role
-              OR (t.decision_payload->>'concept') IS DISTINCT FROM c.concept_canonical_key
-              OR t.decision_payload->'params' IS DISTINCT FROM c.params
-              OR t.decision_payload->'scope' IS DISTINCT FROM c.scope
-              OR (t.decision_payload->>'source_url') IS DISTINCT FROM c.source_key
-              OR (t.decision_payload->>'evidence_quote') IS DISTINCT FROM c.evidence_quote
-              OR (t.decision_payload->>'span_start')::integer IS DISTINCT FROM c.span_start
-              OR (t.decision_payload->>'span_end')::integer IS DISTINCT FROM c.span_end
-              OR (t.decision_payload->>'llm_provider') IS DISTINCT FROM c.llm_provider
-              OR (t.decision_payload->>'llm_model') IS DISTINCT FROM c.llm_model
-              OR (t.decision_payload->>'prompt_version') IS DISTINCT FROM c.prompt_version
-          )
-        "#,
-    )
-    .bind(context_key)
-    .bind(run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
-    let result = sqlx::query(
-        r#"
-        INSERT INTO site.seo_hitl_tasks
-            (task_key, task_type, queue_state, first_owner_role, current_owner_role,
-             scope_signature, blocking_step_name, blocking_execution_key,
-             severity, decision_payload, audit_log_payload)
-        SELECT
-            'truth_candidate_review@1:' || c.rule_candidate_id || ':' || c.source_snapshot_hash,
-            'truth_candidate_review', 'open', 'truth_reviewer', 'truth_reviewer',
-            c.context_key, 'truth_adjudication', c.rule_candidate_id,
-            'blocking',
-            jsonb_build_object(
-                'schema_version', 1, 'candidate_id', c.rule_candidate_id,
-                'context_key', c.context_key, 'raw_section_id', c.raw_section_id,
-                'role', c.role, 'concept', c.concept_canonical_key,
-                'params', c.params, 'scope', c.scope,
-                'source_url', c.source_key, 'source_snapshot_hash', c.source_snapshot_hash,
-                'evidence_quote', c.evidence_quote,
-                'span_start', c.span_start, 'span_end', c.span_end,
-                'llm_provider', c.llm_provider, 'llm_model', c.llm_model,
-                'prompt_version', c.prompt_version, 'epistemic_status', 'needs_hitl',
-                'recheck_required', true),
-            jsonb_build_array(jsonb_build_object(
-                'event', 'truth_candidate_needs_review',
-                'run_id', $2::text,
-                'source_snapshot_hash', c.source_snapshot_hash))
-        FROM extracted.rule_candidates c
-        WHERE c.context_key = $1
-          AND c.epistemic_status = 'needs_hitl'
-        ON CONFLICT (task_key) DO NOTHING
-        "#,
-    )
-    .bind(context_key)
-    .bind(run_id)
-    .execute(&mut **tx)
-    .await
-    .map_err(|e| infra_unavailable(e.to_string()))?;
-    Ok(result.rows_affected())
+    Ok(created as u64)
 }
 
 /// A rejection is a conservative input to the *existing* canonical

@@ -115,7 +115,7 @@ async fn pg_v3_seed_review_fixture(pool: &sqlx::PgPool) -> PgV3ReviewFixture {
 #[cfg(feature = "e2e")]
 async fn pg_v3_issue_operator_admission(pool: &sqlx::PgPool, fixture: &PgV3ReviewFixture) {
     use postgres_store::truth_review_effect_v3::{
-        contract_fingerprint, CANDIDATE_SET_HASH_SQL,
+        contract_fingerprint, execution_key, CANDIDATE_SET_HASH_SQL,
     };
 
     // Only the privileged operator connection sees this INSERT. The hash is
@@ -130,8 +130,10 @@ async fn pg_v3_issue_operator_admission(pool: &sqlx::PgPool, fixture: &PgV3Revie
         "INSERT INTO pipeline.pg_effect_v3_admissions
          (admission_id, run_id, tenant_id, context_key, workflow_id,
           workflow_execution_run_id, operation_instance, plan_hash,
-          contract_fingerprint, candidate_set_hash, issued_by, expires_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ci_authorized_operator',now() + interval '1 hour')",
+          contract_fingerprint, candidate_set_hash, v3_expected_execution_key,
+          issued_by, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,
+                 'ci_authorized_operator',now() + interval '1 hour')",
     )
     .bind(fixture.command.admission_id)
     .bind(fixture.command.run_id)
@@ -143,9 +145,40 @@ async fn pg_v3_issue_operator_admission(pool: &sqlx::PgPool, fixture: &PgV3Revie
     .bind(&fixture.command.plan_hash)
     .bind(contract_fingerprint().expect("pin typed owner contract"))
     .bind(observed_hash)
+    .bind(execution_key(&fixture.workflow_id, &fixture.workflow_run_id, &fixture.command)
+        .expect("pin canonical admitted V3 receipt key"))
     .execute(pool)
     .await
     .expect("operator issues independently authorized PG effect admission");
+}
+
+#[cfg(feature = "e2e")]
+async fn pg_v3_issue_historical_unpinned_admission(
+    pool: &sqlx::PgPool,
+    fixture: &PgV3ReviewFixture,
+) {
+    use postgres_store::truth_review_effect_v3::contract_fingerprint;
+    sqlx::query(
+        "INSERT INTO pipeline.pg_effect_v3_admissions
+         (admission_id, run_id, tenant_id, context_key, workflow_id,
+          workflow_execution_run_id, operation_instance, plan_hash,
+          contract_fingerprint, candidate_set_hash, issued_by, expires_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+                 pipeline.pg_truth_candidate_set_hash_v1($4),
+                 'historical_v3_operator',now() + interval '1 hour')",
+    )
+    .bind(fixture.command.admission_id)
+    .bind(fixture.command.run_id)
+    .bind(&fixture.command.scope.tenant_id)
+    .bind(&fixture.command.context_key)
+    .bind(&fixture.workflow_id)
+    .bind(&fixture.workflow_run_id)
+    .bind(&fixture.command.operation_instance)
+    .bind(&fixture.command.plan_hash)
+    .bind(contract_fingerprint().expect("original V3 contract hash"))
+    .execute(pool)
+    .await
+    .expect("seed historical V3 admission with NULL key before upgrade");
 }
 
 #[cfg(feature = "e2e")]
@@ -166,9 +199,13 @@ async fn pg_v3_unprivileged_effect_identity(postgres: &PostgresHarness) -> (sqlx
          GRANT USAGE ON SCHEMA pipeline, site, extracted, raw, verified, system TO {role};
          GRANT SELECT ON pipeline.execution_runs, pipeline.step_executions,
                          pipeline.pg_effect_v3_admissions TO {role};
-         GRANT SELECT, INSERT ON pipeline.pg_effect_v3_receipts TO {role};
+         GRANT SELECT ON pipeline.pg_effect_v3_receipts TO {role};
          GRANT SELECT ON extracted.rule_candidates, raw.sections, raw.pages TO {role};
-         GRANT SELECT, INSERT, UPDATE ON site.seo_hitl_tasks TO {role};"
+         GRANT SELECT ON site.seo_hitl_tasks TO {role};
+         GRANT EXECUTE ON FUNCTION pipeline.consume_pg_truth_review_v1(
+             UUID,UUID,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,SMALLINT,
+             TEXT,TEXT,TEXT,BYTEA,BYTEA,BYTEA
+         ) TO {role};"
     );
     // Identifiers are composed solely of a fixed prefix and generated UUID
     // hex, and this PostgreSQL lives inside this test's disposable container.
@@ -408,6 +445,36 @@ async fn pg_v3_truth_review_admission_effect_idempotence_staleness_and_role_boun
         .expect("start disposable real application PostgreSQL");
     let effect_pool = pg_v3_unprivileged_effect_pool(&postgres).await;
 
+    // A stolen Worker DB credential is not an HITL adjudicator and cannot
+    // manufacture a receipt. Only the independently validating owner SQL
+    // function has definer write rights. Its underlying invoker-only policy
+    // cannot be called by this SELECT/EXECUTE-only Activity login either.
+    for forbidden_sql in [
+        "UPDATE site.seo_hitl_tasks SET queue_state = 'resolved'",
+        "UPDATE site.seo_hitl_tasks SET decision_payload = '{\"review\":{\"decision\":\"approve\"}}'::jsonb",
+        "INSERT INTO pipeline.pg_effect_v3_receipts
+         (admission_id, execution_key, operation_id, operation_revision,
+          run_id, context_key, candidate_set_hash, created_review_tasks, open_review_tasks)
+         VALUES (gen_random_uuid(), repeat('a',64),
+                 'pg.truth.reconcile_candidate_reviews',1,gen_random_uuid(),
+                 'forged',repeat('b',64),0,0)",
+        "SELECT site.reconcile_truth_candidate_reviews_v1('forged','forged')",
+    ] {
+        let refused = sqlx::query(forbidden_sql)
+            .execute(&effect_pool)
+            .await
+            .expect_err("restricted Worker exercised arbitrary HITL/receipt SQL");
+        assert_eq!(
+            refused
+                .as_database_error()
+                .and_then(|error| error.code())
+                .as_deref(),
+            Some("42501"),
+            "expected privilege denial for direct effect: {forbidden_sql}"
+        );
+    }
+    eprintln!("CI_PG_V3_NO_DIRECT_HITL_OR_RECEIPT_DML=PASS");
+
     // Forged DAG-compatible command cannot grant a PG effect. Neither review
     // tasks nor receipts exist when there was no operator admission.
     let forged = pg_v3_seed_review_fixture(&postgres.pool).await;
@@ -423,8 +490,287 @@ async fn pg_v3_truth_review_admission_effect_idempotence_staleness_and_role_boun
     pg_v3_assert_no_effect(&postgres.pool, &forged).await;
     eprintln!("CI_PG_V3_FORGED=PASS");
 
+    // V4 admission is NOT a V3 capability. A database constraint must reject
+    // missing V4 parent-child attestation fields (SQL CHECK NULL is otherwise
+    // UNKNOWN/accepted), and a fully shaped V4 row cannot be downgraded into
+    // the legacy V3 Activity even if its child/parent run IDs were identical.
+    let downgrade = pg_v3_seed_review_fixture(&postgres.pool).await;
+    let malformed_v4 = sqlx::query(
+        "INSERT INTO pipeline.pg_effect_v3_admissions
+         (admission_id, admission_schema_revision, run_id, tenant_id, context_key,
+          workflow_id, workflow_execution_run_id, operation_instance, plan_hash,
+          contract_fingerprint, candidate_set_hash, issued_by, expires_at)
+         VALUES ($1,4,$2,$3,$4,$5,$6,$7,$8,$9,
+                 pipeline.pg_truth_candidate_set_hash_v1($4),'ci_v4_shape',now()+interval '1 hour')",
+    )
+    .bind(downgrade.command.admission_id)
+    .bind(downgrade.command.run_id)
+    .bind(&downgrade.command.scope.tenant_id)
+    .bind(&downgrade.command.context_key)
+    .bind(&downgrade.workflow_id)
+    .bind(&downgrade.workflow_run_id)
+    .bind(&downgrade.command.operation_instance)
+    .bind(&downgrade.command.plan_hash)
+    .bind(postgres_store::truth_review_effect_v3::contract_fingerprint().unwrap())
+    .execute(&postgres.pool)
+    .await
+    .expect_err("PostgreSQL accepted missing mandatory V4 attestations");
+    assert_eq!(
+        malformed_v4
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+    sqlx::query(
+        "INSERT INTO pipeline.pg_effect_v3_admissions
+         (admission_id, admission_schema_revision, run_id, tenant_id, context_key,
+          workflow_id, workflow_execution_run_id, operation_instance, plan_hash,
+          contract_fingerprint, candidate_set_hash, issued_by, expires_at,
+          parent_workflow_id, parent_workflow_run_id, dispatch_execution_key,
+          dispatch_input_hash, invocation_sha256, bound_input_sha256,
+          owner_command_sha256, temporal_attestation_sha256,
+          temporal_child_started_event_id)
+         VALUES ($1,4,$2,$3,$4,$5,$6,$7,$8,$9,
+                 pipeline.pg_truth_candidate_set_hash_v1($4),'ci_v4_shape',now()+interval '1 hour',
+                 'parent-workflow',$6,repeat('a',64),repeat('b',64),repeat('c',64),
+                 repeat('d',64),repeat('e',64),repeat('f',64),1)",
+    )
+    .bind(downgrade.command.admission_id)
+    .bind(downgrade.command.run_id)
+    .bind(&downgrade.command.scope.tenant_id)
+    .bind(&downgrade.command.context_key)
+    .bind(&downgrade.workflow_id)
+    .bind(&downgrade.workflow_run_id)
+    .bind(&downgrade.command.operation_instance)
+    .bind(&downgrade.command.plan_hash)
+    .bind(postgres_store::truth_review_effect_v3::contract_fingerprint().unwrap())
+    .execute(&postgres.pool)
+    .await
+    .expect("operator-owned V4-specific attestation row inserted for negative downgrade test");
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &downgrade.workflow_id,
+            &downgrade.workflow_run_id,
+            &downgrade.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::AdmissionDenied)
+    ));
+    // Call the SECURITY DEFINER entrypoint DIRECTLY over the stolen Worker
+    // DSN, bypassing all Rust typed validation. Matching claimed parent/child
+    // IDs and checked key still cannot substitute for the operator-pinned
+    // exact Temporal invocation/bound-command byte SHA256 fingerprints.
+    let forged_v4_bytes = sqlx::query(
+        "SELECT * FROM pipeline.consume_pg_truth_review_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+    )
+    .bind(downgrade.command.admission_id)
+    .bind(downgrade.command.run_id)
+    .bind(&downgrade.command.scope.tenant_id)
+    .bind(&downgrade.command.context_key)
+    .bind(&downgrade.workflow_id)
+    .bind(&downgrade.workflow_run_id)
+    .bind(&downgrade.command.operation_instance)
+    .bind(&downgrade.command.plan_hash)
+    .bind(postgres_store::truth_review_effect_v3::contract_fingerprint().unwrap())
+    .bind("a".repeat(64))
+    .bind(4_i16)
+    .bind("parent-workflow")
+    .bind(&downgrade.workflow_run_id)
+    .bind("b".repeat(64))
+    .bind(b"forged-child-history-bytes".to_vec())
+    .bind(b"forged-artifact".to_vec())
+    .bind(b"forged-command".to_vec())
+    .fetch_one(&effect_pool)
+    .await
+    .expect_err("direct SQL V4 invocation-byte forgery consumed admission");
+    assert_eq!(
+        forged_v4_bytes
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("AV001")
+    );
+    pg_v3_assert_no_effect(&postgres.pool, &downgrade).await;
+    eprintln!("CI_PG_V4_SHAPE_AND_V3_DOWNGRADE_DENIED=PASS");
+
+    // An independently admitted V4 child may share the canonical parent run,
+    // plan and operation instance with an older V3 child, while the old
+    // uniqueness constraint sees two different child Temporal Run IDs.
+    // Neither revision may then create a SECOND business receipt. Require
+    // an explicit operator drain/cutover rather than consume either blindly.
+    let cross_revision = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_operator_admission(&postgres.pool, &cross_revision).await;
+    let competing_v4_admission_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO pipeline.pg_effect_v3_admissions
+         (admission_id, admission_schema_revision, run_id, tenant_id, context_key,
+          workflow_id, workflow_execution_run_id, operation_instance, plan_hash,
+          contract_fingerprint, candidate_set_hash, issued_by, expires_at,
+          parent_workflow_id, parent_workflow_run_id, dispatch_execution_key,
+          dispatch_input_hash, invocation_sha256, bound_input_sha256,
+          owner_command_sha256, temporal_attestation_sha256,
+          temporal_child_started_event_id)
+         VALUES ($1,4,$2,$3,$4,'different-v4-child',$5,$6,$7,$8,
+                 pipeline.pg_truth_candidate_set_hash_v1($4),
+                 'ci_cross_revision',now()+interval '1 hour',
+                 'parent-workflow',$9,repeat('a',64),repeat('b',64),repeat('c',64),
+                 repeat('d',64),repeat('e',64),repeat('f',64),1)",
+    )
+    .bind(competing_v4_admission_id)
+    .bind(cross_revision.command.run_id)
+    .bind(&cross_revision.command.scope.tenant_id)
+    .bind(&cross_revision.command.context_key)
+    .bind(Uuid::new_v4().to_string())
+    .bind(&cross_revision.command.operation_instance)
+    .bind(&cross_revision.command.plan_hash)
+    .bind(postgres_store::truth_review_effect_v3::contract_fingerprint().unwrap())
+    .bind(&cross_revision.workflow_run_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("both independently shaped revision admissions can historically coexist");
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &cross_revision.workflow_id,
+            &cross_revision.workflow_run_id,
+            &cross_revision.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::AdmissionDenied)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &cross_revision).await;
+    eprintln!("CI_PG_V4_CROSS_REVISION_DOUBLE_EFFECT_DENIED=PASS");
+
+    // Unconsumed opposite-revision authority can be explicitly revoked and
+    // drained: no receipt exists, so the original admitted V3 business effect
+    // is legal again. A completed opposite-revision receipt would permanently
+    // block this other instance from producing a duplicate.
+    sqlx::query(
+        "UPDATE pipeline.pg_effect_v3_admissions
+         SET revoked_at = clock_timestamp() WHERE admission_id = $1",
+    )
+    .bind(competing_v4_admission_id)
+    .execute(&postgres.pool)
+    .await
+    .expect("operator revokes unconsumed opposite-revision admission");
+    let resumed = execute_admitted_reconcile(
+        &effect_pool,
+        &cross_revision.workflow_id,
+        &cross_revision.workflow_run_id,
+        &cross_revision.command,
+    )
+    .await
+    .expect("revoked, unconsumed opposite revision does not poison cutover");
+    assert_eq!(resumed.created_review_tasks, 1);
+    eprintln!("CI_PG_V4_REVOKED_UNCONSUMED_CUTOVER_ALLOWED=PASS");
+
+    // Historical upgrade boundary: a V3 admission issued before the
+    // expected-key column existed cannot originate an effect (otherwise a
+    // stolen Worker credential can choose a forged receipt key), while a
+    // committed historical receipt still replays read-only and unchanged.
+    let legacy_unconsumed = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_historical_unpinned_admission(&postgres.pool, &legacy_unconsumed).await;
+    assert!(matches!(
+        execute_admitted_reconcile(
+            &effect_pool,
+            &legacy_unconsumed.workflow_id,
+            &legacy_unconsumed.workflow_run_id,
+            &legacy_unconsumed.command,
+        )
+        .await,
+        Err(ReconcileTruthReviewsError::AdmissionDenied)
+    ));
+    pg_v3_assert_no_effect(&postgres.pool, &legacy_unconsumed).await;
+
+    let historical_replay = pg_v3_seed_review_fixture(&postgres.pool).await;
+    pg_v3_issue_historical_unpinned_admission(&postgres.pool, &historical_replay).await;
+    let historical_key = postgres_store::truth_review_effect_v3::execution_key(
+        &historical_replay.workflow_id,
+        &historical_replay.workflow_run_id,
+        &historical_replay.command,
+    )
+    .expect("original receipt execution key");
+    let old_receipt: Uuid = sqlx::query_scalar(
+        "INSERT INTO pipeline.pg_effect_v3_receipts
+         (admission_id, execution_key, operation_id, operation_revision,
+          run_id, context_key, candidate_set_hash,
+          created_review_tasks, open_review_tasks)
+         VALUES ($1,$2,'pg.truth.reconcile_candidate_reviews',1,$3,$4,
+                 pipeline.pg_truth_candidate_set_hash_v1($4),0,0)
+         RETURNING receipt_id",
+    )
+    .bind(historical_replay.command.admission_id)
+    .bind(&historical_key)
+    .bind(historical_replay.command.run_id)
+    .bind(&historical_replay.command.context_key)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("seed originally committed V3 receipt before key migration");
+    let replayed = execute_admitted_reconcile(
+        &effect_pool,
+        &historical_replay.workflow_id,
+        &historical_replay.workflow_run_id,
+        &historical_replay.command,
+    )
+    .await
+    .expect("historical durable receipt replay remains valid");
+    assert_eq!(replayed.receipt_id, old_receipt);
+    assert_eq!(replayed.execution_key, historical_key);
+    assert_eq!(replayed.created_review_tasks, 0);
+    let historical_tasks: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM site.seo_hitl_tasks WHERE scope_signature = $1",
+    )
+    .bind(&historical_replay.command.context_key)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("historic replay did not create new human review");
+    assert_eq!(historical_tasks, 0);
+    eprintln!("CI_PG_V3_HISTORICAL_REPLAY_ONLY_NO_NEW_EFFECT=PASS");
+
     let authorized = pg_v3_seed_review_fixture(&postgres.pool).await;
     pg_v3_issue_operator_admission(&postgres.pool, &authorized).await;
+    let mut forged_session = effect_pool.begin().await.expect("stolen Worker SQL session");
+    sqlx::query("SELECT set_config('app.pg_effect_admitted','true',true)")
+        .execute(&mut *forged_session)
+        .await
+        .expect("attacker may set arbitrary local GUC, never authorization");
+    let forged_execution_key = sqlx::query(
+        "SELECT * FROM pipeline.consume_pg_truth_review_v1(
+            $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
+    )
+    .bind(authorized.command.admission_id)
+    .bind(authorized.command.run_id)
+    .bind(&authorized.command.scope.tenant_id)
+    .bind(&authorized.command.context_key)
+    .bind(&authorized.workflow_id)
+    .bind(&authorized.workflow_run_id)
+    .bind(&authorized.command.operation_instance)
+    .bind(&authorized.command.plan_hash)
+    .bind(postgres_store::truth_review_effect_v3::contract_fingerprint().unwrap())
+    .bind("f".repeat(64))
+    .bind(3_i16)
+    .bind(None::<String>)
+    .bind(None::<String>)
+    .bind(None::<String>)
+    .bind(None::<Vec<u8>>)
+    .bind(None::<Vec<u8>>)
+    .bind(None::<Vec<u8>>)
+    .fetch_one(&mut *forged_session)
+    .await
+    .expect_err("attacker-chosen V3 receipt key bypassed owner SQL capability");
+    assert_eq!(
+        forged_execution_key
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("AV001")
+    );
+    forged_session.rollback().await.expect("clear rejected attack transaction");
+    pg_v3_assert_no_effect(&postgres.pool, &authorized).await;
+    eprintln!("CI_PG_V3_V4_DIRECT_SQL_CAPABILITY_FORGERY_DENIED=PASS");
     // An unprivileged Activity cannot update or revoke the admission, even
     // if it knows the exact admission UUID and every command field.
     assert!(

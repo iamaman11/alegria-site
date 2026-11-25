@@ -13,10 +13,12 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use futures::FutureExt;
+use operation_protocol::{EffectChildInvocationV4, EffectChildResultV4};
 use postgres_store::truth_review_effect_v3::{
-    assert_unprivileged_pg_effect_role, execute_admitted_reconcile, ReconcileTruthReviewsError,
-    ReconcileTruthReviewsInput, ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE,
-    PG_EFFECT_WORKFLOW_TYPE,
+    assert_unprivileged_pg_effect_role, execute_admitted_reconcile,
+    execute_admitted_reconcile_v4, ReconcileTruthReviewsError, ReconcileTruthReviewsInput,
+    ReconcileTruthReviewsReceipt, RetryClass, PG_EFFECT_TASK_QUEUE, PG_EFFECT_WORKFLOW_TYPE,
+    PG_EFFECT_WORKFLOW_TYPE_V4,
 };
 use sqlx::PgPool;
 use temporalio_client::WorkflowHistory;
@@ -30,6 +32,52 @@ use temporalio_sdk::{
 };
 
 mod operator;
+mod operator_v4;
+
+/// Production can mount a Docker/Orchestrator secret as a private file;
+/// credentials never have to appear in a process environment. Exactly one
+/// distinct V3/V4 Worker DSN source is permitted; there is no DATABASE_URL
+/// fallback. The operator has its own separately authorized credentials.
+fn worker_database_url() -> Result<String> {
+    let inline = std::env::var("PG_EFFECT_WORKER_DATABASE_URL").ok();
+    let file_path = std::env::var("PG_EFFECT_WORKER_DATABASE_URL_FILE").ok();
+    let url = match (inline, file_path) {
+        (Some(_), Some(_)) => anyhow::bail!(
+            "configure only one of PG_EFFECT_WORKER_DATABASE_URL or PG_EFFECT_WORKER_DATABASE_URL_FILE"
+        ),
+        (Some(url), None) => url,
+        (None, Some(file_path)) => {
+            let path = std::path::Path::new(&file_path);
+            anyhow::ensure!(path.is_absolute(), "PG effect DSN secret path must be absolute");
+            let metadata = std::fs::symlink_metadata(path)
+                .with_context(|| format!("stat PG effect DSN secret {}", path.display()))?;
+            anyhow::ensure!(metadata.file_type().is_file(), "PG effect DSN secret must be a regular file, not symlink");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                anyhow::ensure!(
+                    metadata.permissions().mode() & 0o077 == 0,
+                    "PG effect DSN secret must not be readable or writable by group/others (0600/0400)"
+                );
+            }
+            std::fs::read_to_string(path)
+                .with_context(|| format!("read PG effect DSN secret {}", path.display()))?
+                .trim_end_matches(|c| c == '\r' || c == '\n')
+                .to_owned()
+        }
+        (None, None) => anyhow::bail!(
+            "PG effect Worker requires PG_EFFECT_WORKER_DATABASE_URL_FILE or PG_EFFECT_WORKER_DATABASE_URL"
+        ),
+    };
+    anyhow::ensure!(
+        !url.trim().is_empty()
+            && url.trim() == url
+            && !url.contains('\r')
+            && !url.contains('\n'),
+        "PG effect Worker DSN is blank or contains unsafe whitespace"
+    );
+    Ok(url)
+}
 
 // Required by Temporal proc-macro expansions.
 use futures_util as _;
@@ -89,6 +137,41 @@ impl PgTruthReviewActivities {
             ActivityError::application(failure)
         })
     }
+
+    /// The server-attested V4 child workflow can consume only a V4 admission
+    /// pinned to its exact child execution and checked parent dispatch.
+    #[activity]
+    pub(crate) async fn reconcile_truth_candidate_reviews_v4(
+        self: Arc<Self>,
+        ctx: ActivityContext,
+        invocation: EffectChildInvocationV4,
+    ) -> Result<ReconcileTruthReviewsReceipt, ActivityError> {
+        let info = ctx.info();
+        let workflow_id = info.workflow_id.as_deref().ok_or_else(||
+            activity_terminal("V4 effect requires server-attested child Workflow ID"))?;
+        let run_id = info.workflow_run_id.as_deref().ok_or_else(||
+            activity_terminal("V4 effect requires server-attested child Workflow Run ID"))?;
+        if info.workflow_type.as_deref() != Some(PG_EFFECT_WORKFLOW_TYPE_V4)
+            || info.task_queue != PG_EFFECT_TASK_QUEUE
+        {
+            return Err(activity_terminal(
+                "V4 Activity invoked outside exact registered PG child Workflow/Queue",
+            ));
+        }
+        execute_admitted_reconcile_v4(&self.pool, workflow_id, run_id, &invocation)
+            .await
+            .map_err(|err| {
+                let failure = match err.retry_class() {
+                    RetryClass::Never => ApplicationFailure::non_retryable(
+                        std::io::Error::other(err.to_string()),
+                    ),
+                    RetryClass::RetryWithSameAdmission => ApplicationFailure::new(
+                        std::io::Error::other(err.to_string()),
+                    ),
+                };
+                ActivityError::application(failure)
+            })
+    }
 }
 
 fn activity_terminal(message: &str) -> ActivityError {
@@ -101,6 +184,62 @@ fn activity_terminal(message: &str) -> ActivityError {
 struct PgTruthReviewReconcileV3Workflow {
     immutable_command: ReconcileTruthReviewsInput,
     admission_signal_received: bool,
+}
+
+/// New history-visible type: V3 history cannot silently acquire a new
+/// parent/child authorization interpretation during rolling deployment.
+#[workflow]
+struct PgTruthReviewReconcileV4Workflow {
+    immutable_invocation: EffectChildInvocationV4,
+    admission_signal_received: bool,
+}
+
+#[workflow_methods]
+impl PgTruthReviewReconcileV4Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, invocation: EffectChildInvocationV4) -> Self {
+        Self { immutable_invocation: invocation, admission_signal_received: false }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
+        let invocation = ctx.state(|state| state.immutable_invocation.clone());
+        invocation.verify_integrity().map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })?;
+        ctx.wait_condition(|state| state.admission_signal_received).await?;
+        let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+        options.task_queue = Some(PG_EFFECT_TASK_QUEUE.to_string());
+        let receipt: ReconcileTruthReviewsReceipt = ctx
+            .start_activity(
+                PgTruthReviewActivities::reconcile_truth_candidate_reviews_v4,
+                invocation.clone(),
+                options,
+            )
+            .await?;
+        // V4's durable SQL receipt execution_key equals the checked dispatch
+        // key; V3 retains its older command/workflow-derived key namespace.
+        // Preserve both V4 fields so the parent validates this exact link.
+        serde_json::to_string(&EffectChildResultV4::<ReconcileTruthReviewsReceipt> {
+            schema_revision: 4,
+            dispatch_execution_key: invocation.checked_dispatch.execution_key,
+            pg_receipt: receipt,
+        })
+        .map_err(|error| {
+            temporalio_sdk::WorkflowTermination::failed_application(
+                ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+            )
+        })
+    }
+
+    #[signal(name = "operator_admission_ready_v4")]
+    fn operator_admission_ready_v4(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
+        // An arbitrary Signal is not authority; only PG V4 admitted effect
+        // consumption with exact server ActivityInfo can cross this gate.
+        self.admission_signal_received = true;
+    }
 }
 
 #[workflow_methods]
@@ -166,6 +305,7 @@ async fn replay_history(path: &std::path::Path) -> Result<()> {
         .task_queue(COMMAND_TASK_QUEUE.to_string())
         .build();
     options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
+    options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
     WorkflowReplayer::new(options)
         .map_err(|error| anyhow::anyhow!("construct PG V3 Temporal replayer: {error}"))?
         .replay_workflow(history)
@@ -197,6 +337,12 @@ async fn main() -> Result<()> {
             operator::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
+        if argument == std::ffi::OsStr::new("--operator-issue-v4") {
+            let path = args.next().context("--operator-issue-v4 requires one JSON file")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V4 operator issue arguments");
+            operator_v4::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
         if argument == std::ffi::OsStr::new("--operator-revoke") {
             let id = args.next().context("--operator-revoke requires one UUID")?;
             anyhow::ensure!(
@@ -204,6 +350,12 @@ async fn main() -> Result<()> {
                 "unexpected operator revoke arguments"
             );
             operator::revoke_by_id(&id.to_string_lossy()).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-revoke-v4") {
+            let id = args.next().context("--operator-revoke-v4 requires one UUID")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected V4 operator revoke arguments");
+            operator_v4::revoke_by_id(&id.to_string_lossy()).await?;
             return Ok(());
         }
         anyhow::bail!("unexpected temporal_pg_effects argument: {argument:?}");
@@ -220,8 +372,7 @@ async fn main() -> Result<()> {
 
     // Deliberately not DATABASE_URL: an application admin connection can
     // create its own admissions and is a forbidden runtime identity.
-    let database_url = std::env::var("PG_EFFECT_WORKER_DATABASE_URL")
-        .context("PG_EFFECT_WORKER_DATABASE_URL must identify an unprivileged PG role")?;
+    let database_url = worker_database_url()?;
     let pool = PgPool::connect(&database_url)
         .await
         .context("connect dedicated PG effect database role")?;
@@ -243,6 +394,7 @@ async fn main() -> Result<()> {
     // not join the legacy V1/V2 or pure-DAG worker Task Queue.
     let mut command_options = WorkerOptions::new(COMMAND_TASK_QUEUE).build();
     command_options.register_workflow::<PgTruthReviewReconcileV3Workflow>()?;
+    command_options.register_workflow::<PgTruthReviewReconcileV4Workflow>()?;
     let mut command_worker = Worker::new(&runtime, client.clone(), command_options)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let activity_options = WorkerOptions::new(PG_EFFECT_TASK_QUEUE)

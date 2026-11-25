@@ -234,3 +234,77 @@ including the separately conditional Truth certification fixture) in the
 candidate's declared plan; neither a newly sharded job nor a reduced test
 filter is a legitimate timing optimization. These source-level CI assertions
 still require an actual accepted GitHub run to prove live E2E execution.
+
+## 25 November 2026 — V3 Docker contexts and secret boundary, opt-in only
+
+The preview `infra/temporal/Dockerfile.v3` separates two already existing
+native executables into different final images: provider-free
+`temporal_orchestrator` and PostgreSQL-only `temporal_pg_effects`. Unlike the
+legacy `temporal_worker` image, the V3 evaluation path now accepts a separate
+**Cargo metadata-derived, exact-commit build context per owner**:
+
+| Optional Compose service | Explicit context variable | Cargo package / Docker target | Credential boundary |
+| --- | --- | --- | --- |
+| `temporal-orchestrator-v3` | `V3_PURE_BUILD_CONTEXT` | `temporal_orchestrator` / `pure` | No PG, Neo4j, Qdrant or Outbox DSN |
+| `temporal-effect-dag-v4` | `V3_PURE_BUILD_CONTEXT` (same pure owner image) | `temporal_orchestrator` / `pure` | Separate `alegria-effect-dag-v4` queue; no provider credentials |
+| `temporal-pg-effects-v3` | `V3_PG_BUILD_CONTEXT` | `temporal_pg_effects` / `pg` | Only restricted PostgreSQL secret file |
+| Default `temporal-worker` | Unchanged repository context | Legacy provider-linked runtime | Existing PG + graph + vector owners remain linked |
+
+The current checked-in-manifest conservative production graph (including
+optional/build and target-specific workspace edges, excluding dev-only edges)
+has these exact *manifest-derived* transitive workspace closures:
+
+| Root | Workspace packages | Graph/Vector/PG owner sources |
+| --- | ---: | --- |
+| V3 pure `temporal_orchestrator` | 11 | none |
+| V3 `temporal_pg_effects` | 10 | `postgres_store` only |
+| Legacy `temporal_worker` | 24 | `postgres_store`, `graph_neo4j`, `vector_qdrant` |
+
+These numbers are not resolved third-party dependency weights, compiler units,
+Docker image size or actual rebuild duration. The manifest graph may
+overapproximate feature-selected Cargo build edges; the context export still
+uses actual locked Cargo metadata on a clean accepted source commit.
+
+`automation/prepare_worker_build_context.py --image-owner
+temporal-orchestrator-v3|temporal-pg-effects-v3` exports the selected owner’s
+transitive workspace sources plus every necessary Cargo manifest and lockfile;
+other workspace crates carry inert placeholders. The Dockerfile first copies
+`dependency-skeleton/app` and compiles stable stub targets to a reusable
+dependency layer, then copies `app` from the narrow context and compiles the
+selected binary. Thus the former `COPY app`-from-whole-repository invalidation
+is removed **only when the corresponding V3 context variable points to this
+prepared owner-scoped export**. Compose retains `.` as a default context
+fallback, but an ordinary root checkout has no generated `dependency-skeleton`
+and is not a valid optimized V3 image input. The default path does not prove
+independent rebuilds.
+
+The pure V3 and PostgreSQL V3 services remain under the explicitly requested
+`v3-evaluation` profile. The admitted V4 effect-DAG parent is in a **separate**
+`v4-effect-evaluation` profile, reusing the provider-free image with a
+different Task Queue (`alegria-effect-dag-v4`) and a distinct
+`ALLOW_EFFECT_DAG_ORCHESTRATOR_V4` mode gate defaulting to `false`; its
+`ALLOW_PURE_DAG_ORCHESTRATOR` is pinned to `false`. The V3 pure service still
+polls `alegria-pure-dag-v3` with its original pure-only gate. These services
+neither replace the default Worker nor automatically acquire
+legacy Temporal history, task routing, projection/Outbox ownership, or
+production authority. The PostgreSQL service receives no DSN environment
+value: it requests the external `pg_effect_worker_dsn` secret at
+`/run/secrets/pg_effect_worker_dsn`, owned by UID/GID `65532` with requested
+mode `0400`. Its startup code rejects absent, symlinked, blank or
+group/world-accessible secret files and requires an independently verified
+least-privilege PG role. Compose secret backends can differ in how they apply
+UID/GID/mode; **live verification on the chosen backend is mandatory**, and a
+backend that does not meet the strict file contract must fail closed.
+
+`infra/temporal/check_v3_evaluation_topology.py` statically and negatively
+tests both V3/V4 profile gates, distinct parent queues and exclusive modes,
+owner target selection, separate source context variables,
+absence of forbidden direct provider dependencies, external-secret file path
+and restrictive mode. The context generator has its own source-closure tests.
+These are valuable regression contracts, **not measured Docker builds**:
+no local Docker daemon ran cold/warm images, measured layer-cache invalidation,
+verified secret mount mode, startup CPU/RAM or Task Queue ownership. No
+deployment was cut over, no history drained/replayed, and no rollback was
+tested. The V3 topology therefore remains a **NO-GO production experiment**;
+the four PostgreSQL/Neo4j/Qdrant/Temporal owner rebuild measurement, signed
+exact-source release and ≤180-second full CI target remain open.

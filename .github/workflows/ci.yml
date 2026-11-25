@@ -16,6 +16,21 @@ on:
           - comprehensive
           - worker-image
           - dependency-refresh
+          - physical-study
+      expected_source_sha:
+        description: Exact previously green Draft PR head SHA for a physical study
+        required: false
+        type: string
+      physical_study:
+        description: One optional compiler experiment; never required by the CI gate
+        required: false
+        default: compiler-owners
+        type: choice
+        options:
+          - compiler-owners
+          - coldwarm
+          - pg-harness
+          - owner-rebuild
 
 permissions:
   contents: read
@@ -305,42 +320,6 @@ jobs:
           fi
           python3 automation/run_scoped_cargo_feedback.py \
             --report automation/reports/ci_impact.json "${args[@]}"
-
-      # Diagnostic only. Explicitly label the Draft PR to profile four isolated
-      # owner edits on this same ephemeral runner; ordinary required PR CI never
-      # pays for these experiments. No new job or parallel Cargo compilation.
-      - name: Measure four actual owner-only rebuilds (opt-in)
-        if: contains(github.event.pull_request.labels.*.name, 'owner-build-probe')
-        env:
-          SQLX_OFFLINE: "true"
-        run: python3 automation/measure_owner_rebuild.py
-
-      # Independent from the legacy in-place owner probe: this experimental
-      # A/B study requires a *real* provider-free orchestrator package and
-      # builds four isolated owner-only source deltas in a temporary exact-SHA
-      # git archive. No PR source files or default Task Queues are changed.
-      # Until B exists it fails closed; ordinary PR checks never run it.
-      - name: Compare physical A/B owner relinks (opt-in)
-        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-probe') && !contains(github.event.pull_request.labels.*.name, 'physical-ab-coldwarm')
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          mkdir -p automation/reports
-          python3 automation/compare_physical_build_options.py \
-            --compiler-owners > automation/reports/physical_owner_ab.json
-
-      # Separate on-demand study: three real Cargo executables compiled from
-      # independent empty targets, then each rebuilt warm without source edits.
-      # Mutually exclusive labels avoid two costly full A/B experiments in one
-      # required run; neither path executes on ordinary pull requests.
-      - name: Measure physical A/B cold and warm CPU/RAM (opt-in)
-        if: contains(github.event.pull_request.labels.*.name, 'physical-ab-coldwarm') && !contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')
-        env:
-          SQLX_OFFLINE: "true"
-        run: |
-          mkdir -p automation/reports
-          python3 automation/compare_physical_build_options.py \
-            --compiler > automation/reports/physical_coldwarm_ab.json
 
       - name: Publish Rust compiler cache hit/miss statistics
         if: always()
@@ -775,27 +754,79 @@ jobs:
           path: automation/reports/rust-ci-artifacts/outbox_harness/
           if-no-files-found: error
 
-  # Opt-in physical, isolated cold-build A/B: intentionally outside the
-  # required PR gate and main-merge mandatory owner list. It never changes the
-  # ordinary nine E2E runner schedule or consumes a production compilation.
+  # One optional physical study on a previously green, exact canonical PR SHA.
+  # It never participates in the required PR gate, and cannot replace any of
+  # the 41 real E2E checks. Reuse this existing job for all expensive probes;
+  # no diagnostic Cargo work executes inside a mandatory job.
   rust-pg-physical-ab:
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'physical-pg-harness-ab-probe')
+    if: github.event_name == 'workflow_dispatch' && inputs.operation == 'physical-study'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
-      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      CI_SOURCE_SHA: ${{ inputs.expected_source_sha }}
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
       RUSTC_WRAPPER: ""
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
       SQLX_OFFLINE: "true"
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.expected_source_sha }}
           fetch-depth: 0
+      - name: Fail closed unless exact selected source already passed full PR CI
+        env:
+          EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const expected = process.env.EXPECTED_SOURCE_SHA;
+            if (!/^[0-9a-f]{40}$/.test(expected)) {
+              throw new Error('Physical study requires an exact 40-character source SHA');
+            }
+            const { execFileSync } = require('node:child_process');
+            const actual = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            if (actual !== expected) {
+              throw new Error('Physical study checked-out source differs from selected exact SHA');
+            }
+            const { data } = await github.rest.actions.listWorkflowRunsForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              head_sha: expected, event: 'pull_request', per_page: 100,
+            });
+            const accepted = data.workflow_runs.filter(run =>
+              run.name === 'ci' && run.head_sha === expected &&
+              run.status === 'completed' && run.conclusion === 'success');
+            if (!accepted.length) {
+              throw new Error('No previously successful PR CI run for exact source SHA');
+            }
+            const fullRunMarkers = [
+              'verify', 'rust-e2e-temporal-harness',
+              'rust-temporal-legacy-e2e (temporal_manual)', 'rust-pg-e2e (verify_d)',
+            ];
+            let green = null;
+            for (const run of accepted.slice(0, 5)) {
+              const { data: result } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner, repo: context.repo.repo,
+                run_id: run.id, per_page: 100,
+              });
+              const completedJobs = new Set(result.jobs.filter(job =>
+                job.conclusion === 'success').map(job => job.name));
+              if (fullRunMarkers.every(name => completedJobs.has(name))) {
+                green = run;
+                break;
+              }
+            }
+            if (!green) {
+              throw new Error('Exact SHA has no previously green full-scope PR CI gate and real E2E jobs');
+            }
+            core.info(`PHYSICAL_STUDY_GREEN_SOURCE=PASS sha=${expected} run=${green.id}`);
       - run: bash automation/install_ci_native_tools.sh protoc
       - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
       - name: Install and identify GNU time for physical CPU and RSS evidence
         run: |
           sudo apt-get update -qq
@@ -809,19 +840,42 @@ jobs:
           key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
           restore-keys: |
             cargo-registry-${{ runner.os }}-
-      - name: Compare PG V3 owner and monolith real cold Cargo compilers
+      - name: Execute one selected optional physical study
+        env:
+          PHYSICAL_STUDY: ${{ inputs.physical_study }}
         run: |
-          python3 automation/compare_pg_v3_harness_build.py \
-            --output automation/reports/pg_v3_harness_physical_ab.json \
-            --measure-resources
-          python3 automation/check_pg_v3_harness_build.py \
-            --report automation/reports/pg_v3_harness_physical_ab.json
+          set -euo pipefail
+          mkdir -p automation/reports
+          case "$PHYSICAL_STUDY" in
+            compiler-owners)
+              python3 automation/compare_physical_build_options.py \
+                --compiler-owners > automation/reports/physical_owner_ab.json
+              ;;
+            coldwarm)
+              python3 automation/compare_physical_build_options.py \
+                --compiler > automation/reports/physical_coldwarm_ab.json
+              ;;
+            pg-harness)
+              python3 automation/compare_pg_v3_harness_build.py \
+                --output automation/reports/pg_v3_harness_physical_ab.json --measure-resources
+              python3 automation/check_pg_v3_harness_build.py \
+                --report automation/reports/pg_v3_harness_physical_ab.json
+              ;;
+            owner-rebuild)
+              RUSTC_WRAPPER=sccache python3 automation/measure_owner_rebuild.py
+              ;;
+            *) echo "Unknown physical study kind" >&2; exit 2 ;;
+          esac
       - name: Publish optional isolated build measurement
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: rust-pg-physical-ab-${{ github.event.pull_request.head.sha }}
-          path: automation/reports/pg_v3_harness_physical_ab.json
+          name: rust-pg-physical-ab-${{ inputs.physical_study }}-${{ inputs.expected_source_sha }}
+          path: |
+            automation/reports/pg_v3_harness_physical_ab.json
+            automation/reports/physical_owner_ab.json
+            automation/reports/physical_coldwarm_ab.json
+            automation/reports/owner_rebuild_probe.json
           if-no-files-found: warn
 
   # Actual legacy and V3 Workers compile in parallel with the shared harness

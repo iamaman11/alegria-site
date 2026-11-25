@@ -25,7 +25,7 @@ from run_scoped_cargo_feedback import (
     cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
     run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
-    run_precompiled_e2e_suite, selected_preparations,
+    run_precompiled_e2e_suite, selected_preparations, suite_runtime_environment,
 )
 
 
@@ -261,7 +261,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         self.assertNotIn("INTEGRATION_TEMPORAL_WORKER_BIN", output)
         self.assertNotIn("INTEGRATION_OUTBOX_WORKER_BIN", output)
 
-    def test_pg_v3_operator_cli_reuses_pg_owner_binary_without_temporal_or_monolith(self) -> None:
+    def test_pg_v4_parent_child_operator_cli_requires_both_v3_owner_binaries_no_monolith(self) -> None:
         suites = ["pg_effect_v3"]
         executions, output, measurements = self.run_plan(suites, scope="scoped")
         self.assertEqual([command for command, _ in executions], [
@@ -273,8 +273,28 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         self.assertIn("pg_v3_", output)
         self.assertIn("CI_SUITE_PREPARE=pg_effect_v3 COMMAND=", output)
         self.assertIn("CI_SUITE_PREBUILT=pg_effect_v3 INTEGRATION_PG_EFFECT_WORKER_BIN=", output)
+        self.assertIn("CI_SUITE_PREBUILT=pg_effect_v3 INTEGRATION_EFFECT_DAG_WORKER_BIN=", output)
         self.assertNotIn("INTEGRATION_TEMPORAL_WORKER_BIN", output)
         self.assertNotIn("INTEGRATION_OUTBOX_WORKER_BIN", output)
+
+    def test_live_v4_pg_shard_fails_closed_when_parent_binary_was_not_installed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            runtime = target / "debug"
+            runtime.mkdir(parents=True)
+            pg = runtime / "temporal_pg_effects"
+            pg.write_bytes(b"exact PG child runtime")
+            pg.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                with self.assertRaisesRegex(FileNotFoundError, "temporal_orchestrator"):
+                    suite_runtime_environment(self.report(["pg_effect_v3"]), "pg_effect_v3")
+                pure = runtime / "temporal_orchestrator"
+                pure.write_bytes(b"exact parent runtime")
+                pure.chmod(0o755)
+                with patch("sys.stdout", new_callable=io.StringIO):
+                    env = suite_runtime_environment(self.report(["pg_effect_v3"]), "pg_effect_v3")
+                self.assertEqual(env["INTEGRATION_PG_EFFECT_WORKER_BIN"], str(pg))
+                self.assertEqual(env["INTEGRATION_EFFECT_DAG_WORKER_BIN"], str(pure))
 
     def test_full_workspace_tests_delegated_only_to_parallel_verify_owner(self) -> None:
         suites = ["cms_review_revision", "knowledge_a13", "temporal_restart"]
@@ -657,7 +677,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
         pure_command = list(SUITE_OWNERS["pure_dag_v3"]["command"])
         temporal_command = list(SUITE_OWNERS["pg_temporal_v3"]["command"])
         shards = {
-            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 5)],
+            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 6)],
             "pg_temporal": [("pg_temporal_v3", temporal_command, "temporal_effect_v3_", 1)],
             "temporal_pure": [("pure_dag_v3", pure_command, "pure_v3_", 1)],
         }
@@ -695,7 +715,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     report, "verify_d", suite_job="verify", prebuilt_executable=harness,
                     prebuilt_pg_executable=pg,
                 )
-                self.assertEqual(sum(row["matched_tests"] for row in verify), 5)
+                self.assertEqual(sum(row["matched_tests"] for row in verify), 6)
                 architecture = run_exact_precompiled_e2e_shard(
                     report, "pg_temporal", suite_job="architecture-and-rust",
                     prebuilt_executable=harness, prebuilt_pg_executable=pg,
@@ -720,7 +740,7 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                         report, suite_commands_by_ci_job(report)["verify"], suite_job="verify",
                     )
             self.assertEqual(actual, [
-                ("pg_effect_v3", pg, "pg_v3_", 5),
+                ("pg_effect_v3", pg, "pg_v3_", 6),
                 ("pg_temporal_v3", pg, "temporal_effect_v3_", 1),
                 ("pure_dag_v3", temporal, "pure_v3_", 1),
             ])

@@ -22,7 +22,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,15 +243,27 @@ def git_source_is_clean(paths: list[str]) -> bool:
     return result.returncode == 0
 
 
+def verified_study_source(commit_sha: str, environment: Mapping[str, str]) -> str:
+    """Only explicitly dispatched exact-head studies may perturb local source.
+
+    GitHub's workflow_dispatch GITHUB_SHA can be the moving branch ref; the
+    caller selects an immutable previously green PR SHA independently. Never
+    substitute a synthetic PR merge or an unverified branch tip for that SHA.
+    """
+    if (environment.get("GITHUB_ACTIONS") != "true"
+            or environment.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+            or not environment.get("GITHUB_RUN_ID")):
+        raise RuntimeError("owner rebuild study requires an explicit GitHub Actions dispatch")
+    expected = environment.get("CI_SOURCE_SHA", "")
+    if not re.fullmatch(r"[a-f0-9]{40}", expected) or commit_sha != expected:
+        raise RuntimeError("owner rebuild study source differs from exact selected PR SHA")
+    return expected
+
+
 def run_study() -> dict[str, Any]:
     global LATEST_REPORT
-    if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
-        raise RuntimeError("owner rebuild study is allowed only on an ephemeral PR GitHub Actions runner")
-    if not os.environ.get("GITHUB_RUN_ID") or not os.environ.get("GITHUB_SHA"):
-        raise RuntimeError("missing required GitHub Actions provenance")
     commit_sha = checked_output(["git", "rev-parse", "HEAD"])
-    if commit_sha != os.environ["GITHUB_SHA"]:
-        raise RuntimeError("runner checkout differs from exact GitHub PR merge SHA")
+    verified_study_source(commit_sha, os.environ)
     paths = list(OWNER_SOURCES.values())
     if not git_source_is_clean(paths):
         raise RuntimeError("owner probe refuses to modify already-dirty provider sources")

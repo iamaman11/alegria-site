@@ -191,11 +191,12 @@ fn run(nodes: Vec<OperationNode>) -> EffectDagRunV1 {
     .unwrap();
     let owner_commands = effect_instances
         .into_iter()
-        .map(|instance| {
+        .enumerate()
+        .map(|(ordinal, instance)| {
             (
                 instance.clone(),
                 OwnerCommandV1::PgTruthReviewReconcileV1(ReconcileTruthReviewsInput {
-                    admission_id: Uuid::from_u128(ADMISSION_ID),
+                    admission_id: Uuid::from_u128(ADMISSION_ID + ordinal as u128),
                     run_id: Uuid::from_u128(RUN_ID),
                     scope: scope(),
                     context_key: "canonical-context".to_owned(),
@@ -294,6 +295,14 @@ fn changed_actual_external_bytes_change_checked_dispatch_key_not_operator_author
     };
     assert_ne!(old_key, new_key);
     no_durable_effects(&changed);
+    // V1 manifest preflight remains history-compatible and accepts an
+    // equivalent JSON representation, but V4 must match PostgreSQL's exact
+    // canonical typed artifact bytes before any child Workflow can start.
+    assert!(matches!(
+        super::super::MixedDagMachineV4::new(&scope().run_id, changed),
+        Err(EffectDagError::NonCanonicalOwnerInput(id))
+            if id == ArtifactId::from("review_scope")
+    ));
 }
 
 #[test]
@@ -381,6 +390,12 @@ fn malformed_pure_payload_cannot_run_before_effect_admission_failure() {
         execute_checked_dag_v1(&scope().run_id, &run),
         Err(EffectDagError::NoDurableOwnerBridge(_))
     ));
+    // The new V4 parent has the stronger deterministic safety property:
+    // dry-run all pure computations *before* a child Workflow is scheduled.
+    assert!(matches!(
+        super::super::MixedDagMachineV4::new(&scope().run_id, run),
+        Err(EffectDagError::Run(OperationRunError::InvalidInput { .. }))
+    ));
 }
 
 #[test]
@@ -458,4 +473,133 @@ fn pure_only_plan_is_executable_through_checked_workflow_without_owner_bridge() 
         execute_checked_dag_v1(&scope().run_id, &run),
         Ok(CheckedDagOutcomeV1::Pure(_))
     ));
+}
+
+#[test]
+fn v4_native_child_invocation_roundtrips_exact_plan_derived_dispatch() {
+    let mut review = review_node("review_after_route");
+    review.after.insert(OperationInstanceId::from("route"));
+    let run = run(vec![review, route_node("route")]);
+    let mut machine = super::super::MixedDagMachineV4::new(&scope().run_id, run.clone()).unwrap();
+    machine.advance_pure().unwrap();
+    let invocation = machine
+        .next_owner_child_invocation(operation_protocol::TemporalExecutionIdentityV4 {
+            workflow_id: scope().run_id,
+            run_id: "actual-server-parent-temporal-run-id".into(),
+        })
+        .unwrap();
+    invocation.verify_integrity().unwrap();
+    assert_eq!(invocation.schema_revision, operation_protocol::EFFECT_CHILD_SCHEMA_REVISION);
+    assert_eq!(invocation.checked_dispatch.plan_hash, run.plan.hash);
+    assert_eq!(invocation.checked_dispatch.instance.as_str(), "review_after_route");
+    let typed: ReconcileTruthReviewsInput =
+        serde_json::from_slice(&invocation.owner_command_bytes).unwrap();
+    assert_eq!(typed.operation_instance, "review_after_route");
+    assert_eq!(typed.admission_id, Uuid::from_u128(ADMISSION_ID));
+
+    let mut malicious = invocation;
+    malicious.bound_input.payload.push(b' ');
+    assert!(malicious.verify_integrity().is_err());
+}
+
+#[test]
+fn v4_interpreter_rejects_forged_pg_receipt_and_unfinished_graph() {
+    let run = run(vec![review_node("review")]);
+    let mut machine = super::super::MixedDagMachineV4::new(&scope().run_id, run).unwrap();
+    let forged = truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
+        receipt_id: Uuid::from_u128(4),
+        admission_id: Uuid::from_u128(ADMISSION_ID),
+        execution_key: "attacker-chosen-key".into(),
+        run_id: Uuid::from_u128(RUN_ID),
+        context_key: "canonical-context".into(),
+        candidate_set_hash: "claimed-source".into(),
+        created_review_tasks: 1,
+        open_review_tasks: 1,
+    };
+    assert!(matches!(
+        machine.advance_owner_receipt(forged),
+        Err(EffectDagError::InvalidOwnerReceipt(_))
+    ));
+    assert!(matches!(machine.finish(), Err(EffectDagError::IncompleteDag)));
+}
+
+#[test]
+fn v4_typed_child_result_boundary_rejects_wrong_version_and_dispatch_key() {
+    let run = run(vec![review_node("review")]);
+    let prepared = preflight_effect_dag_v1(&scope().run_id, &run).unwrap();
+    let checked = match &prepared.steps[0] {
+        PreparedDagStepV1::Owner { checked, .. } => checked,
+        _ => panic!("expected PG owner step"),
+    };
+    let receipt = truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
+        receipt_id: Uuid::from_u128(9),
+        admission_id: Uuid::from_u128(ADMISSION_ID),
+        execution_key: checked.execution_key.clone(),
+        run_id: Uuid::from_u128(RUN_ID),
+        context_key: "canonical-context".into(),
+        candidate_set_hash: "snapshot-hash".into(),
+        created_review_tasks: 0,
+        open_review_tasks: 2,
+    };
+    let mut child_result = operation_protocol::EffectChildResultV4 {
+        schema_revision: operation_protocol::EFFECT_CHILD_SCHEMA_REVISION,
+        dispatch_execution_key: checked.execution_key.clone(),
+        pg_receipt: receipt.clone(),
+    };
+    let wire = serde_json::to_string(&child_result).unwrap();
+    assert_eq!(decode_owner_child_result_v4(&wire, checked).unwrap(), receipt);
+    child_result.schema_revision = 3;
+    assert!(decode_owner_child_result_v4(
+        &serde_json::to_string(&child_result).unwrap(),
+        checked,
+    )
+    .is_err());
+    child_result.schema_revision = operation_protocol::EFFECT_CHILD_SCHEMA_REVISION;
+    child_result.dispatch_execution_key = "forged-dispatch-key".into();
+    assert!(decode_owner_child_result_v4(
+        &serde_json::to_string(&child_result).unwrap(),
+        checked,
+    )
+    .is_err());
+}
+
+#[test]
+fn v4_interpreter_completes_only_after_exact_typed_receipt_for_each_effect() {
+    let first = review_node("review_a");
+    let mut second = review_node("review_b");
+    second.after.insert(first.instance.clone());
+    let run = run(vec![second, first]);
+    let mut machine = super::super::MixedDagMachineV4::new(&scope().run_id, run).unwrap();
+    let mut keys = Vec::new();
+    for (ordinal, instance) in ["review_a", "review_b"].iter().enumerate() {
+        let invocation = machine
+            .next_owner_child_invocation(operation_protocol::TemporalExecutionIdentityV4 {
+                workflow_id: scope().run_id,
+                run_id: "server-parent-run-id".into(),
+            })
+            .unwrap();
+        invocation.verify_integrity().unwrap();
+        assert_eq!(invocation.checked_dispatch.instance.as_str(), *instance);
+        keys.push(invocation.checked_dispatch.execution_key.clone());
+        let command: ReconcileTruthReviewsInput =
+            serde_json::from_slice(&invocation.owner_command_bytes).unwrap();
+        // Unit-only typed receipt fixture: a real Temporal parent obtains
+        // this exclusively from the admitted PG child Workflow completion.
+        let receipt = truth_domain::review_effect_contract::ReconcileTruthReviewsReceipt {
+            receipt_id: Uuid::from_u128(ordinal as u128 + 10),
+            admission_id: command.admission_id,
+            execution_key: invocation.checked_dispatch.execution_key,
+            run_id: command.run_id,
+            context_key: command.context_key,
+            candidate_set_hash: format!("synthetic-unit-snapshot-{ordinal}"),
+            created_review_tasks: 1,
+            open_review_tasks: 1,
+        };
+        machine.advance_owner_receipt(receipt).unwrap();
+    }
+    assert_ne!(keys[0], keys[1]);
+    let finished = machine.finish().unwrap();
+    assert_eq!(finished.owner_receipts.len(), 2);
+    assert_eq!(finished.order.len(), 2);
+    assert_eq!(finished.artifacts.len(), 3); // one admitted scope + two PG receipts
 }
