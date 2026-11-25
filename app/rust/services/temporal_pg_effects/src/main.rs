@@ -37,6 +37,7 @@ use temporalio_sdk::{
 };
 
 mod operator;
+mod operator_dag_governance;
 mod operator_owner_v1;
 mod operator_v4;
 
@@ -546,6 +547,14 @@ async fn main() -> Result<()> {
                 "unexpected PG owner operator arguments"
             );
             operator_owner_v1::issue_from_file(std::path::Path::new(&path)).await?;
+            return Ok(());
+        }
+        if argument == std::ffi::OsStr::new("--operator-admit-dag-run-v1") {
+            let path = args.next().context(
+                "--operator-admit-dag-run-v1 requires strict JSON parent locator"
+            )?;
+            anyhow::ensure!(args.next().is_none(), "unexpected DAG governance operator arguments");
+            operator_dag_governance::issue_from_file(std::path::Path::new(&path)).await?;
             return Ok(());
         }
         if argument == std::ffi::OsStr::new("--operator-revoke") {

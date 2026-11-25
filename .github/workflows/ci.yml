@@ -1268,6 +1268,17 @@ jobs:
           python3 automation/rust_ci_artifacts.py install \
             --kind v3 --source-sha "$GITHUB_SHA" \
             --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
+      # Generic Temporal DAG routing is executable deployment authority.
+      # Preserve the exact production /etc/alegria root-ownership fence even
+      # on this disposable runner; the native test installs its typed catalog
+      # with sudo rather than enabling any worker-side trust bypass.
+      - name: Provision root-owned native DAG route directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -o root -g root -m 0755 /etc/alegria
+          test "$(stat -c '%u:%g:%a' /etc/alegria)" = '0:0:755'
+          echo ALEGRIA_CI_ROOT_CATALOG_INSTALL_OK=true >> "$GITHUB_ENV"
       - name: Prove live Temporal history and durable PostgreSQL/Qdrant receipt
         run: |
           python3 automation/run_scoped_cargo_feedback.py \

@@ -6,8 +6,9 @@
 //! This process cannot execute Activities, access provider SDKs or publish.
 
 use operation_protocol::{
-    EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1, OwnerResultV1,
-    TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
+    owner_child_workflow_id, EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1,
+    OwnerResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog,
+    OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,
@@ -212,6 +213,10 @@ impl AlegriaOperationDagV1Workflow {
             .ok_or_else(|| workflow_failure("missing trusted owner route catalog"))?
             .clone();
         let run = ctx.state(|state| state.immutable_input.clone());
+        // `run.plan.scope.run_id` is the canonical BUSINESS run UUID. The
+        // Temporal Workflow ID is a deterministic prefixed identity, while
+        // Temporal Run ID below is independently issued by the server.
+        // Never pass the business UUID as a fabricated Temporal Run ID.
         let workflow_id = ctx.info().workflow_id().to_string();
         let parent = TemporalExecutionIdentityV4 {
             workflow_id: workflow_id.clone(),
@@ -233,10 +238,7 @@ impl AlegriaOperationDagV1Workflow {
             // on its own queue. The checked dispatch key fences retries across
             // parent/child Histories and must be independently verified by the
             // owner operator before any side-effectful Activity runs.
-            let child_id = format!(
-                "alegria-owner-operation-v1-{}",
-                invocation.checked_dispatch.execution_key
-            );
+            let child_id = owner_child_workflow_id(&invocation.checked_dispatch.execution_key);
             let options = ChildWorkflowOptions::builder()
                 .workflow_id(child_id)
                 .task_queue(route.task_queue)

@@ -11,7 +11,7 @@ use std::{env, fs, path::Path};
 
 use anyhow::{bail, ensure, Context, Result};
 use operation_protocol::{
-    ArtifactBinding, OperationDagRunV6, OwnerInvocationV1, PortId, OPERATION_DAG_PARENT_QUEUE,
+    operation_dag_parent_workflow_id, ArtifactBinding, OperationDagRunV6, OwnerInvocationV1, PortId, OPERATION_DAG_PARENT_QUEUE,
     OPERATION_DAG_PARENT_TYPE, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use postgres_store::truth_review_effect_v3::{
@@ -49,6 +49,7 @@ struct IssueRequest {
 struct Attested {
     invocation: OwnerInvocationV1,
     exact_invocation_bytes: Vec<u8>,
+    parent_start_bytes: Vec<u8>,
     child_started_event_id: i64,
     command: ReconcileTruthReviewsInput,
 }
@@ -274,6 +275,7 @@ fn prove_temporal_histories(
     Ok(Attested {
         invocation,
         exact_invocation_bytes: child_input,
+        parent_start_bytes: parent_input,
         child_started_event_id,
         command,
     })
@@ -284,12 +286,9 @@ async fn attest_from_server(request: &IssueRequest, build_id: &str) -> Result<At
         .context("PG owner requires independently configured Temporal operator URL")?;
     let namespace = env::var("PG_EFFECT_OPERATOR_TEMPORAL_NAMESPACE")
         .context("PG owner requires exact Temporal namespace")?;
-    ensure!(
-        (url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:"))
-            && !namespace.trim().is_empty()
-            && namespace == namespace.trim(),
-        "PG native owner issuer currently trusts only explicitly configured local Temporal"
-    );
+    super::operator_dag_governance::validate_local_temporal_endpoint(&url)?;
+    ensure!(!namespace.trim().is_empty() && namespace == namespace.trim(),
+        "PG owner issuer requires nonempty exact Temporal namespace");
     let client = temporal_gateway::connect_client(
         &url,
         format!("alegria-pg-native-operator-{}", std::process::id()),
@@ -339,8 +338,12 @@ async fn insert_admission(
         .bind(format!("truth-run-status|{}", request.canonical_run_id))
         .execute(&mut *tx)
         .await?;
-    // Until a separate owner-neutral run-governance contract exists, do NOT
-    // weaken the canonical SEO/HITL eligibility gate for this pilot.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text,0))")
+        .bind(format!("operation-dag-canonical|{}", request.canonical_run_id))
+        .execute(&mut *tx)
+        .await?;
+    // The canonical SEO Truth source is a DIFFERENT Temporal execution from
+    // the new, separately operator-admitted native generic DAG parent.
     let run = sqlx::query(
         "SELECT context_key,workflow_run_id,workflow_type,status
          FROM pipeline.execution_runs WHERE run_id=$1",
@@ -351,7 +354,6 @@ async fn insert_admission(
     .context("PG owner operator found no authoritative canonical Truth run")?;
     ensure!(
         run.get::<String, _>("context_key") == attested.command.context_key
-            && run.get::<String, _>("workflow_run_id") == request.parent_workflow_run_id
             && run.get::<String, _>("workflow_type") == "seo_site_build"
             && matches!(
                 run.get::<String, _>("status").as_str(),
@@ -390,6 +392,20 @@ async fn insert_admission(
     let bound_sha256 = sha256_pg(&mut tx, &bound_bytes).await?;
     let command_sha256 = sha256_pg(&mut tx, &attested.invocation.command_bytes).await?;
     let attestation_sha256 = sha256_pg(&mut tx, &serde_json::to_vec(&attestation)?).await?;
+    let parent_start_sha256 = sha256_pg(&mut tx, &attested.parent_start_bytes).await?;
+    let governed: bool = sqlx::query_scalar(
+        "SELECT pipeline.operation_dag_governance_matches_v1(
+            $1,$2,$3,$4,$5,$6,$7,TRUE)")
+        .bind(request.canonical_run_id)
+        .bind(tenant)
+        .bind(&attested.command.context_key)
+        .bind(&request.parent_workflow_id)
+        .bind(&request.parent_workflow_run_id)
+        .bind(checked.plan_hash.as_str())
+        .bind(&parent_start_sha256)
+        .fetch_one(&mut *tx).await?;
+    ensure!(governed,
+        "independently issued native DAG run governance absent/expired/mismatched");
     let inserted: Uuid = sqlx::query_scalar(
         "INSERT INTO pipeline.pg_effect_v3_admissions
            (admission_id,run_id,tenant_id,context_key,workflow_id,
@@ -398,15 +414,16 @@ async fn insert_admission(
             admission_schema_revision,parent_workflow_id,parent_workflow_run_id,
             dispatch_execution_key,dispatch_input_hash,invocation_sha256,
             bound_input_sha256,owner_command_sha256,temporal_attestation_sha256,
-            temporal_child_started_event_id)
+            temporal_child_started_event_id,generic_parent_start_sha256)
          SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,current_user,
                 clock_timestamp() + ($11::integer * interval '1 second'),
-                5,$12,$13,$14,$15,$16,$17,$18,$19,$20
+                5,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21
          FROM pipeline.execution_runs er
          WHERE er.run_id=$2 AND er.context_key=$4
-           AND er.workflow_run_id=$13
            AND er.workflow_type='seo_site_build'
            AND er.status IN ('verifying','pending_hitl')
+           AND pipeline.operation_dag_governance_matches_v1(
+               er.run_id,$3,$4,$12,$13,$8,$21,TRUE)
          RETURNING admission_id",
     )
     .bind(request.admission_id)
@@ -429,6 +446,7 @@ async fn insert_admission(
     .bind(command_sha256)
     .bind(attestation_sha256)
     .bind(attested.child_started_event_id)
+    .bind(parent_start_sha256)
     .fetch_one(&mut *tx)
     .await?;
     ensure!(
@@ -485,7 +503,8 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
             && !request.canonical_run_id.is_nil()
             && Uuid::parse_str(&request.parent_workflow_run_id).is_ok()
             && Uuid::parse_str(&request.child_workflow_run_id).is_ok()
-            && request.parent_workflow_id == request.canonical_run_id.to_string()
+            && request.parent_workflow_id
+                == operation_dag_parent_workflow_id(&request.canonical_run_id.to_string())
             && request
                 .child_workflow_id
                 .starts_with(GENERIC_CHILD_ID_PREFIX),

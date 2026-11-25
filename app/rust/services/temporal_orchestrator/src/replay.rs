@@ -82,4 +82,28 @@ mod tests {
         std::fs::remove_file(&corrupt).unwrap();
         assert!(error.to_string().contains("decode Temporal history"));
     }
+
+    #[tokio::test]
+    async fn generic_replay_has_one_stable_queue_and_no_obsolete_mixed_v6_alias() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let missing = std::env::temp_dir().join(format!(
+            "alegria-generic-dag-missing-{}-{unique}",
+            std::process::id(),
+        ));
+        let obsolete = replay_history_for_queue(&missing, "alegria-mixed-owner-dag-v6")
+            .await
+            .unwrap_err();
+        assert!(obsolete.to_string().contains("unknown replay Task Queue"));
+
+        // The generic queue is recognized, but an actual SDK History is
+        // mandatory. A missing source must never be replayed as an invented
+        // successful result or reinterpreted as an old workflow version.
+        let absent = replay_history_for_queue(&missing, OPERATION_DAG_PARENT_QUEUE)
+            .await
+            .unwrap_err();
+        assert!(absent.to_string().contains("read actual Temporal history"));
+    }
 }

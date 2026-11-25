@@ -6,6 +6,9 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE pipeline.pg_effect_v3_admissions
+    ADD COLUMN generic_parent_start_sha256 TEXT;
+
+ALTER TABLE pipeline.pg_effect_v3_admissions
     DROP CONSTRAINT pg_effect_v4_admission_revision_check,
     ADD CONSTRAINT pg_effect_v4_admission_revision_check
         CHECK (admission_schema_revision IN (3,4,5)),
@@ -16,7 +19,8 @@ ALTER TABLE pipeline.pg_effect_v3_admissions
             dispatch_execution_key IS NULL AND dispatch_input_hash IS NULL AND
             invocation_sha256 IS NULL AND bound_input_sha256 IS NULL AND
             owner_command_sha256 IS NULL AND temporal_attestation_sha256 IS NULL AND
-            temporal_child_started_event_id IS NULL)
+            temporal_child_started_event_id IS NULL AND
+            generic_parent_start_sha256 IS NULL)
         OR (admission_schema_revision IN (4,5) AND
             num_nonnulls(parent_workflow_id, parent_workflow_run_id,
                 dispatch_execution_key, dispatch_input_hash,
@@ -30,8 +34,31 @@ ALTER TABLE pipeline.pg_effect_v3_admissions
             length(bound_input_sha256) = 64 AND
             length(owner_command_sha256) = 64 AND
             length(temporal_attestation_sha256) = 64 AND
-            temporal_child_started_event_id > 0)
+            temporal_child_started_event_id > 0 AND
+            ((admission_schema_revision = 4 AND
+              generic_parent_start_sha256 IS NULL)
+             OR (admission_schema_revision = 5 AND
+                 generic_parent_start_sha256 IS NOT NULL AND
+                 generic_parent_start_sha256 ~ '^[0-9a-f]{64}$')))
     );
+
+-- The existing V3/V4 immutable-row guard deliberately remains untouched.
+-- This additional trigger protects the new V5-only parent input SHA field.
+CREATE FUNCTION pipeline.guard_pg_generic_parent_start_sha256_v1()
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = pg_catalog AS $$
+BEGIN
+    IF NEW.generic_parent_start_sha256 IS DISTINCT FROM
+       OLD.generic_parent_start_sha256 THEN
+        RAISE EXCEPTION 'native DAG parent start SHA attestation is immutable'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION pipeline.guard_pg_generic_parent_start_sha256_v1() FROM PUBLIC;
+CREATE TRIGGER guard_pg_generic_parent_start_sha256_v1
+    BEFORE UPDATE ON pipeline.pg_effect_v3_admissions
+    FOR EACH ROW EXECUTE FUNCTION pipeline.guard_pg_generic_parent_start_sha256_v1();
 
 ALTER TABLE pipeline.pg_effect_v3_receipts
     DROP CONSTRAINT pg_effect_v4_receipt_revision_check,
@@ -104,6 +131,15 @@ BEGIN
         hashtextextended('truth-context|' || p_context_key, 0));
     PERFORM pg_advisory_xact_lock(
         hashtextextended('pg-v3-admission|' || p_admission_id::text, 0));
+    -- Serialize native DAG effects against status transitions/issuance. This
+    -- lock does not modify any legacy V3/V4 permission or History.
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('truth-run-status|' || p_run_id::text, 0));
+    -- Governance revocation/second admission serialize with the complete
+    -- irreversible PG Truth transaction, not merely its initial validity
+    -- check. Lock order matches governance issuer: status, then canonical.
+    PERFORM pg_advisory_xact_lock(
+        hashtextextended('operation-dag-canonical|' || p_run_id::text, 0));
     SELECT auth.*, er.status AS run_status INTO a
     FROM pipeline.pg_effect_v3_admissions AS auth
     JOIN pipeline.execution_runs AS er ON er.run_id = auth.run_id
@@ -122,7 +158,12 @@ BEGIN
       AND auth.authorized_effect = 'pg.truth.review_queue.reconcile'
       AND er.context_key = auth.context_key
       AND er.workflow_type = 'seo_site_build'
-      AND er.workflow_run_id = auth.parent_workflow_run_id
+      -- The site-build source and generic Temporal DAG parent are distinct
+      -- real Workflow Run IDs. Exact identity is separately operator-attested.
+      AND pipeline.operation_dag_governance_matches_v1(
+          auth.run_id,auth.tenant_id,auth.context_key,
+          auth.parent_workflow_id,auth.parent_workflow_run_id,
+          auth.plan_hash,auth.generic_parent_start_sha256,FALSE)
       AND auth.v3_expected_execution_key IS NULL
       AND auth.parent_workflow_id = p_parent_workflow_id
       AND auth.parent_workflow_run_id = p_parent_workflow_run_id
@@ -152,6 +193,13 @@ BEGIN
         WHERE r.admission_id = p_admission_id
           AND r.admission_schema_revision = p_admission_revision;
         RETURN;
+    END IF;
+    IF NOT pipeline.operation_dag_governance_matches_v1(
+        a.run_id,a.tenant_id,a.context_key,
+        a.parent_workflow_id,a.parent_workflow_run_id,
+        a.plan_hash,a.generic_parent_start_sha256,TRUE) THEN
+        RAISE EXCEPTION 'native DAG governance expired, revoked or source status drifted'
+            USING ERRCODE = 'AV001';
     END IF;
     -- The legacy table predated per-parent instance uniqueness. A V3/V4/V5
     -- admission (or two completed same-revision admissions) must not each

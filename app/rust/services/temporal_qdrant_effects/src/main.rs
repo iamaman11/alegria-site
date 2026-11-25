@@ -26,6 +26,8 @@ use temporalio_common as _;
 
 mod operator;
 mod operator_v2;
+mod operator_v3;
+mod owner_generic_v1;
 mod owner_v2;
 
 fn qdrant_activity_options() -> ActivityOptions {
@@ -417,6 +419,13 @@ async fn main() -> Result<()> {
             println!("CI_TEMPORAL_QDRANT_EFFECT_V2_REPLAY=PASS");
             return Ok(());
         }
+        if arg == std::ffi::OsStr::new("--replay-history-generic-v1") {
+            let file = args.next().context("--replay-history-generic-v1 requires real History JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected generic replay arguments");
+            owner_generic_v1::replay_history(std::path::Path::new(&file)).await?;
+            println!("CI_TEMPORAL_QDRANT_GENERIC_OWNER_V1_REPLAY=PASS");
+            return Ok(());
+        }
         if arg == std::ffi::OsStr::new("--operator-issue") {
             let file = args
                 .next()
@@ -445,7 +454,20 @@ async fn main() -> Result<()> {
             anyhow::ensure!(args.next().is_none(), "unexpected V2 operator arguments");
             return operator_v2::resignal_from_file(std::path::Path::new(&file)).await;
         }
+        if arg == std::ffi::OsStr::new("--operator-issue-v3") {
+            let file = args.next().context("--operator-issue-v3 requires exact-run locator JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected generic operator arguments");
+            return operator_v3::issue_from_file(std::path::Path::new(&file)).await;
+        }
+        if arg == std::ffi::OsStr::new("--operator-resignal-v3") {
+            let file = args.next().context("--operator-resignal-v3 requires exact-run locator JSON")?;
+            anyhow::ensure!(args.next().is_none(), "unexpected generic resignal arguments");
+            return operator_v3::resignal_from_file(std::path::Path::new(&file)).await;
+        }
         anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");
+    }
+    if std::env::var("ALEGRIA_ENABLE_QDRANT_GENERIC_OWNER_V1").as_deref() == Ok("true") {
+        return owner_generic_v1::run_worker().await;
     }
     anyhow::ensure!(
         std::env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_V1").as_deref() == Ok("true"),

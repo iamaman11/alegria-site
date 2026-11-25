@@ -19,6 +19,15 @@ use crate::{
 pub const OPERATION_DAG_RUN_SCHEMA_REVISION_V6: u16 = 6;
 pub const OPERATION_DAG_PARENT_TYPE: &str = "AlegriaOperationDagV1Workflow";
 pub const OPERATION_DAG_PARENT_QUEUE: &str = "alegria-operation-dag-v1";
+/// The domain/business RunScope is NOT the Temporal parent Workflow ID or
+/// the server-generated Temporal Workflow Run ID. In particular it must not
+/// collide with a still-active `seo_site_build` Workflow for the same Truth
+/// run. This deterministic namespace applies only to the new generic parent.
+pub const OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX: &str = "alegria-operation-dag-v1-";
+
+pub fn operation_dag_parent_workflow_id(business_run_id: &str) -> String {
+    format!("{OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX}{business_run_id}")
+}
 /// All owners implement the same typed Temporal child ABI on separate queues.
 /// A client can never select an arbitrary Workflow type from plan data.
 pub const OWNER_OPERATION_CHILD_TYPE_V1: &str = "AlegriaOwnerOperationV1Workflow";
@@ -52,6 +61,40 @@ pub struct BoundArtifactV1 {
     pub artifact_id: ArtifactId,
     pub source: ArtifactBinding,
     pub artifact: AdmittedArtifactV1,
+    /// External artifacts must have no producer proof. Produced artifacts
+    /// must bind the exact earlier owner child result and receipt bytes.
+    /// This deterministic claim is NOT itself independent History attestation:
+    /// the receiving owner operator checks server parent/child Histories.
+    pub produced_evidence: Option<ProducedArtifactEvidenceV1>,
+}
+
+/// Deterministic digest of a *completed* upstream typed Temporal child result.
+/// No arbitrary plan can manufacture this in the generic DAG machine. A
+/// receiving owner must corroborate the hashes against the parent's actual
+/// ChildWorkflowExecutionCompleted event and the owner's durable receipt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProducedArtifactEvidenceV1 {
+    pub producer: OperationInstanceId,
+    pub port: PortId,
+    pub artifact_id: ArtifactId,
+    pub dispatch_execution_key: String,
+    pub child_workflow_id: String,
+    /// Blake3 hash of canonical `serde_json::to_vec(OwnerResultV1)` bytes.
+    pub result_hash: String,
+    pub receipt_hash: String,
+    pub payload_hash: String,
+}
+
+/// Exact child Workflow ID used by the generic parent and independently
+/// checked by owner operators against server-observed Temporal History.
+pub fn owner_child_workflow_id(dispatch_execution_key: &str) -> String {
+    format!("alegria-owner-operation-v1-{dispatch_execution_key}")
+}
+
+fn is_canonical_blake3_hash(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte|
+        byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 /// Snapshot from a trusted route catalog, recorded in Temporal start History
@@ -121,6 +164,17 @@ pub fn canonical_owner_dispatch_input_bytes(
     ))
 }
 
+/// An independent owner can recompute this from the previous child's
+/// server-observed completed result; a provenance string is not proof.
+pub fn canonical_owner_result_hash(result: &OwnerResultV1) -> Result<String, serde_json::Error> {
+    Ok(owner_content_hash(&serde_json::to_vec(result)?))
+}
+
+/// Provider-neutral byte digest used for receipt and artifact evidence.
+pub fn owner_content_hash(bytes: &[u8]) -> String {
+    blake3::hash(bytes).to_hex().to_string()
+}
+
 #[derive(Debug, Error)]
 pub enum RouteCatalogError {
     #[error(transparent)]
@@ -150,6 +204,8 @@ impl OwnerInvocationV1 {
         if self.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
             || self.parent.workflow_id.trim().is_empty()
             || self.parent.run_id.trim().is_empty()
+            || self.parent.workflow_id
+                != operation_dag_parent_workflow_id(&self.checked_dispatch.scope.run_id)
             || self.command_bytes.is_empty()
         {
             return Err(RouteCatalogError::InvalidInvocation);
@@ -168,9 +224,20 @@ impl OwnerInvocationV1 {
             return Err(RouteCatalogError::InvalidInvocation);
         }
         for (port, bound) in &self.bound_inputs {
-            let source_artifact = match &bound.source {
-                ArtifactBinding::External { artifact }
-                | ArtifactBinding::Produced { artifact, .. } => artifact,
+            let source_artifact = match (&bound.source, &bound.produced_evidence) {
+                (ArtifactBinding::External { artifact }, None) => artifact,
+                (ArtifactBinding::Produced { producer, port: producer_port, artifact },
+                    Some(proof)) if proof.producer == *producer
+                        && proof.port == *producer_port
+                        && proof.artifact_id == *artifact
+                        && is_canonical_blake3_hash(&proof.dispatch_execution_key)
+                        && proof.child_workflow_id == owner_child_workflow_id(
+                            &proof.dispatch_execution_key)
+                        && is_canonical_blake3_hash(&proof.result_hash)
+                        && is_canonical_blake3_hash(&proof.receipt_hash)
+                        && proof.payload_hash ==
+                            blake3::hash(&bound.artifact.payload).to_hex().to_string() => artifact,
+                _ => return Err(RouteCatalogError::InvalidInvocation),
             };
             if source_artifact != &bound.artifact_id
                 || contract.inputs.get(port) != Some(&bound.artifact.schema)

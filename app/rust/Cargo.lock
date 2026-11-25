@@ -2295,6 +2295,7 @@ dependencies = [
  "operation_protocol",
  "qdrant_contracts",
  "seo_application",
+ "serde",
  "serde_json",
  "serial_test",
  "sqlx",
@@ -5413,6 +5414,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "truth_domain",
+ "url",
  "uuid",
 ]
 
@@ -5438,6 +5440,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

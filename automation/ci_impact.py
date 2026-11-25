@@ -337,6 +337,17 @@ QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES = {
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
     "INTEGRATION_QDRANT_EFFECT_WORKER_BIN": "temporal_qdrant_effects",
 }
+MIXED_V6_NATIVE_OWNER_PREPARE = (
+    "cargo", "build", "--locked",
+    "-p", "temporal_orchestrator", "-p", "temporal_pg_effects",
+    "-p", "temporal_qdrant_effects",
+    "--bin", "temporal_orchestrator", "--bin", "temporal_pg_effects",
+    "--bin", "temporal_qdrant_effects",
+)
+MIXED_V6_NATIVE_RUNTIME_BINARIES = {
+    **QDRANT_V7_PARENT_CHILD_RUNTIME_BINARIES,
+    **PG_V3_TEMPORAL_RUNTIME_BINARIES,
+}
 PG_V4_PARENT_CHILD_RUNTIME_BINARIES = {
     **PG_V3_TEMPORAL_RUNTIME_BINARIES,
     "INTEGRATION_EFFECT_DAG_WORKER_BIN": "temporal_orchestrator",
@@ -564,14 +575,19 @@ SUITE_OWNERS = {
             "--locked", "--", "--nocapture",
         ),
     },
-    # The proposed cross-owner wiring must fail at the typed DAG boundary
-    # when a PG receipt is passed as an unrelated Qdrant command. The same
-    # existing real Temporal/Qdrant shard runs this exact preflight test;
-    # they do NOT replace the independent native provider E2E above.
+    # Real independently admitted PG->Qdrant after-only native Temporal E2E,
+    # with a second strict Produced-schema/cross-tenant/forged-route negative.
+    # Both run in the EXISTING mandatory Qdrant Temporal shard, reusing its
+    # source-verified three Worker binaries. The unrelated PG receipt is never
+    # pretended to be a Qdrant vector command or a Produced dataflow edge.
     "temporal_mixed_v6_contract": {
         "paths": {
             "app/rust/crates/integration_qdrant_temporal_e2e/src/lib.rs",
             "app/rust/crates/integration_qdrant_temporal_e2e/src/tests/native_temporal_mixed_owner_tests.rs",
+            "app/db/migrations/20261125_0017_qdrant_mixed_owner_v2.sql",
+            "app/db/migrations/20261125_0018_pg_generic_owner_v1.sql",
+            "app/db/migrations/20261125_0019_qdrant_generic_owner_v3.sql",
+            "app/db/migrations/20261125_0020_operation_dag_run_governance_v1.sql",
         },
         "prefixes": (
             "app/rust/crates/integration_qdrant_temporal_e2e/",
@@ -581,11 +597,14 @@ SUITE_OWNERS = {
             "app/rust/crates/seo_application/src/operation_adapter/",
         ),
         "lock_crates": {"operation_protocol", "qdrant_contracts", "truth_domain",
-                        "seo_application"},
+                        "seo_application", "temporal_orchestrator",
+                        "temporal_qdrant_effects", "temporal_pg_effects"},
         "on_unknown_global_input": True,
+        "prepare": MIXED_V6_NATIVE_OWNER_PREPARE,
+        "runtime_binaries": MIXED_V6_NATIVE_RUNTIME_BINARIES,
         "command": (
             "cargo", "test", "-p", "integration_qdrant_temporal_e2e", "--features", "e2e",
-            "--lib", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow",
+            "--lib", "mixed_v6_",
             "--locked", "--", "--nocapture",
         ),
     },
@@ -1101,7 +1120,7 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     ),
     "temporal_qdrant": (
         ("temporal_qdrant_v8", "qdrant_v8_native_temporal_history_operator_real_effect", 1),
-        ("temporal_mixed_v6_contract", "mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow", 1),
+        ("temporal_mixed_v6_contract", "mixed_v6_", 2),
     ),
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),

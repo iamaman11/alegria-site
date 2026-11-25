@@ -10,6 +10,7 @@ default = []
 e2e = [
   "dep:anyhow", "dep:integration_data_fixtures", "integration_data_fixtures/e2e",
   "dep:operation_protocol", "dep:serial_test", "dep:sqlx",
+  "dep:serde",
   "dep:temporal_gateway", "dep:temporalio-client", "dep:temporalio-common",
   "dep:temporalio-sdk-core", "dep:testcontainers", "dep:tokio",
   "dep:uuid", "dep:vector_qdrant", "dep:truth_domain", "dep:seo_application",
@@ -20,6 +21,7 @@ e2e = [
 anyhow = { workspace = true, optional = true }
 integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
 operation_protocol = { path = "../operation_protocol", optional = true }
+serde = { workspace = true, optional = true }
 serial_test = { version = "3.2.0", optional = true }
 sqlx = { workspace = true, optional = true }
 temporal_gateway = { path = "../temporal_gateway", optional = true }

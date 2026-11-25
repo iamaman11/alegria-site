@@ -32,6 +32,12 @@ switch or built-in pure-operation registry participates in this new parent.
 The DAG alone defines the operations, checked inputs, Produced bindings and
 execution order. This initial implementation is deliberately serial: disjoint
 parallel fanout is reserved until owner isolation is independently tested.
+The canonical business run UUID remains `OperationDagRunV6.plan.scope.run_id`;
+the actual parent Temporal Workflow ID must be
+`alegria-operation-dag-v1-{business_run_uuid}`. Temporal's separately
+server-issued **Run ID** is taken exclusively from the SDK context and is
+attested through reciprocal parent/child Histories. It is never substituted
+with a business identifier or claimed manifest value.
 
 Every owner — including an owner of a pure transformation — registers the
 **same** native Temporal child Workflow Type
@@ -55,6 +61,24 @@ unvalidated workflow routing is available. The catalog's asserted `build_id`
 does **not** itself instruct Temporal to target a matching Worker Deployment
 version; real owner Worker Versioning/routing evidence remains a separate
 production requirement.
+
+In a disposable GitHub Actions E2E runner, install the *actual* trusted file
+with root privileges and exercise the production trust path. There is no
+environment-variable bypass:
+
+```sh
+sudo install -d -o root -g root -m 0755 /etc/alegria
+sudo install -o root -g root -m 0644 validated-owner-catalog.json \
+  /etc/alegria/owner-routes-v1.json
+export TEMPORAL_OPERATION_DAG_CATALOG_PATH=/etc/alegria/owner-routes-v1.json
+```
+
+The JSON has `schema_revision: 1` and an `entries` array of objects with
+`contract` and `route` fields. Generate each contract from its owner-declared
+`OperationContract` and derive `route.contract_hash` from `fingerprint()`.
+Routes pin the operation, owner, shared Workflow Type, owner-specific Task
+Queue and asserted owner build ID. The run's `pinned_routes` must exactly
+equal the trusted catalog's sorted snapshot for its operations.
 
 This is a nonproduction pilot. Even a valid DAG has **no** independent
 permission to execute external effects: each owner operator must attest

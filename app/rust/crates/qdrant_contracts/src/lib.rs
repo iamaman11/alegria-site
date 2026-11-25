@@ -6,6 +6,7 @@
 
 mod qdrant_effect_child_v1;
 mod qdrant_effect_child_v2;
+mod qdrant_owner_generic_v1;
 
 pub use qdrant_effect_child_v1::{
     QdrantChildOutcomeV1, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
@@ -19,4 +20,9 @@ pub use qdrant_effect_child_v2::{
     QDRANT_EFFECT_INPUT_PORT_V2, QDRANT_EFFECT_OPERATION_ID_V2, QDRANT_EFFECT_OUTPUT_PORT_V2,
     QDRANT_EFFECT_OWNER_ID_V2, QDRANT_OWNER_ACTIVITY_QUEUE_V2, QDRANT_OWNER_CHILD_TYPE_V2,
     QDRANT_OWNER_COMMAND_QUEUE_V2,
+};
+pub use qdrant_owner_generic_v1::{
+    confirmed_qdrant_owner_result, verify_external_qdrant_owner_invocation,
+    GenericQdrantContractError, QDRANT_GENERIC_ACTIVITY_QUEUE_V1,
+    QDRANT_GENERIC_ADMISSION_SIGNAL_V1, QDRANT_GENERIC_OWNER_QUEUE_V1,
 };

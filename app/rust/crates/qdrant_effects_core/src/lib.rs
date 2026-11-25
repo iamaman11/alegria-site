@@ -251,6 +251,100 @@ pub async fn execute_admitted_qdrant_projection_v2(
     })
 }
 
+/// The shared OwnerInvocationV1 wire has its own admission namespace and
+/// immutable provider attempt. V1/V2 Histories and SQL receipts are never
+/// relabelled as generic owner executions. Unknown provider outcomes never
+/// trigger a second upsert for the same admission.
+pub async fn execute_admitted_qdrant_projection_v3(
+    pool: &PgPool,
+    admission_id: Uuid,
+    dispatch_execution_key: &str,
+) -> Result<QdrantProjectionOutcomeV1> {
+    ensure!(
+        std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V3").as_deref() == Ok("1"),
+        "generic Qdrant effect V3 is disabled without explicit opt-in"
+    );
+    ensure!(
+        dispatch_execution_key.len() == 64
+            && dispatch_execution_key.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid checked generic Qdrant dispatch key"
+    );
+    let row = sqlx::query(
+        "SELECT tenant_id,context_key,keyword_key,command_bytes,command_sha256,dispatch_execution_key
+           FROM pipeline.qdrant_projection_v3_admissions WHERE admission_id=$1",
+    )
+    .bind(admission_id)
+    .fetch_one(pool)
+    .await
+    .context("generic Qdrant V3 admission absent or inaccessible to owner Activity")?;
+    let bytes: Vec<u8> = row.try_get("command_bytes")?;
+    let sha256: String = row.try_get("command_sha256")?;
+    let command: QdrantKeywordProjectionCommandV1 = serde_json::from_slice(&bytes)
+        .context("generic Qdrant admission contains a malformed concrete command")?;
+    command.validate().map_err(anyhow::Error::msg)?;
+    ensure!(
+        row.try_get::<String, _>("dispatch_execution_key")? == dispatch_execution_key
+            && command.admission_id == admission_id
+            && command.tenant_id == row.try_get::<String, _>("tenant_id")?
+            && command.context_key == row.try_get::<String, _>("context_key")?
+            && command.keyword_key == row.try_get::<String, _>("keyword_key")?,
+        "generic Qdrant admission does not pin exact checked owner command"
+    );
+    let state: String = sqlx::query_scalar("SELECT pipeline.begin_qdrant_projection_v3($1,$2,$3)")
+        .bind(admission_id)
+        .bind(&bytes)
+        .bind(dispatch_execution_key)
+        .fetch_one(pool)
+        .await
+        .context("V3 SQL denied fresh Qdrant effect before provider I/O")?;
+    let key = entity_key(&command);
+    let meta = metadata(&command, &sha256);
+    match state.as_str() {
+        "started" => {
+            // The durable SQL attempt has committed before this first RPC;
+            // later executions can only read back the exact point.
+            let identity = ProjectionIdentity::new(COLLECTION, ENTITY_TYPE, &key)?;
+            let upsert = ProjectionUpsert::new(
+                identity,
+                admission_id.to_string(),
+                command.vector.clone(),
+                VECTOR_DIMENSIONS as u64,
+                "cosine",
+                meta.clone(),
+            )?;
+            upsert_projection(upsert)
+                .await
+                .context("unknown generic Qdrant V3 RPC outcome; retain SQL attempt and do not retry")?;
+        }
+        "uncertain" | "confirmed" => {}
+        other => bail!("unsupported Qdrant V3 durable attempt state: {other}"),
+    }
+    let exact = projection_readback_exact(
+        COLLECTION,
+        &admission_id.to_string(),
+        ENTITY_TYPE,
+        &key,
+        &command.vector,
+        &meta,
+    )
+    .await
+    .context("generic Qdrant V3 readback unavailable; outcome uncertain")?;
+    ensure!(exact, "generic Qdrant V3 provider state drifted or not yet confirmed");
+    let confirmed: bool = sqlx::query_scalar("SELECT pipeline.confirm_qdrant_projection_v3($1,$2,$3)")
+        .bind(admission_id)
+        .bind(&bytes)
+        .bind(dispatch_execution_key)
+        .fetch_one(pool)
+        .await
+        .context("generic Qdrant V3 provider readback succeeded but durable receipt failed")?;
+    ensure!(confirmed, "V3 PostgreSQL refused exact provider receipt");
+    Ok(match state.as_str() {
+        "started" => QdrantProjectionOutcomeV1::Applied,
+        "uncertain" => QdrantProjectionOutcomeV1::Reconciled,
+        _ => QdrantProjectionOutcomeV1::AlreadyConfirmed,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

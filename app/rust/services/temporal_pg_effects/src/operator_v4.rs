@@ -486,11 +486,8 @@ async fn attest_temporal_child(request: &V4IssueRequest) -> Result<ServerAtteste
     // Without a separately authenticated TLS client configuration, only an
     // operator-side localhost control endpoint is trusted for development.
     // Production remote TLS/mTLS credential provisioning remains a NO-GO.
-    ensure!(
-        temporal_url.starts_with("http://127.0.0.1:")
-            || temporal_url.starts_with("http://localhost:"),
-        "V4 operator currently requires a trusted LOCAL Temporal endpoint; remote auth is not provisioned"
-    );
+    super::operator_dag_governance::validate_local_temporal_endpoint(&temporal_url)
+        .context("V4 operator requires exact LOCAL Temporal endpoint; remote auth is not provisioned")?;
     let client = temporal_gateway::connect_client(
         &temporal_url,
         format!("alegria-pg-v4-operator-proof-{}", std::process::id()),
