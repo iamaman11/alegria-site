@@ -23,8 +23,8 @@ use temporalio_sdk::{Runtime, Worker, WorkerOptions};
 use futures_util as _;
 use temporalio_common as _;
 
-mod replay;
 mod qdrant_child_wire_json;
+mod replay;
 mod workflow;
 
 const LIVE_OPT_IN: &str = "ALLOW_PURE_DAG_ORCHESTRATOR";

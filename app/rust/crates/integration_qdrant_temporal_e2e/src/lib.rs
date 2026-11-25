@@ -10,16 +10,20 @@ mod tests {
     use super::temporal_containers::TemporalHarness;
     use integration_data_fixtures::{PostgresHarness, QdrantHarness};
     use operation_protocol::{
-        QdrantKeywordProjectionCommandV1, QdrantProjectionRunV1,
-        QDRANT_DAG_PARENT_TYPE_V1, QDRANT_DAG_PARENT_QUEUE_V1,
+        QdrantKeywordProjectionCommandV1, QdrantProjectionRunV1, QDRANT_DAG_PARENT_QUEUE_V1,
+        QDRANT_DAG_PARENT_TYPE_V1,
     };
     use serial_test::serial;
-    use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf,
-        process::{Child, Command}, time::Duration};
+    use std::{
+        env, fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        process::{Child, Command},
+        time::Duration,
+    };
     use temporalio_client::{
-        UntypedSignal, UntypedWorkflow, WorkflowExecutionInfo,
-        WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowSignalOptions,
-        WorkflowStartOptions,
+        UntypedSignal, UntypedWorkflow, WorkflowExecutionInfo, WorkflowFetchHistoryOptions,
+        WorkflowGetResultOptions, WorkflowSignalOptions, WorkflowStartOptions,
     };
     use temporalio_common::{
         data_converters::{PayloadConverter, RawValue},
@@ -30,11 +34,16 @@ mod tests {
 
     struct ChildGuard(Child);
     impl Drop for ChildGuard {
-        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
     }
 
     fn binary(variable: &str) -> PathBuf {
-        let value = PathBuf::from(env::var_os(variable).expect("CI must supply exact-source worker binary"));
+        let value = PathBuf::from(
+            env::var_os(variable).expect("CI must supply exact-source worker binary"),
+        );
         assert!(value.is_file(), "native worker binary missing: {variable}");
         value
     }

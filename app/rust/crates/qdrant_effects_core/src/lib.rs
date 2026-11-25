@@ -23,22 +23,22 @@ const VECTOR_DIMENSIONS: usize = 1024;
 const EXPERIMENTAL_ENV: &str = "ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1";
 
 fn entity_key(command: &QdrantKeywordProjectionCommandV1) -> String {
-        // One-shot PostgreSQL uniqueness and a UUID point ID prevent another
-        // admission from overwriting this exact business-key projection.
-        format!(
-            "tenant/{}/context/{}/keyword/{}",
-            command.tenant_id, command.context_key, command.keyword_key
-        )
+    // One-shot PostgreSQL uniqueness and a UUID point ID prevent another
+    // admission from overwriting this exact business-key projection.
+    format!(
+        "tenant/{}/context/{}/keyword/{}",
+        command.tenant_id, command.context_key, command.keyword_key
+    )
 }
 
 fn metadata(command: &QdrantKeywordProjectionCommandV1, sha256: &str) -> serde_json::Value {
-        serde_json::json!({
-            "tenant_id": command.tenant_id,
-            "context_key": command.context_key,
-            "keyword_key": command.keyword_key,
-            "operator_admission_id": command.admission_id.to_string(),
-            "approved_command_sha256": sha256,
-        })
+    serde_json::json!({
+        "tenant_id": command.tenant_id,
+        "context_key": command.context_key,
+        "keyword_key": command.keyword_key,
+        "operator_admission_id": command.admission_id.to_string(),
+        "approved_command_sha256": sha256,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

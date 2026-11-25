@@ -7,12 +7,9 @@ use std::{sync::Arc, time::Duration};
 use anyhow::{Context, Result};
 use operation_protocol::{
     QdrantChildOutcomeV1, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
-    QDRANT_OWNER_ACTIVITY_QUEUE_V1, QDRANT_OWNER_CHILD_TYPE_V1,
-    QDRANT_OWNER_COMMAND_QUEUE_V1,
+    QDRANT_OWNER_ACTIVITY_QUEUE_V1, QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
-use qdrant_effects_core::{
-    execute_admitted_qdrant_projection_v1, QdrantProjectionOutcomeV1,
-};
+use qdrant_effects_core::{execute_admitted_qdrant_projection_v1, QdrantProjectionOutcomeV1};
 use sqlx::{PgPool, Row};
 use temporalio_client::WorkflowHistory;
 use temporalio_macros::{activities, workflow, workflow_methods};
@@ -45,7 +42,10 @@ struct QdrantKeywordProjectionV1Workflow {
 impl QdrantKeywordProjectionV1Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, invocation: QdrantKeywordChildInvocationV1) -> Self {
-        Self { immutable_invocation: invocation, admission_signals_received: 0 }
+        Self {
+            immutable_invocation: invocation,
+            admission_signals_received: 0,
+        }
     }
 
     #[run]
@@ -81,8 +81,11 @@ impl QdrantKeywordProjectionV1Workflow {
             }
         }
         let result: QdrantKeywordChildResultV1 = ctx
-            .start_activity(QdrantProjectionActivities::materialize_admitted_keyword_v1,
-                invocation, qdrant_activity_options())
+            .start_activity(
+                QdrantProjectionActivities::materialize_admitted_keyword_v1,
+                invocation,
+                qdrant_activity_options(),
+            )
             .await?;
         serde_json::to_string(&result).map_err(|err| {
             temporalio_sdk::WorkflowTermination::failed_application(
@@ -97,7 +100,9 @@ impl QdrantKeywordProjectionV1Workflow {
     }
 }
 
-struct QdrantProjectionActivities { pool: Arc<PgPool> }
+struct QdrantProjectionActivities {
+    pool: Arc<PgPool>,
+}
 
 // Read-only admission lookup is safely repeatable after a database outage.
 // Rejected Workflow provenance or mismatched immutable SQL identity is not.
@@ -121,25 +126,29 @@ impl std::error::Error for AdmissionProbeError {}
 
 fn admission_probe_activity_error(error: AdmissionProbeError) -> ActivityError {
     let failure = match error {
-        AdmissionProbeError::Storage(error) =>
-            ApplicationFailure::new(std::io::Error::other(error.to_string())),
-        AdmissionProbeError::Denied(error) =>
-            ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+        AdmissionProbeError::Storage(error) => {
+            ApplicationFailure::new(std::io::Error::other(error.to_string()))
+        }
+        AdmissionProbeError::Denied(error) => {
+            ApplicationFailure::non_retryable(std::io::Error::other(error.to_string()))
+        }
     };
     ActivityError::application(failure)
 }
 
 fn terminal_activity_error(error: impl std::fmt::Display) -> ActivityError {
-    ActivityError::application(ApplicationFailure::non_retryable(
-        std::io::Error::other(error.to_string()),
-    ))
+    ActivityError::application(ApplicationFailure::non_retryable(std::io::Error::other(
+        error.to_string(),
+    )))
 }
 
 #[activities]
 impl QdrantProjectionActivities {
     #[activity]
     pub(crate) async fn check_operator_admission_v1(
-        self: Arc<Self>, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+        self: Arc<Self>,
+        ctx: ActivityContext,
+        invocation: QdrantKeywordChildInvocationV1,
     ) -> Result<bool, ActivityError> {
         // The Signal is unauthenticated data. Each child has at most one
         // admission probe in flight; spacing probes inside this read-only
@@ -153,7 +162,9 @@ impl QdrantProjectionActivities {
 
     #[activity]
     pub(crate) async fn materialize_admitted_keyword_v1(
-        self: Arc<Self>, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+        self: Arc<Self>,
+        ctx: ActivityContext,
+        invocation: QdrantKeywordChildInvocationV1,
     ) -> Result<QdrantKeywordChildResultV1, ActivityError> {
         self.materialize_with_server_info(ctx, invocation).await
     }
@@ -161,23 +172,34 @@ impl QdrantProjectionActivities {
 
 impl QdrantProjectionActivities {
     async fn matching_server_admission(
-        &self, ctx: &ActivityContext, invocation: &QdrantKeywordChildInvocationV1,
+        &self,
+        ctx: &ActivityContext,
+        invocation: &QdrantKeywordChildInvocationV1,
     ) -> std::result::Result<bool, AdmissionProbeError> {
         let info = ctx.info();
         let (actual_id, actual_run_id) = (|| -> Result<(&str, &str)> {
-            let actual_id = info.workflow_id.as_deref()
+            let actual_id = info
+                .workflow_id
+                .as_deref()
                 .context("Activity lacks server child Workflow ID")?;
-            let actual_run_id = info.workflow_run_id.as_deref()
+            let actual_run_id = info
+                .workflow_run_id
+                .as_deref()
                 .context("Activity lacks server child Run ID")?;
             anyhow::ensure!(
                 info.workflow_type.as_deref() == Some(QDRANT_OWNER_CHILD_TYPE_V1)
                     && info.task_queue == QDRANT_OWNER_ACTIVITY_QUEUE_V1
-                    && actual_id == format!("alegria-qdrant-effect-v1-{}", invocation.command.admission_id),
+                    && actual_id
+                        == format!(
+                            "alegria-qdrant-effect-v1-{}",
+                            invocation.command.admission_id
+                        ),
                 "Qdrant Activity originated outside registered native child Workflow/Queue"
             );
             invocation.validate().map_err(anyhow::Error::msg)?;
             Ok((actual_id, actual_run_id))
-        })().map_err(AdmissionProbeError::Denied)?;
+        })()
+        .map_err(AdmissionProbeError::Denied)?;
         let row = sqlx::query(
             "SELECT child_workflow_id,child_workflow_run_id,parent_workflow_id,
                     parent_workflow_run_id,run_id,tenant_id,context_key,keyword_key,
@@ -186,7 +208,8 @@ impl QdrantProjectionActivities {
         )
         .bind(invocation.command.admission_id)
         .fetch_optional(&*self.pool)
-        .await.map_err(AdmissionProbeError::Storage)?;
+        .await
+        .map_err(AdmissionProbeError::Storage)?;
         let Some(row) = row else {
             return Ok(false);
         };
@@ -205,23 +228,31 @@ impl QdrantProjectionActivities {
             "operator admission does not pin exact server child, parent, tenant and command bytes"
             );
             Ok(())
-        })().map_err(AdmissionProbeError::Denied)?;
+        })()
+        .map_err(AdmissionProbeError::Denied)?;
         Ok(true)
     }
 
     async fn materialize_with_server_info(
-        &self, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+        &self,
+        ctx: ActivityContext,
+        invocation: QdrantKeywordChildInvocationV1,
     ) -> Result<QdrantKeywordChildResultV1, ActivityError> {
-        if !self.matching_server_admission(&ctx, &invocation).await
-            .map_err(admission_probe_activity_error)? {
+        if !self
+            .matching_server_admission(&ctx, &invocation)
+            .await
+            .map_err(admission_probe_activity_error)?
+        {
             return Err(terminal_activity_error(
                 "native Qdrant child has no independently issued operator admission",
             ));
         }
         // An ambiguous provider RPC can only reconcile by readback; SQL
         // forbids a second attempt. Never retry errors after this boundary.
-        let outcome = execute_admitted_qdrant_projection_v1(&self.pool,
-            invocation.command.admission_id).await.map_err(terminal_activity_error)?;
+        let outcome =
+            execute_admitted_qdrant_projection_v1(&self.pool, invocation.command.admission_id)
+                .await
+                .map_err(terminal_activity_error)?;
         let outcome = match outcome {
             QdrantProjectionOutcomeV1::Applied => QdrantChildOutcomeV1::Applied,
             QdrantProjectionOutcomeV1::Reconciled => QdrantChildOutcomeV1::Reconciled,
@@ -243,21 +274,33 @@ fn worker_database_url() -> Result<String> {
         (Some(url), None) => url,
         (None, Some(path)) => {
             let path = std::path::Path::new(&path);
-            anyhow::ensure!(path.is_absolute(), "Qdrant worker DSN path must be absolute");
+            anyhow::ensure!(
+                path.is_absolute(),
+                "Qdrant worker DSN path must be absolute"
+            );
             let meta = std::fs::symlink_metadata(path)?;
-            anyhow::ensure!(meta.file_type().is_file(), "Qdrant worker DSN must be a regular non-symlink file");
-            #[cfg(unix)] {
+            anyhow::ensure!(
+                meta.file_type().is_file(),
+                "Qdrant worker DSN must be a regular non-symlink file"
+            );
+            #[cfg(unix)]
+            {
                 use std::os::unix::fs::PermissionsExt;
-                anyhow::ensure!(meta.permissions().mode() & 0o077 == 0,
-                    "Qdrant worker DSN secret requires 0600/0400 permissions");
+                anyhow::ensure!(
+                    meta.permissions().mode() & 0o077 == 0,
+                    "Qdrant worker DSN secret requires 0600/0400 permissions"
+                );
             }
             std::fs::read_to_string(path)?
-                .trim_end_matches(|c| c == '\r' || c == '\n').to_owned()
+                .trim_end_matches(|c| c == '\r' || c == '\n')
+                .to_owned()
         }
         (None, None) => anyhow::bail!("dedicated Qdrant worker DSN secret required"),
     };
-    anyhow::ensure!(!value.is_empty() && value.trim() == value,
-        "Qdrant worker DSN has unsafe whitespace");
+    anyhow::ensure!(
+        !value.is_empty() && value.trim() == value,
+        "Qdrant worker DSN has unsafe whitespace"
+    );
     Ok(value)
 }
 
@@ -268,12 +311,16 @@ async fn assert_effect_worker_role(pool: &PgPool) -> Result<()> {
                   'pipeline.qdrant_projection_v1_admissions','INSERT') AS may_admit,
                 pipeline.current_session_tenant_v1() AS tenant
          FROM pg_roles r WHERE r.rolname=session_user",
-    ).fetch_one(pool).await?;
-    anyhow::ensure!(!row.try_get::<bool, _>("rolsuper")?
-        && !row.try_get::<bool, _>("rolbypassrls")?
-        && !row.try_get::<bool, _>("may_admit")?
-        && row.try_get::<Option<String>, _>("tenant")?.is_some(),
-        "Qdrant Activity role must be tenant-bound and must not issue admissions/bypass RLS");
+    )
+    .fetch_one(pool)
+    .await?;
+    anyhow::ensure!(
+        !row.try_get::<bool, _>("rolsuper")?
+            && !row.try_get::<bool, _>("rolbypassrls")?
+            && !row.try_get::<bool, _>("may_admit")?
+            && row.try_get::<Option<String>, _>("tenant")?.is_some(),
+        "Qdrant Activity role must be tenant-bound and must not issue admissions/bypass RLS"
+    );
     Ok(())
 }
 
@@ -283,11 +330,13 @@ async fn replay_history(path: &std::path::Path) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("decode real Qdrant Temporal History: {e}"))?;
     let mut options = WorkflowReplayerOptions::new()
         .namespace("default".to_string())
-        .task_queue(QDRANT_OWNER_COMMAND_QUEUE_V1.to_string()).build();
+        .task_queue(QDRANT_OWNER_COMMAND_QUEUE_V1.to_string())
+        .build();
     options.register_workflow::<QdrantKeywordProjectionV1Workflow>()?;
     WorkflowReplayer::new(options)
         .map_err(|e| anyhow::anyhow!("construct Qdrant replayer: {e}"))?
-        .replay_workflow(history).await
+        .replay_workflow(history)
+        .await
         .map_err(|e| anyhow::anyhow!("Qdrant History replay failed: {e}"))?;
     Ok(())
 }
@@ -297,43 +346,64 @@ async fn main() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(arg) = args.next() {
         if arg == std::ffi::OsStr::new("--replay-history") {
-            let file = args.next().context("--replay-history requires real History JSON")?;
+            let file = args
+                .next()
+                .context("--replay-history requires real History JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected replay arguments");
             replay_history(std::path::Path::new(&file)).await?;
             println!("CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS");
             return Ok(());
         }
         if arg == std::ffi::OsStr::new("--operator-issue") {
-            let file = args.next().context("--operator-issue requires request JSON")?;
+            let file = args
+                .next()
+                .context("--operator-issue requires request JSON")?;
             anyhow::ensure!(args.next().is_none(), "unexpected operator arguments");
             return operator::issue_from_file(std::path::Path::new(&file)).await;
         }
         anyhow::bail!("unsupported temporal_qdrant_effects argument: {arg:?}");
     }
-    anyhow::ensure!(std::env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_V1").as_deref() == Ok("true"),
-        "experimental native Qdrant owner is disabled");
-    anyhow::ensure!(std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1").as_deref() == Ok("1"),
-        "underlying Qdrant provider pilot is disabled");
-    tracing_subscriber::fmt().with_env_filter(
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into())
-    ).init();
-    let pool = PgPool::connect(&worker_database_url()?).await
+    anyhow::ensure!(
+        std::env::var("ALEGRIA_ENABLE_QDRANT_EFFECT_V1").as_deref() == Ok("true"),
+        "experimental native Qdrant owner is disabled"
+    );
+    anyhow::ensure!(
+        std::env::var("ALEGRIA_EXPERIMENTAL_QDRANT_PROJECTION_V1").as_deref() == Ok("1"),
+        "underlying Qdrant provider pilot is disabled"
+    );
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+        )
+        .init();
+    let pool = PgPool::connect(&worker_database_url()?)
+        .await
         .context("connect dedicated Qdrant Activity PostgreSQL LOGIN")?;
     assert_effect_worker_role(&pool).await?;
-    let runtime = Runtime::from_current_tokio(RuntimeOptions::builder().build()
-        .map_err(|e| anyhow::anyhow!("{e}"))?)?;
+    let runtime = Runtime::from_current_tokio(
+        RuntimeOptions::builder()
+            .build()
+            .map_err(|e| anyhow::anyhow!("{e}"))?,
+    )?;
     let url = std::env::var("TEMPORAL_URL").unwrap_or_else(|_| "http://localhost:7233".into());
     let namespace = std::env::var("TEMPORAL_NAMESPACE").unwrap_or_else(|_| "default".into());
-    let client = temporal_gateway::connect_client(&url,
-        format!("alegria-qdrant-owner-v1:{}",std::process::id()), &namespace).await?;
+    let client = temporal_gateway::connect_client(
+        &url,
+        format!("alegria-qdrant-owner-v1:{}", std::process::id()),
+        &namespace,
+    )
+    .await?;
     let mut command = WorkerOptions::new(QDRANT_OWNER_COMMAND_QUEUE_V1).build();
     command.register_workflow::<QdrantKeywordProjectionV1Workflow>()?;
-    let mut command_worker = Worker::new(&runtime,client.clone(),command)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    let mut command_worker =
+        Worker::new(&runtime, client.clone(), command).map_err(|e| anyhow::anyhow!("{e}"))?;
     let activities = WorkerOptions::new(QDRANT_OWNER_ACTIVITY_QUEUE_V1)
-        .register_activities(QdrantProjectionActivities { pool: Arc::new(pool) }).build();
-    let mut activity_worker = Worker::new(&runtime,client,activities)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .register_activities(QdrantProjectionActivities {
+            pool: Arc::new(pool),
+        })
+        .build();
+    let mut activity_worker =
+        Worker::new(&runtime, client, activities).map_err(|e| anyhow::anyhow!("{e}"))?;
     tokio::try_join!(command_worker.run(), activity_worker.run())?;
     Ok(())
 }
@@ -344,9 +414,9 @@ mod tests {
 
     #[test]
     fn retry_only_read_only_storage_failure_never_identity_or_provider_failure() {
-        let lost_connection = AdmissionProbeError::Storage(sqlx::Error::Io(
-            std::io::Error::other("PostgreSQL connection reset before admission SELECT"),
-        ));
+        let lost_connection = AdmissionProbeError::Storage(sqlx::Error::Io(std::io::Error::other(
+            "PostgreSQL connection reset before admission SELECT",
+        )));
         match admission_probe_activity_error(lost_connection) {
             ActivityError::Application(failure) => assert!(!failure.is_non_retryable()),
             other => panic!("expected retryable SQL transport failure, got {other:?}"),

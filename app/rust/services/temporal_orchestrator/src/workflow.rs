@@ -7,8 +7,8 @@
 
 use operation_protocol::{
     EffectChildInvocationV4, QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1,
-    QdrantProjectionRunV1, TemporalExecutionIdentityV4,
-    QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
+    QdrantProjectionRunV1, TemporalExecutionIdentityV4, QDRANT_OWNER_CHILD_TYPE_V1,
+    QDRANT_OWNER_COMMAND_QUEUE_V1,
 };
 use seo_application::operation_adapter::{
     decode_owner_child_result_v4, execute_checked_dag_v1, execute_pure_dag, EffectDagRunV1,
@@ -186,10 +186,12 @@ impl AlegriaQdrantProjectionDagV1Workflow {
             // Strictly sequential: cannot start a second remote write until
             // the first independently admitted child has a durable receipt.
             let result: String = child.result().await.map_err(workflow_failure)?;
-            let parsed = super::qdrant_child_wire_json::decode_result(&result)
-                .map_err(workflow_failure)?;
+            let parsed =
+                super::qdrant_child_wire_json::decode_result(&result).map_err(workflow_failure)?;
             if parsed.schema_revision != 1 || parsed.admission_id != command.admission_id {
-                return Err(workflow_failure("Qdrant child returned mismatched durable receipt"));
+                return Err(workflow_failure(
+                    "Qdrant child returned mismatched durable receipt",
+                ));
             }
             results.push(parsed);
         }

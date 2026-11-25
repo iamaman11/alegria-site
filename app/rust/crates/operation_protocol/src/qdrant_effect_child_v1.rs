@@ -68,11 +68,14 @@ pub struct QdrantProjectionRunV1 {
 
 impl QdrantProjectionRunV1 {
     pub fn preflight(&self) -> Result<(), &'static str> {
-        if self.schema_revision != 1 || self.canonical_run_id.is_nil()
-            || self.tenant_id.is_empty() || self.context_key.is_empty()
+        if self.schema_revision != 1
+            || self.canonical_run_id.is_nil()
+            || self.tenant_id.is_empty()
+            || self.context_key.is_empty()
             || self.tenant_id.trim() != self.tenant_id
             || self.context_key.trim() != self.context_key
-            || self.commands.is_empty() || self.commands.len() > 32
+            || self.commands.is_empty()
+            || self.commands.len() > 32
         {
             return Err("invalid Qdrant parent run envelope or child count");
         }
@@ -104,8 +107,10 @@ pub struct QdrantKeywordChildInvocationV1 {
 
 impl QdrantKeywordChildInvocationV1 {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.schema_revision != 1 || self.canonical_run_id.is_nil()
-            || self.parent.workflow_id.is_empty() || self.parent.run_id.is_empty()
+        if self.schema_revision != 1
+            || self.canonical_run_id.is_nil()
+            || self.parent.workflow_id.is_empty()
+            || self.parent.run_id.is_empty()
             || self.parent.workflow_id.trim() != self.parent.workflow_id
             || self.parent.run_id.trim() != self.parent.run_id
         {
@@ -138,13 +143,18 @@ mod tests {
     #[test]
     fn native_qdrant_parent_preflights_complete_command_set() {
         let command = QdrantKeywordProjectionCommandV1 {
-            schema_revision: 1, admission_id: Uuid::new_v4(),
-            tenant_id: "tenant-a".into(), context_key: "context-a".into(),
-            keyword_key: "keyword-a".into(), vector: vec![0.1; 1024],
+            schema_revision: 1,
+            admission_id: Uuid::new_v4(),
+            tenant_id: "tenant-a".into(),
+            context_key: "context-a".into(),
+            keyword_key: "keyword-a".into(),
+            vector: vec![0.1; 1024],
         };
         let mut run = QdrantProjectionRunV1 {
-            schema_revision: 1, canonical_run_id: Uuid::new_v4(),
-            tenant_id: command.tenant_id.clone(), context_key: command.context_key.clone(),
+            schema_revision: 1,
+            canonical_run_id: Uuid::new_v4(),
+            tenant_id: command.tenant_id.clone(),
+            context_key: command.context_key.clone(),
             commands: vec![command.clone()],
         };
         run.preflight().unwrap();

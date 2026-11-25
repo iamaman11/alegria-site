@@ -24,10 +24,10 @@ use super::{
 
 mod preflight;
 mod source_fence;
-pub(in crate::adapters) use source_fence::lock_and_validate_prepared_sources_in_tx;
 use preflight::{
     serialize_truth_value, unstaged_global_verified_rule_ids, validate_prepared_truth_write,
 };
+pub(in crate::adapters) use source_fence::lock_and_validate_prepared_sources_in_tx;
 
 /// Read-only idempotent replay before any external embedding call. The
 /// transaction below repeats this check under the context lock.
