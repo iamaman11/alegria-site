@@ -22,14 +22,15 @@ mod tests {
         time::Duration,
     };
     use temporalio_client::{
-        UntypedSignal, UntypedWorkflow, WorkflowDescribeOptions, WorkflowExecutionInfo,
-        WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowSignalOptions,
-        WorkflowStartOptions,
+        Client, ClientOptions, Connection, ConnectionOptions, UntypedSignal, UntypedWorkflow,
+        WorkflowDescribeOptions, WorkflowExecutionInfo, WorkflowFetchHistoryOptions,
+        WorkflowGetResultOptions, WorkflowSignalOptions, WorkflowStartOptions,
     };
     use temporalio_common::{
         data_converters::{PayloadConverter, RawValue},
         protos::temporal::api::history::v1::history_event::Attributes,
     };
+    use temporalio_sdk_core::Url;
     use tokio::time::{sleep, timeout};
     use uuid::Uuid;
 
@@ -49,6 +50,21 @@ mod tests {
         );
         assert!(value.is_file(), "native worker binary missing: {variable}");
         value
+    }
+
+    // Connect with the SDK already used by the test. The mixed-owner harness
+    // must not compile the production SEO gateway just to inspect History.
+    async fn connect_client(
+        temporal_url: &str,
+        identity: String,
+        namespace: &str,
+    ) -> anyhow::Result<Client> {
+        let options = ConnectionOptions::new(Url::parse(temporal_url)?)
+            .identity(identity)
+            .build();
+        let connection = Connection::connect(options).await?;
+        Client::new(connection, ClientOptions::new(namespace).build())
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     fn secret(prefix: &str, value: &str) -> PathBuf {

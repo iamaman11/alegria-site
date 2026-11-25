@@ -11,9 +11,9 @@ e2e = [
   "dep:anyhow", "dep:integration_data_fixtures", "integration_data_fixtures/e2e",
   "dep:operation_protocol", "dep:serial_test", "dep:sqlx",
   "dep:serde",
-  "dep:temporal_gateway", "dep:temporalio-client", "dep:temporalio-common",
+  "dep:temporalio-client", "dep:temporalio-common",
   "dep:temporalio-sdk-core", "dep:testcontainers", "dep:tokio",
-  "dep:uuid", "dep:vector_qdrant", "dep:truth_domain", "dep:seo_application",
+  "dep:uuid", "dep:vector_qdrant", "dep:truth_domain",
   "dep:qdrant_contracts", "dep:postgres_store", "dep:projection_contracts",
 ]
 
@@ -24,7 +24,6 @@ operation_protocol = { path = "../operation_protocol", optional = true }
 serde = { workspace = true, optional = true }
 serial_test = { version = "3.2.0", optional = true }
 sqlx = { workspace = true, optional = true }
-temporal_gateway = { path = "../temporal_gateway", optional = true }
 temporalio-client = { workspace = true, optional = true }
 temporalio-common = { workspace = true, optional = true }
 temporalio-sdk-core = { workspace = true, optional = true }
@@ -36,5 +35,4 @@ truth_domain = { path = "../truth_domain", optional = true }
 qdrant_contracts = { path = "../qdrant_contracts", optional = true }
 postgres_store = { path = "../postgres_store", optional = true }
 projection_contracts = { path = "../projection_contracts", optional = true }
-seo_application = { path = "../seo_application", optional = true }
 serde_json = { workspace = true }

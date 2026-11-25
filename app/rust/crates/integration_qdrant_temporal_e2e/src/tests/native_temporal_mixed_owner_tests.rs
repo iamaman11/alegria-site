@@ -920,7 +920,7 @@ fn mixed_v6_governance_issuer_catalog(
 async fn mixed_v6_native_pg_then_qdrant_independent_operator_effects() {
     use operation_protocol::{operation_dag_parent_workflow_id, OPERATION_DAG_PARENT_QUEUE,
         OPERATION_DAG_PARENT_TYPE};
-    use seo_application::operation_adapter::OperationDagReceiptV1;
+    use operation_protocol::OperationDagReceiptV1;
     use temporalio_common::protos::temporal::api::history::v1::history_event::Attributes;
 
     let pg = PostgresHarness::start().await.expect("disposable PG owner Truth database");
@@ -998,7 +998,7 @@ async fn mixed_v6_native_pg_then_qdrant_independent_operator_effects() {
         .spawn().expect("separate Qdrant generic Workflow+Activity worker");
     let _qdrant_guard = ChildGuard(Some(qdrant_process));
 
-    let client = temporal_gateway::connect_client(
+    let client = connect_client(
         &temporal.temporal_url,
         format!("ci-native-mixed-v6-{}", Uuid::new_v4()),
         &temporal.namespace,
@@ -1239,7 +1239,7 @@ async fn mixed_v6_native_pg_then_qdrant_independent_operator_effects() {
 #[test]
 fn mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflow() {
     use operation_protocol::{ArtifactBinding, PlanError, RouteCatalogError};
-    use seo_application::operation_adapter::{GenericDagError, OperationDagMachine};
+    use operation_protocol::{GenericDagError, OperationDagMachine};
 
     let (run, routes) = mixed_v6_fixture();
     let workflow_id = operation_protocol::operation_dag_parent_workflow_id(&run.plan.scope.run_id);
@@ -1329,7 +1329,7 @@ fn mixed_v6_typed_owner_preflight_rejects_cross_tenant_and_fake_produced_dataflo
 /// attest actual owner scheduling and effects.
 #[test]
 fn mixed_v6_owner_order_is_plan_defined_not_pg_qdrant_hardcoded() {
-    use seo_application::operation_adapter::OperationDagMachine;
+    use operation_protocol::OperationDagMachine;
     use truth_domain::review_effect_contract::ReconcileTruthReviewsInput;
 
     let (mut run, routes) = mixed_v6_fixture();
@@ -1359,7 +1359,7 @@ fn mixed_v6_owner_order_is_plan_defined_not_pg_qdrant_hardcoded() {
 #[test]
 fn mixed_v7_real_vector_produced_contract_is_typed_before_effects() {
     use operation_protocol::{ArtifactBinding, PlanError};
-    use seo_application::operation_adapter::{GenericDagError, OperationDagMachine};
+    use operation_protocol::{GenericDagError, OperationDagMachine};
 
     let run_id = Uuid::new_v4();
     let (run, routes) = mixed_produced_fixture_for(
@@ -1417,7 +1417,7 @@ async fn mixed_v7_native_temporal_produced_pg_vector_to_qdrant_readback() {
     use operation_protocol::{operation_dag_parent_workflow_id, OPERATION_DAG_PARENT_QUEUE,
         OPERATION_DAG_PARENT_TYPE};
     use projection_contracts::VectorProjectionV1;
-    use seo_application::operation_adapter::OperationDagReceiptV1;
+    use operation_protocol::OperationDagReceiptV1;
     use temporalio_common::protos::temporal::api::history::v1::history_event::Attributes;
 
     let pg = PostgresHarness::start().await.expect("disposable PG artifact source");
@@ -1497,7 +1497,7 @@ async fn mixed_v7_native_temporal_produced_pg_vector_to_qdrant_readback() {
         .spawn().expect("independent Qdrant Produced consumer worker");
     let _qdrant_guard = ChildGuard(Some(qdrant_process));
 
-    let client = temporal_gateway::connect_client(
+    let client = connect_client(
         &temporal.temporal_url,
         format!("ci-native-produced-{}", Uuid::new_v4()),
         &temporal.namespace,
@@ -1662,7 +1662,7 @@ async fn mixed_v7_native_temporal_produced_pg_vector_to_qdrant_readback() {
 async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
     use operation_protocol::{operation_dag_parent_workflow_id_v2,
         OPERATION_DAG_PARENT_QUEUE_V2, OPERATION_DAG_PARENT_TYPE_V2};
-    use seo_application::operation_adapter::OperationDagReceiptV1;
+    use operation_protocol::OperationDagReceiptV1;
     use temporalio_common::protos::temporal::api::history::v1::history_event::Attributes;
 
     let pg = PostgresHarness::start().await.expect("real V2 PostgreSQL source/authority");
@@ -1776,7 +1776,7 @@ async fn mixed_v2_native_validated_produced_and_parallel_owner_effects() {
         .env("TEMPORAL_NAMESPACE", &temporal.namespace)
         .env_remove("DATABASE_URL")
         .spawn().expect("Qdrant typed ValidateChild and effect Child worker")));
-    let client = temporal_gateway::connect_client(&temporal.temporal_url,
+    let client = connect_client(&temporal.temporal_url,
         format!("ci-mixed-v2-{}", Uuid::new_v4()), &temporal.namespace)
         .await.expect("connect actual Temporal History server");
 

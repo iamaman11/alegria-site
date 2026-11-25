@@ -124,6 +124,15 @@ class NativeDagIsolationTests(unittest.TestCase):
         self.assertNotIn("qdrant_contracts", pg)
         self.assertNotIn("postgres_store", qdrant)
 
+    def test_native_mixed_owner_harness_excludes_site_runtime(self) -> None:
+        from check_rust_adapter_boundaries import (
+            MIXED_E2E_FORBIDDEN_LOCAL_OWNERS,
+            QDRANT_TEMPORAL_E2E_DIR,
+        )
+
+        closure, _ = workspace_dependency_closure(QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml")
+        self.assertFalse(MIXED_E2E_FORBIDDEN_LOCAL_OWNERS & closure)
+
     def test_future_direct_or_transitive_owner_dependencies_fail_closed(self) -> None:
         cases = (
             ({"operation_protocol", "qdrant_contracts"}, {"temporal_pg_effects"},

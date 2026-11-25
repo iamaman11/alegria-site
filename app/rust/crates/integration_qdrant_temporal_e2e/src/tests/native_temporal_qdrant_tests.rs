@@ -109,7 +109,7 @@ async fn qdrant_v8_native_temporal_history_operator_real_effect() {
         commands:vec![command.clone()],
     };
     input.preflight().unwrap();
-    let client = temporal_gateway::connect_client(&temporal.temporal_url,
+    let client = connect_client(&temporal.temporal_url,
         format!("ci-v7-qdrant-{}", Uuid::new_v4()),&temporal.namespace).await.unwrap();
     let handle = client.start_workflow(
         UntypedWorkflow::new(QDRANT_DAG_PARENT_TYPE_V1),

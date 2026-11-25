@@ -38,6 +38,11 @@ QDRANT_TEMPORAL_E2E_SRC = QDRANT_TEMPORAL_E2E_DIR / "src"
 QDRANT_TEMPORAL_E2E_SDKS = frozenset({
     "temporalio-client", "temporalio-common", "temporalio-sdk-core",
 })
+# The test must exercise the native owner protocol without compiling the SEO
+# application or production Temporal gateway as an accidental dependency.
+MIXED_E2E_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "seo_application", "seo_ports", "temporal_gateway",
+})
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
@@ -573,6 +578,11 @@ def main() -> int:
         violations.extend(native_dag_owner_closure_failures(
             protocol_closure, pg_owner_closure, qdrant_owner_closure,
         ))
+        mixed_e2e_closure, _ = workspace_dependency_closure(
+            QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml"
+        )
+        for forbidden in sorted(MIXED_E2E_FORBIDDEN_LOCAL_OWNERS & mixed_e2e_closure):
+            violations.append(f"native mixed-owner E2E Cargo closure imports `{forbidden}`")
         for source in DAG_GENERIC_NEUTRAL_SOURCE:
             violations.extend(generic_dag_source_failures(source, set(DAG_PROVIDER_CRATES)))
         # New provider-neutral DAG types/validation modules are added without
