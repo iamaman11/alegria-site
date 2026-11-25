@@ -551,6 +551,7 @@ mod owner_validate_tests {
 
     fn valid_produced_preflight() -> OwnerValidationRequestV1 {
         let contract = QdrantProducedVectorProjectionContractV1::contract();
+        let contract_hash = contract.fingerprint().unwrap();
         let scope = RunScope {
             tenant_id: "tenant-a".into(),
             run_id: Uuid::new_v4().to_string(),
@@ -566,7 +567,7 @@ mod owner_validate_tests {
             instance: OperationInstanceId::from("qdrant-new-projection"),
             operation: contract.reference,
             owner: contract.owner,
-            contract_hash: contract.fingerprint().unwrap(),
+            contract_hash,
             command_bytes: serde_json::to_vec(&QdrantProducedVectorCommandV1 {
                 schema_revision: 1,
                 admission_id: Uuid::new_v4(),
