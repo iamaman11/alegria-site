@@ -19,6 +19,17 @@ PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
     "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
 })
 
+# The A14 Outbox integration tests were physically moved out of the broad
+# harness; their fixture JSON remains confined to this exact opt-in test file.
+# The other two files are production provider wire adapters, moved verbatim
+# from the previously permitted infrastructure/runtime adapter directories.
+# Explicit file grants keep new modules in these crates deny-by-default.
+EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+    "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
+    "app/rust/crates/voyage_api/src/lib.rs",
+})
+
 FORBIDDEN_PATTERNS = {
     "serde_json::Value": re.compile(r"\bserde_json::Value\b"),
     "json! macro": re.compile(r"\bjson!\s*\("),
@@ -31,7 +42,7 @@ FORBIDDEN_PATTERNS = {
 
 def is_allowed_json_boundary(path: Path) -> bool:
     rel = str(path.relative_to(ROOT))
-    if rel in PG_V3_E2E_HISTORY_TEST_BOUNDARIES:
+    if rel in PG_V3_E2E_HISTORY_TEST_BOUNDARIES | EXTRACTED_OWNER_JSON_BOUNDARIES:
         return True
     if rel.startswith("app/rust/crates/runtime_models/src/"):
         return True

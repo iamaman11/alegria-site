@@ -14,7 +14,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci_impact import (
-    CI_PR_OWNERS, E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS,
+    CI_PR_OWNERS, E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS,
+    E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
 )
 
 
@@ -25,11 +26,13 @@ SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
     "impact",
-    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
     *(f"rust-architecture-e2e ({name})" for name in E2E_ARCH_RUNNER_SHARDS),
     *(f"rust-verify-e2e ({name})" for name in E2E_VERIFY_RUNNER_SHARDS),
     *(f"rust-pg-e2e ({name})" for name in E2E_PG_SHARDS),
+    *(f"rust-outbox-e2e ({name})" for name in E2E_OUTBOX_SHARDS),
     "product-truth", "rust-security",
     "cloudflare-static-build", "stack-temporal-postgres18",
     "stack-storage-graph", "verify", "Native Windows first-site operator regression", "CI",
@@ -169,7 +172,8 @@ class MainMergeProvenanceTests(unittest.TestCase):
         self.assertIn("uses: actions/checkout@v7", checkout_step)
         self.assertIn("ref: ${{ github.sha }}", checkout_step)
         self.assertNotIn("if: github.event_name == 'pull_request'", checkout_step)
-        self.assertIn("from ci_impact import E2E_ARCH_RUNNER_SHARDS", main_gate_source())
+        self.assertIn("E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS,", main_gate_source())
+        self.assertIn("E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,", main_gate_source())
 
     def test_identical_git_trees_and_all_required_green_jobs_accept_without_build(self) -> None:
         ok, message, calls = execute_gate()

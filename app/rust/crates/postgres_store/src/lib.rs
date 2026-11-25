@@ -7,6 +7,7 @@
 pub mod sqlx_adapter;
 pub mod sqlx_error;
 pub mod sqlx_outbox_adapter;
+pub mod sqlx_projection_rows;
 pub mod sqlx_reconcile_adapter;
 pub mod sqlx_reconcile_runtime_adapter;
 pub mod sqlx_runtime_health_adapter;

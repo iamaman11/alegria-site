@@ -2123,6 +2123,7 @@ dependencies = [
  "tracing",
  "truth_domain",
  "uuid",
+ "voyage_api",
 ]
 
 [[package]]
@@ -2136,6 +2137,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_data_fixtures"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sqlx",
+ "testcontainers",
+ "tokio",
+ "vector_qdrant",
+]
+
+[[package]]
 name = "integration_harness"
 version = "0.1.0"
 dependencies = [
@@ -2145,10 +2157,11 @@ dependencies = [
  "contracts",
  "graph_neo4j",
  "infrastructure",
+ "integration_data_fixtures",
  "operation_protocol",
- "outbox_worker",
  "postgres_store",
  "primitives",
+ "projection_delivery",
  "prost",
  "reqwest 0.13.5",
  "runtime_composition",
@@ -2165,6 +2178,30 @@ dependencies = [
  "temporalio-common",
  "temporalio-sdk-core",
  "testcontainers",
+ "tokio",
+ "uuid",
+ "vector_qdrant",
+]
+
+[[package]]
+name = "integration_outbox_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "contracts",
+ "infrastructure",
+ "integration_data_fixtures",
+ "integration_harness",
+ "outbox_worker",
+ "postgres_store",
+ "primitives",
+ "projection_delivery",
+ "prost",
+ "seo_application",
+ "seo_ports",
+ "serde_json",
+ "serial_test",
+ "sqlx",
  "tokio",
  "uuid",
  "vector_qdrant",
@@ -3071,14 +3108,8 @@ name = "outbox_worker"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "contracts",
  "postgres_store",
- "primitives",
- "prost",
- "runtime_composition",
- "seo_steps",
- "serde",
- "serde_json",
+ "projection_delivery",
  "sqlx",
  "telemetry",
  "tokio",
@@ -3450,6 +3481,22 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.21",
  "uuid",
+]
+
+[[package]]
+name = "projection_delivery"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "contracts",
+ "graph_neo4j",
+ "postgres_store",
+ "primitives",
+ "prost",
+ "serde_json",
+ "sqlx",
+ "vector_qdrant",
+ "voyage_api",
 ]
 
 [[package]]
@@ -5174,6 +5221,7 @@ dependencies = [
  "policies",
  "postgres_store",
  "primitives",
+ "projection_delivery",
  "prometheus",
  "runtime_composition",
  "runtime_models",
@@ -6193,6 +6241,18 @@ dependencies = [
  "qdrant-client",
  "reqwest 0.13.5",
  "serde_json",
+]
+
+[[package]]
+name = "voyage_api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "http_client",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

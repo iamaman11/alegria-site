@@ -26,6 +26,7 @@ FORMAT = "alegria-rust-ci-artifact@1"
 KINDS = {
     "harness": ("integration_harness_test",),
     "pg_harness": ("integration_pg_v3_e2e_test",),
+    "outbox_harness": ("integration_outbox_e2e_test",),
     "legacy": ("temporal_worker", "outbox_worker"),
     "v3": ("temporal_orchestrator", "temporal_pg_effects"),
 }
@@ -54,7 +55,7 @@ def digest(path: Path) -> tuple[str, int]:
 def source_binaries(kind: str, *, harness: Path | None = None) -> dict[str, Path]:
     if kind not in KINDS:
         raise ValueError(f"unknown Rust CI artifact kind {kind}")
-    if kind in ("harness", "pg_harness"):
+    if kind in ("harness", "pg_harness", "outbox_harness"):
         if harness is None:
             raise ValueError("the harness bundle needs the compiler-reported test executable")
         return {KINDS[kind][0]: harness.resolve()}
@@ -124,6 +125,7 @@ def install(kind: str, source_sha: str, bundle: Path, *, target: Path = TARGET) 
         exact_tests = {
             "harness": "deps/integration_harness-ci-exact",
             "pg_harness": "deps/integration_pg_v3_e2e-ci-exact",
+            "outbox_harness": "deps/integration_outbox_e2e-ci-exact",
         }
         destination = target / exact_tests.get(kind, name)
         destination.parent.mkdir(parents=True, exist_ok=True)

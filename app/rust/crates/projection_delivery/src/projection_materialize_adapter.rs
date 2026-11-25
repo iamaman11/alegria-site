@@ -13,7 +13,7 @@ use prost::Message;
 use sqlx::PgPool;
 
 use super::neo4j_materialization_adapter;
-use infrastructure::adapters::voyage_api_adapter::{
+use voyage_api::{
     VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
 };
 use vector_qdrant::projection_commands::{

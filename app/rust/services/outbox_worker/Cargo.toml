@@ -6,16 +6,10 @@ edition = "2021"
 [dependencies]
 tokio = { workspace = true }
 postgres_store = { path = "../../crates/postgres_store" }
-runtime_composition = { path = "../../crates/runtime_composition" }
-seo_steps = { path = "../../crates/seo_steps" }
+projection_delivery = { path = "../../crates/projection_delivery" }
 telemetry = { path = "../../crates/telemetry" }
-contracts = { path = "../../crates/contracts" }
-primitives = { path = "../../crates/primitives" }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 sqlx = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-prost = { workspace = true }
 uuid = { workspace = true }

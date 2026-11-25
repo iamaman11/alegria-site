@@ -112,6 +112,17 @@ def main() -> int:
         return 1
 
     containers_text = (ROOT / "app/rust/crates/integration_harness/src/containers.rs").read_text()
+    # PostgreSQL/Qdrant real-container fixtures now have one source owner.
+    # Check the public re-export as well as the concrete structs/images so a
+    # missing shared fixture or accidental test double still fails closed.
+    shared_fixtures = ROOT / "app/rust/crates/integration_data_fixtures/src/lib.rs"
+    if "pub use integration_data_fixtures::{PostgresHarness, QdrantHarness};" not in containers_text:
+        print("FAIL integration_harness missing shared real-container re-export")
+        return 1
+    if not shared_fixtures.exists():
+        print("FAIL integration_harness missing shared real-container fixtures")
+        return 1
+    containers_text += "\n" + shared_fixtures.read_text(encoding="utf-8")
     missing_containers = [
         snippet for snippet in CONTAINERS_REQUIRED_SNIPPETS if snippet not in containers_text
     ]

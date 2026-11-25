@@ -58,7 +58,7 @@ def read_file_resolved(path: Path) -> str:
             for sub_file in sub_dir.glob("*.rs"):
                 text += "\n" + sub_file.read_text(encoding="utf-8")
     elif path.name == "materialize.rs" and "outbox_worker" in path.parts:
-        delegate_path = path.parents[3] / "crates" / "runtime_composition" / "src" / "adapters" / "projection_materialize_adapter.rs"
+        delegate_path = path.parents[3] / "crates" / "projection_delivery" / "src" / "projection_materialize_adapter.rs"
         if delegate_path.exists():
             text += "\n" + delegate_path.read_text(encoding="utf-8")
     elif path.name == "seo_site_build_canonical_cutover.rs":

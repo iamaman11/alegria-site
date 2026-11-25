@@ -3,8 +3,8 @@ use sqlx::Row;
 use std::env;
 
 use graph_neo4j::{connect_neo4j, projection, Graph};
-use infrastructure::adapters::sqlx_adapter::connect_pg;
-use infrastructure::adapters::sqlx_context_bundle_adapter;
+use postgres_store::sqlx_adapter::connect_pg;
+use postgres_store::sqlx_projection_rows;
 
 fn neo4j_cfg() -> (String, String, String) {
     (
@@ -23,7 +23,7 @@ fn pg_cfg() -> String {
 pub async fn materialize_rule_instance(rule_instance_id: &str) -> Result<()> {
     let pg = connect_pg(&pg_cfg()).await?;
     let Some((rule_instance_id, context_key, rule_type_key, concept_key, role_type, status)) =
-        sqlx_context_bundle_adapter::load_rule_instance_materialization_row(&pg, rule_instance_id)
+        sqlx_projection_rows::load_rule_instance_materialization_row(&pg, rule_instance_id)
             .await?
     else {
         bail!("rule_instance not found: {rule_instance_id}");
@@ -49,7 +49,7 @@ pub async fn materialize_rule_instance(rule_instance_id: &str) -> Result<()> {
 pub async fn materialize_concept(concept_key: &str) -> Result<()> {
     let pg = connect_pg(&pg_cfg()).await?;
     let Some((concept_key, concept_type, label_ru, status)) =
-        sqlx_context_bundle_adapter::load_concept_materialization_row(&pg, concept_key).await?
+        sqlx_projection_rows::load_concept_materialization_row(&pg, concept_key).await?
     else {
         bail!("concept not found: {concept_key}");
     };
@@ -71,7 +71,7 @@ pub async fn materialize_concept(concept_key: &str) -> Result<()> {
 pub async fn materialize_page_context(url_path: &str) -> Result<()> {
     let pg = connect_pg(&pg_cfg()).await?;
     let Some((url_path, context_key, mapping_status)) =
-        sqlx_context_bundle_adapter::load_page_context_materialization_row(&pg, url_path).await?
+        sqlx_projection_rows::load_page_context_materialization_row(&pg, url_path).await?
     else {
         bail!("page_context_map not found: {url_path}");
     };

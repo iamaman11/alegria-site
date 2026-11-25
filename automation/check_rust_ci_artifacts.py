@@ -65,6 +65,27 @@ class RustArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "digest"):
             artifacts.install("pg_harness", SHA, bundle, target=self.root / "tampered_install")
 
+    def test_outbox_a14_owner_is_distinct_hashed_and_fail_closed(self) -> None:
+        source = self.executable("integration_outbox_e2e-build-hash", b"real A14 test binary")
+        bundle = self.root / "outbox_bundle"
+        manifest = artifacts.package("outbox_harness", SHA, bundle, harness=source)
+        self.assertEqual(set(manifest["files"]), {"integration_outbox_e2e_test"})
+        self.assertEqual(manifest["total_bytes"], source.stat().st_size)
+        installed = self.root / "outbox_install" / "debug"
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            artifacts.install("harness", SHA, bundle, target=installed)
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            artifacts.install("pg_harness", SHA, bundle, target=installed)
+        artifacts.install("outbox_harness", SHA, bundle, target=installed)
+        self.assertEqual(
+            (installed / "deps/integration_outbox_e2e-ci-exact").read_bytes(),
+            source.read_bytes(),
+        )
+        self.assertFalse((installed / "deps/integration_harness-ci-exact").exists())
+        (bundle / "integration_outbox_e2e_test").write_bytes(b"forged")
+        with self.assertRaisesRegex(ValueError, "digest"):
+            artifacts.install("outbox_harness", SHA, bundle, target=self.root / "forged_install")
+
     def test_worker_owner_rejects_tamper_wrong_sha_and_wrong_kind(self) -> None:
         with patch.object(artifacts, "TARGET", self.target):
             self.executable("temporal_worker", b"legacy-real-binary")

@@ -9,7 +9,7 @@ import ast
 import re
 import textwrap
 from ci_impact import (
-    E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS, E2E_PG_SHARDS,
+    E2E_ARCH_SHARDS, E2E_VERIFY_SHARDS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
     E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, NON_WORKER_DELIVERY_INPUTS,
     SCHEMA_VERSION, main_cache_prime_required, worker_release_decision,
 )
@@ -17,8 +17,9 @@ from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
-    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries",
-    "rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e", "rust-pg-e2e", "product-truth",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+    "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries", "rust-architecture-e2e",
+    "rust-verify-e2e", "rust-pg-e2e", "rust-outbox-e2e", "product-truth",
     "rust-security", "cloudflare-static-build",
     "stack-temporal-postgres18", "stack-storage-graph", "verify",
     "windows-operator-smoke",
@@ -180,20 +181,24 @@ def check() -> None:
     assert 'git fetch --depth=1 origin "refs/pull/${CI_PR_NUMBER}/head"' in architecture
     assert 'test "$(git rev-parse FETCH_HEAD)" = "${CI_SOURCE_SHA}"' in architecture
     compiler = workflow.split("  rust-e2e-harness:\n", 1)[1].split("  rust-e2e-pg-harness:\n", 1)[0]
-    pg_compiler = workflow.split("  rust-e2e-pg-harness:\n", 1)[1].split("  rust-e2e-legacy-binaries:\n", 1)[0]
-    optional_pg_ab = pg_compiler.split("  rust-pg-physical-ab:\n", 1)[1]
-    pg_compiler = pg_compiler.split("  rust-pg-physical-ab:\n", 1)[0]
+    pg_compiler = workflow.split("  rust-e2e-pg-harness:\n", 1)[1].split("  rust-e2e-outbox-harness:\n", 1)[0]
+    outbox_compiler = workflow.split("  rust-e2e-outbox-harness:\n", 1)[1].split("  rust-pg-physical-ab:\n", 1)[0]
+    optional_pg_ab = workflow.split("  rust-pg-physical-ab:\n", 1)[1].split("  rust-e2e-legacy-binaries:\n", 1)[0]
     legacy_job = workflow.split("  rust-e2e-legacy-binaries:\n", 1)[1].split("  rust-e2e-v3-binaries:\n", 1)[0]
     v3 = workflow.split("  rust-e2e-v3-binaries:\n", 1)[1].split("  rust-architecture-e2e:\n", 1)[0]
     graph = workflow.split("  rust-architecture-e2e:\n", 1)[1].split("  rust-verify-e2e:\n", 1)[0]
     postgres = workflow.split("  rust-verify-e2e:\n", 1)[1].split("  rust-pg-e2e:\n", 1)[0]
-    pg_runner = workflow.split("  rust-pg-e2e:\n", 1)[1].split("  product-truth:\n", 1)[0]
+    pg_runner = workflow.split("  rust-pg-e2e:\n", 1)[1].split("  rust-outbox-e2e:\n", 1)[0]
+    outbox_runner = workflow.split("  rust-outbox-e2e:\n", 1)[1].split("  product-truth:\n", 1)[0]
     assert "--compile-harness-only" in compiler
     assert "--harness-bundle-dir automation/reports/rust-ci-artifacts/harness" in compiler
     assert "--compile-pg-harness-only" in pg_compiler
     assert "--pg-harness-bundle-dir automation/reports/rust-ci-artifacts/pg_harness" in pg_compiler
     assert "name: ci-owner-impact" in pg_compiler
     assert "name: rust-e2e-pg-harness-${{ github.sha }}" in pg_compiler
+    assert "--compile-outbox-harness-only" in outbox_compiler
+    assert "--outbox-harness-bundle-dir automation/reports/rust-ci-artifacts/outbox_harness" in outbox_compiler
+    assert "name: rust-e2e-outbox-harness-${{ github.sha }}" in outbox_compiler
     assert "contains(github.event.pull_request.labels.*.name, 'physical-pg-harness-ab-probe')" in optional_pg_ab
     assert "continue-on-error: true" not in optional_pg_ab
     assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in optional_pg_ab
@@ -207,18 +212,21 @@ def check() -> None:
     assert "contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')" in architecture
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3
-    for block in (compiler, pg_compiler, legacy_job, v3):
+    for block in (compiler, pg_compiler, outbox_compiler, legacy_job, v3):
         assert "uses: actions/cache/restore@v4" in block
         assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in block
         assert "uses: actions/upload-artifact@v7" in block
         assert "cargo test --workspace --locked" not in block
     assert compiler.count("--compile-harness-only") == 1
     assert pg_compiler.count("--compile-pg-harness-only") == 1
+    assert outbox_compiler.count("--compile-outbox-harness-only") == 1
     assert workflow.count("--compile-harness-only") == 1
     assert workflow.count("--compile-pg-harness-only") == 1
+    assert workflow.count("--compile-outbox-harness-only") == 1
     assert graph.count("--execute-precompiled-e2e") == 1
     assert postgres.count("--execute-precompiled-e2e") == 1
     assert pg_runner.count("--execute-precompiled-e2e") == 2
+    assert outbox_runner.count("--execute-precompiled-e2e") == 1
     assert "--suite-job architecture-and-rust" in graph
     assert "--suite-job verify" in postgres
     assert "--parallel-verify-e2e" not in postgres
@@ -228,20 +236,24 @@ def check() -> None:
     assert "fail-fast: false" in graph
     assert "matrix:\n        shard: ${{ fromJSON(needs.impact.outputs.architecture_e2e_shards) }}" in graph
     assert "matrix:\n        shard: ${{ fromJSON(needs.impact.outputs.verify_e2e_shards) }}" in postgres
+    assert "matrix:\n        shard: ${{ fromJSON(needs.impact.outputs.outbox_e2e_shards) }}" in outbox_runner
     assert "name: rust-architecture-e2e (${{ matrix.shard }})" in graph
     assert "name: rust-verify-e2e (${{ matrix.shard }})" in postgres
     assert "if: matrix.shard == 'pg_temporal'" in pg_runner
     assert "if: matrix.shard == 'verify_d'" in pg_runner
     assert 'architecture_e2e_shards=' in workflow
     assert 'verify_e2e_shards=' in workflow
+    assert 'outbox_e2e_shards=' in workflow
     assert "architecture = [name for name in E2E_ARCH_RUNNER_SHARDS if shards[name]]" in workflow
     assert "verify = [name for name in E2E_VERIFY_RUNNER_SHARDS if shards[name]]" in workflow
     assert "pg = [name for name in E2E_PG_SHARDS if shards[name]]" in workflow
-    assert len(E2E_ARCH_SHARDS) == 6 and len(E2E_VERIFY_SHARDS) == 4
+    assert "outbox = [name for name in E2E_OUTBOX_SHARDS if shards[name]]" in workflow
+    assert len(E2E_ARCH_SHARDS) == 6 and len(E2E_VERIFY_SHARDS) == 5
     assert set(E2E_PG_SHARDS) == {"pg_temporal", "verify_d"}
     assert set(E2E_ARCH_RUNNER_SHARDS) == set(E2E_ARCH_SHARDS) - set(E2E_PG_SHARDS)
-    assert set(E2E_VERIFY_RUNNER_SHARDS) == set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS)
-    assert "if not architecture or not verify or not pg:" in workflow
+    assert set(E2E_OUTBOX_SHARDS) == {"outbox"}
+    assert set(E2E_VERIFY_RUNNER_SHARDS) == set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS) - set(E2E_OUTBOX_SHARDS)
+    assert "if not architecture or not verify or not pg or not outbox:" in workflow
     assert "raise SystemExit('CI_IMPACT=FAIL full CI has no mandatory live E2E shards')" in workflow
     assert "rust_ci_artifacts.py install" in graph and "rust_ci_artifacts.py install" in postgres
     assert "rust-e2e-harness-${{ github.sha }}" in graph
@@ -252,6 +264,8 @@ def check() -> None:
     assert "rust-e2e-pg-harness-${{ github.sha }}" not in postgres
     assert "rust-e2e-v3-${{ github.sha }}" in postgres
     assert "rust-e2e-pg-harness-${{ github.sha }}" in pg_runner
+    assert "rust-e2e-outbox-harness-${{ github.sha }}" in outbox_runner
+    assert "rust-e2e-harness-${{ github.sha }}" not in outbox_runner
     assert "rust-e2e-v3-${{ github.sha }}" in pg_runner
     assert "CI_RUST_ARTIFACT_TRANSFER owner=architecture" in graph
     assert "CI_RUST_ARTIFACT_TRANSFER owner=verify" in postgres
@@ -259,23 +273,33 @@ def check() -> None:
     assert "needs.rust-e2e-pg-harness.result == 'success'" not in graph
     assert "needs.rust-e2e-pg-harness.result == 'success'" not in postgres
     assert "needs.rust-e2e-pg-harness.result == 'success'" in pg_runner
+    assert "needs.rust-e2e-outbox-harness.result == 'success'" in outbox_runner
+    assert "needs.rust-e2e-harness.result == 'success'" not in outbox_runner
+    assert "needs: [impact, rust-e2e-outbox-harness, rust-e2e-legacy-binaries]" in outbox_runner
+    assert "--kind outbox_harness --source-sha \"$GITHUB_SHA\"" in outbox_runner
+    assert "--kind legacy --source-sha \"$GITHUB_SHA\"" in outbox_runner
+    assert "--suite-job verify" in outbox_runner
+    assert "CI_RUST_ARTIFACT_TRANSFER owner=outbox" in outbox_runner
     assert "--kind pg_harness --source-sha \"$GITHUB_SHA\"" in pg_runner
     assert "--kind harness --source-sha \"$GITHUB_SHA\"" in graph
     assert "needs: [impact, rust-e2e-harness, rust-e2e-legacy-binaries]" in graph
-    assert "needs: [impact, rust-e2e-harness, rust-e2e-legacy-binaries, rust-e2e-v3-binaries]" in postgres
-    assert "if: matrix.shard == 'verify_b'" in postgres
+    assert "needs: [impact, rust-e2e-harness, rust-e2e-v3-binaries]" in postgres
+    assert "if: matrix.shard == 'verify_b'" not in postgres
     assert "if: matrix.shard == 'verify_c'" in postgres
-    assert "--kind legacy --source-sha \"$GITHUB_SHA\"" in postgres
+    assert "--kind legacy --source-sha \"$GITHUB_SHA\"" not in postgres
     assert "--kind v3 --source-sha \"$GITHUB_SHA\"" in postgres
     assert "needs: [impact, rust-e2e-pg-harness, rust-e2e-v3-binaries]" in pg_runner
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in pg_runner
     assert '"rust-e2e-v3-binaries",' in gate
     assert '"rust-e2e-pg-harness",' in gate
+    assert '"rust-e2e-outbox-harness",' in gate
     assert '"rust-architecture-e2e": set(E2E_ARCH_RUNNER_SHARDS)' in gate
     assert '"rust-verify-e2e": set(E2E_VERIFY_RUNNER_SHARDS)' in gate
     assert '"rust-pg-e2e": set(E2E_PG_SHARDS)' in gate
+    assert '"rust-outbox-e2e": set(E2E_OUTBOX_SHARDS)' in gate
     assert "did not pass all selected E2E shards" in gate
-    assert "from ci_impact import E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS" in gate
+    assert "E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS," in gate
+    assert "E2E_PG_SHARDS, E2E_OUTBOX_SHARDS," in gate
     assert "      - name: Checkout exact CI plan owner registry\n" in gate
     checkout = gate.split("      - name: Checkout exact CI plan owner registry\n", 1)[1].split("      - name:", 1)[0]
     assert "uses: actions/checkout@v7" in checkout and "ref: ${{ github.sha }}" in checkout

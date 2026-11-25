@@ -811,7 +811,7 @@
                 "authoritative raw section".to_string(),
             )]),
         };
-        runtime_composition::adapters::projection_materialize_adapter::dispatch_event(
+        projection_delivery::projection_materialize_adapter::dispatch_event(
             "qdrant",
             "QdrantUpsertCommand",
             &entity_key,

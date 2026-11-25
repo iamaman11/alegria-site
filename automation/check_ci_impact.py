@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from ci_impact import (
     CI_PR_OWNERS, E2E_ARCH_SHARDS, E2E_SHARD_RUNS, E2E_VERIFY_SHARDS,
-    E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS,
+    E2E_ARCH_RUNNER_SHARDS, E2E_VERIFY_RUNNER_SHARDS, E2E_PG_SHARDS, E2E_OUTBOX_SHARDS,
     FULL_VERIFY_E2E_SUITES, SUITE_OWNERS, TRUTH_FIXTURE_PREFIX,
     WORKER_E2E_PREPARE, analyze, changed_paths,
     affected_crates_for_lock_change, declared_workspace_owners, parsed_lock_graph,
@@ -39,6 +39,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/infrastructure": "infrastructure",
             "app/rust/crates/runtime_composition": "runtime_composition",
             "app/rust/crates/integration_harness": "integration_harness",
+            "app/rust/crates/integration_outbox_e2e": "integration_outbox_e2e",
             "app/rust/crates/integration_pg_v3_e2e": "integration_pg_v3_e2e",
             "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
@@ -60,6 +61,7 @@ class ImpactFixtures(unittest.TestCase):
             "infrastructure": {"runtime_composition"},
             "runtime_composition": {"temporal_worker", "outbox_worker", "integration_harness"},
             "integration_harness": set(),
+            "integration_outbox_e2e": set(),
             "integration_pg_v3_e2e": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
@@ -107,12 +109,29 @@ class ImpactFixtures(unittest.TestCase):
         self.assertFalse(decision["worker_required"])
         self.assertEqual(decision["reason"], "ci_operator_maintenance_only")
 
+    def test_shared_real_provider_fixtures_fail_closed_across_both_e2e_crates(self) -> None:
+        report = self.impact("app/rust/crates/integration_data_fixtures/src/postgres.rs")
+        self.assertEqual(report["scope"], "full")
+        self.assertEqual(set(report["selected_ci_jobs"]), set(CI_PR_OWNERS))
+        self.assertIn("outbox_a14", report["selected_suites"])
+        self.assertIn("knowledge_a13", report["selected_suites"])
+        self.assertIn("pg_effect_v3", report["selected_suites"])
+        self.assertIn("temporal_restart", report["selected_suites"])
+        self.assertIn("graph_query", report["selected_suites"])
+        self.assertNotIn("truth_certification", report["selected_suites"])
+        shards = e2e_shard_commands_for_report(report)
+        self.assertEqual(sum(count for rows in shards.values()
+                             for _, _, _, count in rows), 38)
+        self.assertTrue(all(shards[shard] for shard in E2E_ARCH_RUNNER_SHARDS
+                            if shard != "truth_certification"))
+
     def test_full_ci_real_e2e_suites_are_partitioned_once_between_existing_owners(self) -> None:
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
         self.assertTrue({
-            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
-            "rust-architecture-e2e", "rust-verify-e2e",
+            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
+            "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-architecture-e2e", "rust-verify-e2e", "rust-outbox-e2e",
         } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
         assignments = suite_commands_by_ci_job(report)
@@ -132,7 +151,8 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("pg_temporal_v3", architecture)
         for owner in ("pg_effect_v3", "pg_temporal_v3"):
             self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_pg_v3_e2e")
-        for owner in set(SUITE_OWNERS) - {"pg_effect_v3", "pg_temporal_v3"}:
+        self.assertEqual(SUITE_OWNERS["outbox_a14"]["command"][3], "integration_outbox_e2e")
+        for owner in set(SUITE_OWNERS) - {"pg_effect_v3", "pg_temporal_v3", "outbox_a14"}:
             self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_harness")
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["command"][7], "temporal_effect_v3_")
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
@@ -181,16 +201,22 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_pg_runner_does_not_require_legacy_harness_or_drop_live_shards(self) -> None:
         self.assertEqual(E2E_PG_SHARDS, ("pg_temporal", "verify_d"))
+        self.assertEqual(E2E_OUTBOX_SHARDS, ("outbox",))
         self.assertEqual(set(E2E_ARCH_RUNNER_SHARDS), set(E2E_ARCH_SHARDS) - set(E2E_PG_SHARDS))
-        self.assertEqual(set(E2E_VERIFY_RUNNER_SHARDS), set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS))
+        self.assertEqual(set(E2E_VERIFY_RUNNER_SHARDS), set(E2E_VERIFY_SHARDS) - set(E2E_PG_SHARDS) - set(E2E_OUTBOX_SHARDS))
         self.assertEqual(
-            set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS),
+            set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS) | set(E2E_OUTBOX_SHARDS),
             set(E2E_SHARD_RUNS),
         )
         self.assertEqual({suite for shard in E2E_PG_SHARDS
                           for suite, *_ in E2E_SHARD_RUNS[shard]}, {"pg_temporal_v3", "pg_effect_v3"})
         self.assertEqual(SUITE_OWNERS["outbox_a14"]["runtime_binaries"], {
             "INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker",
+        })
+        self.assertEqual(E2E_SHARD_RUNS["outbox"], (("outbox_a14", "outbox_a14_", 9),))
+        self.assertEqual({*E2E_SHARD_RUNS["verify_b"]}, {
+            ("knowledge_a13", "knowledge_a13_", 3),
+            ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1),
         })
 
     def test_full_real_e2e_shards_cover_all_38_existing_tests_without_duplicate_filters(self) -> None:
@@ -918,7 +944,8 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/infrastructure/src/adapters/sqlx_hitl_adapter.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_step_ledger_adapter.rs",
             "app/rust/crates/infrastructure/src/adapters/sqlx_seo_adapter/projection_runtime_store.rs",
-            "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/integration_outbox_e2e/src/tests/pg_migration_upgrade_tests.rs",
         ):
             with self.subTest(path=path):
                 result = self.impact(path)

@@ -100,7 +100,11 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         .await;
     seed_truth_certification_support_bundle(&infra.postgres.pool, &input.context_key, &fixture)
         .await;
-    let mut outbox = spawn_outbox_worker(&worker_env);
+    // In the draft-only run, deliberately withhold the *real* standalone
+    // Outbox Worker until Temporal is already executing its first projection
+    // Activity against this run's durable Qdrant backlog. The HITL branch
+    // retains its normally running Outbox Worker.
+    let mut outbox = block_review.then(|| spawn_outbox_worker(&worker_env));
     let mut worker = spawn_temporal_worker(&worker_env);
     // Temporal persists the workflow task until a poller is available.
     // The real workflow outcome below proves readiness, not a fixed sleep.
@@ -124,6 +128,78 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         .await
         .unwrap();
     checkpoint("workflow_started");
+
+    if !block_review {
+        use infrastructure::adapters::sqlx_seo_adapter::projection_backlog_counts;
+
+        // No mocked Activity response and no synthetic projection receipt:
+        // crawl has emitted real Qdrant outbox rows, and Temporal has recorded
+        // its real `run_projection_sync_step` command before we test the outage.
+        // This is the first projection gate, before later graph materialization
+        // or editorial work can introduce unrelated failure modes.
+        let pending_without_owner = timeout(Duration::from_secs(90), async {
+            loop {
+                let backlog = projection_backlog_counts(&infra.postgres.pool, &run_id, "qdrant")
+                    .await
+                    .expect("read scoped durable Qdrant outbox backlog");
+                if backlog.pending_events > 0 {
+                    let history = handle
+                        .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                        .to_json()
+                        .await
+                        .expect("read live Temporal history while projection awaits ACK");
+                    if scheduled_temporal_activities(&history)
+                        .iter()
+                        .any(|name| name == "AlegriaActivities::run_projection_sync_step")
+                    {
+                        break backlog.pending_events;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await
+        .expect("Temporal did not reach a real Qdrant projection Activity with pending outbox");
+        checkpoint("outbox_absent_projection_activity_waiting");
+        assert!(pending_without_owner > 0);
+        let done_without_owner: i64 = sqlx::query_scalar(
+            "SELECT count(*)::bigint FROM system.sync_outbox \
+             WHERE run_id=$1 AND target_system='qdrant' AND status='done'",
+        )
+        .bind(&run_id)
+        .fetch_one(&infra.postgres.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            done_without_owner, 0,
+            "Temporal is not an Outbox owner and cannot fabricate a durable ACK"
+        );
+
+        // Check actual workflow non-completion, without paying the production
+        // 60-second projection timeout on the mandatory CI critical path.
+        assert!(
+            timeout(
+                Duration::from_secs(2),
+                handle.get_result(WorkflowGetResultOptions::default()),
+            )
+            .await
+            .is_err(),
+            "missing Outbox Worker must not let Temporal complete projection sync"
+        );
+        let still_pending = projection_backlog_counts(&infra.postgres.pool, &run_id, "qdrant")
+            .await
+            .unwrap();
+        assert!(
+            still_pending.pending_events > 0,
+            "missing Outbox Worker must not turn unacknowledged rows into done"
+        );
+
+        // Resume the same run/target using the real Worker claim -> Qdrant RPC
+        // -> PostgreSQL receipt path. Final history and scoped ACK checks below
+        // prove that the previously blocked workflow actually progressed.
+        outbox = Some(spawn_outbox_worker(&worker_env));
+        checkpoint("outbox_worker_resumed");
+    }
 
     // Before editorial generation, prove that the same Temporal run waits
     // for every raw-section truth proposal in the same durable inbox.
@@ -216,7 +292,10 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
                 // leased batch while the Temporal Neo4j sync waits. Preserve
                 // the exact leased event types, retries and error/lease state
                 // so a missing ACK is not misdiagnosed as an editorial timeout.
-                let outbox_process = format!("{:?}", outbox.child.try_wait());
+                let outbox_process = format!(
+                    "{:?}",
+                    outbox.as_mut().map(|guard| guard.child.try_wait())
+                );
                 let graph_outbox = sqlx::query(
                     "SELECT event_type, status, retry_count, worker_id, \
                             locked_until::text AS locked_until_text, last_error \
@@ -588,6 +667,37 @@ async fn run_canonical_manual_editorial(run_mode: &str, block_review: bool) {
         .to_json()
         .await
         .expect("fetch real completed V1 history from Temporal server");
+    assert!(
+        scheduled_temporal_activities(&saved_history)
+            .iter()
+            .any(|name| name == "AlegriaActivities::run_projection_sync_step"),
+        "the resumed V1 workflow must have executed a real projection sync Activity"
+    );
+    let qdrant_remaining =
+        infrastructure::adapters::sqlx_seo_adapter::projection_backlog_counts(
+            &infra.postgres.pool,
+            &run_id,
+            "qdrant",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        (qdrant_remaining.pending_events, qdrant_remaining.failed_events),
+        (0, 0),
+        "restarted Outbox Worker must durably ACK this run's Qdrant projection"
+    );
+    let done_after_resume: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM system.sync_outbox \
+         WHERE run_id=$1 AND target_system='qdrant' AND status='done'",
+    )
+    .bind(&run_id)
+    .fetch_one(&infra.postgres.pool)
+    .await
+    .unwrap();
+    assert!(
+        done_after_resume > 0,
+        "real Worker ACK must replace the previously pending Qdrant backlog"
+    );
     assert_saved_temporal_history_replays(&saved_history);
     checkpoint("workflow_replayed");
     let drafted: i64 = sqlx::query_scalar("SELECT count(*)::bigint FROM site.page_drafts")

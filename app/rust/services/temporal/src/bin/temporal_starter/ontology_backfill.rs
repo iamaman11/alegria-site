@@ -142,7 +142,7 @@ async fn run_ontology_backfill_plan(
     {
         let mut neo4j_result = json!({ "status": "skipped" });
         if apply_neo4j {
-            match runtime_composition::adapters::neo4j_materialization_adapter::materialize_concept(
+            match projection_delivery::neo4j_materialization_adapter::materialize_concept(
                 &concept_key,
             )
             .await

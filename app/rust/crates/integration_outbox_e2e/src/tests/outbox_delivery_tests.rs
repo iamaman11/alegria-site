@@ -4,7 +4,7 @@
 #[tokio::test]
 #[serial]
 async fn outbox_a14_verified_rule_projection_atomic_stage_replay_and_qdrant_delete() {
-    use runtime_composition::adapters::projection_materialize_adapter::{
+    use projection_delivery::projection_materialize_adapter::{
         dispatch_leased_event, DispatchDisposition,
     };
     use infrastructure::adapters::{
@@ -1220,7 +1220,7 @@ async fn outbox_a14_verified_rule_uncertain_effect_quarantines_claim_and_new_rev
 #[serial]
 async fn outbox_a14_postgres_qdrant_crash_replay_and_lease_fencing() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use runtime_composition::adapters::projection_materialize_adapter::dispatch_event;
+    use projection_delivery::projection_materialize_adapter::dispatch_event;
     use infrastructure::adapters::sqlx_outbox_adapter::{
         claim_outbox_batch_for_run_target, mark_done, mark_retry, LeaseUpdate, OutboxEnvelope,
     };

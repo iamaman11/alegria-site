@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 
 from check_json_boundary_policy import (
+    EXTRACTED_OWNER_JSON_BOUNDARIES,
     FORBIDDEN_PATTERNS,
     PG_V3_E2E_HISTORY_TEST_BOUNDARIES,
     ROOT,
@@ -14,6 +15,25 @@ from check_json_boundary_policy import (
 
 
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
+    def test_extracted_owner_json_grants_are_exact_files(self) -> None:
+        self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {
+            "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+            "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
+            "app/rust/crates/voyage_api/src/lib.rs",
+        })
+        for relative in EXTRACTED_OWNER_JSON_BOUNDARIES:
+            with self.subTest(relative=relative):
+                self.assertTrue(is_allowed_json_boundary(ROOT / relative))
+
+        for relative in (
+            "app/rust/crates/integration_outbox_e2e/src/lib.rs",
+            "app/rust/crates/integration_outbox_e2e/src/tests/new_json_test.rs",
+            "app/rust/crates/projection_delivery/src/new_provider.rs",
+            "app/rust/crates/voyage_api/src/operation.rs",
+        ):
+            with self.subTest(relative=relative):
+                self.assertFalse(is_allowed_json_boundary(ROOT / relative))
+
     def test_only_two_actual_temporal_history_test_files_are_exempt(self) -> None:
         self.assertEqual(PG_V3_E2E_HISTORY_TEST_BOUNDARIES, {
             "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",

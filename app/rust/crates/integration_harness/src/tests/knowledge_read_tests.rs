@@ -8,7 +8,7 @@
 #[serial]
 async fn knowledge_a13_editorial_source_context_uses_real_qdrant_and_typed_port() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use runtime_composition::adapters::projection_materialize_adapter;
+    use projection_delivery::projection_materialize_adapter;
     use prost::Message;
     use seo_application::knowledge::retrieve_source_context;
     use seo_ports::knowledge::{SourceContextCollection, SourceContextQuery};

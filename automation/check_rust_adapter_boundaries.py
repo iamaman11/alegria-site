@@ -12,6 +12,9 @@ RUST_ROOT = ROOT / "app" / "rust"
 INFRA_SRC = ROOT / "app" / "rust" / "crates" / "infrastructure" / "src"
 ADAPTERS_DIR = INFRA_SRC / "adapters"
 POSTGRES_STORE_SRC = RUST_ROOT / "crates" / "postgres_store" / "src"
+OUTBOX_MANIFEST = RUST_ROOT / "services" / "outbox_worker" / "Cargo.toml"
+DELIVERY_MANIFEST = RUST_ROOT / "crates" / "projection_delivery" / "Cargo.toml"
+VOYAGE_MANIFEST = RUST_ROOT / "crates" / "voyage_api" / "Cargo.toml"
 INTEGRATION_HARNESS_DIR = ROOT / "app" / "rust" / "crates" / "integration_harness"
 # This is an opt-in, test-only binary owner. It needs the native Temporal
 # client to validate actual History/Signal replay, but it is not a production
@@ -32,6 +35,7 @@ DEDICATED_ADAPTER_DIRS = {
     (RUST_ROOT / "crates" / "graph_neo4j").resolve(),
     (RUST_ROOT / "crates" / "http_client").resolve(),
     (RUST_ROOT / "crates" / "vector_qdrant").resolve(),
+    (RUST_ROOT / "crates" / "voyage_api").resolve(),
 }
 # A standalone gRPC service owns its transport-facing request/response types.
 GRPC_SERVICE_SRCS = {
@@ -83,6 +87,11 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-sdk-core",
     },
     (PG_E2E_DIR / "Cargo.toml").resolve(): PG_E2E_TEMPORAL_SDKS,
+    # Test-only A14 package exercises real PostgreSQL transactions directly.
+    # Grant precisely SQLx, not unrelated provider or Temporal SDK imports.
+    (RUST_ROOT / "crates" / "integration_outbox_e2e" / "Cargo.toml").resolve(): {"sqlx"},
+    # Shared real PG/Qdrant setup used by multiple integration executables.
+    (RUST_ROOT / "crates" / "integration_data_fixtures" / "Cargo.toml").resolve(): {"sqlx"},
 }
 
 ENFORCED_DEP_KEYS = [
@@ -155,6 +164,7 @@ REQUIRED_POSTGRES_OWNER_FILES = {
     "sqlx_reconcile_adapter.rs",
     "sqlx_reconcile_runtime_adapter.rs",
     "sqlx_runtime_health_adapter.rs",
+    "sqlx_projection_rows.rs",
 }
 
 FORBIDDEN_INFRA_ROOT_FILES = {
@@ -166,6 +176,14 @@ FORBIDDEN_INFRA_ROOT_FILES = {
     "outbox_store.rs",
     "telemetry.rs",
 }
+
+DELIVERY_FORBIDDEN_LOCAL_OWNERS = frozenset({
+    "runtime_composition", "infrastructure", "acquisition", "seo_steps",
+    "temporal_worker", "temporal_gateway",
+})
+DELIVERY_REQUIRED_DIRECT_OWNERS = frozenset({
+    "postgres_store", "graph_neo4j", "vector_qdrant", "voyage_api",
+})
 
 
 def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
@@ -209,6 +227,25 @@ def workspace_dependency_closure(manifest: Path) -> tuple[set[str], set[str]]:
 
     visit(manifest, root=True)
     return packages, direct
+
+
+def provider_delivery_closure_failures(
+    outbox_closure: set[str], outbox_direct: set[str],
+    delivery_closure: set[str], delivery_direct: set[str],
+    voyage_closure: set[str],
+) -> list[str]:
+    """Negative guard for every transitive local package, including dev edges."""
+    failures = []
+    if "projection_delivery" not in outbox_direct:
+        failures.append("outbox_worker must directly depend on projection_delivery")
+    for name, closure in (("projection_delivery", delivery_closure),
+                          ("voyage_api", voyage_closure),
+                          ("outbox_worker", outbox_closure)):
+        for forbidden in sorted(DELIVERY_FORBIDDEN_LOCAL_OWNERS & closure):
+            failures.append(f"{name} Cargo closure imports heavy owner `{forbidden}`")
+    for required in sorted(DELIVERY_REQUIRED_DIRECT_OWNERS - delivery_direct):
+        failures.append(f"projection_delivery must directly depend on `{required}`")
+    return failures
 
 
 def pg_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
@@ -356,6 +393,23 @@ def main() -> int:
                     violations.append(f"{owner} depends on higher-level `{forbidden}`")
         if not required_composition.issubset(composition_closure):
             violations.append("runtime_composition Cargo closure lacks one or more provider owners")
+        # Compile-time isolation, not a renamed forwarding adapter: the
+        # production Outbox binary may only close over narrow provider owners,
+        # never Temporal, crawling/Playwright, or the broad runtime composer.
+        delivery_closure, delivery_direct = workspace_dependency_closure(DELIVERY_MANIFEST)
+        voyage_closure, _ = workspace_dependency_closure(VOYAGE_MANIFEST)
+        outbox_closure, outbox_direct = workspace_dependency_closure(OUTBOX_MANIFEST)
+        violations.extend(provider_delivery_closure_failures(
+            outbox_closure, outbox_direct, delivery_closure, delivery_direct, voyage_closure,
+        ))
+        # An implementation living under runtime_composition would compile
+        # its broad closure into Outbox regardless of its public import path.
+        for legacy in ("projection_materialize_adapter.rs", "neo4j_materialization_adapter.rs"):
+            if (COMPOSITION_MANIFEST.parent / "src" / "adapters" / legacy).exists():
+                violations.append(f"stale runtime_composition materializer: {legacy}")
+        for forbidden in ("runtime_composition", "infrastructure"):
+            if forbidden in OUTBOX_MANIFEST.read_text(encoding="utf-8"):
+                violations.append(f"outbox_worker manifest still refers to `{forbidden}`")
     except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError) as error:
         violations.append(f"cannot verify provider Cargo dependency closure: {error}")
 

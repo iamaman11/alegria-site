@@ -6,6 +6,8 @@ edition = "2021"
 [features]
 default = []
 e2e = [
+  "dep:integration_data_fixtures",
+  "integration_data_fixtures/e2e",
   "dep:infrastructure",
   "dep:runtime_composition",
   "dep:graph_neo4j",
@@ -21,6 +23,7 @@ e2e = [
 
 [dependencies]
 anyhow = { workspace = true }
+integration_data_fixtures = { path = "../integration_data_fixtures", optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -40,13 +43,13 @@ uuid = { workspace = true, optional = true }
 
 [dev-dependencies]
 postgres_store = { path = "../postgres_store" }
-outbox_worker = { path = "../../services/outbox_worker" }
 operation_protocol = { path = "../operation_protocol" }
 async-trait = "0.1"
 contracts = { path = "../contracts" }
 primitives = { path = "../primitives" }
 infrastructure = { path = "../infrastructure" }
 runtime_composition = { path = "../runtime_composition" }
+projection_delivery = { path = "../projection_delivery" }
 seo_application = { path = "../seo_application" }
 seo_domain = { path = "../seo_domain" }
 seo_ports = { path = "../seo_ports" }

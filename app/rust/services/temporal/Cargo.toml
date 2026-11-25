@@ -16,6 +16,7 @@ temporal_gateway = { path = "../../crates/temporal_gateway" }
 infrastructure = { path = "../../crates/infrastructure" }
 postgres_store = { path = "../../crates/postgres_store" }
 runtime_composition = { path = "../../crates/runtime_composition" }
+projection_delivery = { path = "../../crates/projection_delivery" }
 graph_neo4j = { path = "../../crates/graph_neo4j" }
 vector_qdrant = { path = "../../crates/vector_qdrant" }
 acquisition = { path = "../../crates/acquisition" }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression tests for the exact-source E2E Temporal SDK exception."""
+"""Regression tests for Temporal test SDK and production Outbox isolation."""
 
 from __future__ import annotations
 
@@ -7,12 +7,18 @@ import re
 import unittest
 
 from check_rust_adapter_boundaries import (
+    DELIVERY_MANIFEST,
+    DELIVERY_FORBIDDEN_LOCAL_OWNERS,
     MANIFEST_DEP_EXCEPTIONS,
+    OUTBOX_MANIFEST,
     PG_E2E_DIR,
     PG_E2E_SRC,
     PG_E2E_TEMPORAL_SDKS,
     RUST_ROOT,
+    VOYAGE_MANIFEST,
     pg_e2e_direct_temporal_sdk_allowed,
+    provider_delivery_closure_failures,
+    workspace_dependency_closure,
 )
 
 
@@ -58,6 +64,39 @@ class PgE2eSdkBoundaryTests(unittest.TestCase):
             MANIFEST_DEP_EXCEPTIONS[(PG_E2E_DIR / "Cargo.toml").resolve()],
             PG_E2E_TEMPORAL_SDKS,
         )
+
+
+class OutboxProviderDeliveryBoundaryTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.delivery_closure, self.delivery_direct = workspace_dependency_closure(DELIVERY_MANIFEST)
+        self.voyage_closure, _ = workspace_dependency_closure(VOYAGE_MANIFEST)
+        self.outbox_closure, self.outbox_direct = workspace_dependency_closure(OUTBOX_MANIFEST)
+
+    def failures(self, *, outbox_closure=None, outbox_direct=None,
+                 delivery_closure=None, delivery_direct=None, voyage_closure=None):
+        return provider_delivery_closure_failures(
+            self.outbox_closure if outbox_closure is None else outbox_closure,
+            self.outbox_direct if outbox_direct is None else outbox_direct,
+            self.delivery_closure if delivery_closure is None else delivery_closure,
+            self.delivery_direct if delivery_direct is None else delivery_direct,
+            self.voyage_closure if voyage_closure is None else voyage_closure,
+        )
+
+    def test_production_outbox_physical_cargo_graph_is_narrow(self) -> None:
+        self.assertEqual(self.failures(), [])
+        self.assertTrue({"projection_delivery", "postgres_store", "voyage_api"} <= self.outbox_closure)
+        self.assertEqual(DELIVERY_FORBIDDEN_LOCAL_OWNERS & self.outbox_closure, set())
+
+    def test_all_heavy_owners_fail_closed_at_every_delivery_layer(self) -> None:
+        for owner in DELIVERY_FORBIDDEN_LOCAL_OWNERS:
+            for layer in ("outbox_closure", "delivery_closure", "voyage_closure"):
+                with self.subTest(owner=owner, layer=layer):
+                    closure = getattr(self, layer) | {owner}
+                    self.assertIn(owner, " ".join(self.failures(**{layer: closure})))
+
+    def test_forwarding_shim_and_missing_provider_edge_are_rejected(self) -> None:
+        self.assertIn("must directly depend", " ".join(self.failures(outbox_direct=set())))
+        self.assertIn("must directly depend", " ".join(self.failures(delivery_direct=set())))
 
 
 if __name__ == "__main__":

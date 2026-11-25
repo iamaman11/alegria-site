@@ -27,6 +27,9 @@ GLOBAL_PREFIXES = (
     ".github/",
     "automation/",
     "app/db/",
+    # Shared live PG/Qdrant test setup feeds *both* E2E owner packages.
+    # A fixture change cannot be assigned only to the new A14 package.
+    "app/rust/crates/integration_data_fixtures/",
     "contracts/",
     "analytics_lab/",
     "infra/",
@@ -181,9 +184,14 @@ OUTBOX_A14_PATHS = {
     "app/rust/services/outbox_worker/src/materialize.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_outbox_adapter.rs",
     "app/rust/crates/infrastructure/src/adapters/sqlx_runtime_outbox_adapter.rs",
-    "app/rust/crates/runtime_composition/src/adapters/projection_materialize_adapter.rs",
+    "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
+    "app/rust/crates/projection_delivery/src/neo4j_materialization_adapter.rs",
+    "app/rust/crates/voyage_api/src/lib.rs",
+    "app/rust/crates/postgres_store/src/sqlx_projection_rows.rs",
     "app/rust/services/temporal/src/activities/operations/runtime_support_ops.rs",
-    "app/rust/crates/integration_harness/src/tests/outbox_delivery_tests.rs",
+    "app/rust/crates/integration_outbox_e2e/src/lib.rs",
+    "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
+    "app/rust/crates/integration_outbox_e2e/src/tests/pg_migration_upgrade_tests.rs",
 }
 
 # Truth adjudication is a real PostgreSQL/evidence operation distinct from
@@ -369,13 +377,13 @@ SUITE_OWNERS = {
     },
     "outbox_a14": {
         "paths": OUTBOX_A14_PATHS,
-        "prefixes": ("app/rust/services/outbox_worker/src/",),
+        "prefixes": ("app/rust/services/outbox_worker/src/", "app/rust/crates/integration_outbox_e2e/"),
         "lock_crates": {"outbox_worker", "infrastructure"},
         "on_unknown_global_input": True,
         "prepare": OUTBOX_E2E_PREPARE,
         "runtime_binaries": {"INTEGRATION_OUTBOX_WORKER_BIN": "outbox_worker"},
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_outbox_e2e", "--features", "e2e",
             "--lib", "outbox_a14_", "--locked", "--", "--nocapture",
         ),
     },
@@ -627,7 +635,8 @@ def main_cache_prime_required(changed: list[str]) -> bool:
         raise ValueError("MAIN_CACHE_PRIME=FAIL invalid changed paths")
     return any(
         path.startswith("app/rust/")
-        and not path.startswith("app/rust/crates/integration_harness/src/tests/")
+        and not path.startswith(("app/rust/crates/integration_harness/src/tests/",
+                                 "app/rust/crates/integration_outbox_e2e/src/tests/"))
         and not path.startswith(TRUTH_FIXTURE_PREFIX)
         and not path.endswith("/Dockerfile")
         for path in changed
@@ -639,11 +648,13 @@ CI_PR_OWNERS = (
     "architecture-and-rust",
     "rust-e2e-harness",
     "rust-e2e-pg-harness",
+    "rust-e2e-outbox-harness",
     "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
     "rust-architecture-e2e",
     "rust-verify-e2e",
     "rust-pg-e2e",
+    "rust-outbox-e2e",
     "product-truth",
     "rust-security",
     "cloudflare-static-build",
@@ -854,17 +865,21 @@ E2E_ARCH_SHARDS = (
     "graph", "pg_temporal", "temporal_manual", "temporal_blocked",
     "vector", "truth_certification",
 )
-E2E_VERIFY_SHARDS = ("verify_a", "verify_b", "verify_c", "verify_d")
+E2E_VERIFY_SHARDS = ("verify_a", "verify_b", "verify_c", "verify_d", "outbox")
 # Execution (not business-suite) routing: the physically independent PG V3
 # owner must never wait for compilation of the unrelated legacy E2E harness.
 # Preserve the original source-suite owner partition above for exhaustive
 # exact-filter/count verification and fail-closed impact selection.
 E2E_PG_SHARDS = ("pg_temporal", "verify_d")
+E2E_OUTBOX_SHARDS = ("outbox",)
 E2E_ARCH_RUNNER_SHARDS = tuple(name for name in E2E_ARCH_SHARDS if name not in E2E_PG_SHARDS)
-E2E_VERIFY_RUNNER_SHARDS = tuple(name for name in E2E_VERIFY_SHARDS if name not in E2E_PG_SHARDS)
+E2E_VERIFY_RUNNER_SHARDS = tuple(
+    name for name in E2E_VERIFY_SHARDS if name not in E2E_PG_SHARDS + E2E_OUTBOX_SHARDS
+)
 if (set(E2E_ARCH_RUNNER_SHARDS) | set(E2E_VERIFY_RUNNER_SHARDS) | set(E2E_PG_SHARDS)
+        | set(E2E_OUTBOX_SHARDS)
         != set(E2E_ARCH_SHARDS) | set(E2E_VERIFY_SHARDS)):
-    raise ValueError("PG E2E runner partition lost a required shard")
+    raise ValueError("independent E2E runner partition lost a required shard")
 E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "graph": (("graph_query", "graph_capability_", 2),),
     "pg_temporal": (("pg_temporal_v3", "temporal_effect_v3_", 1),),
@@ -879,13 +894,13 @@ E2E_SHARD_RUNS: dict[str, tuple[tuple[str, str, int], ...]] = {
     "truth_certification": (
         ("truth_certification", "truth_certification_suite_matches_fixture_expectations", 1),
     ),
-    # Measured full-scope CI #45515259024: 31 PostgreSQL/pure Temporal tests
-    # in this partition, in addition to the seven architecture owner tests.
+    # Measured full-scope CI #45515259024: 31 verify-side tests in total, nine
+    # of which now compile and execute through a separate Outbox owner crate.
     "verify_a": (("draft_qa_scenario", "draft_qa_", 2),
                  ("truth_adjudication_integrity", "truth_adjudication_", 3)),
-    "verify_b": (("outbox_a14", "outbox_a14_", 9),
-                 ("knowledge_a13", "knowledge_a13_", 3),
+    "verify_b": (("knowledge_a13", "knowledge_a13_", 3),
                  ("publishing_a17", "publishing_a17_postgres_outbox_http_faults_and_recovery", 1)),
+    "outbox": (("outbox_a14", "outbox_a14_", 9),),
     "verify_c": (("cms_review_revision", "cms_revision_", 4),
                  ("planning_atomicity", "planning_atomic_", 6),
                  # Pure DAG owns the independent V3 executor but tests the
@@ -1337,8 +1352,16 @@ def analyze(
     scope = "full" if broad_reasons else "scoped" if affected else "none"
 
     suite_reasons: dict[str, list[str]] = {}
+    shared_provider_fixture_changed = any(
+        path.startswith("app/rust/crates/integration_data_fixtures/") for path in paths
+    )
     for name, rule in SUITE_OWNERS.items():
         matched = [path for path in sorted(set(paths)) if path in rule["paths"] or path.startswith(rule["prefixes"])]
+        # Both executable owners consume the same real provider fixtures;
+        # changes to that common setup require ALL mandatory 38 live checks,
+        # including architecture shards otherwise optional for global inputs.
+        if shared_provider_fixture_changed and name != "truth_certification":
+            matched.append("shared real provider fixture consumed by all mandatory E2E owners")
         if lock_changed and not broad_reasons:
             matched.extend(
                 f"locked dependency affects: {crate}"

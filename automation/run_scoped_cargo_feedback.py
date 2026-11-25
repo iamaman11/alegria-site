@@ -35,15 +35,23 @@ PG_E2E_PACKAGE = "integration_pg_v3_e2e"
 PG_E2E_COMMAND_PREFIX = (
     "cargo", "test", "-p", PG_E2E_PACKAGE, "--features", "e2e", "--lib",
 )
-E2E_COMMAND_PREFIXES = (VERIFY_E2E_COMMAND_PREFIX, PG_E2E_COMMAND_PREFIX)
+OUTBOX_E2E_PACKAGE = "integration_outbox_e2e"
+OUTBOX_E2E_COMMAND_PREFIX = (
+    "cargo", "test", "-p", OUTBOX_E2E_PACKAGE, "--features", "e2e", "--lib",
+)
+E2E_COMMAND_PREFIXES = (
+    VERIFY_E2E_COMMAND_PREFIX, PG_E2E_COMMAND_PREFIX, OUTBOX_E2E_COMMAND_PREFIX,
+)
 VERIFY_E2E_COMMAND_SUFFIX = ("--locked", "--", "--nocapture")
 E2E_COMPILE = [
     *VERIFY_E2E_COMMAND_PREFIX, "--locked", "--no-run",
 ]
 PG_E2E_COMPILE = [*PG_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
+OUTBOX_E2E_COMPILE = [*OUTBOX_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
 EXACT_EXECUTABLE_NAMES = {
     "integration_harness": "integration_harness-ci-exact",
     PG_E2E_PACKAGE: "integration_pg_v3_e2e-ci-exact",
+    OUTBOX_E2E_PACKAGE: "integration_outbox_e2e-ci-exact",
 }
 E2E_MAX_PROCESSES = 2
 TEST_RESULT_COUNT = re.compile(r"test result: ok\. (\d+) passed;")
@@ -250,6 +258,7 @@ def run_precompiled_e2e_suite(
 def run_exact_precompiled_e2e_shard(
     report: dict, shard: str, *, suite_job: str, prebuilt_executable: Path,
     prebuilt_pg_executable: Path | None = None,
+    prebuilt_outbox_executable: Path | None = None,
 ) -> list[dict]:
     """Execute one nonempty, registry-owned E2E shard on its *own* CI runner.
 
@@ -283,6 +292,7 @@ def run_exact_precompiled_e2e_shard(
     executables = {
         "integration_harness": prebuilt_executable,
         PG_E2E_PACKAGE: prebuilt_pg_executable,
+        OUTBOX_E2E_PACKAGE: prebuilt_outbox_executable,
     }
     for name, command, _, _ in selected:
         package = e2e_package_for_command(command)
@@ -397,10 +407,14 @@ def main() -> int:
                         help="For full impact, compile exact E2E harness once and publish content-verified bundle")
     parser.add_argument("--compile-pg-harness-only", action="store_true",
                         help="Compile the independent PostgreSQL V3 E2E owner test target once")
+    parser.add_argument("--compile-outbox-harness-only", action="store_true",
+                        help="Compile the independent A14 Outbox E2E owner test target once")
     parser.add_argument("--harness-bundle-dir", type=Path,
                         help="Fresh output directory for the single full-impact E2E compiler artifact")
     parser.add_argument("--pg-harness-bundle-dir", type=Path,
                         help="Fresh output directory for the independent PG V3 compiler artifact")
+    parser.add_argument("--outbox-harness-bundle-dir", type=Path,
+                        help="Fresh output directory for the independent A14 Outbox compiler artifact")
     parser.add_argument("--execute-precompiled-e2e", action="store_true",
                         help="For full impact, run exact owner suites from previously verified binary artifacts")
     parser.add_argument("--e2e-shard",
@@ -412,15 +426,17 @@ def main() -> int:
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
-    compiling = args.compile_harness_only or args.compile_pg_harness_only
+    compiling = args.compile_harness_only or args.compile_pg_harness_only or args.compile_outbox_harness_only
     if compiling or args.execute_precompiled_e2e:
         if (report.get("analysis") != "full"
                 or compiling == args.execute_precompiled_e2e
-                or (args.compile_harness_only and args.compile_pg_harness_only)
+                or sum((args.compile_harness_only, args.compile_pg_harness_only,
+                        args.compile_outbox_harness_only)) > 1
                 or (compiling and args.e2e_shard is not None)
                 or args.delegate_workspace_unit_tests_to_verify
                 or (args.compile_harness_only != (args.harness_bundle_dir is not None))
                 or (args.compile_pg_harness_only != (args.pg_harness_bundle_dir is not None))
+                or (args.compile_outbox_harness_only != (args.outbox_harness_bundle_dir is not None))
                 or (args.parallel_verify_e2e and args.suite_job != "verify")
                 or not {"architecture-and-rust", "verify"}.issubset(report.get("selected_ci_jobs", []))):
             raise ValueError("full exact-source compiler/E2E stage must be exclusive and correctly gated")
@@ -438,6 +454,13 @@ def main() -> int:
             package_ci_artifact("pg_harness", actual_sha, args.pg_harness_bundle_dir, harness=executable)
             print("CI_PG_E2E_HARNESS_BUILD=PASS", flush=True)
             return 0
+        if args.compile_outbox_harness_only:
+            print("CI_OUTBOX_E2E_PRECOMPILE COMMAND=" + " ".join(OUTBOX_E2E_COMPILE), flush=True)
+            compilation = run_cargo(OUTBOX_E2E_COMPILE, cwd=WORKSPACE)
+            executable = precompiled_verify_executable(compilation, package=OUTBOX_E2E_PACKAGE)
+            package_ci_artifact("outbox_harness", actual_sha, args.outbox_harness_bundle_dir, harness=executable)
+            print("CI_OUTBOX_E2E_HARNESS_BUILD=PASS", flush=True)
+            return 0
         if args.e2e_shard is not None:
             if args.compile_harness_only or args.parallel_verify_e2e:
                 raise ValueError("a precompiled shard cannot compile or request old worker-level parallelism")
@@ -445,6 +468,7 @@ def main() -> int:
                 report, args.e2e_shard, suite_job=args.suite_job,
                 prebuilt_executable=exact_e2e_executable("integration_harness"),
                 prebuilt_pg_executable=exact_e2e_executable(PG_E2E_PACKAGE),
+                prebuilt_outbox_executable=exact_e2e_executable(OUTBOX_E2E_PACKAGE),
             )
             print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} shard={args.e2e_shard} "
                   f"tests={sum(row['matched_tests'] for row in results)}", flush=True)
@@ -459,6 +483,7 @@ def main() -> int:
         print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} suites={len(suites)} tests={sum(row['matched_tests'] for row in results)}", flush=True)
         return 0
     if (args.harness_bundle_dir is not None or args.pg_harness_bundle_dir is not None
+            or args.outbox_harness_bundle_dir is not None
             or args.e2e_shard is not None):
         raise ValueError("harness bundle is valid only for the dedicated full compiler stage")
     if args.suite_job == "verify":

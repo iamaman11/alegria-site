@@ -21,7 +21,8 @@ from ci_impact import (
     suite_commands_by_ci_job, suite_commands_for_report,
 )
 from run_scoped_cargo_feedback import (
-    E2E_COMPILE, PG_E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
+    E2E_COMPILE, PG_E2E_COMPILE, OUTBOX_E2E_COMPILE,
+    cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
     run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
     run_precompiled_e2e_suite, selected_preparations,
@@ -423,6 +424,73 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                     ]}, package="integration_harness")
                 with self.assertRaisesRegex(ValueError, "unsupported"):
                     precompiled_verify_executable({}, package="unreviewed_test_owner")
+
+    def test_outbox_a14_compiler_is_independent_and_keeps_nine_exact_tests(self) -> None:
+        self.assertEqual(OUTBOX_E2E_COMPILE, [
+            "cargo", "test", "-p", "integration_outbox_e2e", "--features", "e2e",
+            "--lib", "--locked", "--no-run",
+        ])
+        command = list(SUITE_OWNERS["outbox_a14"]["command"])
+        self.assertEqual(exact_verify_e2e_filter(command), "outbox_a14_")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            binary = target / "debug/deps/integration_outbox_e2e-testhash"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"real independent A14 test binary")
+            binary.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                self.assertEqual(precompiled_verify_executable({"test_executables": [
+                    {"target": "integration_outbox_e2e", "path": str(binary)},
+                ]}, package="integration_outbox_e2e"), binary)
+                with self.assertRaisesRegex(RuntimeError, "expected one"):
+                    precompiled_verify_executable({"test_executables": [
+                        {"target": "integration_outbox_e2e", "path": str(binary)},
+                    ]}, package="integration_harness")
+
+    def test_outbox_shard_cannot_execute_broad_harness_or_accept_short_test_count(self) -> None:
+        report = self.report(["outbox_a14"])
+        report["analysis"] = "full"
+        command = list(SUITE_OWNERS["outbox_a14"]["command"])
+        selected = [("outbox_a14", command, "outbox_a14_", 9)]
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "app/rust"
+            broad = workspace / "target/debug/deps/integration_harness-ci-exact"
+            outbox = workspace / "target/debug/deps/integration_outbox_e2e-ci-exact"
+            outbox.parent.mkdir(parents=True)
+            broad.write_bytes(b"wrong broad harness")
+            outbox.write_bytes(b"real A14 harness")
+            broad.chmod(0o755)
+            outbox.chmod(0o755)
+            with (
+                patch("run_scoped_cargo_feedback.WORKSPACE", workspace),
+                patch("run_scoped_cargo_feedback.e2e_shard_commands_for_report",
+                      return_value={"outbox": selected}),
+                patch("run_scoped_cargo_feedback.suite_runtime_environment", return_value={}),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite",
+                      return_value={"matched_tests": 9}) as run,
+            ):
+                with self.assertRaisesRegex(ValueError, "only installed verified"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "outbox", suite_job="verify",
+                        prebuilt_executable=broad,
+                        prebuilt_outbox_executable=broad,
+                    )
+                run.assert_not_called()
+                result = run_exact_precompiled_e2e_shard(
+                    report, "outbox", suite_job="verify",
+                    prebuilt_executable=broad,
+                    prebuilt_outbox_executable=outbox,
+                )
+                self.assertEqual(result[0]["matched_tests"], 9)
+                self.assertEqual(run.call_args.kwargs["expected_tests"], 9)
+                self.assertEqual(run.call_args.args[2], outbox)
+                run.return_value = {"matched_tests": 8}
+                with self.assertRaisesRegex(RuntimeError, "mismatched required coverage"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "outbox", suite_job="verify",
+                        prebuilt_executable=broad,
+                        prebuilt_outbox_executable=outbox,
+                    )
 
     def test_precompiled_filter_is_process_isolated_and_cannot_pass_zero_tests(self) -> None:
         command = list(SUITE_OWNERS["cms_review_revision"]["command"])
