@@ -19,6 +19,11 @@ use crate::{
 pub const OPERATION_DAG_RUN_SCHEMA_REVISION_V6: u16 = 6;
 pub const OPERATION_DAG_PARENT_TYPE: &str = "AlegriaOperationDagV1Workflow";
 pub const OPERATION_DAG_PARENT_QUEUE: &str = "alegria-operation-dag-v1";
+/// Parallel ready-wave scheduling changes Temporal's history-visible command
+/// order, so the V1 parent is frozen and V2 has a different Workflow identity.
+pub const OPERATION_DAG_PARENT_TYPE_V2: &str = "AlegriaOperationDagV2Workflow";
+pub const OPERATION_DAG_PARENT_QUEUE_V2: &str = "alegria-operation-dag-v2";
+pub const OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2: &str = "alegria-operation-dag-v2-";
 /// The domain/business RunScope is NOT the Temporal parent Workflow ID or
 /// the server-generated Temporal Workflow Run ID. In particular it must not
 /// collide with a still-active `seo_site_build` Workflow for the same Truth
@@ -27,6 +32,9 @@ pub const OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX: &str = "alegria-operation-dag
 
 pub fn operation_dag_parent_workflow_id(business_run_id: &str) -> String {
     format!("{OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX}{business_run_id}")
+}
+pub fn operation_dag_parent_workflow_id_v2(business_run_id: &str) -> String {
+    format!("{OPERATION_DAG_PARENT_WORKFLOW_ID_PREFIX_V2}{business_run_id}")
 }
 /// All owners implement the same typed Temporal child ABI on separate queues.
 /// A client can never select an arbitrary Workflow type from plan data.
@@ -208,8 +216,10 @@ impl OwnerInvocationV1 {
         if self.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
             || self.parent.workflow_id.trim().is_empty()
             || self.parent.run_id.trim().is_empty()
-            || self.parent.workflow_id
+            || (self.parent.workflow_id
                 != operation_dag_parent_workflow_id(&self.checked_dispatch.scope.run_id)
+                && self.parent.workflow_id
+                    != operation_dag_parent_workflow_id_v2(&self.checked_dispatch.scope.run_id))
             || self.command_bytes.is_empty()
         {
             return Err(RouteCatalogError::InvalidInvocation);
@@ -300,8 +310,10 @@ impl OwnerInvocationV1 {
         let upstream = &producer_invocation.checked_dispatch;
         if self.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
             || producer_invocation.schema_revision != OWNER_INVOCATION_SCHEMA_REVISION
-            || self.parent.workflow_id
+            || (self.parent.workflow_id
                 != operation_dag_parent_workflow_id(&self.checked_dispatch.scope.run_id)
+                && self.parent.workflow_id
+                    != operation_dag_parent_workflow_id_v2(&self.checked_dispatch.scope.run_id))
             || self.parent.run_id.trim().is_empty()
             || self.parent != producer_invocation.parent
             || producer_invocation.command_bytes.is_empty()

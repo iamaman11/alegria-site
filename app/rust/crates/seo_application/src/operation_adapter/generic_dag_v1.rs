@@ -21,7 +21,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use operation_protocol::{
     canonical_owner_dispatch_input_bytes, canonical_owner_result_hash,
-    operation_dag_parent_workflow_id, owner_child_workflow_id, owner_content_hash,
+    operation_dag_parent_workflow_id, operation_dag_parent_workflow_id_v2,
+    owner_child_workflow_id, owner_content_hash,
     AdmittedArtifactV1, ArtifactBinding, ArtifactId, BoundArtifactV1, CheckedDispatch,
     DispatchAttempt, OperationDagRunV6, OperationInstanceId, OwnerInvocationV1, OwnerResultV1,
     PinnedOwnerRouteV1, PlanError, PlanHash, PortId, ProducedArtifactEvidenceV1, RouteCatalogError,
@@ -58,6 +59,8 @@ pub enum GenericDagError {
     InvalidArtifact(ArtifactId),
     #[error("generic DAG finished before every node completed")]
     Incomplete,
+    #[error("parallel V2 parent cannot execute unadmitted effectful operation {0:?}")]
+    UnadmittedV2Effect(OperationInstanceId),
 }
 
 /// Immutable, typed final result of one fully completed operation DAG.
@@ -92,7 +95,43 @@ impl OperationDagMachine {
         run: OperationDagRunV6,
         routes: TrustedRouteCatalog,
     ) -> Result<Self, GenericDagError> {
-        if temporal_workflow_id != operation_dag_parent_workflow_id(&run.plan.scope.run_id) {
+        let expected_id = operation_dag_parent_workflow_id(&run.plan.scope.run_id);
+        Self::new_for_identity(temporal_workflow_id, expected_id, run, routes)
+    }
+
+    /// A completely different Temporal parent Workflow Type/ID is required
+    /// for parallel scheduling. Until independent owner operators support
+    /// V2 History admission, only trusted *pure* owner contracts are legal.
+    pub fn new_v2(
+        temporal_workflow_id: &str,
+        run: OperationDagRunV6,
+        routes: TrustedRouteCatalog,
+    ) -> Result<Self, GenericDagError> {
+        let expected_id = operation_dag_parent_workflow_id_v2(&run.plan.scope.run_id);
+        let machine = Self::new_for_identity(temporal_workflow_id, expected_id, run, routes)?;
+        for node in &machine.run.plan.nodes {
+            let contract = machine
+                .routes
+                .catalog()
+                .contract(&node.operation)
+                .expect("preflight registered the contract");
+            if !contract.effects.is_empty()
+                || !node.permitted_effects.is_empty()
+                || contract.idempotency != operation_protocol::IdempotencyPolicy::Pure
+            {
+                return Err(GenericDagError::UnadmittedV2Effect(node.instance.clone()));
+            }
+        }
+        Ok(machine)
+    }
+
+    fn new_for_identity(
+        temporal_workflow_id: &str,
+        expected_id: String,
+        run: OperationDagRunV6,
+        routes: TrustedRouteCatalog,
+    ) -> Result<Self, GenericDagError> {
+        if temporal_workflow_id != expected_id {
             return Err(GenericDagError::TemporalRunIdMismatch);
         }
         if run.plan.nodes.is_empty() {
@@ -675,6 +714,92 @@ mod tests {
             .advance_owner_result(result(consumer, b"consumer-output"))
             .unwrap();
         assert_eq!(machine.finish().unwrap().order.len(), 3);
+    }
+
+    #[test]
+    fn parallel_v2_has_distinct_parent_identity_and_requires_pure_owner_contracts() {
+        let (run, routes) = setup_with_independent_node();
+        let old_id = operation_dag_parent_workflow_id("run-a");
+        assert!(matches!(
+            OperationDagMachine::new_v2(&old_id, run.clone(), routes.clone()),
+            Err(GenericDagError::TemporalRunIdMismatch)
+        ));
+        let v2_id = operation_dag_parent_workflow_id_v2("run-a");
+        assert!(matches!(
+            OperationDagMachine::new(&v2_id, run.clone(), routes.clone()),
+            Err(GenericDagError::TemporalRunIdMismatch)
+        ));
+        let machine = OperationDagMachine::new_v2(&v2_id, run, routes).unwrap();
+        let mut parent = parent();
+        parent.workflow_id = v2_id;
+        let wave = machine.next_independent_owner_invocations(parent).unwrap();
+        assert_eq!(wave.len(), 2);
+    }
+
+    #[test]
+    fn parallel_v2_rejects_effectful_owner_before_first_child_command() {
+        let mut routes = TrustedRouteCatalog::default();
+        let mut write = contract("admitted-external-writer", false);
+        write.effects.insert(EffectId::from("external.write"));
+        write.idempotency = IdempotencyPolicy::Idempotent;
+        let fingerprint = write.fingerprint().unwrap();
+        routes
+            .register(
+                write.clone(),
+                PinnedOwnerRouteV1 {
+                    operation: write.reference.clone(),
+                    owner: write.owner.clone(),
+                    contract_hash: fingerprint.clone(),
+                    workflow_type: OWNER_OPERATION_CHILD_TYPE_V1.into(),
+                    task_queue: "effectful-independent-owner-queue".into(),
+                    build_id: "cccccccccccccccccccccccccccccccccccccccc".into(),
+                },
+            )
+            .unwrap();
+        let instance = OperationInstanceId::from("external-writer");
+        let plan = ExecutionPlan {
+            schema_revision: PLAN_SCHEMA_REVISION,
+            scope: scope(),
+            allowed_effects: BTreeSet::from([EffectId::from("external.write")]),
+            external_artifacts: BTreeMap::new(),
+            pinned_contracts: vec![],
+            nodes: vec![OperationNode {
+                instance: instance.clone(),
+                operation: write.reference.clone(),
+                inputs: BTreeMap::new(),
+                outputs: BTreeMap::from([("document".into(), "written-artifact".into())]),
+                after: BTreeSet::new(),
+                permitted_effects: BTreeSet::from([EffectId::from("external.write")]),
+            }],
+            hash: PlanHash::from("unsealed"),
+        }
+        .seal(routes.catalog())
+        .unwrap();
+        let run = OperationDagRunV6 {
+            schema_revision: OPERATION_DAG_RUN_SCHEMA_REVISION_V6,
+            plan,
+            admitted: BTreeMap::new(),
+            owner_commands: BTreeMap::from([(
+                instance.clone(),
+                OwnerCommandWireV1 {
+                    operation: write.reference,
+                    owner: write.owner,
+                    contract_hash: fingerprint,
+                    command_bytes: b"effectful-command-must-not-start".to_vec(),
+                },
+            )]),
+            pinned_routes: routes
+                .trusted_snapshot_for([&OperationRef {
+                    id: OperationId::from("admitted-external-writer"),
+                    revision: 1,
+                }])
+                .unwrap(),
+        };
+        let id = operation_dag_parent_workflow_id_v2("run-a");
+        assert!(matches!(
+            OperationDagMachine::new_v2(&id, run, routes),
+            Err(GenericDagError::UnadmittedV2Effect(rejected)) if rejected == instance
+        ));
     }
 
     #[test]

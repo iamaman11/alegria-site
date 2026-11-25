@@ -9,6 +9,7 @@ use operation_protocol::{
     owner_child_workflow_id, EffectChildInvocationV4, OperationDagRunV6, OwnerInvocationV1,
     OwnerResultV1, TemporalExecutionIdentityV4, TrustedRouteCatalog, OWNER_OPERATION_CHILD_TYPE_V1,
 };
+#[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::{
     QdrantKeywordChildInvocationV1, QdrantKeywordChildResultV1, QdrantProjectionRunV1,
     QDRANT_OWNER_CHILD_TYPE_V1, QDRANT_OWNER_COMMAND_QUEUE_V1,
@@ -55,9 +56,11 @@ impl WorkflowDefinition for PgTruthReviewReconcileV4Definition {
 /// No Qdrant SDK, DB connection or Activity handler can enter this pure
 /// process. The separately registered child on a dedicated Task Queue owns
 /// the provider RPC and cannot execute before operator admission.
+#[cfg(feature = "legacy-qdrant-v1")]
 #[derive(Clone, Copy)]
 struct QdrantKeywordProjectionV1Definition;
 
+#[cfg(feature = "legacy-qdrant-v1")]
 impl WorkflowDefinition for QdrantKeywordProjectionV1Definition {
     type Input = QdrantKeywordChildInvocationV1;
     type Output = String;
@@ -125,6 +128,7 @@ struct AlegriaAdmittedEffectDagV3Workflow {
 /// V7 new History-visible typed serial owner route. Deliberately not a
 /// reinterpretation of prior V5 DAG Histories or arbitrary PG/Qdrant fanout.
 /// All Qdrant effects must have independent Temporal parent/child proof.
+#[cfg(feature = "legacy-qdrant-v1")]
 #[workflow]
 struct AlegriaQdrantProjectionDagV1Workflow {
     immutable_input: QdrantProjectionRunV1,
@@ -136,6 +140,15 @@ struct AlegriaQdrantProjectionDagV1Workflow {
 /// Child Workflow on its separately credentialed Task Queue.
 #[workflow]
 struct AlegriaOperationDagV1Workflow {
+    immutable_input: OperationDagRunV6,
+}
+
+/// A NEW history-visible parent: unlike frozen serial V1, it may start a
+/// bounded wave of independent children before awaiting their typed results.
+/// Until independently operator-attested V2 effect owners exist, every
+/// registered operation must be pure; no PG/Qdrant external write can start.
+#[workflow]
+struct AlegriaOperationDagV2Workflow {
     immutable_input: OperationDagRunV6,
 }
 
@@ -171,11 +184,13 @@ pub(crate) fn register_for_replay_v5(opts: &mut WorkflowReplayerOptions) -> anyh
     Ok(())
 }
 
+#[cfg(feature = "legacy-qdrant-v1")]
 pub(crate) fn register_qdrant_v1(opts: &mut WorkerOptions) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaQdrantProjectionDagV1Workflow>()?;
     Ok(())
 }
 
+#[cfg(feature = "legacy-qdrant-v1")]
 pub(crate) fn register_for_replay_qdrant_v1(
     opts: &mut WorkflowReplayerOptions,
 ) -> anyhow::Result<()> {
@@ -193,6 +208,82 @@ pub(crate) fn register_for_replay_operation_dag_v1(
 ) -> anyhow::Result<()> {
     opts.register_workflow::<AlegriaOperationDagV1Workflow>()?;
     Ok(())
+}
+
+pub(crate) fn register_operation_dag_v2(opts: &mut WorkerOptions) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaOperationDagV2Workflow>()?;
+    Ok(())
+}
+
+pub(crate) fn register_for_replay_operation_dag_v2(
+    opts: &mut WorkflowReplayerOptions,
+) -> anyhow::Result<()> {
+    opts.register_workflow::<AlegriaOperationDagV2Workflow>()?;
+    Ok(())
+}
+
+#[workflow_methods]
+impl AlegriaOperationDagV2Workflow {
+    #[init]
+    fn new(_ctx: &WorkflowContextView, immutable_input: OperationDagRunV6) -> Self {
+        Self { immutable_input }
+    }
+
+    #[run]
+    async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<OperationDagReceiptV1> {
+        let trusted_routes = TRUSTED_OWNER_CATALOG
+            .get()
+            .ok_or_else(|| workflow_failure("missing trusted owner route catalog"))?
+            .clone();
+        let run = ctx.state(|state| state.immutable_input.clone());
+        let workflow_id = ctx.info().workflow_id().to_string();
+        let parent = TemporalExecutionIdentityV4 {
+            workflow_id: workflow_id.clone(),
+            run_id: ctx.run_id().to_string(),
+        };
+        // All plans, commands, schemas, routes and *pure-only* policy pass
+        // before the first Temporal child is started. A future effectful V2
+        // parent needs independent owner operator/governance protocol first.
+        let mut machine = OperationDagMachine::new_v2(&workflow_id, run, trusted_routes)
+            .map_err(workflow_failure)?;
+        while machine.next_instance().is_some() {
+            let ready = machine
+                .next_independent_owner_invocations(parent.clone())
+                .map_err(workflow_failure)?;
+            if ready.is_empty() {
+                return Err(workflow_failure("parallel DAG has no ready owner child"));
+            }
+            // A deterministic fan-out: no provider SDK, credentials or
+            // provider-specific operation enters this coordinator.
+            let mut children = Vec::with_capacity(ready.len());
+            for (route, invocation) in ready {
+                if route.workflow_type != OWNER_OPERATION_CHILD_TYPE_V1 {
+                    return Err(workflow_failure("untrusted owner Workflow Type"));
+                }
+                let options = ChildWorkflowOptions::builder()
+                    .workflow_id(owner_child_workflow_id(
+                        &invocation.checked_dispatch.execution_key,
+                    ))
+                    .task_queue(route.task_queue)
+                    .build();
+                let started = ctx
+                    .start_child_workflow(OwnerOperationV1Definition, invocation, options)
+                    .await
+                    .map_err(workflow_failure)?;
+                children.push(started);
+            }
+            // A deterministic fan-in: every actual typed Child result is
+            // validated and published in sealed plan order. Produced edges
+            // become ready in a *later* wave, never in the producer's wave.
+            for child in children {
+                let actual: OwnerResultV1 = child.result().await.map_err(workflow_failure)?;
+                machine
+                    .advance_owner_result(actual)
+                    .map_err(workflow_failure)?;
+            }
+        }
+        machine.finish().map_err(workflow_failure)
+    }
 }
 
 #[workflow_methods]
@@ -257,6 +348,7 @@ impl AlegriaOperationDagV1Workflow {
     }
 }
 
+#[cfg(feature = "legacy-qdrant-v1")]
 #[workflow_methods]
 impl AlegriaQdrantProjectionDagV1Workflow {
     #[init]

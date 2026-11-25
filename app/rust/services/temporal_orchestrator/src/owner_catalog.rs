@@ -10,7 +10,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use operation_protocol::{
     OperationContract, PinnedOwnerRouteV1, TrustedRouteCatalog, OPERATION_DAG_PARENT_QUEUE,
-    OWNER_OPERATION_CHILD_TYPE_V1,
+    OPERATION_DAG_PARENT_QUEUE_V2, OWNER_OPERATION_CHILD_TYPE_V1,
 };
 use serde::Deserialize;
 
@@ -108,7 +108,8 @@ fn register_trusted_entry(
         "all independent owner queues must register the same typed owner Workflow Type"
     );
     anyhow::ensure!(
-        route.task_queue != OPERATION_DAG_PARENT_QUEUE,
+        route.task_queue != OPERATION_DAG_PARENT_QUEUE
+            && route.task_queue != OPERATION_DAG_PARENT_QUEUE_V2,
         "owner child must never poll the DAG parent Task Queue"
     );
     anyhow::ensure!(

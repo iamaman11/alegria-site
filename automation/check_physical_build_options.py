@@ -71,6 +71,39 @@ class ManifestEvidenceTests(unittest.TestCase):
         self.assertEqual(report["D_qdrant_activity_owner"]["provider_dependencies"],
                          ["vector_qdrant"])
 
+    def test_legacy_parent_optional_feature_cannot_masquerade_as_default_isolation(self) -> None:
+        manifest = ab.cargo_manifest(self.paths[ab.ORCHESTRATOR])
+        evidence = ab.generic_parent_default_feature_boundary(self.graph, manifest)
+        # A neutral native parent can be built without provider contracts
+        # under --no-default-features, while legacy V1 E2E currently consumes
+        # the DEFAULT binary. Do not falsely label the default artifact as
+        # isolated until CI builds a separate legacy-featured executable.
+        self.assertTrue(evidence["explicit_no_default_feature_isolation_declared"])
+        self.assertFalse(evidence["legacy_qdrant_contracts_in_no_default_closure"])
+        if not evidence["default_legacy_dependency_gated"]:
+            self.assertTrue(evidence["legacy_qdrant_contracts_in_default_closure"])
+        self.assertEqual(evidence["confidence"],
+                         "manifest_feature_boundary_only_not_physical_rustc")
+        self.assertIn("qdrant_contracts", evidence["feature_union_workspace_closure_excluding_self"])
+        self.assertEqual(evidence["legacy_qdrant_contracts_in_default_closure"],
+                         not evidence["default_legacy_dependency_gated"])
+        unsafe = dict(manifest)
+        unsafe["features"] = {"default": [ab.QDRANT_LEGACY_PARENT_FEATURE],
+                              ab.QDRANT_LEGACY_PARENT_FEATURE: ["dep:qdrant_contracts"]}
+        invalid = ab.generic_parent_default_feature_boundary(self.graph, unsafe)
+        self.assertFalse(invalid["default_legacy_dependency_gated"])
+        self.assertTrue(invalid["legacy_qdrant_contracts_in_default_closure"])
+        linked = dict(manifest)
+        linked["dependencies"] = {
+            **manifest["dependencies"],
+            "qdrant_contracts": {
+                **manifest["dependencies"]["qdrant_contracts"], "optional": False,
+            },
+        }
+        rejected = ab.generic_parent_default_feature_boundary(self.graph, linked)
+        self.assertFalse(rejected["explicit_no_default_feature_isolation_declared"])
+        self.assertTrue(rejected["legacy_qdrant_contracts_in_no_default_closure"])
+
     def test_four_owner_edits_have_known_current_reverse_consumers(self) -> None:
         report = ab.manifest_report(self.graph, self.paths)
         actual = report["provider_edits_reverse_closure"]

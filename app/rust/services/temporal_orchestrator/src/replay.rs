@@ -4,7 +4,8 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use operation_protocol::OPERATION_DAG_PARENT_QUEUE;
+use operation_protocol::{OPERATION_DAG_PARENT_QUEUE, OPERATION_DAG_PARENT_QUEUE_V2};
+#[cfg(feature = "legacy-qdrant-v1")]
 use qdrant_contracts::QDRANT_DAG_PARENT_QUEUE_V1;
 use temporal_gateway::{
     EFFECT_DAG_ORCHESTRATOR_V4_QUEUE, EFFECT_DAG_ORCHESTRATOR_V5_QUEUE, PURE_DAG_ORCHESTRATOR_QUEUE,
@@ -17,19 +18,24 @@ pub(crate) async fn replay_history(path: &Path) -> Result<()> {
 }
 
 pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result<()> {
+    #[cfg(feature = "legacy-qdrant-v1")]
+    let qdrant_v1 = queue == QDRANT_DAG_PARENT_QUEUE_V1;
+    #[cfg(not(feature = "legacy-qdrant-v1"))]
+    let qdrant_v1 = false;
     anyhow::ensure!(
         queue == PURE_DAG_ORCHESTRATOR_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V4_QUEUE
             || queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE
-            || queue == QDRANT_DAG_PARENT_QUEUE_V1
-            || queue == OPERATION_DAG_PARENT_QUEUE,
+            || qdrant_v1
+            || queue == OPERATION_DAG_PARENT_QUEUE
+            || queue == OPERATION_DAG_PARENT_QUEUE_V2,
         "unknown replay Task Queue"
     );
     let bytes = std::fs::read(path)
         .with_context(|| format!("read actual Temporal history {}", path.display()))?;
     let history = WorkflowHistory::from_json(&bytes)
         .map_err(|error| anyhow::anyhow!("decode Temporal history: {error}"))?;
-    if queue == OPERATION_DAG_PARENT_QUEUE {
+    if queue == OPERATION_DAG_PARENT_QUEUE || queue == OPERATION_DAG_PARENT_QUEUE_V2 {
         // Replay must use the same trusted snapshot as execution. A different
         // process catalog is a *failure*, never authority to reroute effects.
         let path = std::env::var("TEMPORAL_OPERATION_DAG_CATALOG_PATH")
@@ -41,9 +47,12 @@ pub(crate) async fn replay_history_for_queue(path: &Path, queue: &str) -> Result
         .namespace("default".to_string())
         .task_queue(queue.to_string())
         .build();
-    if queue == OPERATION_DAG_PARENT_QUEUE {
+    if queue == OPERATION_DAG_PARENT_QUEUE_V2 {
+        super::workflow::register_for_replay_operation_dag_v2(&mut options)?;
+    } else if queue == OPERATION_DAG_PARENT_QUEUE {
         super::workflow::register_for_replay_operation_dag_v1(&mut options)?;
-    } else if queue == QDRANT_DAG_PARENT_QUEUE_V1 {
+    } else if qdrant_v1 {
+        #[cfg(feature = "legacy-qdrant-v1")]
         super::workflow::register_for_replay_qdrant_v1(&mut options)?;
     } else if queue == EFFECT_DAG_ORCHESTRATOR_V5_QUEUE {
         super::workflow::register_for_replay_v5(&mut options)?;
@@ -105,5 +114,10 @@ mod tests {
             .await
             .unwrap_err();
         assert!(absent.to_string().contains("read actual Temporal history"));
+
+        let absent_v2 = replay_history_for_queue(&missing, OPERATION_DAG_PARENT_QUEUE_V2)
+            .await
+            .unwrap_err();
+        assert!(absent_v2.to_string().contains("read actual Temporal history"));
     }
 }

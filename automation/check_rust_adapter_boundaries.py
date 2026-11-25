@@ -357,6 +357,26 @@ def native_dag_owner_closure_failures(
     return failures
 
 
+def default_generic_parent_feature_failures(manifest: dict) -> list[str]:
+    """Keep frozen Qdrant V1 replay opt-in, not in the generic DAG binary.
+
+    This is a Cargo feature/manifest guarantee only; a physical rustc A/B
+    compile must still be run on the exact PR SHA before claiming complete
+    native owner-only rebuild independence.
+    """
+    qdrant = manifest.get("dependencies", {}).get("qdrant_contracts")
+    features = manifest.get("features", {})
+    if (isinstance(qdrant, dict)
+            and qdrant.get("optional") is True
+            and features.get("legacy-qdrant-v1") == ["dep:qdrant_contracts"]
+            and features.get("default", []) in ([], ["legacy-qdrant-v1"])):
+        return []
+    return [
+        "generic Temporal parent must expose a no-default provider-neutral "
+        "build and explicit legacy-qdrant-v1 feature for immutable old History"
+    ]
+
+
 def generic_dag_source_failures(source: Path, forbidden_crates: set[str]) -> list[str]:
     """Require all provider-specific Rust paths to stay in their owner source.
 
@@ -540,6 +560,8 @@ def main() -> int:
     # Enforce the architectural dependency direction, not just source path or
     # direct SDK imports: infra/PG must never compile graph/vector providers.
     try:
+        orchestrator_manifest = tomllib.loads(ORCHESTRATOR_MANIFEST.read_text(encoding="utf-8"))
+        violations.extend(default_generic_parent_feature_failures(orchestrator_manifest))
         protocol_closure, _ = workspace_dependency_closure(OPERATION_PROTOCOL_MANIFEST)
         pg_owner_closure, _ = workspace_dependency_closure(PG_OWNER_MANIFEST)
         qdrant_owner_closure, _ = workspace_dependency_closure(QDRANT_OWNER_MANIFEST)
@@ -619,8 +641,12 @@ def main() -> int:
     legacy_provider_crates = sorted(orchestrator_closure & DAG_PROVIDER_CRATES)
     print("RUST_ADAPTER_BOUNDARY: OK")
     if legacy_provider_crates:
-        print("DAG_GENERIC_PARENT_PHYSICAL_ISOLATION=NOT_PROVEN "
-              f"legacy_closure={','.join(legacy_provider_crates)}")
+        orchestrator_manifest = tomllib.loads(ORCHESTRATOR_MANIFEST.read_text(encoding="utf-8"))
+        default_enabled = "legacy-qdrant-v1" in orchestrator_manifest["features"].get("default", [])
+        print("DAG_GENERIC_PARENT_PHYSICAL_ISOLATION=RUSTC_AB_PENDING "
+              f"default_legacy_qdrant_enabled={str(default_enabled).lower()} "
+              "no_default_qdrant_disabled=true "
+              f"all_features_legacy_closure={','.join(legacy_provider_crates)}")
     return 0
 
 

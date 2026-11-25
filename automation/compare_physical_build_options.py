@@ -35,6 +35,7 @@ MONOLITH = "temporal_worker"
 ORCHESTRATOR = "temporal_orchestrator"
 PG_EFFECT_OWNER = "temporal_pg_effects"
 QDRANT_EFFECT_OWNER = "temporal_qdrant_effects"
+QDRANT_LEGACY_PARENT_FEATURE = "legacy-qdrant-v1"
 # This is a DESIGN hypothesis only. Once a candidate Cargo package exists,
 # its *actual* manifest replaces this proposed set in all measurements.
 PROPOSED_ORCHESTRATOR_DEPS = frozenset({
@@ -183,6 +184,47 @@ def owner_must_relink_binary(owner: str, binary_package: str, dependencies: set[
     return owner == binary_package or owner in dependencies
 
 
+def generic_parent_default_feature_boundary(
+    graph: dict[str, set[str]], orchestrator_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    """Classify native generic parent without confusing optional with default.
+
+    The existing workspace_graph deliberately overapproximates all feature
+    edges. For this *one reviewed legacy dependency*, inspect the real Cargo
+    feature graph and remove it only if the feature is not default and an
+    explicit `dep:qdrant_contracts` dependency gate exists. Physical rustc
+    isolation still needs an actual --locked no-default compile/relink probe.
+    """
+    dependencies = orchestrator_manifest.get("dependencies", {})
+    qdrant = dependencies.get("qdrant_contracts")
+    features = orchestrator_manifest.get("features", {})
+    feature_separated = (
+        isinstance(qdrant, dict)
+        and qdrant.get("optional") is True
+        and features.get(QDRANT_LEGACY_PARENT_FEATURE) == ["dep:qdrant_contracts"]
+    )
+    is_gated = feature_separated and features.get("default", []) == []
+    conservative = closure(graph, {ORCHESTRATOR})
+    if feature_separated:
+        default_graph = {package: deps.copy() for package, deps in graph.items()}
+        default_graph[ORCHESTRATOR].discard("qdrant_contracts")
+        no_default = closure(default_graph, {ORCHESTRATOR})
+    else:
+        no_default = conservative
+    computed = no_default if is_gated else conservative
+    return {
+        "legacy_feature": QDRANT_LEGACY_PARENT_FEATURE,
+        "default_legacy_dependency_gated": is_gated,
+        "explicit_no_default_feature_isolation_declared": feature_separated,
+        "no_default_workspace_closure_excluding_self": sorted(no_default - {ORCHESTRATOR}),
+        "legacy_qdrant_contracts_in_no_default_closure": "qdrant_contracts" in no_default,
+        "default_workspace_closure_excluding_self": sorted(computed - {ORCHESTRATOR}),
+        "legacy_qdrant_contracts_in_default_closure": "qdrant_contracts" in computed,
+        "feature_union_workspace_closure_excluding_self": sorted(conservative - {ORCHESTRATOR}),
+        "confidence": "manifest_feature_boundary_only_not_physical_rustc",
+    }
+
+
 def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[str, Any]:
     provenance = subprocess.run(
         ["git", "rev-parse", "HEAD", "HEAD^{tree}"],
@@ -255,6 +297,10 @@ def manifest_report(graph: dict[str, set[str]], paths: dict[str, Path]) -> dict[
             "workspace_dependency_count": len(candidate) - (1 if actual_candidate else 0),
             "provider_dependencies": candidate_providers,
         },
+        "B_generic_parent_default_feature_boundary": (
+            generic_parent_default_feature_boundary(graph, cargo_manifest(paths[ORCHESTRATOR]))
+            if actual_candidate else None
+        ),
         "C_postgres_activity_owner": {
             "package": PG_EFFECT_OWNER,
             "exists": pg_exists,

@@ -3,6 +3,12 @@ name = "temporal_orchestrator"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["legacy-qdrant-v1"]
+# Frozen Qdrant V1 parent is available only for explicitly deployed legacy
+# history replay. Generic DAG and PostgreSQL parents do not link this owner.
+legacy-qdrant-v1 = ["dep:qdrant_contracts"]
+
 [dependencies]
 # Temporal macros resolve these packages by their canonical crate names.
 temporalio-sdk = { workspace = true }
@@ -13,7 +19,7 @@ temporalio-workflow = { workspace = true }
 temporal_gateway = { path = "../../crates/temporal_gateway" }
 seo_application = { path = "../../crates/seo_application" }
 operation_protocol = { path = "../../crates/operation_protocol" }
-qdrant_contracts = { path = "../../crates/qdrant_contracts" } # frozen Qdrant V1 parent only
+qdrant_contracts = { path = "../../crates/qdrant_contracts", optional = true } # frozen V1 only
 serde = { workspace = true }
 futures-util = "0.3"
 anyhow = { workspace = true }
