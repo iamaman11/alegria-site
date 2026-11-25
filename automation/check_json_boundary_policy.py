@@ -17,6 +17,10 @@ RUST = ROOT / "app" / "rust"
 PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
     "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
     "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+    # Exact opt-in V5 E2E is the native Temporal wire boundary: it builds a
+    # serialized parent Start payload and decodes the real History result.
+    # This grants no JSON privileges to the production orchestration code.
+    "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v5_ordered_children_tests.rs",
 })
 
 # The V3 operator's separately credentialed CLI decodes a strictly typed

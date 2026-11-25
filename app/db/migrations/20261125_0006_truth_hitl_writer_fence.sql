@@ -10,8 +10,13 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 
 CREATE OR REPLACE FUNCTION site.guard_truth_review_hitl_context()
-RETURNS trigger LANGUAGE plpgsql
-SET search_path = pg_catalog AS $$
+-- This must see ALL tenants during the statement-level TRUNCATE check:
+-- RLS-filtered EXISTS could treat another tenant's queue as empty while
+-- TRUNCATE itself bypasses row filtering. A database-owner definer sees all
+-- rows; row_security=off also fails closed if FORCE RLS is later introduced.
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = pg_catalog
+SET row_security = off AS $$
 DECLARE
     previous_scope TEXT;
     next_scope TEXT;
