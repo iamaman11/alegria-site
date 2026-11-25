@@ -13,13 +13,11 @@ use prost::Message;
 use sqlx::PgPool;
 
 use super::neo4j_materialization_adapter;
-use voyage_api::{
-    VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype,
-};
 use vector_qdrant::projection_commands::{
     delete_projection, upsert_projection, ProjectionDelete, ProjectionError, ProjectionIdentity,
     ProjectionUpsert,
 };
+use voyage_api::{VoyageClient, VoyageEmbeddingOptions, VoyageInputType, VoyageOutputDtype};
 
 const DEFAULT_VOYAGE_MODEL: &str = "voyage-4-large";
 const VOYAGE4_COLLECTIONS: [&str; 3] = [

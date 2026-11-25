@@ -3,6 +3,7 @@
 use crate::env_overrides::{btree_env, EnvOverrideGuard};
 use anyhow::{Context, Result};
 use graph_neo4j::{query, Graph};
+pub use integration_data_fixtures::{PostgresHarness, QdrantHarness};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Instant;
@@ -15,7 +16,6 @@ use testcontainers::{
 };
 use tokio::time::{sleep, Duration};
 use uuid::Uuid;
-pub use integration_data_fixtures::{PostgresHarness, QdrantHarness};
 
 pub struct Neo4jHarness {
     pub uri: String,

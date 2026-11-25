@@ -269,10 +269,8 @@ fn knowledge_canonical_mapping_temporal_wire_contract_is_stable() {
 #[serial]
 async fn knowledge_a13_canonical_vector_retrieval_uses_real_qdrant_and_hitl_gate() {
     use contracts::generated::alegria::sync::v1::QdrantUpsertCommand;
-    use runtime_composition::adapters::{
-        canonical_vector_search_adapter::CanonicalVectorSearchAdapter,
-        projection_materialize_adapter,
-    };
+    use projection_delivery::projection_materialize_adapter;
+    use runtime_composition::adapters::canonical_vector_search_adapter::CanonicalVectorSearchAdapter;
     use prost::Message;
     use seo_application::knowledge::resolve_canonical_vector_mappings;
     use seo_domain::canonical_mapping::{

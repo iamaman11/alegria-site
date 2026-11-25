@@ -25,6 +25,7 @@ PG_V3_E2E_HISTORY_TEST_BOUNDARIES = frozenset({
 # from the previously permitted infrastructure/runtime adapter directories.
 # Explicit file grants keep new modules in these crates deny-by-default.
 EXTRACTED_OWNER_JSON_BOUNDARIES = frozenset({
+    "app/rust/crates/integration_data_fixtures/src/lib.rs",
     "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
     "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
     "app/rust/crates/voyage_api/src/lib.rs",

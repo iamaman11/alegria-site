@@ -10,6 +10,7 @@ default = []
 e2e = [
   "dep:anyhow",
   "dep:sqlx",
+  "dep:serde_json",
   "dep:testcontainers",
   "dep:tokio",
   "dep:vector_qdrant",
@@ -17,6 +18,7 @@ e2e = [
 
 [dependencies]
 anyhow = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 sqlx = { workspace = true, optional = true }
 testcontainers = { version = "0.28.0", optional = true }
 tokio = { workspace = true, optional = true }

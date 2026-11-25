@@ -23,8 +23,7 @@ fn pg_cfg() -> String {
 pub async fn materialize_rule_instance(rule_instance_id: &str) -> Result<()> {
     let pg = connect_pg(&pg_cfg()).await?;
     let Some((rule_instance_id, context_key, rule_type_key, concept_key, role_type, status)) =
-        sqlx_projection_rows::load_rule_instance_materialization_row(&pg, rule_instance_id)
-            .await?
+        sqlx_projection_rows::load_rule_instance_materialization_row(&pg, rule_instance_id).await?
     else {
         bail!("rule_instance not found: {rule_instance_id}");
     };

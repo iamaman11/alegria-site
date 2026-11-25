@@ -17,6 +17,7 @@ from check_json_boundary_policy import (
 class PgHistoryJsonBoundaryTests(unittest.TestCase):
     def test_extracted_owner_json_grants_are_exact_files(self) -> None:
         self.assertEqual(EXTRACTED_OWNER_JSON_BOUNDARIES, {
+            "app/rust/crates/integration_data_fixtures/src/lib.rs",
             "app/rust/crates/integration_outbox_e2e/src/tests/outbox_delivery_tests.rs",
             "app/rust/crates/projection_delivery/src/projection_materialize_adapter.rs",
             "app/rust/crates/voyage_api/src/lib.rs",

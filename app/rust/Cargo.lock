@@ -2141,6 +2141,7 @@ name = "integration_data_fixtures"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "sqlx",
  "testcontainers",
  "tokio",

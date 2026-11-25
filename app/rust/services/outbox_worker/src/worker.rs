@@ -12,9 +12,7 @@ use postgres_store::sqlx_outbox_adapter::{
     claim_outbox_batch, claim_outbox_batch_for_target, mark_done, mark_failed_with_dead_letter,
     mark_retry, read_sync_status, LeaseUpdate,
 };
-use projection_delivery::projection_materialize_adapter::{
-    DispatchDisposition, DispatchStage,
-};
+use projection_delivery::projection_materialize_adapter::{DispatchDisposition, DispatchStage};
 use telemetry::fbs_writer::write_runtime_window;
 
 use crate::health;
