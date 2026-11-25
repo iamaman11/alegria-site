@@ -33,10 +33,26 @@ TEMPORAL_FIXTURE_SDKS = frozenset({"temporalio-client", "temporalio-sdk-core"})
 TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_temporal_e2e"
 TEMPORAL_E2E_SRC = TEMPORAL_E2E_DIR / "src"
 TEMPORAL_E2E_SDKS = frozenset({"temporalio-client", "temporalio-common"})
+QDRANT_TEMPORAL_E2E_DIR = RUST_ROOT / "crates" / "integration_qdrant_temporal_e2e"
+QDRANT_TEMPORAL_E2E_SRC = QDRANT_TEMPORAL_E2E_DIR / "src"
+QDRANT_TEMPORAL_E2E_SDKS = frozenset({
+    "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+})
 TEMPORAL_GATEWAY_SRC = RUST_ROOT / "crates" / "temporal_gateway" / "src"
 TEMPORAL_WORKER_SRC = RUST_ROOT / "services" / "temporal" / "src"
 TEMPORAL_ORCHESTRATOR_SRC = RUST_ROOT / "services" / "temporal_orchestrator" / "src"
 TEMPORAL_PG_EFFECTS_SRC = RUST_ROOT / "services" / "temporal_pg_effects" / "src"
+QDRANT_EFFECTS_MANIFEST = RUST_ROOT / "services" / "temporal_qdrant_effects" / "Cargo.toml"
+QDRANT_EFFECTS_SRC = QDRANT_EFFECTS_MANIFEST.parent / "src"
+QDRANT_EFFECTS_RUNTIME_SDKS = frozenset({
+    "temporalio-sdk", "temporalio-client", "temporalio-common", "temporalio-macros",
+})
+# This dedicated production Activity owner must not become a generic escape
+# hatch for domain crates or any new file added without architectural review.
+QDRANT_EFFECTS_SDK_SOURCE_FILES = frozenset({
+    (QDRANT_EFFECTS_SRC / "main.rs").resolve(),
+    (QDRANT_EFFECTS_SRC / "operator.rs").resolve(),
+})
 INFRA_MANIFEST = RUST_ROOT / "crates" / "infrastructure" / "Cargo.toml"
 COMPOSITION_MANIFEST = RUST_ROOT / "crates" / "runtime_composition" / "Cargo.toml"
 # SDKs may be used by these dedicated adapter crates, never by domain code.
@@ -86,6 +102,7 @@ MANIFEST_DEP_EXCEPTIONS = {
         "temporalio-common",
         "temporalio-macros",
     },
+    QDRANT_EFFECTS_MANIFEST.resolve(): QDRANT_EFFECTS_RUNTIME_SDKS,
     (INTEGRATION_HARNESS_DIR / "Cargo.toml").resolve(): {
         "neo4rs",
         "qdrant-client",
@@ -102,6 +119,9 @@ MANIFEST_DEP_EXCEPTIONS = {
     # Actual five-scenario Temporal/full-infra test owner: native SDK History
     # and PostgreSQL are allowed only in this opt-in test package.
     (TEMPORAL_E2E_DIR / "Cargo.toml").resolve(): TEMPORAL_E2E_SDKS | {"sqlx"},
+    # The four-container V7 integration executable may only use these native
+    # SDK dependencies when its opt-in e2e feature is selected.
+    (QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml").resolve(): QDRANT_TEMPORAL_E2E_SDKS,
     # Test-only A14 package exercises real PostgreSQL transactions directly.
     # Grant precisely SQLx, not unrelated provider or Temporal SDK imports.
     (RUST_ROOT / "crates" / "integration_outbox_e2e" / "Cargo.toml").resolve(): {"sqlx"},
@@ -280,17 +300,41 @@ def provider_delivery_closure_failures(
     return failures
 
 
-def pg_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
-    """Except precisely three native Temporal SDKs in the isolated E2E src.
-
-    Unlike the older all-provider integration harness, this owner must still
-    fail if Graph/Qdrant, reqwest or an additional Temporal SDK appears.
-    """
-    if PG_E2E_SRC not in file_path.parents:
+def exact_temporal_sdk_source_allowed(
+    file_path: Path, pattern: re.Pattern[str],
+    *, sdk_set: frozenset[str], source_root: Path | None = None,
+    exact_files: frozenset[Path] | None = None,
+) -> bool:
+    """Allow specific Temporal SDKs only inside a reviewed runtime/test owner."""
+    if source_root is not None and source_root not in file_path.parents:
+        return False
+    if exact_files is not None and file_path.resolve() not in exact_files:
         return False
     return any(
         f"{dependency.replace('-', '_')}::" in pattern.pattern
-        for dependency in PG_E2E_TEMPORAL_SDKS
+        for dependency in sdk_set
+    )
+
+
+def pg_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    """Only PG E2E's exact three opt-in native Temporal SDK dependencies."""
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, source_root=PG_E2E_SRC,
+        sdk_set=PG_E2E_TEMPORAL_SDKS,
+    )
+
+
+def qdrant_e2e_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, source_root=QDRANT_TEMPORAL_E2E_SRC,
+        sdk_set=QDRANT_TEMPORAL_E2E_SDKS,
+    )
+
+
+def qdrant_runtime_direct_temporal_sdk_allowed(file_path: Path, pattern: re.Pattern[str]) -> bool:
+    return exact_temporal_sdk_source_allowed(
+        file_path, pattern, exact_files=QDRANT_EFFECTS_SDK_SOURCE_FILES,
+        sdk_set=QDRANT_EFFECTS_RUNTIME_SDKS,
     )
 
 
@@ -319,6 +363,10 @@ def main() -> int:
             if file_path == PG_APP_HTTP_FAULT_FILE and "reqwest" in pat.pattern:
                 continue
             if pg_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if qdrant_e2e_direct_temporal_sdk_allowed(file_path, pat):
+                continue
+            if qdrant_runtime_direct_temporal_sdk_allowed(file_path, pat):
                 continue
             if TEMPORAL_FIXTURE_SRC in file_path.parents and any(
                 f"{sdk.replace('-', '_')}::" in pat.pattern
@@ -368,22 +416,25 @@ def main() -> int:
 
     dep_patterns = {k: re.compile(rf"^\s*{re.escape(k)}\s*=", re.MULTILINE) for k in ENFORCED_DEP_KEYS}
 
-    # SDK exceptions here are *only* test feature dependencies. Otherwise a
-    # default workspace build could silently turn the E2E package into an
-    # extra Temporal runtime owner with unconditional SDK linkage.
-    try:
-        pg_doc = tomllib.loads((PG_E2E_DIR / "Cargo.toml").read_text(encoding="utf-8"))
-        pg_deps = pg_doc["dependencies"]
-        pg_e2e_features = set(pg_doc["features"]["e2e"])
-        for sdk in sorted(PG_E2E_TEMPORAL_SDKS):
-            declared = pg_deps.get(sdk)
-            if (not isinstance(declared, dict) or declared.get("optional") is not True
-                    or f"dep:{sdk}" not in pg_e2e_features):
-                violations.append(
-                    f"integration_pg_v3_e2e must gate native test-only SDK `{sdk}` behind `e2e`"
-                )
-    except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
-        violations.append(f"cannot verify isolated PG E2E SDK feature boundary: {error}")
+    # Test-only native Temporal imports remain optional and behind e2e, never
+    # part of a default Cargo build. A production SDK runtime is separate.
+    for e2e_dir, allowed in (
+        (PG_E2E_DIR, PG_E2E_TEMPORAL_SDKS),
+        (QDRANT_TEMPORAL_E2E_DIR, QDRANT_TEMPORAL_E2E_SDKS),
+    ):
+        try:
+            doc = tomllib.loads((e2e_dir / "Cargo.toml").read_text(encoding="utf-8"))
+            deps = doc["dependencies"]
+            e2e_features = set(doc["features"]["e2e"])
+            for sdk in sorted(allowed):
+                declared = deps.get(sdk)
+                if (not isinstance(declared, dict) or declared.get("optional") is not True
+                        or f"dep:{sdk}" not in e2e_features):
+                    violations.append(
+                        f"{e2e_dir.name} must gate test-only SDK `{sdk}` behind `e2e`"
+                    )
+        except (OSError, KeyError, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
+            violations.append(f"cannot verify {e2e_dir.name} SDK feature boundary: {error}")
 
     for manifest in sorted(RUST_ROOT.rglob("Cargo.toml")):
         manifest = manifest.resolve()

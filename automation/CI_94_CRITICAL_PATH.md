@@ -151,3 +151,42 @@ full-scope count is **48 mandatory** tests, or **49** if optional Truth
 certification is impact-selected. Compiler and green-gate times for this
 new immutable V7 source must be recorded from GitHub CI; **the ≤180-second
 criterion remains NO-GO** until it is actually demonstrated.
+
+## V7 follow-up: fail-fast compiler gating and machine-readable critical paths
+
+The first V7 run on `03425d62` ([#538](https://github.com/iamaman11/alegria-site/actions/runs/45633939168))
+reported three distinct failures: Rust formatting, the new direct Temporal SDK
+consumer missing an exact boundary exception, and a missing `futures` dependency
+in `temporal_qdrant_effects`. Crucially, the new Qdrant effect compiler continued
+until its compile error around 14:29 UTC even though `verify` had already
+reported the cheap source-policy error around 14:26:47 UTC.
+
+The current candidate **adds no compiler or runner** to the gating graph.
+The existing `impact` job, which every mandatory compiler already needs,
+performs `cargo fmt --all -- --check` and the Rust external-SDK boundary audit
+immediately after its exact-source decision. They remain in their old owners
+for standalone diagnostics. Scoped/no-Rust impact skips this preflight; every
+relevant Rust-impact failure stops expensive compilers before they begin.
+This trades a few seconds on a green Rust PR for minutes of avoided compile
+waste on a deterministic red PR. It does **not** make correct-source full CI
+faster or claim to solve the 180-second industrial SLA.
+
+For each later fully selected-job-gated PR the existing `CI` job makes a
+read-only, source-SHA-bound GitHub REST snapshot and prints `CI_CRITICAL_PATH`
+plus a GitHub Step Summary. It reports actual runner durations and arrival
+times of legacy/manual, native-Qdrant and Outbox compiler→real-E2E paths;
+it never estimates test durations or marks a skipped job PASS. Offline tests
+cover dependency ordering, missing compiler jobs and the explicit non-proof
+of a `≤180 seconds` result. The authoritative measurement is still the
+**completed** gate timestamp in GitHub Actions, not this pre-completion
+diagnostic; a transient metrics API outage cannot create a false release PASS.
+
+**Architecture conclusion:** the legacy `temporal_worker` still imports
+24 local workspace crates, including provider-linked infrastructure, while
+its manual E2E truly requires both the Worker and Outbox binaries. The
+existing optional `legacy-worker-split` physical study must measure any
+separate-link proposal before altering required PR artifact ownership.
+The remaining big latency reduction requires removing provider-linked
+implementation from the mandatory legacy runtime's compilation closure
+while keeping identical live behavior under test. No default production
+rollout or migration is implied.

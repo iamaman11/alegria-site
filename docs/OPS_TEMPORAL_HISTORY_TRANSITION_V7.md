@@ -64,7 +64,13 @@ python3 automation/temporal_history_transition.py replay-audit \
 The Qdrant binary argument is optional **only if the live census has zero
 Qdrant child Histories**. SDK replay uses protected temporary copies, never
 mutable export paths; its subprocess receives no operator PG/Temporal/provider
-secrets. Even a successful `OFFLINE_SDK_REPLAY_CANDIDATE_ONLY` must be matched
+secrets. The replay executable is likewise copied to a private temporary
+directory, executed from the immutable `0500` copy, and reported as
+`native_replayers[owner].sha256` together with its exact byte length. This
+closes local pathname-swap races between binary verification and SDK replay.
+Both verified copies disappear on success or failure. Binary hashing is **not**
+a signed CI artifact provenance proof or server History attestation.
+Even a successful `OFFLINE_SDK_REPLAY_CANDIDATE_ONLY` must be matched
 to an independently signed server export, run-owner/tenant evidence, exact
 binary attestation and rollback Worker fleet.
 
@@ -122,9 +128,11 @@ python3 automation/temporal_history_transition.py rehearse \
 
 Omit `--replay-evidence` only if the authoritative namespace census has no
 retained histories. The rehearsal rejects changed source/namespace,
-nonterminal PG runs, tenant quarantine, missing SDK coverage, duplicate Queue
-owners, incorrect binary owner, non-reversible Build IDs, and any attempt to
-change a Queue that might still own retained histories. All these checks are
+nonterminal PG runs, tenant quarantine, missing SDK coverage or native
+executable hashes, duplicate Queue owners, incorrect binary owner,
+unknown/unregistered Task Queues, non-reversible Build IDs, and any attempt to
+change a Queue that might still own retained histories. Conflicting aliases
+in the History start-event envelope also fail closed. All these checks are
 **model contracts**, not measurements of live routing/poller health.
 
 A successful result is only `ROUTING_REHEARSAL_CANDIDATE_ONLY`, still with

@@ -159,6 +159,15 @@ jobs:
                                                    for owner, names in routes.items()))
           PY
 
+      # Fast deterministic failures must precede all expensive Cargo runners.
+      # The existing architecture/verify suites retain the same checks; this
+      # gate only moves first detection to the already-required impact owner.
+      - name: Reject Rust format and SDK boundary violations before compilation
+        if: steps.decide.outputs.cargo_scope != 'none'
+        run: |
+          (cd app/rust && cargo fmt --all -- --check)
+          python3 automation/check_rust_adapter_boundaries.py
+
       - name: Preserve selected and not-applicable evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -1964,6 +1973,17 @@ jobs:
               sys.exit(1)
           print("CI_GATE=PASS")
           PY
+
+      # No extra matrix, cache writer, or hidden after-gate suite: this is a
+      # read-only REST snapshot of the very jobs the existing gate waited for.
+      # It never substitutes elapsed estimates for the three real <=180s runs.
+      - name: Report measured PR compiler-to-E2E critical paths
+        if: github.event_name == 'pull_request' && success()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.run_id }}
+          CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 automation/report_ci_critical_path.py
 
       - name: Verify main merge comes from a fully successful PR CI
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.operation == 'worker-image')

@@ -515,6 +515,48 @@ async fn pg_v3_tenant_ingress_native_login_and_rls_provenance() {
     .await
     .expect("B native tenant LOGIN can pass after the unsafe privilege is revoked");
     assert!(preflight_b);
+    // A role can pass ordinary RLS and the existing destructive-privilege
+    // checks while still being able to mint tenant context ownership or
+    // promote an untrusted registry entry to authoritative Truth evidence.
+    // These administrator/curator capabilities are not ingress privileges.
+    for (privilege, table) in [
+        ("UPDATE", "kb.sources"),
+        ("UPDATE", "kb.visa_contexts"),
+        ("INSERT", "pipeline.tenant_context_ownership"),
+        ("INSERT", "pipeline.tenant_role_ownership"),
+        ("INSERT", "site.seo_hitl_tasks"),
+    ] {
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "GRANT {privilege} ON {table} TO {login_b}"
+        )))
+        .execute(&postgres.pool)
+        .await
+        .expect("DBA introduces an isolated test-only curator/authority overgrant");
+        pg_v6_expect_provenance_rejection(
+            sqlx::query("SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)")
+                .bind(&login_b)
+                .bind(&tenant_b)
+                .execute(&postgres.pool)
+                .await
+                .expect_err("native tenant ingress cannot possess curator/DBA authority"),
+            table,
+        );
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
+            "REVOKE {privilege} ON {table} FROM {login_b}"
+        )))
+        .execute(&postgres.pool)
+        .await
+        .expect("DBA removes the test-only curator/authority overgrant");
+    }
+    let privilege_recovery: bool = sqlx::query_scalar(
+        "SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)",
+    )
+    .bind(&login_b)
+    .bind(&tenant_b)
+    .fetch_one(&postgres.pool)
+    .await
+    .expect("cutover preflight recovers after all forbidden authority grants are removed");
+    assert!(privilege_recovery);
     pg_v6_expect_provenance_rejection(
         sqlx::query("SELECT pipeline.assert_tenant_ingress_login_v1($1::name,$2::text)")
             .bind(&login_unbound)

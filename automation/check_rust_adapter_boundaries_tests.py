@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import tomllib
 import unittest
 
 from check_rust_adapter_boundaries import (
@@ -16,9 +17,17 @@ from check_rust_adapter_boundaries import (
     PG_E2E_TEMPORAL_SDKS,
     PG_RUNTIME_FORBIDDEN_LOCAL_OWNERS,
     PG_RUNTIME_MANIFEST,
+    QDRANT_EFFECTS_MANIFEST,
+    QDRANT_EFFECTS_RUNTIME_SDKS,
+    QDRANT_EFFECTS_SDK_SOURCE_FILES,
+    QDRANT_TEMPORAL_E2E_DIR,
+    QDRANT_TEMPORAL_E2E_SRC,
+    QDRANT_TEMPORAL_E2E_SDKS,
     RUST_ROOT,
     VOYAGE_MANIFEST,
     pg_e2e_direct_temporal_sdk_allowed,
+    qdrant_e2e_direct_temporal_sdk_allowed,
+    qdrant_runtime_direct_temporal_sdk_allowed,
     provider_delivery_closure_failures,
     pg_runtime_closure_failures,
     workspace_dependency_closure,
@@ -82,6 +91,62 @@ class PgRuntimeOwnerBoundaryTests(unittest.TestCase):
                 self.assertIn(forbidden, " ".join(
                     pg_runtime_closure_failures(closure | {forbidden}, direct)
                 ))
+
+
+class NativeQdrantTemporalSdkBoundaryTests(unittest.TestCase):
+    def test_runtime_exception_is_exact_two_files_and_four_sdks(self) -> None:
+        self.assertEqual({path.name for path in QDRANT_EFFECTS_SDK_SOURCE_FILES},
+                         {"main.rs", "operator.rs"})
+        self.assertEqual(QDRANT_EFFECTS_RUNTIME_SDKS, {
+            "temporalio-sdk", "temporalio-client",
+            "temporalio-common", "temporalio-macros",
+        })
+        for path in QDRANT_EFFECTS_SDK_SOURCE_FILES:
+            for sdk in QDRANT_EFFECTS_RUNTIME_SDKS:
+                with self.subTest(path=path, sdk=sdk):
+                    self.assertTrue(qdrant_runtime_direct_temporal_sdk_allowed(
+                        path, re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
+            for forbidden in ("temporalio_sdk_core", "qdrant_client", "neo4rs", "reqwest"):
+                with self.subTest(path=path, forbidden=forbidden):
+                    self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
+                        path, re.compile(rf"\buse\s+{forbidden}::")))
+        self.assertEqual(MANIFEST_DEP_EXCEPTIONS[QDRANT_EFFECTS_MANIFEST.resolve()],
+                         QDRANT_EFFECTS_RUNTIME_SDKS)
+
+    def test_future_runtime_modules_and_domain_crates_cannot_import_sdk(self) -> None:
+        for path in (
+            QDRANT_EFFECTS_MANIFEST.parent / "src" / "future_effect.rs",
+            RUST_ROOT / "crates" / "qdrant_effects_core" / "src" / "lib.rs",
+            RUST_ROOT / "crates" / "operation_protocol" / "src" / "lib.rs",
+            RUST_ROOT / "services" / "temporal_pg_effects" / "src" / "operator.rs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(qdrant_runtime_direct_temporal_sdk_allowed(
+                    path, re.compile(r"\buse\s+temporalio_client::")))
+
+    def test_e2e_is_exact_optional_native_temporal_sdk_set(self) -> None:
+        self.assertEqual(QDRANT_TEMPORAL_E2E_SDKS, {
+            "temporalio-client", "temporalio-common", "temporalio-sdk-core",
+        })
+        manifest = tomllib.loads((QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml").read_text())
+        for sdk in QDRANT_TEMPORAL_E2E_SDKS:
+            with self.subTest(sdk=sdk):
+                self.assertTrue(manifest["dependencies"][sdk]["optional"])
+                self.assertIn(f"dep:{sdk}", manifest["features"]["e2e"])
+                self.assertTrue(qdrant_e2e_direct_temporal_sdk_allowed(
+                    QDRANT_TEMPORAL_E2E_SRC / "lib.rs",
+                    re.compile(rf"\buse\s+{sdk.replace('-', '_')}::")))
+        for forbidden in ("temporalio_sdk", "temporalio_macros", "neo4rs", "qdrant_client"):
+            self.assertFalse(qdrant_e2e_direct_temporal_sdk_allowed(
+                QDRANT_TEMPORAL_E2E_SRC / "tests" / "unexpected.rs",
+                re.compile(rf"\buse\s+{forbidden}::")))
+        self.assertFalse(qdrant_e2e_direct_temporal_sdk_allowed(
+            QDRANT_TEMPORAL_E2E_DIR / "build.rs",
+            re.compile(r"\btemporalio_client::")))
+        self.assertEqual(
+            MANIFEST_DEP_EXCEPTIONS[(QDRANT_TEMPORAL_E2E_DIR / "Cargo.toml").resolve()],
+            QDRANT_TEMPORAL_E2E_SDKS,
+        )
 
 
 class OutboxProviderDeliveryBoundaryTests(unittest.TestCase):

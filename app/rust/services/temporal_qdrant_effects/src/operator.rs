@@ -66,9 +66,8 @@ fn attest_pair(parent: &History, child: &History, request: &IssueRequest) -> Res
         "parent History run differs from requested canonical run");
     let invocation: QdrantKeywordChildInvocationV1 = serde_json::from_slice(&child_bytes)
         .context("child History did not start with typed Qdrant invocation")?;
-    invocation.command.validate().map_err(anyhow::Error::msg)?;
-    ensure!(invocation.schema_revision == 1
-        && invocation.canonical_run_id == request.canonical_run_id
+    invocation.validate().map_err(anyhow::Error::msg)?;
+    ensure!(invocation.canonical_run_id == request.canonical_run_id
         && invocation.parent.workflow_id == request.parent_workflow_id
         && invocation.parent.run_id == request.parent_workflow_run_id
         && invocation.command.admission_id == request.admission_id
@@ -246,7 +245,9 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
     )
     .bind(&attested.parent_input_bytes)
     .fetch_one(&mut *tx).await?;
-    let inserted: Uuid = sqlx::query_scalar(
+    // The operator LOGIN has INSERT but deliberately no SELECT on admissions.
+    // `INSERT ... RETURNING` would implicitly require a broader SELECT grant.
+    let inserted = sqlx::query(
         "INSERT INTO pipeline.qdrant_projection_v1_admissions
            (admission_id,run_id,tenant_id,context_key,keyword_key,
             parent_workflow_id,parent_workflow_run_id,child_workflow_id,child_workflow_run_id,
@@ -258,8 +259,7 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
          FROM pipeline.execution_runs er
          WHERE er.run_id=$2 AND er.tenant_id=$3 AND er.context_key=$4
            AND er.workflow_run_id=$7 AND er.workflow_type='seo_site_build'
-           AND er.status IN ('verifying','pending_hitl')
-         RETURNING admission_id",
+           AND er.status IN ('verifying','pending_hitl')",
     )
     .bind(request.admission_id)
     .bind(request.canonical_run_id)
@@ -276,9 +276,10 @@ pub async fn issue_from_file(path: &Path) -> Result<()> {
     .bind(parent_plan_sha256)
     .bind(&attested.command_bytes)
     .bind(request.expires_in_seconds as i32)
-    .fetch_one(&mut *tx).await
+    .execute(&mut *tx).await
     .context("native Qdrant operator admission insert refused canonical run/tenant")?;
-    ensure!(inserted == request.admission_id, "Qdrant SQL returned wrong admission UUID");
+    ensure!(inserted.rows_affected() == 1,
+        "Qdrant operator admission did not insert exactly one authorized row");
     tx.commit().await?;
     signal_after_commit(client,&namespace,&request).await
         .context("Qdrant admission committed but child wakeup signal failed; manually recover only")

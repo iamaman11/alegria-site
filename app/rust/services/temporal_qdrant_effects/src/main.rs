@@ -29,41 +29,60 @@ use temporalio_common as _;
 
 mod operator;
 
+fn qdrant_activity_options() -> ActivityOptions {
+    let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
+    options.task_queue = Some(QDRANT_OWNER_ACTIVITY_QUEUE_V1.to_string());
+    options
+}
+
 #[workflow]
 struct QdrantKeywordProjectionV1Workflow {
     immutable_invocation: QdrantKeywordChildInvocationV1,
-    admission_signal_received: bool,
+    admission_signals_received: u64,
 }
 
 #[workflow_methods]
 impl QdrantKeywordProjectionV1Workflow {
     #[init]
     fn new(_ctx: &WorkflowContextView, invocation: QdrantKeywordChildInvocationV1) -> Self {
-        Self { immutable_invocation: invocation, admission_signal_received: false }
+        Self { immutable_invocation: invocation, admission_signals_received: 0 }
     }
 
     #[run]
     async fn run(ctx: &mut WorkflowContext<Self>) -> WorkflowResult<String> {
         let invocation = ctx.state(|state| state.immutable_invocation.clone());
-        if invocation.schema_revision != 1 || invocation.command.validate().is_err()
-            || invocation.canonical_run_id.is_nil()
-            || invocation.parent.workflow_id.is_empty()
-            || invocation.parent.run_id.is_empty()
-        {
+        if invocation.validate().is_err() {
             return Err(temporalio_sdk::WorkflowTermination::failed_application(
                 ApplicationFailure::non_retryable(std::io::Error::other(
                     "invalid typed Qdrant child invocation",
                 )),
             ));
         }
-        // This Signal is an untrusted wake-up only. The Activity rechecks the
-        // exact server-issued child identity and independently issued SQL row.
-        ctx.wait_condition(|state| state.admission_signal_received).await?;
-        let mut options = ActivityOptions::schedule_to_close_timeout(Duration::from_secs(300));
-        options.task_queue = Some(QDRANT_OWNER_ACTIVITY_QUEUE_V1.to_string());
+        // A caller capable of sending a Temporal Signal does not possess
+        // PostgreSQL operator authority. A forged early wakeup must neither
+        // perform a provider RPC nor permanently poison a legitimate child.
+        // Count signals rather than resetting a Boolean: the real operator
+        // can signal while a read-only check is pending without losing wakeup.
+        let mut inspected_signals = 0;
+        loop {
+            let previous = inspected_signals;
+            ctx.wait_condition(move |state| state.admission_signals_received > previous)
+                .await?;
+            inspected_signals = ctx.state(|state| state.admission_signals_received);
+            let admitted: bool = ctx
+                .start_activity(
+                    QdrantProjectionActivities::check_operator_admission_v1,
+                    invocation.clone(),
+                    qdrant_activity_options(),
+                )
+                .await?;
+            if admitted {
+                break;
+            }
+        }
         let result: QdrantKeywordChildResultV1 = ctx
             .start_activity(QdrantProjectionActivities::materialize_admitted_keyword_v1,
-                invocation, options)
+                invocation, qdrant_activity_options())
             .await?;
         serde_json::to_string(&result).map_err(|err| {
             temporalio_sdk::WorkflowTermination::failed_application(
@@ -74,44 +93,91 @@ impl QdrantKeywordProjectionV1Workflow {
 
     #[signal(name = "operator_admission_ready_qdrant_v1")]
     fn operator_admission_ready_qdrant_v1(&mut self, _ctx: &mut SyncWorkflowContext<Self>) {
-        self.admission_signal_received = true;
+        self.admission_signals_received = self.admission_signals_received.saturating_add(1);
     }
 }
 
 struct QdrantProjectionActivities { pool: Arc<PgPool> }
 
+// Read-only admission lookup is safely repeatable after a database outage.
+// Rejected Workflow provenance or mismatched immutable SQL identity is not.
+// The provider RPC itself remains non-retryable after an ambiguous outcome.
+#[derive(Debug)]
+enum AdmissionProbeError {
+    Storage(sqlx::Error),
+    Denied(anyhow::Error),
+}
+
+impl std::fmt::Display for AdmissionProbeError {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Storage(error) => write!(fmt, "retryable admission read: {error}"),
+            Self::Denied(error) => write!(fmt, "permanent admission rejection: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for AdmissionProbeError {}
+
+fn admission_probe_activity_error(error: AdmissionProbeError) -> ActivityError {
+    let failure = match error {
+        AdmissionProbeError::Storage(error) =>
+            ApplicationFailure::new(std::io::Error::other(error.to_string())),
+        AdmissionProbeError::Denied(error) =>
+            ApplicationFailure::non_retryable(std::io::Error::other(error.to_string())),
+    };
+    ActivityError::application(failure)
+}
+
+fn terminal_activity_error(error: impl std::fmt::Display) -> ActivityError {
+    ActivityError::application(ApplicationFailure::non_retryable(
+        std::io::Error::other(error.to_string()),
+    ))
+}
+
 #[activities]
 impl QdrantProjectionActivities {
+    #[activity]
+    pub(crate) async fn check_operator_admission_v1(
+        self: Arc<Self>, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+    ) -> Result<bool, ActivityError> {
+        // The Signal is unauthenticated data. Each child has at most one
+        // admission probe in flight; spacing probes inside this read-only
+        // Activity bounds DB load under a Signal flood without imposing a
+        // finite retry count that an attacker could exhaust before admission.
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        self.matching_server_admission(&ctx, &invocation)
+            .await
+            .map_err(admission_probe_activity_error)
+    }
+
     #[activity]
     pub(crate) async fn materialize_admitted_keyword_v1(
         self: Arc<Self>, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
     ) -> Result<QdrantKeywordChildResultV1, ActivityError> {
-        let result = self.materialize_with_server_info(ctx, invocation).await;
-        result.map_err(|error| {
-            // An ambiguous provider RPC can only reconcile by readback; the
-            // SQL barrier forbids a second call. Activity retries remain safe.
-            ActivityError::application(ApplicationFailure::non_retryable(
-                std::io::Error::other(error.to_string()),
-            ))
-        })
+        self.materialize_with_server_info(ctx, invocation).await
     }
 }
 
 impl QdrantProjectionActivities {
-    async fn materialize_with_server_info(
-        &self, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
-    ) -> Result<QdrantKeywordChildResultV1> {
+    async fn matching_server_admission(
+        &self, ctx: &ActivityContext, invocation: &QdrantKeywordChildInvocationV1,
+    ) -> std::result::Result<bool, AdmissionProbeError> {
         let info = ctx.info();
-        let actual_id = info.workflow_id.as_deref().context("Activity lacks server child Workflow ID")?;
-        let actual_run_id = info.workflow_run_id.as_deref().context("Activity lacks server child Run ID")?;
-        anyhow::ensure!(
-            info.workflow_type.as_deref() == Some(QDRANT_OWNER_CHILD_TYPE_V1)
-                && info.task_queue == QDRANT_OWNER_ACTIVITY_QUEUE_V1
-                && actual_id == format!("alegria-qdrant-effect-v1-{}", invocation.command.admission_id),
-            "Qdrant Activity originated outside registered native child Workflow/Queue"
-        );
-        anyhow::ensure!(invocation.schema_revision == 1, "Qdrant invocation revision mismatch");
-        invocation.command.validate().map_err(anyhow::Error::msg)?;
+        let (actual_id, actual_run_id) = (|| -> Result<(&str, &str)> {
+            let actual_id = info.workflow_id.as_deref()
+                .context("Activity lacks server child Workflow ID")?;
+            let actual_run_id = info.workflow_run_id.as_deref()
+                .context("Activity lacks server child Run ID")?;
+            anyhow::ensure!(
+                info.workflow_type.as_deref() == Some(QDRANT_OWNER_CHILD_TYPE_V1)
+                    && info.task_queue == QDRANT_OWNER_ACTIVITY_QUEUE_V1
+                    && actual_id == format!("alegria-qdrant-effect-v1-{}", invocation.command.admission_id),
+                "Qdrant Activity originated outside registered native child Workflow/Queue"
+            );
+            invocation.validate().map_err(anyhow::Error::msg)?;
+            Ok((actual_id, actual_run_id))
+        })().map_err(AdmissionProbeError::Denied)?;
         let row = sqlx::query(
             "SELECT child_workflow_id,child_workflow_run_id,parent_workflow_id,
                     parent_workflow_run_id,run_id,tenant_id,context_key,keyword_key,
@@ -119,10 +185,14 @@ impl QdrantProjectionActivities {
              WHERE admission_id=$1",
         )
         .bind(invocation.command.admission_id)
-        .fetch_one(&*self.pool)
-        .await.context("native Qdrant child has no readable independently issued admission")?;
-        let actual_command = serde_json::to_vec(&invocation.command)?;
-        anyhow::ensure!(
+        .fetch_optional(&*self.pool)
+        .await.map_err(AdmissionProbeError::Storage)?;
+        let Some(row) = row else {
+            return Ok(false);
+        };
+        (|| -> Result<()> {
+            let actual_command = serde_json::to_vec(&invocation.command)?;
+            anyhow::ensure!(
             row.try_get::<String, _>("child_workflow_id")? == actual_id
                 && row.try_get::<String, _>("child_workflow_run_id")? == actual_run_id
                 && row.try_get::<String, _>("parent_workflow_id")? == invocation.parent.workflow_id
@@ -133,9 +203,25 @@ impl QdrantProjectionActivities {
                 && row.try_get::<String, _>("keyword_key")? == invocation.command.keyword_key
                 && row.try_get::<Vec<u8>, _>("command_bytes")? == actual_command,
             "operator admission does not pin exact server child, parent, tenant and command bytes"
-        );
+            );
+            Ok(())
+        })().map_err(AdmissionProbeError::Denied)?;
+        Ok(true)
+    }
+
+    async fn materialize_with_server_info(
+        &self, ctx: ActivityContext, invocation: QdrantKeywordChildInvocationV1,
+    ) -> Result<QdrantKeywordChildResultV1, ActivityError> {
+        if !self.matching_server_admission(&ctx, &invocation).await
+            .map_err(admission_probe_activity_error)? {
+            return Err(terminal_activity_error(
+                "native Qdrant child has no independently issued operator admission",
+            ));
+        }
+        // An ambiguous provider RPC can only reconcile by readback; SQL
+        // forbids a second attempt. Never retry errors after this boundary.
         let outcome = execute_admitted_qdrant_projection_v1(&self.pool,
-            invocation.command.admission_id).await?;
+            invocation.command.admission_id).await.map_err(terminal_activity_error)?;
         let outcome = match outcome {
             QdrantProjectionOutcomeV1::Applied => QdrantChildOutcomeV1::Applied,
             QdrantProjectionOutcomeV1::Reconciled => QdrantChildOutcomeV1::Reconciled,
@@ -250,4 +336,33 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("{e}"))?;
     tokio::try_join!(command_worker.run(), activity_worker.run())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_only_read_only_storage_failure_never_identity_or_provider_failure() {
+        let lost_connection = AdmissionProbeError::Storage(sqlx::Error::Io(
+            std::io::Error::other("PostgreSQL connection reset before admission SELECT"),
+        ));
+        match admission_probe_activity_error(lost_connection) {
+            ActivityError::Application(failure) => assert!(!failure.is_non_retryable()),
+            other => panic!("expected retryable SQL transport failure, got {other:?}"),
+        }
+
+        let forged_identity = AdmissionProbeError::Denied(anyhow::anyhow!(
+            "server-origin child identity differs from immutable admission"
+        ));
+        match admission_probe_activity_error(forged_identity) {
+            ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+            other => panic!("expected permanently rejected identity, got {other:?}"),
+        }
+
+        match terminal_activity_error("unknown outcome after Qdrant provider RPC") {
+            ActivityError::Application(failure) => assert!(failure.is_non_retryable()),
+            other => panic!("expected fenced provider ambiguity, got {other:?}"),
+        }
+    }
 }

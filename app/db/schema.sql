@@ -4292,6 +4292,25 @@ BEGIN
         RAISE EXCEPTION 'tenant ingress LOGIN has operator admission or receipt write privileges'
             USING ERRCODE = 'AV001';
     END IF;
+    -- A native crawler/extractor LOGIN must never be able to mint canonical
+    -- context/role ownership or promote a source to authoritative evidence.
+    -- These are administrative/curator-owned inputs to the tenant and Truth
+    -- decisions, even if RLS would correctly restrict the raw evidence rows.
+    IF EXISTS (
+        SELECT 1 FROM pg_catalog.pg_class c
+        WHERE c.oid = ANY(ARRAY[
+            'kb.sources'::regclass, 'kb.visa_contexts'::regclass,
+            'pipeline.tenant_context_ownership'::regclass,
+            'pipeline.tenant_role_ownership'::regclass,
+            'site.seo_hitl_tasks'::regclass])
+          AND (pg_catalog.has_table_privilege(v_role_oid,c.oid,'INSERT')
+               OR pg_catalog.has_table_privilege(v_role_oid,c.oid,'UPDATE')
+               OR pg_catalog.has_table_privilege(v_role_oid,c.oid,'DELETE')
+               OR pg_catalog.has_table_privilege(v_role_oid,c.oid,'TRUNCATE'))
+    ) THEN
+        RAISE EXCEPTION 'tenant ingress LOGIN can mutate curator or DBA-owned authority'
+            USING ERRCODE = 'AV001';
+    END IF;
     IF EXISTS (
         SELECT 1 FROM pg_catalog.pg_class c
         WHERE c.oid = ANY(ARRAY[

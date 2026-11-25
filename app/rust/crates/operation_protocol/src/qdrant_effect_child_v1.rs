@@ -102,6 +102,19 @@ pub struct QdrantKeywordChildInvocationV1 {
     pub command: QdrantKeywordProjectionCommandV1,
 }
 
+impl QdrantKeywordChildInvocationV1 {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.schema_revision != 1 || self.canonical_run_id.is_nil()
+            || self.parent.workflow_id.is_empty() || self.parent.run_id.is_empty()
+            || self.parent.workflow_id.trim() != self.parent.workflow_id
+            || self.parent.run_id.trim() != self.parent.run_id
+        {
+            return Err("invalid canonical Qdrant child execution identity");
+        }
+        self.command.validate()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QdrantKeywordChildResultV1 {
@@ -143,5 +156,34 @@ mod tests {
         run.preflight().unwrap();
         run.commands[1].tenant_id = "tenant-b".into();
         assert!(run.preflight().is_err());
+    }
+
+    #[test]
+    fn child_identity_and_full_parent_are_checked_before_external_effect() {
+        let mut child = QdrantKeywordChildInvocationV1 {
+            schema_revision: 1,
+            parent: TemporalExecutionIdentityV4 {
+                workflow_id: "canonical-parent".into(),
+                run_id: Uuid::new_v4().to_string(),
+            },
+            canonical_run_id: Uuid::new_v4(),
+            command: QdrantKeywordProjectionCommandV1 {
+                schema_revision: 1,
+                admission_id: Uuid::new_v4(),
+                tenant_id: "tenant-a".into(),
+                context_key: "context-a".into(),
+                keyword_key: "keyword-a".into(),
+                vector: vec![0.1; 1024],
+            },
+        };
+        child.validate().unwrap();
+        child.schema_revision = 2;
+        assert!(child.validate().is_err());
+        child.schema_revision = 1;
+        child.parent.run_id.push(' ');
+        assert!(child.validate().is_err());
+        child.parent.run_id.pop();
+        child.canonical_run_id = Uuid::nil();
+        assert!(child.validate().is_err());
     }
 }

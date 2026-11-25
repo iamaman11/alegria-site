@@ -345,10 +345,19 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
         self.assertEqual(result["replay_count"], 1)
         self.assertEqual(result["replayed_by_type"]["AlegriaAdmittedEffectDagV3Workflow"], 1)
         self.assertEqual(result["replayed_sha256"], [hashlib.sha256(self.history).hexdigest()])
+        self.assertEqual(result["native_replayers"], {
+            "orchestrator": {
+                "sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest(),
+                "size_bytes": self.binary.stat().st_size,
+            },
+        })
         self.assertIn("independent_server_history_export_identity_and_completeness",
                       result["unverified_external_gates"])
         args, kwargs = command.call_args
-        self.assertEqual(args[0][:2], [str(self.binary), "--replay-v5-effect-history"])
+        self.assertEqual(args[0][1], "--replay-v5-effect-history")
+        self.assertEqual(Path(args[0][0]).name, "replayer-orchestrator")
+        self.assertNotEqual(args[0][0], str(self.binary))
+        self.assertFalse(Path(args[0][0]).exists(), "protected executable copy must be removed")
         self.assertNotEqual(args[0][2], str(self.root / "history.json"),
                             "SDK must only see a protected copy, not mutable export path")
         self.assertFalse(Path(args[0][2]).exists(), "protected replay copy must be removed")
@@ -434,8 +443,51 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
                 self.assertEqual(result["replay_count"], 1)
                 self.assertFalse(result["cutover_authorized"])
                 argv = command.call_args.args[0]
-                self.assertEqual(argv[:2], [str(self.binary), argument])
+                self.assertEqual(argv[1], argument)
+                self.assertEqual(Path(argv[0]).name, f"replayer-{binary_owner}")
+                self.assertFalse(Path(argv[0]).exists())
                 self.assertNotEqual(argv[2], str(self.root / "history.json"))
+
+    def test_sdk_replayer_receives_verified_immutable_executable_bytes(self):
+        observed = {}
+
+        def swap_original_binary(argv, *, env):
+            copied = Path(argv[0])
+            observed["bytes"] = copied.read_bytes()
+            observed["mode"] = copied.stat().st_mode & 0o777
+            self.binary.write_bytes(b"modified after immutable SDK copy")
+            observed["after"] = copied.read_bytes()
+            observed["path"] = copied
+            return "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"
+
+        original = self.binary.read_bytes()
+        with patch.object(transition, "exact_source", return_value={"sha": SHA, "tree": TREE}), \
+             patch.object(transition, "run_command", side_effect=swap_original_binary):
+            result = transition.replay_audit(
+                self.capture, self.manifest, history_root=self.root,
+                binaries=self.binaries, clock=NOW,
+            )
+        self.assertEqual(observed["bytes"], original)
+        self.assertEqual(observed["after"], original)
+        self.assertEqual(observed["mode"], 0o500)
+        self.assertFalse(observed["path"].exists())
+        self.assertEqual(result["native_replayers"]["orchestrator"]["sha256"],
+                         hashlib.sha256(original).hexdigest())
+
+    def test_replay_rejects_symlinked_oversized_or_empty_native_binary(self):
+        original = self.binary
+        symlink = self.root / "binary-symlink"
+        symlink.symlink_to(original)
+        self.binaries["orchestrator"] = symlink
+        with self.assertRaisesRegex(transition.EvidenceError, "required executable"):
+            self.audit()
+        self.binaries["orchestrator"] = original
+        with patch.object(transition, "MAX_REPLAYER_BYTES", 1), \
+             self.assertRaisesRegex(transition.EvidenceError, "size exceeds"):
+            self.audit()
+        original.write_bytes(b"")
+        with self.assertRaisesRegex(transition.EvidenceError, "size exceeds"):
+            self.audit()
 
     def test_history_type_and_queue_come_from_first_actual_start_event(self):
         self.assertEqual(transition.history_type_and_queue(self.history),
@@ -473,6 +525,16 @@ class TemporalOfflineReplayAuditTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(transition.EvidenceError, "ambiguous"):
             transition.history_type_and_queue(json.dumps(flat).encode())
+
+    def test_history_rejects_dual_root_and_event_type_aliases(self):
+        nested = json.loads(self.history)
+        nested["history"] = {"events": list(nested["events"])}
+        with self.assertRaisesRegex(transition.EvidenceError, "ambiguous"):
+            transition.history_type_and_queue(json.dumps(nested).encode())
+        aliases = json.loads(self.history)
+        aliases["events"][0]["event_type"] = "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED"
+        with self.assertRaisesRegex(transition.EvidenceError, "ambiguous"):
+            transition.history_type_and_queue(json.dumps(aliases).encode())
 
     def test_missing_history_count_blocks_before_any_sdk_invocation(self):
         self.capture["temporal"]["legacy_workflow_types"]["AlegriaAdmittedEffectDagV3Workflow"]["total"] = 2
@@ -747,6 +809,7 @@ class TemporalNonmutatingCutoverRehearsalTests(unittest.TestCase):
             "environment": "staging", "temporal_namespace": "staging-site",
             "replayed_by_type": {name: c["total"] for name, c in retained.items()},
             "replayed_sha256": ["a" * 64], "replay_count": 1,
+            "native_replayers": {"orchestrator": {"sha256": "b" * 64, "size_bytes": 42}},
             "replayed_runs": [{
                 "workflow_type": "AlegriaAdmittedEffectDagV3Workflow",
                 "task_queue": "alegria-effect-dag-v5", "workflow_id": "id-1",
@@ -761,7 +824,7 @@ class TemporalNonmutatingCutoverRehearsalTests(unittest.TestCase):
 
     def test_rehearsal_rejects_duplicate_queue_wrong_owner_and_missing_rollback(self):
         earlier, later = self.snapshots()
-        for broken in ("duplicate", "owner", "rollback", "same-build"):
+        for broken in ("duplicate", "owner", "rollback", "same-build", "unknown-queue"):
             with self.subTest(broken=broken):
                 plan = self.plan()
                 if broken == "duplicate":
@@ -770,11 +833,32 @@ class TemporalNonmutatingCutoverRehearsalTests(unittest.TestCase):
                     plan["routes"][0]["owner"] = "pg"
                 elif broken == "rollback":
                     plan["routes"][0]["rollback_build_id"] = "unrelated"
+                elif broken == "unknown-queue":
+                    plan["routes"][0]["task_queue"] = "unaudited-foreign-queue"
                 else:
                     plan["routes"][0]["to_build_id"] = "orchestrator-v5"
                 result = transition.rehearse_cutover_plan(earlier, later, plan, clock=NOW)
                 self.assertEqual(result["status"], "BLOCKED")
                 self.assertFalse(result["cutover_authorized"])
+                if broken == "unknown-queue":
+                    self.assertTrue(any("unregistered native Task Queue" in reason
+                                        for reason in result["errors"]))
+
+    def test_snapshot_and_replay_boolean_schema_never_equate_to_version_one(self):
+        earlier, later = self.snapshots()
+        earlier["schema_version"] = True
+        self.assertEqual(transition.check_pair(earlier, later, clock=NOW)["status"], "BLOCKED")
+        earlier["schema_version"] = 1
+        replay = {
+            "schema_version": True, "status": "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY",
+            "cutover_authorized": False, "source": later["source"],
+            "environment": "staging", "temporal_namespace": "staging-site",
+            "replayed_by_type": {name: 0 for name in transition.WORKFLOW_TYPES},
+            "replayed_sha256": [], "replay_count": 0, "replayed_runs": [],
+            "native_replayers": {},
+        }
+        self.assertEqual(transition.check_pair(earlier, later, replay_evidence=replay,
+                                               clock=NOW)["status"], "BLOCKED")
 
     def test_rehearsal_is_blocked_on_unready_pg_ownership_or_stale_snapshots(self):
         earlier, later = self.snapshots()

@@ -128,10 +128,48 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         }
     }).await.expect("native Qdrant child never started");
     assert_eq!(child_id,format!("alegria-qdrant-effect-v1-{admission}"));
+    let child_handle = WorkflowExecutionInfo::builder()
+        .namespace(temporal.namespace.clone())
+        .workflow_id(child_id.clone())
+        .run_id(child_run.clone())
+        .build()
+        .bind_untyped(client.clone());
     let before: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pipeline.qdrant_projection_v1_attempts WHERE admission_id=$1",
     ).bind(admission).fetch_one(&pg.pool).await.unwrap();
     assert_eq!(before,0,"native child must remain blocked without operator History proof");
+
+    // An untrusted caller may know the child locator and send an early
+    // operator-shaped Signal. The child must inspect SQL read-only, decline
+    // this wake-up, and remain alive for a subsequent legitimate admission.
+    for _ in 0..3 {
+        child_handle.signal(
+            UntypedSignal::<UntypedWorkflow>::new("operator_admission_ready_qdrant_v1"),
+            RawValue::default(), WorkflowSignalOptions::default(),
+        ).await.expect("send deliberately forged pre-admission wake-up");
+    }
+    timeout(Duration::from_secs(30),async {
+        loop {
+            let events = child_handle
+                .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+                .into_events().await.expect("read child History after forged wake-up");
+            assert!(!events.iter().any(|event| matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::WorkflowExecutionFailedEventAttributes(_))
+            )), "forged pre-admission Signal permanently poisoned the child Workflow");
+            if events.iter().any(|event| matches!(
+                event.attributes.as_ref(),
+                Some(Attributes::ActivityTaskCompletedEventAttributes(_))
+            )) {
+                break;
+            }
+            sleep(Duration::from_millis(150)).await;
+        }
+    }).await.expect("forged Signal's read-only SQL admission check never completed");
+    assert_eq!(sqlx::query_scalar::<_,i64>(
+        "SELECT count(*) FROM pipeline.qdrant_projection_v1_attempts WHERE admission_id=$1",
+    ).bind(admission).fetch_one(&pg.pool).await.unwrap(),0,
+        "untrusted Signal must not initiate any Qdrant provider RPC");
 
     // The operator file contains only locators. First tamper an independently
     // server-issued child Run ID; it must fail with ZERO SQL admissions.
@@ -195,6 +233,39 @@ async fn qdrant_v7_native_temporal_history_operator_real_effect() {
         serde_json::from_str(&json).unwrap();
     assert_eq!(results.len(),1);
     assert_eq!(results[0].admission_id,admission);
+
+    // Replay the ORIGINAL server-issued parent and child Histories using
+    // independent native SDK replay binaries. Synthetic parser fixtures
+    // cannot prove deterministic Workflow recovery at this new owner seam.
+    for (source, replay_binary, replay_flag, marker) in [
+        (&handle, &parent_bin, "--replay-qdrant-effect-history",
+            "CI_TEMPORAL_ORCHESTRATOR_REPLAY=PASS"),
+        (&child_handle, &qdrant_bin, "--replay-history",
+            "CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS"),
+    ] {
+        let server_history = source
+            .fetch_history(WorkflowFetchHistoryOptions::builder().build())
+            .to_json().await.expect("fetch full authentic server Temporal History");
+        assert!(server_history.len() > 100, "authentic Temporal History missing");
+        let history_file = env::temp_dir().join(format!(
+            "alegria-v7-native-history-{}-{}.json", std::process::id(), Uuid::new_v4()
+        ));
+        fs::write(&history_file,&server_history).unwrap();
+        let replay = Command::new(replay_binary)
+            .arg(replay_flag).arg(&history_file)
+            .env_remove("DATABASE_URL")
+            .env_remove("QDRANT_EFFECT_WORKER_DATABASE_URL")
+            .env_remove("QDRANT_EFFECT_WORKER_DATABASE_URL_FILE")
+            .env_remove("QDRANT_EFFECT_OPERATOR_DATABASE_URL_FILE")
+            .output().expect("execute native offline Temporal SDK replay");
+        fs::remove_file(history_file).unwrap();
+        assert!(replay.status.success(),
+            "real V7 Temporal History replay failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&replay.stdout),
+            String::from_utf8_lossy(&replay.stderr));
+        assert!(String::from_utf8_lossy(&replay.stdout).contains(marker),
+            "native replay exited without exact Workflow History completion marker");
+    }
     let durable: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM pipeline.qdrant_projection_v1_receipts
          WHERE admission_id=$1 AND exact_provider_readback=TRUE",

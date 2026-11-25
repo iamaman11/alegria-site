@@ -26,6 +26,7 @@ BASE = "b" * 40
 JOBS = (
     "impact",
     "architecture-and-rust", "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+    "rust-e2e-qdrant-temporal-harness", "rust-e2e-qdrant-effects-binaries",
     "rust-e2e-pg-app-harness", "rust-e2e-temporal-harness", "rust-e2e-truth-harness",
     "rust-e2e-pg-harness", "rust-e2e-outbox-harness", "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
@@ -195,7 +196,9 @@ class MainMergeProvenanceTests(unittest.TestCase):
 
     def test_missing_precompiled_e2e_or_verified_binary_owner_blocks_merge(self) -> None:
         for omitted in (
-            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness", "rust-e2e-pg-app-harness",
+            "rust-e2e-graph-harness", "rust-e2e-qdrant-harness",
+            "rust-e2e-qdrant-temporal-harness", "rust-e2e-qdrant-effects-binaries",
+            "rust-e2e-pg-app-harness",
             "rust-e2e-temporal-harness", "rust-e2e-pg-harness", "rust-e2e-outbox-harness",
             "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries", "rust-e2e-truth-harness",
         ):

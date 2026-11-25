@@ -22,4 +22,5 @@ serde = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+futures = { workspace = true }
 futures-util = "0.3"

@@ -14,6 +14,7 @@ from ci_impact import (
     SCHEMA_VERSION, main_cache_prime_required, worker_release_decision,
 )
 from report_sccache_failures import summarize
+from report_ci_critical_path import E2E_PATHS
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
@@ -64,6 +65,27 @@ def check() -> None:
     assert "run: python3 automation/check_docs_layout.py" in workflow
     assert "python3 automation/ci_impact.py --base" in workflow
     assert "CI_IMPACT=PASS selected=" in workflow
+    impact = workflow.split("  impact:\n", 1)[1].split("  architecture-and-rust:\n", 1)[0]
+    assert impact.index("id: decide") < impact.index(
+        "Reject Rust format and SDK boundary violations before compilation"
+    ) < impact.index("Preserve selected and not-applicable evidence")
+    assert "if: steps.decide.outputs.cargo_scope != 'none'" in impact
+    assert "(cd app/rust && cargo fmt --all -- --check)" in impact
+    assert "python3 automation/check_rust_adapter_boundaries.py" in impact
+    # Every costly owner needs impact=success, so these cheap failures stop
+    # its compiler from consuming minutes before the first actionable error.
+    for owner in OWNERS:
+        section = workflow.split(f"  {owner}:\n", 1)[1]
+        assert "needs: impact\n" in section or "needs: [impact," in section
+    assert "Report measured PR compiler-to-E2E critical paths" in gate
+    assert "python3 automation/report_ci_critical_path.py" in gate
+    assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in gate
+    assert fast.count("python3 automation/test_report_ci_critical_path.py") == 1
+    for _, (display_name, prerequisite_jobs) in E2E_PATHS.items():
+        owner = display_name.partition(" (")[0]
+        section = re.split(r"(?m)^  [a-z][a-z0-9_-]*:$",
+                           workflow.split(f"  {owner}:\n", 1)[1], maxsplit=1)[0]
+        assert f"    needs: [impact, {', '.join(prerequisite_jobs)}]" in section
     for owner in OWNERS:
         assert f"  {owner}:\n" in workflow, owner
         assert f"      - {owner}\n" in gate, owner

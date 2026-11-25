@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -177,6 +178,7 @@ REPLAY_ROUTES: dict[tuple[str, str], tuple[str, str, str]] = {
         ("qdrant", "--replay-history", "CI_TEMPORAL_QDRANT_EFFECT_REPLAY=PASS"),
 }
 MAX_HISTORY_BYTES = 16 * 1024 * 1024
+MAX_REPLAYER_BYTES = 512 * 1024 * 1024
 HISTORY_SHA_RE = re.compile(r"[a-f0-9]{64}\Z")
 ROUTING_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 # Native replay must not inherit live PG, Temporal, provider, signing, or
@@ -399,6 +401,8 @@ def history_type_and_queue(raw: bytes) -> tuple[str, str]:
         raise EvidenceError("Temporal History export is not JSON") from error
     if not isinstance(document, dict):
         raise EvidenceError("Temporal History must be a JSON object")
+    if "history" in document and "events" in document:
+        raise EvidenceError("ambiguous Temporal History root and envelope")
     envelope = document.get("history", document)
     if not isinstance(envelope, dict) or not isinstance(envelope.get("events"), list):
         raise EvidenceError("Temporal History has no complete events array")
@@ -408,6 +412,8 @@ def history_type_and_queue(raw: bytes) -> tuple[str, str]:
     first = events[0]
     if not isinstance(first, dict):
         raise EvidenceError("Temporal History first event is invalid")
+    if "eventType" in first and "event_type" in first:
+        raise EvidenceError("ambiguous Temporal History event Type aliases")
     event_type = first.get("eventType", first.get("event_type"))
     if type(event_type) is int and event_type == 1:
         pass  # SDK serde protobuf's EventType::WorkflowExecutionStarted value.
@@ -448,6 +454,48 @@ def history_type_and_queue(raw: bytes) -> tuple[str, str]:
     if not isinstance(workflow_type, str) or not workflow_type or not isinstance(task_queue, str) or not task_queue:
         raise EvidenceError("Temporal History Workflow Type or Task Queue is invalid")
     return workflow_type, task_queue
+
+
+def protected_replayer(binary: Path, owner: str, protected_root: Path) -> tuple[Path, dict[str, Any]]:
+    """Snapshot the exact executable bytes; execute only the immutable copy.
+
+    Merely checking the path and then hashing it permits a build artifact to
+    be replaced before the SDK subprocess starts. This copy is diagnostic
+    provenance, not a signature or proof that the binary came from CI.
+    """
+    if (not isinstance(binary, Path) or binary.is_symlink() or not binary.is_file()
+            or not os.access(binary, os.X_OK)):
+        raise EvidenceError("required executable SDK replay binary is absent")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(binary, flags)
+    except OSError as error:
+        raise EvidenceError("SDK replay binary cannot be opened without following symlinks") from error
+    destination = protected_root / f"replayer-{owner}"
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with os.fdopen(fd, "rb") as source:
+            metadata = os.fstat(source.fileno())
+            if not stat.S_ISREG(metadata.st_mode) or not (metadata.st_mode & 0o111):
+                raise EvidenceError("SDK replay binary is not a regular executable file")
+            if not 0 < metadata.st_size <= MAX_REPLAYER_BYTES:
+                raise EvidenceError("SDK replay binary size exceeds the attestation budget")
+            with destination.open("xb") as target:
+                os.fchmod(target.fileno(), 0o600)
+                while chunk := source.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > MAX_REPLAYER_BYTES:
+                        raise EvidenceError("SDK replay binary changed beyond the size budget")
+                    digest.update(chunk)
+                    target.write(chunk)
+                if size != metadata.st_size:
+                    raise EvidenceError("SDK replay binary changed during protected copy")
+                target.flush()
+                os.fchmod(target.fileno(), 0o500)
+    except OSError as error:
+        raise EvidenceError("SDK replay binary cannot be safely snapshotted") from error
+    return destination, {"sha256": digest.hexdigest(), "size_bytes": size}
 
 
 def _replay_audit_verified(snapshot: dict[str, Any], manifest: dict[str, Any], *,
@@ -562,12 +610,11 @@ def _replay_audit_verified(snapshot: dict[str, Any], manifest: dict[str, Any], *
     # First check the complete manifest, THEN run any offline replay. An
     # incomplete or unsupported history must never yield partial green output.
     verified_binaries: dict[str, Path] = {}
+    replayer_digests: dict[str, dict[str, Any]] = {}
     for owner in {item[0] for item in prepared}:
-        binary = binaries.get(owner)
-        if (not isinstance(binary, Path) or binary.is_symlink() or not binary.is_file()
-                or not os.access(binary, os.X_OK)):
-            raise EvidenceError("required executable SDK replay binary is absent")
-        verified_binaries[owner] = binary.resolve(strict=True)
+        verified_binaries[owner], replayer_digests[owner] = protected_replayer(
+            binaries.get(owner), owner, protected_copy_root,
+        )
     replay_env = {key: os.environ[key] for key in REPLAY_ENV_ALLOW if key in os.environ}
     for owner, command, marker, path, _ in prepared:
         binary = verified_binaries[owner]
@@ -579,6 +626,7 @@ def _replay_audit_verified(snapshot: dict[str, Any], manifest: dict[str, Any], *
         "environment": snapshot["environment"], "source": source,
         "temporal_namespace": temporal["namespace"],
         "replayed_by_type": observed, "replayed_sha256": sorted(seen_bytes),
+        "native_replayers": replayer_digests,
         "replayed_runs": sorted(
             (item[4] for item in prepared),
             key=lambda run: (run["workflow_type"], run["workflow_id"], run["run_id"]),
@@ -642,7 +690,9 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
     clock = clock or now_utc()
     errors = []
     for name, document in (("earlier", earlier), ("later", later)):
-        if not isinstance(document, dict) or document.get("schema_version") != SCHEMA_VERSION:
+        if (not isinstance(document, dict)
+                or type(document.get("schema_version")) is not int
+                or document["schema_version"] != SCHEMA_VERSION):
             errors.append(f"{name}: unsupported evidence schema")
             continue
         if document.get("cutover_authorized") is not False:
@@ -697,7 +747,8 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
         if not isinstance(replay_evidence, dict):
             errors.append("replay evidence is not an object")
         else:
-            if (replay_evidence.get("schema_version") != SCHEMA_VERSION
+            if (type(replay_evidence.get("schema_version")) is not int
+                    or replay_evidence["schema_version"] != SCHEMA_VERSION
                     or replay_evidence.get("status") != "OFFLINE_SDK_REPLAY_CANDIDATE_ONLY"
                     or replay_evidence.get("cutover_authorized") is not False
                     or replay_evidence.get("source") != later["source"]
@@ -747,6 +798,19 @@ def check_pair(earlier: dict[str, Any], later: dict[str, Any], *,
                     or not isinstance(replay_hashes, list)
                     or reported_hashes != set(replay_hashes)):
                 errors.append("SDK replay per-run Type/Queue/Workflow ID/Run ID/SHA mapping is inconsistent")
+            expected_owners = {
+                REPLAY_ROUTES[(run["workflow_type"], run["task_queue"])][0]
+                for run in replayed_runs if runs_valid
+            } if isinstance(replayed_runs, list) else set()
+            replayers = replay_evidence.get("native_replayers")
+            if (not isinstance(replayers, dict) or set(replayers) != expected_owners
+                    or any(not isinstance(meta, dict) or set(meta) != {"sha256", "size_bytes"}
+                           or not isinstance(meta["sha256"], str)
+                           or not HISTORY_SHA_RE.fullmatch(meta["sha256"])
+                           or type(meta["size_bytes"]) is not int
+                           or not 0 < meta["size_bytes"] <= MAX_REPLAYER_BYTES
+                           for meta in replayers.values())):
+                errors.append("native replay executable hashes or owner mapping are missing")
     return {
         "status": "BLOCKED" if errors else (
             "HISTORY_REPLAY_PRECONDITIONS_CAPTURED" if replay_evidence is not None
@@ -820,6 +884,8 @@ def rehearse_cutover_plan(earlier: dict[str, Any], later: dict[str, Any],
             REPLAY_ROUTES[(workflow_type, routed_queue)][0]
             for workflow_type, routed_queue in REPLAY_ROUTES if routed_queue == queue
         }
+        if not known_owners:
+            errors.append("routing rehearsal references an unregistered native Task Queue")
         if known_owners and route["owner"] not in known_owners:
             errors.append("routing rehearsal reassigns a registered Queue to the wrong owner")
         if queue in protected_queues:

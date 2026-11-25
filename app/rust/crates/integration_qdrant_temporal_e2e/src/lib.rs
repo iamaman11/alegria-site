@@ -17,7 +17,8 @@ mod tests {
     use std::{env, fs, os::unix::fs::PermissionsExt, path::PathBuf,
         process::{Child, Command}, time::Duration};
     use temporalio_client::{
-        UntypedWorkflow, WorkflowFetchHistoryOptions, WorkflowGetResultOptions,
+        UntypedSignal, UntypedWorkflow, WorkflowExecutionInfo,
+        WorkflowFetchHistoryOptions, WorkflowGetResultOptions, WorkflowSignalOptions,
         WorkflowStartOptions,
     };
     use temporalio_common::{
