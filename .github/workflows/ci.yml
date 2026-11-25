@@ -524,13 +524,10 @@ jobs:
           if-no-files-found: error
 
 
-  # Independent exact-source Temporal/full-infra E2E compiler. This is the one
-  # PR-local compiler-object cache writer: on a new immutable PR SHA its
-  # unchanged Rust units may be reused from a prior green SHA of the *same PR*
-  # without ever reusing an old executable. GHA cache ref scoping keeps writes
-  # on refs/pull/<number>/merge away from trusted main; all other PR compilers
-  # are readers. Every SHA still compiles its exact source and executes all
-  # selected live E2E tests. A cold PR remains an independently measured case.
+  # Independent exact-source Temporal/full-infra E2E compiler. The optional
+  # PR-local write-through cache trial made this cold compiler 100 seconds
+  # slower on V6.1 (270.596s vs prior 170.381s) despite 0 HTTP429 errors.
+  # Keep every PR compiler READ_ONLY; only accepted main primes shared objects.
   rust-e2e-temporal-harness:
     needs: impact
     if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-temporal-harness') && needs.impact.outputs.cargo_scope == 'full'
@@ -540,13 +537,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_PROFILE_DEV_DEBUG: "0"
       CARGO_PROFILE_TEST_DEBUG: "0"
-      # Main cache priming showed 3 compiler slots avoid the GHA write-rate
-      # burst from parallel owners; keep only this job writable on PR refs.
-      CARGO_BUILD_JOBS: "3"
       SCCACHE_GHA_ENABLED: "on"
-      SCCACHE_GHA_RW_MODE: READ_WRITE
-      SCCACHE_ERROR_LOG: /tmp/sccache-pr-temporal-errors.log
-      SCCACHE_LOG: sccache::server=debug
+      SCCACHE_GHA_RW_MODE: READ_ONLY
       RUSTC_WRAPPER: sccache
       SQLX_OFFLINE: "true"
     steps:
@@ -559,7 +551,7 @@ jobs:
       - uses: mozilla-actions/sccache-action@v0.0.11
         with:
           version: "v0.16.0"
-      - name: Authorize ref-scoped PR Temporal compiler cache
+      - name: Authorize read-only Rust object cache
         uses: actions/github-script@v8
         with:
           script: |
@@ -593,13 +585,6 @@ jobs:
           path: automation/reports/rust-ci-artifacts/temporal_harness/
           if-no-files-found: error
 
-      - name: Report native exact-source PR Temporal cache hits and write pressure
-        # Cache writes are advisory, not a test-result shortcut. The reporter
-        # accounts separately for GHA 429 errors and never exposes cache URLs.
-        if: success()
-        env:
-          CI_SOURCE_SHA: ${{ github.sha }}
-        run: python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"
 
   # Only live Truth fixture diffs require the remaining real broad test binary.
   # This is conditional and never blocks the 38 ordinary physical E2E tests.

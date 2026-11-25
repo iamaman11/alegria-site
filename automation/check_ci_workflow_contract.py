@@ -212,12 +212,10 @@ def check() -> None:
         assert f"name: rust-e2e-{name}-harness-${{{{ github.sha }}}}" in job
         assert "ref: ${{ github.sha }}" in job
         assert "uses: actions/cache/restore@v4" in job
-        cache_mode = "READ_WRITE" if name == "temporal" else "READ_ONLY"
-        assert f"SCCACHE_GHA_RW_MODE: {cache_mode}" in job
+        assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in job
         if name == "temporal":
-            assert 'CARGO_BUILD_JOBS: "3"' in job
+            assert "CARGO_BUILD_JOBS:" not in job
             assert "--compile-owner-harness temporal_harness" in job
-            assert 'python3 automation/report_sccache_failures.py --log "$SCCACHE_ERROR_LOG"' in job
         assert "--compile-harness-only" not in job
 
     truth_compiler = job_block("rust-e2e-truth-harness", "rust-e2e-pg-harness")
