@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import unittest
 
 from report_ci_critical_path import (
-    COMPILER_STEPS, COMPILER_FINAL_STEPS, LIVE_E2E_STEPS, analyze, timestamp, to_summary,
+    COMPILER_STEPS, LIVE_E2E_STEPS, analyze, timestamp, to_summary,
 )
 
 
