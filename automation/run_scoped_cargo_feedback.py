@@ -31,10 +31,20 @@ FULL_WORKSPACE_UNIT_TEST = ["cargo", "test", "--workspace", "--locked"]
 VERIFY_E2E_COMMAND_PREFIX = (
     "cargo", "test", "-p", "integration_harness", "--features", "e2e", "--lib",
 )
+PG_E2E_PACKAGE = "integration_pg_v3_e2e"
+PG_E2E_COMMAND_PREFIX = (
+    "cargo", "test", "-p", PG_E2E_PACKAGE, "--features", "e2e", "--lib",
+)
+E2E_COMMAND_PREFIXES = (VERIFY_E2E_COMMAND_PREFIX, PG_E2E_COMMAND_PREFIX)
 VERIFY_E2E_COMMAND_SUFFIX = ("--locked", "--", "--nocapture")
 E2E_COMPILE = [
     *VERIFY_E2E_COMMAND_PREFIX, "--locked", "--no-run",
 ]
+PG_E2E_COMPILE = [*PG_E2E_COMMAND_PREFIX, "--locked", "--no-run"]
+EXACT_EXECUTABLE_NAMES = {
+    "integration_harness": "integration_harness-ci-exact",
+    PG_E2E_PACKAGE: "integration_pg_v3_e2e-ci-exact",
+}
 E2E_MAX_PROCESSES = 2
 TEST_RESULT_COUNT = re.compile(r"test result: ok\. (\d+) passed;")
 
@@ -118,19 +128,34 @@ def exact_verify_e2e_filter(command: list[str]) -> str:
     command shape change must be reviewed before enabling direct execution.
     """
     if (len(command) != 11
-            or tuple(command[:7]) != VERIFY_E2E_COMMAND_PREFIX
+            or tuple(command[:7]) not in E2E_COMMAND_PREFIXES
             or tuple(command[8:]) != VERIFY_E2E_COMMAND_SUFFIX
             or not command[7] or command[7].startswith("-")):
-        raise ValueError(f"parallel E2E requires an exact, locked integration harness filter: {command}")
+        raise ValueError(f"parallel E2E requires an exact, locked owner-package filter: {command}")
     return command[7]
 
 
-def precompiled_verify_executable(measurement: dict) -> Path:
+def e2e_package_for_command(command: list[str]) -> str:
+    exact_verify_e2e_filter(command)
+    return command[3]
+
+
+def exact_e2e_executable(package: str) -> Path:
+    if package not in EXACT_EXECUTABLE_NAMES:
+        raise ValueError(f"unsupported exact-source E2E owner package {package}")
+    return WORKSPACE / "target/debug/deps" / EXACT_EXECUTABLE_NAMES[package]
+
+
+def precompiled_verify_executable(
+    measurement: dict, *, package: str = "integration_harness",
+) -> Path:
     """Bind execution to the actual Cargo-produced test artifact, not a glob."""
+    if package not in EXACT_EXECUTABLE_NAMES:
+        raise ValueError(f"unsupported E2E package {package}")
     paths = [row["path"] for row in measurement.get("test_executables", [])
-             if row.get("target") == "integration_harness"]
+             if row.get("target") == package]
     if len(paths) != 1:
-        raise RuntimeError(f"expected one compiled integration_harness lib test executable, found {len(paths)}")
+        raise RuntimeError(f"expected one compiled {package} lib test executable, found {len(paths)}")
     target = Path(os.environ.get("CARGO_TARGET_DIR", WORKSPACE / "target"))
     if not target.is_absolute():
         target = WORKSPACE / target
@@ -144,9 +169,9 @@ def precompiled_verify_executable(measurement: dict) -> Path:
     debug = target.resolve() / "debug"
     normal = (
         executable.is_relative_to(debug / "deps")
-        and executable.name.startswith("integration_harness-")
+        and executable.name.startswith(package + "-")
     )
-    build_root = debug / "build" / "integration_harness"
+    build_root = debug / "build" / package
     special = False
     if executable.is_relative_to(build_root):
         parts = executable.relative_to(build_root).parts
@@ -154,11 +179,11 @@ def precompiled_verify_executable(measurement: dict) -> Path:
             len(parts) == 3
             and re.fullmatch(r"[0-9a-f]{16}", parts[0]) is not None
             and parts[1] == "out"
-            and parts[2].startswith("integration_harness-")
+            and parts[2].startswith(package + "-")
         )
     if (not (normal or special) or not executable.is_file()
             or not os.access(executable, os.X_OK)):
-        raise RuntimeError(f"Cargo returned an unusable integration_harness test binary: {executable}")
+        raise RuntimeError(f"Cargo returned an unusable {package} test binary: {executable}")
     return executable
 
 
@@ -224,6 +249,7 @@ def run_precompiled_e2e_suite(
 
 def run_exact_precompiled_e2e_shard(
     report: dict, shard: str, *, suite_job: str, prebuilt_executable: Path,
+    prebuilt_pg_executable: Path | None = None,
 ) -> list[dict]:
     """Execute one nonempty, registry-owned E2E shard on its *own* CI runner.
 
@@ -254,10 +280,19 @@ def run_exact_precompiled_e2e_shard(
             raise ValueError(f"shard {shard} has an invalid or duplicate real test filter: {filter_!r}")
         filters.add(filter_)
 
-    executable = prebuilt_executable.resolve()
-    expected = (WORKSPACE / "target/debug/deps/integration_harness-ci-exact").resolve()
-    if executable != expected or not executable.is_file() or not os.access(executable, os.X_OK):
-        raise ValueError("E2E shard must execute only the installed verified exact-source test binary")
+    executables = {
+        "integration_harness": prebuilt_executable,
+        PG_E2E_PACKAGE: prebuilt_pg_executable,
+    }
+    for name, command, _, _ in selected:
+        package = e2e_package_for_command(command)
+        executable = executables[package]
+        expected = exact_e2e_executable(package).resolve()
+        if (executable is None or executable.resolve() != expected
+                or not expected.is_file() or not os.access(expected, os.X_OK)):
+            raise ValueError(
+                f"E2E shard {shard} must execute only installed verified {package} test binary"
+            )
     print(f"CI_E2E_SHARD_SOURCE=PASS shard={shard} owner={suite_job} filters={len(selected)}", flush=True)
     results: list[dict] = []
     output_lock = threading.Lock()
@@ -266,7 +301,8 @@ def run_exact_precompiled_e2e_shard(
         runtime_env = suite_runtime_environment(report, name)
         print(f"CI_E2E_SHARD_FILTER={shard} suite={name} filter={filter_} expected_tests={count}", flush=True)
         results.append(run_precompiled_e2e_suite(
-            name, command, executable, runtime_env, output_lock,
+            name, command, exact_e2e_executable(e2e_package_for_command(command)).resolve(),
+            runtime_env, output_lock,
             test_filter=filter_, expected_tests=count,
         ))
     actual = sum(row["matched_tests"] for row in results)
@@ -294,6 +330,9 @@ def run_precompiled_e2e_suites(
     if suite_job not in ("verify", "architecture-and-rust"):
         raise ValueError("unknown E2E CI owner")
     filters = [exact_verify_e2e_filter(command) for _, command in integration_commands]
+    if any(e2e_package_for_command(command) != "integration_harness"
+           for _, command in integration_commands):
+        raise ValueError("mixed E2E owner binaries require the exact-source sharded executor")
     if len(filters) != len(set(filters)):
         raise ValueError("parallel E2E cannot execute duplicated filters")
     if integration_commands != suite_commands_by_ci_job(report)[suite_job]:
@@ -356,8 +395,12 @@ def main() -> int:
     )
     parser.add_argument("--compile-harness-only", action="store_true",
                         help="For full impact, compile exact E2E harness once and publish content-verified bundle")
+    parser.add_argument("--compile-pg-harness-only", action="store_true",
+                        help="Compile the independent PostgreSQL V3 E2E owner test target once")
     parser.add_argument("--harness-bundle-dir", type=Path,
                         help="Fresh output directory for the single full-impact E2E compiler artifact")
+    parser.add_argument("--pg-harness-bundle-dir", type=Path,
+                        help="Fresh output directory for the independent PG V3 compiler artifact")
     parser.add_argument("--execute-precompiled-e2e", action="store_true",
                         help="For full impact, run exact owner suites from previously verified binary artifacts")
     parser.add_argument("--e2e-shard",
@@ -369,12 +412,15 @@ def main() -> int:
     ).strip()
     if report.get("source_sha") != actual_sha:
         raise ValueError("Rust impact report does not match the checked-out source SHA")
-    if args.compile_harness_only or args.execute_precompiled_e2e:
+    compiling = args.compile_harness_only or args.compile_pg_harness_only
+    if compiling or args.execute_precompiled_e2e:
         if (report.get("analysis") != "full"
-                or args.compile_harness_only == args.execute_precompiled_e2e
-                or (args.compile_harness_only and args.e2e_shard is not None)
+                or compiling == args.execute_precompiled_e2e
+                or (args.compile_harness_only and args.compile_pg_harness_only)
+                or (compiling and args.e2e_shard is not None)
                 or args.delegate_workspace_unit_tests_to_verify
                 or (args.compile_harness_only != (args.harness_bundle_dir is not None))
+                or (args.compile_pg_harness_only != (args.pg_harness_bundle_dir is not None))
                 or (args.parallel_verify_e2e and args.suite_job != "verify")
                 or not {"architecture-and-rust", "verify"}.issubset(report.get("selected_ci_jobs", []))):
             raise ValueError("full exact-source compiler/E2E stage must be exclusive and correctly gated")
@@ -385,12 +431,20 @@ def main() -> int:
             package_ci_artifact("harness", actual_sha, args.harness_bundle_dir, harness=executable)
             print("CI_E2E_HARNESS_BUILD=PASS", flush=True)
             return 0
+        if args.compile_pg_harness_only:
+            print("CI_PG_E2E_PRECOMPILE COMMAND=" + " ".join(PG_E2E_COMPILE), flush=True)
+            compilation = run_cargo(PG_E2E_COMPILE, cwd=WORKSPACE)
+            executable = precompiled_verify_executable(compilation, package=PG_E2E_PACKAGE)
+            package_ci_artifact("pg_harness", actual_sha, args.pg_harness_bundle_dir, harness=executable)
+            print("CI_PG_E2E_HARNESS_BUILD=PASS", flush=True)
+            return 0
         if args.e2e_shard is not None:
             if args.compile_harness_only or args.parallel_verify_e2e:
                 raise ValueError("a precompiled shard cannot compile or request old worker-level parallelism")
             results = run_exact_precompiled_e2e_shard(
                 report, args.e2e_shard, suite_job=args.suite_job,
-                prebuilt_executable=WORKSPACE / "target/debug/deps/integration_harness-ci-exact",
+                prebuilt_executable=exact_e2e_executable("integration_harness"),
+                prebuilt_pg_executable=exact_e2e_executable(PG_E2E_PACKAGE),
             )
             print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} shard={args.e2e_shard} "
                   f"tests={sum(row['matched_tests'] for row in results)}", flush=True)
@@ -404,7 +458,8 @@ def main() -> int:
         )
         print(f"CI_E2E_PREBUILT_OWNER=PASS owner={args.suite_job} suites={len(suites)} tests={sum(row['matched_tests'] for row in results)}", flush=True)
         return 0
-    if args.harness_bundle_dir is not None or args.e2e_shard is not None:
+    if (args.harness_bundle_dir is not None or args.pg_harness_bundle_dir is not None
+            or args.e2e_shard is not None):
         raise ValueError("harness bundle is valid only for the dedicated full compiler stage")
     if args.suite_job == "verify":
         if args.delegate_workspace_unit_tests_to_verify or report.get("analysis") != "full":

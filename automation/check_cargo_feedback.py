@@ -21,7 +21,7 @@ from ci_impact import (
     suite_commands_by_ci_job, suite_commands_for_report,
 )
 from run_scoped_cargo_feedback import (
-    E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
+    E2E_COMPILE, PG_E2E_COMPILE, cargo_commands_for_ci, exact_verify_e2e_filter,
     main as run_scoped_cargo_feedback, precompiled_verify_executable,
     run_exact_precompiled_e2e_shard, run_precompiled_e2e_suites,
     run_precompiled_e2e_suite, selected_preparations,
@@ -389,6 +389,38 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                         {"target": "integration_harness", "path": str(wrong_crate)},
                     ]})
 
+    def test_pg_v3_owner_cargo_command_and_compiler_report_are_exactly_typed(self) -> None:
+        self.assertEqual(PG_E2E_COMPILE, [
+            "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
+            "--lib", "--locked", "--no-run",
+        ])
+        for name, selected_filter in (("pg_effect_v3", "pg_v3_"),
+                                      ("pg_temporal_v3", "temporal_effect_v3_")):
+            command = list(SUITE_OWNERS[name]["command"])
+            self.assertEqual(command[3], "integration_pg_v3_e2e")
+            self.assertEqual(exact_verify_e2e_filter(command), selected_filter)
+        with self.assertRaisesRegex(ValueError, "exact, locked"):
+            exact_verify_e2e_filter([
+                "cargo", "test", "-p", "integration_pg_v3_e2e", "--lib",
+                "pg_v3_", "--locked", "--", "--nocapture",
+            ])
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "target"
+            binary = target / "debug/deps/integration_pg_v3_e2e-testhash"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"PG V3 isolated test binary")
+            binary.chmod(0o755)
+            with patch.dict(os.environ, {"CARGO_TARGET_DIR": str(target)}):
+                self.assertEqual(precompiled_verify_executable({"test_executables": [
+                    {"target": "integration_pg_v3_e2e", "path": str(binary)},
+                ]}, package="integration_pg_v3_e2e"), binary)
+                with self.assertRaisesRegex(RuntimeError, "expected one"):
+                    precompiled_verify_executable({"test_executables": [
+                        {"target": "integration_pg_v3_e2e", "path": str(binary)},
+                    ]}, package="integration_harness")
+                with self.assertRaisesRegex(ValueError, "unsupported"):
+                    precompiled_verify_executable({}, package="unreviewed_test_owner")
+
     def test_precompiled_filter_is_process_isolated_and_cannot_pass_zero_tests(self) -> None:
         command = list(SUITE_OWNERS["cms_review_revision"]["command"])
         with tempfile.TemporaryDirectory() as directory:
@@ -516,6 +548,69 @@ class ScopedCargoFeedbackTests(unittest.TestCase):
                         prebuilt_executable=Path("/tmp/never-reached"),
                     )
                 run.assert_not_called()
+
+    def test_pg_v3_full_shards_execute_exact_owner_binary_without_monolith_fallback(self) -> None:
+        report = self.report(["pg_effect_v3", "pure_dag_v3", "pg_temporal_v3"])
+        pg_command = list(SUITE_OWNERS["pg_effect_v3"]["command"])
+        pure_command = list(SUITE_OWNERS["pure_dag_v3"]["command"])
+        temporal_command = list(SUITE_OWNERS["pg_temporal_v3"]["command"])
+        shards = {
+            "verify_d": [("pg_effect_v3", pg_command, "pg_v3_", 2),
+                         ("pure_dag_v3", pure_command, "pure_v3_", 1)],
+            "pg_temporal": [("pg_temporal_v3", temporal_command, "temporal_effect_v3_", 1)],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "app/rust"
+            debug = workspace / "target/debug/deps"
+            debug.mkdir(parents=True)
+            harness = debug / "integration_harness-ci-exact"
+            pg = debug / "integration_pg_v3_e2e-ci-exact"
+            for path in (harness, pg):
+                path.write_bytes(b"exact-source verified artifact")
+                path.chmod(0o755)
+            actual: list[tuple[str, Path, str, int]] = []
+
+            def execute(name: str, _command: list[str], executable: Path,
+                        *_args: object, **kwargs: object) -> dict:
+                actual.append((name, executable, kwargs["test_filter"], kwargs["expected_tests"]))
+                return {"suite": name, "matched_tests": kwargs["expected_tests"]}
+
+            with (
+                patch("run_scoped_cargo_feedback.WORKSPACE", workspace),
+                patch("run_scoped_cargo_feedback.e2e_shard_commands_for_report", return_value=shards),
+                patch("run_scoped_cargo_feedback.suite_runtime_environment", return_value={}),
+                patch("run_scoped_cargo_feedback.run_precompiled_e2e_suite", side_effect=execute),
+                patch("sys.stdout", new_callable=io.StringIO),
+            ):
+                with self.assertRaisesRegex(ValueError, "verified integration_pg_v3_e2e"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "verify_d", suite_job="verify", prebuilt_executable=harness,
+                    )
+                self.assertFalse(actual)
+                verify = run_exact_precompiled_e2e_shard(
+                    report, "verify_d", suite_job="verify", prebuilt_executable=harness,
+                    prebuilt_pg_executable=pg,
+                )
+                self.assertEqual(sum(row["matched_tests"] for row in verify), 3)
+                architecture = run_exact_precompiled_e2e_shard(
+                    report, "pg_temporal", suite_job="architecture-and-rust",
+                    prebuilt_executable=harness, prebuilt_pg_executable=pg,
+                )
+                self.assertEqual(sum(row["matched_tests"] for row in architecture), 1)
+                with self.assertRaisesRegex(ValueError, "verified integration_pg_v3_e2e"):
+                    run_exact_precompiled_e2e_shard(
+                        report, "pg_temporal", suite_job="architecture-and-rust",
+                        prebuilt_executable=harness, prebuilt_pg_executable=harness,
+                    )
+                with self.assertRaisesRegex(ValueError, "mixed E2E owner binaries"):
+                    run_precompiled_e2e_suites(
+                        report, suite_commands_by_ci_job(report)["verify"], suite_job="verify",
+                    )
+            self.assertEqual(actual, [
+                ("pg_effect_v3", pg, "pg_v3_", 2),
+                ("pure_dag_v3", harness, "pure_v3_", 1),
+                ("pg_temporal_v3", pg, "temporal_effect_v3_", 1),
+            ])
 
     def test_parallel_verify_compiles_once_and_runs_every_suite_in_two_processes(self) -> None:
         selected = ["cms_review_revision", "draft_qa_scenario", "knowledge_a13"]

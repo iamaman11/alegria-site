@@ -2171,6 +2171,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration_pg_v3_e2e"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "operation_protocol",
+ "postgres_store",
+ "serde_json",
+ "serial_test",
+ "sqlx",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-sdk-core",
+ "testcontainers",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "inventory"
 version = "0.3.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"

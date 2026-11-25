@@ -506,11 +506,12 @@ SUITE_OWNERS = {
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/postgres_store/src/sqlx_hitl_adapter.rs",
             "app/rust/crates/postgres_store/src/lib.rs",
-            "app/rust/crates/integration_harness/src/lib.rs",
-            "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
-            "app/rust/crates/integration_harness/src/tests/pg_v3_admission_race_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
         },
         "prefixes": (
+            "app/rust/crates/integration_pg_v3_e2e/",
             "app/rust/services/temporal_pg_effects/",
             "app/rust/crates/operation_protocol/src/",
         ),
@@ -522,20 +523,21 @@ SUITE_OWNERS = {
         # disposable real PostgreSQL service. No Temporal Docker service and
         # no PG Worker binary are needed; do not add either as preparation.
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
             "--lib", "pg_v3_", "--locked", "--", "--nocapture",
         ),
     },
     "pg_temporal_v3": {
         "paths": {
-            "app/rust/crates/integration_harness/src/lib.rs",
-            "app/rust/crates/integration_harness/src/tests/pg_v3_temporal_cross_queue_tests.rs",
-            "app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/lib.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_temporal_cross_queue_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/db/schema.sql",
             "app/db/migrations/20261124_0003_pg_truth_review_v3.sql",
         },
         "prefixes": (
+            "app/rust/crates/integration_pg_v3_e2e/",
             "app/rust/services/temporal_pg_effects/",
             "app/rust/crates/operation_protocol/src/",
             "app/rust/crates/temporal_gateway/src/",
@@ -545,7 +547,7 @@ SUITE_OWNERS = {
         "prepare": PG_V3_TEMPORAL_PREPARE,
         "runtime_binaries": PG_V3_TEMPORAL_RUNTIME_BINARIES,
         "command": (
-            "cargo", "test", "-p", "integration_harness", "--features", "e2e",
+            "cargo", "test", "-p", "integration_pg_v3_e2e", "--features", "e2e",
             "--lib", "temporal_effect_v3_", "--locked", "--", "--nocapture",
         ),
     },
@@ -629,6 +631,7 @@ def main_cache_prime_required(changed: list[str]) -> bool:
 CI_PR_OWNERS = (
     "architecture-and-rust",
     "rust-e2e-harness",
+    "rust-e2e-pg-harness",
     "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
     "rust-architecture-e2e",

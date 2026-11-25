@@ -54,7 +54,8 @@ class ManifestEvidenceTests(unittest.TestCase):
         self.assertEqual(set(actual["postgres_store"]), {
             "postgres_store", "cli_tools", "infrastructure", "integration_harness",
             "outbox_worker", "reconcile", "runtime_composition", "temporal_worker",
-        } | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set()))
+        } | ({ab.PG_EFFECT_OWNER} if ab.PG_EFFECT_OWNER in self.graph else set())
+          | ({"integration_pg_v3_e2e"} if "integration_pg_v3_e2e" in self.graph else set()))
         self.assertEqual(set(actual["temporal_gateway"]), {
             "temporal_gateway", "cli_tools", "integration_harness", "reconcile", "temporal_worker",
         } | ({ab.ORCHESTRATOR} if ab.ORCHESTRATOR in self.graph else set())

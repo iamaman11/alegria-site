@@ -23,7 +23,7 @@ SOURCE = "s" * 40
 BASE = "b" * 40
 JOBS = (
     "impact",
-    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries",
     *(f"rust-architecture-e2e ({name})" for name in E2E_ARCH_SHARDS),
     *(f"rust-verify-e2e ({name})" for name in E2E_VERIFY_SHARDS),
@@ -191,7 +191,7 @@ class MainMergeProvenanceTests(unittest.TestCase):
 
     def test_missing_precompiled_e2e_or_verified_binary_owner_blocks_merge(self) -> None:
         for omitted in (
-            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
         ):
             with self.subTest(omitted=omitted):
                 ok, message, _ = execute_gate(omit_job=omitted)

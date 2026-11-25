@@ -47,6 +47,24 @@ class RustArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "overwrite"):
             artifacts.install("harness", SHA, bundle, target=destination)
 
+    def test_pg_v3_owner_is_distinct_verified_exact_source_test_artifact(self) -> None:
+        source = self.executable("integration_pg_v3_e2e-build-hash", b"real isolated PG E2E executable")
+        bundle = self.root / "pg_bundle"
+        manifest = artifacts.package("pg_harness", SHA, bundle, harness=source)
+        self.assertEqual(set(manifest["files"]), {"integration_pg_v3_e2e_test"})
+        self.assertEqual(manifest["total_bytes"], source.stat().st_size)
+        self.assertEqual(manifest["files"]["integration_pg_v3_e2e_test"]["size"], source.stat().st_size)
+        destination = self.root / "pg_install" / "debug"
+        with self.assertRaisesRegex(ValueError, "manifest"):
+            artifacts.install("harness", SHA, bundle, target=destination)
+        artifacts.install("pg_harness", SHA, bundle, target=destination)
+        installed = destination / "deps" / "integration_pg_v3_e2e-ci-exact"
+        self.assertEqual(installed.read_bytes(), source.read_bytes())
+        self.assertFalse((destination / "deps" / "integration_harness-ci-exact").exists())
+        (bundle / "integration_pg_v3_e2e_test").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ValueError, "digest"):
+            artifacts.install("pg_harness", SHA, bundle, target=self.root / "tampered_install")
+
     def test_worker_owner_rejects_tamper_wrong_sha_and_wrong_kind(self) -> None:
         with patch.object(artifacts, "TARGET", self.target):
             self.executable("temporal_worker", b"legacy-real-binary")

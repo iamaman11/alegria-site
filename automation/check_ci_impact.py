@@ -6,6 +6,7 @@ from __future__ import annotations
 import unittest
 import json
 import re
+import tomllib
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import patch
@@ -37,6 +38,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/infrastructure": "infrastructure",
             "app/rust/crates/runtime_composition": "runtime_composition",
             "app/rust/crates/integration_harness": "integration_harness",
+            "app/rust/crates/integration_pg_v3_e2e": "integration_pg_v3_e2e",
             "app/rust/crates/runtime_models": "runtime_models",
             "app/rust/crates/seo_application": "seo_application",
             "app/rust/crates/seo_domain": "seo_domain",
@@ -57,6 +59,7 @@ class ImpactFixtures(unittest.TestCase):
             "infrastructure": {"runtime_composition"},
             "runtime_composition": {"temporal_worker", "outbox_worker", "integration_harness"},
             "integration_harness": set(),
+            "integration_pg_v3_e2e": set(),
             "runtime_models": {"seo_steps", "seo_application"},
             "seo_application": set(),
             "seo_domain": {"seo_application", "seo_ports"},
@@ -107,7 +110,7 @@ class ImpactFixtures(unittest.TestCase):
         report = self.impact(".github/workflows/ci.yml", "app/rust/services/temporal/src/main.rs")
         self.assertEqual(report["scope"], "full")
         self.assertTrue({
-            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
             "rust-architecture-e2e", "rust-verify-e2e",
         } <= set(report["selected_ci_jobs"]))
         self.assertTrue(FULL_VERIFY_E2E_SUITES <= set(SUITE_OWNERS))
@@ -126,11 +129,52 @@ class ImpactFixtures(unittest.TestCase):
         self.assertNotIn("pg_effect_v3", architecture)
         self.assertIn("temporal_restart", architecture)
         self.assertIn("pg_temporal_v3", architecture)
+        for owner in ("pg_effect_v3", "pg_temporal_v3"):
+            self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_pg_v3_e2e")
+        for owner in set(SUITE_OWNERS) - {"pg_effect_v3", "pg_temporal_v3"}:
+            self.assertEqual(SUITE_OWNERS[owner]["command"][3], "integration_harness")
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["command"][7], "temporal_effect_v3_")
         self.assertEqual(SUITE_OWNERS["pg_temporal_v3"]["runtime_binaries"], {
             "INTEGRATION_PG_EFFECT_WORKER_BIN": "temporal_pg_effects",
         })
         self.assertIn("INTEGRATION_TEMPORAL_WORKER_BIN", SUITE_OWNERS["temporal_restart"]["runtime_binaries"])
+
+    def test_pg_v3_package_is_physically_isolated_from_monolith_and_owns_three_tests_once(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        owner_root = root / "app/rust/crates/integration_pg_v3_e2e"
+        manifest = tomllib.loads((owner_root / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["package"]["name"], "integration_pg_v3_e2e")
+        self.assertEqual(manifest["features"]["default"], [])
+        self.assertEqual(set(manifest["features"]["e2e"]), {
+            "dep:" + name for name in manifest["dependencies"]
+        })
+        self.assertTrue(all(isinstance(spec, dict) and spec.get("optional") is True
+                            for spec in manifest["dependencies"].values()))
+        self.assertFalse({
+            "integration_harness", "runtime_composition", "infrastructure",
+            "graph_neo4j", "vector_qdrant", "temporal_worker", "outbox_worker",
+        } & set(manifest["dependencies"]))
+
+        new_lib = (owner_root / "src/lib.rs").read_text(encoding="utf-8")
+        monolith = (root / "app/rust/crates/integration_harness/src/lib.rs").read_text(encoding="utf-8")
+        self.assertIn('#[cfg(all(test, feature = "e2e"))]', new_lib)
+        names = (
+            "pg_v3_truth_review_effect_tests.rs",
+            "pg_v3_admission_race_tests.rs",
+            "pg_v3_temporal_cross_queue_tests.rs",
+        )
+        for filename in names:
+            with self.subTest(filename=filename):
+                self.assertEqual(new_lib.count(f'include!("tests/{filename}")'), 1)
+                self.assertNotIn(filename, monolith)
+                source = (owner_root / "src/tests" / filename).read_text(encoding="utf-8")
+                self.assertEqual(source.count("#[tokio::test]"), 1)
+                self.assertFalse((root / "app/rust/crates/integration_harness/src/tests" / filename).exists())
+        self.assertEqual(set(SUITE_OWNERS["pg_effect_v3"]["paths"]) & {
+            "app/rust/crates/integration_harness/src/lib.rs",
+        }, set())
+        self.assertEqual(E2E_SHARD_RUNS["verify_d"][0], ("pg_effect_v3", "pg_v3_", 2))
+        self.assertEqual(E2E_SHARD_RUNS["pg_temporal"], (("pg_temporal_v3", "temporal_effect_v3_", 1),))
 
     def test_full_real_e2e_shards_cover_all_38_existing_tests_without_duplicate_filters(self) -> None:
         # Select all known live sources, including the optional canonical
@@ -273,7 +317,7 @@ class ImpactFixtures(unittest.TestCase):
         self.assertIn("prepare", SUITE_OWNERS["pg_temporal_v3"])
         self.assertIn("runtime_binaries", SUITE_OWNERS["pg_temporal_v3"])
         helper_impact = analyze(
-            ["app/rust/crates/integration_harness/src/tests/pg_v3_truth_review_effect_tests.rs"],
+            ["app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_truth_review_effect_tests.rs"],
             {**self.owners, "app/rust/services/temporal_pg_effects": "temporal_pg_effects"},
             {**self.reverse, "temporal_pg_effects": set()}, head="HEAD", base="BASE",
         )
@@ -281,7 +325,7 @@ class ImpactFixtures(unittest.TestCase):
 
     def test_full_only_compiler_handoff_jobs_not_selected_for_scoped_changes(self) -> None:
         full_only = {
-            "rust-e2e-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
+            "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries", "rust-e2e-v3-binaries",
             "rust-architecture-e2e", "rust-verify-e2e",
         }
         for changed in (
@@ -317,7 +361,7 @@ class ImpactFixtures(unittest.TestCase):
             "app/rust/crates/postgres_store/src/lib.rs",
             "app/rust/crates/postgres_store/src/truth_review_effect_v3.rs",
             "app/rust/crates/operation_protocol/src/lib.rs",
-            "app/rust/crates/integration_harness/src/tests/pg_v3_admission_race_tests.rs",
+            "app/rust/crates/integration_pg_v3_e2e/src/tests/pg_v3_admission_race_tests.rs",
         ):
             with self.subTest(changed=changed):
                 report = analyze([changed], owners, reverse, head="HEAD", base="BASE")

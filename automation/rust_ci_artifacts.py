@@ -25,6 +25,7 @@ from ci_impact import ROOT, WORKSPACE
 FORMAT = "alegria-rust-ci-artifact@1"
 KINDS = {
     "harness": ("integration_harness_test",),
+    "pg_harness": ("integration_pg_v3_e2e_test",),
     "legacy": ("temporal_worker", "outbox_worker"),
     "v3": ("temporal_orchestrator", "temporal_pg_effects"),
 }
@@ -53,10 +54,10 @@ def digest(path: Path) -> tuple[str, int]:
 def source_binaries(kind: str, *, harness: Path | None = None) -> dict[str, Path]:
     if kind not in KINDS:
         raise ValueError(f"unknown Rust CI artifact kind {kind}")
-    if kind == "harness":
+    if kind in ("harness", "pg_harness"):
         if harness is None:
             raise ValueError("the harness bundle needs the compiler-reported test executable")
-        return {"integration_harness_test": harness.resolve()}
+        return {KINDS[kind][0]: harness.resolve()}
     if harness is not None:
         raise ValueError("runtime bundles cannot disguise arbitrary harness executables")
     return {name: TARGET / name for name in KINDS[kind]}
@@ -120,7 +121,11 @@ def install(kind: str, source_sha: str, bundle: Path, *, target: Path = TARGET) 
         if (entry != {"sha256": sha256, "size": size}
                 or sha256 == "" or size == 0):
             raise ValueError(f"artifact digest or size mismatch for {name}")
-        destination = target / ("deps/integration_harness-ci-exact" if kind == "harness" else name)
+        exact_tests = {
+            "harness": "deps/integration_harness-ci-exact",
+            "pg_harness": "deps/integration_pg_v3_e2e-ci-exact",
+        }
+        destination = target / exact_tests.get(kind, name)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.exists() or destination.is_symlink():
             raise ValueError(f"refuse to overwrite a pre-existing CI executable: {destination}")

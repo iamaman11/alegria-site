@@ -16,7 +16,7 @@ from report_sccache_failures import summarize
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = (
-    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
+    "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries",
     "rust-e2e-v3-binaries", "rust-architecture-e2e", "rust-verify-e2e", "product-truth",
     "rust-security", "cloudflare-static-build",
     "stack-temporal-postgres18", "stack-storage-graph", "verify",
@@ -177,21 +177,42 @@ def check() -> None:
     assert "if: needs.impact.outputs.cargo_scope != 'full'" in architecture
     assert 'git fetch --depth=1 origin "refs/pull/${CI_PR_NUMBER}/head"' in architecture
     assert 'test "$(git rev-parse FETCH_HEAD)" = "${CI_SOURCE_SHA}"' in architecture
-    compiler = workflow.split("  rust-e2e-harness:\n", 1)[1].split("  rust-e2e-legacy-binaries:\n", 1)[0]
+    compiler = workflow.split("  rust-e2e-harness:\n", 1)[1].split("  rust-e2e-pg-harness:\n", 1)[0]
+    pg_compiler = workflow.split("  rust-e2e-pg-harness:\n", 1)[1].split("  rust-e2e-legacy-binaries:\n", 1)[0]
+    optional_pg_ab = pg_compiler.split("  rust-pg-physical-ab:\n", 1)[1]
+    pg_compiler = pg_compiler.split("  rust-pg-physical-ab:\n", 1)[0]
     legacy_job = workflow.split("  rust-e2e-legacy-binaries:\n", 1)[1].split("  rust-e2e-v3-binaries:\n", 1)[0]
     v3 = workflow.split("  rust-e2e-v3-binaries:\n", 1)[1].split("  rust-architecture-e2e:\n", 1)[0]
     graph = workflow.split("  rust-architecture-e2e:\n", 1)[1].split("  rust-verify-e2e:\n", 1)[0]
     postgres = workflow.split("  rust-verify-e2e:\n", 1)[1].split("  product-truth:\n", 1)[0]
     assert "--compile-harness-only" in compiler
     assert "--harness-bundle-dir automation/reports/rust-ci-artifacts/harness" in compiler
+    assert "--compile-pg-harness-only" in pg_compiler
+    assert "--pg-harness-bundle-dir automation/reports/rust-ci-artifacts/pg_harness" in pg_compiler
+    assert "name: ci-owner-impact" in pg_compiler
+    assert "name: rust-e2e-pg-harness-${{ github.sha }}" in pg_compiler
+    assert "contains(github.event.pull_request.labels.*.name, 'physical-pg-harness-ab-probe')" in optional_pg_ab
+    assert "continue-on-error: true" not in optional_pg_ab
+    assert "CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}" in optional_pg_ab
+    assert "ref: ${{ github.event.pull_request.head.sha }}" in optional_pg_ab
+    assert "fetch-depth: 0" in optional_pg_ab
+    assert "--output automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
+    assert "--report automation/reports/pg_v3_harness_physical_ab.json" in optional_pg_ab
+    assert "if: always()" in optional_pg_ab
+    assert "rust-pg-physical-ab" not in gate
+    assert "rust-pg-physical-ab" not in OWNERS
+    assert "contains(github.event.pull_request.labels.*.name, 'physical-ab-probe')" in architecture
     assert "cargo build --locked -p temporal_worker -p outbox_worker" in legacy_job
     assert "cargo build --locked -p temporal_orchestrator -p temporal_pg_effects" in v3
-    for block in (compiler, legacy_job, v3):
+    for block in (compiler, pg_compiler, legacy_job, v3):
         assert "uses: actions/cache/restore@v4" in block
         assert "SCCACHE_GHA_RW_MODE: READ_ONLY" in block
         assert "uses: actions/upload-artifact@v7" in block
         assert "cargo test --workspace --locked" not in block
     assert compiler.count("--compile-harness-only") == 1
+    assert pg_compiler.count("--compile-pg-harness-only") == 1
+    assert workflow.count("--compile-harness-only") == 1
+    assert workflow.count("--compile-pg-harness-only") == 1
     assert graph.count("--execute-precompiled-e2e") == 1
     assert postgres.count("--execute-precompiled-e2e") == 1
     assert "--suite-job architecture-and-rust" in graph
@@ -216,15 +237,25 @@ def check() -> None:
     assert "raise SystemExit('CI_IMPACT=FAIL full CI has no mandatory live E2E shards')" in workflow
     assert "rust_ci_artifacts.py install" in graph and "rust_ci_artifacts.py install" in postgres
     assert "rust-e2e-harness-${{ github.sha }}" in graph
+    assert "rust-e2e-pg-harness-${{ github.sha }}" in graph
     assert "rust-e2e-legacy-${{ github.sha }}" in graph
     assert "rust-e2e-v3-${{ github.sha }}" in graph
     assert "rust-e2e-harness-${{ github.sha }}" in postgres
+    assert "rust-e2e-pg-harness-${{ github.sha }}" in postgres
     assert "rust-e2e-v3-${{ github.sha }}" in postgres
     assert "CI_RUST_ARTIFACT_TRANSFER owner=architecture" in graph
     assert "CI_RUST_ARTIFACT_TRANSFER owner=verify" in postgres
     assert "needs.rust-e2e-harness.result == 'success'" in graph
+    assert "needs.rust-e2e-pg-harness.result == 'success'" in graph
+    assert "needs.rust-e2e-pg-harness.result == 'success'" in postgres
+    assert "--kind pg_harness --source-sha \"$GITHUB_SHA\"" in postgres
+    assert "kind=pg_harness" in graph and "kind=harness" in graph
+    assert 'if: matrix.shard != \'pg_temporal\'' in graph
+    assert 'if: matrix.shard == \'pg_temporal\'' in graph
+    assert 'if: matrix.shard == \'verify_d\'' in postgres
     assert "needs.rust-e2e-v3-binaries.result == 'success'" in postgres
     assert '"rust-e2e-v3-binaries",' in gate
+    assert '"rust-e2e-pg-harness",' in gate
     assert '"rust-architecture-e2e": set(E2E_ARCH_SHARDS)' in gate
     assert '"rust-verify-e2e": set(E2E_VERIFY_SHARDS)' in gate
     assert "did not pass all selected E2E shards" in gate

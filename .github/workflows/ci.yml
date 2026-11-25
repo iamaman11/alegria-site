@@ -402,6 +402,107 @@ jobs:
           path: automation/reports/rust-ci-artifacts/harness/
           if-no-files-found: error
 
+  # The PostgreSQL V3 owner has a smaller independent test-only dependency
+  # closure. Compile its real PostgreSQL + Temporal tests concurrently with
+  # the remaining monolithic harness, never through the monolithic owner.
+  rust-e2e-pg-harness:
+    needs: impact
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-e2e-pg-harness') && needs.impact.outputs.cargo_scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      SCCACHE_GHA_ENABLED: "on"
+      SCCACHE_GHA_RW_MODE: READ_ONLY
+      RUSTC_WRAPPER: sccache
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: "v0.16.0"
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            if (!process.env.ACTIONS_RESULTS_URL || !process.env.ACTIONS_RUNTIME_TOKEN) {
+              throw new Error('Rust cache service credentials unavailable');
+            }
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL);
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN);
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Load exact-source PostgreSQL V3 E2E suite selection
+        uses: actions/download-artifact@v7
+        with:
+          name: ci-owner-impact
+          path: automation/reports
+      - name: Compile independent PostgreSQL V3 exact-source E2E test executable
+        run: |
+          python3 automation/run_scoped_cargo_feedback.py \
+            --report automation/reports/ci_impact.json --compile-pg-harness-only \
+            --pg-harness-bundle-dir automation/reports/rust-ci-artifacts/pg_harness
+      - name: Publish content-verified PostgreSQL V3 E2E test executable
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: automation/reports/rust-ci-artifacts/pg_harness/
+          if-no-files-found: error
+
+  # Opt-in physical, isolated cold-build A/B: intentionally outside the
+  # required PR gate and main-merge mandatory owner list. It never changes the
+  # ordinary nine E2E runner schedule or consumes a production compilation.
+  rust-pg-physical-ab:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'physical-pg-harness-ab-probe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI_SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      RUSTC_WRAPPER: ""
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - run: bash automation/install_ci_native_tools.sh protoc
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-registry-${{ runner.os }}-${{ hashFiles('app/rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-${{ runner.os }}-
+      - name: Compare PG V3 owner and monolith real cold Cargo compilers
+        run: |
+          python3 automation/compare_pg_v3_harness_build.py \
+            --output automation/reports/pg_v3_harness_physical_ab.json
+          python3 automation/check_pg_v3_harness_build.py \
+            --report automation/reports/pg_v3_harness_physical_ab.json
+      - name: Publish optional isolated build measurement
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rust-pg-physical-ab-${{ github.event.pull_request.head.sha }}
+          path: automation/reports/pg_v3_harness_physical_ab.json
+          if-no-files-found: warn
+
   # Actual legacy and V3 Workers compile in parallel with the shared harness
   # and full workspace tests, not serially before their own E2E suites.
   rust-e2e-legacy-binaries:
@@ -512,8 +613,8 @@ jobs:
   # artifacts and fail-closed content/source checks.
   rust-architecture-e2e:
     name: rust-architecture-e2e (${{ matrix.shard }})
-    needs: [impact, rust-e2e-harness, rust-e2e-legacy-binaries, rust-e2e-v3-binaries]
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-architecture-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    needs: [impact, rust-e2e-harness, rust-e2e-pg-harness, rust-e2e-legacy-binaries, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-architecture-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-legacy-binaries.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -537,9 +638,15 @@ jobs:
           name: ci-owner-impact
           path: automation/reports
       - uses: actions/download-artifact@v7
+        if: matrix.shard != 'pg_temporal'
         with:
           name: rust-e2e-harness-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/harness
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'pg_temporal'
+        with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
       - uses: actions/download-artifact@v7
         if: matrix.shard == 'temporal_manual' || matrix.shard == 'temporal_blocked' || matrix.shard == 'truth_certification'
         with:
@@ -559,11 +666,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for kind in harness; do
-            python3 automation/rust_ci_artifacts.py install \
-              --kind "$kind" --source-sha "$GITHUB_SHA" \
-              --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
-          done
+          if [[ "${{ matrix.shard }}" == pg_temporal ]]; then
+            kind=pg_harness
+          else
+            kind=harness
+          fi
+          python3 automation/rust_ci_artifacts.py install \
+            --kind "$kind" --source-sha "$GITHUB_SHA" \
+            --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
           if [[ "${{ matrix.shard }}" == temporal_manual || "${{ matrix.shard }}" == temporal_blocked || "${{ matrix.shard }}" == truth_certification ]]; then
             python3 automation/rust_ci_artifacts.py install \
               --kind legacy --source-sha "$GITHUB_SHA" \
@@ -581,8 +691,8 @@ jobs:
 
   rust-verify-e2e:
     name: rust-verify-e2e (${{ matrix.shard }})
-    needs: [impact, rust-e2e-harness, rust-e2e-v3-binaries]
-    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-verify-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
+    needs: [impact, rust-e2e-harness, rust-e2e-pg-harness, rust-e2e-v3-binaries]
+    if: github.event_name == 'pull_request' && needs.impact.result == 'success' && contains(fromJSON(needs.impact.outputs.selected_ci_jobs), 'rust-verify-e2e') && needs.impact.outputs.cargo_scope == 'full' && needs.rust-e2e-harness.result == 'success' && needs.rust-e2e-pg-harness.result == 'success' && needs.rust-e2e-v3-binaries.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -609,6 +719,11 @@ jobs:
       - uses: actions/download-artifact@v7
         if: matrix.shard == 'verify_d'
         with:
+          name: rust-e2e-pg-harness-${{ github.sha }}
+          path: ${{ runner.temp }}/rust-ci-bundles/pg_harness
+      - uses: actions/download-artifact@v7
+        if: matrix.shard == 'verify_d'
+        with:
           name: rust-e2e-v3-${{ github.sha }}
           path: ${{ runner.temp }}/rust-ci-bundles/v3
       - name: Report compiler artifact transfer cost
@@ -626,6 +741,9 @@ jobs:
               --directory "$RUNNER_TEMP/rust-ci-bundles/$kind"
           done
           if [[ "${{ matrix.shard }}" == verify_d ]]; then
+            python3 automation/rust_ci_artifacts.py install \
+              --kind pg_harness --source-sha "$GITHUB_SHA" \
+              --directory "$RUNNER_TEMP/rust-ci-bundles/pg_harness"
             python3 automation/rust_ci_artifacts.py install \
               --kind v3 --source-sha "$GITHUB_SHA" \
               --directory "$RUNNER_TEMP/rust-ci-bundles/v3"
@@ -947,6 +1065,7 @@ jobs:
       - impact
       - architecture-and-rust
       - rust-e2e-harness
+      - rust-e2e-pg-harness
       - rust-e2e-legacy-binaries
       - rust-e2e-v3-binaries
       - rust-architecture-e2e
@@ -1022,7 +1141,7 @@ jobs:
           token = os.environ["GITHUB_TOKEN"]
           expected_jobs = {
               "impact",
-              "architecture-and-rust", "rust-e2e-harness", "rust-e2e-legacy-binaries",
+              "architecture-and-rust", "rust-e2e-harness", "rust-e2e-pg-harness", "rust-e2e-legacy-binaries",
               "rust-e2e-v3-binaries",
               "product-truth", "rust-security", "cloudflare-static-build",
               "stack-temporal-postgres18",

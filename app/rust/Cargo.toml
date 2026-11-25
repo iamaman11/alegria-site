@@ -5,6 +5,7 @@ members = [
   "crates/primitives",
   "crates/contracts",
   "crates/integration_harness",
+  "crates/integration_pg_v3_e2e",
   "crates/runtime_models",
   "crates/operation_protocol",
   "crates/postgres_store",
